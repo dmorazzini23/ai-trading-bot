@@ -1096,48 +1096,53 @@ else:
     ta.ichimoku = mock_ichimoku
 
 _MARKET_SCHEDULE = None
+NY = None  # Lazy-init to avoid optional dependency at import time
 
 
 def get_market_schedule():
     global _MARKET_SCHEDULE
+    cal = get_market_calendar()
     if _MARKET_SCHEDULE is None:
-        # AI-AGENT-REF: Handle testing environment where NY is SimpleNamespace without schedule()
-        if hasattr(NY, "schedule"):
-            _MARKET_SCHEDULE = NY.schedule(
+        if hasattr(cal, "schedule"):
+            _MARKET_SCHEDULE = cal.schedule(
                 start_date="2020-01-01", end_date="2030-12-31"
             )
         else:
-            # Return empty DataFrame for testing environments
             _MARKET_SCHEDULE = pd.DataFrame()
     return _MARKET_SCHEDULE
 
 
-_MARKET_CALENDAR = None
-
-
 def get_market_calendar():
-    """Lazy-load the NYSE calendar itself (but not its full schedule)."""
-    global _MARKET_CALENDAR
-    if _MARKET_CALENDAR is None:
-        import pandas_market_calendars as mcal
+    """
+    Return a pandas_market_calendars calendar, or a harmless dummy object
+    if the optional dependency is unavailable. Memoized via module-global NY.
+    """
+    global NY
+    if NY is not None:
+        return NY
+    try:
+        import pandas_market_calendars as mcal  # optional
+    except Exception:
+        NY = types.SimpleNamespace(
+            valid_days=lambda *a, **k: pd.DatetimeIndex([]),
+            schedule=pd.DataFrame(),
+            open_at_time=lambda *a, **k: False,
+            is_session_open=lambda *a, **k: True,
+        )
+        return NY
+    cal_name = "XNYS"
+    try:
+        NY = mcal.get_calendar(cal_name)
+    except Exception:
+        NY = types.SimpleNamespace(
+            valid_days=lambda *a, **k: pd.DatetimeIndex([]),
+            schedule=pd.DataFrame(),
+            open_at_time=lambda *a, **k: False,
+            is_session_open=lambda *a, **k: True,
+        )
+    return NY
 
-        _MARKET_CALENDAR = mcal.get_calendar("NYSE")
-    return _MARKET_CALENDAR
 
-
-# AI-AGENT-REF: Only initialize market calendar in non-test environments to avoid import issues
-import os
-
-if not os.getenv("TESTING"):
-    # back-compat for existing code references
-    NY = get_market_calendar()
-else:
-    # Provide a test-friendly stub
-    import types
-
-    NY = types.SimpleNamespace()
-    NY.is_session_open = lambda dt: True
-    NY.sessions_in_range = lambda start, end: []
 
 
 _FULL_DATETIME_RANGE = None
@@ -5637,9 +5642,10 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
             f"No NYSE market schedule for {ts.date()}; skipping market open/close check."
         )
         return False
+    cal = get_market_calendar()
     try:
-        return NY.open_at_time(get_market_schedule(), ts)
-    except ValueError as exc:
+        return cal.open_at_time(get_market_schedule(), ts)
+    except (AttributeError, ValueError) as exc:
         _log.warning(f"Invalid schedule time {ts}: {exc}; assuming market closed")
         return False
 
@@ -12796,9 +12802,10 @@ def main() -> None:
             )
             market_open = False
         else:
+            cal = get_market_calendar()
             try:
-                market_open = NY.open_at_time(get_market_schedule(), now_utc)
-            except ValueError as e:
+                market_open = cal.open_at_time(get_market_schedule(), now_utc)
+            except (AttributeError, ValueError) as e:
                 _log.warning(
                     f"Invalid schedule time {now_utc}: {e}; assuming market closed"
                 )

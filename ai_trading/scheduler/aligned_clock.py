@@ -10,8 +10,23 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-import pandas_market_calendars as mcal
+try:
+    import pandas_market_calendars as mcal  # optional
+except Exception:  # pragma: no cover
+    mcal = None
+
+MARKET_CALENDAR_AVAILABLE = mcal is not None
 logger = logging.getLogger(__name__)
+
+
+def _get_calendar(cal_name: str):
+    if mcal is None:
+        return None
+    try:
+        return mcal.get_calendar(cal_name)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning(f"Failed to load {cal_name} calendar: {exc}")
+        return None
 
 
 @dataclass
@@ -46,14 +61,7 @@ class AlignedClock:
         self.max_skew_ms = max_skew_ms
         self.exchange = exchange
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-
-        # Initialize market calendar if available
-        self.calendar = None
-        if MARKET_CALENDAR_AVAILABLE:
-            try:
-                self.calendar = mcal.get_calendar(exchange)
-            except Exception as e:
-                self.logger.warning(f"Failed to load {exchange} calendar: {e}")
+        self.calendar = _get_calendar(exchange)
 
         # Cache for bar close times
         self._bar_close_cache: dict[str, datetime] = {}
@@ -73,7 +81,9 @@ class AlignedClock:
                 exchange_tz = self.calendar.tz
                 return utc_now.astimezone(exchange_tz)
             except Exception as e:
-                self.logger.warning(f"Failed to get exchange time: {e}")
+                self.logger.warning(
+                    f"Failed to get exchange time: {e.__class__.__name__}: {e}"
+                )
 
         # Fallback to EST/EDT for NYSE
         import pytz
@@ -147,7 +157,9 @@ class AlignedClock:
                         )
                         next_close = next_close.replace(tzinfo=next_close.tzinfo)
             except Exception as e:
-                self.logger.warning(f"Calendar check failed: {e}")
+                self.logger.warning(
+                    f"Calendar check failed: {e.__class__.__name__}: {e}"
+                )
 
         # Cache the result
         self._bar_close_cache[cache_key] = next_close
@@ -255,6 +267,8 @@ class AlignedClock:
         """
         if timestamp is None:
             timestamp = self.get_exchange_time()
+        elif timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=UTC)
 
         if not self.calendar:
             # Fallback - assume market hours 9:30 AM - 4:00 PM EST weekdays
@@ -285,7 +299,9 @@ class AlignedClock:
             return market_open <= timestamp <= market_close
 
         except Exception as e:
-            self.logger.warning(f"Market hours check failed: {e}")
+            self.logger.warning(
+                f"Market hours check failed: {e.__class__.__name__}: {e}"
+            )
             return False
 
     def wait_for_aligned_tick(

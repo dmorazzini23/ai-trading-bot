@@ -324,6 +324,9 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         stream_handler.setFormatter(formatter)
         stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
         stream_handler.addFilter(_PhaseFilter())
+        from ai_trading.logging_filters import SecretFilter
+        secret_filter = SecretFilter()
+        stream_handler.addFilter(secret_filter)
         handlers.append(stream_handler)
 
         if log_file:
@@ -331,12 +334,14 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             rotating_handler.setFormatter(formatter)
             rotating_handler.setLevel(logging.INFO)
             rotating_handler.addFilter(_PhaseFilter())
+            rotating_handler.addFilter(secret_filter)
             handlers.append(rotating_handler)
 
         _log_queue = queue.Queue(-1)
         queue_handler = QueueHandler(_log_queue)
         queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
         queue_handler.addFilter(_PhaseFilter())
+        queue_handler.addFilter(secret_filter)
         # AI-AGENT-REF: QueueHandler should enqueue raw records without formatting
         logger.handlers = [queue_handler]
         # AI-AGENT-REF: use background queue listener to reduce I/O blocking
@@ -772,6 +777,9 @@ def setup_enhanced_logging(
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         console_handler.setFormatter(console_formatter)
+        from ai_trading.logging_filters import SecretFilter
+        secret_filter = SecretFilter()
+        console_handler.addFilter(secret_filter)
         root_logger.addHandler(console_handler)
 
         # Setup file handler if log file specified
@@ -795,6 +803,7 @@ def setup_enhanced_logging(
                     )
 
                 file_handler.setFormatter(file_formatter)
+                file_handler.addFilter(secret_filter)
                 root_logger.addHandler(file_handler)
 
             except OSError as e:
@@ -831,8 +840,11 @@ def _setup_performance_logging():
             "%(asctime)s PERF %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
         perf_handler.setFormatter(perf_formatter)
+        from ai_trading.logging_filters import SecretFilter
+        perf_handler.addFilter(SecretFilter())
         perf_logger.addHandler(perf_handler)
         perf_logger.setLevel(logging.INFO)
+        perf_logger.propagate = False
 
     except OSError as e:
         logging.warning("Could not setup performance logging: %s", e)

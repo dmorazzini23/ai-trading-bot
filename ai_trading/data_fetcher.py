@@ -5,6 +5,9 @@ from collections.abc import Iterable
 from datetime import datetime
 
 import pandas as pd
+import requests
+
+from ai_trading.logging import get_logger
 
 # AI-AGENT-REF: lightweight stubs for data fetch routines
 FINNHUB_AVAILABLE = True
@@ -24,7 +27,14 @@ __all__ = [
     "clear_cached_minute_timestamp",
     "age_cached_minute_timestamps",
     "last_minute_bar_age_seconds",
+    "DataFetchException",
 ]
+
+_log = get_logger(__name__)
+
+
+class DataFetchException(Exception):
+    """Error raised when market data retrieval fails."""
 
 
 # ---- datetime helpers ----
@@ -58,6 +68,13 @@ def set_cached_minute_timestamp(symbol: str | None, ts_or_dt) -> None:
     _GLOBAL_MINUTE_TS = ts
     if symbol:
         _MINUTE_CACHE[symbol.upper()] = ts
+        # Prevent unbounded growth: evict oldest ~20% if too large
+        MAX_CACHE_SIZE = 2000
+        if len(_MINUTE_CACHE) > MAX_CACHE_SIZE:
+            for k, _ in sorted(
+                _MINUTE_CACHE.items(), key=lambda kv: kv[1]
+            )[: MAX_CACHE_SIZE // 5]:
+                _MINUTE_CACHE.pop(k, None)
 
 
 def get_cached_minute_timestamp(symbol: str | None = None) -> int | None:
@@ -107,7 +124,11 @@ def get_bars(symbol: str, timeframe: str, start, end, /, *, feed=None) -> pd.Dat
     try:
         if feed and hasattr(feed, "get_bars"):
             return feed.get_bars(symbol, timeframe, start, end) or pd.DataFrame()
-    except Exception:  # noqa: BLE001
+    except (requests.exceptions.RequestException, DataFetchException) as exc:
+        _log.info(
+            f"feed.get_bars error {exc.__class__.__name__}", exc_info=True
+        )
+    except AttributeError:
         pass
     cols = ["Open", "High", "Low", "Close", "Volume"]
     return pd.DataFrame(columns=cols)
@@ -134,7 +155,11 @@ def get_minute_df(
     try:
         if feed and hasattr(feed, "get_bars"):
             return feed.get_bars(symbol, "1Min", start, end) or pd.DataFrame()
-    except Exception:  # noqa: BLE001
+    except (requests.exceptions.RequestException, DataFetchException) as exc:
+        _log.info(
+            f"feed.get_bars error {exc.__class__.__name__}", exc_info=True
+        )
+    except AttributeError:
         pass
     cols = ["Open", "High", "Low", "Close", "Volume"]
     return pd.DataFrame(columns=cols)

@@ -1,5 +1,5 @@
-"""
-Centralized import management for ai_trading modules.
+# TEST-ONLY IMPORTS
+"""Centralized import management for ai_trading modules.
 
 All dependencies are imported directly. Optional features are controlled
 via Settings flags rather than import guards.
