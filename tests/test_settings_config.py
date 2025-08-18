@@ -34,3 +34,10 @@ def test_worker_defaults_and_overrides(monkeypatch):
     s2 = Settings()
     assert s2.effective_executor_workers(8) == 3
     assert s2.effective_prediction_workers(8) == 5
+
+
+def test_market_calendar_env(monkeypatch):
+    """MARKET_CALENDAR env var flows into Settings."""  # AI-AGENT-REF
+    monkeypatch.setenv("MARKET_CALENDAR", "XNAS")
+    s = Settings()
+    assert s.market_calendar == "XNAS"

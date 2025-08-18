@@ -45,6 +45,15 @@ def test_trading_config_from_env_loads_parameters():
         assert cfg.max_position_size == 2.0
 
 
+def test_trading_config_from_env_market_calendar(monkeypatch):
+    """TradingConfig.from_env picks up MARKET_CALENDAR."""  # AI-AGENT-REF
+    from ai_trading.config.management import TradingConfig
+
+    monkeypatch.setenv("MARKET_CALENDAR", "XNAS")
+    cfg = TradingConfig.from_env()
+    assert cfg.market_calendar == "XNAS"
+
+
 def test_build_runtime_hydrates_all_parameters():
     """Test that build_runtime creates runtime with all required parameters."""
     from ai_trading.core.runtime import build_runtime, REQUIRED_PARAM_DEFAULTS

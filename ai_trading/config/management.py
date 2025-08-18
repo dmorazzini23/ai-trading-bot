@@ -1526,6 +1526,8 @@ class TradingConfig(BaseModel):
         0.05, ge=0, le=1
     )  # AI-AGENT-REF: bounded dollar risk
     max_portfolio_risk: float = 0.10  # AI-AGENT-REF: portfolio risk cap
+    # AI-AGENT-REF: enable calendar configurability for optional mcal integration
+    market_calendar: str = "XNYS"
     max_position_size: float = 8000.0  # AI-AGENT-REF: default max position
     # Optional ML model hints (referenced by bot_engine for model loading)
     # These were previously relied upon via extra/overrides; make them explicit
@@ -1690,6 +1692,10 @@ class TradingConfig(BaseModel):
         base.buy_threshold = _env_or_get("BUY_THRESHOLD", get_buy_threshold)
         base.lookback_days = int(os.getenv("LOOKBACK_DAYS") or base.lookback_days)
         base.seed = int(os.getenv("SEED") or get_seed_int())
+        # AI-AGENT-REF: allow override via env; default stays XNYS
+        base.market_calendar = os.getenv(
+            "MARKET_CALENDAR", getattr(base, "market_calendar", "XNYS")
+        )
         if overrides:
             base = base.model_copy(update=overrides)
         return base
