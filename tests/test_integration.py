@@ -8,7 +8,7 @@ sys.path.append('.')
 
 def test_money_execution_integration():
     """Test Money math integration with execution engine."""
-    print("Testing Money Math + Execution Integration...")
+    print("Testing Money Math + Execution Integration")
     
     from ai_trading.execution.engine import Order
     from ai_trading.core.enums import OrderSide, OrderType
@@ -47,7 +47,7 @@ def test_money_execution_integration():
 
 def test_rate_limit_integration():
     """Test rate limiting integration."""
-    print("Testing Rate Limiting Integration...")
+    print("Testing Rate Limiting Integration")
     
     # Test that the alpaca_api module uses rate limiting
     try:

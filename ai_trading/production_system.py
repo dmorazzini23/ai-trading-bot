@@ -86,7 +86,7 @@ class ProductionTradingSystem:
     async def start_system(self) -> dict[str, Any]:
         """Start the production trading system."""
         try:
-            logger.info("Starting production trading system...")
+            logger.info("Starting production trading system")
 
             # Start monitoring components
             self.alert_manager.start_processing()

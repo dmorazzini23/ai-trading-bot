@@ -692,7 +692,7 @@ class ExecutionEngine:
             Order ID if successful, None if failed
         """
         try:
-            # Handle legacy signature: execute_order(symbol, qty, side, method=...)
+            # Handle legacy signature: execute_order(symbol, qty, side, method=<legacy>)
             if isinstance(quantity_or_side, int):
                 # Legacy signature: symbol, qty, side
                 quantity = quantity_or_side

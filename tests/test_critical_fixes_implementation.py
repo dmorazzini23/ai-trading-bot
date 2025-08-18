@@ -293,7 +293,7 @@ def test_performance_optimizations():
 
 if __name__ == "__main__":
     # Run tests
-    print("Running critical fixes tests...")
+    print("Running critical fixes tests")
     
     test_metrics_division_by_zero_protection()
     print("✅ Division by zero protection tests passed")

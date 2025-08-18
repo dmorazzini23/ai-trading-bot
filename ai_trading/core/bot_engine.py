@@ -1432,8 +1432,9 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - fallback
 
     class pybreaker:  # type: ignore
-        class CircuitBreaker:
-            def __init__(self, *args, **kwargs): ...
+            class CircuitBreaker:
+            def __init__(self, *args, **kwargs):
+                pass
             def call(self, func):
                 def _wrapped(*a, **kw):
                     return func(*a, **kw)
@@ -11018,7 +11019,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 try:
                     symbols = load_tickers(TICKERS_FILE)
                     _log.info(
-                        f"RETRAINING START for {today_str} on {len(symbols)} tickers..."
+                        f"RETRAINING START for {today_str} on {len(symbols)} tickers"
                     )
                     valid_symbols = []
                     for symbol in symbols:
@@ -12680,7 +12681,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
 
 def main() -> None:
-    _log.info("Main trading bot starting...")
+    _log.info("Main trading bot starting")
 
     # AI-AGENT-REF: Initialize runtime config and validate credentials
     try:

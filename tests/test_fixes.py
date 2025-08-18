@@ -11,7 +11,7 @@ from pathlib import Path
 
 def test_tickers_csv():
     """Test that tickers.csv has been expanded correctly."""
-    print("🔍 Testing tickers.csv expansion...")
+    print("🔍 Testing tickers.csv expansion")
     
     tickers_file = Path("tickers.csv")
     if not tickers_file.exists():
@@ -46,7 +46,7 @@ def test_tickers_csv():
 
 def test_talib_imports():
     """Test TA-Lib imports and fallback handling."""
-    print("\n🔍 Testing TA-Lib imports...")
+    print("\n🔍 Testing TA-Lib imports")
     
     try:
         # Set dummy environment variables to avoid config errors
@@ -103,7 +103,7 @@ def test_talib_imports():
 
 def test_screen_universe_logging():
     """Test that screen_universe function has enhanced logging."""
-    print("\n🔍 Testing screen_universe logging enhancements...")
+    print("\n🔍 Testing screen_universe logging enhancements")
     
     try:
         with open('bot_engine.py', 'r') as f:

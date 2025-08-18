@@ -200,7 +200,7 @@ if __name__ == "__main__":
     
     for test_func in test_functions:
         try:
-            print(f"Running {test_func.__name__}...")
+            print(f"Running {test_func.__name__}")
             test_func()
             passed += 1
             print(f"✅ {test_func.__name__} PASSED\n")

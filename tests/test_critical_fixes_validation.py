@@ -211,7 +211,7 @@ class TestCriticalFixes(unittest.TestCase):
 
 if __name__ == "__main__":
     # Run the tests
-    print("Running Critical Fixes Validation Tests...")
+    print("Running Critical Fixes Validation Tests")
     print("=" * 60)
 
     # Set up the test environment

@@ -129,22 +129,23 @@ def submit_order(api, order_data=None, log=None, **kwargs):
 
     # Back-compat return semantics
     if isinstance(resp, dict):
+        broker_id = resp.get("id")
         resp.setdefault("client_order_id", client_order_id)
-        resp.setdefault("success", True)
         resp.setdefault("status", "submitted")
+        resp.setdefault("success", True)
         if "broker_order_id" not in resp:
-            resp["broker_order_id"] = resp.get("id") or resp.get("order_id")
+            resp["broker_order_id"] = broker_id or resp.get("order_id")
         return types.SimpleNamespace(**resp)
-    # Normalize object-like responses to a SimpleNamespace
-    return types.SimpleNamespace(
-        success=True,
-        status=getattr(resp, "status", "submitted"),
-        client_order_id=getattr(resp, "client_order_id", client_order_id),
-        broker_order_id=getattr(resp, "id", None)
-        or getattr(resp, "order_id", None)
-        or getattr(resp, "broker_order_id", None),
-        raw=resp,
-    )
+    try:
+        if getattr(resp, "client_order_id", None) is None:
+            setattr(resp, "client_order_id", client_order_id)
+        if getattr(resp, "status", None) is None:
+            setattr(resp, "status", "submitted")
+        if getattr(resp, "success", None) is None:
+            setattr(resp, "success", True)
+    except Exception:
+        pass
+    return resp
 
 
 def alpaca_get(*_a, **_k):  # legacy stub

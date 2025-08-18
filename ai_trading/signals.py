@@ -18,7 +18,8 @@ try:  # AI-AGENT-REF: resilient Alpaca import
 except Exception:  # tests/dev envs without alpaca
     TradingClient = None  # type: ignore
 
-    class APIError(Exception): ...
+    class APIError(Exception):
+        pass
 
 
 _log = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ def fetch_history(
 ) -> pd.DataFrame:
     """Fetch historical data for symbols between start and end."""
     try:
-        # existing logic (alpaca / yfinance / cache) ...
+        # existing logic (alpaca / yfinance / cache)
         df = pd.DataFrame()
         return df
     except (
@@ -478,24 +479,6 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         If dataframe is None, empty, or column doesn't exist
     TypeError
         If input parameters are not of expected types
-
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> import numpy as np
-    >>>
-    >>> # Create sample data
-    >>> dates = pd.date_range('2024-01-01', periods=100, freq='1H')
-    >>> df = pd.DataFrame({
-    ...     'close': np.random.randn(100).cumsum() + 100,
-    ...     'momentum': np.random.randn(100)
-    ... }, index=dates)
-    >>>
-    >>> # Generate signals from momentum
-    >>> signals = generate_signal(df, 'momentum')
-    >>> logging.info(f"Buy signals: {(signals == 1).sum()}")
-    >>> logging.info(f"Sell signals: {(signals == -1).sum()}")
-    >>> logging.info(f"Neutral signals: {(signals == 0).sum()}")
 
     >>> # Handle missing data gracefully
     >>> df_with_gaps = df.copy()

@@ -319,7 +319,7 @@ def validate_hyperparams_file(file_path: str = "hyperparams.json") -> dict[str, 
 
 if __name__ == "__main__":
     # Test hyperparams schema
-    logging.info("Testing Hyperparameters Schema...")
+    logging.info("Testing Hyperparameters Schema")
 
     # Test default hyperparams
     default_params = get_default_hyperparams()

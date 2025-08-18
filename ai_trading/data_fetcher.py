@@ -9,6 +9,8 @@ import pandas as pd
 import requests
 
 from ai_trading.logging import get_logger
+from urllib.parse import urlencode
+from datetime import datetime, timezone
 
 # AI-AGENT-REF: lightweight stubs for data fetch routines
 FINNHUB_AVAILABLE = True
@@ -175,18 +177,18 @@ def get_minute_bars_batch(
     return out
 
 
-def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
-    """
-    Construct a real Alpaca data URL for daily bars. Tests may monkeypatch this,
-    but the production CLI benefits from a valid URL.
-    """
-    from ai_trading.settings import get_settings
+def _to_iso_z(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    S = get_settings()
-    base = getattr(S, "alpaca_data_base_url", "https://data.alpaca.markets")
-    start_iso = ensure_datetime(start).isoformat().replace("+00:00", "Z")
-    end_iso = ensure_datetime(end).isoformat().replace("+00:00", "Z")
-    return (
-        f"{base}/v2/stocks/{symbol}/bars"
-        f"?timeframe=1Day&start={start_iso}&end={end_iso}&feed=iex"
-    )
+
+def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
+    base = "https://data.alpaca.markets/v2/stocks"
+    params = {
+        "start": _to_iso_z(ensure_datetime(start)),
+        "end": _to_iso_z(ensure_datetime(end)),
+        "timeframe": "1Day",
+        "feed": "iex",
+    }
+    return f"{base}/{symbol}/bars?{urlencode(params)}"

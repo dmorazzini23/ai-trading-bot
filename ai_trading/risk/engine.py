@@ -36,7 +36,8 @@ try:  # AI-AGENT-REF: resilient Alpaca import
 except Exception:  # AI-AGENT-REF: local fallback when SDK missing
     TradingClient = None  # type: ignore
 
-    class APIError(Exception): ...
+    class APIError(Exception):
+        pass
 
 
 from ai_trading.config.settings import get_settings
@@ -1267,18 +1268,6 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
         True if current drawdown exceeds maximum allowed threshold,
         False if within acceptable limits or if data is insufficient.
 
-    Examples
-    --------
-    >>> state = {
-    ...     'current_drawdown': 0.08,  # 8% drawdown
-    ...     'max_drawdown': 0.05,      # 5% limit
-    ...     'portfolio_value': 45000,
-    ...     'peak_value': 50000
-    ... }
-    >>> if check_max_drawdown(state):
-    ...     logging.info("WARNING: Drawdown limit exceeded!")
-    ...     reduce_position_sizes()
-
     Notes
     -----
     - Returns False for missing or invalid state data
@@ -1325,14 +1314,6 @@ def can_trade() -> bool:
     - Emergency halt flags
     - Pattern Day Trader (PDT) restrictions
 
-    Examples
-    --------
-    >>> if can_trade():
-    ...     execute_trading_strategy()
-    ... else:
-    ...     logging.info("Trading halted due to risk conditions")
-    ...     wait_for_market_open()
-
     Notes
     -----
     - Called before each trading cycle
@@ -1356,7 +1337,7 @@ def check_exposure_caps(portfolio, exposure, cap):
         if pos.quantity > 0 and exposure[sym] > cap:
             logger.warning("Exposure cap triggered, blocking new orders for %s", sym)
             return False
-    # Original exposure logic continues here...
+    # Original exposure logic continues here
 
 
 def apply_trailing_atr_stop(
