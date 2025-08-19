@@ -54,7 +54,10 @@ class Settings(BaseSettings):
     enable_sklearn: bool = Field(False, alias="ENABLE_SKLEARN")
     intraday_lookback_minutes: int = Field(120, alias="INTRADAY_LOOKBACK_MINUTES")
     enable_numba_optimization: bool = Field(False, alias="ENABLE_NUMBA_OPTIMIZATION")
-    alpaca_data_feed: str | None = Field(default=None, alias="ALPACA_DATA_FEED")
+    alpaca_data_feed: str | None = Field(default="iex", alias="ALPACA_DATA_FEED")
+    alpaca_adjustment: str = Field("all", alias="ALPACA_ADJUSTMENT")
+    data_lookback_days_daily: int = Field(200, alias="DATA_LOOKBACK_DAYS_DAILY")
+    data_lookback_days_minute: int = Field(5, alias="DATA_LOOKBACK_DAYS_MINUTE")
     scheduler_sleep_seconds: int = Field(60, alias="SCHEDULER_SLEEP_SECONDS")
     # Feature flags and thresholds
     data_cache_enable: bool = Field(True, env="AI_TRADER_DATA_CACHE_ENABLE")
