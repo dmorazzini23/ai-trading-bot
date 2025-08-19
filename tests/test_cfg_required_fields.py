@@ -1,4 +1,4 @@
-# AI-AGENT-REF: ensure settings expose required runtime attributes
+# AI-AGENT-REF: ensure settings expose required runtime attributes (including log_market_fetch)
 from ai_trading.config.settings import get_settings
 
 
