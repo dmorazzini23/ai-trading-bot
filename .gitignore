@@ -82,3 +82,6 @@ patch_full_cleanup.patch
 # local env & data
 .env*
 *.csv
+
+# Matplotlib cache
+.mpl_cache/
