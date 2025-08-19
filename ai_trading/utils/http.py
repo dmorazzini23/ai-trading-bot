@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import (
+    RequestException as RequestsRequestException,  # AI-AGENT-REF: catch raw requests errors
+)
 from urllib3.util.retry import Retry
 
 from ai_trading.exc import (
@@ -32,6 +35,7 @@ _pool_stats = {
 
 # AI-AGENT-REF: Stage 2.1 build session with pooling metadata
 
+
 def _build_session() -> requests.Session:
     _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
     _pool_stats["workers"] = int(os.getenv("HTTP_POOL_WORKERS", str(_pool_stats["workers"])))
@@ -52,6 +56,7 @@ def _build_session() -> requests.Session:
     s.mount("https://", adapter)
     return s
 
+
 def _get_session() -> requests.Session:
     global _session
     if _session is None:
@@ -60,11 +65,13 @@ def _get_session() -> requests.Session:
                 _session = _build_session()
     return _session
 
+
 def _with_timeout(kwargs: dict) -> dict:
     """Ensure a clamped timeout is always provided."""
     # AI-AGENT-REF: unify timeout handling
     kwargs["timeout"] = clamp_timeout(kwargs.get("timeout"), default_non_test=HTTP_TIMEOUT)
     return kwargs
+
 
 def _retry_config() -> tuple[int, float, float, float]:
     """Load retry knobs from settings if available."""  # AI-AGENT-REF: Stage 2.2
@@ -77,9 +84,15 @@ def _retry_config() -> tuple[int, float, float, float]:
         backoff = float(getattr(s, "RETRY_BASE_DELAY", backoff))
         max_backoff = float(getattr(s, "RETRY_MAX_DELAY", max_backoff))
         jitter = float(getattr(s, "RETRY_JITTER", jitter))
-    except (AttributeError, TypeError, ValueError, ImportError):  # pragma: no cover - settings optional
+    except (
+        AttributeError,
+        TypeError,
+        ValueError,
+        ImportError,
+    ):  # pragma: no cover - settings optional
         pass
     return retries, backoff, max_backoff, jitter
+
 
 def request(method: str, url: str, **kwargs) -> requests.Response:
     sess = _get_session()
@@ -87,6 +100,7 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
     retries, backoff, max_backoff, jitter = _retry_config()
     excs = (
         RequestException,
+        RequestsRequestException,  # AI-AGENT-REF: support direct requests exception
         JSONDecodeError,
         TimeoutError,
         OSError,
@@ -123,29 +137,39 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
         _log.error("HTTP_GIVEUP", extra={"attempts": retries, "error": str(e)})
         raise
 
+
 def get(url: str, **kwargs) -> requests.Response:
     return request("GET", url, **kwargs)
+
 
 def post(url: str, **kwargs) -> requests.Response:
     return request("POST", url, **kwargs)
 
+
 def put(url: str, **kwargs) -> requests.Response:
     return request("PUT", url, **kwargs)
 
+
 def pool_stats() -> dict:
     return dict(_pool_stats)
+
 
 def _fetch_one(url: str, timeout: float | None = None) -> tuple[str, int, bytes]:
     r = get(url, timeout=timeout)
     return (url, r.status_code, r.content)
 
-def map_get(urls: list[str], *, timeout: float | None = None) -> list[tuple[tuple[str, int, bytes] | None, Exception | None]]:
+
+def map_get(
+    urls: list[str], *, timeout: float | None = None
+) -> list[tuple[tuple[str, int, bytes] | None, Exception | None]]:
     """Concurrent GET for a list of URLs."""  # AI-AGENT-REF: Stage 2.1
     if not urls:
         return []
     workers = _pool_stats["workers"]
     SAFE_EXC = TRANSIENT_HTTP_EXC + (ValueError, TypeError, JSONDecodeError)
-    results: list[tuple[tuple[str, int, bytes] | None, Exception | None]] = [(None, None)] * len(urls)
+    results: list[tuple[tuple[str, int, bytes] | None, Exception | None]] = [(None, None)] * len(
+        urls
+    )
     with ThreadPoolExecutor(max_workers=workers) as ex:
         future_to_idx = {ex.submit(_fetch_one, url, timeout): i for i, url in enumerate(urls)}
         for fut in as_completed(future_to_idx):
