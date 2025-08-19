@@ -1320,12 +1320,22 @@ class APIErrorStub(Exception):
     pass
 
 
+# Assign lightweight stubs for Alpaca SDK types; keep TimeFrame separate for constants.
 StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = (
-    TimeFrame
-) = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = (
-    MarketOrderRequest
-) = _AlpacaStub  # type: ignore
+    TradingClient
+) = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
 APIError = APIErrorStub
+
+# Minimal enum-like shim so code can reference TimeFrame.Day etc.
+class _TimeFrame:  # AI-AGENT-REF: safe constants when Alpaca SDK not installed
+    Day = "Day"
+    Minute = "Minute"
+    Hour = "Hour"
+    Week = "Week"
+    Month = "Month"
+
+# Expose shim under expected name
+TimeFrame = _TimeFrame
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
