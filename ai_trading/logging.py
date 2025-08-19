@@ -325,6 +325,12 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
 
     # AI-AGENT-REF: Thread-safe check of global flag to prevent any duplicate setup
     with _LOGGING_LOCK:
+        # AI-AGENT-REF: Idempotent guard if listener thread already active
+        if _listener is not None:
+            thread = getattr(_listener, "_thread", None)
+            if thread is not None and thread.is_alive():
+                return logging.getLogger()
+
         if _LOGGING_CONFIGURED:
             logging.getLogger(__name__).debug(
                 "Logging already configured, skipping duplicate setup"
@@ -387,12 +393,8 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         logger.handlers = [queue_handler]
         # AI-AGENT-REF: use background queue listener to reduce I/O blocking
         _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
+        # QueueListener.start() creates a daemon thread by default; do not mutate daemon
         _listener.start()
-        try:
-            if _listener._thread is not None:
-                _listener._thread.daemon = True
-        except COMMON_EXC:  # AI-AGENT-REF: narrow
-            pass
         _LOGGING_LISTENER = _listener
         atexit.register(_safe_shutdown_logging)
 
