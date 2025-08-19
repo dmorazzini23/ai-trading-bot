@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+Environment=ALPACA_DATA_FEED=iex
+Environment=ALPACA_ADJUSTMENT=all
+Environment=TZ=UTC
+ExecStart=/usr/bin/python -m ai_trading.runner
+WorkingDirectory=/opt/ai-trading-bot
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
