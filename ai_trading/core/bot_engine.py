@@ -27,10 +27,22 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
 
     requests = _RequestsStub()  # type: ignore
 
-from ai_trading.data_fetcher import ensure_datetime, get_bars, get_bars_batch
+from threading import Lock
+
+from ai_trading.data_fetcher import (
+    ensure_datetime,
+    get_bars,
+    get_bars_batch,
+    get_bars_df,
+)
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
+
+try:  # AI-AGENT-REF: optional Alpaca dependency
+    from alpaca_trade_api.rest import TimeFrame
+except Exception:  # pragma: no cover
+    TimeFrame = None  # type: ignore
 
 # One place to define the common exception family (module-scoped)
 COMMON_EXC = (
@@ -170,6 +182,26 @@ class DataFetchError(RuntimeError):
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
+
+
+def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
+    """Validate that Alpaca returns data for benchmark and sample symbols."""
+    symbols = ["SPY"] + list(universe[:5])
+    errors: list[str] = []
+    for sym in symbols:
+        try:
+            df = get_bars_df(sym, TimeFrame.Day)
+            if df is None or df.empty:
+                errors.append(f"{sym}:empty")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{sym}:{exc}")
+    if errors:
+        feed = os.getenv("ALPACA_DATA_FEED", "iex")
+        _log.critical(
+            "DATA_HEALTH_FAIL",
+            extra={"endpoint": "alpaca/bars", "feed": feed, "symbols": symbols, "errors": errors},
+        )
+        raise DataFetchError("data health check failed")
 import asyncio
 import atexit
 import hashlib  # AI-AGENT-REF: model hash helper
@@ -10702,108 +10734,124 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
             "details": {"symbol": symbol, "error": str(e)},
         }
 
+_screen_lock = Lock()
+_screening_in_progress = False
+
 
 def screen_universe(
     candidates: Sequence[str],
     runtime,
 ) -> list[str]:
+    global _screening_in_progress
+    if not _screen_lock.acquire(blocking=False):
+        _log.info("SCREENER_SKIP_REENTRANT")
+        return []
     try:
-        top_n = 20  # AI-AGENT-REF: maintain top N selection
-        cand_set = set(candidates)
-        _log.info(
-            f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
-        )
-
-        spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
-        if spy_df is None or spy_df.empty:
-            time.sleep(0.25)
-            spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
-        if spy_df is None or spy_df.empty:
-            _log.warning(
-                "DATA_FEED_UNAVAILABLE",
-                extra={"provider": "alpaca", "status": "empty"},
-            )
+        if _screening_in_progress:
+            _log.info("SCREENER_SKIP_ALREADY_RUNNING")
             return []
+        _screening_in_progress = True
+        try:
+            top_n = 20  # AI-AGENT-REF: maintain top N selection
+            cand_set = set(candidates)
+            _log.info(
+                f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
+            )
 
-        for sym in list(_SCREEN_CACHE):
-            if sym not in cand_set:
-                _SCREEN_CACHE.pop(sym, None)
-
-        new_syms = cand_set - _SCREEN_CACHE.keys()
-        filtered_out = {}  # Track reasons for filtering
-        tried = valid = empty = failed = 0
-
-        for sym in new_syms:
-            tried += 1
-            df = runtime.data_fetcher.get_daily_df(runtime, sym)
-            if not is_valid_ohlcv(df):
-                empty += 1
-                filtered_out[sym] = "no_data"
-                _log.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe")
+            spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
+            if spy_df is None or spy_df.empty:
                 time.sleep(0.25)
-                continue
-
-            # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
-            validation_result = _validate_market_data_quality(df, sym)
-            if not validation_result["valid"]:
-                failed += 1
-                filtered_out[sym] = validation_result["reason"]
-                _log.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
-                time.sleep(0.25)
-                continue
-
-            original_len = len(df)
-            df = df[df["volume"] > 100_000]
-            if df.empty:
-                filtered_out[sym] = "low_volume"
-                _log.debug(
-                    f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
+                spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
+            if spy_df is None or spy_df.empty:
+                _log.warning(
+                    "DATA_FEED_UNAVAILABLE",
+                    extra={"provider": "alpaca", "status": "empty"},
                 )
+                return []
+
+            for sym in list(_SCREEN_CACHE):
+                if sym not in cand_set:
+                    _SCREEN_CACHE.pop(sym, None)
+
+            new_syms = cand_set - _SCREEN_CACHE.keys()
+            filtered_out = {}  # Track reasons for filtering
+            tried = valid = empty = failed = 0
+
+            for sym in new_syms:
+                tried += 1
+                df = runtime.data_fetcher.get_daily_df(runtime, sym)
+                if not is_valid_ohlcv(df):
+                    empty += 1
+                    filtered_out[sym] = "no_data"
+                    _log.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe")
+                    time.sleep(0.25)
+                    continue
+
+                # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
+                validation_result = _validate_market_data_quality(df, sym)
+                if not validation_result["valid"]:
+                    failed += 1
+                    filtered_out[sym] = validation_result["reason"]
+                    _log.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
+                    time.sleep(0.25)
+                    continue
+
+                original_len = len(df)
+                df = df[df["volume"] > 100_000]
+                if df.empty:
+                    filtered_out[sym] = "low_volume"
+                    _log.debug(
+                        f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
+                    )
+                    time.sleep(0.25)
+                    continue
+
+                series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
+                if series is None or not hasattr(series, "empty") or series.empty:
+                    filtered_out[sym] = "atr_calculation_failed"
+                    _log.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
+                    time.sleep(0.25)
+                    continue
+                atr_val = series.iloc[-1]
+                if not pd.isna(atr_val):
+                    _SCREEN_CACHE[sym] = float(atr_val)
+                    _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
+                    valid += 1
+                else:
+                    filtered_out[sym] = "atr_nan"
+                    _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
                 time.sleep(0.25)
-                continue
 
-            series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
-            if series is None or not hasattr(series, "empty") or series.empty:
-                filtered_out[sym] = "atr_calculation_failed"
-                _log.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
-                time.sleep(0.25)
-                continue
-            atr_val = series.iloc[-1]
-            if not pd.isna(atr_val):
-                _SCREEN_CACHE[sym] = float(atr_val)
-                _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
-                valid += 1
-            else:
-                filtered_out[sym] = "atr_nan"
-                _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
-            time.sleep(0.25)
+            atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
+            ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
+            selected = [sym for sym, _ in ranked[:top_n]]
 
-        atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
-        ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
-        selected = [sym for sym, _ in ranked[:top_n]]
+            _log.info(
+                f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
+                f"Selected: {selected}. "
+                f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
+            )
+            _log.info(
+                "SCREEN_SUMMARY",
+                extra={
+                    "tried": tried,
+                    "valid": valid,
+                    "empty": empty,
+                    "failed": failed,
+                },
+            )
 
-        _log.info(
-            f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
-            f"Selected: {selected}. "
-            f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
-        )
-        _log.info(
-            "SCREEN_SUMMARY",
-            extra={
-                "tried": tried,
-                "valid": valid,
-                "empty": empty,
-                "failed": failed,
-            },
-        )
-
-        return selected
-    except (KeyError, ValueError, TypeError) as e:
-        _log.error(
-            "SCREENING_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )
-        raise
+            return selected
+        except (KeyError, ValueError, TypeError) as e:
+            _log.error(
+                "SCREENING_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            raise
+        finally:
+            _screening_in_progress = False
+    finally:
+        _screen_lock.release()
 
 
 def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
@@ -11752,6 +11800,11 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_candidate_universe(runtime)
+    try:
+        pretrade_data_health(runtime, full_watchlist)
+    except DataFetchError:
+        time.sleep(1.0)
+        return 0.0, False, []
     symbols = screen_candidates(runtime)
     _log.info(
         "Number of screened candidates: %s", len(symbols)

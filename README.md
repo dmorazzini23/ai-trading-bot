@@ -560,6 +560,11 @@ python verify_config.py
    ALPACA_API_KEY=your_actual_api_key_here
    ALPACA_SECRET_KEY=your_actual_secret_key_here
    ALPACA_BASE_URL=https://paper-api.alpaca.markets  # Paper trading
+   ALPACA_DATA_FEED=iex
+   ALPACA_ADJUSTMENT=all
+   DATA_LOOKBACK_DAYS_DAILY=200
+   DATA_LOOKBACK_DAYS_MINUTE=5
+   TZ=UTC
    # ALPACA_BASE_URL=https://api.alpaca.markets     # Live trading (DANGER!)
    
    # Bot Configuration (BOT_MODE is deprecated; use TRADING_MODE)
@@ -571,6 +576,11 @@ python verify_config.py
    MAX_POSITION_PCT=0.05               # Maximum 5% per position
    MAX_PORTFOLIO_HEAT=0.15             # Maximum 15% total risk
    ENABLE_STOP_LOSS=true               # Enable stop-loss orders
+   ```
+
+4. **Quick Self-Check**
+   ```bash
+   make self-check
    ```
 
 ### 📋 Configuration Reference
