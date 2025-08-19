@@ -35,7 +35,7 @@ def check_env_file():
         
         # Load environment first to check if keys are set via env vars
         from dotenv import load_dotenv
-        load_dotenv('.env')
+        load_dotenv('.env', override=True)
         
         for var in required_vars:
             env_value = os.getenv(var)
@@ -64,7 +64,7 @@ def check_api_keys():
     try:
         # Try to load environment
         from dotenv import load_dotenv
-        load_dotenv('.env')
+        load_dotenv('.env', override=True)
         
         api_key = os.getenv('ALPACA_API_KEY')
         secret_key = os.getenv('ALPACA_SECRET_KEY')

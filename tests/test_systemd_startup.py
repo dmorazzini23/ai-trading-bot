@@ -117,7 +117,7 @@ APCA_API_BASE_URL=https://api.alpaca.markets
             test_script = f'''
 import os
 from dotenv import load_dotenv
-load_dotenv("{alpaca_env_path}")
+load_dotenv("{alpaca_env_path}", override=True)
 
 from ai_trading.config.management import _resolve_alpaca_env
 api_key, secret_key, base_url = _resolve_alpaca_env()
@@ -140,7 +140,7 @@ print("✓ ALPACA schema with .env file works")
             test_script = f'''
 import os
 from dotenv import load_dotenv
-load_dotenv("{apca_env_path}")
+load_dotenv("{apca_env_path}", override=True)
 
 from ai_trading.config.management import _resolve_alpaca_env
 api_key, secret_key, base_url = _resolve_alpaca_env()

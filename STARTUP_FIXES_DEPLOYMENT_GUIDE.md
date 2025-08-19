@@ -123,7 +123,7 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
 ```python
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 # AI-AGENT-REF: Import Settings AFTER .env is loaded
 from ai_trading.config import Settings
@@ -217,7 +217,7 @@ All existing functionality is preserved:
 
 2. Verify .env file is loaded:
    ```bash
-   python -c "from dotenv import load_dotenv; load_dotenv(); import os; print('ALPACA_API_KEY set:', bool(os.getenv('ALPACA_API_KEY')))"
+   python -c "from dotenv import load_dotenv; load_dotenv(override=True); import os; print('ALPACA_API_KEY set:', bool(os.getenv('ALPACA_API_KEY')))"
    ```
 
 ### UTC Timestamp Issues

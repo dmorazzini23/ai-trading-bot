@@ -8,9 +8,23 @@ import time  # AI-AGENT-REF: tests patch main.time.sleep
 from threading import Thread
 
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-# AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
+# AI-AGENT-REF: .env values override inherited environment
+_DOTENV_PATH = find_dotenv(usecwd=True)
+load_dotenv(_DOTENV_PATH or None, override=True)
+
+from ai_trading.logging import get_logger  # AI-AGENT-REF: early structured logging
+
+logger = get_logger(__name__)
+if _DOTENV_PATH:
+    logger.info(
+        "ENV_LOADED_FROM override=True", extra={"dotenv_path": _DOTENV_PATH}
+    )
+else:
+    logger.info("ENV_LOADED_DEFAULT override=True")
+
+# AI-AGENT-REF: Import only essential modules after env load for import-light entrypoint
 from ai_trading.config import get_settings as get_config
 from ai_trading.settings import (
     get_seed_int,
@@ -209,8 +223,6 @@ def parse_cli(argv: list[str] | None = None):
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
     args = parse_cli(argv)
-
-    load_dotenv()
     global config
     config = get_config()
     rc = _get_run_cycle()

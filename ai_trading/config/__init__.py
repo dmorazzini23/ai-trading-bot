@@ -38,7 +38,7 @@ def reload_env() -> None:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(override=False)
+        load_dotenv(override=True)
     except Exception:
         pass
 
