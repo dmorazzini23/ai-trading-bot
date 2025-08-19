@@ -97,6 +97,18 @@ config: Any | None = None
 logger = logging.getLogger(__name__)
 
 
+def _get_int_env(var: str, default: int | None = None) -> int | None:
+    """Parse integer from environment. Return default on missing/invalid."""  # AI-AGENT-REF: env parsing helper
+    val = os.getenv(var)
+    if val is None or val == "":
+        return default
+    try:
+        return int(val)
+    except Exception:
+        logger.warning("Invalid integer for %s=%r; using default %r", var, val, default)
+        return default
+
+
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
     cfg = get_config()
@@ -286,8 +298,18 @@ def main(argv: list[str] | None = None) -> None:
     last_health = time.monotonic()
 
     # CLI takes precedence; then settings
+    env_iter = _get_int_env("SCHEDULER_ITERATIONS")  # AI-AGENT-REF: env precedence for iterations
     raw_iter = (
-        args.iterations if args.iterations is not None else getattr(S, "iterations", 0)
+        args.iterations
+        if args.iterations is not None
+        else (
+            env_iter
+            if env_iter is not None
+            else (
+                getattr(S, "iterations", None)
+                or getattr(S, "scheduler_iterations", 0)
+            )
+        )
     )
     try:
         iterations = int(raw_iter)
