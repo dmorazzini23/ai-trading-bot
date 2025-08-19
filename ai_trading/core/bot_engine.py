@@ -1301,7 +1301,19 @@ YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availabilit
 # Production Alpaca SDK imports are performed lazily. Create harmless stand-ins
 # when the SDK is unavailable.
 class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
-    pass
+    """Lightweight no-op stub used before lazy-importing real Alpaca classes.
+    Accepts any args/kwargs and safely no-ops attribute access/calls.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self._args = args
+        self._kwargs = kwargs
+
+    def __getattr__(self, _name):  # return a no-op callable for any missing attr
+        def _noop(*args, **kwargs):
+            return None
+
+        return _noop
 
 
 class APIErrorStub(Exception):
