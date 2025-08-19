@@ -40,6 +40,13 @@ def _cfg_coalesce(cfg, key, default):
     return default
 
 
+class NullAlphaModel:
+    """Fallback alpha model used when no model is configured."""
+
+    def predict(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - simple no-op
+        return None
+
+
 @dataclass
 class BotRuntime:
     """
@@ -62,6 +69,7 @@ class BotRuntime:
     capital_scaler: Any = None
     execution_engine: Any = None
     drawdown_circuit_breaker: Any = None
+    model: Any = None
 
 
 def build_runtime(cfg: "TradingConfig") -> BotRuntime:
@@ -82,7 +90,9 @@ def build_runtime(cfg: "TradingConfig") -> BotRuntime:
         params[k] = float(_cfg_coalesce(cfg, k, dflt))
     
     # Add any additional keys the loop expects if needed
-    return BotRuntime(cfg=cfg, params=params)
+    runtime = BotRuntime(cfg=cfg, params=params)
+    runtime.model = NullAlphaModel()
+    return runtime
 
 
 def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any) -> BotRuntime:
@@ -105,5 +115,10 @@ def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any) -> BotR
     runtime.capital_scaler = getattr(lazy_context, 'capital_scaler', None)
     runtime.execution_engine = getattr(lazy_context, 'execution_engine', None)
     runtime.drawdown_circuit_breaker = getattr(lazy_context, 'drawdown_circuit_breaker', None)
-    
+    runtime.model = getattr(
+        lazy_context,
+        'model',
+        getattr(lazy_context, 'alpha_model', runtime.model),
+    )
     return runtime
+
