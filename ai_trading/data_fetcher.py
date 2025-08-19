@@ -182,6 +182,14 @@ def _yahoo_get_bars(
     """Fetch bars from Yahoo Finance if available."""
     try:
         import yfinance as yf  # type: ignore
+        # AI-AGENT-REF: route yfinance TzCache to writable dir to silence warnings
+        try:
+            import tempfile, os as _os
+            _tz_dir = _os.getenv("YFINANCE_TZCACHE") or _os.path.join(tempfile.gettempdir(), "py-yfinance")
+            if hasattr(yf, "set_tz_cache_location"):
+                yf.set_tz_cache_location(_tz_dir)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001
         return _empty_bars_df()
 
@@ -196,6 +204,7 @@ def _yahoo_get_bars(
             end=end,
             interval=interval,
             progress=False,
+            auto_adjust=True,  # AI-AGENT-REF: fix noisy auto_adjust default change
         )
     except Exception:  # noqa: BLE001
         return _empty_bars_df()

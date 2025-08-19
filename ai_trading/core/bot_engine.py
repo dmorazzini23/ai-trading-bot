@@ -11879,6 +11879,9 @@ def _process_symbols(
     processed: list[str] = []
     row_counts: dict[str, int] = {}
 
+    # AI-AGENT-REF: bind lazy context for trade helpers
+    ctx = get_ctx()
+
     if not hasattr(state, "trade_cooldowns"):
         state.trade_cooldowns = {}
     if not hasattr(state, "last_trade_direction"):
