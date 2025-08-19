@@ -30,10 +30,10 @@ verify:
 	./scripts/quick_verify.sh
 
 audit-exceptions:
-        python tools/audit_exceptions.py --paths ai_trading --fail-over 300
+	python tools/audit_exceptions.py --paths ai_trading --fail-over 300
 
 self-check:
-        python -m ai_trading.scripts.self_check
+	python -m ai_trading.scripts.self_check
 
 # === Import-time config hygiene helpers ===
 
