@@ -40,9 +40,15 @@ from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
 
 try:  # AI-AGENT-REF: optional Alpaca dependency
-    from alpaca_trade_api.rest import TimeFrame
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 except Exception:  # pragma: no cover
     TimeFrame = None  # type: ignore
+    class TimeFrameUnit:  # type: ignore
+        Minute = "Minute"
+        Hour = "Hour"
+        Day = "Day"
+        Week = "Week"
+        Month = "Month"
 
 # One place to define the common exception family (module-scoped)
 COMMON_EXC = (
@@ -1367,8 +1373,21 @@ class _TimeFrame:  # AI-AGENT-REF: safe constants when Alpaca SDK not installed
     Week = "Week"
     Month = "Month"
 
+    def __init__(self, amount, unit):
+        self.amount = amount
+        self.unit = unit
+
+
+class _TimeFrameUnit:
+    Minute = "Minute"
+    Hour = "Hour"
+    Day = "Day"
+    Week = "Week"
+    Month = "Month"
+
 # Expose shim under expected name
 TimeFrame = _TimeFrame
+TimeFrameUnit = _TimeFrameUnit
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
@@ -3503,7 +3522,7 @@ class DataFetcher:
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Day,
+                timeframe=TimeFrame(1, TimeFrameUnit.Day),
                 start=start_ts,
                 end=end_ts,
                 feed=_DEFAULT_FEED,
@@ -3934,7 +3953,7 @@ def prefetch_daily_data(
     try:
         req = StockBarsRequest(
             symbol_or_symbols=symbols,
-            timeframe=TimeFrame.Day,
+            timeframe=TimeFrame(1, TimeFrameUnit.Day),
             start=start_date,
             end=end_date,
             feed=_DEFAULT_FEED,
@@ -4012,7 +4031,7 @@ def prefetch_daily_data(
                     try:
                         req_sym = StockBarsRequest(
                             symbol_or_symbols=[sym],
-                            timeframe=TimeFrame.Day,
+                            timeframe=TimeFrame(1, TimeFrameUnit.Day),
                             start=start_date,
                             end=end_date,
                             feed=_DEFAULT_FEED,
