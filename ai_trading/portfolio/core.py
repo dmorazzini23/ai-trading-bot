@@ -22,22 +22,16 @@ def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
             logger.warning("Too many symbols (%d), limiting to 50", n)
             symbols = symbols[:50]
 
-        prices = [
-            get_latest_close(ctx.data_fetcher.get_daily_df(ctx, s)) for s in symbols
-        ]
-
-        # Filter out invalid prices
-        valid_prices = [(s, p) for s, p in zip(symbols, prices, strict=False) if p > 0]
-        if not valid_prices:
+        closes = {s: get_latest_close(ctx.data_fetcher.get_daily_df(ctx, s)) for s in symbols}
+        # AI-AGENT-REF: drop tickers with invalid closes
+        closes = {s: c for s, c in closes.items() if isinstance(c, int | float) and c > 0}
+        if not closes:
             logger.error("No valid prices found for any symbols")
             return {}
 
-        symbols, prices = zip(*valid_prices, strict=False)
-        inv_prices = [1.0 / p if p > 0 else 1.0 for p in prices]
-        total_inv = sum(inv_prices) or 1.0  # Prevent division by zero
-        weights = {
-            s: inv / total_inv for s, inv in zip(symbols, inv_prices, strict=False)
-        }
+        inv_prices = {s: 1.0 / c for s, c in closes.items()}
+        total_inv = sum(inv_prices.values()) or 1.0  # Prevent division by zero
+        weights = {s: inv / total_inv for s, inv in inv_prices.items()}
 
         # Validate weights sum to 1.0
         weight_sum = sum(weights.values())
@@ -78,9 +72,7 @@ def log_portfolio_summary(ctx) -> None:
         equity = float(acct.equity)
         logger.debug("Raw Alpaca positions: %s", positions)
         exposure = (
-            sum(abs(float(p.market_value)) for p in positions) / equity * 100
-            if equity > 0
-            else 0.0
+            sum(abs(float(p.market_value)) for p in positions) / equity * 100 if equity > 0 else 0.0
         )
         try:
             adaptive_cap = ctx.risk_engine._adaptive_global_cap()
@@ -120,7 +112,7 @@ def log_portfolio_summary(ctx) -> None:
             exc,
             extra={"component": "portfolio_summary", "error_type": "data"},
         )
-    except Exception as exc:  # Final safety net for unexpected errors
+    except Exception as exc:  # Final safety net for unexpected errors  # noqa: BLE001
         logger.warning(
             "Portfolio summary failed - unexpected error: %s",
             exc,
