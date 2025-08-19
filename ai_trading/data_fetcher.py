@@ -10,6 +10,12 @@ import pandas as pd
 from ai_trading.exc import COMMON_EXC, TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: Stage 2.1
+from ai_trading.alpaca_api import get_bars_df  # AI-AGENT-REF: canonical fetcher
+
+try:  # AI-AGENT-REF: optional import
+    from alpaca_trade_api.rest import TimeFrame
+except Exception:  # pragma: no cover
+    TimeFrame = None  # type: ignore
 from urllib.parse import urlencode
 from datetime import datetime, timezone
 
@@ -32,6 +38,7 @@ __all__ = [
     "age_cached_minute_timestamps",
     "last_minute_bar_age_seconds",
     "DataFetchException",
+    "get_bars_df",
 ]
 
 _log = get_logger(__name__)
@@ -140,41 +147,10 @@ def last_minute_bar_age_seconds(now: datetime | None = None) -> int:
 def _alpaca_get_bars(
     client, symbol: str, start: pd.Timestamp, end: pd.Timestamp, timeframe: str = "1Day"
 ) -> pd.DataFrame:
-    """Fetch bars via Alpaca SDK v2/v3 with a stable DataFrame format."""
-    try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.requests import StockBarsRequest
-        from alpaca.data.timeframe import TimeFrame
-
-        _ = StockHistoricalDataClient  # referenced to satisfy linter
-        start = start.tz_convert("UTC") if start is not None else pd.Timestamp.utcnow().tz_localize("UTC") - pd.Timedelta(days=1)
-        end = end.tz_convert("UTC") if end is not None else pd.Timestamp.utcnow().tz_localize("UTC")
-        tf = TimeFrame.Day if timeframe.lower() in {"1d", "1day"} else TimeFrame.Minute
-        req = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            start=start.to_pydatetime(),
-            end=end.to_pydatetime(),
-            timeframe=tf,
-            adjustment="all",
-            limit=10000,
-        )
-        resp = client.get_stock_bars(req)
-        df = getattr(resp, "df", None)
-        if df is None:
-            return _empty_bars_df()
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.xs(symbol, level=0, drop_level=False).droplevel(0)
-        df = df.reset_index().rename(columns={"index": "timestamp"})
-        rename_map = {"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
-        df = df.rename(columns=rename_map)
-        keep = ["timestamp", "open", "high", "low", "close", "volume"]
-        for k in keep:
-            if k not in df.columns:
-                df[k] = pd.NA
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return df[keep].sort_values("timestamp")
-    except Exception:
-        raise
+    """Fetch bars via new Alpaca REST helper."""  # AI-AGENT-REF
+    del client, start, end
+    tf = TimeFrame.Day if timeframe.lower() in {"1d", "1day"} else TimeFrame.Minute
+    return get_bars_df(symbol, tf)
 
 
 def _yahoo_get_bars(
@@ -221,7 +197,8 @@ def _yahoo_get_bars(
         if k not in df.columns:
             df[k] = pd.NA
     return df[keep].sort_values("timestamp")
-def get_bars(symbol: str, timeframe: str, start, end, /, *, feed=None) -> pd.DataFrame:
+def get_bars(symbol: str, timeframe: str, start, end, /, *, feed=None, client=None) -> pd.DataFrame:
+    del client
     if start is not None:
         start = ensure_datetime(start)
     if end is not None:
@@ -243,8 +220,9 @@ def get_bars(symbol: str, timeframe: str, start, end, /, *, feed=None) -> pd.Dat
 
 
 def get_bars_batch(
-    symbols: Iterable[str], timeframe: str, start, end, /, *, feed=None
+    symbols: Iterable[str], timeframe: str, start, end, /, *, feed=None, client=None
 ) -> dict[str, pd.DataFrame]:
+    del client
     out: dict[str, pd.DataFrame] = {}
     for sym in symbols:
         out[str(sym)] = get_bars(sym, timeframe, start, end, feed=feed)
@@ -258,21 +236,16 @@ def get_minute_df(
     *,
     feed=None,
 ) -> pd.DataFrame:
-    start = ensure_datetime(start) if start else None
-    end = ensure_datetime(end) if end else None
-    SAFE_EXC = COMMON_EXC + (DataFetchException,)
+    del start, end, feed
     try:
-        if feed and hasattr(feed, "get_bars"):
-            return retry_call(
-                lambda: feed.get_bars(symbol, "1Min", start, end) or pd.DataFrame(),
-                exceptions=TRANSIENT_HTTP_EXC,
-            )
-    except SAFE_EXC as exc:  # AI-AGENT-REF: Stage 2.1 narrow catch
-        _log.info(f"feed.get_bars error {exc.__class__.__name__}", exc_info=True)
-    except AttributeError:
-        pass
-    cols = ["Open", "High", "Low", "Close", "Volume"]
-    return pd.DataFrame(columns=cols)
+        df = get_bars_df(symbol, TimeFrame.Minute)
+        return df
+    except Exception as exc:  # noqa: BLE001
+        _log.warning(
+            "ALPACA_MINUTE_FAIL",
+            extra={"symbol": symbol, "error": str(exc)},
+        )
+        raise
 
 
 def get_minute_bars_batch(

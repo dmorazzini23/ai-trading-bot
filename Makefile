@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract audit-exceptions
+.PHONY: init test lint verify test-all contract audit-exceptions self-check
 
 init:
 	python tools/check_python_version.py
@@ -30,7 +30,10 @@ verify:
 	./scripts/quick_verify.sh
 
 audit-exceptions:
-	python tools/audit_exceptions.py --paths ai_trading --fail-over 300
+        python tools/audit_exceptions.py --paths ai_trading --fail-over 300
+
+self-check:
+        python -m ai_trading.scripts.self_check
 
 # === Import-time config hygiene helpers ===
 
