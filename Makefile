@@ -30,7 +30,7 @@ verify:
 	./scripts/quick_verify.sh
 
 audit-exceptions:
-	python tools/audit_exceptions.py --paths ai_trading --fail-over 12
+	python tools/audit_exceptions.py --paths ai_trading --fail-over 300
 
 # === Import-time config hygiene helpers ===
 

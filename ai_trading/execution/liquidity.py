@@ -5,11 +5,28 @@ Provides comprehensive liquidity analysis, volume screening,
 and execution optimization for institutional-grade trading operations.
 """
 
-import logging
 import statistics
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
+from json import JSONDecodeError
 from typing import Any
+
+try:  # Optional dependency
+    import requests  # type: ignore
+    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
+except ImportError:  # AI-AGENT-REF: optional requests dependency
+    class RequestException(Exception):
+        pass
+
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    RequestException,
+    TimeoutError,
+    ImportError,
+)  # AI-AGENT-REF: narrow common exception family
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
@@ -129,7 +146,7 @@ class LiquidityAnalyzer:
 
             return analysis_result
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error analyzing liquidity for {symbol}: {e}")
             return {"error": str(e), "symbol": symbol}
 
@@ -181,7 +198,7 @@ class LiquidityAnalyzer:
                 "data_points": len(volume_data),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error analyzing volume patterns: {e}")
             return {"error": str(e)}
 
@@ -260,7 +277,7 @@ class LiquidityAnalyzer:
                 "data_points": len(spreads),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error analyzing bid-ask spread: {e}")
             return {"error": str(e)}
 
@@ -323,7 +340,7 @@ class LiquidityAnalyzer:
                 "data_points": len(dollar_volumes),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error analyzing dollar volume: {e}")
             return {"error": str(e)}
 
@@ -380,7 +397,7 @@ class LiquidityAnalyzer:
                 "current_hour": hour,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error analyzing market hours liquidity: {e}")
             return {
                 "market_session": MarketHours.REGULAR_HOURS,
@@ -453,7 +470,7 @@ class LiquidityAnalyzer:
             else:
                 return LiquidityLevel.VERY_LOW
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error determining liquidity level: {e}")
             return LiquidityLevel.NORMAL
 
@@ -567,7 +584,7 @@ class LiquidityAnalyzer:
 
             return recommendations
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error generating execution recommendations: {e}")
             return {"error": str(e)}
 
@@ -585,7 +602,7 @@ class LiquidityAnalyzer:
             else:
                 return "normal"
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error classifying volume pattern: {e}")
             return "normal"
 
@@ -600,7 +617,7 @@ class LiquidityAnalyzer:
             # Rough estimate: if it's the third week of the month
             return 15 <= day <= 21
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error checking option expiry: {e}")
             return False
 
@@ -628,7 +645,7 @@ class LiquidityAnalyzer:
             if len(self.liquidity_history[symbol]) > 50:
                 self.liquidity_history[symbol] = self.liquidity_history[symbol][-50:]
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating liquidity history: {e}")
 
     def get_liquidity_trend(
@@ -687,7 +704,7 @@ class LiquidityAnalyzer:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting liquidity trend: {e}")
             return {"error": str(e)}
 
@@ -749,7 +766,7 @@ class LiquidityAnalyzer:
                     "reduction_ratio": recommended_size / target_size,
                 }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating optimal order size: {e}")
             return {"error": str(e)}
 
@@ -786,7 +803,7 @@ class LiquidityManager:
 
             return analysis
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating symbol liquidity: {e}")
             return {"error": str(e)}
 
@@ -841,7 +858,7 @@ class LiquidityManager:
                 "last_updated": datetime.now(timezone.utc),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting portfolio liquidity summary: {e}")
             return {"error": str(e)}
 
@@ -880,7 +897,7 @@ class LiquidityManager:
 
             return sorted(illiquid_positions, key=lambda x: x["avg_dollar_volume"])
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting illiquid positions: {e}")
             return []
 
@@ -905,6 +922,6 @@ class LiquidityManager:
                 (total_score / total_symbols - 1) / 4 if total_symbols > 0 else 0.0
             )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating portfolio liquidity score: {e}")
             self.portfolio_liquidity_score = 0.0
