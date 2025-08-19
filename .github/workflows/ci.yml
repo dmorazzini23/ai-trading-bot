@@ -28,5 +28,7 @@ PY
           ruff check .
           ruff format --check .
           mypy ai_trading
+      - name: Audit exceptions
+        run: make audit-exceptions
       - name: Tests
         run: pytest -q -n auto --maxfail=1
