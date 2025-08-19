@@ -1,6 +1,7 @@
 """Enhanced RL training with reward shaping and evaluation callbacks."""
 
 import json
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import logging
 import os
 from datetime import UTC, datetime
@@ -19,7 +20,7 @@ try:
     from stable_baselines3.common.vec_env import DummyVecEnv
 
     sb3_available = True
-except Exception as e:
+except COMMON_EXC as e:  # AI-AGENT-REF: narrow
     # Catch broader failures (e.g., Torch partial installs raising AttributeError during import)
     sb3_available = False
     logger.warning("stable-baselines3 unavailable; RL features disabled: %s", e)
@@ -117,7 +118,7 @@ if sb3_available:
                                     f"Early stopping after {self.patience} evaluations without improvement"
                                 )
                             return False
-                except Exception as e:
+                except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                     if self.verbose > 0:
                         logger.warning(f"Error in early stopping callback: {e}")
 
@@ -200,7 +201,7 @@ if sb3_available:
                         f"Eval at step {self.n_calls}: mean_reward={mean_reward:.4f} ± {std_reward:.4f}"
                     )
 
-            except Exception as e:
+            except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                 logger.error(f"Error in evaluation: {e}")
 
         def _collect_detailed_metrics(self) -> dict[str, float]:
@@ -251,7 +252,7 @@ if sb3_available:
                     ),
                 }
 
-            except Exception as e:
+            except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                 logger.error(f"Error collecting detailed metrics: {e}")
                 return {}
 
@@ -269,7 +270,7 @@ if sb3_available:
 
                 return 0.0
 
-            except Exception:
+            except COMMON_EXC:  # AI-AGENT-REF: narrow
                 return 0.0
 
         def save_results(self, path: str) -> None:
@@ -278,7 +279,7 @@ if sb3_available:
                 with open(path, "w") as f:
                     json.dump(self.eval_results, f, indent=2)
                 logger.info(f"Evaluation results saved to {path}")
-            except Exception as e:
+            except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                 logger.error(f"Error saving evaluation results: {e}")
 
 else:
@@ -405,7 +406,7 @@ class RLTrainer:
             logger.info("RL training completed successfully")
             return self.training_results
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in RL training: {e}")
             raise
 
@@ -444,7 +445,7 @@ class RLTrainer:
                 f"Environments created: train_data={len(train_data)}, eval_data={len(eval_data)}"
             )
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error creating environments: {e}")
             raise
 
@@ -517,7 +518,7 @@ class RLTrainer:
                 f"Model created: {self.algorithm} with {len(final_params)} parameters"
             )
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error creating model: {e}")
             raise
 
@@ -545,7 +546,7 @@ class RLTrainer:
 
             return callbacks
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error setting up callbacks: {e}")
             return []
 
@@ -608,7 +609,7 @@ class RLTrainer:
 
             return final_metrics
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in final evaluation: {e}")
             return {}
 
@@ -646,7 +647,7 @@ class RLTrainer:
 
             logger.info(f"Model and results saved to {save_path}")
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error saving model and results: {e}")
 
 
@@ -691,7 +692,7 @@ def train_rl_model_cli() -> None:
             f"Training completed with final reward: {results['final_evaluation'].get('mean_reward', 'N/A')}"
         )
 
-    except Exception as e:
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow
         logger.error(f"Error in RL CLI training: {e}")
         raise
 

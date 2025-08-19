@@ -6,6 +6,7 @@ and generate trading signals with confidence scoring and risk assessment.
 """
 
 import warnings
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -169,7 +170,7 @@ class MetaLearning(BaseStrategy):
 
             return signal_dict
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in execute_strategy for {symbol}: {e}")
             return self._neutral_signal()
 
@@ -217,7 +218,7 @@ class MetaLearning(BaseStrategy):
                         signals.append(signal)
                         self.signals_generated += 1
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating signals: {e}")
 
         return signals
@@ -266,7 +267,7 @@ class MetaLearning(BaseStrategy):
 
             return position_size
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating position size: {e}")
             return 0
 
@@ -404,7 +405,7 @@ class MetaLearning(BaseStrategy):
 
             return True
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error training model: {e}")
             logger.info("ML training failed, enabling fallback mode")
             # AI-AGENT-REF: Set fallback mode when ML training fails
@@ -452,7 +453,7 @@ class MetaLearning(BaseStrategy):
             try:
                 rf_proba = self.rf_model.predict_proba(features_scaled)[0]
                 gb_proba = self.gb_model.predict_proba(features_scaled)[0]
-            except Exception as e:
+            except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                 logger.warning(f"Model prediction failed: {e}, using fallback")
                 return self._fallback_prediction(data)
 
@@ -530,7 +531,7 @@ class MetaLearning(BaseStrategy):
 
             return result
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in predict_price_movement: {e}")
             return None
 
@@ -692,7 +693,7 @@ class MetaLearning(BaseStrategy):
 
             return features
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error extracting features: {e}")
             return None
 
@@ -786,7 +787,7 @@ class MetaLearning(BaseStrategy):
 
             return aligned_labels
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error creating target labels: {e}")
             return pd.Series(dtype=int)
 
@@ -874,7 +875,7 @@ class MetaLearning(BaseStrategy):
                 "model_accuracy": self.prediction_accuracy,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error converting prediction to signal: {e}")
             return self._neutral_signal()
 
@@ -1011,7 +1012,7 @@ class MetaLearning(BaseStrategy):
                 "source": "technical_fallback",
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in enhanced fallback prediction: {e}")
             return self._simple_momentum_fallback(data)
 
@@ -1068,6 +1069,6 @@ class MetaLearning(BaseStrategy):
                 "source": "momentum_fallback",
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in simple fallback prediction: {e}")
             return None

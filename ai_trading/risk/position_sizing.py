@@ -7,6 +7,7 @@ for institutional-grade trading operations.
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import math
 import statistics
 from datetime import UTC, datetime
@@ -88,7 +89,7 @@ class ATRPositionSizer:
 
             return position_size
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating ATR position size: {e}")
             return 0
 
@@ -125,7 +126,7 @@ class ATRPositionSizer:
                 "take_profit": max(0.01, take_profit),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating stop levels: {e}")
             return {"stop_loss": 0.0, "take_profit": 0.0}
 
@@ -185,7 +186,7 @@ class VolatilityPositionSizer:
 
             return volatility_multiplier
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating volatility multiplier: {e}")
             return 1.0
 
@@ -213,7 +214,7 @@ class VolatilityPositionSizer:
 
             return max(1, adjusted_size)
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating volatility-adjusted position size: {e}")
             return base_position_size
 
@@ -355,7 +356,7 @@ class DynamicPositionSizer:
 
             return result
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating optimal position for {symbol}: {e}")
             return {
                 "symbol": symbol,
@@ -418,7 +419,7 @@ class DynamicPositionSizer:
             )
             return scaled_orders
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating scaling orders: {e}")
             return []
 
@@ -434,7 +435,7 @@ class DynamicPositionSizer:
             )
             return min(1.0, risk_estimate)  # Cap at 100%
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
 
@@ -532,7 +533,7 @@ class PortfolioPositionManager:
 
             return assessment
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error assessing new position for {symbol}: {e}")
             return {
                 "symbol": symbol,
@@ -559,7 +560,7 @@ class PortfolioPositionManager:
             # Recalculate total risk exposure
             self._recalculate_risk_exposure()
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating position for {symbol}: {e}")
 
     def get_portfolio_summary(self) -> dict[str, Any]:
@@ -581,7 +582,7 @@ class PortfolioPositionManager:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating portfolio summary: {e}")
             return {"error": str(e)}
 
@@ -594,6 +595,6 @@ class PortfolioPositionManager:
                 for pos in self.current_positions.values()
             )
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error recalculating risk exposure: {e}")
             self.total_risk_exposure = 0.0

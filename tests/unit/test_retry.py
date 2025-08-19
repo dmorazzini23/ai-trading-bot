@@ -32,16 +32,16 @@ class _AlwaysFail:
 @pytest.mark.unit
 def test_retry_eventually_succeeds() -> None:
     flaky = _Flaky()
-    result = retry_call(flaky, exceptions=RuntimeError, attempts=3)
+    result = retry_call(flaky, exceptions=(RuntimeError,), retries=2)
     assert result == "ok"
-    assert flaky.calls == 3
+    assert flaky.calls == 2
 
 
 @pytest.mark.unit
 def test_retry_raises_after_exhaustion() -> None:
     failing = _AlwaysFail()
     with pytest.raises(ValueError):
-        retry_call(failing, exceptions=ValueError, attempts=3)
+        retry_call(failing, exceptions=(ValueError,), retries=2)
     assert failing.calls == 3
 
 
@@ -58,7 +58,7 @@ def test_fast_retry_skips_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
         return "done"
 
     start = time.perf_counter()
-    result = retry_call(func, exceptions=RuntimeError, attempts=2, base_delay=0.5)
+    result = retry_call(func, exceptions=(RuntimeError,), retries=1, backoff=0.5)
     elapsed = time.perf_counter() - start
     assert result == "done"
     assert calls["n"] == 2

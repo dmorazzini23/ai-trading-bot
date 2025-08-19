@@ -6,6 +6,7 @@ and real-time risk controls for institutional trading operations.
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import math
 import statistics
 from datetime import UTC, datetime, timedelta
@@ -145,7 +146,7 @@ class RiskManager:
 
             return assessment
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error assessing trade risk: {e}")
             return {
                 "symbol": symbol,
@@ -245,7 +246,7 @@ class RiskManager:
 
             return assessment
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error checking portfolio risk: {e}")
             return {
                 "overall_risk_level": "Critical",
@@ -263,7 +264,7 @@ class RiskManager:
                     0, (peak_value - current_value) / peak_value
                 )
                 logger.debug(f"Drawdown updated: {self.current_drawdown:.3f}")
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating drawdown: {e}")
 
     def get_risk_alerts(self) -> list[dict]:
@@ -289,7 +290,7 @@ class RiskManager:
 
             logger.warning(f"Risk alert added: {alert_type} - {message}")
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error adding risk alert: {e}")
 
 
@@ -339,7 +340,7 @@ class PortfolioRiskAssessor:
             logger.debug(f"VaR ({confidence_level:.0%}): {var:.4f}")
             return var
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating VaR: {e}")
             return 0.0
 
@@ -377,7 +378,7 @@ class PortfolioRiskAssessor:
             )
             return expected_shortfall
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating Expected Shortfall: {e}")
             return 0.0
 
@@ -417,7 +418,7 @@ class PortfolioRiskAssessor:
 
             return correlations
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating correlation matrix: {e}")
             return {}
 
@@ -448,7 +449,7 @@ class PortfolioRiskAssessor:
             correlation = numerator / denominator
             return max(-1.0, min(1.0, correlation))  # Clamp to [-1, 1]
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating correlation: {e}")
             return 0.0
 
@@ -494,7 +495,7 @@ class PortfolioRiskAssessor:
 
             return results
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in stress testing: {e}")
             return {"error": str(e)}
 
@@ -524,6 +525,6 @@ class PortfolioRiskAssessor:
                 "portfolio_change_pct": change_pct,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error applying stress scenario: {e}")
             return {"error": str(e)}

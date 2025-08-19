@@ -12,6 +12,7 @@ AI-AGENT-REF: Main intelligent position management orchestrator
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -165,7 +166,7 @@ class IntelligentPositionManager:
 
             return recommendation
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("analyze_position failed for %s: %s", symbol, exc)
             return self._get_default_recommendation(symbol, f"Analysis error: {exc}")
 
@@ -188,7 +189,7 @@ class IntelligentPositionManager:
 
             # Position tracking is updated during analysis calls
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "update_position_tracking failed for %s: %s", symbol, exc
             )
@@ -230,7 +231,7 @@ class IntelligentPositionManager:
                 # Default to holding for NO_ACTION
                 return True
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("should_hold_position failed for %s: %s", symbol, exc)
             # Fallback to simple logic
             return unrealized_pnl_pct > 5.0 or days_held < 3
@@ -260,7 +261,7 @@ class IntelligentPositionManager:
 
             return recommendations
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("get_portfolio_recommendations failed: %s", exc)
             return []
 
@@ -282,7 +283,7 @@ class IntelligentPositionManager:
                 "metrics": regime_metrics,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_analyze_market_regime failed: %s", exc)
             return {
                 "regime": MarketRegime.RANGE_BOUND,
@@ -306,7 +307,7 @@ class IntelligentPositionManager:
                 "momentum": signals.momentum_score,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_analyze_technical_signals failed for %s: %s", symbol, exc
             )
@@ -341,7 +342,7 @@ class IntelligentPositionManager:
                 "has_targets": len(triggered_targets) > 0,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_analyze_profit_opportunities failed for %s: %s", symbol, exc
             )
@@ -369,7 +370,7 @@ class IntelligentPositionManager:
                 "trail_distance": stop_level.trail_distance if stop_level else 0.0,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_analyze_trailing_stops failed for %s: %s", symbol, exc
             )
@@ -415,7 +416,7 @@ class IntelligentPositionManager:
                 "correlation_factor": correlation_factor,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_analyze_portfolio_context failed for %s: %s", symbol, exc
             )
@@ -583,7 +584,7 @@ class IntelligentPositionManager:
 
             return recommendation
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_generate_integrated_recommendation failed for %s: %s", symbol, exc
             )
@@ -658,7 +659,7 @@ class IntelligentPositionManager:
 
             return quantity_to_sell, percentage_to_sell, target_price, stop_price
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return None, None, None, None
 
     def _determine_primary_reason(
@@ -719,7 +720,7 @@ class IntelligentPositionManager:
 
             return 0.0
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _get_default_recommendation(

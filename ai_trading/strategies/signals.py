@@ -7,6 +7,7 @@ meta-learning, stacking, and turnover management.
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import statistics
 from datetime import UTC, datetime
 from typing import Any
@@ -126,7 +127,7 @@ class SignalAggregator:
 
             return aggregated_signal
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error aggregating signals: {e}")
             return None
 
@@ -257,7 +258,7 @@ class SignalAggregator:
                     predicted_weight = self.meta_model.predict([features])[0]
                     # Ensure reasonable bounds
                     predicted_weight = max(-1.0, min(1.0, predicted_weight))
-                except Exception as e:
+                except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                     logger.warning(f"Meta-model prediction failed: {e}")
                     predicted_weight = 0.0
             else:
@@ -315,7 +316,7 @@ class SignalAggregator:
 
             return None
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error in stacking aggregation: {e}")
             return self._weighted_average_aggregation(signals)
 
@@ -355,7 +356,7 @@ class SignalAggregator:
 
                         decayed_signals.append(decayed_signal)
 
-                    except Exception as e:
+                    except COMMON_EXC as e:  # AI-AGENT-REF: narrow
                         logger.warning(f"Error parsing signal timestamp: {e}")
                         decayed_signals.append(signal)
                 else:
@@ -364,7 +365,7 @@ class SignalAggregator:
 
             return decayed_signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error applying signal decay: {e}")
             return signals
 
@@ -434,7 +435,7 @@ class SignalAggregator:
 
             return resolved_signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error resolving signal conflicts: {e}")
             return signals
 
@@ -478,7 +479,7 @@ class SignalAggregator:
 
             return signal
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error applying turnover penalty: {e}")
             return signal
 
@@ -542,7 +543,7 @@ class SignalAggregator:
 
             return features
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error preparing meta features: {e}")
             return None
 
@@ -567,7 +568,7 @@ class SignalAggregator:
 
             logger.debug(f"Meta-model trained with {len(X)} samples")
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error training meta-model: {e}")
             self.meta_model = None
 
@@ -586,7 +587,7 @@ class SignalAggregator:
 
             return X, y
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error preparing training data: {e}")
             return [], []
 
@@ -620,7 +621,7 @@ class SignalAggregator:
             if len(self.ensemble_history) > 1000:
                 self.ensemble_history = self.ensemble_history[-500:]
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating performance tracking: {e}")
 
     def update_signal_performance(
@@ -676,7 +677,7 @@ class SignalAggregator:
             # Update meta-model training data
             self._add_performance_observation(signal_id, actual_return)
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating signal performance: {e}")
 
     def _add_performance_observation(
@@ -705,7 +706,7 @@ class SignalAggregator:
 
                     break
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error adding performance observation: {e}")
 
     def get_signal_statistics(self) -> dict[str, Any]:
@@ -737,7 +738,7 @@ class SignalAggregator:
 
             return stats
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error getting signal statistics: {e}")
             return {}
 
@@ -785,7 +786,7 @@ class SignalProcessor:
             )
             return processed_signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error processing signals: {e}")
             return []
 

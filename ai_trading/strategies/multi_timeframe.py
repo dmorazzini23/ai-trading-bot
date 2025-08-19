@@ -8,6 +8,7 @@ institutional-grade trading strategies.
 
 # AI-AGENT-REF: use standard imports for hard dependencies
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -152,7 +153,7 @@ class TimeframeHierarchy:
             else:
                 return 0.0
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating timeframe score: {e}")
             return 0.0
 
@@ -242,7 +243,7 @@ class MultiTimeframeAnalyzer:
                 "signal_count": len(timeframe_signals),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing symbol {symbol}: {e}")
             return {"error": str(e), "symbol": symbol}
 
@@ -284,7 +285,7 @@ class MultiTimeframeAnalyzer:
             )
             return signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing timeframe {timeframe.value}: {e}")
             return []
 
@@ -369,7 +370,7 @@ class MultiTimeframeAnalyzer:
 
             return signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating MA signals: {e}")
             return []
 
@@ -427,7 +428,7 @@ class MultiTimeframeAnalyzer:
 
             return signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating RSI signals: {e}")
             return []
 
@@ -488,7 +489,7 @@ class MultiTimeframeAnalyzer:
 
             return signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating MACD signals: {e}")
             return []
 
@@ -550,7 +551,7 @@ class MultiTimeframeAnalyzer:
 
             return signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating Bollinger signals: {e}")
             return []
 
@@ -611,7 +612,7 @@ class MultiTimeframeAnalyzer:
 
             return signals
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating volume signals: {e}")
             return []
 
@@ -685,7 +686,7 @@ class MultiTimeframeAnalyzer:
                 },
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error combining timeframe signals: {e}")
             return {"error": str(e)}
 
@@ -760,7 +761,7 @@ class MultiTimeframeAnalyzer:
 
             return alignment_analysis
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing signal alignment: {e}")
             return {"error": str(e)}
 
@@ -789,7 +790,7 @@ class MultiTimeframeAnalyzer:
 
             return alignment_ratio
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating indicator alignment: {e}")
             return 0.0
 
@@ -871,7 +872,7 @@ class MultiTimeframeAnalyzer:
 
             return recommendation
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating trading recommendation: {e}")
             return {"action": "HOLD", "confidence": 0.0, "error": str(e)}
 
@@ -892,7 +893,7 @@ class MultiTimeframeAnalyzer:
             if len(self.signal_history[symbol]) > 100:
                 self.signal_history[symbol] = self.signal_history[symbol][-100:]
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating signal history: {e}")
 
     def get_signal_trend(
@@ -946,7 +947,7 @@ class MultiTimeframeAnalyzer:
                 "periods_analyzed": len(scores),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing signal trend: {e}")
             return {"error": str(e)}
 

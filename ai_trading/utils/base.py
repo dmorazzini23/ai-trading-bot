@@ -1,4 +1,5 @@
 from ai_trading.config import get_settings
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 """Utility functions for common operations across the bot."""
 
@@ -22,7 +23,7 @@ import pandas as pd
 
 try:
     import pandas_market_calendars as mcal  # AI-AGENT-REF: optional dependency
-except Exception:  # AI-AGENT-REF: library optional in tests
+except ImportError:  # AI-AGENT-REF: optional dependency
     mcal = None
 import numpy as np
 
@@ -34,7 +35,7 @@ from ai_trading.settings import get_verbose_logging
 # Alpaca SDK imports - now required dependencies
 try:  # AI-AGENT-REF: optional dependency guard
     from alpaca_trade_api.rest import REST
-except Exception:  # pragma: no cover
+except ImportError:  # AI-AGENT-REF: optional dependency  # pragma: no cover
     REST = object
 
 HAS_PANDAS = True
@@ -258,7 +259,7 @@ def get_latest_close(df: DataFrame) -> float:
     try:
         v = float(df["close"].dropna().iloc[-1])
         return v if np.isfinite(v) else 0.0
-    except Exception:
+    except COMMON_EXC:  # AI-AGENT-REF: narrow
         return 0.0
 
 
@@ -270,7 +271,7 @@ def get_current_price(symbol: str) -> float:
 
         data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
         price = float(data.get("ap", 0) or 0)
-    except Exception as exc:  # pragma: no cover - network/API errors
+    except COMMON_EXC as exc:  # AI-AGENT-REF: narrow  # pragma: no cover - network/API errors
         logger.warning("get_current_price primary fetch failed for %s: %s", symbol, exc)
 
     if price <= 0:
@@ -286,7 +287,7 @@ def get_current_price(symbol: str) -> float:
             start = end - dt.timedelta(days=5)
             df = get_daily_df(symbol, start, end)
             price = get_latest_close(df) if df is not None else 0.0
-        except Exception as exc:  # pragma: no cover - fallback errors
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow  # pragma: no cover - fallback errors
             logger.warning("get_current_price fallback failed for %s: %s", symbol, exc)
 
     if price <= 0:
@@ -392,7 +393,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         )
         current = check_time.time()
         return market_open <= current <= market_close
-    except Exception as exc:
+    except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
         logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
         now_et = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
@@ -432,7 +433,7 @@ def is_weekend(timestamp: dt.datetime | Timestamp | None = None) -> bool:
     try:
         et_time = timestamp.astimezone(ZoneInfo("America/New_York"))
         return et_time.weekday() >= 5  # Saturday=5, Sunday=6
-    except Exception:
+    except COMMON_EXC:  # AI-AGENT-REF: narrow
         # Fallback to UTC weekday
         return timestamp.weekday() >= 5
 
@@ -512,7 +513,7 @@ def get_pid_on_port(port: int) -> int | None:
                 inode = parts[9]
                 if int(local.split(":")[1], 16) == port:
                     return _pid_from_inode(inode)
-    except Exception as e:
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow
         logging.getLogger(__name__).error("get_pid_on_port failed", exc_info=e)
         return None
     return None
@@ -584,7 +585,7 @@ def get_ml_confidence(symbol: str) -> float:
         from ai_trading.ml_model import (
             load_model,
         )  # AI-AGENT-REF: use packaged ml_model
-    except Exception as e:  # pragma: no cover - optional dependency
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow  # pragma: no cover - optional dependency
         logger.error("load_model failed", exc_info=e)
         return 0.5
 
@@ -596,7 +597,7 @@ def get_ml_confidence(symbol: str) -> float:
     feats = DataFrame({"price": [0.0]})
     try:
         conf = float(model.predict_proba(feats)[0][1])
-    except Exception as e:
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow
         logger.error("predict_proba failed", exc_info=e)
         conf = 0.5
     logger.info("ML confidence for %s=%.2f", symbol, conf)
@@ -670,7 +671,7 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
         try:
             # Let pandas infer the format and coerce invalid entries to NaT
             return pd.to_datetime(arr, errors="coerce", utc=utc)
-        except Exception as exc2:
+        except COMMON_EXC as exc2:  # AI-AGENT-REF: narrow
             logger.error("safe_to_datetime failed%s: %s", ctx, exc2)
             # Fall back to an array of NaT with proper timezone
             length = len(arr) if hasattr(arr, "__len__") else 1
@@ -715,7 +716,7 @@ def health_check(df: DataFrame, resolution: str | None = None) -> bool:
     min_rows = int(os.getenv("HEALTH_MIN_ROWS", "0"))
     try:
         return len(df) >= min_rows
-    except Exception:
+    except COMMON_EXC:  # AI-AGENT-REF: narrow
         return False
 
 
@@ -895,7 +896,7 @@ def check_symbol(symbol: str, api: Any) -> bool:
     try:
         path = os.path.join("data", f"{symbol}.csv")
         df = pd.read_csv(path)
-    except Exception as exc:  # pragma: no cover - I/O error
+    except COMMON_EXC as exc:  # AI-AGENT-REF: narrow  # pragma: no cover - I/O error
         logging.warning("Health check fetch failed for %s: %s", symbol, exc)
         return False
     return health_check(df, "daily")

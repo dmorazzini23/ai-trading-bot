@@ -1,6 +1,7 @@
 """Position holding and management logic for reducing churn."""
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
@@ -83,7 +84,7 @@ class PositionManager:
                 "INTELLIGENT_POSITION_MANAGER | Initialized advanced position management system"
             )
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "Failed to initialize intelligent position manager: %s", exc
             )
@@ -119,7 +120,7 @@ class PositionManager:
                     )
                     return result
 
-                except Exception as exc:
+                except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
                     self.logger.warning(
                         "Intelligent system failed for %s, using fallback: %s",
                         symbol,
@@ -132,7 +133,7 @@ class PositionManager:
                 symbol, current_position, unrealized_pnl_pct, days_held
             )
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("should_hold_position failed for %s: %s", symbol, exc)
             return False
 
@@ -167,7 +168,7 @@ class PositionManager:
 
             return False
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_legacy_should_hold_position failed for %s: %s", symbol, exc
             )
@@ -193,7 +194,7 @@ class PositionManager:
                 )
                 return []
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("get_intelligent_recommendations failed: %s", exc)
             return []
 
@@ -203,7 +204,7 @@ class PositionManager:
             if self.use_intelligent_system and self.intelligent_manager:
                 self.intelligent_manager.update_position_tracking(symbol, position_data)
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "update_intelligent_tracking failed for %s: %s", symbol, exc
             )
@@ -218,7 +219,7 @@ class PositionManager:
             ):
                 return self.ctx.api.list_open_positions()
             return []
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return []
 
     def calculate_momentum_score(self, symbol: str) -> float:
@@ -245,7 +246,7 @@ class PositionManager:
 
             return momentum_score
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "calculate_momentum_score failed for %s: %s", symbol, exc
             )
@@ -299,7 +300,7 @@ class PositionManager:
 
             return max(0.0, min(1.0, score))
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "calculate_position_score failed for %s: %s", symbol, exc
             )
@@ -338,7 +339,7 @@ class PositionManager:
                     pos.days_held = (datetime.now(UTC) - pos.entry_time).days
                     pos.momentum_score = self.calculate_momentum_score(symbol)
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "update_position_tracking failed for %s: %s", symbol, exc
             )
@@ -374,7 +375,7 @@ class PositionManager:
                     # Neutral - defer to other signals
                     hold_signals[symbol] = "neutral"
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("get_hold_signals failed: %s", exc)
 
         return hold_signals
@@ -394,7 +395,7 @@ class PositionManager:
 
             return 0.0
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _calculate_days_held(self, symbol: str) -> int:
@@ -405,7 +406,7 @@ class PositionManager:
                     entry_time = self.positions[symbol].entry_time
                     return (datetime.now(UTC) - entry_time).days
             return 0
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0
 
     def _get_sector_strength(self, symbol: str) -> float:
@@ -429,7 +430,7 @@ class PositionManager:
                     )
                     del self.positions[symbol]
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("cleanup_stale_positions failed: %s", exc)
 
 
@@ -461,5 +462,5 @@ def calculate_position_score(symbol: str, position_data) -> float:
         score = min(1.0, abs(qty) / 100.0)  # Normalize to typical position size
         return score
 
-    except Exception:
+    except COMMON_EXC:  # AI-AGENT-REF: narrow
         return 0.0
