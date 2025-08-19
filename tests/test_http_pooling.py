@@ -17,10 +17,10 @@ def test_pool_config_defaults(monkeypatch):
 
 
 def test_host_semaphore_respects_env(monkeypatch):
-    def fake_get(self, url, timeout=None, headers=None):
+    def fake_get(url, timeout=None, headers=None):
         return DummyResp()
 
-    monkeypatch.setattr(requests.Session, "get", fake_get, raising=False)
+    monkeypatch.setattr(H, "get", fake_get)
     monkeypatch.setenv("HTTP_MAX_PER_HOST", "3")
     _ = H.map_get(["https://example.com"])
     assert H.pool_stats()["per_host"] == 3

@@ -32,9 +32,9 @@ def run(symbols: list[str], timeout: float | None = None) -> int:
     with StageTimer(logger, "UNIVERSE_FETCH", universe_size=len(symbols)):
         results = http.map_get(urls, timeout=timeout)
     logger.info("HTTP_POOL_STATS", extra=http.pool_stats())
-    for (_url, code, _), sym in zip(results, symbols, strict=False):
-        if code != 200:
-            logger.error("fetch failed for %s status=%s", sym, code)
+    for (resp, err), sym in zip(results, symbols, strict=False):  # AI-AGENT-REF: Stage 2.1
+        if err or not resp or resp[1] != 200:
+            logger.error("fetch failed for %s", sym)
             failures += 1
     return 0 if failures == 0 else 1
 
