@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Iterable
-from datetime import datetime
 import os
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 import pandas as pd
 
+from ai_trading.alpaca_api import get_bars_df  # AI-AGENT-REF: canonical fetcher
 from ai_trading.exc import COMMON_EXC, TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: Stage 2.1
-from ai_trading.alpaca_api import get_bars_df  # AI-AGENT-REF: canonical fetcher
 
 try:  # AI-AGENT-REF: optional import
     from alpaca_trade_api.rest import TimeFrame
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover  # noqa: BLE001
     TimeFrame = None  # type: ignore
-from urllib.parse import urlencode
-from datetime import datetime, timezone
 
 # AI-AGENT-REF: lightweight stubs for data fetch routines
 FINNHUB_AVAILABLE = True
@@ -70,7 +69,7 @@ def ensure_datetime(dt_or_str, *, tz: str | None = "UTC") -> datetime:
         dt_obj = dt_or_str
     elif isinstance(dt_or_str, str):
         dt_obj = datetime.fromisoformat(dt_or_str.replace("Z", "+00:00"))
-    elif isinstance(dt_or_str, (int, float)):
+    elif isinstance(dt_or_str, int | float):
         dt_obj = datetime.fromtimestamp(dt_or_str, tz=dt.UTC)
     else:
         raise TypeError(f"Unsupported type for ensure_datetime: {type(dt_or_str)!r}")
@@ -153,19 +152,43 @@ def _alpaca_get_bars(
     return get_bars_df(symbol, tf)
 
 
+def _to_utc_dt(dt_like):
+    """Return a UTC-aware ``datetime.datetime`` or ``None``."""  # AI-AGENT-REF: robust tz
+    if dt_like is None:
+        return None
+    if isinstance(dt_like, datetime):
+        return (
+            dt_like.replace(tzinfo=dt.UTC)
+            if dt_like.tzinfo is None
+            else dt_like.astimezone(dt.UTC)
+        )
+    try:
+        ts = pd.Timestamp(dt_like)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        return ts.to_pydatetime()
+    except Exception:  # noqa: BLE001
+        return ensure_datetime(dt_like)
+
+
 def _yahoo_get_bars(
-    symbol: str, start: pd.Timestamp | None, end: pd.Timestamp | None, timeframe: str = "1Day"
+    symbol: str,
+    start: datetime | pd.Timestamp | None,
+    end: datetime | pd.Timestamp | None,
+    timeframe: str = "1Day",
 ) -> pd.DataFrame:
     """Fetch bars from Yahoo Finance if available."""
     try:
         import yfinance as yf  # type: ignore
-    except Exception:
+    except Exception:  # noqa: BLE001
         return _empty_bars_df()
 
     interval = "1d" if timeframe.lower() in {"1d", "1day"} else "1m"
     sym = normalize_symbol_for_provider(symbol, "yahoo")
-    start = (start.tz_convert("UTC") if start is not None else None)
-    end = (end.tz_convert("UTC") if end is not None else None)
+    start = _to_utc_dt(start)
+    end = _to_utc_dt(end)
     try:
         df = yf.download(
             sym,
@@ -174,7 +197,7 @@ def _yahoo_get_bars(
             interval=interval,
             progress=False,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return _empty_bars_df()
     if df is None or df.empty:
         return _empty_bars_df()
