@@ -6,6 +6,7 @@ with comprehensive risk management, monitoring, and execution capabilities.
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from typing import Any
 
@@ -125,7 +126,7 @@ class ProductionTradingSystem:
                 "health_status": health_status,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error starting production trading system: {e}")
             await self.alert_manager.send_system_alert(
                 "Trading System",
@@ -165,7 +166,7 @@ class ProductionTradingSystem:
                 "shutdown_time": datetime.now(UTC),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error stopping production trading system: {e}")
             return {"status": "error", "message": str(e)}
 
@@ -234,7 +235,7 @@ class ProductionTradingSystem:
                 "trading_allowed": trading_status["trading_allowed"],
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing trading opportunity for {symbol}: {e}")
             return {"symbol": symbol, "error": str(e)}
 
@@ -292,7 +293,7 @@ class ProductionTradingSystem:
 
             return execution_result
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error executing trade for {symbol}: {e}")
             await self.alert_manager.send_trading_alert(
                 "Trade Execution Error",
@@ -348,7 +349,7 @@ class ProductionTradingSystem:
 
             return health_status
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error performing health check: {e}")
             return {
                 "healthy": False,
@@ -391,7 +392,7 @@ class ProductionTradingSystem:
                 "system_errors_count": len(self.system_errors),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error getting system status: {e}")
             return {"error": str(e)}
 
@@ -432,7 +433,7 @@ class ProductionTradingSystem:
                 "risk_level": self.risk_level.value,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error getting session summary: {e}")
             return {"error": str(e)}
 
@@ -503,7 +504,7 @@ class ProductionTradingSystem:
 
             return integrated
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error integrating analyses: {e}")
             return {"symbol": symbol, "action": "HOLD", "confidence": 0.0}
 
@@ -550,7 +551,7 @@ class ProductionTradingSystem:
 
             return final_rec
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error generating final recommendation: {e}")
             return {"action": "NO_TRADE", "warnings": [f"Recommendation error: {e}"]}
 
@@ -571,7 +572,7 @@ class ProductionTradingSystem:
             # self.account_equity += trade_pnl
             # self.execution_coordinator.update_account_equity(self.account_equity)
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating performance tracking: {e}")
 
     def update_account_equity(self, new_equity: float):
@@ -581,7 +582,7 @@ class ProductionTradingSystem:
             self.execution_coordinator.update_account_equity(new_equity)
             self.halt_manager.update_equity(new_equity)
             logger.info(f"Account equity updated to ${new_equity:,.2f}")
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating account equity: {e}")
 
     async def emergency_shutdown(self, reason: str = "Emergency"):
@@ -603,7 +604,7 @@ class ProductionTradingSystem:
             # Stop system
             await self.stop_system(f"Emergency: {reason}")
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error during emergency shutdown: {e}")
 
     def is_healthy(self) -> bool:
@@ -614,6 +615,6 @@ class ProductionTradingSystem:
                 and self.halt_manager.is_trading_allowed()["trading_allowed"]
                 and self.account_equity > 0
             )
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             # Any error in health check should return unhealthy status
             return False

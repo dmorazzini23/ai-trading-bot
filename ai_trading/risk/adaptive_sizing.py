@@ -6,6 +6,7 @@ volatility regimes, correlation environments, and risk-adjusted portfolio alloca
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import math
 import statistics
 from datetime import UTC, datetime
@@ -124,7 +125,7 @@ class MarketConditionAnalyzer:
             else:
                 return MarketRegime.SIDEWAYS_RANGE
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing market regime: {e}")
             return MarketRegime.NORMAL
 
@@ -173,7 +174,7 @@ class MarketConditionAnalyzer:
 
             return VolatilityRegime.NORMAL
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error assessing volatility regime: {e}")
             return VolatilityRegime.NORMAL
 
@@ -211,7 +212,7 @@ class MarketConditionAnalyzer:
 
             return correlations
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating correlation matrix: {e}")
             return {}
 
@@ -249,7 +250,7 @@ class MarketConditionAnalyzer:
             # Convert to daily trend strength
             return normalized_slope * 252  # Annualize
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _calculate_rolling_volatility(self, prices: list[float]) -> float:
@@ -273,7 +274,7 @@ class MarketConditionAnalyzer:
 
             return statistics.stdev(recent_returns) * math.sqrt(252)
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _calculate_volatility_percentile(
@@ -296,7 +297,7 @@ class MarketConditionAnalyzer:
 
             return self._get_percentile_rank(current_vol, historical_vols)
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.5
 
     def _calculate_correlation(
@@ -325,7 +326,7 @@ class MarketConditionAnalyzer:
             correlation = numerator / denominator
             return max(-1.0, min(1.0, correlation))  # Clamp to [-1, 1]
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _get_percentile_rank(self, value: float, data: list[float]) -> float:
@@ -491,7 +492,7 @@ class AdaptivePositionSizer:
 
             return result
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating adaptive position for {symbol}: {e}")
             return {
                 "symbol": symbol,
@@ -579,7 +580,7 @@ class AdaptivePositionSizer:
             penalty = min(0.5, total_correlation_exposure)  # Cap at 50% reduction
             return penalty
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating correlation penalty: {e}")
             return 0.0
 
@@ -614,7 +615,7 @@ class AdaptivePositionSizer:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error assessing position risk: {e}")
             return {"error": str(e)}
 

@@ -11,6 +11,7 @@ AI-AGENT-REF: Portfolio correlation analysis for risk-aware position management
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -210,7 +211,7 @@ class PortfolioCorrelationAnalyzer:
 
             return analysis
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("analyze_portfolio failed: %s", exc)
             return self._get_empty_analysis()
 
@@ -268,7 +269,7 @@ class PortfolioCorrelationAnalyzer:
 
             return False, ""
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("should_reduce_position failed for %s: %s", symbol, exc)
             return False, ""
 
@@ -309,7 +310,7 @@ class PortfolioCorrelationAnalyzer:
             else:
                 return 1.0  # Normal correlation
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 1.0
 
     def _extract_position_data(self, positions: list[Any]) -> dict[str, dict]:
@@ -342,7 +343,7 @@ class PortfolioCorrelationAnalyzer:
 
             return position_data
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_extract_position_data failed: %s", exc)
             return {}
 
@@ -366,7 +367,7 @@ class PortfolioCorrelationAnalyzer:
 
             return correlations
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_calculate_position_correlations failed: %s", exc)
             return []
 
@@ -415,7 +416,7 @@ class PortfolioCorrelationAnalyzer:
                 last_updated=datetime.now(UTC),
             )
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_calculate_pair_correlation failed for %s/%s: %s",
                 symbol1,
@@ -442,7 +443,7 @@ class PortfolioCorrelationAnalyzer:
 
             return None
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return None
 
     def _align_price_data(
@@ -462,7 +463,7 @@ class PortfolioCorrelationAnalyzer:
 
             return aligned_data1, aligned_data2
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return None
 
     def _classify_correlation_strength(
@@ -528,7 +529,7 @@ class PortfolioCorrelationAnalyzer:
 
             return sector_exposures
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_analyze_sector_exposures failed: %s", exc)
             return []
 
@@ -562,7 +563,7 @@ class PortfolioCorrelationAnalyzer:
 
             return sum(correlations) / len(correlations) if correlations else 0.0
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _calculate_portfolio_metrics(
@@ -615,7 +616,7 @@ class PortfolioCorrelationAnalyzer:
                 "effective_positions": effective_positions,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_calculate_portfolio_metrics failed: %s", exc)
             return {}
 
@@ -707,7 +708,7 @@ class PortfolioCorrelationAnalyzer:
                 "rebalance": rebalance,
             }
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_generate_recommendations failed: %s", exc)
             return {"reduce_exposure": [], "rebalance": []}
 
@@ -743,7 +744,7 @@ class PortfolioCorrelationAnalyzer:
 
             return 0.0
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _get_empty_analysis(self) -> PortfolioAnalysis:

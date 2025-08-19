@@ -9,10 +9,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ai_trading.exc import (
+    TRANSIENT_HTTP_EXC,
     JSONDecodeError,
     RequestException,
-    HTTPError,
-    TRANSIENT_HTTP_EXC,
 )
 from ai_trading.logging import get_logger  # AI-AGENT-REF: centralized logging
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
@@ -68,24 +67,24 @@ def _with_timeout(kwargs: dict) -> dict:
     return kwargs
 
 def _retry_config() -> tuple[int, float, float, float]:
-    """Load retry knobs from settings if available."""  # AI-AGENT-REF: Stage 2.1
-    attempts, base, max_delay, jitter = 3, 0.1, 2.0, 0.1
+    """Load retry knobs from settings if available."""  # AI-AGENT-REF: Stage 2.2
+    retries, backoff, max_backoff, jitter = 3, 0.1, 2.0, 0.1
     try:  # Lazy import to avoid heavy config at import time
         from ai_trading.config import get_settings  # type: ignore
 
         s = get_settings()
-        attempts = int(getattr(s, "RETRY_MAX_ATTEMPTS", attempts))
-        base = float(getattr(s, "RETRY_BASE_DELAY", base))
-        max_delay = float(getattr(s, "RETRY_MAX_DELAY", max_delay))
+        retries = int(getattr(s, "RETRY_MAX_ATTEMPTS", retries))
+        backoff = float(getattr(s, "RETRY_BASE_DELAY", backoff))
+        max_backoff = float(getattr(s, "RETRY_MAX_DELAY", max_backoff))
         jitter = float(getattr(s, "RETRY_JITTER", jitter))
     except (AttributeError, TypeError, ValueError, ImportError):  # pragma: no cover - settings optional
         pass
-    return attempts, base, max_delay, jitter
+    return retries, backoff, max_backoff, jitter
 
 def request(method: str, url: str, **kwargs) -> requests.Response:
     sess = _get_session()
     kwargs = _with_timeout(kwargs)
-    attempts, base, max_delay, jitter = _retry_config()
+    retries, backoff, max_backoff, jitter = _retry_config()
     excs = (
         RequestException,
         JSONDecodeError,
@@ -100,9 +99,10 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
             return sess.request(method, url, **kwargs)
         except excs as e:  # AI-AGENT-REF: log retry attempt
             attempt["n"] += 1
-            _log.warning(
+            log_fn = _log.warning if attempt["n"] == 1 else _log.debug
+            log_fn(
                 "HTTP_RETRY",
-                extra={"attempt": attempt["n"], "attempts": attempts, "error": str(e)},
+                extra={"attempt": attempt["n"], "attempts": retries, "error": str(e)},
             )
             raise
 
@@ -111,15 +111,16 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
         resp = retry_call(
             _do_request,
             exceptions=excs,
-            attempts=attempts,
-            base_delay=base,
-            max_delay=max_delay,
+            retries=retries,
+            backoff=backoff,
+            max_backoff=max_backoff,
             jitter=jitter,
         )
         _pool_stats["responses"] += 1
         return resp
-    except excs:  # AI-AGENT-REF: Stage 2.1 narrow stats capture
+    except excs as e:  # AI-AGENT-REF: Stage 2.2 final log
         _pool_stats["errors"] += 1
+        _log.error("HTTP_GIVEUP", extra={"attempts": retries, "error": str(e)})
         raise
 
 def get(url: str, **kwargs) -> requests.Response:

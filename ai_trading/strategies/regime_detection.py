@@ -7,6 +7,7 @@ using multiple indicators and statistical models for adaptive trading strategies
 
 # AI-AGENT-REF: use standard imports for hard dependencies
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -162,7 +163,7 @@ class RegimeDetector:
 
             return regime_result
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error detecting market regime: {e}")
             return {"error": str(e)}
 
@@ -238,7 +239,7 @@ class RegimeDetector:
                 "above_sma200": current_price > sma_200,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing trend: {e}")
             return {"direction": "unknown", "strength": TrendStrength.WEAK}
 
@@ -314,7 +315,7 @@ class RegimeDetector:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing volatility: {e}")
             return {"regime": VolatilityRegime.NORMAL_VOL, "current_vol": 0.2}
 
@@ -381,7 +382,7 @@ class RegimeDetector:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing momentum: {e}")
             return {"state": "neutral", "rsi": 50, "momentum_strength": "weak"}
 
@@ -455,7 +456,7 @@ class RegimeDetector:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing volume: {e}")
             return {"trend": "unknown", "strength": "weak"}
 
@@ -504,7 +505,7 @@ class RegimeDetector:
 
             return sentiment_analysis
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing sentiment: {e}")
             return {"sentiment_score": "neutral"}
 
@@ -562,7 +563,7 @@ class RegimeDetector:
             # Default to sideways if unclear
             return MarketRegime.SIDEWAYS
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error determining primary regime: {e}")
             return MarketRegime.SIDEWAYS
 
@@ -607,7 +608,7 @@ class RegimeDetector:
 
             return characteristics
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error detecting secondary characteristics: {e}")
             return []
 
@@ -653,7 +654,7 @@ class RegimeDetector:
 
             return min(0.95, max(0.05, overall_confidence))
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating regime confidence: {e}")
             return 0.5
 
@@ -707,7 +708,7 @@ class RegimeDetector:
                 "recent_regime_changes": regime_changes,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error analyzing regime transitions: {e}")
             return {"transition_probability": 0.1}
 
@@ -768,7 +769,7 @@ class RegimeDetector:
             else:
                 return TrendStrength.VERY_WEAK
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating trend strength: {e}")
             return TrendStrength.WEAK
 
@@ -796,7 +797,7 @@ class RegimeDetector:
             else:
                 return 0.15
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating volatility percentile: {e}")
             return 0.5
 
@@ -832,7 +833,7 @@ class RegimeDetector:
             else:
                 return "weak"
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error calculating momentum strength: {e}")
             return "weak"
 
@@ -849,7 +850,7 @@ class RegimeDetector:
             self.current_regime = regime_result["primary_regime"]
             self.regime_confidence = regime_result["confidence_score"]
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error updating regime history: {e}")
 
     def get_regime_summary(self) -> dict[str, Any]:
@@ -889,7 +890,7 @@ class RegimeDetector:
                 "regime_history_length": len(self.regime_history),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error getting regime summary: {e}")
             return {"error": str(e)}
 
@@ -986,6 +987,6 @@ class RegimeDetector:
 
             return recommendations
 
-        except Exception as e:
+        except COMMON_EXC as e:  # AI-AGENT-REF: narrow
             logger.error(f"Error getting regime recommendations: {e}")
             return {"error": str(e)}

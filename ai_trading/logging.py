@@ -8,6 +8,7 @@ sanitizing adapter for all modules.
 """  # AI-AGENT-REF: document extra key sanitization
 
 import atexit
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import csv
 import json
 import logging
@@ -124,7 +125,7 @@ def _mask_secret(value: str) -> str:
         if n <= 6:
             return "***"
         return f"{s[:2]}***{s[-2:]}"
-    except Exception:
+    except COMMON_EXC:  # AI-AGENT-REF: narrow
         return "***"
 # AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates
 logging.Formatter.converter = time.gmtime
@@ -348,7 +349,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
                 formatter = CompactJsonFormatter("%(asctime)sZ")
             else:
                 formatter = JSONFormatter("%(asctime)sZ")
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             # Fallback to regular formatter if config not available
             formatter = JSONFormatter("%(asctime)sZ")
 
@@ -390,7 +391,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         try:
             if _listener._thread is not None:
                 _listener._thread.daemon = True
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             pass
         _LOGGING_LISTENER = _listener
         atexit.register(_safe_shutdown_logging)
@@ -414,15 +415,15 @@ def _safe_shutdown_logging():
             if listener is not None:
                 try:
                     listener.stop()
-                except Exception:
+                except COMMON_EXC:  # AI-AGENT-REF: narrow
                     pass
                 try:
                     t = getattr(listener, "_thread", None)
                     if t is not None and hasattr(t, "join"):
                         t.join(timeout=1.0)
-                except Exception:
+                except COMMON_EXC:  # AI-AGENT-REF: narrow
                     pass
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             pass
         root = logging.getLogger()
         for h in list(root.handlers):
@@ -430,16 +431,16 @@ def _safe_shutdown_logging():
                 root.removeHandler(h)
                 try:
                     h.flush()
-                except Exception:
+                except COMMON_EXC:  # AI-AGENT-REF: narrow
                     pass
                 try:
                     if hasattr(h, "close"):
                         h.close()
-                except Exception:
+                except COMMON_EXC:  # AI-AGENT-REF: narrow
                     pass
-            except Exception:
+            except COMMON_EXC:  # AI-AGENT-REF: narrow
                 pass
-    except Exception:
+    except COMMON_EXC:  # AI-AGENT-REF: narrow
         pass
 
 
@@ -541,7 +542,7 @@ def log_performance_metrics(
             if new:
                 writer.writeheader()
             writer.writerow(rec)
-    except Exception as exc:  # pragma: no cover - best effort
+    except COMMON_EXC as exc:  # AI-AGENT-REF: narrow  # pragma: no cover - best effort
         logger.warning("Failed to log performance metrics: %s", exc)
 
 
@@ -696,7 +697,7 @@ def _get_system_context() -> dict[str, any]:
     # AI-AGENT-REF: optional psutil context
     try:
         import psutil  # type: ignore
-    except Exception as e:
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow
         return {"context_error": f"psutil missing: {e}"}
 
     try:
@@ -717,7 +718,7 @@ def _get_system_context() -> dict[str, any]:
 
         return context
 
-    except Exception as e:
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow
         return {"context_error": str(e)}
 
 

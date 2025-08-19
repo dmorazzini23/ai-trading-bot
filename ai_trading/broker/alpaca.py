@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE
@@ -31,18 +31,18 @@ SAFE_EXC = TRANSIENT_HTTP_EXC + (APIError,)
 
 def _retry_config() -> tuple[int, float, float, float]:
     """Load retry knobs from settings if available."""  # AI-AGENT-REF
-    attempts, base, max_delay, jitter = 3, 0.1, 2.0, 0.1
+    retries, backoff, max_backoff, jitter = 3, 0.1, 2.0, 0.1
     try:  # Lazy import to avoid heavy config at import time
         from ai_trading.config import get_settings  # type: ignore
 
         s = get_settings()
-        attempts = int(getattr(s, "RETRY_MAX_ATTEMPTS", attempts))
-        base = float(getattr(s, "RETRY_BASE_DELAY", base))
-        max_delay = float(getattr(s, "RETRY_MAX_DELAY", max_delay))
+        retries = int(getattr(s, "RETRY_MAX_ATTEMPTS", retries))
+        backoff = float(getattr(s, "RETRY_BASE_DELAY", backoff))
+        max_backoff = float(getattr(s, "RETRY_MAX_DELAY", max_backoff))
         jitter = float(getattr(s, "RETRY_JITTER", jitter))
     except (AttributeError, TypeError, ValueError, ImportError):  # pragma: no cover
         pass
-    return attempts, base, max_delay, jitter
+    return retries, backoff, max_backoff, jitter
 
 
 class AlpacaBroker:
@@ -106,7 +106,7 @@ class AlpacaBroker:
             self._TimeInForce = TimeInForce
 
     def _call_with_retry(self, op: str, func: Callable[[], Any]) -> Any:
-        attempts, base, max_delay, jitter = _retry_config()
+        retries, backoff, max_backoff, jitter = _retry_config()
         attempt = {"n": 0}
 
         def _wrapped() -> Any:
@@ -119,7 +119,7 @@ class AlpacaBroker:
                     extra={
                         "op": op,
                         "attempt": attempt["n"],
-                        "attempts": attempts,
+                        "attempts": retries,
                         "error": str(e),
                     },
                 )
@@ -128,9 +128,9 @@ class AlpacaBroker:
         return retry_call(
             _wrapped,
             exceptions=SAFE_EXC,
-            attempts=attempts,
-            base_delay=base,
-            max_delay=max_delay,
+            retries=retries,
+            backoff=backoff,
+            max_backoff=max_backoff,
             jitter=jitter,
         )
 

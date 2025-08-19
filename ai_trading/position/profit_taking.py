@@ -11,6 +11,7 @@ AI-AGENT-REF: Advanced profit taking with multi-tiered scale-out strategies
 """
 
 import logging
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -188,7 +189,7 @@ class ProfitTakingEngine:
 
             return plan
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("create_profit_plan failed for %s: %s", symbol, exc)
             return None
 
@@ -242,7 +243,7 @@ class ProfitTakingEngine:
 
             return triggered_targets
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("update_profit_plan failed for %s: %s", symbol, exc)
             return []
 
@@ -275,7 +276,7 @@ class ProfitTakingEngine:
 
             return velocity
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _create_risk_multiple_targets(
@@ -311,7 +312,7 @@ class ProfitTakingEngine:
                 )
                 targets.append(target)
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_create_risk_multiple_targets failed: %s", exc)
             # Fallback to percentage targets
             return self._create_percentage_targets(entry_price, position_size)
@@ -378,7 +379,7 @@ class ProfitTakingEngine:
             if rsi_target:
                 targets.append(rsi_target)
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_create_technical_targets failed for %s: %s", symbol, exc
             )
@@ -407,7 +408,7 @@ class ProfitTakingEngine:
                 )
                 targets.append(velocity_target)
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning("_create_time_based_targets failed: %s", exc)
 
         return targets
@@ -447,7 +448,7 @@ class ProfitTakingEngine:
 
             return False
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return False
 
     def _check_correlation_adjustments(
@@ -500,7 +501,7 @@ class ProfitTakingEngine:
                         current_gain_pct,
                     )
 
-        except Exception as exc:
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
             self.logger.warning(
                 "_check_correlation_adjustments failed for %s: %s", symbol, exc
             )
@@ -534,7 +535,7 @@ class ProfitTakingEngine:
 
             return resistance_levels[:3]  # Return top 3 levels
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return []
 
     def _create_rsi_overbought_target(
@@ -564,7 +565,7 @@ class ProfitTakingEngine:
 
             return target
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return None
 
     def _get_current_price(self, symbol: str) -> float:
@@ -583,7 +584,7 @@ class ProfitTakingEngine:
 
             return 0.0
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 0.0
 
     def _get_market_data(self, symbol: str) -> pd.DataFrame | None:
@@ -602,7 +603,7 @@ class ProfitTakingEngine:
 
             return None
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return None
 
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
@@ -623,5 +624,5 @@ class ProfitTakingEngine:
 
             return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
 
-        except Exception:
+        except COMMON_EXC:  # AI-AGENT-REF: narrow
             return 50.0
