@@ -6,7 +6,6 @@ import time
 import types
 import uuid
 from contextlib import suppress
-import typing as t
 
 import pandas as pd
 import pytz
@@ -16,7 +15,7 @@ from ai_trading.utils.optdeps import module_ok  # AI-AGENT-REF: optional import 
 
 try:  # AI-AGENT-REF: optional Alpaca dependency
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-except Exception:  # pragma: no cover - handled gracefully
+except Exception:  # pragma: no cover - handled gracefully  # noqa: BLE001
     TimeFrame = None  # type: ignore
     TimeFrameUnit = types.SimpleNamespace(  # type: ignore
         Minute="Minute", Hour="Hour", Day="Day", Week="Week", Month="Month"
@@ -25,7 +24,7 @@ except Exception:  # pragma: no cover - handled gracefully
 try:  # AI-AGENT-REF: optional Alpaca dependency
     from alpaca_trade_api import REST as TradeApiREST
     from alpaca_trade_api.rest import APIError as TradeApiError
-except Exception:  # pragma: no cover - handled gracefully
+except Exception:  # pragma: no cover - handled gracefully  # noqa: BLE001
     TradeApiREST = None  # type: ignore
     TradeApiError = Exception  # type: ignore
 
@@ -37,6 +36,19 @@ RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 
 _UTC = pytz.UTC
+
+
+def _is_intraday_unit(unit_tok: str) -> bool:
+    """Return True for minute or hour-based timeframes."""
+    return unit_tok in ("Min", "Hour")
+
+
+def _unit_from_norm(tf_norm: str) -> str:
+    """Extract the unit token (e.g. 'Min', 'Day') from a normalized timeframe."""
+    for u in ("Min", "Hour", "Day", "Week", "Month"):
+        if tf_norm.endswith(u):
+            return u
+    return "Day"
 
 
 ALPACA_AVAILABLE = any(
@@ -67,7 +79,7 @@ def _get(obj, key, default=None):
     return default
 
 
-def _normalize_timeframe_for_tradeapi(tf: t.Union[str, TimeFrame]) -> str:
+def _normalize_timeframe_for_tradeapi(tf: str | TimeFrame) -> str:
     """Normalize various timeframe inputs to Alpaca trade-api REST strings."""
     if isinstance(tf, str):
         s = tf.strip()
@@ -133,8 +145,37 @@ def _normalize_timeframe_for_tradeapi(tf: t.Union[str, TimeFrame]) -> str:
             "Month": "Month",
         }.get(unit_name, unit_name)
         return f"{qty}{unit_tok}"
-    except Exception:
+    except Exception:  # noqa: BLE001
         return "1Day"
+
+
+def _to_utc(dtobj: dt.datetime) -> dt.datetime:
+    """Ensure a ``datetime`` is timezone-aware and in UTC."""
+    if dtobj.tzinfo is None:
+        return dtobj.replace(tzinfo=dt.timezone.utc)
+    return dtobj.astimezone(dt.timezone.utc)
+
+
+def _fmt_rfc3339_z(dtobj: dt.datetime) -> str:
+    """Format a UTC datetime to RFC3339 ``YYYY-MM-DDTHH:MM:SSZ``."""
+    d = _to_utc(dtobj).replace(microsecond=0)
+    return d.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _format_start_end_for_tradeapi(
+    tf_norm: str, start: dt.datetime, end: dt.datetime
+) -> tuple[str, str]:
+    """Format start/end according to Alpaca REST expectations."""
+    unit = _unit_from_norm(tf_norm)
+    s = _to_utc(start)
+    e = _to_utc(end)
+    if s >= e:
+        delta = dt.timedelta(minutes=1) if _is_intraday_unit(unit) else dt.timedelta(days=1)
+        s = e - delta
+    if _is_intraday_unit(unit):
+        return _fmt_rfc3339_z(s), _fmt_rfc3339_z(e)
+    return s.date().isoformat(), e.date().isoformat()
+
 
 # ---- market data helpers ----------------------------------------------------
 
@@ -163,7 +204,7 @@ def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
 
 def get_bars_df(
     symbol: str,
-    timeframe: t.Union[str, TimeFrame],
+    timeframe: str | TimeFrame,
     start: dt.datetime | None = None,
     end: dt.datetime | None = None,
     adjustment: str | None = None,
@@ -178,15 +219,16 @@ def get_bars_df(
     if start is None or end is None:
         try:
             base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
-        except Exception:
+        except Exception:  # noqa: BLE001
             base_tf = TimeFrame(1, TimeFrameUnit.Day)
         start, end = _bars_time_window(base_tf)
+    start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
     try:
         df = rest.get_bars(
             symbol,
             timeframe=tf,
-            start=start,
-            end=end,
+            start=start_s,
+            end=end_s,
             adjustment=adjustment,
             feed=feed,
             limit=None,
@@ -199,23 +241,23 @@ def get_bars_df(
             "timeframe_raw": str(tf_raw),
             "timeframe_norm": tf,
             "feed": feed,
-            "start": start.isoformat() if hasattr(start, "isoformat") else str(start),
-            "end": end.isoformat() if hasattr(end, "isoformat") else str(end),
+            "start": start_s,
+            "end": end_s,
             "adjustment": adjustment,
         }
         body = ""
         try:
             body = e.response.text
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         _log.error(
-            "ALPACA_BARS_FAIL",
+            "ALPACA_FAIL",
             extra={
                 "symbol": symbol,
                 "timeframe": tf,
                 "feed": feed,
-                "start": start,
-                "end": end,
+                "start": start_s,
+                "end": end_s,
                 "status_code": getattr(e, "status_code", None),
                 "endpoint": "alpaca/bars",
                 "query_params": req,
@@ -223,6 +265,7 @@ def get_bars_df(
             },
         )
         return pd.DataFrame()
+
 
 def submit_order(api, order_data=None, log=None, **kwargs):
     """Submit an order and return a canonical ``SimpleNamespace``."""  # AI-AGENT-REF
@@ -300,7 +343,6 @@ def submit_order(api, order_data=None, log=None, **kwargs):
         # Attempt live submit
         resp = submit_fn(**payload)
     except Exception as e:  # noqa: BLE001  # broker/client can raise many types
-        status = getattr(e, "status", "error")
         return types.SimpleNamespace(
             status="error",
             success=False,
@@ -325,7 +367,7 @@ def submit_order(api, order_data=None, log=None, **kwargs):
             setattr(resp, "status", "submitted")
         if getattr(resp, "success", None) is None:
             setattr(resp, "success", True)
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     return resp
 
