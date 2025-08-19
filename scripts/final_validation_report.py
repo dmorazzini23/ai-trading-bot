@@ -99,13 +99,13 @@ def validate_issue_4_position_limits():
             fixes_found += 1
 
     # Check validate_env.py
-    validate_env_path = "validate_env.py"
+    validate_env_path = os.path.join("ai_trading", "tools", "env_validate.py")
     if os.path.exists(validate_env_path):
         with open(validate_env_path) as f:
             content = f.read()
 
         if '"20"' in content and 'MAX_PORTFOLIO_POSITIONS' in content:
-            logging.info("   ✅ Fix: validate_env.py default increased to 20 positions")
+            logging.info("   ✅ Fix: env_validate.py default increased to 20 positions")
             fixes_found += 1
 
     if fixes_found >= 1:

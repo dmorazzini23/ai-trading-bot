@@ -217,11 +217,17 @@ def get_bars_df(
     tf_raw = timeframe
     tf = _normalize_timeframe_for_tradeapi(tf_raw)
     if start is None or end is None:
-        try:
-            base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
-        except Exception:  # noqa: BLE001
-            base_tf = TimeFrame(1, TimeFrameUnit.Day)
-        start, end = _bars_time_window(base_tf)
+        base_tf = None
+        if TimeFrame is not None:
+            try:
+                base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
+            except Exception:  # noqa: BLE001
+                base_tf = TimeFrame(1, TimeFrameUnit.Day)
+        if base_tf is not None:
+            start, end = _bars_time_window(base_tf)
+        else:
+            end = dt.datetime.now(tz=_UTC) - dt.timedelta(minutes=1)
+            start = end - dt.timedelta(days=200)
     start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
     try:
         df = rest.get_bars(
@@ -342,11 +348,16 @@ def submit_order(api, order_data=None, log=None, **kwargs):
     try:
         # Attempt live submit
         resp = submit_fn(**payload)
-    except Exception as e:  # noqa: BLE001  # broker/client can raise many types
+    except Exception as e:  # noqa: BLE001  # AI-AGENT-REF: normalize errors
+        status = int(
+            getattr(e, "status", getattr(e, "status_code", getattr(e, "code", 0)))
+            or 0
+        )
+        retryable = status in RETRY_HTTP_CODES
         return types.SimpleNamespace(
-            status="error",
+            status=status,
             success=False,
-            retryable=False,
+            retryable=retryable,
             error=str(e),
             client_order_id=client_order_id,
         )

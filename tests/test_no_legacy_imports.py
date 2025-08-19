@@ -1,13 +1,21 @@
-import pathlib
-import re
+import importlib.util
+import pytest
+
+BANNED = [
+    "metrics",
+    "algorithm_optimizer",
+    "indicator_manager",
+    "predict",
+    "runner",
+    "data_fetcher",
+    "validate_env",
+]
 
 
-def test_no_legacy_trade_execution_imports():
-    root = pathlib.Path(__file__).resolve().parent
-    bad = []
-    for p in root.rglob("*.py"):
-        txt = p.read_text(encoding="utf-8", errors="ignore")
-        if re.search(r"\bfrom\s+ai_trading\s+import\s+trade_execution\b", txt) or \
-           re.search(r"\bimport\s+ai_trading\.trade_execution\b", txt):
-            bad.append(str(p))
-    assert not bad, f"Legacy trade_execution import found in: {bad}"
+@pytest.mark.unit
+def test_legacy_modules_not_importable():  # AI-AGENT-REF
+    for name in BANNED:
+        assert importlib.util.find_spec(name) is None
+        with pytest.raises(ModuleNotFoundError):
+            __import__(name)
+

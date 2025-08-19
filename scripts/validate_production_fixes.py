@@ -136,7 +136,10 @@ def validate_environment_debugging():
     logging.info("\n🔍 Validating Environment Debugging Enhancements...")
     
     try:
-        from validate_env import debug_environment, validate_specific_env_var
+        from ai_trading.validation.validate_env import (
+            debug_environment,
+            validate_specific_env_var,
+        )
         
         logging.info("✅ Enhanced debugging functions imported successfully")
         

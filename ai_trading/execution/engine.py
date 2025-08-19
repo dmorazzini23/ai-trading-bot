@@ -629,6 +629,8 @@ class ExecutionEngine:
         self.order_manager = OrderManager()
         self.market_data_feed = market_data_feed
         self.broker_interface = broker_interface
+        self.logger = _log  # AI-AGENT-REF: expose logger for tests
+        self._open_orders: dict[str, OrderInfo] = {}
 
         # Execution statistics
         self.execution_stats = {
@@ -654,16 +656,12 @@ class ExecutionEngine:
             return int(quantity * 0.75), False
         return quantity, False
 
-    def _reconcile_partial_fills(
-        self,
-        *,
-        symbol: str,
-        submitted_qty: int,
-        remaining_qty: int,
-        side: str,
-        last_order,
-    ) -> None:
-        """Stub for partial fill reconciliation."""
+    def cleanup_stale_orders(self, now: float | None = None) -> int:
+        """Remove stale orders via module helper."""  # AI-AGENT-REF
+        return _cleanup_stale_orders(now)
+
+    def _reconcile_partial_fills(self, *args, requested_qty=None, **_kwargs) -> None:
+        """Stub for partial fill reconciliation."""  # AI-AGENT-REF: accept requested_qty
         return None
 
     def execute_order(

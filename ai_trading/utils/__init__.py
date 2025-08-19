@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os  # noqa: F401  # AI-AGENT-REF: env overrides
 import time
+from datetime import datetime, timedelta, timezone
+import pandas as pd
 
 from .base import (
     get_free_port,
@@ -10,6 +12,9 @@ from .base import (
     is_market_open,
     market_open_between,
     portfolio_lock as _portfolio_lock,  # NEW: bring in the shared lock
+    EASTERN_TZ,
+    ensure_utc,
+    get_ohlcv_columns as _get_ohlcv_columns,
 )
 from .base import (
     log_warning as _log_warning,
@@ -88,6 +93,22 @@ def validate_ohlcv(*args, **kwargs):
     return _validate_ohlcv(*args, **kwargs)
 
 
+def get_ohlcv_columns(df):
+    """Return list of OHLCV columns present in df."""  # AI-AGENT-REF
+    return _get_ohlcv_columns(df)
+
+
+def get_latest_close(df: pd.DataFrame | None) -> float:
+    """Return last valid close price or 0.0."""  # AI-AGENT-REF
+    if df is None or getattr(df, "empty", True):
+        return 0.0
+    try:
+        val = float(df["close"].dropna().iloc[-1])
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return val
+
+
 #
 # Back-compat wrapper: accept BOTH legacy clamp_timeout(min=, max=, default=)
 # and the new clamp_timeout(min_s=, max_s=, default_non_test=, default_test=)
@@ -153,7 +174,11 @@ __all__ = [
     "health_check",
     "is_market_open",
     "market_open_between",
+    "EASTERN_TZ",
+    "ensure_utc",
     "portfolio_lock",     # NEW
+    "get_latest_close",
+    "get_ohlcv_columns",
     "psleep",
     "sleep_s",
     "sleep",

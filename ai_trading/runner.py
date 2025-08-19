@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import time as _time
 from threading import RLock
+import warnings
 
 from ai_trading.logging import get_logger
 
 log = get_logger(__name__)
+warnings.warn(
+    "ai_trading.runner: legacy flags will change in v1.0",
+    DeprecationWarning,
+)  # AI-AGENT-REF: deprecation notice
 
 _run_lock = RLock()  # Use RLock for re-entrant capability
 _last_run_time = 0.0

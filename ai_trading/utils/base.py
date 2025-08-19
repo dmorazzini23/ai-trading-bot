@@ -356,7 +356,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
-            raise AttributeError
+            return False
         cal = cal("NYSE")
         sched = cal.schedule(
             start_date=check_time.date(),

@@ -25,7 +25,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'ai_trading'))
 
 def test_metrics_division_by_zero_protection():
     """Test metrics module handles division by zero properly."""
-    from metrics import compute_basic_metrics, safe_divide, calculate_atr
+    from ai_trading.metrics import (
+        compute_basic_metrics,
+        safe_divide,
+        calculate_atr,
+    )
     
     # Test with empty data
     empty_df = pd.DataFrame()
@@ -55,7 +59,7 @@ def test_metrics_division_by_zero_protection():
 
 def test_algorithm_optimizer_thread_safety():
     """Test algorithm optimizer thread safety."""
-    from algorithm_optimizer import AlgorithmOptimizer
+    from ai_trading.algorithm_optimizer import AlgorithmOptimizer
     
     optimizer = AlgorithmOptimizer()
     
@@ -90,7 +94,7 @@ def test_algorithm_optimizer_thread_safety():
 def test_sentiment_cache_memory_leak_prevention():
     """Test sentiment cache prevents memory leaks."""
     # Mock the imports to avoid external dependencies
-    import predict
+    import ai_trading.predict as predict
     
     # Test cache bounds
     original_cache = predict._sentiment_cache
@@ -124,7 +128,7 @@ def test_sentiment_cache_memory_leak_prevention():
 def test_circular_buffer_memory_efficiency():
     """Test circular buffer is memory efficient."""
     sys.path.append('ai_trading')
-    from indicator_manager import CircularBuffer
+    from ai_trading.indicator_manager import CircularBuffer
     
     # Test circular buffer bounds
     buffer = CircularBuffer(maxsize=100, dtype=float)
@@ -144,7 +148,11 @@ def test_circular_buffer_memory_efficiency():
 def test_incremental_indicators():
     """Test incremental indicator calculations."""
     sys.path.append('ai_trading')
-    from indicator_manager import IncrementalSMA, IncrementalEMA, IncrementalRSI
+    from ai_trading.indicator_manager import (
+        IncrementalSMA,
+        IncrementalEMA,
+        IncrementalRSI,
+    )
     
     # Test SMA
     sma = IncrementalSMA(5, "SMA_5")

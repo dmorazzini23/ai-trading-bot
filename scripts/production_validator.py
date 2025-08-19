@@ -832,7 +832,7 @@ class ProductionValidator:
     def _test_data_processing(self) -> float:
         """Test data processing functionality."""
         try:
-            import data_fetcher
+            from ai_trading import data_fetcher
             import indicators
             return 90
         except ImportError:

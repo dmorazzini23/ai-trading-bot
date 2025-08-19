@@ -164,7 +164,7 @@ def test_import_hardening():
                 "from ai_trading.trade_execution import ExecutionEngine",
                 "from trade_execution import ExecutionEngine",
                 "from ai_trading.data_fetcher import",
-                "from data_fetcher import",
+                "from ai_trading.data_fetcher import",
             ]
 
             for pattern in expected_patterns:

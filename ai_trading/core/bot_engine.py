@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
     requests = _RequestsStub()  # type: ignore
 
 from threading import Lock
+import warnings
 
 from ai_trading.data_fetcher import (
     ensure_datetime,
@@ -39,9 +40,14 @@ from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
 
+warnings.warn(
+    "ai_trading.core.bot_engine: legacy alias paths will change in v1.0",
+    DeprecationWarning,
+)  # AI-AGENT-REF: deprecation notice
+
 try:  # AI-AGENT-REF: optional Alpaca dependency
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):  # pragma: no cover  # AI-AGENT-REF: narrow import errors
     TimeFrame = None  # type: ignore
     class TimeFrameUnit:  # type: ignore
         Minute = "Minute"
@@ -177,6 +183,8 @@ __all__ = [
     "ALPACA_AVAILABLE",
     "FINNHUB_AVAILABLE",
     "DataFetchError",
+    "MockSignal",
+    "MockContext",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -185,9 +193,26 @@ class DataFetchError(RuntimeError):
     """Raised when required market data is unavailable."""  # AI-AGENT-REF
 
 
+COMMON_EXC = COMMON_EXC + (DataFetchError,)  # AI-AGENT-REF: broaden common exceptions
+
+
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
+
+
+class MockSignal:
+    """Simple signal container for tests."""  # AI-AGENT-REF
+
+    def __init__(self, score: float):
+        self.score = score
+
+
+class MockContext:
+    """Lightweight context object for tests."""  # AI-AGENT-REF
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
 
 
 def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
@@ -199,7 +224,7 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
             df = get_bars_df(sym, TimeFrame.Day)
             if df is None or df.empty:
                 errors.append(f"{sym}:empty")
-        except Exception as exc:  # noqa: BLE001
+        except COMMON_EXC as exc:  # AI-AGENT-REF: narrow catch
             errors.append(f"{sym}:{exc}")
     if errors:
         feed = os.getenv("ALPACA_DATA_FEED", "iex")
@@ -3448,7 +3473,7 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
         if isinstance(df.index, pd.MultiIndex):
             try:
                 df = df.xs(symbol, level=0, drop_level=False).droplevel(0)
-            except Exception:  # noqa: BLE001 - defensive slice
+            except (KeyError, ValueError):  # AI-AGENT-REF: defensive slice
                 pass
         df = df.reset_index().rename(columns={"index": "timestamp"})
         rename_map = {"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
@@ -3459,7 +3484,7 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
                 df[col] = pd.NA
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
         return df[keep]
-    except Exception as e:  # noqa: BLE001
+    except COMMON_EXC as e:  # AI-AGENT-REF: narrow catch
         _log.error(
             "ALPACA_BARS_FETCH_FAILED",
             extra={"symbol": symbol, "context": context, "error": str(e)},
@@ -3494,7 +3519,7 @@ class DataFetcher:
             if self._warn_seen.get(key) == bucket:
                 return
             self._warn_seen[key] = bucket
-        except Exception:
+        except (ImportError, OSError, ValueError):  # AI-AGENT-REF: narrow warn_once
             pass
         _log.warning(msg)
 
@@ -3505,7 +3530,7 @@ class DataFetcher:
         # AI-AGENT-REF: normalize daily window to previous trading day when closed
         try:  # lazy import to avoid hard dependency at import time
             from ai_trading.market.calendars import is_trading_day as _is_trading_day
-        except Exception:  # pragma: no cover
+        except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import
             _is_trading_day = None  # type: ignore
 
         ref_date = now_utc.date()
@@ -3519,7 +3544,7 @@ class DataFetcher:
                     try:
                         if _is_trading_day(symbol, datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC)):
                             break
-                    except Exception:
+                    except COMMON_EXC:
                         if ref_date.weekday() < 5:
                             break
 

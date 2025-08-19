@@ -388,7 +388,7 @@ python health_check.py
 
 # API connectivity test
 python -c "
-from data_fetcher import test_all_providers
+from ai_trading import data_fetcher
 test_all_providers(['SPY'])
 "
 
@@ -525,7 +525,7 @@ python -m ai_trading
 grep -i error logs/scheduler.log | tail -10
 
 # Validate configuration
-python validate_env.py
+python -m ai_trading.tools.env_validate
 python verify_config.py
 ```
 
@@ -655,7 +655,7 @@ MAX_POSITION_PCT=0.01  # Very small positions for testing
 
 ```bash
 # Validate your configuration
-python validate_env.py
+python -m ai_trading.tools.env_validate
 
 # Check API connectivity
 python -c "

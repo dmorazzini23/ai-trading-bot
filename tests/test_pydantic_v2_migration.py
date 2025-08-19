@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 def test_pydantic_v2_migration_syntax():
     """Test that validate_env.py uses correct Pydantic V2 syntax."""
-    validate_env_path = os.path.join(os.path.dirname(__file__), '..', 'validate_env.py')
+    validate_env_path = os.path.join(
+        os.path.dirname(__file__), '..', 'ai_trading', 'validation', 'validate_env.py'
+    )
     
     with open(validate_env_path, 'r') as f:
         content = f.read()

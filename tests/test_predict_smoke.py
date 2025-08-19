@@ -17,9 +17,9 @@ def _import_predict(monkeypatch):
     rt_mod.prepare_indicators = lambda df, freq="intraday": df.assign(feat1=0)
     monkeypatch.setitem(sys.modules, "retrain", rt_mod)
 
-    if "predict" in sys.modules:
-        del sys.modules["predict"]
-    return importlib.import_module("predict")
+    if "ai_trading.predict" in sys.modules:
+        del sys.modules["ai_trading.predict"]
+    return importlib.import_module("ai_trading.predict")
 
 
 def force_coverage(mod):

@@ -1512,7 +1512,7 @@ def load_runner(monkeypatch):
     monkeypatch.setitem(sys.modules, "alpaca", alpaca_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading", trading_mod)
     monkeypatch.setitem(sys.modules, "alpaca.trading.stream", stream_mod)
-    import runner as r
+    import ai_trading.runner as r
     return importlib.reload(r)
 
 

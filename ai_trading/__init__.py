@@ -33,10 +33,3 @@ def __getattr__(name: str):  # AI-AGENT-REF: lazy data_fetcher exposure
     raise AttributeError(name)
 
 
-# AI-AGENT-REF: expose validate_env module at top-level for tests
-try:  # pragma: no cover
-    from .tools import validate_env as _validate_env_mod
-
-    _sys.modules.setdefault("validate_env", _validate_env_mod)
-except Exception:  # noqa: BLE001
-    pass

@@ -116,7 +116,7 @@ Since this is **AI + Dom only**, be strict:
 
 ## 🔒 Additional Safeguards
 
-* Never hardcode API keys, secrets, or credentials. Always load them via environment variables managed through `.env` files and `validate_env.py`.
+* Never hardcode API keys, secrets, or credentials. Always load them via environment variables managed through `.env` files and `ai_trading.tools.env_validate`.
 * **NEVER remove, modify, or touch API keys in .env files without explicit permission from Dom.** The `.env` file contains production API credentials that must be preserved.
 * Do not replace or degrade parallel indicator processing (`concurrent.futures`) with purely serial logic unless explicitly instructed.
 * Never downgrade essential libraries such as `pandas`, `numpy`, or `scikit-learn` below the versions pinned in `requirements.txt` or `pyproject.toml`.
