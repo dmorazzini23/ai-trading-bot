@@ -9,6 +9,7 @@ from .base import (
     health_check,
     is_market_open,
     market_open_between,
+    portfolio_lock as _portfolio_lock,  # NEW: bring in the shared lock
 )
 from .base import (
     log_warning as _log_warning,
@@ -34,6 +35,10 @@ try:  # pragma: no cover
     from . import process_manager  # type: ignore
 except Exception:  # pragma: no cover
     process_manager = None  # type: ignore
+
+
+# Expose the concrete lock directly at the package level
+portfolio_lock = _portfolio_lock
 
 
 def safe_subprocess_run(
@@ -148,6 +153,7 @@ __all__ = [
     "health_check",
     "is_market_open",
     "market_open_between",
+    "portfolio_lock",     # NEW
     "psleep",
     "sleep_s",
     "sleep",
