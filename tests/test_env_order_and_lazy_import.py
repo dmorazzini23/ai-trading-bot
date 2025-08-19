@@ -201,9 +201,9 @@ class TestEnvironmentOrderAndLazyImport:
             with patch('dotenv.load_dotenv', side_effect=mock_load_side_effect):
                 # Load multiple times (simulating multiple imports)
                 from ai_trading.main import load_dotenv
-                load_dotenv()  # First load
-                load_dotenv()  # Second load
-                load_dotenv()  # Third load
+                load_dotenv(override=True)  # First load
+                load_dotenv(override=True)  # Second load
+                load_dotenv(override=True)  # Third load
                 
                 # Should still have the correct value
                 assert os.environ.get('MULTI_LOAD_TEST') == 'safe_value'

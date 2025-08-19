@@ -1396,7 +1396,7 @@ def pytest_configure() -> None:
     if not env_file.exists():
         env_file = Path('.env')
     if env_file.exists():
-        load_dotenv(env_file)
+        load_dotenv(env_file, override=True)
     # Ensure project root is on the import path so modules like
     # ``ai_trading.capital_scaling`` resolve when tests are run from the ``tests``
     # directory by CI tools or developers.
