@@ -9,7 +9,7 @@ def test_universe_fetch_pooling(monkeypatch):
     def fake_map_get(urls, timeout=None, headers=None):
         calls['count'] = calls.get('count', 0) + 1
         calls['len'] = len(urls)
-        return [(u, 200, f"BODY{i}".encode()) for i, u in enumerate(urls)]
+        return [((u, 200, f"BODY{i}".encode()), None) for i, u in enumerate(urls)]
 
     monkeypatch.setattr(http, "map_get", fake_map_get)
     monkeypatch.setattr(data_fetcher, "_parse_bars", lambda s, c, b: b.decode())

@@ -6,9 +6,10 @@ from datetime import datetime
 import os
 
 import pandas as pd
-import requests
 
+from ai_trading.exc import COMMON_EXC, TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1
 from ai_trading.logging import get_logger
+from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: Stage 2.1
 from urllib.parse import urlencode
 from datetime import datetime, timezone
 
@@ -124,10 +125,14 @@ def get_bars(symbol: str, timeframe: str, start, end, /, *, feed=None) -> pd.Dat
         start = ensure_datetime(start)
     if end is not None:
         end = ensure_datetime(end)
+    SAFE_EXC = COMMON_EXC + (DataFetchException,)
     try:
         if feed and hasattr(feed, "get_bars"):
-            return feed.get_bars(symbol, timeframe, start, end) or pd.DataFrame()
-    except (requests.exceptions.RequestException, DataFetchException) as exc:
+            return retry_call(
+                lambda: feed.get_bars(symbol, timeframe, start, end) or pd.DataFrame(),
+                exceptions=TRANSIENT_HTTP_EXC,
+            )
+    except SAFE_EXC as exc:  # AI-AGENT-REF: Stage 2.1 narrow catch
         _log.info(f"feed.get_bars error {exc.__class__.__name__}", exc_info=True)
     except AttributeError:
         pass
@@ -153,10 +158,14 @@ def get_minute_df(
 ) -> pd.DataFrame:
     start = ensure_datetime(start) if start else None
     end = ensure_datetime(end) if end else None
+    SAFE_EXC = COMMON_EXC + (DataFetchException,)
     try:
         if feed and hasattr(feed, "get_bars"):
-            return feed.get_bars(symbol, "1Min", start, end) or pd.DataFrame()
-    except (requests.exceptions.RequestException, DataFetchException) as exc:
+            return retry_call(
+                lambda: feed.get_bars(symbol, "1Min", start, end) or pd.DataFrame(),
+                exceptions=TRANSIENT_HTTP_EXC,
+            )
+    except SAFE_EXC as exc:  # AI-AGENT-REF: Stage 2.1 narrow catch
         _log.info(f"feed.get_bars error {exc.__class__.__name__}", exc_info=True)
     except AttributeError:
         pass

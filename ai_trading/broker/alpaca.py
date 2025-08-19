@@ -7,24 +7,26 @@ from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
 
-try:  # AI-AGENT-REF: optional requests import for HTTPError
+try:  # AI-AGENT-REF: Stage 2.1 optional requests import
     from requests.exceptions import HTTPError
-except Exception:  # pragma: no cover - requests optional
+except ImportError:  # pragma: no cover - requests optional
     class HTTPError(Exception):
         pass
 
-try:  # AI-AGENT-REF: guard Alpaca dependency
+try:  # AI-AGENT-REF: Stage 2.1 guard Alpaca dependency
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     TradingClient = None  # type: ignore
 
     class APIError(Exception):  # AI-AGENT-REF: fallback when SDK missing
         pass
 
 
+from ai_trading.exc import TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1 centralized exc
+
 _log = get_logger(__name__)
-COMMON_EXC = (APIError, HTTPError, TimeoutError, OSError)
+SAFE_EXC = TRANSIENT_HTTP_EXC + (APIError,)
 
 
 def _retry_config() -> tuple[int, float, float, float]:
@@ -38,7 +40,7 @@ def _retry_config() -> tuple[int, float, float, float]:
         base = float(getattr(s, "RETRY_BASE_DELAY", base))
         max_delay = float(getattr(s, "RETRY_MAX_DELAY", max_delay))
         jitter = float(getattr(s, "RETRY_JITTER", jitter))
-    except Exception:  # pragma: no cover - settings optional
+    except (AttributeError, TypeError, ValueError, ImportError):  # pragma: no cover
         pass
     return attempts, base, max_delay, jitter
 
@@ -110,7 +112,7 @@ class AlpacaBroker:
         def _wrapped() -> Any:
             try:
                 return func()
-            except COMMON_EXC as e:  # AI-AGENT-REF: log retry
+            except SAFE_EXC as e:  # AI-AGENT-REF: Stage 2.1 log retry
                 attempt["n"] += 1
                 _log.warning(
                     "ALPACA_RETRY",
@@ -125,7 +127,7 @@ class AlpacaBroker:
 
         return retry_call(
             _wrapped,
-            exceptions=COMMON_EXC,
+            exceptions=SAFE_EXC,
             attempts=attempts,
             base_delay=base,
             max_delay=max_delay,
