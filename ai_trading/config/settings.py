@@ -108,6 +108,40 @@ class Settings(BaseSettings):
     # Logging
     log_compact_json: bool = Field(False, alias="LOG_COMPACT_JSON")
 
+    # AI-AGENT-REF: add missing runtime config fields for trading loop
+    # Operational toggles and thresholds
+    testing: bool = Field(False, alias="TESTING")
+    shadow_mode: bool = Field(False, alias="SHADOW_MODE")
+    log_market_fetch: bool = Field(True, alias="LOG_MARKET_FETCH")
+    healthcheck_port: int = Field(9001, alias="HEALTHCHECK_PORT")
+    min_health_rows: int = Field(120, alias="MIN_HEALTH_ROWS")
+    metrics_enabled: bool = Field(False, alias="METRICS_ENABLED")
+
+    # Data pipeline/cache controls
+    market_cache_enabled: bool = Field(False, alias="MARKET_CACHE_ENABLED")
+    minute_cache_ttl: int = Field(60, alias="MINUTE_CACHE_TTL")
+    data_sanitize_enabled: bool = Field(True, alias="DATA_SANITIZE_ENABLED")
+    liquidity_checks_enabled: bool = Field(True, alias="LIQUIDITY_CHECKS_ENABLED")
+    corp_actions_enabled: bool = Field(True, alias="CORP_ACTIONS_ENABLED")
+
+    # Risk & position caps
+    max_open_positions: int = Field(10, alias="MAX_OPEN_POSITIONS")
+    max_portfolio_positions: int = Field(10, alias="MAX_PORTFOLIO_POSITIONS")
+    sector_exposure_cap: float = Field(0.33, alias="SECTOR_EXPOSURE_CAP")
+    max_drawdown_threshold: float = Field(0.08, alias="MAX_DRAWDOWN_THRESHOLD")
+    weekly_drawdown_limit: float = Field(0.10, alias="WEEKLY_DRAWDOWN_LIMIT")
+    disaster_dd_limit: float = Field(0.25, alias="DISASTER_DD_LIMIT")
+
+    # Strategy/ML thresholds
+    ml_confidence_threshold: float = Field(0.5, alias="ML_CONFIDENCE_THRESHOLD")
+    volume_spike_threshold: float = Field(1.5, alias="VOLUME_SPIKE_THRESHOLD")
+    pyramid_levels: int = Field(0, alias="PYRAMID_LEVELS")
+    sgd_params: dict[str, Any] = Field(default_factory=dict, alias="SGD_PARAMS")
+
+    # Trade execution/behavior
+    force_trades: bool = Field(False, alias="FORCE_TRADES")
+    sizing_enabled: bool = Field(True, alias="SIZING_ENABLED")
+
     # AI-AGENT-REF: rebalancer defaults
     rebalance_interval_min: int = Field(
         15,
