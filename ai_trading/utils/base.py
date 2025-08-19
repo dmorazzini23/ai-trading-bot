@@ -1,6 +1,3 @@
-from ai_trading.config import get_settings
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
-
 """Utility functions for common operations across the bot."""
 
 import datetime as dt
@@ -20,6 +17,9 @@ from zoneinfo import ZoneInfo
 
 # AI-AGENT-REF: Pandas is a hard dependency
 import pandas as pd
+
+from ai_trading.config import get_settings
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 try:
     import pandas_market_calendars as mcal  # AI-AGENT-REF: optional dependency
@@ -125,9 +125,7 @@ HEALTH_THROTTLE = 10
 _last_health_log = 0.0
 
 
-def log_warning(
-    msg: str, *, exc: Exception | None = None, extra: dict | None = None
-) -> None:
+def log_warning(msg: str, *, exc: Exception | None = None, extra: dict | None = None) -> None:
     """Standardized warning logger used across the project."""
     if extra is None:
         extra = {}
@@ -183,9 +181,7 @@ def get_trading_calendar(name: str = "XNYS"):
     return _NaiveCal()
 
 
-def backoff_delay(
-    attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1
-) -> float:
+def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1) -> float:
     """Return exponential backoff delay with jitter."""
     exp = base * (2 ** max(0, attempt - 1))
     delay = min(exp, cap)
@@ -256,10 +252,18 @@ model_lock = _CallableLock()
 
 def get_latest_close(df: DataFrame) -> float:
     """Return the most recent close value or 0.0."""
+    if df is None:
+        return 0.0
     try:
-        v = float(df["close"].dropna().iloc[-1])
-        return v if np.isfinite(v) else 0.0
-    except COMMON_EXC:  # AI-AGENT-REF: narrow
+        # AI-AGENT-REF: handle casing variants and coercion
+        for col in ("close", "Close", "c"):
+            if col in df.columns:
+                s = pd.to_numeric(df[col], errors="coerce").dropna()
+                if not s.empty:
+                    v = float(s.iloc[-1])
+                    return v if np.isfinite(v) else 0.0
+        return 0.0
+    except COMMON_EXC + (IndexError,):  # AI-AGENT-REF: swallow missing/invalid data
         return 0.0
 
 
@@ -640,17 +644,10 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
             return []
 
     # if someone passed (symbol, Timestamp), extract the Timestamp
-    if (
-        HAS_PANDAS
-        and isinstance(arr, tuple)
-        and len(arr) == 2
-        and isinstance(arr[1], pd.Timestamp)
-    ):
+    if HAS_PANDAS and isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
         arr = arr[1]
     elif HAS_PANDAS and (
-        isinstance(arr, list | Index | Series)
-        and len(arr) > 0
-        and isinstance(arr[0], tuple)
+        isinstance(arr, list | Index | Series) and len(arr) > 0 and isinstance(arr[0], tuple)
     ):
         arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
 
@@ -736,9 +733,7 @@ def get_column(
     for col in options:
         if col in df.columns:
             if dtype is not None:
-                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(
-                    df[col]
-                ):
+                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(df[col]):
                     continue
                 elif not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
                     raise TypeError(
@@ -750,16 +745,10 @@ def get_column(
                 raise ValueError(f"{label}: column '{col}' is all null")
             if must_be_unique and not df[col].is_unique:
                 raise ValueError(f"{label}: column '{col}' is not unique")
-            if (
-                must_be_timezone_aware
-                and hasattr(df[col], "dt")
-                and df[col].dt.tz is None
-            ):
+            if must_be_timezone_aware and hasattr(df[col], "dt") and df[col].dt.tz is None:
                 raise ValueError(f"{label}: column '{col}' is not timezone-aware")
             return col
-    raise ValueError(
-        f"No recognized {label} column found in DataFrame: {df.columns.tolist()}"
-    )
+    raise ValueError(f"No recognized {label} column found in DataFrame: {df.columns.tolist()}")
 
 
 # OHLCV helpers
@@ -853,7 +842,7 @@ def get_order_column(df, name):
     )
 
 
-def get_ohlcv_columns(df):
+def get_ohlcv_columns(df):  # noqa: F811  # AI-AGENT-REF: coexist with typed variant
     """Return the names of the OHLCV columns if present."""
 
     if not isinstance(df, DataFrame):
@@ -932,11 +921,7 @@ def enable_market_calendar_lib() -> None:
     S = get_settings()
     if getattr(S, "use_market_calendar_lib", False):
         if find_spec("pandas_market_calendars") is None:
-            raise RuntimeError(
-                "Feature enabled but module 'pandas_market_calendars' not installed"
-            )
+            raise RuntimeError("Feature enabled but module 'pandas_market_calendars' not installed")
         import pandas_market_calendars as _pmc
 
-        globals().update(
-            {k: getattr(_pmc, k) for k in dir(_pmc) if not k.startswith("_")}
-        )
+        globals().update({k: getattr(_pmc, k) for k in dir(_pmc) if not k.startswith("_")})
