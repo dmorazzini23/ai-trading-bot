@@ -3482,12 +3482,48 @@ class DataFetcher:
         self._daily_cache: dict[str, pd.DataFrame | None] = {}
         self._minute_cache: dict[str, pd.DataFrame | None] = {}
         self._minute_timestamps: dict[str, datetime] = {}
+        # AI-AGENT-REF: rate-limit repeated warnings per (symbol, timeframe)
+        self._warn_seen: dict[str, int] = {}
+
+    def _warn_once(self, key: str, msg: str) -> None:
+        """Log a warning at most once per minute for a given key."""
+        try:
+            import time as _time
+
+            bucket = int(_time.time() // 60)
+            if self._warn_seen.get(key) == bucket:
+                return
+            self._warn_seen[key] = bucket
+        except Exception:
+            pass
+        _log.warning(msg)
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
-        end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        # fetch ~6 months of daily bars for health checks and indicators
+
+        # AI-AGENT-REF: normalize daily window to previous trading day when closed
+        try:  # lazy import to avoid hard dependency at import time
+            from ai_trading.market.calendars import is_trading_day as _is_trading_day
+        except Exception:  # pragma: no cover
+            _is_trading_day = None  # type: ignore
+
+        ref_date = now_utc.date()
+        if not is_market_open():
+            for _ in range(10):  # safety bound
+                ref_date = ref_date - timedelta(days=1)
+                if _is_trading_day is None:
+                    if ref_date.weekday() < 5:
+                        break
+                else:
+                    try:
+                        if _is_trading_day(symbol, datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC)):
+                            break
+                    except Exception:
+                        if ref_date.weekday() < 5:
+                            break
+
+        end_ts = datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC) + timedelta(days=1)
         start_ts = end_ts - timedelta(days=150)
 
         with cache_lock:
@@ -3535,8 +3571,9 @@ class DataFetcher:
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if bars.empty:
-                _log.warning(
-                    f"No daily bars returned for {symbol}. Possible market holiday or API outage"
+                self._warn_once(
+                    f"daily|{symbol}",
+                    f"No daily bars returned for {symbol}. Possible market holiday or API outage",
                 )
                 return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
@@ -5638,9 +5675,14 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     if not symbols:
         return
     if len(missing) == len(symbols):
-        _log.error(
-            "DATA_SOURCE_HEALTH_CHECK: No data for any symbol. Possible API outage or market holiday."
-        )
+        if not is_market_open():
+            _log.info(
+                "DATA_SOURCE_HEALTH_CHECK: No data for any symbol (market closed; health check deferred)."
+            )
+        else:
+            _log.error(
+                "DATA_SOURCE_HEALTH_CHECK: No data for any symbol. Possible API outage or market holiday."
+            )
     elif missing:
         _log.warning(
             "DATA_SOURCE_HEALTH_CHECK: missing data for %s",
@@ -10782,10 +10824,20 @@ def screen_universe(
                 time.sleep(0.25)
                 spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
             if spy_df is None or spy_df.empty:
-                _log.warning(
-                    "DATA_FEED_UNAVAILABLE",
-                    extra={"provider": "alpaca", "status": "empty"},
-                )
+                if not is_market_open():
+                    _log.info(
+                        "DATA_FEED_UNAVAILABLE",
+                        extra={
+                            "provider": "alpaca",
+                            "status": "empty",
+                            "context": "market closed; health check deferred",
+                        },
+                    )
+                else:
+                    _log.warning(
+                        "DATA_FEED_UNAVAILABLE",
+                        extra={"provider": "alpaca", "status": "empty"},
+                    )
                 return []
 
             for sym in list(_SCREEN_CACHE):
