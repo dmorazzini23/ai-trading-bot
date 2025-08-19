@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
     requests = _RequestsStub()  # type: ignore
 
 from ai_trading.data_fetcher import ensure_datetime, get_bars, get_bars_batch
+from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
 
@@ -3379,46 +3380,49 @@ class FinnhubFetcherLegacy:
 _last_fh_prefetch_date: date | None = None
 
 
+
+
 def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
-    """Safely get stock bars with proper null checking and error handling."""
+    """Safely get stock bars and always return a DataFrame."""
     try:
         response = client.get_stock_bars(request)
-        if response is None:
-            _log.error(
-                f"ALPACA {context} FETCH ERROR for {symbol}: get_stock_bars returned None"
+        df = getattr(response, "df", None)
+        if df is None or df.empty:
+            _log.warning(
+                "ALPACA_BARS_EMPTY",
+                extra={"symbol": symbol, "context": context},
             )
-            return None
-        if not hasattr(response, "df"):
-            _log.error(
-                f"ALPACA {context} FETCH ERROR for {symbol}: response missing 'df' attribute"
-            )
-            return None
-        return response.df
-    except AttributeError as e:
-        _log.error(f"ALPACA {context} FETCH ERROR for {symbol}: AttributeError: {e}")
-        return None
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
+            return _create_empty_bars_dataframe()
+
+        if isinstance(df.index, pd.MultiIndex):
+            try:
+                df = df.xs(symbol, level=0, drop_level=False).droplevel(0)
+            except Exception:  # noqa: BLE001 - defensive slice
+                pass
+        df = df.reset_index().rename(columns={"index": "timestamp"})
+        rename_map = {"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
+        df = df.rename(columns=rename_map)
+        keep = ["timestamp", "open", "high", "low", "close", "volume"]
+        for col in keep:
+            if col not in df.columns:
+                df[col] = pd.NA
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df[keep]
+    except Exception as e:  # noqa: BLE001
         _log.error(
-            f"ALPACA {context} FETCH ERROR for {symbol}: {type(e).__name__}: {e}"
+            "ALPACA_BARS_FETCH_FAILED",
+            extra={"symbol": symbol, "context": context, "error": str(e)},
         )
-        return None
+        return _create_empty_bars_dataframe()
 
 
 def _create_empty_bars_dataframe(timeframe: str = "daily") -> pd.DataFrame:
-    """Create an empty DataFrame with valid public pandas indexes for failed data fetches."""
-    empty_df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-    # Use public pandas API for datetime index
-    empty_df.index = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-    return empty_df
+    """Return an empty OHLCV DataFrame with a UTC timestamp column."""
+    cols = ["timestamp", "open", "high", "low", "close", "volume"]
+    df = pd.DataFrame(columns=cols)
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).tz_localize("UTC")
+    return df
+
 
 
 @dataclass
@@ -10710,21 +10714,42 @@ def screen_universe(
             f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
         )
 
+        spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
+        if spy_df is None or spy_df.empty:
+            time.sleep(0.25)
+            spy_df = runtime.data_fetcher.get_daily_df(runtime, "SPY")
+        if spy_df is None or spy_df.empty:
+            _log.warning(
+                "DATA_FEED_UNAVAILABLE",
+                extra={"provider": "alpaca", "status": "empty"},
+            )
+            return []
+
         for sym in list(_SCREEN_CACHE):
             if sym not in cand_set:
                 _SCREEN_CACHE.pop(sym, None)
 
         new_syms = cand_set - _SCREEN_CACHE.keys()
         filtered_out = {}  # Track reasons for filtering
+        tried = valid = empty = failed = 0
 
         for sym in new_syms:
+            tried += 1
             df = runtime.data_fetcher.get_daily_df(runtime, sym)
+            if not is_valid_ohlcv(df):
+                empty += 1
+                filtered_out[sym] = "no_data"
+                _log.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe")
+                time.sleep(0.25)
+                continue
 
             # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
             validation_result = _validate_market_data_quality(df, sym)
             if not validation_result["valid"]:
+                failed += 1
                 filtered_out[sym] = validation_result["reason"]
                 _log.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
+                time.sleep(0.25)
                 continue
 
             original_len = len(df)
@@ -10734,20 +10759,24 @@ def screen_universe(
                 _log.debug(
                     f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
                 )
+                time.sleep(0.25)
                 continue
 
             series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
             if series is None or not hasattr(series, "empty") or series.empty:
                 filtered_out[sym] = "atr_calculation_failed"
                 _log.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
+                time.sleep(0.25)
                 continue
             atr_val = series.iloc[-1]
             if not pd.isna(atr_val):
                 _SCREEN_CACHE[sym] = float(atr_val)
                 _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
+                valid += 1
             else:
                 filtered_out[sym] = "atr_nan"
                 _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
+            time.sleep(0.25)
 
         atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
         ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
@@ -10757,6 +10786,15 @@ def screen_universe(
             f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
             f"Selected: {selected}. "
             f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
+        )
+        _log.info(
+            "SCREEN_SUMMARY",
+            extra={
+                "tried": tried,
+                "valid": valid,
+                "empty": empty,
+                "failed": failed,
+            },
         )
 
         return selected
@@ -12390,7 +12428,12 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     )
                 return
 
-            alpha_model = runtime.model
+            alpha_model = getattr(runtime, "model", None)
+            if not alpha_model:
+                _log.warning(
+                    "ALPHA_MODEL_UNAVAILABLE - skipping compute stage for this cycle"
+                )
+                return
 
             retries = 3
             processed, row_counts = [], {}

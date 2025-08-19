@@ -12,7 +12,20 @@ __all__ = [
     "get_stale_symbols",
     "validate_trading_data",
     "emergency_data_check",
+    "is_valid_ohlcv",
 ]
+
+
+REQUIRED_PRICE_COLS = ("open", "high", "low", "close", "volume")
+
+
+def is_valid_ohlcv(df: pd.DataFrame, min_rows: int = 50) -> bool:
+    """Return True if ``df`` has required OHLCV columns and rows."""
+    if df is None or df.empty:
+        return False
+    if not set(REQUIRED_PRICE_COLS).issubset(df.columns):
+        return False
+    return len(df) >= min_rows
 
 
 def check_data_freshness(
