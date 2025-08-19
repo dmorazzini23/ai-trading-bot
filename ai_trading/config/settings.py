@@ -165,7 +165,8 @@ class Settings(BaseSettings):
     # AI-AGENT-REF: runtime defaults for deterministic behavior and loops
     seed: int | None = 42
     loop_interval_seconds: int = 60
-    iterations: int = 0  # 0 => run forever
+    # 0 => run forever; allow override via SCHEDULER_ITERATIONS
+    iterations: int = Field(default=0, env="SCHEDULER_ITERATIONS")  # AI-AGENT-REF: env override
     api_port: int | None = 9001
 
     # AI-AGENT-REF: optional Finnhub API config
