@@ -64,6 +64,50 @@ class Settings(BaseSettings):
     )
     volume_threshold: float = Field(0.0, env="AI_TRADER_VOLUME_THRESHOLD")
 
+    # --- Added fields to support runtime modules and tests ---
+    # Portfolio-level feature flag (clustering, risk sizing)
+    ENABLE_PORTFOLIO_FEATURES: bool = Field(
+        False, alias="ENABLE_PORTFOLIO_FEATURES"
+    )
+
+    # Cache configuration
+    data_cache_ttl_seconds: int = Field(
+        300, env="AI_TRADER_DATA_CACHE_TTL_SECONDS"
+    )
+    data_cache_dir: str = Field(
+        default=str(Path.home() / ".cache" / "ai_trader"),
+        env="AI_TRADER_DATA_CACHE_DIR",
+    )
+    data_cache_disk_enable: bool = Field(
+        True, env="AI_TRADER_DATA_CACHE_DISK_ENABLE"
+    )
+
+    # Batch fallback worker pool size
+    batch_fallback_workers: int = Field(4, alias="BATCH_FALLBACK_WORKERS")
+
+    # Pre-trade lookback days for safety checks
+    pretrade_lookback_days: int = Field(120, alias="PRETRADE_LOOKBACK_DAYS")
+
+    # Meta-learning and trade logging
+    enable_reinforcement_learning: bool = Field(
+        False, alias="ENABLE_REINFORCEMENT_LEARNING"
+    )
+    trade_log_file: str = Field("trades.csv", alias="TRADE_LOG_FILE")
+
+    # Portfolio rebalancer controls
+    rebalance_sleep_seconds: int = Field(60, alias="REBALANCE_SLEEP_SECONDS")
+
+    # Sentiment API (optional)
+    sentiment_api_key: str | None = Field(
+        default=None, alias="SENTIMENT_API_KEY"
+    )
+    sentiment_api_url: str | None = Field(
+        default=None, alias="SENTIMENT_API_URL"
+    )
+
+    # Logging
+    log_compact_json: bool = Field(False, alias="LOG_COMPACT_JSON")
+
     # AI-AGENT-REF: rebalancer defaults
     rebalance_interval_min: int = Field(
         15,
