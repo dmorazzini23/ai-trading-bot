@@ -1,22 +1,33 @@
 from __future__ import annotations
 
+import datetime as dt
 import os
 import time
 import types
 import uuid
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+import typing as t
 
 import pandas as pd
+import pytz
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.optdeps import module_ok  # AI-AGENT-REF: optional import helper
 
 try:  # AI-AGENT-REF: optional Alpaca dependency
-    from alpaca_trade_api.rest import REST, TimeFrame
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 except Exception:  # pragma: no cover - handled gracefully
-    REST = None  # type: ignore
     TimeFrame = None  # type: ignore
+    TimeFrameUnit = types.SimpleNamespace(  # type: ignore
+        Minute="Minute", Hour="Hour", Day="Day", Week="Week", Month="Month"
+    )
+
+try:  # AI-AGENT-REF: optional Alpaca dependency
+    from alpaca_trade_api import REST as TradeApiREST
+    from alpaca_trade_api.rest import APIError as TradeApiError
+except Exception:  # pragma: no cover - handled gracefully
+    TradeApiREST = None  # type: ignore
+    TradeApiError = Exception  # type: ignore
 
 _log = get_logger(__name__)
 
@@ -24,6 +35,8 @@ _log = get_logger(__name__)
 SHADOW_MODE = os.getenv("SHADOW_MODE", "").lower() in {"1", "true", "yes"}
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
+
+_UTC = pytz.UTC
 
 
 ALPACA_AVAILABLE = any(
@@ -54,130 +67,162 @@ def _get(obj, key, default=None):
     return default
 
 
+def _normalize_timeframe_for_tradeapi(tf: t.Union[str, TimeFrame]) -> str:
+    """Normalize various timeframe inputs to Alpaca trade-api REST strings."""
+    if isinstance(tf, str):
+        s = tf.strip()
+        aliases = {
+            "d": "Day",
+            "day": "Day",
+            "days": "Day",
+            "h": "Hour",
+            "hr": "Hour",
+            "hour": "Hour",
+            "hours": "Hour",
+            "m": "Min",
+            "min": "Min",
+            "mins": "Min",
+            "minute": "Min",
+            "minutes": "Min",
+            "w": "Week",
+            "week": "Week",
+            "weeks": "Week",
+            "mo": "Month",
+            "mon": "Month",
+            "month": "Month",
+            "months": "Month",
+        }
+        import re
+
+        m = re.match(r"(?i)^\s*(\d+)\s*([a-z]+)\s*$", s)
+        if m:
+            qty = int(m.group(1))
+            unit_raw = m.group(2)
+            unit = aliases.get(unit_raw, unit_raw.capitalize())
+            unit_map = {
+                "Min": "Min",
+                "Minute": "Min",
+                "Hour": "Hour",
+                "Hr": "Hour",
+                "Day": "Day",
+                "Week": "Week",
+                "Month": "Month",
+            }
+            unit_tok = unit_map.get(unit, unit)
+            return f"{qty}{unit_tok}"
+        unit = aliases.get(s, s.capitalize())
+        unit_tok = {
+            "Minute": "Min",
+            "Min": "Min",
+            "Hour": "Hour",
+            "Day": "Day",
+            "Week": "Week",
+            "Month": "Month",
+        }.get(unit, unit)
+        return f"1{unit_tok}"
+
+    try:
+        qty = getattr(tf, "amount", 1)
+        unit_obj = getattr(tf, "unit", TimeFrameUnit.Day)
+        unit_name = getattr(unit_obj, "name", str(unit_obj))
+        unit_tok = {
+            "Minute": "Min",
+            "Hour": "Hour",
+            "Day": "Day",
+            "Week": "Week",
+            "Month": "Month",
+        }.get(unit_name, unit_name)
+        return f"{qty}{unit_tok}"
+    except Exception:
+        return "1Day"
+
 # ---- market data helpers ----------------------------------------------------
 
-_rest_client = None
+
+def _get_rest() -> TradeApiREST:
+    """Return a new `alpaca_trade_api.REST` instance."""
+    if TradeApiREST is None:  # pragma: no cover - optional dependency
+        raise RuntimeError("alpaca-trade-api not installed")
+    key = os.getenv("ALPACA_API_KEY")
+    secret = os.getenv("ALPACA_SECRET_KEY")
+    base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    return TradeApiREST(key, secret, base)
 
 
-def _get_rest():  # AI-AGENT-REF: lazy REST client
-    """Return a cached `alpaca_trade_api.REST` instance."""
-    global _rest_client
-    if _rest_client is None:
-        if REST is None:
-            raise RuntimeError("alpaca-trade-api not installed")
-        key = os.getenv("ALPACA_API_KEY")
-        secret = os.getenv("ALPACA_SECRET_KEY")
-        base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-        _rest_client = REST(key, secret, base)
-    return _rest_client
-
-
-def _bars_time_window(timeframe: TimeFrame) -> tuple[str, str]:  # AI-AGENT-REF
-    now = datetime.now(timezone.utc)
-    end = now - timedelta(minutes=1)
-    if timeframe == TimeFrame.Day:
+def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
+    now = dt.datetime.now(tz=_UTC)
+    end = now - dt.timedelta(minutes=1)
+    unit = getattr(getattr(timeframe, "unit", None), "name", None)
+    if unit == "Day":
         days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", 200))
     else:
         days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
-    start = end - timedelta(days=days)
-    return (
-        start.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        end.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-    )
+    start = end - dt.timedelta(days=days)
+    return start, end
 
 
-def get_bars_df(symbol: str, timeframe: TimeFrame) -> pd.DataFrame:
-    """Fetch bars for ``symbol`` and return a normalized DataFrame."""  # AI-AGENT-REF
+def get_bars_df(
+    symbol: str,
+    timeframe: t.Union[str, TimeFrame],
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+    adjustment: str | None = None,
+    feed: str | None = None,
+) -> pd.DataFrame:
+    """Fetch bars for ``symbol`` and return a normalized DataFrame."""
     rest = _get_rest()
-    feed = os.getenv("ALPACA_DATA_FEED", "iex")
-    adjustment = os.getenv("ALPACA_ADJUSTMENT", "all")
-    start, end = _bars_time_window(timeframe)
+    feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
+    adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
+    tf_raw = timeframe
+    tf = _normalize_timeframe_for_tradeapi(tf_raw)
+    if start is None or end is None:
+        try:
+            base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
+        except Exception:
+            base_tf = TimeFrame(1, TimeFrameUnit.Day)
+        start, end = _bars_time_window(base_tf)
     try:
-        bars = rest.get_bars(
+        df = rest.get_bars(
             symbol,
-            timeframe=timeframe,
+            timeframe=tf,
             start=start,
             end=end,
             adjustment=adjustment,
             feed=feed,
-            limit=10000,
-        )
-    except Exception as e:  # noqa: BLE001
-        status = getattr(e, "status_code", getattr(getattr(e, "response", None), "status_code", None))
+            limit=None,
+        ).df
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return df.reset_index(drop=False)
+        return pd.DataFrame()
+    except TradeApiError as e:
+        req = {
+            "timeframe_raw": str(tf_raw),
+            "timeframe_norm": tf,
+            "feed": feed,
+            "start": start.isoformat() if hasattr(start, "isoformat") else str(start),
+            "end": end.isoformat() if hasattr(end, "isoformat") else str(end),
+            "adjustment": adjustment,
+        }
         body = ""
-        resp = getattr(e, "response", None)
-        if resp is not None:
-            with suppress(Exception):
-                body = resp.text[:200]
+        try:
+            body = e.response.text
+        except Exception:
+            pass
         _log.error(
             "ALPACA_BARS_FAIL",
             extra={
                 "symbol": symbol,
-                "timeframe": str(timeframe),
+                "timeframe": tf,
                 "feed": feed,
                 "start": start,
                 "end": end,
-                "status_code": status,
+                "status_code": getattr(e, "status_code", None),
                 "endpoint": "alpaca/bars",
-                "query_params": {
-                    "timeframe": str(timeframe),
-                    "feed": feed,
-                    "start": start,
-                    "end": end,
-                    "adjustment": adjustment,
-                },
+                "query_params": req,
                 "body": body,
             },
         )
-        raise
-    try:
-        df = bars.df if hasattr(bars, "df") else bars.to_dataframe()
-    except Exception:
-        df = pd.DataFrame([b._raw for b in bars]) if bars else pd.DataFrame()
-    if df is None or df.empty:
-        sample = str(bars)[:200]
-        _log.critical(
-            "ALPACA_EMPTY",
-            extra={
-                "symbol": symbol,
-                "timeframe": str(timeframe),
-                "feed": feed,
-                "start": start,
-                "end": end,
-                "sample": sample,
-            },
-        )
-        raise RuntimeError(
-            f"ALPACA_EMPTY:{symbol}:{timeframe}:{feed}:{start}->{end}"
-        )
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        df = df.set_index("timestamp").sort_index()
-    else:
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index, utc=True, errors="coerce")
-        df = df.sort_index()
-    if df.index.tzinfo is not None:
-        df.index = df.index.tz_convert("UTC")
-    else:
-        df.index = df.index.tz_localize("UTC")
-    df = df[~df.index.duplicated(keep="last")].sort_index()
-    required = ["open", "high", "low", "close", "volume"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise RuntimeError(f"ALPACA_SCHEMA_MISSING:{symbol}:{missing}")
-    _log.info(
-        "ALPACA_BARS_OK",
-        extra={
-            "symbol": symbol,
-            "timeframe": str(timeframe),
-            "feed": feed,
-            "start": start,
-            "end": end,
-            "row_count": len(df),
-        },
-    )
-    return df
+        return pd.DataFrame()
 
 def submit_order(api, order_data=None, log=None, **kwargs):
     """Submit an order and return a canonical ``SimpleNamespace``."""  # AI-AGENT-REF
