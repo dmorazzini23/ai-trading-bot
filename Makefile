@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract
+.PHONY: init test lint verify test-all contract audit-exceptions
 
 init:
 	python tools/check_python_version.py
@@ -28,6 +28,9 @@ verify:
 	@if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 	chmod +x scripts/quick_verify.sh
 	./scripts/quick_verify.sh
+
+audit-exceptions:
+	python tools/audit_exceptions.py --paths ai_trading --fail-over 12
 
 # === Import-time config hygiene helpers ===
 

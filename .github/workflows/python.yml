@@ -64,6 +64,9 @@ jobs:
           chmod +x scripts/quick_verify.sh
           ./scripts/quick_verify.sh
 
+      - name: Audit exceptions
+        run: make audit-exceptions
+
       - name: Run tests
         run: |
           pytest -q -n auto --disable-warnings
