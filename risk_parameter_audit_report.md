@@ -165,7 +165,7 @@
   Line: 'collection_time_ms': gc_time * 1000
 - system_diagnostic.py:317 - 1000 (old MAX_POSITION_SIZE)
   Line: diagnostic_results[f'{check_name}_time_ms'] = check_time * 1000
-- validate_env.py:84 - 1000 (old MAX_POSITION_SIZE)
+- ai_trading.tools.env_validate:84 - 1000 (old MAX_POSITION_SIZE)
   Line: VOLUME_THRESHOLD: int = Field(default=50000, ge=1000, description="Minimum daily volume requirement")
 - performance_monitor.py:27 - 1000 (old MAX_POSITION_SIZE)
   Line: self.metrics_history = deque(maxlen=1000)  # Store last 1000 measurements

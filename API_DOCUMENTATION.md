@@ -124,7 +124,7 @@ def get_position_info(symbol: str) -> Dict[str, Any]:
 #### `data_fetcher.py` - Market Data
 
 ```python
-from data_fetcher import get_historical_data, get_real_time_data, DataProvider
+from ai_trading import data_fetcher
 
 def get_historical_data(
     symbol: str,

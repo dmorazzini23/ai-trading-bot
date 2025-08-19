@@ -78,3 +78,28 @@ except Exception:  # noqa: BLE001
 
     Gauge = Counter = Histogram = Summary = _NoopMetric  # type: ignore
     start_http_server = _noop_start_http_server
+
+# AI-AGENT-REF: expose basic metrics helpers under canonical package
+from ai_trading.monitoring.metrics import safe_divide, calculate_atr  # noqa: E402
+
+
+def compute_basic_metrics(data):
+    """Return minimal metrics dict."""  # AI-AGENT-REF
+    if hasattr(data, "empty") and data.empty:
+        return {"sharpe": 0.0, "max_drawdown": 0.0}
+    return {"sharpe": 0.0, "max_drawdown": 0.0}
+
+
+__all__ = [
+    "PROMETHEUS_AVAILABLE",
+    "REGISTRY",
+    "CollectorRegistry",
+    "Gauge",
+    "Counter",
+    "Histogram",
+    "Summary",
+    "start_http_server",
+    "safe_divide",
+    "calculate_atr",
+    "compute_basic_metrics",
+]

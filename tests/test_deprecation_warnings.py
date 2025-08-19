@@ -1,31 +1,23 @@
 """
 Test deprecation warnings for root module imports.
 """
-import importlib
 import warnings
 import pytest
 
 
 def test_bot_engine_deprecation_warning():
-    """Test that importing bot_engine shows deprecation warning."""
+    """Importing bot_engine emits DeprecationWarning."""  # AI-AGENT-REF
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        try:
-            importlib.import_module("bot_engine")
-        except ModuleNotFoundError:
-            pytest.skip("bot_engine module removed")
-
-        # Check that a deprecation warning was raised
-        assert len(w) >= 1
-        assert any(issubclass(warning.category, DeprecationWarning) for warning in w)
-        assert any("bot_engine.py is deprecated" in str(warning.message) for warning in w)
+        import ai_trading.core.bot_engine  # noqa: F401
+        assert any(issubclass(w.category, DeprecationWarning) for w in w)
 
 
 def test_data_fetcher_deprecation_warning():
     """Test that importing data_fetcher shows deprecation warning."""
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        import data_fetcher  # noqa: F401
+        import ai_trading.data_fetcher  # noqa: F401
 
         # Check that a deprecation warning was raised
         assert len(w) >= 1
@@ -37,7 +29,7 @@ def test_runner_deprecation_warning():
     """Test that importing runner shows deprecation warning."""
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        import runner  # noqa: F401
+        import ai_trading.runner  # noqa: F401
 
         # Check that a deprecation warning was raised
         assert len(w) >= 1

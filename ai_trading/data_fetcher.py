@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import warnings
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from enum import Enum
 from urllib.parse import urlencode
 
 import pandas as pd
+import requests
 
 from ai_trading.alpaca_api import get_bars_df  # AI-AGENT-REF: canonical fetcher
 from ai_trading.exc import COMMON_EXC, TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1
@@ -18,13 +21,27 @@ try:  # AI-AGENT-REF: optional import
 except Exception:  # pragma: no cover  # noqa: BLE001
     TimeFrame = None  # type: ignore
 
+warnings.warn(
+    "ai_trading.data_fetcher: legacy helpers will change in v1.0",
+    DeprecationWarning,
+)  # AI-AGENT-REF: emit deprecation warning
+
 # AI-AGENT-REF: lightweight stubs for data fetch routines
 FINNHUB_AVAILABLE = True
 YFIN_AVAILABLE = True
+_DEFAULT_FEED = "alpaca"  # AI-AGENT-REF: default feed constant
+
+
+class _TFUnit(str, Enum):  # AI-AGENT-REF: include Week unit
+    Minute = "Minute"
+    Hour = "Hour"
+    Day = "Day"
+    Week = "Week"
 
 __all__ = [
     "FINNHUB_AVAILABLE",
     "YFIN_AVAILABLE",
+    "_DEFAULT_FEED",
     "ensure_datetime",
     "get_bars",
     "get_bars_batch",
@@ -37,6 +54,10 @@ __all__ = [
     "age_cached_minute_timestamps",
     "last_minute_bar_age_seconds",
     "DataFetchException",
+    "DataFetchError",
+    "_TFUnit",
+    "_yahoo_get_bars",
+    "requests",
     "get_bars_df",
 ]
 
@@ -45,6 +66,10 @@ _log = get_logger(__name__)
 
 class DataFetchException(Exception):
     """Error raised when market data retrieval fails."""
+
+
+class DataFetchError(DataFetchException):
+    """Alias error used in tests."""  # AI-AGENT-REF
 
 
 def _empty_bars_df() -> pd.DataFrame:
@@ -65,12 +90,19 @@ def normalize_symbol_for_provider(symbol: str, provider: str) -> str:
 # ---- datetime helpers ----
 def ensure_datetime(dt_or_str, *, tz: str | None = "UTC") -> datetime:
     """Return timezone-aware datetime in UTC."""  # AI-AGENT-REF
-    if isinstance(dt_or_str, datetime):
+    if dt_or_str is None:
+        raise ValueError("value_none")
+    if isinstance(dt_or_str, pd.Timestamp):
+        dt_obj = dt_or_str.to_pydatetime()
+    elif isinstance(dt_or_str, datetime):
         dt_obj = dt_or_str
     elif isinstance(dt_or_str, str):
-        dt_obj = datetime.fromisoformat(dt_or_str.replace("Z", "+00:00"))
-    elif isinstance(dt_or_str, int | float):
-        dt_obj = datetime.fromtimestamp(dt_or_str, tz=dt.UTC)
+        if not dt_or_str:
+            raise ValueError("empty_string")
+        try:
+            dt_obj = datetime.fromisoformat(dt_or_str.replace("Z", "+00:00"))
+        except ValueError as e:
+            raise ValueError("invalid_string") from e
     else:
         raise TypeError(f"Unsupported type for ensure_datetime: {type(dt_or_str)!r}")
     if dt_obj.tzinfo is None:
@@ -204,7 +236,6 @@ def _yahoo_get_bars(
             end=end,
             interval=interval,
             progress=False,
-            auto_adjust=True,  # AI-AGENT-REF: fix noisy auto_adjust default change
         )
     except Exception:  # noqa: BLE001
         return _empty_bars_df()

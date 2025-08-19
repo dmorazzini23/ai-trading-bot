@@ -68,7 +68,7 @@ This document summarizes the implementation of critical production fixes for the
 **Problem**: Environment variables not properly loaded in shell sessions, making debugging difficult.
 
 **Solution Implemented**:
-- ✅ Enhanced `validate_env.py` with comprehensive debugging capabilities
+- ✅ Enhanced `ai_trading.tools.env_validate` with comprehensive debugging capabilities
 - ✅ Added `debug_environment()` function for detailed environment analysis
 - ✅ Implemented `print_environment_debug()` for formatted console output
 - ✅ Added `validate_specific_env_var()` for individual variable checking
@@ -77,7 +77,7 @@ This document summarizes the implementation of critical production fixes for the
 - ✅ Implemented recommendation system for configuration issues
 
 **Files Modified**:
-- `validate_env.py` - Major enhancement with debug capabilities
+- `ai_trading/tools/env_validate.py` - Major enhancement with debug capabilities
 
 **Expected Outcome**: Environment debugging will be significantly easier with detailed reports and specific validation tools.
 
@@ -131,7 +131,7 @@ After deploying these fixes, the production system should exhibit:
 2. **Verify sentiment API configuration**: Check that `SENTIMENT_API_KEY` and `SENTIMENT_API_URL` are properly set
 3. **Monitor process alerts**: Confirm that false positive process alerts are eliminated
 4. **Validate data staleness**: Ensure staleness alerts are appropriate for market conditions
-5. **Test environment debugging**: Use `python validate_env.py --debug` for environment verification
+5. **Test environment debugging**: Use `python -m ai_trading.tools.env_validate --debug` for environment verification
 
 ## Rollback Plan
 
@@ -151,7 +151,7 @@ If issues arise, the changes can be safely rolled back:
 | `config.py` | Added new env vars | Extended configuration |
 | `performance_monitor.py` | Improved process detection | Reduced false alerts |
 | `data_validation.py` | Market-aware thresholds | Smarter staleness detection |
-| `validate_env.py` | Enhanced debugging | Better troubleshooting |
+| `ai_trading.tools.env_validate` | Enhanced debugging | Better troubleshooting |
 | `test_production_fixes.py` | Comprehensive test suite | Quality assurance |
 
 ## Risk Assessment: LOW

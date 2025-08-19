@@ -13,5 +13,5 @@ VENV_PATH="${VENV_PATH:-venv}"
 # shellcheck disable=SC1090
 source "${VENV_PATH}/bin/activate"
 
-python validate_env.py
+python -m ai_trading.tools.env_validate
 exec python -u -m ai_trading.main

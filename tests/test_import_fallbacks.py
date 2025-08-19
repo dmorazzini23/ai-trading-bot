@@ -57,7 +57,7 @@ def test_runner_import_fallbacks():
     """Test that runner.py import fallbacks are correctly implemented."""
     import inspect
 
-    import runner
+    import ai_trading.runner as runner
 
     source = inspect.getsource(runner)
 
@@ -119,7 +119,12 @@ def test_import_robustness():
     # even if some ai_trading submodules were missing
 
     # Test that we can import core modules
-    modules_to_test = ["ai_trading.core.bot_engine", "runner", "backtester", "profile_indicators"]
+    modules_to_test = [
+        "ai_trading.core.bot_engine",
+        "ai_trading.runner",
+        "ai_trading.strategies.backtester",
+        "ai_trading.strategies.profile_indicators",
+    ]
 
     for module_name in modules_to_test:
         try:

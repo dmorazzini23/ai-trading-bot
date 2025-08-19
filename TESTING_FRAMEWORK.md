@@ -331,7 +331,7 @@ class TestDataFetching:
     
     def test_data_fetching_with_valid_parameters(self):
         """Test data fetching with valid parameters."""
-        from data_fetcher import get_historical_data
+        from ai_trading import data_fetcher
         
         with patch('data_fetcher._fetch_bars') as mock_fetch:
             # Mock successful data fetch
@@ -354,7 +354,7 @@ class TestDataFetching:
     
     def test_data_fetching_with_invalid_dates(self):
         """Test data fetching with invalid date parameters."""
-        from data_fetcher import get_historical_data
+        from ai_trading import data_fetcher
         
         # Test with None dates
         with pytest.raises(ValueError):
@@ -365,7 +365,7 @@ class TestDataFetching:
     
     def test_data_fetching_with_connection_error(self):
         """Test data fetching when connection fails."""
-        from data_fetcher import get_historical_data
+        from ai_trading import data_fetcher
         
         with patch('data_fetcher._fetch_bars') as mock_fetch:
             mock_fetch.side_effect = ConnectionError("Network error")
@@ -462,7 +462,7 @@ class TestDataPipeline:
     @pytest.mark.integration
     def test_end_to_end_data_flow(self):
         """Test complete data flow from fetch to signals."""
-        from data_fetcher import get_historical_data
+        from ai_trading import data_fetcher
         from signals import generate_signal
         from indicators import calculate_indicators
         
@@ -487,7 +487,7 @@ class TestDataPipeline:
     @pytest.mark.integration
     def test_multi_symbol_data_processing(self):
         """Test processing multiple symbols simultaneously."""
-        from data_fetcher import fetch_daily_data_async
+        from ai_trading import data_fetcher
         
         symbols = ['SPY', 'QQQ', 'IWM']
         

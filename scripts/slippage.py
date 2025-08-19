@@ -1,5 +1,9 @@
 import logging
-from validate_env import settings
+try:  # AI-AGENT-REF: canonical env validation
+    from ai_trading.validation.validate_env import Settings
+    settings = Settings()
+except Exception:  # noqa: BLE001
+    settings = None
 
 logger = logging.getLogger(__name__)
 

@@ -24,6 +24,16 @@ ORDER_TIMEOUT_SECONDS = 300
 ORDER_STALE_CLEANUP_INTERVAL = 60
 ORDER_FILL_RATE_TARGET = 0.80
 
+# AI-AGENT-REF: risk thresholds and mode parameters
+MAX_DRAWDOWN_THRESHOLD = 0.08
+MODE_PARAMETERS = {
+    "conservative": 0.85,
+    "balanced": 0.75,
+    "aggressive": 0.65,
+}
+SENTIMENT_ENHANCED_CACHING = True
+SENTIMENT_RECOVERY_TIMEOUT_SECS = 3600
+
 
 def _is_lock_held_by_current_thread() -> bool:
     return bool(getattr(_lock_state, "held", False))
@@ -155,4 +165,8 @@ __all__ = [
     "validate_alpaca_credentials",
     "validate_env_vars",
     "log_config",
+    "MAX_DRAWDOWN_THRESHOLD",
+    "MODE_PARAMETERS",
+    "SENTIMENT_ENHANCED_CACHING",
+    "SENTIMENT_RECOVERY_TIMEOUT_SECS",
 ]

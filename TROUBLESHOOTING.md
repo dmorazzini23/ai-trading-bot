@@ -181,7 +181,7 @@ nslookup api.alpaca.markets 8.8.8.8
 
 ```python
 # test_data_providers.py
-import data_fetcher
+from ai_trading import data_fetcher
 import pandas as pd
 from datetime import datetime, timedelta
 
