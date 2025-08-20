@@ -31,11 +31,11 @@ from threading import Lock
 import warnings
 
 from ai_trading.data_fetcher import (
-    ensure_datetime,
     get_bars,
     get_bars_batch,
     get_bars_df,
 )
+from ai_trading.utils.datetime import ensure_datetime
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
