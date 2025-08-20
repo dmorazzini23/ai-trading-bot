@@ -321,6 +321,19 @@ _LOGGING_LOCK = threading.Lock()
 _LOGGING_CONFIGURED = False
 
 
+def ensure_logging_configured(level: int | None = None) -> None:
+    """Configure root logging once."""  # AI-AGENT-REF: prevent duplicate handlers
+    global _LOGGING_CONFIGURED
+    root = logging.getLogger()
+    if _LOGGING_CONFIGURED or root.handlers:
+        return
+    logging.basicConfig(
+        level=level or logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+    _LOGGING_CONFIGURED = True
+
+
 def get_rotating_handler(
     path: str,
     max_bytes: int = 5_000_000,

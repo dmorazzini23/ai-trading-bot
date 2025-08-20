@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from datetime import timezone as _tz
 import os
 import time
 import types
@@ -79,74 +80,19 @@ def _get(obj, key, default=None):
     return default
 
 
-def _normalize_timeframe_for_tradeapi(tf: str | TimeFrame) -> str:
-    """Normalize various timeframe inputs to Alpaca trade-api REST strings."""
-    if isinstance(tf, str):
-        s = tf.strip()
-        aliases = {
-            "d": "Day",
-            "day": "Day",
-            "days": "Day",
-            "h": "Hour",
-            "hr": "Hour",
-            "hour": "Hour",
-            "hours": "Hour",
-            "m": "Min",
-            "min": "Min",
-            "mins": "Min",
-            "minute": "Min",
-            "minutes": "Min",
-            "w": "Week",
-            "week": "Week",
-            "weeks": "Week",
-            "mo": "Month",
-            "mon": "Month",
-            "month": "Month",
-            "months": "Month",
-        }
-        import re
-
-        m = re.match(r"(?i)^\s*(\d+)\s*([a-z]+)\s*$", s)
-        if m:
-            qty = int(m.group(1))
-            unit_raw = m.group(2)
-            unit = aliases.get(unit_raw, unit_raw.capitalize())
-            unit_map = {
-                "Min": "Min",
-                "Minute": "Min",
-                "Hour": "Hour",
-                "Hr": "Hour",
-                "Day": "Day",
-                "Week": "Week",
-                "Month": "Month",
-            }
-            unit_tok = unit_map.get(unit, unit)
-            return f"{qty}{unit_tok}"
-        unit = aliases.get(s, s.capitalize())
-        unit_tok = {
-            "Minute": "Min",
-            "Min": "Min",
-            "Hour": "Hour",
-            "Day": "Day",
-            "Week": "Week",
-            "Month": "Month",
-        }.get(unit, unit)
-        return f"1{unit_tok}"
-
+def _normalize_timeframe_for_tradeapi(tf_raw):
+    """Support string pass-through and alpaca TimeFrame objects."""
     try:
-        qty = getattr(tf, "amount", 1)
-        unit_obj = getattr(tf, "unit", TimeFrameUnit.Day)
-        unit_name = getattr(unit_obj, "name", str(unit_obj))
-        unit_tok = {
-            "Minute": "Min",
-            "Hour": "Hour",
-            "Day": "Day",
-            "Week": "Week",
-            "Month": "Month",
-        }.get(unit_name, unit_name)
-        return f"{qty}{unit_tok}"
-    except Exception:  # noqa: BLE001
-        return "1Day"
+        from alpaca.data.timeframe import TimeFrame
+    except Exception:
+        TimeFrame = None
+    if isinstance(tf_raw, str):
+        s = tf_raw.strip()
+        return s if s[:1].isdigit() else f"1{s.capitalize()}"
+    if TimeFrame is not None and isinstance(tf_raw, TimeFrame):
+        unit = getattr(tf_raw.unit, "name", str(tf_raw.unit)).title()
+        return f"{tf_raw.amount}{unit}"
+    return str(tf_raw)
 
 
 def _to_utc(dtobj: dt.datetime) -> dt.datetime:
@@ -162,19 +108,22 @@ def _fmt_rfc3339_z(dtobj: dt.datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _format_start_end_for_tradeapi(
-    tf_norm: str, start: dt.datetime, end: dt.datetime
-) -> tuple[str, str]:
-    """Format start/end according to Alpaca REST expectations."""
-    unit = _unit_from_norm(tf_norm)
-    s = _to_utc(start)
-    e = _to_utc(end)
-    if s >= e:
-        delta = dt.timedelta(minutes=1) if _is_intraday_unit(unit) else dt.timedelta(days=1)
-        s = e - delta
-    if _is_intraday_unit(unit):
-        return _fmt_rfc3339_z(s), _fmt_rfc3339_z(e)
-    return s.date().isoformat(), e.date().isoformat()
+def _format_start_end_for_tradeapi(timeframe: str, start, end):
+    """Daily => YYYY-MM-DD; intraday => RFC3339Z in UTC."""
+    from ai_trading.data_fetcher import ensure_datetime  # AI-AGENT-REF: avoid circular
+
+    sd = ensure_datetime(start) if start is not None else None
+    ed = ensure_datetime(end) if end is not None else None
+    is_daily = str(timeframe).lower() in {"1day", "day", "daily"}
+    if is_daily:
+        fmt = lambda d: d.date().isoformat() if d else None
+    else:
+        fmt = (
+            lambda d: d.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if d
+            else None
+        )
+    return fmt(sd), fmt(ed)
 
 
 # ---- market data helpers ----------------------------------------------------
