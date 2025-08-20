@@ -117,13 +117,12 @@ def test_subscription_error_logged(monkeypatch, caplog):
 
     monkeypatch.setattr(data_fetcher, "client", DummyClient())
     monkeypatch.setattr(data_fetcher, "TimeFrame", types.SimpleNamespace(Minute="1Min"))
-    def fake_yf(sym):
+    def fake_yf(sym, *args, **kwargs):
         idx = pd.date_range(start="2023-01-01 09:30", periods=5, freq="1min", tz="UTC")
         return pd.DataFrame(
             {"timestamp": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1},
         )
 
-    monkeypatch.setattr(data_fetcher, "fetch_minute_yfinance", fake_yf)
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: fake_yf("AAPL"))
 
     start = pd.Timestamp("2023-01-01", tz="UTC")
@@ -174,7 +173,7 @@ def test_finnhub_403_yfinance(monkeypatch):
 
     called = []
 
-    def fake_yf(symbol):
+    def fake_yf(symbol, *args, **kwargs):
         called.append(symbol)
         return pd.DataFrame(
             {"open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]},
@@ -183,7 +182,7 @@ def test_finnhub_403_yfinance(monkeypatch):
 
     monkeypatch.setattr(data_fetcher, "_fetch_bars", raise_fetch)
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", raise_finnhub)
-    monkeypatch.setattr(data_fetcher, "fetch_minute_yfinance", fake_yf)
+    monkeypatch.setattr(data_fetcher.yf, "download", fake_yf)
     monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
 
     start = pd.Timestamp("2023-01-01", tz="UTC")
@@ -209,7 +208,9 @@ def test_empty_bars_handled(monkeypatch):
     pd.testing.assert_frame_equal(df, fallback)
 
 
-def test_fetch_bars_empty_uses_last_bar(monkeypatch):
+def test_fetch_bars_empty_raises(monkeypatch):
+    """_fetch_bars propagates empty results for Yahoo fallback."""  # AI-AGENT-REF
+
     class Resp:
         status_code = 200
         text = ""
@@ -217,23 +218,16 @@ def test_fetch_bars_empty_uses_last_bar(monkeypatch):
         def json(self):
             return {"bars": []}
 
-    last = pd.DataFrame(
-        {"open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]},
-        index=[pd.Timestamp("2023-01-01", tz="UTC")],
-    )
-
     monkeypatch.setattr(data_fetcher.requests, "get", lambda *a, **k: Resp())
-    monkeypatch.setattr(data_fetcher, "get_last_available_bar", lambda s: last)
 
-    df = data_fetcher._fetch_bars(
-        "AAPL",
-        pd.Timestamp("2023-01-02", tz="UTC"),
-        pd.Timestamp("2023-01-02", tz="UTC"),
-        "1Day",
-        "iex",
-    )
-
-    assert not df.empty and df.equals(last)
+    with pytest.raises(ValueError):
+        data_fetcher._fetch_bars(
+            "AAPL",
+            pd.Timestamp("2023-01-02", tz="UTC"),
+            pd.Timestamp("2023-01-02", tz="UTC"),
+            "1Day",
+            "iex",
+        )
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from core module
 from ai_trading.core.bot_engine import fetch_minute_df_safe
@@ -252,10 +246,10 @@ def test_fetch_minute_df_safe_no_retry(monkeypatch):
     assert not result.empty
 
 
-def test_fetch_minute_df_safe_raises(monkeypatch, caplog):
-    from ai_trading.data_fetcher import DataFetchError
+def test_fetch_minute_df_safe_handles_empty(monkeypatch, caplog):
+    """fetch_minute_df_safe returns empty DataFrame without error."""  # AI-AGENT-REF
     monkeypatch.setattr("ai_trading.core.bot_engine.get_minute_df", lambda *a, **k: pd.DataFrame())
-    caplog.set_level("ERROR")
-    with pytest.raises(DataFetchError):
-        fetch_minute_df_safe("AAPL")
+    caplog.set_level("INFO")
+    result = fetch_minute_df_safe("AAPL")
+    assert result.empty
     assert any("empty DataFrame" in r.message for r in caplog.records)
