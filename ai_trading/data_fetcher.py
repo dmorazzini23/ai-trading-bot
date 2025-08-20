@@ -19,6 +19,42 @@ except Exception:  # pragma: no cover  # noqa: BLE001
 requests = _requests
 
 # ---------------------------------------------------------------------------
+# Minute cache (in-memory). Maps symbol -> (last_bar_epoch_s, inserted_epoch_s)
+# Used by freshness checks in bot_engine and unit tests.
+# ---------------------------------------------------------------------------
+_MINUTE_CACHE: dict[str, tuple[int, int]] = {}
+
+def get_cached_minute_timestamp(symbol: str) -> int | None:
+    """Return cached last bar timestamp for symbol."""  # AI-AGENT-REF: cache getter
+    rec = _MINUTE_CACHE.get(symbol)
+    return rec[0] if rec else None
+
+def set_cached_minute_timestamp(symbol: str, ts_epoch_s: int) -> None:
+    """Store last bar timestamp with current insertion time."""  # AI-AGENT-REF: cache setter
+    now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
+    _MINUTE_CACHE[symbol] = (int(ts_epoch_s), now_s)
+
+def clear_cached_minute_timestamp(symbol: str) -> None:
+    """Remove cached entry for symbol."""  # AI-AGENT-REF: cache clear
+    _MINUTE_CACHE.pop(symbol, None)
+
+def age_cached_minute_timestamps(max_age_seconds: int) -> int:
+    """Drop cache entries older than max_age_seconds (based on inserted time)."""  # AI-AGENT-REF: cache prune
+    now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
+    to_del = [sym for sym, (_, ins) in _MINUTE_CACHE.items() if now_s - ins > max_age_seconds]
+    for sym in to_del:
+        _MINUTE_CACHE.pop(sym, None)
+    return len(to_del)
+
+def last_minute_bar_age_seconds(symbol: str) -> int | None:
+    """Age in seconds of last cached minute bar for symbol, or None if absent."""  # AI-AGENT-REF: age helper
+    ts = get_cached_minute_timestamp(symbol)
+    if ts is None:
+        return None
+    now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
+    return max(0, now_s - int(ts))
+
+# ---------------------------------------------------------------------------
 # Public/tested constants & stubs expected by tests
 # ---------------------------------------------------------------------------
 
@@ -230,36 +266,55 @@ def _fetch_bars(
 
 
 def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) -> pd.DataFrame:
-    """Minute bars fetch with provider fallback and downgraded errors."""
+    """Minute bars fetch with provider fallback and downgraded errors.
+    Also updates in-memory minute cache for freshness checks."""  # AI-AGENT-REF
 
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
 
+    df: pd.DataFrame | None = None
     try:
-        return fh_fetcher.fetch(symbol=symbol, start=start_dt, end=end_dt)
+        df = fh_fetcher.fetch(symbol=symbol, start=start_dt, end=end_dt)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
         if "403" in msg or "forbidden" in msg or "rate limit" in msg:
-            return fetch_minute_yfinance(symbol)
+            df = fetch_minute_yfinance(symbol)
 
-    try:
-        return _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or "sip")
-    except Exception as exc:  # noqa: BLE001
-        emsg = str(exc).lower()
-        if "subscription does not permit querying recent sip data" in emsg:
-            try:
-                import logging as _logging
+    if df is None:
+        try:
+            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or "sip")
+        except Exception as exc:  # noqa: BLE001
+            emsg = str(exc).lower()
+            if "subscription does not permit querying recent sip data" in emsg:
+                try:
+                    import logging as _logging
 
-                _logging.getLogger(__name__).warning(
-                    "Downgrading SIP subscription error; retrying with iex"
-                )
-            except Exception:  # pragma: no cover  # noqa: BLE001
-                pass
-            try:
-                return _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=_DEFAULT_FEED)
-            except Exception:  # noqa: BLE001
-                return _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
-        return _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+                    _logging.getLogger(__name__).warning(
+                        "Downgrading SIP subscription error; retrying with iex"
+                    )
+                except Exception:  # pragma: no cover  # noqa: BLE001
+                    pass
+                try:
+                    df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=_DEFAULT_FEED)
+                except Exception:  # noqa: BLE001
+                    df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+            else:
+                df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+
+    try:  # AI-AGENT-REF: update minute cache with latest bar
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
+                last_ts = int(pd.Timestamp(df.index[-1]).tz_convert("UTC").timestamp())
+            elif "timestamp" in df.columns:
+                last_ts = int(pd.Timestamp(df["timestamp"].iloc[-1]).tz_convert("UTC").timestamp())
+            else:
+                last_ts = None
+            if last_ts is not None:
+                set_cached_minute_timestamp(symbol, last_ts)
+    except Exception:  # pragma: no cover - cache best effort  # noqa: BLE001
+        pass
+
+    return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
 
 def get_bars(

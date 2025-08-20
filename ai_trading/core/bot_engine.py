@@ -683,6 +683,9 @@ from ai_trading.settings import (
 
 # Initialize settings once for global use
 CFG = get_config_settings()
+# Backward-compat constants for risk thresholds used throughout this module
+# AI-AGENT-REF: restored weekly drawdown limit
+WEEKLY_DRAWDOWN_LIMIT = getattr(CFG, "weekly_drawdown_limit", 0.10)
 # AI-AGENT-REF: cached runtime settings for env aliases
 S = get_runtime_settings()
 SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
