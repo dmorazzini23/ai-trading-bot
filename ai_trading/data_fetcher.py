@@ -15,6 +15,7 @@ from ai_trading.alpaca_api import get_bars_df  # AI-AGENT-REF: canonical fetcher
 from ai_trading.exc import COMMON_EXC, TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: Stage 2.1
+from ai_trading.utils.datetime import ensure_datetime
 
 try:  # AI-AGENT-REF: optional import
     from alpaca_trade_api.rest import TimeFrame
@@ -89,28 +90,6 @@ def normalize_symbol_for_provider(symbol: str, provider: str) -> str:
 
 
 # ---- datetime helpers ----
-def ensure_datetime(dt_or_str, *, tz: str | None = "UTC") -> datetime:
-    """Return timezone-aware datetime in UTC."""  # AI-AGENT-REF
-    if dt_or_str is None:
-        raise ValueError("value_none")
-    if isinstance(dt_or_str, pd.Timestamp):
-        dt_obj = dt_or_str.to_pydatetime()
-    elif isinstance(dt_or_str, datetime):
-        dt_obj = dt_or_str
-    elif isinstance(dt_or_str, str):
-        if not dt_or_str:
-            raise ValueError("empty_string")
-        try:
-            dt_obj = datetime.fromisoformat(dt_or_str.replace("Z", "+00:00"))
-        except ValueError as e:
-            raise ValueError("invalid_string") from e
-    else:
-        raise TypeError(f"Unsupported type for ensure_datetime: {type(dt_or_str)!r}")
-    if dt_obj.tzinfo is None:
-        dt_obj = dt_obj.replace(tzinfo=dt.UTC)
-    return dt_obj.astimezone(dt.UTC)
-
-
 # ---- minute cache helpers ----
 # AI-AGENT-REF: bounded minute cache
 _MINUTE_CACHE: dict[str, int] = {}

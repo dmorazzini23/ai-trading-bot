@@ -110,20 +110,21 @@ def _fmt_rfc3339_z(dtobj: dt.datetime) -> str:
 
 def _format_start_end_for_tradeapi(timeframe: str, start, end):
     """Daily => YYYY-MM-DD; intraday => RFC3339Z in UTC."""
-    from ai_trading.data_fetcher import ensure_datetime  # AI-AGENT-REF: avoid circular
+    from ai_trading.utils.datetime import (
+        compose_daily_params,
+        compose_intraday_params,
+        ensure_datetime,
+    )
 
     sd = ensure_datetime(start) if start is not None else None
     ed = ensure_datetime(end) if end is not None else None
     is_daily = str(timeframe).lower() in {"1day", "day", "daily"}
-    if is_daily:
-        fmt = lambda d: d.date().isoformat() if d else None
-    else:
-        fmt = (
-            lambda d: d.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            if d
-            else None
-        )
-    return fmt(sd), fmt(ed)
+    params = (
+        compose_daily_params(sd, ed)
+        if is_daily
+        else compose_intraday_params(sd, ed)
+    )
+    return params["start"], params["end"]
 
 
 # ---- market data helpers ----------------------------------------------------

@@ -18,7 +18,7 @@ from ai_trading.exc import (
 )
 from ai_trading.logging import get_logger  # AI-AGENT-REF: centralized logging
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
-from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout  # AI-AGENT-REF: timeout clamp
+from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout, sleep  # AI-AGENT-REF: timeout clamp
 
 _log = get_logger(__name__)
 
@@ -138,6 +138,54 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
         _pool_stats["errors"] += 1
         _log.error("HTTP_GIVEUP", extra={"attempts": retries, "error": str(e)})
         raise
+
+
+_ERROR_LOGGED: set[str] = set()
+
+
+def request_json(
+    method: str,
+    url: str,
+    *,
+    timeout: tuple[float, float] | float | None = (3.0, 10.0),
+    retries: int = 3,
+    backoff: float = 0.5,
+    status_forcelist: set[int] | None = None,
+    headers: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Perform HTTP request and return decoded JSON with bounded retries."""
+    status_forcelist = status_forcelist or {429, 500, 502, 503, 504}
+
+    if isinstance(timeout, tuple):
+        to = (clamp_timeout(timeout[0], default_non_test=HTTP_TIMEOUT),
+              clamp_timeout(timeout[1], default_non_test=HTTP_TIMEOUT))
+    else:
+        t = clamp_timeout(timeout, default_non_test=HTTP_TIMEOUT)
+        to = (t, t)
+
+    def _fetch() -> requests.Response:
+        return requests.request(method, url, headers=headers, params=params, timeout=to)
+
+    for attempt in range(1, retries + 1):
+        try:
+            resp = _fetch()
+            if resp.status_code in status_forcelist and attempt < retries:
+                raise RequestsRequestException(f"status {resp.status_code}")
+            try:
+                return resp.json()
+            except ValueError:
+                text = resp.text.strip()
+                return {"text": text}
+        except Exception as exc:  # noqa: BLE001
+            key = f"{method}:{url}:{getattr(exc, 'args', '')}"
+            log_fn = _log.warning if key not in _ERROR_LOGGED else _log.debug
+            log_fn("HTTP_RETRY", extra={"attempt": attempt, "attempts": retries, "error": str(exc)})
+            _ERROR_LOGGED.add(key)
+            if attempt >= retries:
+                raise
+            sleep(backoff * attempt)
+
 
 
 def get(url: str, **kwargs) -> requests.Response:
