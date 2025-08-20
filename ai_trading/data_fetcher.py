@@ -165,6 +165,42 @@ def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
 # ---------------------------------------------------------------------------
 
 
+def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) -> pd.DataFrame:
+    """Make YF/other OHLCV DataFrames uniform.
+
+    - flatten MultiIndex columns
+    - lower/snake columns
+    - ensure 'close' exists (fallback to 'adj_close')
+    - de-duplicate & sort index, convert index to UTC and tz-naive
+    """  # AI-AGENT-REF: normalize OHLCV columns
+
+    if isinstance(df.columns, pd.MultiIndex):
+        try:
+            lvl0 = set(map(str, df.columns.get_level_values(0)))
+            if {"Open", "High", "Low", "Close", "Adj Close", "Volume"} & lvl0:
+                df.columns = df.columns.get_level_values(0)
+            else:
+                df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
+        except Exception:  # noqa: BLE001
+            df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
+
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+    if "close" not in df.columns and "adj_close" in df.columns:
+        df["close"] = df["adj_close"]
+
+    if isinstance(df.index, pd.DatetimeIndex):
+        try:
+            tz = df.index.tz
+            if tz is not None:
+                df.index = df.index.tz_convert("UTC").tz_localize(None)
+        except Exception:  # noqa: BLE001
+            pass
+        df = df[~df.index.duplicated(keep="last")].sort_index()
+
+    return df
+
+
 def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Return a DataFrame with a tz-aware 'timestamp' column between start and end."""
 
@@ -176,36 +212,29 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
         cols = ["open", "high", "low", "close", "volume"]
         return pd.DataFrame(columns=cols, index=idx).reset_index()
 
-    df = yf.download(symbol, start=start_dt, end=end_dt, interval=interval, progress=False)
+    df = yf.download(
+        symbol,
+        start=start_dt,
+        end=end_dt,
+        interval=interval,
+        auto_adjust=True,  # AI-AGENT-REF: silence auto_adjust warning
+        threads=False,
+        progress=False,
+        group_by="column",
+    )
     if df is None or df.empty:
         idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
         cols = ["open", "high", "low", "close", "volume"]
         return pd.DataFrame(columns=cols, index=idx).reset_index()
 
-    if df.index.tz is None:
-        df = df.tz_localize("UTC")
-    else:
-        df = df.tz_convert("UTC")
-    df = df.rename(
-        columns={
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Adj Close": "adj_close",
-            "Volume": "volume",
-        }
-    )
     df = df.reset_index().rename(columns={df.index.name or "Date": "timestamp"})
     if "timestamp" not in df.columns:
         for c in df.columns:
             if c.lower() in ("date", "datetime"):
                 df = df.rename(columns={c: "timestamp"})
                 break
-    df.columns = [c.lower().replace(" ", "_") for c in df.columns]
-    # AI-AGENT-REF: ensure fallback exposes stable 'close' column
-    if "close" not in df.columns and "adj_close" in df.columns:
-        df["close"] = df["adj_close"]
+
+    df = _flatten_and_normalize_ohlcv(df, symbol)
     return df
 
 
@@ -238,7 +267,16 @@ def _fetch_bars(
         url = "https://data.alpaca.markets/v2/stocks/bars"
         resp = requests.get(url, params=params, timeout=10)
         status = resp.status_code
-        payload = resp.json() if status != 400 else {}
+        text = (resp.text or "").strip()
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        payload: dict[str, Any] | list[Any] = {}
+        if status != 400 and text:
+            if "json" in ctype:
+                try:
+                    payload = resp.json()
+                except Exception:  # noqa: BLE001
+                    payload = {}
+            # else: non-JSON content -> keep empty payload
 
         bars = []
         if isinstance(payload, dict):

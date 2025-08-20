@@ -7,7 +7,6 @@ for implementing and managing institutional trading strategies.
 
 from __future__ import annotations
 
-import logging
 import uuid
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -141,46 +140,19 @@ class BaseStrategy(ABC):
 
     # --- Back-compat shim -------------------------------------------------
     def generate(self, ctx: Any) -> list[StrategySignal]:
-        """Normalize runtime context into legacy market_data dict."""
-        # AI-AGENT-REF: normalize runtime context for legacy strategies
-        try:
-            get = ctx.get  # type: ignore[attr-defined]
-        except AttributeError:
-            get = None
-        if callable(get):
-            return self.generate_signals(ctx)  # type: ignore[arg-type]
-
-        symbols = list(getattr(ctx, "tickers", None) or getattr(ctx, "symbols", []) or [])
-        prices: dict[str, Any] = {}
-        fetcher = getattr(ctx, "data_fetcher", None)
-        log = getattr(ctx, "logger", logging.getLogger(__name__))
-
-        for sym in symbols:
-            df = None
-            try:
-                if fetcher:
-                    df = fetcher.get_daily_df(ctx, sym)
-            except Exception as e:  # noqa: BLE001
-                log.warning("BASE_STRATEGY_FETCH_FAIL", extra={"symbol": sym, "error": str(e)})
-                df = None
-            if df is None or getattr(df, "empty", True):
-                continue
-            col = (
-                "close"
-                if "close" in df.columns
-                else ("adj_close" if "adj_close" in df.columns else None)
-            )
-            if col is None:
-                continue
-            try:
-                series = df[col].astype("float64").dropna()
-            except Exception:  # noqa: BLE001
-                continue
-            if series.empty:
-                continue
-            prices[sym] = series
-
-        market_data = {"symbols": list(prices.keys()), "prices": prices, "indicators": {}}
+        """Return list of signals from market context (dict-compat)."""
+        # AI-AGENT-REF: adapt runtime context to market_data dict
+        if isinstance(ctx, dict):
+            market_data = ctx
+        else:
+            md = getattr(ctx, "market_data", None)
+            if isinstance(md, dict):
+                market_data = md
+            else:
+                market_data = {
+                    "symbols": getattr(ctx, "symbols", []),
+                    "data_by_symbol": getattr(ctx, "data_by_symbol", {}),
+                }
         return self.generate_signals(market_data)
 
     @abstractmethod
