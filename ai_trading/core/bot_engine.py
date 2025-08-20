@@ -33,7 +33,9 @@ import warnings
 from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
+    get_minute_df,
 )
+from ai_trading.market.calendars import last_market_session
 from ai_trading.utils.datetime import ensure_datetime
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
@@ -1776,16 +1778,6 @@ class StrategyAllocator:
 
 
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
-if not os.getenv("PYTEST_RUNNING"):
-    from ai_trading.data_fetcher import (  # type: ignore
-        get_minute_df,
-    )
-else:
-    # AI-AGENT-REF: mock data_fetcher functions for test environments
-    def get_minute_df(*args, **kwargs):
-        return pd.DataFrame()  # Mock empty DataFrame
-
-
 finnhub_client = None
 
 # AI-AGENT-REF: Add cache size management to prevent memory leaks
@@ -5651,33 +5643,26 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
         return
     if len(missing) == len(symbols):
         try:
-            start_iso = (pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)).isoformat()
-            end_iso = (pd.Timestamp.utcnow() + pd.Timedelta(minutes=1)).isoformat()
-
-            req = StockBarsRequest(
-                symbol_or_symbols=["SPY"],
-                timeframe=TimeFrame(1, TimeFrameUnit.Minute),
-                start=start_iso,
-                end=end_iso,
-                feed="iex",
-            )
-            mdf = _ensure_df(
-                safe_get_stock_bars(ctx.data_client, req, "SPY", "MINUTE_FALLBACK")
-            )
-            if mdf.empty:
-                req.feed = "sip"
-                mdf = _ensure_df(
-                    safe_get_stock_bars(
-                        ctx.data_client, req, "SPY", "MINUTE_FALLBACK_SIP"
+            session = last_market_session(pd.Timestamp.utcnow().tz_convert("UTC"))  # AI-AGENT-REF: prior session window
+            if session is not None:
+                start_ts = session.open.tz_convert("UTC")
+                end_ts = session.close.tz_convert("UTC")
+                df_min = get_minute_df("SPY", start_ts, end_ts, feed="iex")  # AI-AGENT-REF: robust minute fetch
+                if df_min.empty:
+                    df_min = get_minute_df("SPY", start_ts, end_ts, feed="sip")
+                if df_min.empty:
+                    _log.warning(
+                        "DATA_HEALTH_CHECK: minute fallback still empty (rows=0)"
                     )
-                )
-
-            if not mdf.empty and len(mdf) >= 200:
-                _log.info("DATA_HEALTH_CHECK: minute fallback OK (rows=%s)", len(mdf))
-                return
+                else:
+                    _log.info(
+                        "DATA_HEALTH_CHECK: minute fallback ok",
+                        extra={"rows": int(df_min.shape[0])},
+                    )
+                    return
             else:
-                _log.warning(
-                    "DATA_HEALTH_CHECK: minute fallback still empty (rows=%s)", len(mdf)
+                _log.info(
+                    "DATA_HEALTH_CHECK: no prior market session (weekend/holiday); skip minute fallback"
                 )
         except Exception as e:  # pragma: no cover - defensive
             _log.warning("DATA_HEALTH_CHECK: minute fallback exception: %s", e)
