@@ -8,6 +8,10 @@ from typing import Any
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
 from pandas import Timestamp
 
+from ai_trading.data.timeutils import (
+    ensure_utc_datetime,  # AI-AGENT-REF: unified datetime coercion
+)
+
 try:  # AI-AGENT-REF: yfinance fallback for market data
     import yfinance as yf
 except Exception:  # pragma: no cover  # noqa: BLE001
@@ -126,28 +130,7 @@ class FinnhubAPIException(Exception):
 def ensure_datetime(value: Any) -> _dt.datetime:
     """Coerce various datetime inputs into timezone-aware UTC datetime."""
 
-    if value is None:
-        raise ValueError("None is not a valid datetime")
-    if isinstance(value, str):
-        v = value.strip()
-        if not v:
-            raise ValueError("Empty string is not a valid datetime")
-        ts = Timestamp(v)
-    elif isinstance(value, Timestamp):
-        ts = value
-    elif isinstance(value, _dt.datetime):
-        ts = Timestamp(value)
-    else:
-        try:
-            ts = Timestamp(value)
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"Invalid datetime input: {value!r}") from exc
-
-    if ts.tzinfo is None:
-        ts = ts.tz_localize("UTC")
-    else:
-        ts = ts.tz_convert("UTC")
-    return ts.to_pydatetime()
+    return ensure_utc_datetime(value)
 
 
 def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
