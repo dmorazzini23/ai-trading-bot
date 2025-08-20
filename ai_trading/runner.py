@@ -7,8 +7,9 @@ import warnings
 from ai_trading.logging import get_logger
 
 log = get_logger(__name__)
+warnings.filterwarnings("always", category=DeprecationWarning)
 warnings.warn(
-    "ai_trading.runner: legacy flags will change in v1.0",
+    "runner.py is deprecated",
     DeprecationWarning,
 )  # AI-AGENT-REF: deprecation notice
 

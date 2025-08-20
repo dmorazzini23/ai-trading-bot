@@ -23,6 +23,14 @@ from pydantic import (
     model_validator,
 )  # AI-AGENT-REF: allow extras
 from ai_trading.config.aliases import resolve_trading_mode
+from .alpaca_creds import resolve_alpaca_credentials
+from . import (
+    MAX_DRAWDOWN_THRESHOLD as _MAX_DRAWDOWN_THRESHOLD,
+    MODE_PARAMETERS as _MODE_PARAMETERS,
+    ORDER_FILL_RATE_TARGET as _ORDER_FILL_RATE_TARGET,
+    SENTIMENT_ENHANCED_CACHING as _SENTIMENT_ENHANCED_CACHING,
+    SENTIMENT_RECOVERY_TIMEOUT_SECS as _SENTIMENT_RECOVERY_TIMEOUT_SECS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1387,44 +1395,9 @@ def validate_env_vars():
 
 
 def _resolve_alpaca_env() -> tuple[str | None, str | None, str]:
-    """
-    Resolve Alpaca credentials and base URL from environment.
-
-    Preference order:
-      1) ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
-      2) APCA_API_KEY_ID, APCA_API_SECRET_KEY, APCA_API_BASE_URL
-
-    Returns:
-        (api_key, secret_key, base_url) where:
-          - api_key, secret_key may be None if not provided
-          - base_url is always set, defaulting to the paper endpoint
-
-    This function MUST NOT raise just because credentials are absent; tests
-    import without credentials and expect a clean import path.
-    """
-    # Primary schema
-    a_key = os.getenv("ALPACA_API_KEY")
-    a_secret = os.getenv("ALPACA_SECRET_KEY")
-    a_url = os.getenv("ALPACA_BASE_URL")
-
-    # Fallback schema (legacy APCA_*)
-    apca_key = os.getenv("APCA_API_KEY_ID")
-    apca_secret = os.getenv("APCA_API_SECRET_KEY")
-    apca_url = os.getenv("APCA_API_BASE_URL")
-
-    # Prefer ALPACA_* if both key and secret are present (even if APCA_* exist)
-    if a_key and a_secret:
-        base_url = a_url or "https://paper-api.alpaca.markets"
-        return a_key, a_secret, base_url
-
-    # Otherwise, if APCA_* are present, use them
-    if apca_key and apca_secret:
-        base_url = apca_url or "https://paper-api.alpaca.markets"
-        return apca_key, apca_secret, base_url
-
-    # Credentials absent; return None for keys but still provide a usable base_url
-    base_url = a_url or apca_url or "https://paper-api.alpaca.markets"
-    return None, None, base_url
+    """Resolve Alpaca credentials using dual-schema rules."""
+    creds = resolve_alpaca_credentials()
+    return creds.get("API_KEY"), creds.get("SECRET_KEY"), creds["BASE_URL"]
 
 
 def _warn_duplicate_env_keys() -> None:
@@ -1441,11 +1414,8 @@ def _warn_duplicate_env_keys() -> None:
 
         if alpaca_val and apca_val and alpaca_val != apca_val:
             logger.warning(
-                "Conflicting environment variables detected: %s and %s have different values. "
-                "Using %s (ALPACA_* takes precedence)",
-                alpaca_key,
-                apca_key,
-                alpaca_key,
+                f"Conflicting environment variables detected: {alpaca_key} and {apca_key} have different values. "
+                f"Using {alpaca_key} (ALPACA_* takes precedence)"
             )
 
 
@@ -1454,10 +1424,18 @@ from .settings import get_settings  # AI-AGENT-REF: avoid direct Settings import
 
 
 def validate_alpaca_credentials() -> None:
-    """Ensure required Alpaca credentials are present (settings-driven)."""
+    """Ensure required Alpaca credentials are present."""
     if TESTING:
         return
-    get_settings().require_alpaca_or_raise()
+    creds = resolve_alpaca_credentials()
+    if not creds.get("API_KEY") or not creds.get("SECRET_KEY"):
+        missing = []
+        if not creds.get("API_KEY"):
+            missing.append("ALPACA_API_KEY or APCA_API_KEY_ID")
+        if not creds.get("SECRET_KEY"):
+            missing.append("ALPACA_SECRET_KEY or APCA_API_SECRET_KEY")
+        raise RuntimeError("Missing Alpaca credentials: " + ", ".join(missing))
+    logger.info("Alpaca credentials resolved successfully")
 
 
 def log_config(vars_list):
@@ -1543,9 +1521,11 @@ class TradingConfig(BaseModel):
     )  # AI-AGENT-REF: floor for ML signals
     signal_confirmation_bars: int = 2  # AI-AGENT-REF: bars to confirm signal
     delta_threshold: float = 0.02  # AI-AGENT-REF: price delta trigger
-    max_drawdown_threshold: float = Field(
-        0.08, ge=0, le=1
-    )  # AI-AGENT-REF: drawdown guard
+    max_drawdown_threshold: float = Field(_MAX_DRAWDOWN_THRESHOLD, ge=0, le=1)
+    order_fill_rate_target: float = Field(_ORDER_FILL_RATE_TARGET, ge=0, le=1)
+    mode_parameters: dict[str, float] | None = None
+    sentiment_enhanced_caching: bool = _SENTIMENT_ENHANCED_CACHING
+    sentiment_recovery_timeout_secs: int = _SENTIMENT_RECOVERY_TIMEOUT_SECS
     take_profit: float = 0.04
     stop_loss: float = 0.02
     trailing_factor: float = 1.0
@@ -1569,6 +1549,10 @@ class TradingConfig(BaseModel):
     seed: int = 42
     entry_start_offset_min: int = 0
     entry_end_offset_min: int = 390
+
+    def model_post_init(self, __context) -> None:  # AI-AGENT-REF: load mode defaults
+        if self.mode_parameters is None:
+            self.mode_parameters = dict(_MODE_PARAMETERS)
 
     @field_validator("kelly_fraction", "conf_threshold", mode="after")
     @classmethod
@@ -1597,7 +1581,7 @@ class TradingConfig(BaseModel):
             if mode
             else resolve_trading_mode("balanced").lower()
         )
-        defaults = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
+        defaults = dict(_MODE_PARAMETERS)
         override = os.getenv("CONF_THRESHOLD")
         if override is not None:
             conf_threshold = float(override)

@@ -114,12 +114,14 @@ class TestCriticalFixes(unittest.TestCase):
 
     def test_systemd_service_configuration(self):
         """Test 3: Service Configuration - systemd service file."""
-        service_file = (
-            "/home/runner/work/ai-trading-bot/ai-trading-bot/ai-trading-bot.service"
+        service_file = os.path.join(
+            os.getcwd(), "packaging", "systemd", "ai-trading.service"
         )
-        self.assertTrue(
-            os.path.exists(service_file), "systemd service file should exist"
-        )
+        self.assertTrue(os.path.exists(service_file), "service file should exist")
+
+        # Legacy service files should be absent
+        self.assertFalse(os.path.exists("ai-trading-bot.service"))
+        self.assertFalse(os.path.exists(os.path.join("deploy", "ai-trading.service")))
 
         with open(service_file) as f:
             content = f.read()

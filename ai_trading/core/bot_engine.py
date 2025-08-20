@@ -40,8 +40,9 @@ from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
 
+warnings.filterwarnings("always", category=DeprecationWarning)
 warnings.warn(
-    "ai_trading.core.bot_engine: legacy alias paths will change in v1.0",
+    "bot_engine.py is deprecated",
     DeprecationWarning,
 )  # AI-AGENT-REF: deprecation notice
 

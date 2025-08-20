@@ -1,12 +1,15 @@
+
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 
 logger = logging.getLogger(__name__)
 
-REQUIRED = ("ALPACA_API_BASE_URL",)
+# Test suite expects ALPACA_BASE_URL; keep CLI simple and consistent
+REQUIRED = ("ALPACA_BASE_URL",)
 
 
 def validate_env(env: dict[str, str] | None = None) -> list[str]:
@@ -16,14 +19,18 @@ def validate_env(env: dict[str, str] | None = None) -> list[str]:
 
 
 def _main(argv: list[str] | None = None) -> int:
-    """CLI entry point returning process exit code."""  # AI-AGENT-REF
+    """CLI entry point returning process exit code with JSON on stdout.
+
+    Contract: print {"ok": bool, "missing": [...]} and exit 0/1.
+    """  # AI-AGENT-REF
     _ = argv or sys.argv[1:]
     missing = validate_env()
-    if missing:
-        logger.error("Missing env: %s", ",".join(missing))
-        return 1
-    logger.info("Environment OK")
-    return 0
+    ok = not bool(missing)
+    try:
+        print(json.dumps({"ok": ok, "missing": missing}))
+    except Exception:  # noqa: BLE001
+        print('{"ok": false, "missing": []}')
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
@@ -31,4 +38,3 @@ if __name__ == "__main__":
 
 
 __all__ = ["validate_env", "_main"]
-

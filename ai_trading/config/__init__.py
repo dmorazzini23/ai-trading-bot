@@ -5,7 +5,6 @@ from typing import Any
 
 from .alpaca import AlpacaConfig, get_alpaca_config  # noqa: F401
 from .locks import LockWithTimeout
-from .management import TradingConfig  # AI-AGENT-REF: expose TradingConfig
 from .settings import Settings, broker_keys, get_settings  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,13 @@ MODE_PARAMETERS = {
 }
 SENTIMENT_ENHANCED_CACHING = True
 SENTIMENT_RECOVERY_TIMEOUT_SECS = 3600
+
+
+def __getattr__(name: str):  # AI-AGENT-REF: lazy export for TradingConfig
+    if name == "TradingConfig":
+        from .management import TradingConfig as _TC
+        return _TC
+    raise AttributeError(name)
 
 
 def _is_lock_held_by_current_thread() -> bool:
@@ -165,6 +171,7 @@ __all__ = [
     "validate_alpaca_credentials",
     "validate_env_vars",
     "log_config",
+    "ORDER_FILL_RATE_TARGET",
     "MAX_DRAWDOWN_THRESHOLD",
     "MODE_PARAMETERS",
     "SENTIMENT_ENHANCED_CACHING",
