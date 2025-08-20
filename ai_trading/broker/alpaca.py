@@ -10,8 +10,10 @@ from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
 try:  # AI-AGENT-REF: Stage 2.1 optional requests import
     from requests.exceptions import HTTPError
 except ImportError:  # pragma: no cover - requests optional
+
     class HTTPError(Exception):
         pass
+
 
 try:  # AI-AGENT-REF: Stage 2.1 guard Alpaca dependency
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -105,20 +107,21 @@ class AlpacaBroker:
             self._OrderType = OrderType
             self._TimeInForce = TimeInForce
 
-    def _call_with_retry(self, op: str, func: Callable[[], Any]) -> Any:
+    def _call_with_retry(self, op: str, func: Callable[..., Any]) -> Any:
         retries, backoff, max_backoff, jitter = _retry_config()
-        attempt = {"n": 0}
+        attempt = 0
 
         def _wrapped() -> Any:
+            nonlocal attempt
             try:
                 return func()
             except SAFE_EXC as e:  # AI-AGENT-REF: Stage 2.1 log retry
-                attempt["n"] += 1
+                attempt += 1
                 _log.warning(
                     "ALPACA_RETRY",
                     extra={
                         "op": op,
-                        "attempt": attempt["n"],
+                        "attempt": attempt,
                         "attempts": retries,
                         "error": str(e),
                     },
@@ -149,16 +152,14 @@ class AlpacaBroker:
         except AttributeError:
             raise RuntimeError("Alpaca API has neither get_orders nor list_orders")
 
-    def list_orders(
-        self, status: str | None = None, limit: int | None = None
-    ) -> Iterable[Any]:
+    def list_orders(self, status: str | None = None, limit: int | None = None) -> Iterable[Any]:
         """
         Generic order listing with optional status and limit.
         status: 'open'|'closed'|'all' (old SDK words) or maps to new enums.
         """
         if self._is_new:
             self._new_imports()
-            kwargs = {}
+            kwargs: dict[str, Any] = dict()
             if status:
                 map_status = {
                     "open": self._QueryOrderStatus.OPEN,
@@ -178,9 +179,7 @@ class AlpacaBroker:
             return self._call_with_retry(
                 "cancel_order_by_id", lambda: self._api.cancel_order_by_id(order_id)
             )
-        return self._call_with_retry(
-            "cancel_order", lambda: self._api.cancel_order(order_id)
-        )
+        return self._call_with_retry("cancel_order", lambda: self._api.cancel_order(order_id))
 
     def cancel_all_orders(self) -> Any:
         if self._is_new:
@@ -203,9 +202,7 @@ class AlpacaBroker:
             return self._call_with_retry("list_positions", self._api.list_positions)
         except AttributeError:
             # Some old SDKs used `list_positions`; keep explicit error
-            raise RuntimeError(
-                "Alpaca API has neither get_all_positions nor list_positions"
-            )
+            raise RuntimeError("Alpaca API has neither get_all_positions nor list_positions")
 
     def get_account(self) -> Any:
         if self._is_new:
@@ -240,9 +237,7 @@ class AlpacaBroker:
                 req_kwargs["stop_price"] = kwargs.get("stop_price")
             req = req_cls(**req_kwargs)
             return self._call_with_retry("submit_order", lambda: self._api.submit_order(req))
-        return self._call_with_retry(
-            "submit_order", lambda: self._api.submit_order(**kwargs)
-        )
+        return self._call_with_retry("submit_order", lambda: self._api.submit_order(**kwargs))
 
 
 def initialize(*args, **kwargs) -> AlpacaBroker | None:

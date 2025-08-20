@@ -7,10 +7,10 @@ including position-based PnL, market movement PnL, and fee/slippage costs.
 from __future__ import annotations
 
 import logging
+import threading  # AI-AGENT-REF: use re-entrant lock
 from collections import defaultdict
 from datetime import UTC, datetime
 from enum import Enum
-from threading import Lock
 from typing import Any
 
 from ai_trading.logging import get_logger
@@ -110,7 +110,8 @@ class PnLAttributor:
 
     def __init__(self):
         self.logger = get_phase_logger(__name__, "PNL_ATTRIBUTION")
-        self._lock = Lock()
+        # AI-AGENT-REF: RLock prevents self-deadlock when nested calls acquire the same lock
+        self._lock = threading.RLock()
 
         # Track position snapshots by symbol
         self._position_snapshots: dict[str, PositionSnapshot] = {}
@@ -119,9 +120,7 @@ class PnLAttributor:
         self._pnl_events: list[PnLEvent] = []
 
         # Track daily PnL by source
-        self._daily_pnl: dict[str, dict[PnLSource, float]] = defaultdict(
-            lambda: defaultdict(float)
-        )
+        self._daily_pnl: dict[str, dict[PnLSource, float]] = defaultdict(lambda: defaultdict(float))
 
         # Track cumulative PnL by symbol and source
         self._cumulative_pnl: dict[str, dict[PnLSource, float]] = defaultdict(
@@ -162,9 +161,7 @@ class PnLAttributor:
 
             # Calculate PnL attribution if we had a previous snapshot
             if old_snapshot:
-                self._calculate_pnl_attribution(
-                    old_snapshot, new_snapshot, correlation_id
-                )
+                self._calculate_pnl_attribution(old_snapshot, new_snapshot, correlation_id)
 
     def _calculate_pnl_attribution(
         self,
@@ -181,9 +178,7 @@ class PnLAttributor:
             # For position size changes, calculate realized PnL
             if qty_change < 0:  # Selling/reducing position
                 avg_exit_price = new_snapshot.market_price  # Approximate
-                position_change_pnl = abs(qty_change) * (
-                    avg_exit_price - old_snapshot.avg_cost
-                )
+                position_change_pnl = abs(qty_change) * (avg_exit_price - old_snapshot.avg_cost)
 
                 self._add_pnl_event(
                     symbol=symbol,
@@ -356,13 +351,9 @@ class PnLAttributor:
             symbol_pnl = self._cumulative_pnl[symbol].copy()
 
             if sources:
-                symbol_pnl = {
-                    source.value: symbol_pnl.get(source, 0) for source in sources
-                }
+                symbol_pnl = {source.value: symbol_pnl.get(source, 0) for source in sources}
             else:
-                symbol_pnl = {
-                    source.value: amount for source, amount in symbol_pnl.items()
-                }
+                symbol_pnl = {source.value: amount for source, amount in symbol_pnl.items()}
 
             # Add current unrealized PnL if we have position snapshot
             if symbol in self._position_snapshots:
@@ -385,8 +376,7 @@ class PnLAttributor:
         with self._lock:
             # Calculate total unrealized PnL from current positions
             total_unrealized = sum(
-                snapshot.unrealized_pnl
-                for snapshot in self._position_snapshots.values()
+                snapshot.unrealized_pnl for snapshot in self._position_snapshots.values()
             )
 
             # Calculate total by source
@@ -431,9 +421,7 @@ class PnLAttributor:
 
             return [event.to_dict() for event in events]
 
-    def explain_pnl_change(
-        self, symbol: str, time_window_minutes: int = 60
-    ) -> dict[str, Any]:
+    def explain_pnl_change(self, symbol: str, time_window_minutes: int = 60) -> dict[str, Any]:
         """Explain recent PnL changes for a symbol."""
         cutoff_time = datetime.now(UTC).timestamp() - (time_window_minutes * 60)
 
@@ -473,13 +461,9 @@ class PnLAttributor:
             "symbol": symbol,
             "time_window_minutes": time_window_minutes,
             "total_change": total_change,
-            "pnl_by_source": {
-                source.value: amount for source, amount in pnl_by_source.items()
-            },
+            "pnl_by_source": {source.value: amount for source, amount in pnl_by_source.items()},
             "explanation": (
-                "; ".join(explanations)
-                if explanations
-                else "No significant PnL changes"
+                "; ".join(explanations) if explanations else "No significant PnL changes"
             ),
             "events_count": len(recent_events),
             "events": [event.to_dict() for event in recent_events],
@@ -489,8 +473,7 @@ class PnLAttributor:
         """Get current position snapshots."""
         with self._lock:
             return {
-                symbol: snapshot.to_dict()
-                for symbol, snapshot in self._position_snapshots.items()
+                symbol: snapshot.to_dict() for symbol, snapshot in self._position_snapshots.items()
             }
 
     def calculate_attribution_statistics(self) -> dict[str, Any]:
@@ -535,7 +518,8 @@ class PnLAttributor:
 
 # Global PnL attributor instance
 _pnl_attributor: PnLAttributor | None = None
-_attributor_lock = Lock()
+# AI-AGENT-REF: match internal lock type to allow nested acquisition
+_attributor_lock = threading.RLock()
 
 
 def get_pnl_attributor() -> PnLAttributor:
@@ -556,9 +540,7 @@ def update_position_for_pnl(
 ) -> None:
     """Update position snapshot for PnL tracking."""
     attributor = get_pnl_attributor()
-    attributor.update_position_snapshot(
-        symbol, quantity, avg_cost, market_price, correlation_id
-    )
+    attributor.update_position_snapshot(symbol, quantity, avg_cost, market_price, correlation_id)
 
 
 def record_trade_pnl(
