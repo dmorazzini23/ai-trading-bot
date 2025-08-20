@@ -29,7 +29,7 @@ warnings.warn(
 # AI-AGENT-REF: lightweight stubs for data fetch routines
 FINNHUB_AVAILABLE = True
 YFIN_AVAILABLE = True
-_DEFAULT_FEED = "alpaca"  # AI-AGENT-REF: default feed constant
+_DEFAULT_FEED = "iex"  # AI-AGENT-REF: default feed constant
 
 
 class _TFUnit(str, Enum):  # AI-AGENT-REF: include Week unit

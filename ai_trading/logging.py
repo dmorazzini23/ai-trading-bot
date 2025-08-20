@@ -20,7 +20,26 @@ import time
 import traceback
 from datetime import UTC, date, datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
-from typing import Any
+from typing import Any, Optional
+
+def _ensure_single_handler(log: logging.Logger, level: Optional[int] = None) -> None:
+    """Ensure exactly one handler and attach default if none."""
+    if not log.handlers:
+        h = logging.StreamHandler()
+        fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        h.setFormatter(fmt)
+        log.addHandler(h)
+    seen=set()
+    unique=[]
+    for h in log.handlers:
+        sig=(h.__class__, getattr(h, 'stream', None))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        unique.append(h)
+    log.handlers=unique
+    if level is not None:
+        log.setLevel(level)
 
 # Reserved LogRecord attribute names that cannot be overridden by `extra`.
 _RESERVED_LOGRECORD_KEYS = {
@@ -329,7 +348,9 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         if _listener is not None:
             thread = getattr(_listener, "_thread", None)
             if thread is not None and thread.is_alive():
-                return logging.getLogger()
+                if _LOGGING_CONFIGURED:
+                    return logging.getLogger()
+            _listener = None
 
         if _LOGGING_CONFIGURED:
             logging.getLogger(__name__).debug(
@@ -338,6 +359,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             return logging.getLogger()
 
         logger = logging.getLogger()
+        _ensure_single_handler(logger)
 
         if _configured:
             return logger
@@ -447,6 +469,8 @@ def _safe_shutdown_logging():
 
 
 def get_logger(name: str) -> SanitizingLoggerAdapter:
+    _ensure_single_handler(logging.getLogger())
+
     """Return a named logger wrapped with :class:`SanitizingLoggerAdapter`."""
     if name not in _loggers:
         setup_logging()  # AI-AGENT-REF: ensure root configured once

@@ -23,6 +23,13 @@ from pydantic import (
     model_validator,
 )  # AI-AGENT-REF: allow extras
 from ai_trading.config.aliases import resolve_trading_mode
+from . import (
+    MAX_DRAWDOWN_THRESHOLD as _MAX_DRAWDOWN_THRESHOLD,
+    MODE_PARAMETERS as _MODE_PARAMETERS,
+    ORDER_FILL_RATE_TARGET as _ORDER_FILL_RATE_TARGET,
+    SENTIMENT_ENHANCED_CACHING as _SENTIMENT_ENHANCED_CACHING,
+    SENTIMENT_RECOVERY_TIMEOUT_SECS as _SENTIMENT_RECOVERY_TIMEOUT_SECS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1543,9 +1550,11 @@ class TradingConfig(BaseModel):
     )  # AI-AGENT-REF: floor for ML signals
     signal_confirmation_bars: int = 2  # AI-AGENT-REF: bars to confirm signal
     delta_threshold: float = 0.02  # AI-AGENT-REF: price delta trigger
-    max_drawdown_threshold: float = Field(
-        0.08, ge=0, le=1
-    )  # AI-AGENT-REF: drawdown guard
+    max_drawdown_threshold: float = Field(_MAX_DRAWDOWN_THRESHOLD, ge=0, le=1)
+    order_fill_rate_target: float = Field(_ORDER_FILL_RATE_TARGET, ge=0, le=1)
+    mode_parameters: dict[str, float] | None = None
+    sentiment_enhanced_caching: bool = _SENTIMENT_ENHANCED_CACHING
+    sentiment_recovery_timeout_secs: int = _SENTIMENT_RECOVERY_TIMEOUT_SECS
     take_profit: float = 0.04
     stop_loss: float = 0.02
     trailing_factor: float = 1.0
@@ -1569,6 +1578,10 @@ class TradingConfig(BaseModel):
     seed: int = 42
     entry_start_offset_min: int = 0
     entry_end_offset_min: int = 390
+
+    def model_post_init(self, __context) -> None:  # AI-AGENT-REF: load mode defaults
+        if self.mode_parameters is None:
+            self.mode_parameters = dict(_MODE_PARAMETERS)
 
     @field_validator("kelly_fraction", "conf_threshold", mode="after")
     @classmethod
@@ -1597,7 +1610,7 @@ class TradingConfig(BaseModel):
             if mode
             else resolve_trading_mode("balanced").lower()
         )
-        defaults = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
+        defaults = dict(_MODE_PARAMETERS)
         override = os.getenv("CONF_THRESHOLD")
         if override is not None:
             conf_threshold = float(override)
