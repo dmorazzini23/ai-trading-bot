@@ -287,6 +287,25 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
+# AI-AGENT-REF: normalize arbitrary inputs into DataFrames
+import pandas as pd
+import logging
+logger = logging.getLogger(__name__)
+
+def _ensure_df(obj) -> pd.DataFrame:
+    """Best-effort conversion to DataFrame; returns empty DF on None/unsupported."""
+    if obj is None:
+        return pd.DataFrame()
+    if isinstance(obj, pd.DataFrame):
+        return obj
+    df = getattr(obj, "df", None)
+    if isinstance(df, pd.DataFrame):
+        return df
+    try:
+        return pd.DataFrame(obj)
+    except Exception:
+        return pd.DataFrame()
+
 
 def _alpaca_diag_info() -> dict[str, object]:
     """Collect Alpaca env & mode diagnostics for operator visibility."""
@@ -840,9 +859,6 @@ warnings.filterwarnings(
     module="pandas_ta.*",
 )
 
-
-# Import pandas directly as it's a hard dependency
-import pandas as pd
 
 from ai_trading import utils
 
@@ -5725,28 +5741,36 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
         return
     if len(missing) == len(symbols):
         try:
-            end = datetime.now(UTC)
-            start = end - timedelta(days=1)
+            start_iso = (pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)).isoformat()
+            end_iso = (pd.Timestamp.utcnow() + pd.Timedelta(minutes=1)).isoformat()
+
             req = StockBarsRequest(
                 symbol_or_symbols=["SPY"],
                 timeframe=TimeFrame(1, TimeFrameUnit.Minute),
-                start=start,
-                end=end,
+                start=start_iso,
+                end=end_iso,
                 feed="iex",
             )
-            bars = safe_get_stock_bars(ctx.data_client, req, "SPY", "MINUTE_FALLBACK")
-            if bars.empty:
-                req.feed = "sip"
-                bars = safe_get_stock_bars(ctx.data_client, req, "SPY", "MINUTE_FALLBACK_SIP")
-            if len(bars) >= 200:
-                _log.info("DATA_HEALTH_CHECK: minute fallback ok for SPY", extra={"rows": len(bars)})
-                return
-            _log.warning(
-                "DATA_SOURCE_HEALTH_CHECK: insufficient minute bars for SPY (rows=%s)",
-                len(bars),
+            mdf = _ensure_df(
+                safe_get_stock_bars(ctx.data_client, req, "SPY", "MINUTE_FALLBACK")
             )
+            if mdf.empty:
+                req.feed = "sip"
+                mdf = _ensure_df(
+                    safe_get_stock_bars(
+                        ctx.data_client, req, "SPY", "MINUTE_FALLBACK_SIP"
+                    )
+                )
+
+            if not mdf.empty and len(mdf) >= 200:
+                _log.info("DATA_HEALTH_CHECK: minute fallback OK (rows=%s)", len(mdf))
+                return
+            else:
+                _log.warning(
+                    "DATA_HEALTH_CHECK: minute fallback still empty (rows=%s)", len(mdf)
+                )
         except Exception as e:  # pragma: no cover - defensive
-            _log.warning("DATA_SOURCE_HEALTH_CHECK: minute fallback failed: %s", e)
+            _log.warning("DATA_HEALTH_CHECK: minute fallback exception: %s", e)
         if not is_market_open():
             _log.info(
                 "DATA_SOURCE_HEALTH_CHECK: No data for any symbol (market closed; health check deferred)."
@@ -12862,6 +12886,15 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state._strategies_loaded = False
             state.last_loop_duration = time.monotonic() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
+
+            exec_engine = getattr(runtime, "exec_engine", None) or getattr(runtime, "execution_engine", None)
+            if exec_engine is not None and hasattr(exec_engine, "check_stops"):
+                try:
+                    exec_engine.check_stops()
+                except Exception as e:  # AI-AGENT-REF: guard check_stops
+                    _log.info("check_stops raised but was suppressed: %s", e)
+            else:
+                _log.debug("Execution engine lacks check_stops(); skipping")
 
             # AI-AGENT-REF: Perform memory cleanup after trading cycle
             if MEMORY_OPTIMIZATION_AVAILABLE:

@@ -1,13 +1,66 @@
 import logging
 import threading
-
-from ai_trading.utils.base import get_latest_close
+import pandas as pd
+from ai_trading.core.bot_engine import (
+    _ensure_df,
+    safe_get_stock_bars,
+    StockBarsRequest,
+    TimeFrame,
+    TimeFrameUnit,
+)
 
 logger = logging.getLogger(__name__)
 
 # AI-AGENT-REF: moved from top-level module to package to avoid mypy duplicate
 
 _portfolio_lock = threading.RLock()
+
+
+def _last_close_from(df: pd.DataFrame) -> float | None:
+    """Extract last close value from DataFrame."""  # AI-AGENT-REF: price helper
+    if df is None or df.empty:
+        return None
+    for col in ("close", "Close", "c"):
+        if col in df.columns:
+            return float(df[col].iloc[-1])
+    lower = {c.lower(): c for c in df.columns}
+    if "close" in lower:
+        return float(df[lower["close"]].iloc[-1])
+    return None
+
+
+def get_latest_price(ctx, symbol: str) -> float | None:
+    """Return latest price using daily bars with minute fallback."""  # AI-AGENT-REF
+    df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
+    price = _last_close_from(df_day)
+    if price is not None:
+        return price
+
+    start_iso = (pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)).isoformat()
+    end_iso = (pd.Timestamp.utcnow() + pd.Timedelta(minutes=1)).isoformat()
+    try:
+        req = StockBarsRequest(
+            symbol_or_symbols=[symbol],
+            timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+            start=start_iso,
+            end=end_iso,
+            feed="iex",
+        )
+        df_min = _ensure_df(
+            safe_get_stock_bars(
+                getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT"
+            )
+        )
+        if df_min.empty:
+            req.feed = "sip"
+            df_min = _ensure_df(
+                safe_get_stock_bars(
+                    getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT_SIP"
+                )
+            )
+    except Exception:
+        df_min = pd.DataFrame()
+    return _last_close_from(df_min)
 
 
 def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
@@ -22,9 +75,9 @@ def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
             logger.warning("Too many symbols (%d), limiting to 50", n)
             symbols = symbols[:50]
 
-        closes = {s: get_latest_close(ctx.data_fetcher.get_daily_df(ctx, s)) for s in symbols}
+        closes = {s: get_latest_price(ctx, s) for s in symbols}
         # AI-AGENT-REF: drop tickers with invalid closes
-        closes = {s: c for s, c in closes.items() if isinstance(c, int | float) and c > 0}
+        closes = {s: c for s, c in closes.items() if isinstance(c, (int, float)) and c > 0}
         if not closes:
             logger.error("No valid prices found for any symbols")
             return {}
