@@ -1522,6 +1522,7 @@ class TradingConfig(BaseModel):
     signal_confirmation_bars: int = 2  # AI-AGENT-REF: bars to confirm signal
     delta_threshold: float = 0.02  # AI-AGENT-REF: price delta trigger
     max_drawdown_threshold: float = Field(_MAX_DRAWDOWN_THRESHOLD, ge=0, le=1)
+    weekly_drawdown_limit: float = Field(0.10, ge=0, le=1)  # AI-AGENT-REF: risk limit
     order_fill_rate_target: float = Field(_ORDER_FILL_RATE_TARGET, ge=0, le=1)
     mode_parameters: dict[str, float] | None = None
     sentiment_enhanced_caching: bool = _SENTIMENT_ENHANCED_CACHING
