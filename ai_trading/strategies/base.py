@@ -11,7 +11,7 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
-from typing import Any, List
+from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger, logger_once
@@ -98,9 +98,7 @@ class BaseStrategy(ABC):
     signal generation, risk management, and performance tracking.
     """
 
-    def __init__(
-        self, strategy_id: str, name: str, risk_level: RiskLevel = RiskLevel.MODERATE
-    ):
+    def __init__(self, strategy_id: str, name: str, risk_level: RiskLevel = RiskLevel.MODERATE):
         """Initialize base strategy."""
         # AI-AGENT-REF: Base strategy framework
         self.strategy_id = strategy_id
@@ -130,7 +128,7 @@ class BaseStrategy(ABC):
         )
 
     @abstractmethod
-    def generate_signals(self, market_data: dict) -> List[StrategySignal]:
+    def generate_signals(self, market_data: dict) -> list[StrategySignal]:
         """
         Generate trading signals based on market data.
 
@@ -142,11 +140,47 @@ class BaseStrategy(ABC):
         """
 
     # --- Back-compat shim -------------------------------------------------
-    def generate(self, ctx: Any) -> List[StrategySignal]:
-        """Adapt legacy engine call-sites to the new strategy API.
-        `ctx` is the runtime context; we prefer ctx.market_data if present."""
-        # AI-AGENT-REF: adapt legacy generate() to generate_signals()
-        market_data = getattr(ctx, "market_data", ctx)
+    def generate(self, ctx: Any) -> list[StrategySignal]:
+        """Normalize runtime context into legacy market_data dict."""
+        # AI-AGENT-REF: normalize runtime context for legacy strategies
+        try:
+            get = ctx.get  # type: ignore[attr-defined]
+        except AttributeError:
+            get = None
+        if callable(get):
+            return self.generate_signals(ctx)  # type: ignore[arg-type]
+
+        symbols = list(getattr(ctx, "tickers", None) or getattr(ctx, "symbols", []) or [])
+        prices: dict[str, Any] = {}
+        fetcher = getattr(ctx, "data_fetcher", None)
+        log = getattr(ctx, "logger", logging.getLogger(__name__))
+
+        for sym in symbols:
+            df = None
+            try:
+                if fetcher:
+                    df = fetcher.get_daily_df(ctx, sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("BASE_STRATEGY_FETCH_FAIL", extra={"symbol": sym, "error": str(e)})
+                df = None
+            if df is None or getattr(df, "empty", True):
+                continue
+            col = (
+                "close"
+                if "close" in df.columns
+                else ("adj_close" if "adj_close" in df.columns else None)
+            )
+            if col is None:
+                continue
+            try:
+                series = df[col].astype("float64").dropna()
+            except Exception:  # noqa: BLE001
+                continue
+            if series.empty:
+                continue
+            prices[sym] = series
+
+        market_data = {"symbols": list(prices.keys()), "prices": prices, "indicators": {}}
         return self.generate_signals(market_data)
 
     @abstractmethod
@@ -185,21 +219,17 @@ class BaseStrategy(ABC):
 
             # Risk validation
             if signal.risk_score > 0.8:  # High risk threshold
-                logger.warning(
-                    f"High risk signal for {signal.symbol}: {signal.risk_score}"
-                )
+                logger.warning(f"High risk signal for {signal.symbol}: {signal.risk_score}")
                 return False
 
             # Confidence validation
             if signal.confidence < 0.3:  # Low confidence threshold
-                logger.debug(
-                    f"Low confidence signal for {signal.symbol}: {signal.confidence}"
-                )
+                logger.debug(f"Low confidence signal for {signal.symbol}: {signal.confidence}")
                 return False
 
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error validating signal: {e}")
             return False
 
@@ -208,7 +238,7 @@ class BaseStrategy(ABC):
         try:
             self.parameters.update(new_parameters)
             logger.info(f"Strategy {self.name} parameters updated: {new_parameters}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error updating strategy parameters: {e}")
 
     def add_symbol(self, symbol: str):
@@ -245,15 +275,13 @@ class BaseStrategy(ABC):
                     self.win_rate * (self.trades_executed - 1) + 1
                 ) / self.trades_executed
             else:
-                self.win_rate = (
-                    self.win_rate * (self.trades_executed - 1)
-                ) / self.trades_executed
+                self.win_rate = (self.win_rate * (self.trades_executed - 1)) / self.trades_executed
 
             # Update drawdown if negative return
             if return_pct < 0:
                 self.max_drawdown = min(self.max_drawdown, return_pct)
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error updating performance: {e}")
 
     def get_performance_summary(self) -> dict:
@@ -266,9 +294,7 @@ class BaseStrategy(ABC):
             "trades_executed": self.trades_executed,
             "total_return": self.total_return,
             "average_return": (
-                self.total_return / self.trades_executed
-                if self.trades_executed > 0
-                else 0
+                self.total_return / self.trades_executed if self.trades_executed > 0 else 0
             ),
             "max_drawdown": self.max_drawdown,
             "win_rate": self.win_rate,
@@ -325,12 +351,10 @@ class StrategyRegistry:
                 return False
 
             self.strategies[strategy.strategy_id] = strategy
-            logger.info(
-                f"Strategy registered: {strategy.name} ({strategy.strategy_id})"
-            )
+            logger.info(f"Strategy registered: {strategy.name} ({strategy.strategy_id})")
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error registering strategy: {e}")
             return False
 
@@ -357,7 +381,7 @@ class StrategyRegistry:
             logger.info(f"Strategy unregistered: {strategy.name} ({strategy_id})")
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error unregistering strategy: {e}")
             return False
 
@@ -383,7 +407,7 @@ class StrategyRegistry:
             logger.info(f"Strategy activated: {strategy.name}")
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error activating strategy {strategy_id}: {e}")
             return False
 
@@ -407,7 +431,7 @@ class StrategyRegistry:
                 logger.warning(f"Strategy {strategy_id} not active")
                 return False
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error deactivating strategy {strategy_id}: {e}")
             return False
 
@@ -423,9 +447,7 @@ class StrategyRegistry:
         """Get list of all registered strategies."""
         return list(self.strategies.values())
 
-    def generate_signals_from_active_strategies(
-        self, market_data: dict
-    ) -> list[StrategySignal]:
+    def generate_signals_from_active_strategies(self, market_data: dict) -> list[StrategySignal]:
         """
         Generate signals from all active strategies.
 
@@ -446,10 +468,8 @@ class StrategyRegistry:
                         all_signals.append(signal)
                         strategy.signals_generated += 1
 
-            except Exception as e:
-                logger.error(
-                    f"Error generating signals from strategy {strategy.name}: {e}"
-                )
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Error generating signals from strategy {strategy.name}: {e}")
 
         logger.debug(
             f"Generated {len(all_signals)} signals from {len(self.active_strategies)} active strategies"
@@ -473,6 +493,6 @@ class StrategyRegistry:
             ],
         }
 
+
 # AI-AGENT-REF: legacy base class alias
 Strategy = BaseStrategy  # noqa: N816
-

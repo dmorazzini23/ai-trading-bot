@@ -6,6 +6,7 @@ from typing import Any
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
 from pandas import Timestamp
+
 try:  # AI-AGENT-REF: yfinance fallback for market data
     import yfinance as yf
 except Exception:  # pragma: no cover  # noqa: BLE001
@@ -37,19 +38,23 @@ requests = _requests
 # ---------------------------------------------------------------------------
 _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 
+
 def get_cached_minute_timestamp(symbol: str) -> int | None:
     """Return cached last bar timestamp for symbol."""  # AI-AGENT-REF: cache getter
     rec = _MINUTE_CACHE.get(symbol)
     return rec[0] if rec else None
+
 
 def set_cached_minute_timestamp(symbol: str, ts_epoch_s: int) -> None:
     """Store last bar timestamp with current insertion time."""  # AI-AGENT-REF: cache setter
     now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
     _MINUTE_CACHE[symbol] = (int(ts_epoch_s), now_s)
 
+
 def clear_cached_minute_timestamp(symbol: str) -> None:
     """Remove cached entry for symbol."""  # AI-AGENT-REF: cache clear
     _MINUTE_CACHE.pop(symbol, None)
+
 
 def age_cached_minute_timestamps(max_age_seconds: int) -> int:
     """Drop cache entries older than max_age_seconds (based on inserted time)."""  # AI-AGENT-REF: cache prune
@@ -59,6 +64,7 @@ def age_cached_minute_timestamps(max_age_seconds: int) -> int:
         _MINUTE_CACHE.pop(sym, None)
     return len(to_del)
 
+
 def last_minute_bar_age_seconds(symbol: str) -> int | None:
     """Age in seconds of last cached minute bar for symbol, or None if absent."""  # AI-AGENT-REF: age helper
     ts = get_cached_minute_timestamp(symbol)
@@ -66,6 +72,7 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
         return None
     now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
     return max(0, now_s - int(ts))
+
 
 # ---------------------------------------------------------------------------
 # Public/tested constants & stubs expected by tests
@@ -195,6 +202,10 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             if c.lower() in ("date", "datetime"):
                 df = df.rename(columns={c: "timestamp"})
                 break
+    df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+    # AI-AGENT-REF: ensure fallback exposes stable 'close' column
+    if "close" not in df.columns and "adj_close" in df.columns:
+        df["close"] = df["adj_close"]
     return df
 
 
