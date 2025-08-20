@@ -3526,7 +3526,20 @@ class DataFetcher:
                 end=end_ts,
                 feed=_DEFAULT_FEED,
             )
-            bars = safe_get_stock_bars(client, req, symbol, "DAILY")
+            # AI-AGENT-REF: retry with sanitized datetimes on callable TypeError
+            try:
+                bars = safe_get_stock_bars(client, req, symbol, "DAILY")
+            except TypeError as te:
+                msg = str(te)
+                if "datetime argument was callable" in msg:
+                    _log.warning(
+                        f"DAILY_BARS_RETRY_SANITIZE {symbol} due to: {msg}"
+                    )
+                    req.start = ensure_datetime(getattr(req, "start", start_ts))
+                    req.end = ensure_datetime(getattr(req, "end", end_ts))
+                    bars = safe_get_stock_bars(client, req, symbol, "DAILY")
+                else:
+                    raise
             if bars is None:
                 return None
             if isinstance(bars.columns, pd.MultiIndex):

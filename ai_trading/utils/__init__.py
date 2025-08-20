@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import os  # noqa: F401  # AI-AGENT-REF: env overrides
-import time
-from datetime import datetime, timedelta, timezone
+
+# AI-AGENT-REF: alias stdlib time to avoid shadowing by our `time` submodule
+import time as _stdlib_time
+
 import pandas as pd
 
 from .base import (
+    EASTERN_TZ,
+    ensure_utc,
     get_free_port,
     get_pid_on_port,
     health_check,
     is_market_open,
     market_open_between,
-    portfolio_lock as _portfolio_lock,  # NEW: bring in the shared lock
-    EASTERN_TZ,
-    ensure_utc,
+)
+from .base import (
     get_ohlcv_columns as _get_ohlcv_columns,
 )
 from .base import (
@@ -21,6 +24,9 @@ from .base import (
 )
 from .base import (
     model_lock as _model_lock,
+)
+from .base import (
+    portfolio_lock as _portfolio_lock,  # NEW: bring in the shared lock
 )
 from .base import (
     safe_to_datetime as _safe_to_datetime,
@@ -31,6 +37,12 @@ from .base import (
 from .timing import HTTP_TIMEOUT, SUBPROCESS_TIMEOUT_S
 from .timing import clamp_timeout as _clamp_timeout_new
 
+# AI-AGENT-REF: expose local time helpers without rebinding `time`
+try:  # pragma: no cover
+    from . import time as utils_time  # type: ignore
+except Exception:  # pragma: no cover  # noqa: BLE001
+    utils_time = None  # type: ignore
+
 # Back-compat alias
 HTTP_TIMEOUT_DEFAULT = HTTP_TIMEOUT
 SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
@@ -38,7 +50,7 @@ SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
 # AI-AGENT-REF: relative import to satisfy import contract
 try:  # pragma: no cover
     from . import process_manager  # type: ignore
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover  # noqa: BLE001
     process_manager = None  # type: ignore
 
 
@@ -145,12 +157,14 @@ def clamp_timeout(
 
 def psleep(seconds: float) -> None:
     """Plain sleep helper used by tests."""  # AI-AGENT-REF
-    time.sleep(seconds)
+    _stdlib_time.sleep(seconds)
 
 
 def sleep_s(seconds: float) -> None:
     """Thin wrapper so tests can monkeypatch easily."""  # AI-AGENT-REF
-    time.sleep(_clamp_timeout_new(seconds, default_non_test=0.01, min_s=0.0))
+    _stdlib_time.sleep(
+        _clamp_timeout_new(seconds, default_non_test=0.01, min_s=0.0)
+    )
 
 
 def sleep(seconds: float) -> None:
