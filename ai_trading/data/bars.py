@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from ai_trading.data_fetcher import (
     get_bars as http_get_bars,
 )  # AI-AGENT-REF: fallback helpers
-from ai_trading.data_fetcher import (
-    get_minute_df,
-)
+from ai_trading.data_fetcher import get_minute_df
 from ai_trading.logging import get_logger
+from .timeutils import (
+    ensure_utc_datetime,
+    expected_regular_minutes,
+    nyse_session_utc,
+    previous_business_day,
+    UTC,
+)
 
 _log = get_logger(__name__)
 
@@ -156,3 +163,87 @@ def safe_get_stock_bars(
             feed=getattr(request, "feed", None) or "sip",
         )
         return _ensure_df(df)  # AI-AGENT-REF: HTTP/Yahoo fallback on exception
+
+
+def _fetch_daily_bars(client, symbol, start, end, **kwargs):
+    start = ensure_utc_datetime(start)
+    end = ensure_utc_datetime(end)
+    get_bars_fn = getattr(client, "get_bars", None)
+    if not callable(get_bars_fn):
+        raise RuntimeError("Alpaca client missing get_bars()")
+    try:
+        return get_bars_fn(symbol, timeframe="1Day", start=start, end=end, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        _log.exception("ALPACA_DAILY_FAILED", extra={"symbol": symbol, "error": str(e)})
+        raise
+
+
+def _get_minute_bars(client, symbol, start, end, feed="iex"):
+    req = StockBarsRequest(
+        symbol_or_symbols=[symbol],
+        timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+        start=start,
+        end=end,
+        feed=feed,
+    )
+    return _ensure_df(safe_get_stock_bars(client, req, symbol, "MINUTE_FALLBACK"))
+
+
+def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
+    """Compute NYSE session for the current or previous business day."""
+    today_ny = now_utc.astimezone(ZoneInfo("America/New_York")).date()
+    start_u, end_u = nyse_session_utc(today_ny)
+    if now_utc < start_u or now_utc > end_u:
+        prev_day = previous_business_day(today_ny)
+        start_u, end_u = nyse_session_utc(prev_day)
+    return start_u, end_u
+
+
+def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
+    now_utc = ensure_utc_datetime(now_utc)
+    start_u, end_u = _minute_fallback_window(now_utc)
+    df = _get_minute_bars(client, symbol, start_u, end_u, feed="iex")
+    rows = len(df)
+    if rows < 300:
+        _log.warning(
+            "DATA_HEALTH_MINUTE_INCOMPLETE",
+            extra={
+                "rows": rows,
+                "expected": expected_regular_minutes(),
+                "start": start_u.isoformat(),
+                "end": end_u.isoformat(),
+                "feed": "iex",
+            },
+        )
+        df_sip = _get_minute_bars(client, symbol, start_u, end_u, feed="sip")
+        if len(df_sip) > rows:
+            df = df_sip
+            rows = len(df)
+    if rows >= 300:
+        _log.info("DATA_HEALTH: minute fallback ok", extra={"rows": rows})
+    return df
+
+
+def _parse_bars(payload):
+    if payload is None:
+        _log.error("BAR_PARSE_ERROR", extra={"reason": "payload_none"})
+        return None
+    if not isinstance(payload, dict):
+        _log.error(
+            "BAR_PARSE_ERROR",
+            extra={"reason": f"payload_type_{type(payload).__name__}"},
+        )
+        return None
+    o = payload.get("o")
+    h = payload.get("h")
+    l = payload.get("l")
+    c = payload.get("c")
+    v = payload.get("v")
+    t = payload.get("t")
+    if t is None:
+        _log.error(
+            "BAR_PARSE_ERROR",
+            extra={"reason": "missing_timestamp", "payload": payload},
+        )
+        return None
+    return {"o": o, "h": h, "l": l, "c": c, "v": v, "t": t}
