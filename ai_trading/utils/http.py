@@ -98,12 +98,14 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
     sess = _get_session()
     kwargs = _with_timeout(kwargs)
     retries, backoff, max_backoff, jitter = _retry_config()
+    # Some call-sites intentionally raise ValueError during request/parse pipeline; treat it transient.
     excs = (
         RequestException,
         RequestsRequestException,  # AI-AGENT-REF: support direct requests exception
         JSONDecodeError,
         TimeoutError,
         OSError,
+        ValueError,
     )
 
     attempt = {"n": 0}
