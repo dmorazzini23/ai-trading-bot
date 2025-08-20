@@ -22,7 +22,7 @@ def test_packaged_exists_without_env(monkeypatch):
 
 def test_missing_returns_empty(monkeypatch):
     monkeypatch.setenv("AI_TRADER_TICKERS_CSV", "/nonexistent.csv")
-    from ai_trading.data import universe as U
+    import ai_trading.data.universe as U
     orig = U.locate_tickers_csv
     U.locate_tickers_csv = lambda: None
     try:

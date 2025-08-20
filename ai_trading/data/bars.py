@@ -8,6 +8,7 @@ import pandas as pd
 
 from ai_trading.data_fetcher import (
     get_bars as http_get_bars,
+    get_bars,
 )  # AI-AGENT-REF: fallback helpers
 from ai_trading.data_fetcher import get_minute_df
 from ai_trading.logging import get_logger
@@ -18,6 +19,7 @@ from .timeutils import (
     previous_business_day,
     UTC,
 )
+from ai_trading.utils.time import now_utc
 
 _log = get_logger(__name__)
 
@@ -97,24 +99,33 @@ def safe_get_stock_bars(
     This is a faithful move of the original implementation from bot_engine,
     with identical behavior and logging fields.
     """
+    now = now_utc()
+    prev_open, _ = nyse_session_utc(previous_business_day(now.date()))
+    end_dt = ensure_utc_datetime(
+        getattr(request, "end", None) or now,
+        default=now,
+        clamp_to="eod",
+        allow_callables=False,
+    )
+    start_dt = ensure_utc_datetime(
+        getattr(request, "start", None) or prev_open,
+        default=prev_open,
+        clamp_to="bod",
+        allow_callables=False,
+    )
     try:
         response = client.get_stock_bars(request)
         df = getattr(response, "df", None)
         if df is None or df.empty:
             _log.warning("ALPACA_BARS_EMPTY", extra={"symbol": symbol, "context": context})
             if _is_minute_timeframe(getattr(request, "timeframe", "")):
-                df = get_minute_df(
-                    symbol,
-                    getattr(request, "start", None),
-                    getattr(request, "end", None),
-                    feed=getattr(request, "feed", None),
-                )
+                df = get_minute_df(symbol, start_dt, end_dt, feed=getattr(request, "feed", None))
             else:
                 df = http_get_bars(
                     symbol,
                     str(getattr(request, "timeframe", "")),
-                    getattr(request, "start", None),
-                    getattr(request, "end", None),
+                    start_dt,
+                    end_dt,
                     feed=getattr(request, "feed", None) or "sip",
                 )
             return _ensure_df(df)  # AI-AGENT-REF: fallback to robust fetchers
@@ -147,19 +158,12 @@ def safe_get_stock_bars(
             extra={"symbol": symbol, "context": context, "error": str(e)},
         )
         if _is_minute_timeframe(getattr(request, "timeframe", "")):
-            return _ensure_df(
-                get_minute_df(
-                    symbol,
-                    getattr(request, "start", None),
-                    getattr(request, "end", None),
-                    feed=getattr(request, "feed", None),
-                )
-            )
+            return _ensure_df(get_minute_df(symbol, start_dt, end_dt, feed=getattr(request, "feed", None)))
         df = http_get_bars(
             symbol,
             str(getattr(request, "timeframe", "")),
-            getattr(request, "start", None),
-            getattr(request, "end", None),
+            start_dt,
+            end_dt,
             feed=getattr(request, "feed", None) or "sip",
         )
         return _ensure_df(df)  # AI-AGENT-REF: HTTP/Yahoo fallback on exception
@@ -178,15 +182,14 @@ def _fetch_daily_bars(client, symbol, start, end, **kwargs):
         raise
 
 
-def _get_minute_bars(client, symbol, start, end, feed="iex"):
-    req = StockBarsRequest(
-        symbol_or_symbols=[symbol],
-        timeframe=TimeFrame(1, TimeFrameUnit.Minute),
-        start=start,
-        end=end,
-        feed=feed,
-    )
-    return _ensure_df(safe_get_stock_bars(client, req, symbol, "MINUTE_FALLBACK"))
+def _get_minute_bars(symbol: str, start_dt: datetime, end_dt: datetime, feed: str) -> pd.DataFrame:
+    try:
+        df = get_bars(symbol=symbol, timeframe="1Min", start=start_dt, end=end_dt, feed=feed)
+    except Exception:  # noqa: BLE001
+        df = None
+    if df is None or not hasattr(df, "empty") or getattr(df, "empty", True):
+        return empty_bars_dataframe()
+    return df
 
 
 def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
@@ -202,7 +205,7 @@ def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
 def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     now_utc = ensure_utc_datetime(now_utc)
     start_u, end_u = _minute_fallback_window(now_utc)
-    df = _get_minute_bars(client, symbol, start_u, end_u, feed="iex")
+    df = _get_minute_bars(symbol, start_u, end_u, feed="iex")
     rows = len(df)
     if rows < 300:
         _log.warning(
@@ -215,7 +218,7 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
                 "feed": "iex",
             },
         )
-        df_sip = _get_minute_bars(client, symbol, start_u, end_u, feed="sip")
+        df_sip = _get_minute_bars(symbol, start_u, end_u, feed="sip")
         if len(df_sip) > rows:
             df = df_sip
             rows = len(df)
@@ -224,26 +227,17 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     return df
 
 
-def _parse_bars(payload):
-    if payload is None:
-        _log.error("BAR_PARSE_ERROR", extra={"reason": "payload_none"})
-        return None
-    if not isinstance(payload, dict):
-        _log.error(
-            "BAR_PARSE_ERROR",
-            extra={"reason": f"payload_type_{type(payload).__name__}"},
-        )
-        return None
-    o = payload.get("o")
-    h = payload.get("h")
-    l = payload.get("l")
-    c = payload.get("c")
-    v = payload.get("v")
-    t = payload.get("t")
-    if t is None:
-        _log.error(
-            "BAR_PARSE_ERROR",
-            extra={"reason": "missing_timestamp", "payload": payload},
-        )
-        return None
-    return {"o": o, "h": h, "l": l, "c": c, "v": v, "t": t}
+def _parse_bars(payload: Any, symbol: str, tz: str) -> pd.DataFrame:
+    if not payload:
+        return empty_bars_dataframe()
+    if isinstance(payload, dict):
+        bars = payload.get("bars") or payload.get("data") or payload.get("results")
+        if not bars:
+            return empty_bars_dataframe()
+        try:
+            return _ensure_df(pd.DataFrame(bars))
+        except Exception:  # noqa: BLE001
+            return empty_bars_dataframe()
+    if isinstance(payload, pd.DataFrame):
+        return payload
+    return empty_bars_dataframe()

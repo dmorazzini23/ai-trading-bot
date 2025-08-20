@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, date, time, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
 # AI-AGENT-REF: centralized time helpers
@@ -9,18 +10,51 @@ NY = ZoneInfo("America/New_York")
 UTC = timezone.utc
 
 
-def ensure_utc_datetime(x) -> datetime:
-    """Return tz-aware UTC datetime. Accepts datetime/date/str; reject callables."""
-    if callable(x):
-        raise TypeError(f"datetime argument was callable: {x!r}")
-    if isinstance(x, datetime):
-        return x.astimezone(UTC) if x.tzinfo else x.replace(tzinfo=UTC)
-    if isinstance(x, date):
-        return datetime(x.year, x.month, x.day, tzinfo=UTC)
-    if isinstance(x, str):
-        dt = datetime.fromisoformat(x.replace("Z", "+00:00"))
-        return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
-    raise TypeError(f"Unsupported datetime type: {type(x).__name__}")
+def ensure_utc_datetime(
+    value: Any,
+    *,
+    default: datetime | None = None,
+    clamp_to: str | None = None,
+    allow_callables: bool = False,
+) -> datetime:
+    """Normalize a variety of inputs to a timezone-aware UTC datetime.
+
+    - If ``value`` is callable and ``allow_callables`` is ``True``, call it (no args) and
+      re-run normalization on the result.
+    - If ``value`` is callable and ``allow_callables`` is ``False``, raise ``TypeError``.
+    - If normalization fails, return ``default`` if provided; otherwise raise ``ValueError``.
+    """
+    # Reject/handle callables early
+    if callable(value):
+        if allow_callables:
+            try:
+                value = value()
+            except Exception as e:
+                raise TypeError(f"datetime argument callable failed: {e}") from e
+        else:
+            raise TypeError("datetime argument was callable")
+
+    try:
+        if isinstance(value, datetime):
+            dt = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+        elif isinstance(value, date):
+            dt = datetime(value.year, value.month, value.day, tzinfo=UTC)
+        elif isinstance(value, str):
+            tmp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            dt = tmp.astimezone(UTC) if tmp.tzinfo else tmp.replace(tzinfo=UTC)
+        else:
+            raise TypeError(f"Unsupported datetime type: {type(value).__name__}")
+    except Exception as e:
+        if default is not None:
+            return ensure_utc_datetime(default, allow_callables=allow_callables, clamp_to=clamp_to)
+        raise ValueError(f"Invalid datetime input: {value!r}") from e
+
+    if clamp_to == "bod":
+        dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif clamp_to == "eod":
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    return dt
 
 
 def nyse_session_utc(for_day: date):

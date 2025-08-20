@@ -1,24 +1,12 @@
 """
-Data processing and labeling modules for AI trading.
+Lightweight package initializer for ai_trading.data.
 
-This module provides data labeling, splitting, and preprocessing
-capabilities for machine learning model training.
+Intentionally avoids importing heavy submodules at import time to prevent
+circular imports (e.g., data_fetcher <-> data.bars via package __init__).
+
+Import explicitly from submodules instead, for example:
+    from ai_trading.data.bars import safe_get_stock_bars, empty_bars_dataframe
+    from ai_trading.data.timeutils import ensure_utc_datetime, previous_business_day
+    from ai_trading.data.universe import load_tickers
 """
-
-from .bars import (
-    StockBarsRequest,
-    TimeFrame,
-    TimeFrameUnit,
-    _ensure_df,
-    empty_bars_dataframe,
-    safe_get_stock_bars,
-)
-
-__all__ = [
-    "_ensure_df",
-    "empty_bars_dataframe",
-    "safe_get_stock_bars",
-    "StockBarsRequest",
-    "TimeFrame",
-    "TimeFrameUnit",
-]
+__all__ = []
