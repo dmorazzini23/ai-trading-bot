@@ -210,9 +210,7 @@ class CalendarRegistry:
         self._symbol_calendars[symbol] = session
         self.logger.info(f"Registered custom calendar for {symbol}: {session.name}")
 
-    def get_session(
-        self, symbol: str, asset_class: AssetClass | None = None
-    ) -> TradingSession:
+    def get_session(self, symbol: str, asset_class: AssetClass | None = None) -> TradingSession:
         """
         Get trading session for symbol.
 
@@ -234,9 +232,7 @@ class CalendarRegistry:
             asset_class = self._infer_asset_class(symbol)
 
         # Return asset class default
-        return self._asset_calendars.get(
-            asset_class, self._asset_calendars[AssetClass.EQUITY]
-        )
+        return self._asset_calendars.get(asset_class, self._asset_calendars[AssetClass.EQUITY])
 
     def _infer_asset_class(self, symbol: str) -> AssetClass:
         """
@@ -256,9 +252,11 @@ class CalendarRegistry:
                 return AssetClass.CRYPTO
 
         # Futures patterns (simplified)
-        if symbol.endswith(
-            ("F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z")
-        ) and len(symbol) >= 3 and symbol[-2:].isdigit():
+        if (
+            symbol.endswith(("F", "G", "H", "J", "K", "M", "N", "Q", "U", "V", "X", "Z"))
+            and len(symbol) >= 3
+            and symbol[-2:].isdigit()
+        ):
             return AssetClass.FUTURES
 
         # Common ETFs
@@ -461,3 +459,23 @@ def ensure_final_bar(symbol: str, timeframe: str) -> bool:
     """Check if final bar should be ensured for symbol/timeframe."""
     calendar = get_calendar_registry()
     return calendar.ensure_final_bar(symbol, timeframe)
+
+
+@dataclass
+class SessionWindow:
+    open: pd.Timestamp
+    close: pd.Timestamp
+
+
+def last_market_session(now: pd.Timestamp) -> SessionWindow | None:
+    """Return previous market session window for NYSE."""  # AI-AGENT-REF: session helper
+    cal = get_calendar_registry()
+    current = now.tz_convert("UTC").date()
+    for _ in range(10):
+        start, end = cal.get_session_bounds("SPY", current)
+        if start and end and end <= now.to_pydatetime():
+            return SessionWindow(
+                pd.Timestamp(start).tz_convert("UTC"), pd.Timestamp(end).tz_convert("UTC")
+            )
+        current -= timedelta(days=1)
+    return None

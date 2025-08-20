@@ -1,12 +1,15 @@
 import logging
 import threading
+
 import pandas as pd
+
 from ai_trading.data.bars import (
-    _ensure_df,
-    safe_get_stock_bars,
     StockBarsRequest,
     TimeFrame,
     TimeFrameUnit,
+    _ensure_df,
+    empty_bars_dataframe,  # noqa: F401 - imported for compatibility
+    safe_get_stock_bars,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,9 +50,7 @@ def get_latest_price(ctx, symbol: str) -> float | None:
             feed="iex",
         )
         df_min = _ensure_df(
-            safe_get_stock_bars(
-                getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT"
-            )
+            safe_get_stock_bars(getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT")
         )
         if df_min.empty:
             req.feed = "sip"
@@ -58,7 +59,7 @@ def get_latest_price(ctx, symbol: str) -> float | None:
                     getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT_SIP"
                 )
             )
-    except Exception:
+    except Exception:  # noqa: BLE001
         df_min = pd.DataFrame()
     return _last_close_from(df_min)
 
@@ -77,7 +78,7 @@ def compute_portfolio_weights(ctx, symbols: list[str]) -> dict[str, float]:
 
         closes = {s: get_latest_price(ctx, s) for s in symbols}
         # AI-AGENT-REF: drop tickers with invalid closes
-        closes = {s: c for s, c in closes.items() if isinstance(c, (int, float)) and c > 0}
+        closes = {s: c for s, c in closes.items() if isinstance(c, (int | float)) and c > 0}
         if not closes:
             logger.error("No valid prices found for any symbols")
             return {}
