@@ -1,99 +1,97 @@
 """
-Simple momentum strategy for testing enhanced strategy discovery.
-This demonstrates that the framework can discover strategies in any submodule.
+Momentum strategy leveraging price return over a lookback window.
+
+This module provides a simple long-only momentum strategy used in tests and
+example workflows.
 """
 
-from typing import List
+from __future__ import annotations
 
-from ai_trading.strategies.base import BaseStrategy, StrategySignal
-from ai_trading.core.enums import OrderSide, RiskLevel
+import numpy as np
+import pandas as pd
+
+from ai_trading.logging import logger
+
+from ..core.enums import RiskLevel
+from ..core.interfaces import OrderSide
+from .base import BaseStrategy, StrategySignal
 
 
 class MomentumStrategy(BaseStrategy):
-    """
-    Simple momentum-based trading strategy for testing.
-    
-    This is a minimal strategy that demonstrates the strategy discovery framework
-    can find concrete strategies defined in any submodule under ai_trading/strategies/.
-    """
-    
+    """Momentum-based trading strategy."""
+
     def __init__(
         self,
         strategy_id: str = "momentum",
-        name: str = "Simple Momentum Strategy", 
-        risk_level: RiskLevel = RiskLevel.MODERATE
+        name: str = "Simple Momentum Strategy",
+        risk_level: RiskLevel = RiskLevel.MODERATE,
+        *,
+        lookback: int = 50,
+        threshold: float = 0.0,
     ):
-        """Initialize momentum strategy."""
         super().__init__(strategy_id, name, risk_level)
-        
-        # Strategy parameters
-        self.parameters = {
-            "lookback_period": 20,  # Days to look back for momentum calculation
-            "momentum_threshold": 0.02,  # 2% threshold for momentum signal
-            "max_position_size": 0.05,  # 5% max position size
-        }
-        
-    def generate_signals(self, market_data: dict) -> List[StrategySignal]:
+        # AI-AGENT-REF: parameters for momentum calculation
+        self.lookback = lookback
+        self.threshold = threshold
+
+    def generate_signals(self, market_data: dict) -> list[StrategySignal]:
         """
-        Generate trading signals based on simple momentum.
-        
-        Args:
-            market_data: Current market data and indicators
-            
-        Returns:
-            List of trading signals
+        Generate momentum-based long-only signals using price changes over a
+        lookback period. Accepts market_data with keys:
+          - 'symbols': list[str] (optional)
+          - 'prices': dict[str, pd.Series]
+        If 'symbols' is missing, derive from the 'prices' keys.
         """
-        signals = []
-        
-        # Simple momentum logic for demonstration
-        # In a real strategy, this would use actual market data
-        for symbol in market_data.get('symbols', []):
-            # Mock momentum calculation
-            momentum = 0.03  # Mock 3% momentum
-            
-            if momentum > self.parameters['momentum_threshold']:
-                signal = StrategySignal(
-                    symbol=symbol,
-                    side=OrderSide.BUY,
-                    strength=min(momentum / 0.05, 1.0),  # Scale to [0,1]
-                    confidence=0.7,
-                    strategy_id=self.strategy_id,
-                    signal_type="momentum"
+        lookback = int(getattr(self, "lookback", 50))
+        threshold = float(getattr(self, "threshold", 0.0))
+
+        signals: list[StrategySignal] = []
+        symbols = market_data.get("symbols") or list(market_data.get("prices", {}).keys())
+        if not symbols:
+            return signals
+
+        for symbol in symbols:
+            prices = market_data.get("prices", {}).get(symbol)
+            if prices is None:
+                continue
+            if len(prices) <= lookback + 1:
+                logger.warning("Insufficient data for %s", symbol)
+                continue
+            p_now = prices.iloc[-1]
+            p_then = prices.iloc[-1 - lookback]
+            if pd.isna(p_now) or pd.isna(p_then):
+                continue
+            mom = (p_now / p_then) - 1.0
+            if not np.isfinite(mom):
+                continue
+            if mom > threshold:
+                strength = float(min(max(mom, 0.0), 1.0))
+                signals.append(
+                    StrategySignal(
+                        symbol=symbol,
+                        side=OrderSide.BUY,
+                        strength=strength,
+                        confidence=float(min(1.0, 0.5 + strength)),
+                        metadata={"lookback": lookback, "momentum": float(mom)},
+                    )
                 )
-                signals.append(signal)
-                
+
         return signals
 
     # Back-compat: engine may call `generate(ctx)`
-    def generate(self, ctx) -> List[StrategySignal]:
+    def generate(self, ctx) -> list[StrategySignal]:
         # AI-AGENT-REF: ensure MomentumStrategy exposes legacy generate()
         return super().generate(ctx)
-    
+
     def calculate_position_size(
         self,
         signal: StrategySignal,
         portfolio_value: float,
-        current_position: float = 0
+        current_position: float = 0,
     ) -> int:
-        """
-        Calculate optimal position size for signal.
-        
-        Args:
-            signal: Trading signal
-            portfolio_value: Current portfolio value  
-            current_position: Current position size
-            
-        Returns:
-            Recommended position size
-        """
-        # Simple position sizing based on signal strength and max position size
-        max_dollar_amount = portfolio_value * self.parameters['max_position_size']
-        
-        # Assume $100 per share for simplicity (in real strategy, would use actual price)
+        """Simple position sizing based on signal strength."""
+        max_dollar_amount = portfolio_value * 0.05
         assumed_price = 100.0
         max_shares = int(max_dollar_amount / assumed_price)
-        
-        # Scale by signal strength
         position_size = int(max_shares * signal.strength)
-        
-        return max(1, position_size)  # At least 1 share
+        return max(1, position_size)
