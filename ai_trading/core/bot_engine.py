@@ -2061,8 +2061,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         df = get_minute_df(symbol, start_dt, now_utc)
 
     if df.empty:
-        _log.error(f"Fetch failed: empty DataFrame for {symbol}")
-        raise DataFetchError(f"No data for {symbol}")
+        _log.info("Fetch skipped: empty DataFrame after fallbacks | %s", symbol)  # AI-AGENT-REF
+        _log.info("SKIP_NO_DATA | %s", symbol)
+        return pd.DataFrame()
 
     # Check data freshness before proceeding with trading logic
     try:

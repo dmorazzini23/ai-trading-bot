@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import warnings  # AI-AGENT-REF: control yfinance warnings
 from typing import Any
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
@@ -11,6 +12,8 @@ try:  # AI-AGENT-REF: yfinance fallback for market data
     import yfinance as yf
 except Exception:  # pragma: no cover  # noqa: BLE001
     yf = None
+
+from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
 
 # Ensure yfinance tz cache is writable on headless servers
 try:  # pragma: no cover
@@ -212,16 +215,18 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
         cols = ["open", "high", "low", "close", "volume"]
         return pd.DataFrame(columns=cols, index=idx).reset_index()
 
-    df = yf.download(
-        symbol,
-        start=start_dt,
-        end=end_dt,
-        interval=interval,
-        auto_adjust=True,  # AI-AGENT-REF: silence auto_adjust warning
-        threads=False,
-        progress=False,
-        group_by="column",
-    )
+    with warnings.catch_warnings():  # AI-AGENT-REF: silence yfinance notices
+        warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
+        df = yf.download(
+            symbol,
+            start=start_dt,
+            end=end_dt,
+            interval=interval,
+            auto_adjust=False,  # AI-AGENT-REF: explicit to avoid default warning
+            threads=False,
+            progress=False,
+            group_by="column",
+        )
     if df is None or df.empty:
         idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
         cols = ["open", "high", "low", "close", "volume"]
@@ -238,6 +243,13 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     return df
 
 
+def _post_process(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize OHLCV DataFrame or return empty."""  # AI-AGENT-REF
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame()
+    return _flatten_and_normalize_ohlcv(df)
+
+
 # ---------------------------------------------------------------------------
 # Minimal bars fetcher used by tests (monkeypatchable)
 # ---------------------------------------------------------------------------
@@ -246,19 +258,20 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
 def _fetch_bars(
     symbol: str, start: Any, end: Any, timeframe: str, feed: str = "sip"
 ) -> pd.DataFrame:
-    """Fetch bars from Alpaca v2; tests monkeypatch HTTP call path."""
+    """Fetch bars from Alpaca v2 with alt-feed fallback."""  # AI-AGENT-REF
 
-    start_dt = ensure_datetime(start)
-    end_dt = ensure_datetime(end)
-    tf = str(timeframe)
-    use_feed = feed or "sip"
+    _start = ensure_datetime(start)
+    _end = ensure_datetime(end)
+    _interval = str(timeframe)
+    _feed = feed or "sip"
 
-    def _req(_feed: str) -> pd.DataFrame:
+    def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
+        nonlocal _interval, _feed, _start, _end
         params = {
             "symbols": symbol,
-            "timeframe": tf,
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
+            "timeframe": _interval,
+            "start": _start.isoformat(),
+            "end": _end.isoformat(),
             "limit": 10000,
             "feed": _feed,
         }
@@ -276,32 +289,43 @@ def _fetch_bars(
                     payload = resp.json()
                 except Exception:  # noqa: BLE001
                     payload = {}
-            # else: non-JSON content -> keep empty payload
 
-        bars = []
+        data = []
         if isinstance(payload, dict):
             if "bars" in payload and isinstance(payload["bars"], list):
-                bars = payload["bars"]
+                data = payload["bars"]
             elif (
                 symbol in payload
                 and isinstance(payload[symbol], dict)
                 and "bars" in payload[symbol]
             ):
-                bars = payload[symbol]["bars"]
+                data = payload[symbol]["bars"]
+        elif isinstance(payload, list):
+            data = payload
 
         if status == 400:
             raise ValueError("Invalid feed or bad request")
 
-        if not bars:
-            if tf.lower() in ("1day", "day"):
-                try:
-                    return get_last_available_bar(symbol)
-                except Exception:  # noqa: BLE001
-                    pass
-            cols = ["timestamp", "open", "high", "low", "close", "volume"]
-            return pd.DataFrame(columns=cols)
+        df = pd.DataFrame(data)
+        if df.empty:
+            logger.warning(
+                "DATA_SOURCE_AVAILABLE",
+                extra={
+                    "provider": "alpaca",
+                    "status": "empty",
+                    "feed": _feed,
+                    "timeframe": _interval,
+                },
+            )
+            if fallback:
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": fallback},
+                )
+                _interval, _feed, _start, _end = fallback
+                return _req(None)
+            raise ValueError("empty_bars")
 
-        df = pd.DataFrame(bars)
         ts_col = None
         for c in df.columns:
             if c.lower() in ("t", "timestamp", "time"):
@@ -313,16 +337,16 @@ def _fetch_bars(
             df["timestamp"] = pd.to_datetime([], utc=True)
         return df
 
-    try:
-        return _req(use_feed)
-    except ValueError:
-        fallback = _DEFAULT_FEED if use_feed != _DEFAULT_FEED else "sip"
-        return _req(fallback)
+    # AI-AGENT-REF: prepare alt feed for retry on empty/exception
+    alt_feed = "iex" if (_feed != "iex") else "sip"
+    fallback = (_interval, alt_feed, _start, _end)
+    return _req(fallback)
 
 
 # ---------------------------------------------------------------------------
 # get_minute_df wrapper with graceful fallbacks / logging behavior
 # ---------------------------------------------------------------------------
+
 
 
 def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) -> pd.DataFrame:
@@ -332,34 +356,28 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
 
-    df: pd.DataFrame | None = None
+    # 1) Finnhub primary
     try:
-        df = fh_fetcher.fetch(symbol=symbol, start=start_dt, end=end_dt)
-    except Exception as exc:  # noqa: BLE001
-        msg = str(exc).lower()
-        if "403" in msg or "forbidden" in msg or "rate limit" in msg:
-            df = fetch_minute_yfinance(symbol)
+        df: pd.DataFrame | None = (
+            fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
+            if fh_fetcher is not None
+            else None
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+        df = None
 
-    if df is None:
+    # 2) Alpaca fallback if Finnhub missing/empty
+    if df is None or getattr(df, "empty", True):
         try:
-            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or "sip")
-        except Exception as exc:  # noqa: BLE001
-            emsg = str(exc).lower()
-            if "subscription does not permit querying recent sip data" in emsg:
-                try:
-                    import logging as _logging
+            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+            df = None
 
-                    _logging.getLogger(__name__).warning(
-                        "Downgrading SIP subscription error; retrying with iex"
-                    )
-                except Exception:  # pragma: no cover  # noqa: BLE001
-                    pass
-                try:
-                    df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=_DEFAULT_FEED)
-                except Exception:  # noqa: BLE001
-                    df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
-            else:
-                df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+    # 3) Yahoo final fallback
+    if df is None or getattr(df, "empty", True):
+        df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
 
     try:  # AI-AGENT-REF: update minute cache with latest bar
         if isinstance(df, pd.DataFrame) and not df.empty:
@@ -374,7 +392,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     except Exception:  # pragma: no cover - cache best effort  # noqa: BLE001
         pass
 
-    return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+    return _post_process(df)
 
 
 def get_bars(
@@ -402,12 +420,20 @@ def get_bars_df(
     """Legacy alias expected by bot_engine (accepts optional start/end)."""  # AI-AGENT-REF
     if start is None or end is None:
         start, end = _default_window_for(timeframe)
-    return get_bars(symbol, str(timeframe), start, end, feed=feed)
+    try:
+        df = get_bars(symbol, str(timeframe), start, end, feed=feed)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ALPACA_DAILY_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+        df = None
+    if df is None or getattr(df, "empty", True):
+        return _post_process(_yahoo_get_bars(symbol, start, end, interval="1d"))
+    return _post_process(df)
 
 
-def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
-    """Placeholder for tests to monkeypatch Yahoo minute fetcher."""  # AI-AGENT-REF
-    raise NotImplementedError
+def fetch_minute_yfinance(symbol: str, start_dt: _dt.datetime, end_dt: _dt.datetime) -> pd.DataFrame:
+    """Explicit helper for tests and optional direct Yahoo minute fetch."""  # AI-AGENT-REF
+    df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+    return _post_process(df)
 
 
 def is_market_open() -> bool:
