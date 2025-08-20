@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa
+import os
 import time as _time
 from threading import RLock
 import warnings
@@ -7,11 +9,12 @@ import warnings
 from ai_trading.logging import get_logger
 
 log = get_logger(__name__)
-warnings.filterwarnings("always", category=DeprecationWarning)
-warnings.warn(
-    "runner.py is deprecated",
-    DeprecationWarning,
-)  # AI-AGENT-REF: deprecation notice
+if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
+    warnings.filterwarnings("default", category=DeprecationWarning)
+    warnings.warn(
+        "runner.py is deprecated",
+        DeprecationWarning,
+    )  # AI-AGENT-REF: deprecation notice
 
 _run_lock = RLock()  # Use RLock for re-entrant capability
 _last_run_time = 0.0
@@ -134,7 +137,7 @@ def run_cycle() -> None:
                 )  # best-effort; ignores if disabled or already warmed
         except Exception as e:
             # Cache warming failed - log warning but continue execution
-            logger.warning("Failed to warm cache during state setup: %s", e)
+            log.warning("Failed to warm cache during state setup: %s", e)  # AI-AGENT-REF: use module logger
 
         # Get runtime context and ensure it has proper parameter hydration
         from ai_trading.core.bot_engine import get_ctx

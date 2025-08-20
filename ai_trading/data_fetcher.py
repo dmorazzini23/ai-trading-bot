@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from typing import Any
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
@@ -88,6 +89,19 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     else:
         ts = ts.tz_convert("UTC")
     return ts.to_pydatetime()
+
+
+def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
+    """Derive [start, end] when callers omit them."""  # AI-AGENT-REF: legacy helper
+    now = _dt.datetime.now(tz=_dt.timezone.utc)
+    end = now - _dt.timedelta(minutes=1)
+    tf = str(timeframe).lower()
+    if "day" in tf:
+        days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", "200"))
+    else:
+        days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", "5"))
+    start = end - _dt.timedelta(days=days)
+    return start, end
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +277,17 @@ def get_bars_batch(
 
 
 def get_bars_df(
-    symbol: str, timeframe: str, start: Any, end: Any, *, feed: str | None = None
+    symbol: str,
+    timeframe: Any,
+    start: Any | None = None,
+    end: Any | None = None,
+    *,
+    feed: str | None = None,
 ) -> pd.DataFrame:
-    """Legacy alias expected by bot_engine."""  # AI-AGENT-REF
-    return get_bars(symbol, timeframe, start, end, feed=feed)
+    """Legacy alias expected by bot_engine (accepts optional start/end)."""  # AI-AGENT-REF
+    if start is None or end is None:
+        start, end = _default_window_for(timeframe)
+    return get_bars(symbol, str(timeframe), start, end, feed=feed)
 
 
 def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:

@@ -33,18 +33,21 @@ import warnings
 from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
-    get_bars_df,
 )
 from ai_trading.utils.datetime import ensure_datetime
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
-from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
+from ai_trading.alpaca_api import (
+    ALPACA_AVAILABLE,
+    get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
+)
 
-warnings.filterwarnings("always", category=DeprecationWarning)
-warnings.warn(
-    "bot_engine.py is deprecated",
-    DeprecationWarning,
-)  # AI-AGENT-REF: deprecation notice
+if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
+    warnings.filterwarnings("default", category=DeprecationWarning)
+    warnings.warn(
+        "bot_engine.py is deprecated",
+        DeprecationWarning,
+    )  # AI-AGENT-REF: deprecation notice
 
 try:  # AI-AGENT-REF: optional Alpaca dependency
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -222,7 +225,11 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
     errors: list[str] = []
     for sym in symbols:
         try:
-            df = get_bars_df(sym, TimeFrame.Day)
+            df = get_bars_df(
+                sym,
+                TimeFrame.Day,
+                feed=os.getenv("ALPACA_DATA_FEED", "iex"),
+            )  # AI-AGENT-REF: derive window & feed
             if df is None or df.empty:
                 errors.append(f"{sym}:empty")
         except COMMON_EXC as exc:  # AI-AGENT-REF: narrow catch
