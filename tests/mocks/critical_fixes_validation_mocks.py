@@ -13,6 +13,7 @@ class MockSignal:
     def __init__(self, symbol, side, confidence):
         self.symbol = symbol
         self.side = side
+        self.action = side  # compatibility alias for strategy allocator
         self.confidence = confidence
 
 class MockContextShortSelling:

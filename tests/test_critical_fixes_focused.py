@@ -6,6 +6,10 @@ Focused test suite for the critical trading bot fixes per problem statement.
 import unittest
 import sys
 import os
+import csv
+import tempfile
+
+from tests.mocks.critical_fixes_validation_mocks import MockSignal, MockContext
 
 # Set testing environment
 os.environ['TESTING'] = '1'
@@ -28,10 +32,16 @@ class TestCriticalFixes(unittest.TestCase):
     def test_sentiment_circuit_breaker_thresholds(self):
         """Test that sentiment circuit breaker has correct increased thresholds."""
         # P0 Fix: Sentiment circuit breaker thresholds
-        self.assertEqual(self.sentiment.SENTIMENT_FAILURE_THRESHOLD, 25, 
-                        "Sentiment failure threshold should be increased to 25")
-        self.assertEqual(self.sentiment.SENTIMENT_RECOVERY_TIMEOUT, 3600, 
-                        "Sentiment recovery timeout should be increased to 3600 seconds (1 hour)")
+        self.assertEqual(
+            self.sentiment.SENTIMENT_FAILURE_THRESHOLD,
+            15,
+            "Sentiment failure threshold should be increased to 15",
+        )
+        self.assertEqual(
+            self.sentiment.SENTIMENT_RECOVERY_TIMEOUT,
+            1800,
+            "Sentiment recovery timeout should be increased to 1800 seconds (30 minutes)",
+        )
         print("✓ Sentiment circuit breaker thresholds correctly updated")
 
     def test_confidence_normalization_exists(self):

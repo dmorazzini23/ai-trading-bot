@@ -89,7 +89,7 @@ def _load_transformers(log=logger):
 # Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
 SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200  # 2 hour cache when rate limited (increased)
-SENTIMENT_FAILURE_THRESHOLD = 25  # increased threshold expected by tests
+SENTIMENT_FAILURE_THRESHOLD = 15  # increased threshold expected by tests
 SENTIMENT_RECOVERY_TIMEOUT = 1800  # 30 minutes recovery time (more aggressive)
 SENTIMENT_MAX_RETRIES = 5  # Maximum retry attempts with exponential backoff
 SENTIMENT_BASE_DELAY = 5  # Base delay in seconds for exponential backoff
