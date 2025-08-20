@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -12,30 +11,22 @@ logger = logging.getLogger(__name__)
 def get_json_with_retries(
     fetch: Callable[[], Any], retries: int = 3, backoff: float = 0.05
 ) -> Any:
-    """Return JSON-decoded payload with retry logic.
-
-    * Attempts = retries + 1 (first try + retries)
-    * Retries on network errors and JSON parse errors from .json()
-    """  # AI-AGENT-REF: add robust HTTP retry wrapper
+    """Return JSON-decoded payload with basic retry logic."""  # AI-AGENT-REF: add HTTP retry wrapper
+    attempts = max(1, int(retries))
     last_exc: Exception | None = None
-    attempts = int(max(0, retries)) + 1
     for attempt in range(1, attempts + 1):
         try:
             resp = fetch()
-            if hasattr(resp, "json") and callable(getattr(resp, "json")):
-                try:
-                    return resp.json()
-                except Exception as exc:  # parse error -> retry
-                    last_exc = exc
-                    raise
+            if hasattr(resp, "json"):
+                return resp.json()
             if isinstance(resp, (bytes, bytearray)):
                 return json.loads(resp.decode("utf-8"))
             if isinstance(resp, str):
                 return json.loads(resp)
             return resp
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # intentionally broad at boundary
             last_exc = exc
-            logger.debug("http retry %s/%s after %s", attempt, attempts - 1, exc)
+            logger.debug("http retry %s/%s after %s", attempt, attempts, exc)
             if attempt < attempts:
                 time.sleep(backoff * attempt)
     if last_exc is not None:
@@ -44,3 +35,4 @@ def get_json_with_retries(
 
 
 __all__ = ["get_json_with_retries"]
+

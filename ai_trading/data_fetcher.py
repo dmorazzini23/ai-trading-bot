@@ -21,15 +21,16 @@ try:  # AI-AGENT-REF: optional import
 except Exception:  # pragma: no cover  # noqa: BLE001
     TimeFrame = None  # type: ignore
 
+warnings.filterwarnings("always", category=DeprecationWarning)
 warnings.warn(
-    "ai_trading.data_fetcher: legacy helpers will change in v1.0",
+    "data_fetcher.py is deprecated",
     DeprecationWarning,
 )  # AI-AGENT-REF: emit deprecation warning
 
 # AI-AGENT-REF: lightweight stubs for data fetch routines
 FINNHUB_AVAILABLE = True
 YFIN_AVAILABLE = True
-_DEFAULT_FEED = "iex"  # AI-AGENT-REF: default feed constant
+_DEFAULT_FEED = "iex"  # test contract requires this default
 
 
 class _TFUnit(str, Enum):  # AI-AGENT-REF: include Week unit

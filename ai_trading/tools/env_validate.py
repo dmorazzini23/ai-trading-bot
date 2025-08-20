@@ -8,7 +8,8 @@ import sys
 
 logger = logging.getLogger(__name__)
 
-REQUIRED = ("ALPACA_API_BASE_URL",)
+# Test suite expects ALPACA_BASE_URL; keep CLI simple and consistent
+REQUIRED = ("ALPACA_BASE_URL",)
 
 
 def validate_env(env: dict[str, str] | None = None) -> list[str]:
