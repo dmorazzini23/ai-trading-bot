@@ -356,15 +356,19 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
 
-    # 1) Finnhub primary
-    try:
-        df: pd.DataFrame | None = (
-            fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
-            if fh_fetcher is not None
-            else None
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+    # 1) Finnhub primary (opt-in)
+    if os.getenv("FINNHUB_API_KEY"):
+        try:
+            df = (
+                fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
+                if fh_fetcher is not None
+                else None
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+            df = None
+    else:
+        logger.debug("Skipping Finnhub fetch; FINNHUB_API_KEY not set")
         df = None
 
     # 2) Alpaca fallback if Finnhub missing/empty

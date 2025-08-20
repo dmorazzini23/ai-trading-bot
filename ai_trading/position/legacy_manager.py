@@ -1,15 +1,13 @@
 """Position holding and management logic for reducing churn."""
 
 import logging
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 
-# AI-AGENT-REF: numpy and pandas are hard dependencies
-import numpy as np
-import pandas as pd
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
+# AI-AGENT-REF: numpy and pandas are hard dependencies
 HAS_NUMPY = True
 HAS_PANDAS = True
 
@@ -85,11 +83,11 @@ class PositionManager:
             )
 
         except COMMON_EXC as exc:  # AI-AGENT-REF: narrow
-            self.logger.warning(
-                "Failed to initialize intelligent position manager: %s", exc
+            self.logger.info(
+                "Intelligent position manager not available: %s; using legacy",
+                exc,
             )
             self.use_intelligent_system = False
-            self.logger.info("FALLBACK_MODE | Using legacy position management logic")
 
     def should_hold_position(
         self, symbol: str, current_position, unrealized_pnl_pct: float, days_held: int

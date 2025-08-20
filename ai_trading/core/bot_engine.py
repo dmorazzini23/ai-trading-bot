@@ -3495,7 +3495,15 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
             if col not in df.columns:
                 df[col] = pd.NA
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return df[keep]
+        df = df[keep]
+        if df.empty or len(df) == 0:
+            _log.warning(
+                "Alpaca data available but parsing resulted in empty frame (feed=%s, timeframe=%s)",
+                getattr(request, "feed", None),
+                getattr(request, "timeframe", None),
+            )
+            return pd.DataFrame()
+        return df
     except COMMON_EXC as e:  # AI-AGENT-REF: narrow catch
         _log.error(
             "ALPACA_BARS_FETCH_FAILED",
@@ -3608,9 +3616,9 @@ class DataFetcher:
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if bars.empty:
-                self._warn_once(
-                    f"daily|{symbol}",
-                    f"No daily bars returned for {symbol}. Possible market holiday or API outage",
+                _log.info(
+                    "No daily bars returned for %s. Possible market holiday or API outage",
+                    symbol,
                 )
                 return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
@@ -4435,7 +4443,7 @@ def _parse_local_positions() -> dict[str, int]:
             dtype=str,
         )
         if df.empty:
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
     except pd.errors.ParserError as e:
         logging.getLogger(__name__).warning(
             "Failed to parse TRADE_LOG_FILE (malformed row): %s; returning empty set",
@@ -4844,7 +4852,7 @@ class SignalManager:
                 usecols=["signal_name", "weight"],
             )
             if df.empty:
-                _log.warning("Loaded DataFrame is empty after parsing/fallback")
+                _log.info("Loaded DataFrame is empty after parsing/fallback")
                 return {}
             return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
         except ValueError as e:
@@ -5716,17 +5724,40 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     if not symbols:
         return
     if len(missing) == len(symbols):
+        try:
+            end = datetime.now(UTC)
+            start = end - timedelta(days=1)
+            req = StockBarsRequest(
+                symbol_or_symbols=["SPY"],
+                timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+                start=start,
+                end=end,
+                feed="iex",
+            )
+            bars = safe_get_stock_bars(ctx.data_client, req, "SPY", "MINUTE_FALLBACK")
+            if bars.empty:
+                req.feed = "sip"
+                bars = safe_get_stock_bars(ctx.data_client, req, "SPY", "MINUTE_FALLBACK_SIP")
+            if len(bars) >= 200:
+                _log.info("DATA_HEALTH_CHECK: minute fallback ok for SPY", extra={"rows": len(bars)})
+                return
+            _log.warning(
+                "DATA_SOURCE_HEALTH_CHECK: insufficient minute bars for SPY (rows=%s)",
+                len(bars),
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            _log.warning("DATA_SOURCE_HEALTH_CHECK: minute fallback failed: %s", e)
         if not is_market_open():
             _log.info(
                 "DATA_SOURCE_HEALTH_CHECK: No data for any symbol (market closed; health check deferred)."
             )
         else:
-            _log.error(
+            _log.warning(
                 "DATA_SOURCE_HEALTH_CHECK: No data for any symbol. Possible API outage or market holiday."
             )
     elif missing:
-        _log.warning(
-            "DATA_SOURCE_HEALTH_CHECK: missing data for %s",
+        _log.info(
+            "DATA_SOURCE_HEALTH_CHECK: missing daily data for %s",
             ", ".join(missing),
         )
 
@@ -6401,7 +6432,7 @@ def count_day_trades() -> int:
     )
     if df.empty:
         if _is_market_open_now():
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
         else:
             _log.info("Loaded DataFrame is empty (market closed)")
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
@@ -6600,7 +6631,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     )
     if df.empty:
         if _is_market_open_now():
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
         else:
             _log.info("Loaded DataFrame is empty (market closed)")
     if "exit_time" not in df.columns or "symbol" not in df.columns:
@@ -9384,6 +9415,10 @@ def pair_trade_signal(sym1: str, sym2: str) -> tuple[str, int]:
 def fetch_data(
     ctx: BotContext, symbols: list[str], period: str, interval: str
 ) -> pd.DataFrame | None:
+    if not os.getenv("FINNHUB_API_KEY"):
+        _log.debug("Skipping Finnhub fetch; FINNHUB_API_KEY not set")
+        return None
+
     frames: list[pd.DataFrame] = []
     now = datetime.now(UTC)
     if period.endswith("d"):
@@ -9404,7 +9439,7 @@ def fetch_data(
                     sym, resolution=interval, _from=unix_from, to=unix_to
                 )
             except FinnhubAPIException as e:
-                _log.warning(f"[fetch_data] {sym} error: {e}")
+                _log.debug("FINNHUB_FETCH_FAILED", extra={"symbol": sym, "err": str(e)})
                 continue
 
             if not ohlc or ohlc.get("s") != "ok":
@@ -9562,7 +9597,7 @@ def update_signal_weights() -> None:
             ],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
@@ -9602,7 +9637,7 @@ def update_signal_weights() -> None:
                     usecols=["signal_name", "weight"],
                 )
                 if old_df.empty:
-                    _log.warning("Loaded DataFrame is empty after parsing/fallback")
+                    _log.info("Loaded DataFrame is empty after parsing/fallback")
                     old = {}
                 else:
                     old = old_df.set_index("signal_name")["weight"].to_dict()
@@ -9691,7 +9726,7 @@ def run_meta_learning_weight_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
             _log.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -9760,7 +9795,7 @@ def run_bayesian_meta_learning_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side"],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
             _log.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -11013,7 +11048,7 @@ def daily_summary() -> None:
         ).dropna(subset=["entry_price", "exit_price"])
         if df.empty:
             if _is_market_open_now():
-                _log.warning("Loaded DataFrame is empty after parsing/fallback")
+                _log.info("Loaded DataFrame is empty after parsing/fallback")
             else:
                 _log.info("Loaded DataFrame is empty (market closed)")
         direction = np.where(df["side"] == "buy", 1, -1)
@@ -11133,7 +11168,7 @@ def _average_reward(n: int = 20) -> float:
     ).tail(n)
     if df.empty:
         if _is_market_open_now():
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.info("Loaded DataFrame is empty after parsing/fallback")
         else:
             _log.info("Loaded DataFrame is empty (market closed)")
     if df.empty or "reward" not in df.columns:
@@ -11747,6 +11782,13 @@ def run_multi_strategy(ctx) -> None:
         OSError,
     ) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("Position holding logic failed, using original signals: %s", exc)
+    if getattr(ctx, "allocator", None) is None:  # AI-AGENT-REF: ensure allocator
+        ctx.allocator = get_allocator()
+
+    all_signals = [s for sigs in signals_by_strategy.values() for s in sigs]
+    if not all_signals:
+        _log.info("No signals produced this cycle; skipping allocation and execution")
+        return
 
     final = ctx.allocator.allocate(signals_by_strategy)
     acct = ctx.api.get_account()

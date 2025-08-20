@@ -8,8 +8,9 @@ access to trading parameters and configuration across the system.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List
-from pathlib import Path  # AI-AGENT-REF: path helper for future extensions
+from typing import TYPE_CHECKING, Any
+
+from .protocols import AllocatorProtocol  # AI-AGENT-REF: avoid circular import
 
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
@@ -55,9 +56,9 @@ class BotRuntime:
     Provides consistent access to configuration and runtime parameters
     required by the trading loop and related components.
     """
-    cfg: "TradingConfig"
+    cfg: TradingConfig
     params: dict[str, Any] = field(default_factory=dict)
-    tickers: List[str] = field(default_factory=list)  # AI-AGENT-REF: runtime-selected tickers
+    tickers: list[str] = field(default_factory=list)  # AI-AGENT-REF: runtime-selected tickers
     
     # Additional runtime attributes will be set by _ensure_initialized
     # These are forwarded from the underlying LazyBotContext
@@ -70,9 +71,10 @@ class BotRuntime:
     execution_engine: Any = None
     drawdown_circuit_breaker: Any = None
     model: Any = None
+    allocator: AllocatorProtocol | None = None
 
 
-def build_runtime(cfg: "TradingConfig") -> BotRuntime:
+def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     """
     Build a runtime context from trading configuration.
     
@@ -90,12 +92,12 @@ def build_runtime(cfg: "TradingConfig") -> BotRuntime:
         params[k] = float(_cfg_coalesce(cfg, k, dflt))
     
     # Add any additional keys the loop expects if needed
-    runtime = BotRuntime(cfg=cfg, params=params)
+    runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get("allocator"))
     runtime.model = NullAlphaModel()
     return runtime
 
 
-def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any) -> BotRuntime:
+def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any, **kwargs: Any) -> BotRuntime:
     """
     Enhance runtime with attributes from LazyBotContext after initialization.
     
@@ -120,5 +122,7 @@ def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any) -> BotR
         'model',
         getattr(lazy_context, 'alpha_model', runtime.model),
     )
+    if "allocator" in kwargs:
+        runtime.allocator = kwargs["allocator"]
     return runtime
 
