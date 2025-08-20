@@ -15,8 +15,9 @@ except Exception:  # noqa: BLE001
 @lru_cache(maxsize=1024)
 def predict(path: str):
     """Minimal prediction interface used in tests."""  # AI-AGENT-REF
-    import pandas as pd
     import importlib
+
+    import pandas as pd
 
     df = pd.read_csv(path)
     retrain = importlib.import_module("retrain")
@@ -41,7 +42,7 @@ def fetch_sentiment(symbol: str) -> float:
     try:
         import requests
 
-        resp = requests.get(f"https://example.com/{symbol}")
+        resp = requests.get(f"https://example.com/{symbol}", timeout=10)
         resp.raise_for_status()
         data = resp.json()
         score = float(data.get("score", 0.0))
@@ -66,4 +67,3 @@ __all__ = [
     "_sentiment_cache",
     "_CACHETOOLS_AVAILABLE",
 ]
-
