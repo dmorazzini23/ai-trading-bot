@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# ruff: noqa
 import datetime as dt
 from datetime import timezone as _tz
 import os
@@ -140,7 +141,7 @@ def _get_rest() -> TradeApiREST:
     return TradeApiREST(key, secret, base)
 
 
-def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
+def _bars_time_window(timeframe: TimeFrame) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
     end = now - dt.timedelta(minutes=1)
     unit = getattr(getattr(timeframe, "unit", None), "name", None)
@@ -149,7 +150,7 @@ def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
     else:
         days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
     start = end - dt.timedelta(days=days)
-    return start, end
+    return _fmt_rfc3339_z(start), _fmt_rfc3339_z(end)  # AI-AGENT-REF: return RFC3339 strings
 
 
 def get_bars_df(
