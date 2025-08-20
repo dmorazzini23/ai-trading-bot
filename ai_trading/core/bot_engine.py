@@ -5259,6 +5259,10 @@ def _initialize_alpaca_clients():
     if not (key and secret):
         # In SHADOW_MODE we may not have creds; skip client init
         diag = _alpaca_diag_info()
+        # AI-AGENT-REF: surface skip reason for tests via standard logger
+        logger.info(
+            "Shadow mode or missing credentials: skipping Alpaca client initialization"
+        )
         logger_once.warning(
             "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
             key="alpaca_init_skipped",

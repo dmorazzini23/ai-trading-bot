@@ -53,17 +53,25 @@ class OrderInfo:
     last_status: str = "new"
 
 
-_active_orders: dict[str, OrderInfo] = {}
-_order_tracking_lock = threading.RLock()
+from ai_trading.monitoring.order_health_monitor import (
+    _active_orders as _mon_active,
+    _order_tracking_lock as _mon_lock,
+)
+
+_active_orders = _mon_active
+_order_tracking_lock = _mon_lock
 
 
-def _cleanup_stale_orders(now: float | None = None) -> int:
-    """Remove orders older than ``ORDER_STALE_AFTER_S`` and return count."""
+def _cleanup_stale_orders(
+    now: float | None = None, max_age_s: int | None = None
+) -> int:
+    """Remove orders older than ``max_age_s`` and return count."""  # AI-AGENT-REF
+    max_age = max_age_s if max_age_s is not None else ORDER_STALE_AFTER_S
     now_s = now if now is not None else time.time()
     removed = 0
     with _order_tracking_lock:
         for oid, info in list(_active_orders.items()):
-            if now_s - info.submitted_time >= ORDER_STALE_AFTER_S:
+            if now_s - info.submitted_time >= max_age:
                 _active_orders.pop(oid, None)
                 removed += 1
     return removed
@@ -656,13 +664,48 @@ class ExecutionEngine:
             return int(quantity * 0.75), False
         return quantity, False
 
-    def cleanup_stale_orders(self, now: float | None = None) -> int:
-        """Remove stale orders via module helper."""  # AI-AGENT-REF
-        return _cleanup_stale_orders(now)
+    def cleanup_stale_orders(
+        self, now: float | None = None, max_age_seconds: int | None = None
+    ) -> int:
+        """Remove stale orders and attempt cancelation via broker."""  # AI-AGENT-REF
+        now_s = now if now is not None else time.time()
+        max_age = max_age_seconds if max_age_seconds is not None else ORDER_STALE_AFTER_S
+        removed = 0
+        with _order_tracking_lock:
+            for oid, info in list(_active_orders.items()):
+                if now_s - info.submitted_time >= max_age:
+                    if self.broker_interface is not None:
+                        try:
+                            ord_obj = self.broker_interface.get_order_by_id(oid)
+                            if getattr(ord_obj, "status", "").lower() == "new":
+                                self.broker_interface.cancel_order_by_id(oid)
+                        except Exception:
+                            pass
+                    _active_orders.pop(oid, None)
+                    removed += 1
+        return removed
 
-    def _reconcile_partial_fills(self, *args, requested_qty=None, **_kwargs) -> None:
-        """Stub for partial fill reconciliation."""  # AI-AGENT-REF: accept requested_qty
-        return None
+    # AI-AGENT-REF: expose short selling validation hook
+    def _validate_short_selling(self, symbol: str, qty: float, price: float) -> None:
+        from ai_trading.risk.short_selling import validate_short_selling
+
+        validate_short_selling(symbol, qty, price)
+
+    def _reconcile_partial_fills(
+        self, *args, requested_qty=None, remaining_qty=None, symbol=None, side=None, **_kwargs
+    ) -> None:
+        """Detect partial fills and log for quantity tracking."""  # AI-AGENT-REF
+        try:
+            if requested_qty is None or remaining_qty is None:
+                return
+            filled = requested_qty - remaining_qty
+            if filled < requested_qty:
+                self.logger.info(
+                    "PARTIAL_FILL_DETECTED",
+                    extra={"symbol": symbol, "side": side, "filled": filled, "requested": requested_qty},
+                )
+        except Exception:
+            pass
 
     def execute_order(
         self,
