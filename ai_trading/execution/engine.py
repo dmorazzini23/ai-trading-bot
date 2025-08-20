@@ -685,6 +685,23 @@ class ExecutionEngine:
                     removed += 1
         return removed
 
+    # AI-AGENT-REF: safe stop check hook
+    def check_stops(self) -> None:
+        """
+        Safety hook invoked after each cycle. It should never raise.
+        For now: best-effort inspection of open positions; no-op if unsupported.
+        """
+        try:
+            broker = getattr(self, "broker", None) or getattr(self, "broker_interface", None)
+            if broker is None or not hasattr(broker, "list_positions"):
+                _log.debug("check_stops: no broker/list_positions; skipping")
+                return
+
+            positions = broker.list_positions() or []
+            _log.debug("check_stops: inspected %d positions", len(positions))
+        except Exception as e:
+            _log.info("check_stops: suppressed exception: %s", e)
+
     # AI-AGENT-REF: expose short selling validation hook
     def _validate_short_selling(self, symbol: str, qty: float, price: float) -> None:
         from ai_trading.risk.short_selling import validate_short_selling
