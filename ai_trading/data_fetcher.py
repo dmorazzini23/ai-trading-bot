@@ -6,6 +6,19 @@ from typing import Any
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
 from pandas import Timestamp
+try:  # AI-AGENT-REF: yfinance fallback for market data
+    import yfinance as yf
+except Exception:  # pragma: no cover  # noqa: BLE001
+    yf = None
+
+# Ensure yfinance tz cache is writable on headless servers
+try:  # pragma: no cover
+    # AI-AGENT-REF: silence tz cache warnings on unwritable directories
+    if yf is not None and hasattr(yf, "set_tz_cache_location"):
+        os.makedirs("/tmp/py-yfinance", exist_ok=True)
+        yf.set_tz_cache_location("/tmp/py-yfinance")
+except Exception:  # noqa: BLE001
+    pass
 
 try:  # AI-AGENT-REF: prefer internal HTTP helper when available
     from ai_trading.utils import http as _http
@@ -151,9 +164,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
 
-    try:  # AI-AGENT-REF: yfinance already used elsewhere in project
-        import yfinance as yf
-    except Exception:  # pragma: no cover - provides empty frame  # noqa: BLE001
+    if yf is None:  # AI-AGENT-REF: yfinance optional dependency
         idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
         cols = ["open", "high", "low", "close", "volume"]
         return pd.DataFrame(columns=cols, index=idx).reset_index()

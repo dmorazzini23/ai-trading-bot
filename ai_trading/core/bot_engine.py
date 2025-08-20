@@ -5736,20 +5736,8 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     Logs UTC timestamps and fails fast if any symbol is stale.
     """
     try:
-        from ai_trading.data_fetcher import (
-            last_minute_bar_age_seconds,
-        )  # type: ignore
-    except (
-        ImportError,
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
+        from ai_trading.data_fetcher import last_minute_bar_age_seconds
+    except Exception as e:  # AI-AGENT-REF: soft-fail if import missing
         _log.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
     now_utc = utc_now_iso()
@@ -11614,7 +11602,20 @@ def run_multi_strategy(ctx) -> None:
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
     for strat in ctx.strategies:
         try:
-            sigs = strat.generate(ctx)
+            gen = getattr(strat, "generate", None)
+            # AI-AGENT-REF: support legacy generate() and new generate_signals()
+            if callable(gen):
+                sigs = gen(ctx)
+            else:
+                gs = getattr(strat, "generate_signals", None)
+                if callable(gs):
+                    sigs = gs(getattr(ctx, "market_data", ctx))
+                else:
+                    _log.error(
+                        "Strategy %s has neither `generate` nor `generate_signals`; skipping",
+                        type(strat).__name__,
+                    )
+                    continue
             signals_by_strategy[strat.name] = sigs
         except (
             FileNotFoundError,
