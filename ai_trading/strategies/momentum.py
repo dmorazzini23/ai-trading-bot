@@ -3,6 +3,8 @@ Simple momentum strategy for testing enhanced strategy discovery.
 This demonstrates that the framework can discover strategies in any submodule.
 """
 
+from typing import List
+
 from ai_trading.strategies.base import BaseStrategy, StrategySignal
 from ai_trading.core.enums import OrderSide, RiskLevel
 
@@ -31,7 +33,7 @@ class MomentumStrategy(BaseStrategy):
             "max_position_size": 0.05,  # 5% max position size
         }
         
-    def generate_signals(self, market_data: dict) -> list[StrategySignal]:
+    def generate_signals(self, market_data: dict) -> List[StrategySignal]:
         """
         Generate trading signals based on simple momentum.
         
@@ -61,6 +63,11 @@ class MomentumStrategy(BaseStrategy):
                 signals.append(signal)
                 
         return signals
+
+    # Back-compat: engine may call `generate(ctx)`
+    def generate(self, ctx) -> List[StrategySignal]:
+        # AI-AGENT-REF: ensure MomentumStrategy exposes legacy generate()
+        return super().generate(ctx)
     
     def calculate_position_size(
         self,

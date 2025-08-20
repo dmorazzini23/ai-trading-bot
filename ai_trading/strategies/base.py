@@ -5,10 +5,13 @@ Provides abstract base strategy class and strategy registry
 for implementing and managing institutional trading strategies.
 """
 
+from __future__ import annotations
+
 import logging
 import uuid
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
+from typing import Any, List
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger, logger_once
@@ -127,7 +130,7 @@ class BaseStrategy(ABC):
         )
 
     @abstractmethod
-    def generate_signals(self, market_data: dict) -> list[StrategySignal]:
+    def generate_signals(self, market_data: dict) -> List[StrategySignal]:
         """
         Generate trading signals based on market data.
 
@@ -137,6 +140,14 @@ class BaseStrategy(ABC):
         Returns:
             List of trading signals
         """
+
+    # --- Back-compat shim -------------------------------------------------
+    def generate(self, ctx: Any) -> List[StrategySignal]:
+        """Adapt legacy engine call-sites to the new strategy API.
+        `ctx` is the runtime context; we prefer ctx.market_data if present."""
+        # AI-AGENT-REF: adapt legacy generate() to generate_signals()
+        market_data = getattr(ctx, "market_data", ctx)
+        return self.generate_signals(market_data)
 
     @abstractmethod
     def calculate_position_size(
