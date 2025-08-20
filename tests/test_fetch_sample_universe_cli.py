@@ -1,4 +1,13 @@
-from ai_trading.tools.fetch_sample_universe import run
+import importlib.util, pathlib
+
+spec = importlib.util.spec_from_file_location(
+    "ai_trading.tools.fetch_sample_universe",
+    pathlib.Path(__file__).resolve().parents[1] / "ai_trading" / "tools" / "fetch_sample_universe.py",
+)
+fetch_module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(fetch_module)  # type: ignore[attr-defined]
+run = fetch_module.run
 
 
 def test_run_success(monkeypatch):

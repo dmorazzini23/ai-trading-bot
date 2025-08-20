@@ -41,6 +41,7 @@ from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
 )
+from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit)
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
     warnings.filterwarnings("default", category=DeprecationWarning)
@@ -49,16 +50,6 @@ if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
         DeprecationWarning,
     )  # AI-AGENT-REF: deprecation notice
 
-try:  # AI-AGENT-REF: optional Alpaca dependency
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-except (ImportError, AttributeError):  # pragma: no cover  # AI-AGENT-REF: narrow import errors
-    TimeFrame = None  # type: ignore
-    class TimeFrameUnit:  # type: ignore
-        Minute = "Minute"
-        Hour = "Hour"
-        Day = "Day"
-        Week = "Week"
-        Month = "Month"
 
 # One place to define the common exception family (module-scoped)
 COMMON_EXC = (
@@ -291,21 +282,6 @@ _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 import pandas as pd
 import logging
 logger = logging.getLogger(__name__)
-
-def _ensure_df(obj) -> pd.DataFrame:
-    """Best-effort conversion to DataFrame; returns empty DF on None/unsupported."""
-    if obj is None:
-        return pd.DataFrame()
-    if isinstance(obj, pd.DataFrame):
-        return obj
-    df = getattr(obj, "df", None)
-    if isinstance(df, pd.DataFrame):
-        return df
-    try:
-        return pd.DataFrame(obj)
-    except Exception:
-        return pd.DataFrame()
-
 
 def _alpaca_diag_info() -> dict[str, object]:
     """Collect Alpaca env & mode diagnostics for operator visibility."""
@@ -1352,17 +1328,6 @@ def is_holiday(ts: pd.Timestamp) -> bool:
     # Precompute set of valid trading dates (as dates) once
     trading_dates = {d.date() for d in get_market_schedule().index}
     return dt not in trading_dates
-
-
-# AI-AGENT-REF: lazy import heavy signal calculation module to speed up import for tests
-if not os.getenv("PYTEST_RUNNING") and ALPACA_AVAILABLE:
-    from ai_trading.signals import (
-        calculate_macd as signals_calculate_macd,  # type: ignore
-    )
-else:
-    # AI-AGENT-REF: mock signals_calculate_macd for test environments or when Alpaca unavailable
-    def signals_calculate_macd(*args, **kwargs):
-        return [0.0] * 20  # Mock MACD signal values
 
 
 # FutureWarning now filtered globally in pytest.ini
@@ -3482,61 +3447,6 @@ class FinnhubFetcherLegacy:
 
 
 _last_fh_prefetch_date: date | None = None
-
-
-
-
-def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
-    """Safely get stock bars and always return a DataFrame."""
-    try:
-        response = client.get_stock_bars(request)
-        df = getattr(response, "df", None)
-        if df is None or df.empty:
-            _log.warning(
-                "ALPACA_BARS_EMPTY",
-                extra={"symbol": symbol, "context": context},
-            )
-            return _create_empty_bars_dataframe()
-
-        if isinstance(df.index, pd.MultiIndex):
-            try:
-                df = df.xs(symbol, level=0, drop_level=False).droplevel(0)
-            except (KeyError, ValueError):  # AI-AGENT-REF: defensive slice
-                pass
-        df = df.reset_index().rename(columns={"index": "timestamp"})
-        rename_map = {"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
-        df = df.rename(columns=rename_map)
-        keep = ["timestamp", "open", "high", "low", "close", "volume"]
-        for col in keep:
-            if col not in df.columns:
-                df[col] = pd.NA
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        df = df[keep]
-        if df.empty or len(df) == 0:
-            _log.warning(
-                "Alpaca data available but parsing resulted in empty frame (feed=%s, timeframe=%s)",
-                getattr(request, "feed", None),
-                getattr(request, "timeframe", None),
-            )
-            return pd.DataFrame()
-        return df
-    except COMMON_EXC as e:  # AI-AGENT-REF: narrow catch
-        _log.error(
-            "ALPACA_BARS_FETCH_FAILED",
-            extra={"symbol": symbol, "context": context, "error": str(e)},
-        )
-        return _create_empty_bars_dataframe()
-
-
-def _create_empty_bars_dataframe(timeframe: str = "daily") -> pd.DataFrame:
-    """Return an empty OHLCV DataFrame with a UTC timestamp column."""
-    cols = ["timestamp", "open", "high", "low", "close", "volume"]
-    df = pd.DataFrame(columns=cols)
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).tz_localize("UTC")
-    return df
-
-
-
 @dataclass
 class DataFetcher:
     def __post_init__(self):
@@ -3728,10 +3638,10 @@ class DataFetcher:
             _log.error(
                 "DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": str(e)}
             )
-            return _create_empty_bars_dataframe("daily")
+            return _create_empty_bars_dataframe()
         except (KeyError, ValueError) as e:
             _log.error(f"DATA_VALIDATION_ERROR for {symbol}: {repr(e)}")
-            return _create_empty_bars_dataframe("daily")
+            return _create_empty_bars_dataframe()
         except (
             FileNotFoundError,
             PermissionError,
@@ -3897,10 +3807,10 @@ class DataFetcher:
             _log.error(
                 "DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": str(e)}
             )
-            df = _create_empty_bars_dataframe("minute")
+            df = _create_empty_bars_dataframe()
         except (KeyError, ValueError) as e:
             _log.warning(f"DATA_VALIDATION_ERROR for minute data {symbol}: {repr(e)}")
-            df = _create_empty_bars_dataframe("minute")
+            df = _create_empty_bars_dataframe()
         except (
             FileNotFoundError,
             PermissionError,

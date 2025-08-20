@@ -1,7 +1,7 @@
 import logging
 import threading
 import pandas as pd
-from ai_trading.core.bot_engine import (
+from ai_trading.data.bars import (
     _ensure_df,
     safe_get_stock_bars,
     StockBarsRequest,
