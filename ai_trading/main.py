@@ -39,6 +39,9 @@ from ai_trading.net.http import (
     build_retrying_session,
     set_global_session,
 )  # AI-AGENT-REF: retrying HTTP session
+from ai_trading.position_sizing import (
+    resolve_max_position_size,
+)  # AI-AGENT-REF: dynamic max position sizing
 
 
 # AI-AGENT-REF: expose run_cycle for monkeypatching
@@ -329,12 +332,33 @@ def main(argv: list[str] | None = None) -> None:
         },
     )
 
+    # AI-AGENT-REF: resolve max position size before startup banner
+    try:
+        resolved_size, sizing_meta = resolve_max_position_size(config, S, force_refresh=True)
+        try:
+            setattr(S, "max_position_size", float(resolved_size))
+        except Exception:
+            pass
+        if sizing_meta.get("source") == "fallback":
+            logger.warning(
+                "POSITION_SIZING_FALLBACK",
+                extra={**sizing_meta, "resolved": resolved_size},
+            )
+        else:
+            logger.info(
+                "POSITION_SIZING_RESOLVED",
+                extra={**sizing_meta, "resolved": resolved_size},
+            )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("POSITION_SIZING_ERROR", extra={"error": str(e)})
+
     banner = {
         "mode": getattr(config, "trading_mode", "balanced"),
         "paper": getattr(config, "paper", True),
         "alpaca_base_url": getattr(config, "alpaca_base_url", ""),
         "capital_cap": float(getattr(S, "capital_cap", 0.0)),
         "dollar_risk_limit": float(getattr(S, "dollar_risk_limit", 0.0)),
+        "max_position_mode": str(getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))).upper(),
         "max_position_size": float(getattr(S, "max_position_size", 0.0)),
     }
     logger.info("STARTUP_BANNER", extra=_redact(banner))
@@ -488,6 +512,24 @@ def main(argv: list[str] | None = None) -> None:
                     "HEALTH_TICK", extra={"iteration": count, "interval": interval}
                 )
                 last_health = now_mono
+            # AI-AGENT-REF: periodic AUTO sizing refresh
+            try:
+                mode_now = str(getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))).upper()
+                if mode_now == "AUTO":
+                    resolved_size, meta = resolve_max_position_size(config, S, force_refresh=False)
+                    if float(getattr(S, "max_position_size", 0.0)) != resolved_size:
+                        try:
+                            setattr(S, "max_position_size", float(resolved_size))
+                        except Exception:
+                            pass
+                        logger.info(
+                            "POSITION_SIZING_REFRESHED",
+                            extra={**meta, "resolved": resolved_size},
+                        )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    "POSITION_SIZING_REFRESH_ERROR", extra={"error": str(e)}
+                )
 
             _interruptible_sleep(int(max(1, interval)))
             if _SHUTDOWN.is_set():
