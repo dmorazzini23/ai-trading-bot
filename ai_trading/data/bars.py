@@ -26,6 +26,36 @@ from .timeutils import (
 
 _log = get_logger(__name__)
 
+# AI-AGENT-REF: canonicalize timeframe and feed to avoid stub leakage
+def _to_timeframe_str(tf: object) -> str:
+    """Return canonical timeframe string ("1Min" or "1Day")."""
+    try:
+        s = str(tf).strip().lower()
+    except Exception:  # noqa: BLE001
+        return "1Day"
+    if s in {"1min", "1m", "minute", "1 minute"}:
+        return "1Min"
+    if s in {"1day", "1d", "day", "1 day"}:
+        return "1Day"
+    if "min" in s:
+        return "1Min"
+    if "day" in s:
+        return "1Day"
+    return "1Day"
+
+
+# AI-AGENT-REF: normalize feed names
+def _to_feed_str(feed: object) -> str:
+    """Return canonical feed name ("iex" or "sip")."""
+    try:
+        s = str(feed).strip().lower()
+    except Exception:  # noqa: BLE001
+        return "sip"
+    if "iex" in s:
+        return "iex"
+    if "sip" in s:
+        return "sip"
+    return "sip"
 # AI-AGENT-REF: canonical fallback payload builder
 def _format_fallback_payload(tf_str: str, feed_str: str, start_utc: datetime, end_utc: datetime) -> list[str]:
     s = start_utc.astimezone(UTC).isoformat()
@@ -143,14 +173,21 @@ def safe_get_stock_bars(
         if df is None or df.empty:
             _log.warning("ALPACA_BARS_EMPTY", extra={"symbol": symbol, "context": context})
             if _is_minute_timeframe(getattr(request, "timeframe", "")):
-                df = get_minute_df(symbol, start_dt, end_dt, feed=getattr(request, "feed", None))
-            else:
-                df = http_get_bars(
+                df = get_minute_df(
                     symbol,
-                    str(getattr(request, "timeframe", "")),
                     start_dt,
                     end_dt,
-                    feed=getattr(request, "feed", None) or "sip",
+                    feed=_to_feed_str(getattr(request, "feed", None)),
+                )
+            else:
+                tf_str = _to_timeframe_str(getattr(request, "timeframe", ""))
+                feed_str = _to_feed_str(getattr(request, "feed", None))
+                df = http_get_bars(
+                    symbol,
+                    tf_str,
+                    start_dt,
+                    end_dt,
+                    feed=feed_str,
                 )
             return _ensure_df(df)  # AI-AGENT-REF: fallback to robust fetchers
 
@@ -171,8 +208,8 @@ def safe_get_stock_bars(
             extra={
                 "symbol": symbol,
                 "context": context,
-                "feed": getattr(request, "feed", None),
-                "timeframe": getattr(request, "timeframe", None),
+                "feed": _to_feed_str(getattr(request, "feed", None)),
+                "timeframe": _to_timeframe_str(getattr(request, "timeframe", "")),
             },
         )
         return pd.DataFrame()
@@ -182,14 +219,17 @@ def safe_get_stock_bars(
             extra={"symbol": symbol, "context": context, "error": str(e)},
         )
         if _is_minute_timeframe(getattr(request, "timeframe", "")):
-            return _ensure_df(get_minute_df(symbol, start_dt, end_dt, feed=getattr(request, "feed", None)))
-        df = http_get_bars(
-            symbol,
-            str(getattr(request, "timeframe", "")),
-            start_dt,
-            end_dt,
-            feed=getattr(request, "feed", None) or "sip",
-        )
+            return _ensure_df(
+                get_minute_df(
+                    symbol,
+                    start_dt,
+                    end_dt,
+                    feed=_to_feed_str(getattr(request, "feed", None)),
+                )
+            )
+        tf_str = _to_timeframe_str(getattr(request, "timeframe", ""))
+        feed_str = _to_feed_str(getattr(request, "feed", None))
+        df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
         return _ensure_df(df)  # AI-AGENT-REF: HTTP/Yahoo fallback on exception
 
 
