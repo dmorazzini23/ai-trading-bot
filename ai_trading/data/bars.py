@@ -165,6 +165,39 @@ def safe_get_stock_bars(
                     end_dt,
                     feed=feed_str,
                 )
+                if (df is None or df.empty) and tf_str.lower() in {"1day", "day"}:  # AI-AGENT-REF: minute fallback
+                    if feed_str != "iex":
+                        payload = _format_fallback_payload(tf_str, "iex", start_dt, end_dt)
+                        _log.info(
+                            "DATA_FALLBACK_ATTEMPT",
+                            extra={"provider": "alpaca", "fallback": payload},
+                        )
+                        df = http_get_bars(
+                            symbol, tf_str, start_dt, end_dt, feed="iex"
+                        )
+                    if df is None or df.empty:
+                        _log.info(
+                            "DATA_MINUTE_FALLBACK",
+                            extra={"provider": "alpaca", "timeframe": "1Min"},
+                        )
+                        min_start = end_dt - timedelta(days=35)
+                        mdf = http_get_bars(
+                            symbol,
+                            "1Min",
+                            min_start,
+                            end_dt,
+                            feed=feed_str,
+                        )
+                        if (mdf is None or mdf.empty) and feed_str != "iex":
+                            mdf = http_get_bars(
+                                symbol,
+                                "1Min",
+                                min_start,
+                                end_dt,
+                                feed="iex",
+                            )
+                        if mdf is not None and not mdf.empty:
+                            df = _resample_minutes_to_daily(mdf)
             return _ensure_df(df)  # AI-AGENT-REF: fallback to robust fetchers
 
         # If MultiIndex (symbol, ts), select the symbol level

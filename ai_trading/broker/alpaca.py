@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, Optional
+from types import SimpleNamespace
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from ai_trading.logging import get_logger
@@ -195,14 +196,57 @@ class AlpacaBroker:
             return self._api.get_order_by_id(order_id)
 
     # ---------- Positions & Account ----------
-    def list_open_positions(self) -> Iterable[Any]:
-        if self._is_new:
-            return self._call_with_retry("get_all_positions", self._api.get_all_positions)
+    def list_open_positions(self) -> list[Any]:
+        """Return open positions as objects with symbol/qty/avg_entry_price."""  # AI-AGENT-REF: attribute access
         try:
-            return self._call_with_retry("list_positions", self._api.list_positions)
+            if self._is_new:
+                raw = self._call_with_retry("get_all_positions", self._api.get_all_positions)
+            else:
+                raw = self._call_with_retry("list_positions", self._api.list_positions)
         except AttributeError:
-            # Some old SDKs used `list_positions`; keep explicit error
             raise RuntimeError("Alpaca API has neither get_all_positions nor list_positions")
+        except SAFE_EXC as e:  # AI-AGENT-REF: narrow exception
+            _log.warning("list_open_positions failed: %s", e, exc_info=True)
+            return []
+        positions: list[Any] = []
+        for p in raw or []:
+            try:
+                sym = p.symbol if hasattr(p, "symbol") else p["symbol"]
+                qty = int(p.qty) if hasattr(p, "qty") else int(p["qty"])
+                aep = (
+                    float(p.avg_entry_price)
+                    if hasattr(p, "avg_entry_price")
+                    else float(p["avg_entry_price"])
+                )
+                positions.append(SimpleNamespace(symbol=sym, qty=qty, avg_entry_price=aep))
+            except (KeyError, AttributeError, TypeError, ValueError):  # AI-AGENT-REF: narrow parse errors
+                continue
+        return positions
+
+    def get_open_position(self, symbol: str) -> Optional[Any]:
+        """Return a single open position object or None."""  # AI-AGENT-REF
+        try:
+            if hasattr(self._api, "get_position"):
+                p = self._call_with_retry(
+                    "get_position", lambda: self._api.get_position(symbol)
+                )
+                sym = p.symbol if hasattr(p, "symbol") else p["symbol"]
+                qty = int(p.qty) if hasattr(p, "qty") else int(p["qty"])
+                aep = (
+                    float(p.avg_entry_price)
+                    if hasattr(p, "avg_entry_price")
+                    else float(p["avg_entry_price"])
+                )
+                return SimpleNamespace(symbol=sym, qty=qty, avg_entry_price=aep)
+        except SAFE_EXC:  # AI-AGENT-REF: narrow exception
+            pass
+        for p in self.list_open_positions():
+            if getattr(p, "symbol", "").upper() == symbol.upper():
+                return p
+        return None
+
+    # Back-compat alias some codebases expect  # AI-AGENT-REF
+    get_position = get_open_position
 
     def get_account(self) -> Any:
         if self._is_new:
