@@ -17,7 +17,8 @@ def test_canonical_helpers() -> None:
 
     assert df._to_timeframe_str(Weird()) in {"1Day", "1Min"}
     assert df._to_feed_str("IEX") == "iex"
-    assert df._to_feed_str("sip") == "sip"
+    assert df._to_feed_str(" sip ") == "sip"
+    assert df._to_feed_str("iex-feed") == "iex"
     assert df._to_feed_str(object()) in {"sip", "iex"}
 
 

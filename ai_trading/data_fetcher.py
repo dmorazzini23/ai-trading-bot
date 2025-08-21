@@ -64,12 +64,16 @@ def _to_timeframe_str(tf: object) -> str:
 
 def _to_feed_str(feed: object) -> str:
     """Return canonical Alpaca feed string ("iex" or "sip").
-    Defaults to "sip" on ambiguity."""  # AI-AGENT-REF: feed canonicalization
+    Defaults to "sip" on ambiguity. Accepts slightly messy inputs."""  # AI-AGENT-REF: feed canonicalization
     try:
         s = str(feed).strip().lower()
     except Exception:  # noqa: BLE001
         return "sip"
-    return "iex" if s == "iex" else "sip"
+    if "iex" in s:
+        return "iex"
+    if "sip" in s:
+        return "sip"
+    return "sip"
 
 
 def _format_fallback_payload_df(
