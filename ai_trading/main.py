@@ -27,11 +27,8 @@ else:
     logger.info("ENV_LOADED_DEFAULT override=True")
 
 # AI-AGENT-REF: Import only essential modules after env load for import-light entrypoint
-from ai_trading.config import get_settings as get_config
-from ai_trading.settings import (
-    get_seed_int,
-    get_settings,
-)  # AI-AGENT-REF: runtime env settings
+from ai_trading.settings import get_seed_int
+from ai_trading.config import get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact  # AI-AGENT-REF: startup banner redaction
@@ -201,7 +198,7 @@ def _interruptible_sleep(total_seconds: float) -> None:
 
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
-    cfg = get_config()
+    cfg = get_settings()
     # Check critical environment variables
     if not cfg.webhook_secret:
         raise RuntimeError("WEBHOOK_SECRET is required")
@@ -248,7 +245,7 @@ def run_bot(*_a, **_k) -> int:
 
     try:
         # Load configuration
-        config = get_config()
+        config = get_settings()
         validate_environment()
 
         # Memory optimization and performance monitoring
@@ -308,7 +305,7 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 
 def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
-    settings = get_config()
+    settings = get_settings()
     port = int(settings.api_port or 9001)  # AI-AGENT-REF: default API port fallback
     run_flask_app(port, ready_signal)
 
@@ -326,7 +323,7 @@ def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
     args = parse_cli(argv)
     global config
-    config = get_config()
+    config = get_settings()
     S = get_settings()
     logger.info(
         "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca",

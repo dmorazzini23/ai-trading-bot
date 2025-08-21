@@ -683,24 +683,20 @@ from ai_trading import (
     paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
 )
 from ai_trading.config import management as config
-from ai_trading.config.settings import get_settings
-from ai_trading.config.settings import get_settings as get_config_settings
+from ai_trading.config import get_settings
 from ai_trading.settings import (
     _secret_to_str,
     get_news_api_key,
     get_seed_int,
 )  # AI-AGENT-REF: runtime env settings
-from ai_trading.settings import (
-    get_settings as get_runtime_settings,
-)
 
 # Initialize settings once for global use
-CFG = get_config_settings()
+CFG = get_settings()
 # Backward-compat constants for risk thresholds used throughout this module
 # AI-AGENT-REF: restored weekly drawdown limit
 WEEKLY_DRAWDOWN_LIMIT = getattr(CFG, "weekly_drawdown_limit", 0.10)
 # AI-AGENT-REF: cached runtime settings for env aliases
-S = get_runtime_settings()
+S = CFG
 SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
 
 
@@ -999,7 +995,7 @@ RL_MODEL_PATH = (
     (Path(BASE_DIR) / _rl_path).resolve() if _rl_path else None
 )  # AI-AGENT-REF: resolve RL model path
 RL_AGENT: Any | None = None
-if S.use_rl_agent and RL_MODEL_PATH:
+if getattr(S, "use_rl_agent", False) and RL_MODEL_PATH:
     if RLTrader is not None:
         try:
             rl = RLTrader(RL_MODEL_PATH)
@@ -1569,9 +1565,9 @@ def _ensure_alpaca_env_or_raise():
 
 def init_runtime_config():
     """Initialize runtime configuration and validate critical keys."""
-    from ai_trading.config import get_settings as get_config_settings
+    from ai_trading.config import get_settings
 
-    cfg = get_config_settings()
+    cfg = get_settings()
 
     # Validate critical keys at runtime, not import time
     global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
@@ -2311,7 +2307,7 @@ TRADE_LOG_FILE = default_trade_log_path()
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
-HALT_FLAG_PATH = abspath(S.halt_flag_path)  # AI-AGENT-REF: absolute halt flag path
+HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "halt.flag"))  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath_safe("feature_perf.csv")
@@ -3095,8 +3091,8 @@ EVENT_COOLDOWN = 15.0  # seconds
 # AI-AGENT-REF: hold time now configurable; default to 0 for pure signal holding
 REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
-TRADE_COOLDOWN = S.trade_cooldown  # AI-AGENT-REF: validated timedelta
-TRADE_COOLDOWN_MIN = S.trade_cooldown_min  # minutes
+TRADE_COOLDOWN_MIN = get_trade_cooldown_min()  # minutes
+TRADE_COOLDOWN = getattr(S, "trade_cooldown", timedelta(minutes=TRADE_COOLDOWN_MIN))  # AI-AGENT-REF: validated cooldown
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
 MAX_TRADES_PER_HOUR = get_max_trades_per_hour()  # limit high-frequency trading

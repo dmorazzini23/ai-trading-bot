@@ -875,7 +875,7 @@ class _LegacyTradingConfig:
             "aggressive": {"kelly_fraction": 0.75, "conf_threshold": 0.65},
         }
         mode_defaults = defaults[mode]
-        from ai_trading.config.settings import (
+        from ai_trading.config import (
             get_settings as get_config_settings,
         )
         from ai_trading.settings import (
@@ -886,7 +886,7 @@ class _LegacyTradingConfig:
             get_max_drawdown_threshold,
             get_seed_int,
         )
-        from ai_trading.settings import (
+        from ai_trading.config import (
             get_settings as get_runtime_settings,
         )
 

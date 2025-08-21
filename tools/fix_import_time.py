@@ -24,7 +24,7 @@ RE_MODULE_CFG   = re.compile(r"^(\s*)CFG\s*=\s*get_settings\(\)\s*$", re.M)
 RE_DIRECT_ATTR  = re.compile(r"\bget_settings\(\)\.(\w+)")
 
 IMPORT_GETTERS_TMPL = "from ai_trading.settings import ({})"
-LOCAL_RUNTIME_IMPORT = "from ai_trading.settings import get_settings as get_runtime_settings"
+LOCAL_RUNTIME_IMPORT = "from ai_trading.config import get_settings as get_runtime_settings"
 
 def ensure_getter_imports(lines, getters):
     if not getters: return False

@@ -21,10 +21,8 @@ except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
 
 
 from ai_trading.portfolio import compute_portfolio_weights
-from ai_trading.settings import (
-    get_rebalance_interval_min,
-    get_settings,
-)
+from ai_trading.settings import get_rebalance_interval_min
+from ai_trading.config import get_settings
 
 
 def apply_no_trade_bands(

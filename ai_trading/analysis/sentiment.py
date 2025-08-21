@@ -26,7 +26,8 @@ from tenacity import (
 from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import config
-from ai_trading.settings import get_news_api_key, get_settings
+from ai_trading.settings import get_news_api_key
+from ai_trading.config import get_settings
 from ai_trading.utils.timing import HTTP_TIMEOUT  # AI-AGENT-REF: timeout helper
 
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
