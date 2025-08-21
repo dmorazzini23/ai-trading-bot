@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -243,6 +243,59 @@ def _get_minute_bars(symbol: str, start_dt: datetime, end_dt: datetime, feed: st
     if df is None or not hasattr(df, "empty") or getattr(df, "empty", True):
         return empty_bars_dataframe()
     return df
+
+
+def _resample_minutes_to_daily(df, tz="America/New_York"):
+    """Resample minute bars to daily OHLCV over regular trading hours."""  # AI-AGENT-REF
+    if df is None or df.empty:
+        return df
+    try:
+        mkt = df.copy()
+        mkt = mkt.tz_convert(tz) if mkt.index.tz is not None else mkt.tz_localize(tz)
+        mkt = mkt.between_time("09:30", "16:00", inclusive="both")
+        o = mkt["open"].resample("1D").first()
+        h = mkt["high"].resample("1D").max()
+        l = mkt["low"].resample("1D").min()
+        c = mkt["close"].resample("1D").last()
+        v = mkt.get("volume")
+        v = v.resample("1D").sum() if v is not None else None
+        out = pd.concat({"open": o, "high": h, "low": l, "close": c}, axis=1)
+        if v is not None:
+            out["volume"] = v
+        out = out.dropna(how="all").tz_convert("UTC")
+        return out
+    except Exception as e:  # noqa: BLE001
+        _log.warning("RESAMPLE_DAILY_FAILED", extra={"error": str(e)})
+        return df
+
+
+def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: str = "sip"):
+    """Fetch daily bars; fallback to alternate feed then resampled minutes."""  # AI-AGENT-REF
+    start = ensure_utc_datetime(start)
+    end = ensure_utc_datetime(end)
+    df = _fetch_daily_bars(client, symbol, start, end, feed=feed)
+    if df is not None and not df.empty:
+        return df
+    alt = "iex" if feed == "sip" else "sip"
+    df = _fetch_daily_bars(client, symbol, start, end, feed=alt)
+    if df is not None and not df.empty:
+        return df
+    try:
+        minutes_start = end - timedelta(days=5)
+        mdf = _get_minute_bars(symbol, minutes_start, end, feed=alt)
+        if mdf is not None and not mdf.empty:
+            rdf = _resample_minutes_to_daily(mdf)
+            if rdf is not None and not rdf.empty:
+                _log.info(
+                    "DAILY_FALLBACK_RESAMPLED",
+                    extra={"symbol": symbol, "rows": len(rdf)},
+                )
+                return rdf
+    except Exception as e:  # noqa: BLE001
+        _log.warning(
+            "DAILY_MINUTE_RESAMPLE_FAILED", extra={"symbol": symbol, "error": str(e)}
+        )
+    raise ValueError("empty_bars")
 
 
 def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:

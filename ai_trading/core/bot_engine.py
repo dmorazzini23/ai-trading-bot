@@ -4707,7 +4707,12 @@ class SignalManager:
         """Machine learning prediction signal with probability logging."""
         if model is None and symbol is not None:
             model = _load_ml_model(symbol)
-        if model is None:
+        if model is None or not (
+            hasattr(model, "predict") and hasattr(model, "predict_proba")
+        ):
+            _log.debug(
+                "ML_PREDICT_SKIPPED", extra={"reason": "model_missing_or_invalid"}
+            )  # AI-AGENT-REF: guard absent model
             return None
         try:
             if hasattr(model, "feature_names_in_"):
@@ -5962,13 +5967,19 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
     Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
     If FinBERT isn’t available, return neutral 0.0.
     """
-    from ai_trading.settings import get_settings
+    from ai_trading.config.settings import get_settings  # AI-AGENT-REF: modern settings source
 
     settings = get_settings()
-    api_key = settings.sentiment_api_key or get_news_api_key()
+    # AI-AGENT-REF: guard missing attributes across legacy Settings versions
+    api_key = (
+        getattr(settings, "sentiment_api_key", None)
+        or getattr(settings, "azure_language_key", None)
+        or getattr(settings, "news_api_key", None)
+        or get_news_api_key()
+    )
     if not api_key:
         _log.debug(
-            "No sentiment API key configured (checked settings.sentiment_api_key and news API key)"
+            "No sentiment API key configured (checked settings.sentiment_api_key, azure_language_key, news_api_key; env fallback)"
         )
         return 0.0
 
