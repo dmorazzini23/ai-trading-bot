@@ -7,6 +7,7 @@ import importlib.util
 import os
 import sys
 from typing import Dict, Iterable
+from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 
 from json import JSONDecodeError
 # Safe 'requests' import with stub + RequestException binding
@@ -37,6 +38,11 @@ from ai_trading.data_fetcher import (
 )
 from ai_trading.market.calendars import last_market_session
 from ai_trading.utils.datetime import ensure_datetime
+from ai_trading.data.timeutils import (
+    ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
+    nyse_session_utc as _nyse_session_utc,  # AI-AGENT-REF: derive NYSE RTH in UTC
+    previous_business_day as _prev_bus_day,  # AI-AGENT-REF: default previous session
+)
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import (
@@ -3535,8 +3541,27 @@ class DataFetcher:
                     _log.warning(
                         f"DAILY_BARS_RETRY_SANITIZE {symbol} due to: {msg}"
                     )
-                    req.start = ensure_datetime(getattr(req, "start", start_ts))
-                    req.end = ensure_datetime(getattr(req, "end", end_ts))
+                    # AI-AGENT-REF: derive previous session window in UTC
+                    _today_utc = datetime.now(UTC)
+                    _prev_day = _prev_bus_day(
+                        _today_utc.astimezone(ZoneInfo("America/New_York")).date()
+                    )
+                    _default_start_u, _default_end_u = _nyse_session_utc(_prev_day)
+
+                    # AI-AGENT-REF: callable-aware sanitization with safe defaults
+                    def _sanitize(x, default):
+                        try:
+                            return _ensure_utc_dt(x, allow_callables=True)
+                        except Exception:
+                            return default
+
+                    # AI-AGENT-REF: apply sanitized or default bounds
+                    req.start = _sanitize(
+                        getattr(req, "start", start_ts), _default_start_u
+                    )
+                    req.end = _sanitize(
+                        getattr(req, "end", end_ts), _default_end_u
+                    )
                     bars = safe_get_stock_bars(client, req, symbol, "DAILY")
                 else:
                     raise
