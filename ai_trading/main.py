@@ -1,3 +1,4 @@
+# ruff: noqa: E402, I001, BLE001
 from __future__ import annotations
 
 import argparse
@@ -6,6 +7,8 @@ import os
 import threading
 import time  # AI-AGENT-REF: tests patch main.time.sleep
 from threading import Thread
+import signal  # AI-AGENT-REF: handle graceful shutdown
+from datetime import datetime, timezone  # AI-AGENT-REF: structured signal logs
 
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
 from dotenv import load_dotenv, find_dotenv
@@ -31,9 +34,12 @@ from ai_trading.settings import (
     get_settings,
 )  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
-from ai_trading.utils import sleep as psleep
 from ai_trading.utils.prof import StageTimer, SoftBudget
-from ai_trading.utils import http as http_utils
+from ai_trading.logging.redact import redact as _redact  # AI-AGENT-REF: startup banner redaction
+from ai_trading.net.http import (
+    build_retrying_session,
+    set_global_session,
+)  # AI-AGENT-REF: retrying HTTP session
 
 
 # AI-AGENT-REF: expose run_cycle for monkeypatching
@@ -96,6 +102,8 @@ config: Any | None = None
 
 logger = logging.getLogger(__name__)
 
+_SHUTDOWN = threading.Event()  # AI-AGENT-REF: signal-triggered shutdown flag
+
 
 def _get_int_env(var: str, default: int | None = None) -> int | None:
     """Parse integer from environment. Return default on missing/invalid."""  # AI-AGENT-REF: env parsing helper
@@ -107,6 +115,63 @@ def _get_int_env(var: str, default: int | None = None) -> int | None:
     except Exception:
         logger.warning("Invalid integer for %s=%r; using default %r", var, val, default)
         return default
+
+
+def _install_signal_handlers() -> None:
+    """Install SIGINT/SIGTERM handlers."""  # AI-AGENT-REF
+
+    def _handler(signum, frame):  # noqa: ARG001
+        logger.info(
+            "SERVICE_SIGNAL",
+            extra={"signal": signum, "ts": datetime.now(tz=timezone.utc).isoformat()},
+        )
+        _SHUTDOWN.set()
+
+    signal.signal(signal.SIGINT, _handler)
+    signal.signal(signal.SIGTERM, _handler)
+
+
+def _validate_runtime_config(cfg, tcfg) -> None:
+    """Fail-fast runtime config checks."""  # AI-AGENT-REF
+
+    errors = []
+    mode = getattr(cfg, "trading_mode", "balanced")
+    if mode not in {"aggressive", "balanced", "conservative"}:
+        errors.append(f"TRADING_MODE invalid: {mode}")
+
+    cap = float(getattr(tcfg, "capital_cap", 0.0))
+    risk = float(getattr(tcfg, "dollar_risk_limit", 0.0))
+    max_pos = float(getattr(tcfg, "max_position_size", 0.0))
+    if not (0.0 < cap <= 1.0):
+        errors.append(f"CAPITAL_CAP out of range: {cap}")
+    if not (0.0 < risk <= 1.0):
+        errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
+    if not (max_pos > 0.0):
+        errors.append(f"MAX_POSITION_SIZE must be > 0: {max_pos}")
+
+    base_url = str(getattr(cfg, "alpaca_base_url", ""))
+    paper = bool(getattr(cfg, "paper", True))
+    if paper and "paper" not in base_url:
+        errors.append(
+            f"ALPACA_BASE_URL should be a paper endpoint when PAPER=True: {base_url}"
+        )
+    if not paper and "paper" in base_url:
+        errors.append(
+            f"ALPACA_BASE_URL should be a live endpoint when PAPER=False: {base_url}"
+        )
+
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def _interruptible_sleep(total_seconds: float) -> None:
+    """Sleep in slices while honoring shutdown."""  # AI-AGENT-REF
+
+    remaining = float(total_seconds)
+    step = 0.25
+    while remaining > 0 and not _SHUTDOWN.is_set():
+        time.sleep(min(step, remaining))
+        remaining -= step
 
 
 def validate_environment() -> None:
@@ -237,6 +302,46 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = get_config()
+    S = get_settings()
+    try:
+        _validate_runtime_config(config, S)
+    except Exception as e:  # noqa: BLE001
+        logger.critical("RUNTIME_CONFIG_INVALID", extra={"error": str(e)})
+        raise
+
+    session = build_retrying_session(
+        pool_maxsize=int(getattr(config, "http_pool_maxsize", 32)),
+        total_retries=int(getattr(config, "http_total_retries", 3)),
+        backoff_factor=float(getattr(config, "http_backoff_factor", 0.3)),
+        connect_timeout=float(getattr(config, "http_connect_timeout", 5.0)),
+        read_timeout=float(getattr(config, "http_read_timeout", 10.0)),
+    )
+    set_global_session(session)
+
+    logger.info(
+        "REQUESTS_POOL_STATS",
+        extra={
+            "transport": "requests",
+            "pool_maxsize": getattr(config, "http_pool_maxsize", 32),
+            "retries": getattr(config, "http_total_retries", 3),
+            "backoff_factor": getattr(config, "http_backoff_factor", 0.3),
+            "connect_timeout": getattr(config, "http_connect_timeout", 5.0),
+            "read_timeout": getattr(config, "http_read_timeout", 10.0),
+        },
+    )
+
+    banner = {
+        "mode": getattr(config, "trading_mode", "balanced"),
+        "paper": getattr(config, "paper", True),
+        "alpaca_base_url": getattr(config, "alpaca_base_url", ""),
+        "capital_cap": float(getattr(S, "capital_cap", 0.0)),
+        "dollar_risk_limit": float(getattr(S, "dollar_risk_limit", 0.0)),
+        "max_position_size": float(getattr(S, "max_position_size", 0.0)),
+    }
+    logger.info("STARTUP_BANNER", extra=_redact(banner))
+
+    _install_signal_handlers()
+
     rc = _get_run_cycle()
     rc()
 
@@ -370,10 +475,6 @@ def main(argv: list[str] | None = None) -> None:
                 logger.exception("run_cycle failed")
             count += 1
 
-            # AI-AGENT-REF: clarify pool stats origin
-            _pool_stats = http_utils.pool_stats()
-            _pool_stats["transport"] = "requests"
-            logger.info("REQUESTS_POOL_STATS", extra=_pool_stats)
             logger.info(
                 "CYCLE_TIMING",
                 extra={
@@ -389,7 +490,10 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 last_health = now_mono
 
-            psleep(int(max(1, interval)))
+            _interruptible_sleep(int(max(1, interval)))
+            if _SHUTDOWN.is_set():
+                logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})
+                break
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received — shutting down gracefully")
         return
