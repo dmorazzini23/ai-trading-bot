@@ -157,34 +157,20 @@ def _validate_runtime_config(cfg, tcfg) -> None:
             # AI-AGENT-REF: dynamic resolver will handle later
             pass
         else:
-            fallback = None
-            for name in ("max_position_size_fallback", "max_position_size_default"):
-                if getattr(tcfg, name, None):
-                    try:
-                        fallback = float(getattr(tcfg, name))
-                        break
-                    except Exception:
-                        pass
-            if fallback is None and getattr(cfg, "default_max_position_size", None):
-                try:
-                    fallback = float(getattr(cfg, "default_max_position_size"))
-                except Exception:
-                    fallback = None
-            if fallback is None:
-                fallback = 8000.0
-
+            fallback, meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
             try:
                 setattr(tcfg, "max_position_size", float(fallback))
             except Exception:
                 pass
-
-            logger.warning(
+            logger.info(
                 "CONFIG_AUTOFIX",
                 extra={
                     "field": "max_position_size",
                     "given": max_pos,
                     "fallback": float(fallback),
-                    "reason": "nonpositive",
+                    "reason": "derived_equity_cap",
+                    "equity": meta.get("equity"),
+                    "capital_cap": meta.get("capital_cap"),
                 },
             )
 
@@ -342,6 +328,11 @@ def main(argv: list[str] | None = None) -> None:
     global config
     config = get_config()
     S = get_settings()
+    logger.info(
+        "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca",
+        S.alpaca_data_feed,
+        S.alpaca_adjustment,
+    )
     try:
         _validate_runtime_config(config, S)
     except Exception as e:  # noqa: BLE001

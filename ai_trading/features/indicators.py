@@ -71,10 +71,14 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute MACD with multiple timeframes."""
+    """Map MACD signal to 'macds' column if available."""  # AI-AGENT-REF
     try:
-        df = compute_macd(df)
-        # Add additional MACD variations if needed
+        if "macds" not in df.columns:
+            if "signal" in df.columns:
+                df["macds"] = df["signal"]
+            else:
+                logger.warning("Missing column 'macds' and 'signal', filling with zeros")
+                df["macds"] = 0.0
         return df
     except Exception:
         logger.error("MACDS computation failed", exc_info=True)
@@ -82,15 +86,12 @@ def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def ensure_columns(
-    df: pd.DataFrame, required_columns: list, symbol: str | None = None
+    df: pd.DataFrame, required: list[str] | None = None, symbol: str | None = None
 ) -> pd.DataFrame:
-    """
-    Ensure DataFrame has required columns for calculations.
-    Accepts an optional 'symbol' (ignored except for logging) for
-    call-site compatibility.
-    """
+    """Ensure DataFrame has required columns for calculations."""
+    required = required or ["open", "high", "low", "close", "volume"]
     try:
-        for col in required_columns:
+        for col in required:
             if col not in df.columns:
                 if symbol:
                     logger.warning(

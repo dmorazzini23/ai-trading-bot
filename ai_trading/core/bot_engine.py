@@ -9207,19 +9207,20 @@ def _evaluate_trade_signal(
 
 
 def _current_position_qty(ctx: BotContext, symbol: str) -> int:
+    client = getattr(ctx, "api", None)
     try:
-        pos = ctx.api.get_open_position(symbol)
-        return int(pos.qty)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
+        pos = client.get_open_position(symbol) if client else None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("No open position for %s: %s", symbol, e)
+        return 0
+    if pos is None:
+        return 0
+    qty = getattr(pos, "qty", None)
+    if qty is None and isinstance(pos, dict):
+        qty = pos.get("qty")
+    try:
+        return int(qty) if qty is not None else 0
+    except (TypeError, ValueError):
         return 0
 
 

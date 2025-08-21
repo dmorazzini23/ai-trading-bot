@@ -144,61 +144,72 @@ def safe_get_stock_bars(
         allow_callables=False,
     )
     try:
-        response = client.get_stock_bars(request)
+        try:
+            response = client.get_stock_bars(request)
+        except Exception as e:  # noqa: BLE001
+            status = getattr(e, "status_code", None)
+            if status in (401, 403):
+                _log.error(
+                    "ALPACA_BARS_UNAUTHORIZED",
+                    extra={
+                        "symbol": symbol,
+                        "context": context,
+                        "feed": _canon_feed(getattr(request, "feed", None)),
+                    },
+                )
+                raise
+            raise
         df = getattr(response, "df", None)
         if df is None or df.empty:
             _log.warning("ALPACA_BARS_EMPTY", extra={"symbol": symbol, "context": context})
-            if _is_minute_timeframe(getattr(request, "timeframe", "")):
-                df = get_minute_df(
-                    symbol,
-                    start_dt,
-                    end_dt,
-                    feed=_canon_feed(getattr(request, "feed", None)),  # AI-AGENT-REF: central feed
-                )
-            else:
-                tf_str = _canon_tf(getattr(request, "timeframe", ""))  # AI-AGENT-REF
-                feed_str = _canon_feed(getattr(request, "feed", None))
-                df = http_get_bars(
-                    symbol,
-                    tf_str,
-                    start_dt,
-                    end_dt,
-                    feed=feed_str,
-                )
-                if (df is None or df.empty) and tf_str.lower() in {"1day", "day"}:  # AI-AGENT-REF: minute fallback
-                    if feed_str != "iex":
-                        payload = _format_fallback_payload(tf_str, "iex", start_dt, end_dt)
-                        _log.info(
-                            "DATA_FALLBACK_ATTEMPT",
-                            extra={"provider": "alpaca", "fallback": payload},
-                        )
-                        df = http_get_bars(
-                            symbol, tf_str, start_dt, end_dt, feed="iex"
-                        )
-                    if df is None or df.empty:
-                        _log.info(
-                            "DATA_MINUTE_FALLBACK",
-                            extra={"provider": "alpaca", "timeframe": "1Min"},
-                        )
-                        min_start = end_dt - timedelta(days=35)
-                        mdf = http_get_bars(
-                            symbol,
-                            "1Min",
-                            min_start,
-                            end_dt,
+            tf_str = _canon_tf(getattr(request, "timeframe", ""))
+            feed_str = _canon_feed(getattr(request, "feed", None))
+            if tf_str.lower() in {"1day", "day"}:
+                mdf = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
+                if mdf is not None and not mdf.empty:
+                    rdf = _resample_minutes_to_daily(mdf)
+                    if rdf is not None and not rdf.empty:
+                        df = rdf
+                    else:
+                        df = pd.DataFrame()
+                else:
+                    df = pd.DataFrame()
+                if df.empty:
+                    try:
+                        alt_req = StockBarsRequest(
+                            symbol_or_symbols=symbol,
+                            timeframe=TimeFrame.Day,
+                            limit=2,
                             feed=feed_str,
                         )
-                        if (mdf is None or mdf.empty) and feed_str != "iex":
-                            mdf = http_get_bars(
-                                symbol,
-                                "1Min",
-                                min_start,
-                                end_dt,
-                                feed="iex",
+                        alt_resp = client.get_stock_bars(alt_req)
+                        df2 = getattr(alt_resp, "df", pd.DataFrame())
+                        if isinstance(df2.index, pd.MultiIndex):
+                            df2 = df2.xs(symbol, level=0, drop_level=False).droplevel(0)
+                        df2 = df2.sort_index()
+                        if not df2.empty:
+                            last = df2.index[-1]
+                            if last.date() == start_dt.date():
+                                df = df2.loc[[last]]
+                    except Exception as e:  # noqa: BLE001
+                        status = getattr(e, "status_code", None)
+                        if status in (401, 403):
+                            _log.error(
+                                "ALPACA_BARS_UNAUTHORIZED",
+                                extra={"symbol": symbol, "context": context, "feed": feed_str},
                             )
-                        if mdf is not None and not mdf.empty:
-                            df = _resample_minutes_to_daily(mdf)
-            return _ensure_df(df)  # AI-AGENT-REF: fallback to robust fetchers
+                            raise
+                        _log.warning(
+                            "ALPACA_LIMIT_FETCH_FAILED",
+                            extra={"symbol": symbol, "context": context, "error": str(e)},
+                        )
+            else:
+                if _is_minute_timeframe(tf_str):
+                    df = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
+                else:
+                    df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
+            if df is None or df.empty:
+                return _create_empty_bars_dataframe()
 
         # If MultiIndex (symbol, ts), select the symbol level
         if isinstance(df.index, pd.MultiIndex):
