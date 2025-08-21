@@ -17,11 +17,11 @@ def build_features_pipeline(df, symbol: str):
     - compute MACD/MACD signal, ATR, VWAP
     """
     # AI-AGENT-REF: minimal feature pipeline for tests
-    df = ensure_columns(df, symbol)
     df = compute_macd(df)
     df = compute_macds(df)
     df = compute_atr(df)
     df = compute_vwap(df)
+    df = ensure_columns(df, symbol=symbol)
     return df
 
 

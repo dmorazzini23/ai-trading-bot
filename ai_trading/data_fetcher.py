@@ -319,7 +319,11 @@ def _fetch_bars(
         if requests is None:  # pragma: no cover
             raise RuntimeError("requests not available")
         url = "https://data.alpaca.markets/v2/stocks/bars"
-        resp = requests.get(url, params=params, timeout=10)
+        headers = {
+            "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
+            "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
         status = resp.status_code
         text = (resp.text or "").strip()
         ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -347,8 +351,52 @@ def _fetch_bars(
         if status == 400:
             raise ValueError("Invalid feed or bad request")
 
+        if status in (401, 403):
+            logger.warning(
+                "UNAUTHORIZED_SIP" if _feed == "sip" else "DATA_SOURCE_UNAUTHORIZED",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "status": "unauthorized",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                    }
+                ),
+            )
+            if _feed == "sip" and fallback:
+                _interval, _feed, _start, _end = fallback
+                payload = _format_fallback_payload_df(
+                    _interval, _feed, _start, _end
+                )
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": payload},
+                )
+                return _req(None)
+            raise ValueError("unauthorized")
+
         df = pd.DataFrame(data)
         if df.empty:
+            if _interval.lower() in {"1day", "day", "1d"}:
+                try:
+                    mdf = _fetch_bars(
+                        symbol, _start, _end, "1Min", feed=_feed
+                    )
+                except Exception:  # noqa: BLE001
+                    mdf = pd.DataFrame()
+                if not mdf.empty:
+                    try:
+                        if "timestamp" in mdf.columns:
+                            mdf["timestamp"] = pd.to_datetime(
+                                mdf["timestamp"], utc=True
+                            )
+                            mdf.set_index("timestamp", inplace=True)
+                        from ai_trading.data.bars import _resample_minutes_to_daily as _resample_to_daily
+                        rdf = _resample_to_daily(mdf)
+                        if rdf is not None and not rdf.empty:
+                            return rdf
+                    except Exception:  # noqa: BLE001
+                        pass
             _now = datetime.now(UTC)
             _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
             if _empty_should_emit(_key, _now):
@@ -356,8 +404,8 @@ def _fetch_bars(
                 cnt = _empty_record(_key, _now)
                 logger.log(
                     lvl,
-                    "DATA_SOURCE_AVAILABLE",
-                    extra=_norm_extra(  # AI-AGENT-REF: canonicalize log payload
+                    "EMPTY_DATA",
+                    extra=_norm_extra(
                         {
                             "provider": "alpaca",
                             "status": "empty",
@@ -388,6 +436,20 @@ def _fetch_bars(
             df["timestamp"] = pd.to_datetime(df[ts_col], utc=True)
         elif "timestamp" not in df.columns:
             df["timestamp"] = pd.to_datetime([], utc=True)
+        # Normalize columns and types
+        rename = {
+            "o": "open",
+            "h": "high",
+            "l": "low",
+            "c": "close",
+            "v": "volume",
+        }
+        df.rename(columns={k: v for k, v in rename.items() if k in df.columns}, inplace=True)
+        for col in ("open", "high", "low", "close", "volume"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=["open", "high", "low", "close"])
+        df.set_index("timestamp", inplace=True, drop=False)
         return df
 
     # AI-AGENT-REF: prepare alt feed for retry on empty/exception
