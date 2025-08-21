@@ -39,8 +39,10 @@ def get_latest_price(ctx, symbol: str) -> float | None:
     if price is not None:
         return price
 
-    start_iso = (pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)).isoformat()
-    end_iso = (pd.Timestamp.utcnow() + pd.Timedelta(minutes=1)).isoformat()
+    # AI-AGENT-REF: use aware UTC now for minute fallback window
+    now_utc = pd.Timestamp.now(tz="UTC")
+    start_iso = (now_utc.normalize() - pd.Timedelta(days=1)).isoformat()
+    end_iso = (now_utc + pd.Timedelta(minutes=1)).isoformat()
     try:
         req = StockBarsRequest(
             symbol_or_symbols=[symbol],

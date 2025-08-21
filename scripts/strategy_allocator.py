@@ -1,15 +1,23 @@
 """
 Strategy allocation with proper signal confirmation and hold protection.
 """
+import copy
 import logging
 from typing import Any
 
 from ai_trading.config.management import TradingConfig
+
 CONFIG = TradingConfig()
 
-import copy
-
 logger = logging.getLogger(__name__)
+
+# AI-AGENT-REF: resolver for configurable confidence threshold
+def _resolve_conf_threshold(cfg) -> float:
+    for name in ("score_confidence_min", "min_confidence", "conf_threshold"):
+        v = getattr(cfg, name, None)
+        if isinstance(v, int | float) and 0 <= float(v) <= 1:
+            return float(v)
+    return 0.6
 
 
 class StrategyAllocator:
@@ -65,6 +73,33 @@ class StrategyAllocator:
         # AI-AGENT-REF: Log confirmed signals for debugging
         confirmed_count = sum(len(signals) for signals in confirmed_signals.values())
         logger.debug(f"Signal confirmation produced {confirmed_count} confirmed signals from {total_signals} input signals")
+
+        # AI-AGENT-REF: confidence gate before risk sizing
+        threshold = _resolve_conf_threshold(self.config)
+        gated: dict[str, list[Any]] = {}
+        for strat, sigs in (confirmed_signals or {}).items():
+            kept = []
+            for s in sigs or []:
+                try:
+                    c = float(getattr(s, "confidence", 0.0))
+                except (TypeError, ValueError):
+                    c = 0.0
+                if c >= threshold:
+                    kept.append(s)
+                else:
+                    logger.info(
+                        "CONFIDENCE_DROP",
+                        extra={
+                            "strategy": strat,
+                            "symbol": getattr(s, "symbol", "?"),
+                            "confidence": c,
+                            "threshold": threshold,
+                        },
+                    )
+            if kept:
+                gated[strat] = kept
+
+        confirmed_signals = gated
 
         result = self._allocate_confirmed(confirmed_signals)
 
@@ -154,7 +189,7 @@ class StrategyAllocator:
                     # Calculate average confidence with additional validation
                     try:
                         avg_conf = sum(history_values) / len(history_values)
-                        if not isinstance(avg_conf, (int, float)) or avg_conf < 0:
+                        if not isinstance(avg_conf, int | float) or avg_conf < 0:
                             logger.warning(f"Invalid average confidence {avg_conf} for {s.symbol}, skipping")
                             continue
                     except (ZeroDivisionError, TypeError, ValueError) as e:
@@ -165,7 +200,7 @@ class StrategyAllocator:
                     min_conf_threshold = getattr(self.config, 'min_confidence', 0.6)
 
                     # AI-AGENT-REF: Additional defensive check for None or invalid threshold
-                    if min_conf_threshold is None or not isinstance(min_conf_threshold, (int, float)):
+                    if min_conf_threshold is None or not isinstance(min_conf_threshold, int | float):
                         logger.warning(f"Invalid min_confidence threshold: {min_conf_threshold}, using default 0.6")
                         min_conf_threshold = 0.6
 

@@ -10,7 +10,8 @@ from ai_trading.data.bars import safe_get_stock_bars
 
 if __name__ == "__main__":  # pragma: no cover - manual use
     rt = build_runtime(SimpleNamespace())
-    now = pd.Timestamp.utcnow().tz_localize("UTC")
+    # AI-AGENT-REF: use timezone-aware UTC now for diagnostics
+    now = pd.Timestamp.now(tz="UTC")
     start = now - pd.Timedelta(days=120)
     client = getattr(
         rt,

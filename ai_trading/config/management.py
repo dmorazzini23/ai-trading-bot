@@ -1519,6 +1519,7 @@ class TradingConfig(BaseModel):
     min_confidence: float = Field(
         0.60, ge=0, le=1
     )  # AI-AGENT-REF: floor for ML signals
+    score_confidence_min: float = Field(0.60, ge=0, le=1)  # AI-AGENT-REF: allocator confidence gate
     signal_confirmation_bars: int = 2  # AI-AGENT-REF: bars to confirm signal
     delta_threshold: float = 0.02  # AI-AGENT-REF: price delta trigger
     max_drawdown_threshold: float = Field(_MAX_DRAWDOWN_THRESHOLD, ge=0, le=1)
