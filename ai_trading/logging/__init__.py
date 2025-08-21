@@ -8,7 +8,6 @@ sanitizing adapter for all modules.
 """  # AI-AGENT-REF: document extra key sanitization
 
 import atexit
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import csv
 import json
 import logging
@@ -20,9 +19,12 @@ import time
 import traceback
 from datetime import UTC, date, datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
-from typing import Any, Optional
+from typing import Any
 
-def _ensure_single_handler(log: logging.Logger, level: Optional[int] = None) -> None:
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
+
+
+def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> None:
     """Ensure exactly one handler and attach default if none."""
     if not log.handlers:
         h = logging.StreamHandler()
@@ -45,6 +47,7 @@ def _ensure_single_handler(log: logging.Logger, level: Optional[int] = None) -> 
 _RESERVED_LOGRECORD_KEYS = {
     "name",
     "msg",
+    "message",
     "args",
     "levelname",
     "levelno",
@@ -205,7 +208,7 @@ class JSONFormatter(logging.Formatter):
             lk = field.lower()
             if lk.startswith("has_"):
                 return False
-            if not isinstance(value, (str, bytes)):
+            if not isinstance(value, str | bytes):
                 return False
             sensitive_tokens = (
                 "api_key",
@@ -887,46 +890,78 @@ def _setup_performance_logging():
         logging.warning("Could not setup performance logging: %s", e)
 
 
-def validate_logging_setup() -> dict[str, Any]:
-    """
-    Validate that logging is properly configured without duplicates.
+def dedupe_stream_handlers(log: logging.Logger) -> int:
+    """Public helper to dedupe duplicate ``StreamHandler`` instances on a logger.
+
+    Returns the final total number of handlers on the logger after dedupe.
+    """  # AI-AGENT-REF: dedupe helper
+    before = len(log.handlers)
+    _ensure_single_handler(log)
+    after = len(log.handlers)
+    if after < before:
+        logging.getLogger(__name__).info(
+            "LOGGING_SETUP_DEDUPED", extra={"before": before, "after": after}
+        )
+    return after
+
+
+def validate_logging_setup(
+    logger: logging.Logger | None = None, *, dedupe: bool = False
+) -> dict[str, Any]:
+    """Validate logging configuration and (optionally) dedupe handlers.
+
+    Parameters
+    ----------
+    logger: Optional[logging.Logger]
+        Logger to validate; defaults to the root logger when ``None``.
+    dedupe: bool
+        When ``True``, duplicates are removed via :func:`dedupe_stream_handlers`.
 
     Returns
     -------
-    Dict[str, Any]
-        Validation results including handler count and potential issues
-    """
-    root_logger = logging.getLogger()
-    handler_count = len(root_logger.handlers)
+    dict[str, Any]
+        Validation results including handler counts and issues.
+    """  # AI-AGENT-REF: validator enhancement
+    log = logging.getLogger() if logger is None else logger
+    before_count = len(log.handlers)
+
+    if dedupe:
+        after_count = dedupe_stream_handlers(log)
+        did_dedupe = after_count < before_count
+    else:
+        after_count = before_count
+        did_dedupe = False
 
     validation_result = {
-        "handlers_count": handler_count,
+        "handlers_count": after_count,
+        "before_handlers_count": before_count,
+        "deduped": did_dedupe,
         "is_configured": _LOGGING_CONFIGURED,
-        "expected_max_handlers": 2,  # Should be: 1 console + 1 file handler max
+        "expected_max_handlers": 2,  # 1 console + 1 file (max intended)
         "validation_passed": True,
         "issues": [],
     }
 
-    # Check for too many handlers (potential duplicates)
-    if handler_count > 2:
+    # Too many handlers (potential duplicates)
+    if after_count > 2:
         validation_result["validation_passed"] = False
         validation_result["issues"].append(
-            f"Too many handlers detected: {handler_count} (expected ≤ 2)"
+            f"Too many handlers detected: {after_count} (expected ≤ 2)"
         )
         logging.getLogger(__name__).warning(
             "WARNING: %d handlers detected - possible duplicate logging setup",
-            handler_count,
+            after_count,
         )
 
-    # Check if logging is not configured at all
-    if handler_count == 0 and not _LOGGING_CONFIGURED:
+    # Nothing configured at all
+    if after_count == 0 and not _LOGGING_CONFIGURED:
         validation_result["validation_passed"] = False
         validation_result["issues"].append("No logging handlers configured")
 
-    # Log validation results
+    # Emit a summary log
     if validation_result["validation_passed"]:
         logging.getLogger(__name__).info(
-            "Logging validation passed - %d handlers configured", handler_count
+            "Logging validation passed - %d handlers configured", after_count
         )
     else:
         logging.getLogger(__name__).error(
@@ -947,6 +982,7 @@ __all__ = [
     "log_trading_event",
     "setup_enhanced_logging",
     "validate_logging_setup",
+    "dedupe_stream_handlers",
     "EmitOnceLogger",
     "CompactJsonFormatter",
     "with_extra",
