@@ -144,12 +144,49 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     cap = float(getattr(tcfg, "capital_cap", 0.0))
     risk = float(getattr(tcfg, "dollar_risk_limit", 0.0))
     max_pos = float(getattr(tcfg, "max_position_size", 0.0))
+    mp_mode = str(
+        getattr(tcfg, "max_position_mode", getattr(cfg, "max_position_mode", "STATIC"))
+    ).upper()  # AI-AGENT-REF: allow AUTO vs STATIC handling
     if not (0.0 < cap <= 1.0):
         errors.append(f"CAPITAL_CAP out of range: {cap}")
     if not (0.0 < risk <= 1.0):
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
+    # AI-AGENT-REF: allow AUTO mode to defer resolution; STATIC mode auto-fixes nonpositive
     if not (max_pos > 0.0):
-        errors.append(f"MAX_POSITION_SIZE must be > 0: {max_pos}")
+        if mp_mode == "AUTO":
+            # AI-AGENT-REF: dynamic resolver will handle later
+            pass
+        else:
+            fallback = None
+            for name in ("max_position_size_fallback", "max_position_size_default"):
+                if getattr(tcfg, name, None):
+                    try:
+                        fallback = float(getattr(tcfg, name))
+                        break
+                    except Exception:
+                        pass
+            if fallback is None and getattr(cfg, "default_max_position_size", None):
+                try:
+                    fallback = float(getattr(cfg, "default_max_position_size"))
+                except Exception:
+                    fallback = None
+            if fallback is None:
+                fallback = 8000.0
+
+            try:
+                setattr(tcfg, "max_position_size", float(fallback))
+            except Exception:
+                pass
+
+            logger.warning(
+                "CONFIG_AUTOFIX",
+                extra={
+                    "field": "max_position_size",
+                    "given": max_pos,
+                    "fallback": float(fallback),
+                    "reason": "nonpositive",
+                },
+            )
 
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
     paper = bool(getattr(cfg, "paper", True))
