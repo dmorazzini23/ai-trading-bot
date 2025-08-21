@@ -40,6 +40,48 @@ except Exception:  # pragma: no cover  # noqa: BLE001
 requests = _requests
 
 # ---------------------------------------------------------------------------
+# Canonicalization helpers (defense-in-depth against stub/callable leakage)
+# ---------------------------------------------------------------------------
+
+
+def _to_timeframe_str(tf: object) -> str:
+    """Return canonical timeframe string ("1Min" or "1Day").
+    Tolerates enums, objects, callables; defaults to "1Day" on ambiguity."""  # AI-AGENT-REF: timeframe canonicalization
+    try:
+        s = str(tf).strip().lower()
+    except Exception:  # noqa: BLE001
+        return "1Day"
+    if s in {"1min", "1m", "minute", "1 minute"}:
+        return "1Min"
+    if s in {"1day", "1d", "day", "1 day"}:
+        return "1Day"
+    if "min" in s:
+        return "1Min"
+    if "day" in s:
+        return "1Day"
+    return "1Day"
+
+
+def _to_feed_str(feed: object) -> str:
+    """Return canonical Alpaca feed string ("iex" or "sip").
+    Defaults to "sip" on ambiguity."""  # AI-AGENT-REF: feed canonicalization
+    try:
+        s = str(feed).strip().lower()
+    except Exception:  # noqa: BLE001
+        return "sip"
+    return "iex" if s == "iex" else "sip"
+
+
+def _format_fallback_payload_df(
+    tf_str: str, feed_str: str, start_dt: _dt.datetime, end_dt: _dt.datetime
+) -> list[str]:
+    """UTC ISO payload for consistent logging."""  # AI-AGENT-REF: normalize fallback payload
+
+    s = ensure_datetime(start_dt).astimezone(_dt.timezone.utc).isoformat()
+    e = ensure_datetime(end_dt).astimezone(_dt.timezone.utc).isoformat()
+    return [tf_str, feed_str, s, e]
+
+# ---------------------------------------------------------------------------
 # Minute cache (in-memory). Maps symbol -> (last_bar_epoch_s, inserted_epoch_s)
 # Used by freshness checks in bot_engine and unit tests.
 # ---------------------------------------------------------------------------
@@ -263,8 +305,8 @@ def _fetch_bars(
 
     _start = ensure_datetime(start)
     _end = ensure_datetime(end)
-    _interval = str(timeframe)
-    _feed = feed or "sip"
+    _interval = _to_timeframe_str(timeframe)  # AI-AGENT-REF: canonical timeframe
+    _feed = _to_feed_str(feed or "sip")  # AI-AGENT-REF: canonical feed
 
     def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
@@ -319,11 +361,14 @@ def _fetch_bars(
                 },
             )
             if fallback:
+                _interval, _feed, _start, _end = fallback
+                payload = _format_fallback_payload_df(
+                    _interval, _feed, _start, _end
+                )
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
-                    extra={"provider": "alpaca", "fallback": fallback},
+                    extra={"provider": "alpaca", "fallback": payload},
                 )
-                _interval, _feed, _start, _end = fallback
                 return _req(None)
             raise ValueError("empty_bars")
 
