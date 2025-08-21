@@ -4,9 +4,9 @@ import datetime as _dt
 import os
 import warnings  # AI-AGENT-REF: control yfinance warnings
 from typing import Any
+from zoneinfo import ZoneInfo  # AI-AGENT-REF: ET default for naive datetimes
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
-from pandas import Timestamp
 
 from ai_trading.data.timeutils import (
     ensure_utc_datetime,  # AI-AGENT-REF: unified datetime coercion
@@ -128,9 +128,27 @@ class FinnhubAPIException(Exception):
 
 
 def ensure_datetime(value: Any) -> _dt.datetime:
-    """Coerce various datetime inputs into timezone-aware UTC datetime."""
+    """Coerce various datetime inputs into timezone-aware UTC datetime.
 
-    return ensure_utc_datetime(value)
+    Rules for market-data windows:
+    - If ``value`` is callable, call it (no args) and re-normalize.
+    - If ``value`` is a *naive* ``datetime``, interpret it as **America/New_York**
+      (exchange time) before converting to UTC.
+    - Otherwise, delegate to ``ensure_utc_datetime``.
+    """
+
+    # AI-AGENT-REF: unwrap callables early
+    if callable(value):
+        try:
+            value = value()
+        except Exception as e:
+            raise TypeError(f"datetime argument callable failed: {e}") from e
+
+    # AI-AGENT-REF: localize naive ET datetimes before UTC coercion
+    if isinstance(value, _dt.datetime) and value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo("America/New_York"))
+
+    return ensure_utc_datetime(value, allow_callables=False)
 
 
 def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
