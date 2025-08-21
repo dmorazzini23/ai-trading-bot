@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from functools import lru_cache
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from ai_trading.settings import _secret_to_str  # AI-AGENT-REF: centralized normalization
 
+from ai_trading.settings import _secret_to_str  # AI-AGENT-REF: centralized normalization
 
 TICKERS_FILE = os.getenv("AI_TRADER_TICKERS_FILE", "tickers.csv")
 TICKERS_CSV = os.getenv("AI_TRADER_TICKERS_CSV")  # optional literal CSV list
@@ -40,13 +40,15 @@ class Settings(BaseSettings):
     alpaca_secret_key: SecretStr = Field(
         default=SecretStr("test_secret"), alias="ALPACA_SECRET_KEY"
     )
-    redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
+    redis_url: str | None = Field(default=None, alias="REDIS_URL")  # AI-AGENT-REF: modern union
     # AI-AGENT-REF: include Alpaca base URL
     alpaca_base_url: str = Field(
         default="https://paper-api.alpaca.markets", alias="ALPACA_BASE_URL"
     )
     # Expose canonical env key; alias resolution handled by resolver
     trading_mode: str = Field(default="balanced", alias="TRADING_MODE")
+    # AI-AGENT-REF: secret used by webhook handlers
+    webhook_secret: str | None = Field(default=None, alias="WEBHOOK_SECRET")
 
     REGIME_MIN_ROWS: int = Field(200, alias="REGIME_MIN_ROWS")
     data_warmup_lookback_days: int = Field(60, alias="DATA_WARMUP_LOOKBACK_DAYS")
