@@ -268,6 +268,7 @@ from ai_trading.logging import (
     _get_metrics_logger,
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
+from ai_trading.logging.redact import redact as _redact  # AI-AGENT-REF: mask secrets
 from ai_trading.utils import http
 from ai_trading.utils.timing import (
     HTTP_TIMEOUT,
@@ -5255,7 +5256,7 @@ def _initialize_alpaca_clients():
             "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
             key="alpaca_init_skipped",
         )
-        _log.info("ALPACA_DIAG", extra=diag)
+        _log.info("ALPACA_DIAG", extra=_redact(diag))
         return
     # Lazy-import SDK only when needed
     try:
@@ -5288,7 +5289,7 @@ def _initialize_alpaca_clients():
     raw_client = TradingClient(key, secret, paper=is_paper)
     trading_client = AlpacaBroker(raw_client)
     data_client = StockHistoricalDataClient(key, secret)
-    _log.info("ALPACA_DIAG", extra={"initialized": True, **_alpaca_diag_info()})
+    _log.info("ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()}))
     stream = None  # initialize stream lazily elsewhere if/when required
 
 
