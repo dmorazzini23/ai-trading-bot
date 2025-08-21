@@ -1,28 +1,27 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ai_trading.data_fetcher import (
-    get_bars,
-    get_minute_df,
-)
-from ai_trading.data_fetcher import (
-    get_bars as http_get_bars,
-)  # AI-AGENT-REF: fallback helpers
+from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
+from ai_trading.data_fetcher import get_bars, get_minute_df
+from ai_trading.data_fetcher import get_bars as http_get_bars  # AI-AGENT-REF: fallback helpers
 from ai_trading.logging import get_logger
+from ai_trading.logging.empty_policy import (
+    classify as _empty_classify,
+)
+from ai_trading.logging.empty_policy import (
+    record as _empty_record,
+)
+from ai_trading.logging.empty_policy import (
+    should_emit as _empty_should_emit,
+)
 from ai_trading.utils.time import now_utc
 
-from .timeutils import (
-    UTC,
-    ensure_utc_datetime,
-    expected_regular_minutes,
-    nyse_session_utc,
-    previous_business_day,
-)
+from .timeutils import ensure_utc_datetime, expected_regular_minutes
 
 _log = get_logger(__name__)
 
@@ -154,7 +153,7 @@ def safe_get_stock_bars(
     with identical behavior and logging fields.
     """
     now = now_utc()
-    prev_open, _ = nyse_session_utc(previous_business_day(now.date()))
+    prev_open, _ = rth_session_utc(previous_trading_session(now.date()))  # AI-AGENT-REF
     end_dt = ensure_utc_datetime(
         getattr(request, "end", None) or now,
         default=now,
@@ -203,15 +202,28 @@ def safe_get_stock_bars(
         if not df.empty:
             return df
 
-        _log.warning(
-            "ALPACA_PARSE_EMPTY",
-            extra={
-                "symbol": symbol,
-                "context": context,
-                "feed": _to_feed_str(getattr(request, "feed", None)),
-                "timeframe": _to_timeframe_str(getattr(request, "timeframe", "")),
-            },
+        _now = datetime.now(UTC)
+        _key = (
+            symbol,
+            str(context),
+            _now.date().isoformat(),
+            _to_feed_str(getattr(request, "feed", None)),
+            _to_timeframe_str(getattr(request, "timeframe", "")),
         )
+        if _empty_should_emit(_key, _now):
+            lvl = _empty_classify(is_market_open=False)
+            cnt = _empty_record(_key, _now)
+            _log.log(
+                lvl,
+                "ALPACA_PARSE_EMPTY",
+                extra={
+                    "symbol": symbol,
+                    "context": context,
+                    "feed": _to_feed_str(getattr(request, "feed", None)),
+                    "timeframe": _to_timeframe_str(getattr(request, "timeframe", "")),
+                    "occurrences": cnt,
+                },
+            )
         return pd.DataFrame()
     except COMMON_EXC as e:
         _log.error(
@@ -257,12 +269,13 @@ def _get_minute_bars(symbol: str, start_dt: datetime, end_dt: datetime, feed: st
 
 
 def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
-    """Compute NYSE session for the current or previous business day."""
+    """Compute NYSE session for the current or previous trading day."""  # AI-AGENT-REF
+
     today_ny = now_utc.astimezone(ZoneInfo("America/New_York")).date()
-    start_u, end_u = nyse_session_utc(today_ny)
+    start_u, end_u = rth_session_utc(today_ny)
     if now_utc < start_u or now_utc > end_u:
-        prev_day = previous_business_day(today_ny)
-        start_u, end_u = nyse_session_utc(prev_day)
+        prev_day = previous_trading_session(today_ny)
+        start_u, end_u = rth_session_utc(prev_day)
     return start_u, end_u
 
 

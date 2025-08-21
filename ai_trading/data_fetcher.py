@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import warnings  # AI-AGENT-REF: control yfinance warnings
+from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: ET default for naive datetimes
 
@@ -10,6 +11,15 @@ import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
 
 from ai_trading.data.timeutils import (
     ensure_utc_datetime,  # AI-AGENT-REF: unified datetime coercion
+)
+from ai_trading.logging.empty_policy import (
+    classify as _empty_classify,
+)
+from ai_trading.logging.empty_policy import (
+    record as _empty_record,
+)
+from ai_trading.logging.empty_policy import (
+    should_emit as _empty_should_emit,
 )
 
 try:  # AI-AGENT-REF: yfinance fallback for market data
@@ -355,15 +365,22 @@ def _fetch_bars(
 
         df = pd.DataFrame(data)
         if df.empty:
-            logger.warning(
-                "DATA_SOURCE_AVAILABLE",
-                extra={
-                    "provider": "alpaca",
-                    "status": "empty",
-                    "feed": _feed,
-                    "timeframe": _interval,
-                },
-            )
+            _now = datetime.now(UTC)
+            _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
+            if _empty_should_emit(_key, _now):
+                lvl = _empty_classify(is_market_open=False)  # AI-AGENT-REF: after-hours default
+                cnt = _empty_record(_key, _now)
+                logger.log(
+                    lvl,
+                    "DATA_SOURCE_AVAILABLE",
+                    extra={
+                        "provider": "alpaca",
+                        "status": "empty",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "occurrences": cnt,
+                    },
+                )
             if fallback:
                 _interval, _feed, _start, _end = fallback
                 payload = _format_fallback_payload_df(
