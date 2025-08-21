@@ -40,3 +40,17 @@ def test_minute_fallback_uses_http_yahoo(monkeypatch, caplog):
     assert called.get("called")
     record = next(r for r in caplog.records if "minute fallback ok" in r.message)
     assert record.rows >= 300
+
+    # AI-AGENT-REF: ensure no function object leakage in logs
+    assert not any("<function" in (r.message or "") for r in caplog.records)
+
+    # AI-AGENT-REF: if availability/fallback events emitted, extras are canonical
+    for r in caplog.records:
+        if r.getMessage() in {"DATA_SOURCE_AVAILABLE", "DATA_SOURCE_FALLBACK_ATTEMPT"}:
+            d = r.__dict__
+            feed = d.get("feed") or (d.get("extra") or {}).get("feed")
+            timeframe = d.get("timeframe") or (d.get("extra") or {}).get("timeframe")
+            if feed is not None:
+                assert feed in {"iex", "sip"}
+            if timeframe is not None:
+                assert timeframe in {"1Min", "1Day"}

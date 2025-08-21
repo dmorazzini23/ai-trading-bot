@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import threading
 import time  # AI-AGENT-REF: tests patch main.time.sleep
@@ -100,7 +99,7 @@ from typing import Any
 config: Any | None = None
 
 
-logger = logging.getLogger(__name__)
+# AI-AGENT-REF: structured logger already bound via get_logger(__name__); avoid rebinding
 
 _SHUTDOWN = threading.Event()  # AI-AGENT-REF: signal-triggered shutdown flag
 

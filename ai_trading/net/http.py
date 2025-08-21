@@ -41,7 +41,7 @@ def build_retrying_session(
         read=total_retries,
         backoff_factor=backoff_factor,
         status_forcelist=status_forcelist,
-        allowed_methods=("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"),
+        allowed_methods=frozenset({"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}),  # AI-AGENT-REF: frozenset for urllib3 compatibility
         raise_on_status=False,
     )
     adapter = HTTPAdapter(
