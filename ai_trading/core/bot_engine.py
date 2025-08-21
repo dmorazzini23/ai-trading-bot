@@ -377,7 +377,8 @@ def _is_market_open_now(cfg=None) -> bool:
     if cfg is not None:
         market_calendar = getattr(cfg, "market_calendar", "XNYS")
     cal = mcal.get_calendar(market_calendar)
-    now = pd.Timestamp.utcnow().tz_convert("UTC")
+    # AI-AGENT-REF: use timezone-aware UTC now to avoid naive timestamps
+    now = pd.Timestamp.now(tz="UTC")
     schedule = cal.schedule(start_date=now.date(), end_date=now.date())
     if schedule.empty:
         return False
@@ -5740,7 +5741,8 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
         return
     if len(missing) == len(symbols):
         try:
-            session = last_market_session(pd.Timestamp.utcnow().tz_convert("UTC"))  # AI-AGENT-REF: prior session window
+            # AI-AGENT-REF: compute prior session from aware UTC now
+            session = last_market_session(pd.Timestamp.now(tz="UTC"))  # AI-AGENT-REF: prior session window
             if session is not None:
                 start_ts = session.open.tz_convert("UTC")
                 end_ts = session.close.tz_convert("UTC")

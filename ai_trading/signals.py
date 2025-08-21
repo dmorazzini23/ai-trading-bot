@@ -231,19 +231,27 @@ def build_feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
         raise
 
 
-# AI-AGENT-REF: structured error logging for model scoring
+# AI-AGENT-REF: structured model scoring with real scores
 def score_candidates(X: pd.DataFrame, model) -> pd.DataFrame:
+    """Attach model-derived score column in [0, 1] to ``X``."""
     try:
-        # model.predict_proba or predict; attach to frame
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X)
+            if hasattr(proba, "shape") and len(getattr(proba, "shape", ())) == 2 and proba.shape[1] >= 2:
+                scores = pd.Series(proba[:, 1], index=X.index)
+            else:
+                scores = pd.Series(pd.DataFrame(proba).mean(axis=1).values, index=X.index)
+        elif hasattr(model, "predict"):
+            scores = pd.Series(model.predict(X), index=X.index)
+        else:
+            raise AttributeError("Model has neither predict_proba nor predict")
+
         scored = X.copy()
+        scored["score"] = scores.astype(float).clip(0.0, 1.0)
         return scored
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-    ) as e:  # AI-AGENT-REF: narrow exception
+    except (ValueError, KeyError, TypeError, AttributeError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(
-            "SCORING_FAILED",
+            "MODEL_SCORE_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
         raise
