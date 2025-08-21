@@ -21,6 +21,15 @@ from ai_trading.logging.empty_policy import (
 from ai_trading.logging.empty_policy import (
     should_emit as _empty_should_emit,
 )
+from ai_trading.logging.normalize import (
+    canon_feed as _canon_feed,  # AI-AGENT-REF: centralized feed normalization
+)
+from ai_trading.logging.normalize import (
+    canon_timeframe as _canon_tf,  # AI-AGENT-REF: centralized timeframe normalization
+)
+from ai_trading.logging.normalize import (
+    normalize_extra as _norm_extra,  # AI-AGENT-REF: canonicalize logging extras
+)
 
 try:  # AI-AGENT-REF: yfinance fallback for market data
     import yfinance as yf
@@ -28,6 +37,18 @@ except Exception:  # pragma: no cover  # noqa: BLE001
     yf = None
 
 from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
+
+# ---------------------------------------------------------------------------
+# Backwards compatibility wrappers around central canonicalizers
+# ---------------------------------------------------------------------------
+
+
+def _to_timeframe_str(tf: object) -> str:  # AI-AGENT-REF: delegate to central helper
+    return _canon_tf(tf)
+
+
+def _to_feed_str(feed: object) -> str:  # AI-AGENT-REF: delegate to central helper
+    return _canon_feed(feed)
 
 # Ensure yfinance tz cache is writable on headless servers
 try:  # pragma: no cover
@@ -48,43 +69,6 @@ try:  # AI-AGENT-REF: fallback to requests if internal helper missing
 except Exception:  # pragma: no cover  # noqa: BLE001
     _requests = None
 requests = _requests
-
-# ---------------------------------------------------------------------------
-# Canonicalization helpers (defense-in-depth against stub/callable leakage)
-# ---------------------------------------------------------------------------
-
-
-def _to_timeframe_str(tf: object) -> str:
-    """Return canonical timeframe string ("1Min" or "1Day").
-    Tolerates enums, objects, callables; defaults to "1Day" on ambiguity."""  # AI-AGENT-REF: timeframe canonicalization
-    try:
-        s = str(tf).strip().lower()
-    except Exception:  # noqa: BLE001
-        return "1Day"
-    if s in {"1min", "1m", "minute", "1 minute"}:
-        return "1Min"
-    if s in {"1day", "1d", "day", "1 day"}:
-        return "1Day"
-    if "min" in s:
-        return "1Min"
-    if "day" in s:
-        return "1Day"
-    return "1Day"
-
-
-def _to_feed_str(feed: object) -> str:
-    """Return canonical Alpaca feed string ("iex" or "sip").
-    Defaults to "sip" on ambiguity. Accepts slightly messy inputs."""  # AI-AGENT-REF: feed canonicalization
-    try:
-        s = str(feed).strip().lower()
-    except Exception:  # noqa: BLE001
-        return "sip"
-    if "iex" in s:
-        return "iex"
-    if "sip" in s:
-        return "sip"
-    return "sip"
-
 
 def _format_fallback_payload_df(
     tf_str: str, feed_str: str, start_dt: _dt.datetime, end_dt: _dt.datetime
@@ -319,8 +303,8 @@ def _fetch_bars(
 
     _start = ensure_datetime(start)
     _end = ensure_datetime(end)
-    _interval = _to_timeframe_str(timeframe)  # AI-AGENT-REF: canonical timeframe
-    _feed = _to_feed_str(feed or "sip")  # AI-AGENT-REF: canonical feed
+    _interval = _canon_tf(timeframe)  # AI-AGENT-REF: centralized timeframe normalization
+    _feed = _canon_feed(feed or "sip")  # AI-AGENT-REF: centralized feed normalization
 
     def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
@@ -373,13 +357,15 @@ def _fetch_bars(
                 logger.log(
                     lvl,
                     "DATA_SOURCE_AVAILABLE",
-                    extra={
-                        "provider": "alpaca",
-                        "status": "empty",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "occurrences": cnt,
-                    },
+                    extra=_norm_extra(  # AI-AGENT-REF: canonicalize log payload
+                        {
+                            "provider": "alpaca",
+                            "status": "empty",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "occurrences": cnt,
+                        }
+                    ),
                 )
             if fallback:
                 _interval, _feed, _start, _end = fallback
