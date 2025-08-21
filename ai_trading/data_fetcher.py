@@ -5,6 +5,7 @@ import os
 import warnings  # AI-AGENT-REF: control yfinance warnings
 from datetime import UTC, datetime
 from typing import Any
+from ai_trading.config import get_settings
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: ET default for naive datetimes
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
@@ -297,14 +298,20 @@ def _post_process(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fetch_bars(
-    symbol: str, start: Any, end: Any, timeframe: str, feed: str = "sip"
+    symbol: str,
+    start: Any,
+    end: Any,
+    timeframe: str,
+    *,
+    feed: str = _DEFAULT_FEED,
+    adjustment: str = "raw",
 ) -> pd.DataFrame:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""  # AI-AGENT-REF
 
     _start = ensure_datetime(start)
     _end = ensure_datetime(end)
     _interval = _canon_tf(timeframe)  # AI-AGENT-REF: centralized timeframe normalization
-    _feed = _canon_feed(feed or "sip")  # AI-AGENT-REF: centralized feed normalization
+    _feed = _canon_feed(feed or _DEFAULT_FEED)  # AI-AGENT-REF: centralized feed normalization
 
     def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
@@ -315,6 +322,7 @@ def _fetch_bars(
             "end": _end.isoformat(),
             "limit": 10000,
             "feed": _feed,
+            "adjustment": adjustment,
         }
         if requests is None:  # pragma: no cover
             raise RuntimeError("requests not available")
@@ -380,7 +388,12 @@ def _fetch_bars(
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
                     mdf = _fetch_bars(
-                        symbol, _start, _end, "1Min", feed=_feed
+                        symbol,
+                        _start,
+                        _end,
+                        "1Min",
+                        feed=_feed,
+                        adjustment=adjustment,
                     )
                 except Exception:  # noqa: BLE001
                     mdf = pd.DataFrame()
@@ -515,17 +528,42 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
 
 
 def get_bars(
-    symbol: str, timeframe: str, start: Any, end: Any, *, feed: str | None = None
+    symbol: str,
+    timeframe: str,
+    start: Any,
+    end: Any,
+    *,
+    feed: str | None = None,
+    adjustment: str | None = None,
 ) -> pd.DataFrame:
     """Compatibility wrapper delegating to _fetch_bars."""  # AI-AGENT-REF
-    return _fetch_bars(symbol, start, end, timeframe, feed=feed or "sip")
+    S = get_settings()
+    feed = feed or S.alpaca_data_feed
+    adjustment = adjustment or S.alpaca_adjustment
+    return _fetch_bars(
+        symbol,
+        start,
+        end,
+        timeframe,
+        feed=feed,
+        adjustment=adjustment,
+    )
 
 
 def get_bars_batch(
-    symbols: list[str], timeframe: str, start: Any, end: Any, *, feed: str | None = None
+    symbols: list[str],
+    timeframe: str,
+    start: Any,
+    end: Any,
+    *,
+    feed: str | None = None,
+    adjustment: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch bars for multiple symbols via get_bars."""  # AI-AGENT-REF
-    return {sym: get_bars(sym, timeframe, start, end, feed=feed) for sym in symbols}
+    return {
+        sym: get_bars(sym, timeframe, start, end, feed=feed, adjustment=adjustment)
+        for sym in symbols
+    }
 
 
 def get_bars_df(
@@ -535,12 +573,20 @@ def get_bars_df(
     end: Any | None = None,
     *,
     feed: str | None = None,
+    adjustment: str | None = None,
 ) -> pd.DataFrame:
     """Legacy alias expected by bot_engine (accepts optional start/end)."""  # AI-AGENT-REF
     if start is None or end is None:
         start, end = _default_window_for(timeframe)
     try:
-        df = get_bars(symbol, str(timeframe), start, end, feed=feed)
+        df = get_bars(
+            symbol,
+            str(timeframe),
+            start,
+            end,
+            feed=feed,
+            adjustment=adjustment,
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("ALPACA_DAILY_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
         df = None

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 python - <<'PY'
-from ai_trading.settings import get_settings
+from ai_trading.config import get_settings
 S = get_settings()
 print("settings_ok", {"interval": S.interval, "iterations": S.iterations, "seed": S.seed, "model_path": S.model_path})
 PY

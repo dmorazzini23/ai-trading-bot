@@ -9,6 +9,7 @@ import pandas as pd
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.data_fetcher import get_bars, get_minute_df
 from ai_trading.data_fetcher import get_bars as http_get_bars  # AI-AGENT-REF: fallback helpers
+from ai_trading.config import get_settings
 from ai_trading.logging import get_logger
 from ai_trading.logging.empty_policy import (
     classify as _empty_classify,
@@ -313,20 +314,30 @@ def _resample_minutes_to_daily(df, tz="America/New_York"):
         return df
 
 
-def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: str = "sip"):
+def get_daily_bars(
+    symbol: str,
+    client,
+    start: datetime,
+    end: datetime,
+    feed: str | None = None,
+):
     """Fetch daily bars; fallback to alternate feed then resampled minutes."""  # AI-AGENT-REF
+    S = get_settings()
+    if feed is None:
+        feed = S.alpaca_data_feed
+    adjustment = S.alpaca_adjustment
     start = ensure_utc_datetime(start)
     end = ensure_utc_datetime(end)
-    df = _fetch_daily_bars(client, symbol, start, end, feed=feed)
+    df = _fetch_daily_bars(client, symbol, start, end, feed=feed, adjustment=adjustment)
     if df is not None and not df.empty:
         return df
     alt = "iex" if feed == "sip" else "sip"
-    df = _fetch_daily_bars(client, symbol, start, end, feed=alt)
+    df = _fetch_daily_bars(client, symbol, start, end, feed=alt, adjustment=adjustment)
     if df is not None and not df.empty:
         return df
     try:
         minutes_start = end - timedelta(days=5)
-        mdf = _get_minute_bars(symbol, minutes_start, end, feed=alt)
+        mdf = _get_minute_bars(symbol, minutes_start, end, feed=feed)
         if mdf is not None and not mdf.empty:
             rdf = _resample_minutes_to_daily(mdf)
             if rdf is not None and not rdf.empty:
