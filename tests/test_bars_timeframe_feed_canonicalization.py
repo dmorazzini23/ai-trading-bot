@@ -4,20 +4,28 @@ import pandas as pd
 
 from ai_trading.data import bars as bars_mod
 
+# AI-AGENT-REF: test central helpers
+from ai_trading.logging.normalize import (
+    canon_feed as _canon_feed,
+)
+from ai_trading.logging.normalize import (
+    canon_timeframe as _canon_tf,
+)
+
 
 def _dummy_callable():  # AI-AGENT-REF: simulate stub attribute
     return None
 
 
 def test_canonicalizers_map_weird_values_to_safe_defaults():
-    assert bars_mod._to_timeframe_str(_dummy_callable) == "1Day"
-    assert bars_mod._to_timeframe_str("1m") == "1Min"
-    assert bars_mod._to_timeframe_str("1Min") == "1Min"
-    assert bars_mod._to_timeframe_str("DAY") == "1Day"
+    assert _canon_tf(_dummy_callable) == "1Day"
+    assert _canon_tf("1m") == "1Min"
+    assert _canon_tf("1Min") == "1Min"
+    assert _canon_tf("DAY") == "1Day"
 
-    assert bars_mod._to_feed_str(_dummy_callable) == "sip"
-    assert bars_mod._to_feed_str("IEX") == "iex"
-    assert bars_mod._to_feed_str("sip") == "sip"
+    assert _canon_feed(_dummy_callable) == "sip"
+    assert _canon_feed("IEX") == "iex"
+    assert _canon_feed("sip") == "sip"
 
 
 def test_safe_get_stock_bars_uses_canonicalized_values(monkeypatch):
