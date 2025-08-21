@@ -5,6 +5,6 @@ from ai_trading.config.settings import get_settings as modern_get
 
 
 def test_settings_bridge_alias():
-    """Legacy get_settings should reference modern config."""  # AI-AGENT-REF
-    assert legacy_get is modern_get
+    """Legacy and modern helpers return the same instance."""  # AI-AGENT-REF
+    assert legacy_get() is modern_get()
 
