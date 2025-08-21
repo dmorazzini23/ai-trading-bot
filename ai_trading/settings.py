@@ -196,7 +196,7 @@ def get_settings() -> Settings:
 
 def get_news_api_key() -> str | None:
     """Lazy accessor for optional News API key."""  # AI-AGENT-REF: runtime News API key
-    return get_settings().news_api_key
+    return getattr(get_settings(), "news_api_key", None)
 
 
 def get_rebalance_interval_min() -> int:
@@ -310,3 +310,18 @@ def get_seed_int(default: int = 42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: robust seed accessor
     s = get_settings()
     return _to_int(getattr(s, "ai_trading_seed", default), default)
+
+
+# ---------------------------------------------------------------------------
+# AI-AGENT-REF: compatibility shim re-exporting modern config settings
+# ---------------------------------------------------------------------------
+try:
+    from ai_trading.config.settings import (
+        Settings as _ConfigSettings,
+        get_settings as _config_get_settings,
+    )
+
+    Settings = _ConfigSettings  # type: ignore[assignment]
+    get_settings = _config_get_settings  # type: ignore[assignment]
+except Exception:  # noqa: BLE001
+    pass
