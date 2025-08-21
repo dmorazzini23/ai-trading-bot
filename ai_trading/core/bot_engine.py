@@ -8544,20 +8544,7 @@ def should_enter(
 def should_exit(
     ctx: BotContext, symbol: str, price: float, atr: float
 ) -> tuple[bool, int, str]:
-    try:
-        pos = ctx.api.get_open_position(symbol)
-        current_qty = int(pos.qty)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        current_qty = 0
+    current_qty = _current_qty(ctx, symbol)  # AI-AGENT-REF: derive qty safely
 
     # AI-AGENT-REF: remove time-based rebalance hold logic
     if symbol in ctx.rebalance_buys:
@@ -9202,20 +9189,13 @@ def _evaluate_trade_signal(
     return final_score, conf, strat
 
 
-def _current_position_qty(ctx: BotContext, symbol: str) -> int:
-    client = getattr(ctx, "api", None)
-    try:
-        pos = client.get_open_position(symbol) if client else None
-    except Exception as e:  # noqa: BLE001
-        logger.debug("No open position for %s: %s", symbol, e)
-        return 0
+def _current_qty(ctx, symbol: str) -> int:
+    pos = ctx.position_map.get(symbol) if hasattr(ctx, "position_map") else None  # AI-AGENT-REF: safe lookup
     if pos is None:
         return 0
-    qty = getattr(pos, "qty", None)
-    if qty is None and isinstance(pos, dict):
-        qty = pos.get("qty")
+    qty = getattr(pos, "qty", 0) or 0
     try:
-        return int(qty) if qty is not None else 0
+        return int(qty)
     except (TypeError, ValueError):
         return 0
 
@@ -9273,7 +9253,7 @@ def trade_logic(
         _log.warning(f"Skipping {symbol}: model returned NaN prediction")
         return True
 
-    current_qty = _current_position_qty(ctx, symbol)
+    current_qty = _current_qty(ctx, symbol)
 
     from datetime import UTC, datetime
 
@@ -12275,14 +12255,14 @@ def manage_position_risk(ctx, position) -> None:
 def pyramid_add_position(
     ctx: BotContext, symbol: str, fraction: float, side: str
 ) -> None:
-    current_qty = _current_position_qty(ctx, symbol)
+    current_qty = _current_qty(ctx, symbol)
     add_qty = max(1, int(abs(current_qty) * fraction))
     submit_order(ctx, symbol, add_qty, "buy" if side == "long" else "sell")
     _log.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
 
 
 def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
-    current_qty = _current_position_qty(ctx, symbol)
+    current_qty = _current_qty(ctx, symbol)
     reduce_qty = max(1, int(abs(current_qty) * fraction))
     side = "sell" if current_qty > 0 else "buy"
     submit_order(ctx, symbol, reduce_qty, side)

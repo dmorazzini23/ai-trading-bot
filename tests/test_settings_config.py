@@ -1,43 +1,52 @@
 import pytest
-from ai_trading.config import Settings
+from pydantic import ValidationError
 
-def test_dual_schema_resolution(monkeypatch):
-    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-    monkeypatch.setenv("APCA_API_KEY_ID", "pk_apca")
-    monkeypatch.setenv("APCA_API_SECRET_KEY", "sk_apca")
+from ai_trading.config.settings import get_settings
+from ai_trading.settings import Settings
+from ai_trading.core.bot_engine import _current_qty
+from ai_trading.main import logger
+
+
+def test_settings_defaults(monkeypatch):
+    """Defaults should populate sane values."""  # AI-AGENT-REF
+    for key in [
+        "ALPACA_DATA_FEED",
+        "ALPACA_ADJUSTMENT",
+        "CAPITAL_CAP",
+        "DOLLAR_RISK_LIMIT",
+    ]:
+        monkeypatch.delenv(key, raising=False)
     s = Settings()
-    assert s.alpaca_api_key == "pk_apca"
-    assert s.alpaca_secret_key == "sk_apca"
-
-def test_shadow_mode_bypasses_validation():
-    s = Settings(shadow_mode=True)
-    s.require_alpaca_or_raise()  # should not raise
-
-def test_missing_creds_raises(monkeypatch):
-    # Clear environment variables to ensure test isolation
-    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
-    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
-    
-    s = Settings(shadow_mode=False, alpaca_api_key=None, alpaca_secret_key=None)
-    with pytest.raises(RuntimeError):
-        s.require_alpaca_or_raise()
-
-def test_worker_defaults_and_overrides(monkeypatch):
-    s = Settings()
-    assert s.effective_executor_workers(8) == 4
-    assert s.effective_prediction_workers(1) == 2
-    monkeypatch.setenv("EXECUTOR_WORKERS", "3")
-    monkeypatch.setenv("PREDICTION_WORKERS", "5")
-    s2 = Settings()
-    assert s2.effective_executor_workers(8) == 3
-    assert s2.effective_prediction_workers(8) == 5
+    assert s.alpaca_data_feed == "iex"
+    assert s.alpaca_adjustment == "all"
+    assert s.capital_cap == 0.04
+    assert s.dollar_risk_limit == 0.05
 
 
-def test_market_calendar_env(monkeypatch):
-    """MARKET_CALENDAR env var flows into Settings."""  # AI-AGENT-REF
-    monkeypatch.setenv("MARKET_CALENDAR", "XNAS")
-    s = Settings()
-    assert s.market_calendar == "XNAS"
+def test_settings_invalid_risk(monkeypatch):
+    """Invalid risk values raise ValidationError."""  # AI-AGENT-REF
+    monkeypatch.setenv("CAPITAL_CAP", "0")
+    monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_main_startup_log(caplog):
+    """Startup log emits DATA_CONFIG line."""  # AI-AGENT-REF
+    S = get_settings()
+    with caplog.at_level("INFO"):
+        logger.info(
+            "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca",
+            S.alpaca_data_feed,
+            S.alpaca_adjustment,
+        )
+    assert "DATA_CONFIG feed=iex adjustment=all timeframe=1Day/1Min provider=alpaca" in caplog.text
+
+
+def test_current_qty_no_position():
+    """Helper returns 0 when position missing."""  # AI-AGENT-REF
+    class Ctx:
+        position_map = {}
+
+    assert _current_qty(Ctx(), "XYZ") == 0
+

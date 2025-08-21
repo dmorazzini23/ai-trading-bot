@@ -5,7 +5,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 from functools import lru_cache
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from ai_trading.env import ensure_dotenv_loaded  # AI-AGENT-REF: re-export for CLI
 
@@ -70,6 +71,29 @@ def _to_bool(val: Any, default: bool | None = None) -> bool:
 
 
 class Settings(BaseSettings):
+    # General runtime configuration
+    env: str = Field(default="test", alias="APP_ENV")  # AI-AGENT-REF: environment name
+    market_calendar: str = Field(default="XNYS", alias="MARKET_CALENDAR")  # AI-AGENT-REF: trading calendar
+    data_provider: str = Field(default="mock", alias="DATA_PROVIDER")  # AI-AGENT-REF: data provider source
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")  # AI-AGENT-REF: log level
+    enable_memory_optimization: bool = Field(default=True)  # AI-AGENT-REF: memory tweaks
+    log_compact_json: bool = Field(False, alias="LOG_COMPACT_JSON")  # AI-AGENT-REF: compact log format
+    alpaca_api_key: str | None = Field(default=None, alias="ALPACA_API_KEY")  # AI-AGENT-REF: Alpaca key
+    alpaca_secret_key: SecretStr | None = Field(
+        default=None, alias="ALPACA_SECRET_KEY"
+    )  # AI-AGENT-REF: Alpaca secret
+    redis_url: str | None = Field(default=None, alias="REDIS_URL")  # AI-AGENT-REF: redis URL
+    alpaca_base_url: str = Field(
+        default="https://paper-api.alpaca.markets", alias="ALPACA_BASE_URL"
+    )  # AI-AGENT-REF: Alpaca base URL
+    trading_mode: str = Field(default="balanced", alias="TRADING_MODE")  # AI-AGENT-REF: trading mode
+    webhook_secret: str | None = Field(default=None, alias="WEBHOOK_SECRET")  # AI-AGENT-REF: webhook secret
+    testing: bool = Field(False, alias="TESTING")  # AI-AGENT-REF: test mode toggle
+    shadow_mode: bool = Field(False, alias="SHADOW_MODE")  # AI-AGENT-REF: shadow trades
+    log_market_fetch: bool = Field(True, alias="LOG_MARKET_FETCH")  # AI-AGENT-REF: fetch logging
+    healthcheck_port: int = Field(9001, alias="HEALTHCHECK_PORT")  # AI-AGENT-REF: health server port
+    min_health_rows: int = Field(120, alias="MIN_HEALTH_ROWS")  # AI-AGENT-REF: health rows threshold
+
     # Finnhub API calls per minute (rate limit budget)
     finnhub_rpm: int = Field(default=55, env="AI_TRADER_FINNHUB_RPM")
     # Upper bound on trade submissions per day (rate limit)
@@ -91,10 +115,6 @@ class Settings(BaseSettings):
     portfolio_drift_threshold: float = Field(
         default=0.15, env="AI_TRADER_PORTFOLIO_DRIFT_THRESHOLD"
     )
-    # Max fraction of equity at risk per trade
-    dollar_risk_limit: float = Field(default=0.05, env="AI_TRADER_DOLLAR_RISK_LIMIT")
-    # Max fraction of equity per new position
-    capital_cap: float = Field(default=0.04, env="AI_TRADER_CAPITAL_CAP")
     # Max fraction of equity in one sector
     sector_exposure_cap: float = Field(
         default=0.33, env="AI_TRADER_SECTOR_EXPOSURE_CAP"
@@ -109,6 +129,14 @@ class Settings(BaseSettings):
     data_cache_ttl_seconds: int = Field(
         default=300, env="AI_TRADER_DATA_CACHE_TTL_SECONDS"
     )
+    data_cache_dir: str = Field(
+        default=str(Path.home() / ".cache" / "ai_trader"),
+        env="AI_TRADER_DATA_CACHE_DIR",
+    )  # AI-AGENT-REF: cache directory
+    data_cache_disk_enable: bool = Field(
+        True, env="AI_TRADER_DATA_CACHE_DISK_ENABLE"
+    )  # AI-AGENT-REF: disk cache toggle
+    pretrade_lookback_days: int = Field(120, alias="PRETRADE_LOOKBACK_DAYS")  # AI-AGENT-REF: safety lookback
     verbose_logging: bool = Field(default=False, env="AI_TRADER_VERBOSE_LOGGING")
     # Plotting (matplotlib) allowed in environments that support it
     enable_plotting: bool = Field(default=False, env="AI_TRADER_ENABLE_PLOTTING")
@@ -118,6 +146,20 @@ class Settings(BaseSettings):
     )
     # Global volume threshold used by bot_engine init
     volume_threshold: float = Field(default=0.0, env="AI_TRADER_VOLUME_THRESHOLD")
+
+    # Data fetching knobs used by main.py
+    alpaca_data_feed: Literal["iex", "sip"] = Field(
+        "iex", env="ALPACA_DATA_FEED"
+    )  # AI-AGENT-REF: market data feed
+    alpaca_adjustment: Literal["all", "raw"] = Field(
+        "all", env="ALPACA_ADJUSTMENT"
+    )  # AI-AGENT-REF: bar adjustment
+
+    # Risk knobs used during runtime validation
+    capital_cap: float = Field(0.04, env="CAPITAL_CAP")  # AI-AGENT-REF: equity cap
+    dollar_risk_limit: float = Field(
+        0.05, env="DOLLAR_RISK_LIMIT"
+    )  # AI-AGENT-REF: per-position risk
     """Single source of truth for runtime configuration."""
 
     # loop control
@@ -173,6 +215,23 @@ class Settings(BaseSettings):
         if v in (None, "", "None"):
             return info.field_info.default
         return v
+
+    @field_validator("alpaca_data_feed", mode="before")
+    @classmethod
+    def _norm_feed(cls, v):  # AI-AGENT-REF: normalize feed
+        return str(v).lower().strip()
+
+    @field_validator("alpaca_adjustment", mode="before")
+    @classmethod
+    def _norm_adj(cls, v):  # AI-AGENT-REF: normalize adjustment
+        return str(v).lower().strip()
+
+    @field_validator("capital_cap", "dollar_risk_limit")
+    @classmethod
+    def _risk_in_range(cls, v, info):  # AI-AGENT-REF: risk bounds check
+        if not (0.0 < float(v) <= 1.0):
+            raise ValueError(f"{info.field_name} must be in (0, 1], got {v}")
+        return float(v)
 
     # AI-AGENT-REF: derive timedelta from minutes
     @computed_field
@@ -251,6 +310,8 @@ def get_conf_threshold() -> float:
     from ai_trading.config.management import TradingConfig
 
     mode = getattr(get_settings(), "trading_mode", "balanced")
+    if not isinstance(mode, str):  # AI-AGENT-REF: guard FieldInfo from raw Settings
+        mode = str(getattr(mode, "default", mode))
     cfg = TradingConfig.from_env(mode=mode)
     return _to_float(
         getattr(cfg, "conf_threshold", 0.75), 0.75
@@ -310,18 +371,3 @@ def get_seed_int(default: int = 42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: robust seed accessor
     s = get_settings()
     return _to_int(getattr(s, "ai_trading_seed", default), default)
-
-
-# ---------------------------------------------------------------------------
-# AI-AGENT-REF: compatibility shim re-exporting modern config settings
-# ---------------------------------------------------------------------------
-try:
-    from ai_trading.config.settings import (
-        Settings as _ConfigSettings,
-        get_settings as _config_get_settings,
-    )
-
-    Settings = _ConfigSettings  # type: ignore[assignment]
-    get_settings = _config_get_settings  # type: ignore[assignment]
-except Exception:  # noqa: BLE001
-    pass
