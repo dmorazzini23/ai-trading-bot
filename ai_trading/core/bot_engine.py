@@ -49,7 +49,7 @@ from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
 )
-from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit)
+from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
     warnings.filterwarnings("default", category=DeprecationWarning)
@@ -286,6 +286,15 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
         pipeline = None  # type: ignore  # AI-AGENT-REF: fallback when pipeline absent
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
+
+# AI-AGENT-REF: ensure FinBERT disabled message logged once
+_finbert_logged = False
+
+def _log_finbert_disabled() -> None:
+    global _finbert_logged
+    if not _finbert_logged:
+        _log.info("FinBERT disabled by config; skipping model load.")
+        _finbert_logged = True
 
 # AI-AGENT-REF: normalize arbitrary inputs into DataFrames
 import pandas as pd
@@ -2172,7 +2181,7 @@ def ensure_finbert(cfg=None):
             ):  # AI-AGENT-REF: narrow exception
                 enabled = False
         if not enabled:
-            _log.info("FinBERT disabled by config; skipping model load.")
+            _log_finbert_disabled()  # AI-AGENT-REF: reduce log spam
             return None, None
 
         # dependency presence check without ImportError guards
@@ -3525,6 +3534,33 @@ class DataFetcher:
 
         client = StockHistoricalDataClient(api_key, api_secret)
 
+        def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
+            try:
+                m_req = StockBarsRequest(
+                    symbol_or_symbols=[symbol],
+                    timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+                    start=start_ts,
+                    end=end_ts,
+                    feed="iex",
+                )
+                mdf = safe_get_stock_bars(client, m_req, symbol, "FALLBACK MINUTE")
+                if mdf is None or mdf.empty:
+                    return None
+                if isinstance(mdf.columns, pd.MultiIndex):
+                    mdf = mdf.xs(symbol, level=0, axis=1)
+                else:
+                    mdf = mdf.drop(columns=["symbol"], errors="ignore")
+                idx_vals = mdf.index
+                try:
+                    idx = safe_to_datetime(idx_vals, context=f"minute fallback {symbol}")
+                except ValueError:
+                    return None
+                mdf.index = idx
+                mdf = mdf.rename(columns=lambda c: c.lower())
+                return _resample_minutes_to_daily(mdf)
+            except Exception:  # noqa: BLE001
+                return None
+
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
@@ -3648,35 +3684,43 @@ class DataFetcher:
                     OSError,
                 ) as iex_err:  # AI-AGENT-REF: narrow exception
                     _log.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    _log.info(
-                        f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
-                    )
-                    ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
-                    if ts is None:
-                        ts = pd.Timestamp.now(tz="UTC")
-                    dummy_date = ts
-                    df = pd.DataFrame(
-                        [
-                            {
-                                "open": 0.0,
-                                "high": 0.0,
-                                "low": 0.0,
-                                "close": 0.0,
-                                "volume": 0,
-                            }
-                        ],
-                        index=[dummy_date],
-                    )
+                    rdf = _minute_resample()
+                    if rdf is not None and not rdf.empty:
+                        df = rdf
+                    else:
+                        _log.info(
+                            f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
+                        )
+                        ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
+                        if ts is None:
+                            ts = pd.Timestamp.now(tz="UTC")
+                        dummy_date = ts
+                        df = pd.DataFrame(
+                            [
+                                {
+                                    "open": 0.0,
+                                    "high": 0.0,
+                                    "low": 0.0,
+                                    "close": 0.0,
+                                    "volume": 0,
+                                }
+                            ],
+                            index=[dummy_date],
+                        )
             else:
                 _log.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
-                ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
-                if ts2 is None:
-                    ts2 = pd.Timestamp.now(tz="UTC")
-                dummy_date = ts2
-                df = pd.DataFrame(
-                    [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
-                    index=[dummy_date],
-                )
+                rdf = _minute_resample()
+                if rdf is not None and not rdf.empty:
+                    df = rdf
+                else:
+                    ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
+                    if ts2 is None:
+                        ts2 = pd.Timestamp.now(tz="UTC")
+                    dummy_date = ts2
+                    df = pd.DataFrame(
+                        [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
+                        index=[dummy_date],
+                    )
         except (NameError, AttributeError) as e:
             # Handle pandas schema errors (like missing _RealMultiIndex) gracefully
             _log.error(
