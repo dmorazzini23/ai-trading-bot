@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+import ai_trading.logging as L
 from ai_trading.logging import SanitizingLoggerAdapter
 
 
@@ -32,7 +33,7 @@ def test_extra_key_collisions_are_prefixed():
             "hello",
             extra={
                 "levelname": "XLEVEL",  # reserved key collision
-                "msg": "XMSG",         # reserved key collision (message)
+                "message": "XMSG",      # reserved key collision (message)
                 "feed": "iex",          # a normal key for contrast
             },
         )
@@ -46,14 +47,12 @@ def test_extra_key_collisions_are_prefixed():
     assert rec.levelname == "INFO"
     assert rec.getMessage() == "hello"
 
-    # The extra values should appear under a *prefixed* key, not the reserved names
+    # The extra values should appear under the exact 'x_' prefix your adapter uses
     d = rec.__dict__
-    has_level_extra = any(
-        k != "levelname" and "levelname" in k and d[k] == "XLEVEL" for k in d
+    assert d.get("x_levelname") == "XLEVEL", (
+        f"Expected x_levelname='XLEVEL', got: {d.get('x_levelname')} (keys={list(d.keys())})"
     )
-    has_message_extra = any(
-        k != "msg" and "msg" in k and d[k] == "XMSG" for k in d
+    assert d.get("x_message") == "XMSG", (
+        f"Expected x_message='XMSG', got: {d.get('x_message')} (keys={list(d.keys())})"
     )
-    assert has_level_extra, f"Collision key 'levelname' was not prefixed: keys={list(d.keys())}"
-    assert has_message_extra, f"Collision key 'msg' was not prefixed: keys={list(d.keys())}"
 
