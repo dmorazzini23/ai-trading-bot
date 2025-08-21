@@ -370,7 +370,10 @@ def main(argv: list[str] | None = None) -> None:
                 logger.exception("run_cycle failed")
             count += 1
 
-            logger.info("HTTP_POOL_STATS", extra=http_utils.pool_stats())
+            # AI-AGENT-REF: clarify pool stats origin
+            _pool_stats = http_utils.pool_stats()
+            _pool_stats["transport"] = "requests"
+            logger.info("REQUESTS_POOL_STATS", extra=_pool_stats)
             logger.info(
                 "CYCLE_TIMING",
                 extra={

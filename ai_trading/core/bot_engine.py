@@ -3532,34 +3532,47 @@ class DataFetcher:
                 end=end_ts,
                 feed=_DEFAULT_FEED,
             )
-            # AI-AGENT-REF: retry with sanitized datetimes on callable TypeError
+
+            # AI-AGENT-REF: pre-sanitize to avoid TypeError on callables
+            _today_utc = datetime.now(UTC)
+            _prev_day = _prev_bus_day(
+                _today_utc.astimezone(ZoneInfo("America/New_York")).date()
+            )
+            _default_start_u, _default_end_u = _nyse_session_utc(_prev_day)
+
+            _was_callable = False
+
+            def _sanitize_pre(x, default):
+                nonlocal _was_callable
+                if callable(x):
+                    _was_callable = True
+                try:
+                    return _ensure_utc_dt(x, allow_callables=True)
+                except Exception:
+                    return default
+
+            req.start = _sanitize_pre(
+                getattr(req, "start", start_ts), _default_start_u
+            )
+            req.end = _sanitize_pre(
+                getattr(req, "end", end_ts), _default_end_u
+            )
+            if _was_callable:
+                _log.debug("DAILY_BARS_INPUT_SANITIZED", extra={"symbol": symbol})
+
+            # AI-AGENT-REF: safety net retry with downgraded log level
             try:
                 bars = safe_get_stock_bars(client, req, symbol, "DAILY")
             except TypeError as te:
                 msg = str(te)
                 if "datetime argument was callable" in msg:
-                    _log.warning(
+                    _log.debug(
                         f"DAILY_BARS_RETRY_SANITIZE {symbol} due to: {msg}"
                     )
-                    # AI-AGENT-REF: derive previous session window in UTC
-                    _today_utc = datetime.now(UTC)
-                    _prev_day = _prev_bus_day(
-                        _today_utc.astimezone(ZoneInfo("America/New_York")).date()
-                    )
-                    _default_start_u, _default_end_u = _nyse_session_utc(_prev_day)
-
-                    # AI-AGENT-REF: callable-aware sanitization with safe defaults
-                    def _sanitize(x, default):
-                        try:
-                            return _ensure_utc_dt(x, allow_callables=True)
-                        except Exception:
-                            return default
-
-                    # AI-AGENT-REF: apply sanitized or default bounds
-                    req.start = _sanitize(
+                    req.start = _sanitize_pre(
                         getattr(req, "start", start_ts), _default_start_u
                     )
-                    req.end = _sanitize(
+                    req.end = _sanitize_pre(
                         getattr(req, "end", end_ts), _default_end_u
                     )
                     bars = safe_get_stock_bars(client, req, symbol, "DAILY")
