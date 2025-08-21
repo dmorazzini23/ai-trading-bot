@@ -1,27 +1,51 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from ai_trading.data_fetcher import (
-    get_bars as http_get_bars,
     get_bars,
+    get_minute_df,
+)
+from ai_trading.data_fetcher import (
+    get_bars as http_get_bars,
 )  # AI-AGENT-REF: fallback helpers
-from ai_trading.data_fetcher import get_minute_df
 from ai_trading.logging import get_logger
+from ai_trading.utils.time import now_utc
+
 from .timeutils import (
+    UTC,
     ensure_utc_datetime,
     expected_regular_minutes,
     nyse_session_utc,
     previous_business_day,
-    UTC,
 )
-from ai_trading.utils.time import now_utc
 
 _log = get_logger(__name__)
+
+# AI-AGENT-REF: canonical fallback payload builder
+def _format_fallback_payload(tf_str: str, feed_str: str, start_utc: datetime, end_utc: datetime) -> list[str]:
+    s = start_utc.astimezone(UTC).isoformat()
+    e = end_utc.astimezone(UTC).isoformat()
+    return [tf_str, feed_str, s, e]
+
+
+# AI-AGENT-REF: debug helper mapping ET window to UTC
+def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_utc: datetime) -> None:
+    try:
+        logger.debug(
+            "DATA_FALLBACK_WINDOW_DEBUG",
+            extra={
+                "et_day": day_et.isoformat(),
+                "rth_et": "09:30-16:00",
+                "rth_utc": f"{start_utc.astimezone(UTC).isoformat()}..{end_utc.astimezone(UTC).isoformat()}",
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 # Light, local Alpaca shims so this module never needs bot_engine
 try:
@@ -205,7 +229,10 @@ def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
 def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     now_utc = ensure_utc_datetime(now_utc)
     start_u, end_u = _minute_fallback_window(now_utc)
-    df = _get_minute_bars(symbol, start_u, end_u, feed="iex")
+    day_et = start_u.astimezone(ZoneInfo("America/New_York")).date()
+    _log_fallback_window_debug(_log, day_et, start_u, end_u)
+    feed_str = "iex"
+    df = _get_minute_bars(symbol, start_u, end_u, feed=feed_str)
     rows = len(df)
     if rows < 300:
         _log.warning(
@@ -213,15 +240,18 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
             extra={
                 "rows": rows,
                 "expected": expected_regular_minutes(),
-                "start": start_u.isoformat(),
-                "end": end_u.isoformat(),
-                "feed": "iex",
+                "start": start_u.astimezone(UTC).isoformat(),
+                "end": end_u.astimezone(UTC).isoformat(),
+                "feed": feed_str,
             },
         )
         df_sip = _get_minute_bars(symbol, start_u, end_u, feed="sip")
         if len(df_sip) > rows:
             df = df_sip
+            feed_str = "sip"
             rows = len(df)
+    payload = _format_fallback_payload("1Min", feed_str, start_u, end_u)
+    _log.info("DATA_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
     if rows >= 300:
         _log.info("DATA_HEALTH: minute fallback ok", extra={"rows": rows})
     return df
