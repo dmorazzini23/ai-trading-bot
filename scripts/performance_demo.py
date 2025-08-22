@@ -49,7 +49,7 @@ def demo_system_diagnostic():
         else:
             logging.info("  - No performance recommendations needed ✓")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ System diagnostic error: {e}")
 
 def demo_memory_optimizer():
@@ -84,7 +84,7 @@ def demo_memory_optimizer():
         for obj_type, count in list(top_objects.items())[:3]:
             logging.info(f"    • {obj_type}: {count:,}")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Memory optimizer error: {e}")
 
 def demo_performance_monitor():
@@ -130,7 +130,7 @@ def demo_performance_monitor():
         else:
             logging.info("  - No alerts (system healthy) ✓")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Performance monitor error: {e}")
 
 def demo_process_manager():
@@ -174,7 +174,7 @@ def demo_process_manager():
         else:
             logging.info("  - All services healthy ✓")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Process manager error: {e}")
 
 def demo_integration():
@@ -206,7 +206,7 @@ def demo_integration():
         if 'memory_check_interval' in content:
             logging.info("  ✓ Periodic memory checks added")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Integration check error: {e}")
 
 def demo_startup_optimization():
@@ -229,7 +229,7 @@ def demo_startup_optimization():
         else:
             logging.info("  ✗ Startup script not found")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Startup optimization error: {e}")
 
 def main():

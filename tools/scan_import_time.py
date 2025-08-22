@@ -17,17 +17,23 @@ PATS = {
 def scan_file(p: pathlib.Path):
     txt = p.read_text(encoding="utf-8", errors="ignore")
     hits = []
-    if PATS["MODULE_CONST"].search(txt): hits.append("MODULE_CONST_FROM_SETTINGS")
-    if PATS["MODULE_CFG"].search(txt):   hits.append("MODULE_CFG_FROM_SETTINGS")
-    if PATS["DIRECT_ATTR"].search(txt):  hits.append("DIRECT_SETTINGS_ATTR")
-    if PATS["BARE_CALL"].search(txt):    hits.append("BARE_GET_SETTINGS")
+    if PATS["MODULE_CONST"].search(txt):
+        hits.append("MODULE_CONST_FROM_SETTINGS")
+    if PATS["MODULE_CFG"].search(txt):
+        hits.append("MODULE_CFG_FROM_SETTINGS")
+    if PATS["DIRECT_ATTR"].search(txt):
+        hits.append("DIRECT_SETTINGS_ATTR")
+    if PATS["BARE_CALL"].search(txt):
+        hits.append("BARE_GET_SETTINGS")
     return hits
 
 def main():
     any_hits = False
     for py in ROOT.rglob("*.py"):
-        if any(part in EXCLUDE for part in py.parts): continue
-        if py.parts[0] not in INCLUDE: continue
+        if any(part in EXCLUDE for part in py.parts):
+            continue
+        if py.parts[0] not in INCLUDE:
+            continue
         hits = scan_file(py)
         if hits:
             any_hits = True

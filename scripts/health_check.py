@@ -81,7 +81,7 @@ class HealthMonitor:
             try:
                 self.production_monitor = get_production_monitor()
                 logger.info("Production monitoring integration enabled")
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.warning(f"Could not initialize production monitoring: {e}")
 
         self.register_default_checks()
@@ -144,7 +144,7 @@ class HealthMonitor:
 
             return result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.exception("Error running health check '%s': %s", name, e)
             return HealthCheckResult(
                 name=name,
@@ -209,7 +209,7 @@ class HealthMonitor:
                 timestamp=datetime.now(UTC)
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return HealthCheckResult(
                 name="system_resources",
                 status=HealthStatus.CRITICAL,
@@ -250,7 +250,7 @@ class HealthMonitor:
                 timestamp=datetime.now(UTC)
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return HealthCheckResult(
                 name="disk_space",
                 status=HealthStatus.CRITICAL,
@@ -290,7 +290,7 @@ class HealthMonitor:
                 timestamp=datetime.now(UTC)
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return HealthCheckResult(
                 name="memory_usage",
                 status=HealthStatus.CRITICAL,
@@ -348,7 +348,7 @@ class HealthMonitor:
                 timestamp=datetime.now(UTC)
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return HealthCheckResult(
                 name="log_files",
                 status=HealthStatus.CRITICAL,
@@ -392,7 +392,7 @@ class HealthMonitor:
                 timestamp=datetime.now(UTC)
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return HealthCheckResult(
                 name="environment_variables",
                 status=HealthStatus.CRITICAL,
@@ -445,7 +445,7 @@ def log_health_summary():
                 if check["status"] == "critical":
                     logger.error("Health critical - %s: %s", name, check["message"])
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error("Failed to run health check: %s", e)
 
 
@@ -521,7 +521,7 @@ def _check_trading_system(self) -> HealthCheckResult:
             timestamp=datetime.now(UTC)
         )
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         return HealthCheckResult(
             name="trading_system",
             status=HealthStatus.CRITICAL,

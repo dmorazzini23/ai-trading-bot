@@ -78,7 +78,7 @@ try:  # AI-AGENT-REF: typed request exceptions
         RequestException,
         Timeout,
     )
-except Exception:  # pragma: no cover - requests optional
+except (ValueError, TypeError):  # pragma: no cover - requests optional
     RequestException = Timeout = ConnectionError = HTTPError = Exception  # type: ignore
 
 def _format_fallback_payload_df(

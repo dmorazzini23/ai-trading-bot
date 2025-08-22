@@ -8,6 +8,7 @@ _log = logging.getLogger(__name__)  # AI-AGENT-REF: structured logging
 def pick_torch_device() -> tuple[str, Any | None]:
     try:
         import torch  # type: ignore
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         _log.info(
             "ML_DEVICE_SELECTED", extra={"device": "cpu", "reason": "torch_unavailable"}
@@ -36,6 +37,7 @@ def tensors_to_device(batch: dict, device: str):
         from torch import Tensor  # type: ignore
 
         tv.append(Tensor)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return batch
     return {

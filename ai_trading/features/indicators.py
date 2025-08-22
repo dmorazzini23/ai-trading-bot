@@ -63,6 +63,7 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
         df["vwap"] = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
         return df
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         logger.error("VWAP computation failed", exc_info=True)
         return df
@@ -78,6 +79,7 @@ def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
                 logger.warning("Missing column 'macds' and 'signal', filling with zeros")
                 df["macds"] = 0.0
         return df
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         logger.error("MACDS computation failed", exc_info=True)
         return df
@@ -99,6 +101,7 @@ def ensure_columns(
                     logger.warning(f"Missing column '{col}', filling with zeros")
                 df[col] = 0.0
         return df
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         logger.error("Column validation failed", exc_info=True)
         return df

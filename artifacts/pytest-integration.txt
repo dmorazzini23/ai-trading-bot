@@ -1,0 +1,298 @@
+
+============================================================ ERRORS ============================================================
+__________________________________ ERROR collecting tests/institutional/test_live_trading.py ___________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/institutional/test_live_trading.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/institutional/test_live_trading.py:21: in <module>
+    from ai_trading.execution.live_trading import AlpacaExecutionEngine
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_______________________________________ ERROR collecting tests/test_advanced_features.py _______________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_advanced_features.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_advanced_features.py:31: in <module>
+    from ai_trading.execution import slippage  # AI-AGENT-REF: use prod slippage module
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_______________________________________ ERROR collecting tests/test_batch_and_warmup.py ________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_batch_and_warmup.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_batch_and_warmup.py:6: in <module>
+    from ai_trading.data_fetcher import get_bars_batch, warmup_cache
+E   ImportError: cannot import name 'warmup_cache' from 'ai_trading.data_fetcher' (/workspace/ai-trading-bot/ai_trading/data_fetcher.py)
+__________________________________________ ERROR collecting tests/test_benchmarks.py ___________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_benchmarks.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_benchmarks.py:6: in <module>
+    from ai_trading import indicators, signals
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+____________________________________ ERROR collecting tests/test_critical_trading_fixes.py _____________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_critical_trading_fixes.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_critical_trading_fixes.py:32: in <module>
+    from ai_trading.execution.engine import ExecutionEngine
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+------------------------------------------------------- Captured stdout --------------------------------------------------------
+{"ts": "2025-08-22 17:39:30,528", "level": "INFO", "name": "ai_trading.utils.device", "msg": "ML_D…CTED", "device": "cpu", "reason": "torch_unavailable", "bot_phase": "GENERAL"}
+_______________________________________ ERROR collecting tests/test_enhanced_signals.py ________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_enhanced_signals.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_enhanced_signals.py:10: in <module>
+    from ai_trading import signals
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_______________________________________ ERROR collecting tests/test_execution_classes.py _______________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_execution_classes.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_execution_classes.py:10: in <module>
+    from ai_trading.execution import ExecutionResult, OrderRequest
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_________________________________ ERROR collecting tests/test_execution_engine_check_stops.py __________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_execution_engine_check_stops.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_execution_engine_check_stops.py:1: in <module>
+    from ai_trading.execution.engine import ExecutionEngine
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_______________________________________ ERROR collecting tests/test_execution_methods.py _______________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_execution_methods.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_execution_methods.py:1: in <module>
+    from ai_trading.execution import ExecutionEngine
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_______________________________________ ERROR collecting tests/test_ml_model_loading.py ________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_ml_model_loading.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_ml_model_loading.py:9: in <module>
+    from sklearn.dummy import DummyClassifier
+E   ModuleNotFoundError: No module named 'sklearn.dummy'; 'sklearn' is not a package
+___________________________________ ERROR collecting tests/test_model_registry_roundtrip.py ____________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_model_registry_roundtrip.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_model_registry_roundtrip.py:8: in <module>
+    from sklearn.linear_model import LinearRegression
+E   ImportError: cannot import name 'LinearRegression' from 'sklearn.linear_model' (unknown location)
+________________________________________ ERROR collecting tests/test_parallel_speed.py _________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_parallel_speed.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_parallel_speed.py:4: in <module>
+    from ai_trading import signals
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_____________________________________ ERROR collecting tests/test_portfolio_integration.py _____________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_portfolio_integration.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_portfolio_integration.py:28: in <module>
+    from ai_trading.signals import filter_signals_with_portfolio_optimization
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+____________________________________ ERROR collecting tests/test_portfolio_optimization.py _____________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_portfolio_optimization.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_portfolio_optimization.py:13: in <module>
+    from ai_trading.execution.transaction_costs import (  # AI-AGENT-REF: normalized import
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+________________________________________ ERROR collecting tests/test_property_based.py _________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_property_based.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_property_based.py:13: in <module>
+    from ai_trading import signals, utils
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+____________________________________________ ERROR collecting tests/test_signals.py ____________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_signals.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_signals.py:11: in <module>
+    from ai_trading.signals import GaussianHMM, detect_market_regime_hmm
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+_______________________________________ ERROR collecting tests/test_signals_extended.py ________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_signals_extended.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_signals_extended.py:1: in <module>
+    from ai_trading import signals
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+________________________________________ ERROR collecting tests/test_signals_scoring.py ________________________________________
+ImportError while importing test module '/workspace/ai-trading-bot/tests/test_signals_scoring.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/root/.pyenv/versions/3.11.12/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+tests/test_signals_scoring.py:3: in <module>
+    from ai_trading import signals
+ai_trading/signals.py:114: in <module>
+    from ai_trading.execution.transaction_costs import (
+ai_trading/execution/__init__.py:36: in <module>
+    from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+ai_trading/execution/engine.py:86: in <module>
+    from .idempotency import OrderIdempotencyCache
+ai_trading/execution/idempotency.py:13: in <module>
+    from cachetools import TTLCache
+E   ModuleNotFoundError: No module named 'cachetools'
+=================================================== short test summary info ====================================================
+SKIPPED [1] tests/test_fill_rate_calculation_fix.py:21: ExecutionEngine not available
+SKIPPED [1] tests/test_logger_rotator_smoke.py:10: logger_rotator not available
+SKIPPED [1] tests/test_logging_behavior.py:15: TradeSignal unavailable
+SKIPPED [1] tests/test_main_smoke.py:9: run module not available
+SKIPPED [1] tests/unit/test_alpaca_api.py:3: alpaca_api module not found
+ERROR tests/institutional/test_live_trading.py
+ERROR tests/test_advanced_features.py
+ERROR tests/test_batch_and_warmup.py
+ERROR tests/test_benchmarks.py
+ERROR tests/test_critical_trading_fixes.py
+ERROR tests/test_enhanced_signals.py
+ERROR tests/test_execution_classes.py
+ERROR tests/test_execution_engine_check_stops.py
+ERROR tests/test_execution_methods.py
+ERROR tests/test_ml_model_loading.py
+ERROR tests/test_model_registry_roundtrip.py
+ERROR tests/test_parallel_speed.py
+ERROR tests/test_portfolio_integration.py
+ERROR tests/test_portfolio_optimization.py
+ERROR tests/test_property_based.py
+ERROR tests/test_signals.py
+ERROR tests/test_signals_extended.py
+ERROR tests/test_signals_scoring.py
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! Interrupted: 18 errors during collection !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+5 skipped, 924 deselected, 18 errors in 4.12s

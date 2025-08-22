@@ -4,7 +4,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import pytest
 
+
+pytestmark = pytest.mark.integration
 
 def test_bot_engine_import_no_nameerror():
     """Test that bot_engine can be imported without NameError for BUY_THRESHOLD.

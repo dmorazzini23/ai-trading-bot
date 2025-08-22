@@ -6,7 +6,6 @@ import time
 from unittest.mock import patch
 
 import pytest
-
 from ai_trading import config
 
 
@@ -136,6 +135,7 @@ def test_main_import_no_hang():
     try:
         # This is the specific test case mentioned in the problem statement
         pass
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         # Import might fail due to missing dependencies, but it shouldn't hang
         pass

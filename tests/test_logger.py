@@ -1,8 +1,8 @@
 import logging
 
+import ai_trading.logging as logger  # Use centralized logging module
 import pytest
 
-import ai_trading.logging as logger  # Use centralized logging module
 from tests.conftest import reload_module
 
 

@@ -191,7 +191,7 @@ if __name__ == "__main__":
         try:
             test_func()
             passed += 1
-        except Exception:
+        except (ValueError, TypeError):
             failed += 1
 
 

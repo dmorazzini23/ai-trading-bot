@@ -38,6 +38,7 @@ class TestBotEngineImports:
                     from ai_trading.pipeline import model_pipeline  # type: ignore
                     assert model_pipeline == "mock_model_pipeline"
                     primary_success = True
+                # noqa: BLE001 TODO: narrow exception
                 except Exception:
                     primary_success = False
 
@@ -67,6 +68,7 @@ class TestBotEngineImports:
                     try:
                         from ai_trading.pipeline import model_pipeline  # type: ignore
                         fallback_triggered = False
+                    # noqa: BLE001 TODO: narrow exception
                     except Exception:  # pragma: no cover
                         from pipeline import model_pipeline  # type: ignore
                         fallback_triggered = True

@@ -48,7 +48,7 @@ def test_monitoring_api():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 def test_cost_aware_signals():
@@ -98,7 +98,7 @@ def test_cost_aware_signals():
 
         return passed == len(results)
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 def test_performance_allocator():
@@ -165,7 +165,7 @@ def test_performance_allocator():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         import traceback
         traceback.print_exc()
         return False
@@ -189,7 +189,7 @@ def test_exception_handling():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 def main():
@@ -207,7 +207,7 @@ def main():
         try:
             result = test_func()
             results.append((test_name, result))
-        except Exception:
+        except (ValueError, TypeError):
             results.append((test_name, False))
 
 

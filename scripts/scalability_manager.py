@@ -109,7 +109,7 @@ class LoadBalancer:
 
             return future
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error submitting task: {e}")
             raise
 
@@ -123,7 +123,7 @@ class LoadBalancer:
                 result = func(*args, **kwargs)
                 success = True
                 return result
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 success = False
                 self.logger.error(f"Task {func.__name__} failed: {e}")
                 raise
@@ -335,7 +335,7 @@ class DataReplicationManager:
                                 'checksum': self._calculate_checksum(file_path)
                             })
 
-                        except Exception as e:
+                        except (ValueError, TypeError) as e:
                             self.logger.error(f"Failed to backup {file_path}: {e}")
 
             # Backup data directory
@@ -369,7 +369,7 @@ class DataReplicationManager:
 
             return backup_info
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Backup creation failed: {e}")
             backup_info['success'] = False
             backup_info['error'] = str(e)
@@ -412,7 +412,7 @@ class DataReplicationManager:
             self.logger.info(f"Backup restored: {restored_count} files")
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Backup restoration failed: {e}")
             return False
 
@@ -434,7 +434,7 @@ class DataReplicationManager:
             if removed_count > 0:
                 self.logger.info(f"Cleaned up {removed_count} old backups")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Backup cleanup failed: {e}")
 
     def _calculate_checksum(self, file_path: Path) -> str:
@@ -542,7 +542,7 @@ class HighAvailabilityManager:
                 # Update system state
                 self._update_system_state(health_status)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in HA monitoring loop: {e}")
 
             time.sleep(self.health_check_interval)
@@ -562,7 +562,7 @@ class HighAvailabilityManager:
                 'healthy': True,
                 'metrics': lb_metrics
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             health_status['components']['load_balancer'] = {
                 'healthy': False,
                 'error': str(e)
@@ -576,7 +576,7 @@ class HighAvailabilityManager:
                 'healthy': True,
                 'status': backup_status
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             health_status['components']['data_replication'] = {
                 'healthy': False,
                 'error': str(e)
@@ -707,7 +707,7 @@ class HighAvailabilityManager:
 
             test_results['tests_performed'].append('load_balancer_resilience')
             test_results['tests_passed'] += 1
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             test_results['tests_performed'].append(f'load_balancer_resilience_FAILED: {e}')
             test_results['tests_failed'] += 1
 
@@ -720,7 +720,7 @@ class HighAvailabilityManager:
             else:
                 test_results['tests_performed'].append('backup_system_FAILED')
                 test_results['tests_failed'] += 1
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             test_results['tests_performed'].append(f'backup_system_FAILED: {e}')
             test_results['tests_failed'] += 1
 
@@ -733,7 +733,7 @@ class HighAvailabilityManager:
             else:
                 test_results['tests_performed'].append('health_monitoring_FAILED')
                 test_results['tests_failed'] += 1
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             test_results['tests_performed'].append(f'health_monitoring_FAILED: {e}')
             test_results['tests_failed'] += 1
 
@@ -761,7 +761,7 @@ class HighAvailabilityManager:
 
             self.logger.info("Emergency shutdown completed")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error during emergency shutdown: {e}")
 
 

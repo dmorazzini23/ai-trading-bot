@@ -40,7 +40,9 @@ def test_alpaca_api_deprecation_warning():
     """Test canonical alpaca_api import emits no warnings."""
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        from ai_trading import alpaca_api  # noqa: F401  # AI-AGENT-REF: canonical import
+        from ai_trading import (
+            alpaca_api,  # noqa: F401  # AI-AGENT-REF: canonical import
+        )
 
         # Ensure no deprecation warning is raised for packaged import
         assert not w

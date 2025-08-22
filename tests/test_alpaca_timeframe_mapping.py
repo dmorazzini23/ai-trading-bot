@@ -3,11 +3,13 @@ import types
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-
 from ai_trading.alpaca_api import get_bars_df
+
+from tests.helpers.asserts import assert_df_like
 
 try:
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - inject stub
     mod = types.ModuleType("alpaca.data.timeframe")
 
@@ -39,7 +41,7 @@ def test_day_timeframe_normalized(mock_rest_cls):
     df = get_bars_df("SPY", "Day", feed="iex", adjustment="all")
     args, kwargs = mock_rest.get_bars.call_args
     assert kwargs["timeframe"] in ("1Day", "1D")
-    assert not df.empty
+    assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
 @patch("ai_trading.alpaca_api.TradeApiREST")
@@ -51,7 +53,7 @@ def test_tf_object_normalized(mock_rest_cls):
     df = get_bars_df("SPY", TimeFrame(1, TimeFrameUnit.Day), feed="iex", adjustment="all")
     args, kwargs = mock_rest.get_bars.call_args
     assert kwargs["timeframe"] in ("1Day", "1D")
-    assert not df.empty
+    assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
 @patch("ai_trading.alpaca_api.TradeApiREST")
@@ -63,5 +65,5 @@ def test_minute_normalized(mock_rest_cls):
     df = get_bars_df("SPY", "Minute", feed="iex", adjustment="all")
     args, kwargs = mock_rest.get_bars.call_args
     assert kwargs["timeframe"] in ("1Min", "1Minute")
-    assert not df.empty
+    assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 

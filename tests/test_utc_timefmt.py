@@ -8,7 +8,6 @@ formatting without double "Z" suffixes and ISO-8601 compliance.
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-
 from ai_trading.utils.timefmt import (
     ensure_utc_format,
     format_datetime_utc,

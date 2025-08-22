@@ -6,7 +6,6 @@ import time
 
 import numpy as np
 import pandas as pd
-
 from ai_trading import indicators, signals
 
 
@@ -14,6 +13,7 @@ def profile(func, *args, **kwargs):
     start = time.perf_counter()
     try:
         result = func(*args, **kwargs)
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.error("%s failed: %s", func.__name__, e)
         return None, -1

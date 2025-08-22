@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pandas as pd
-
 from ai_trading.core import bot_engine
 
 

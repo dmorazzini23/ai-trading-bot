@@ -131,7 +131,7 @@ class LoadTester:
                         response_time = (time.perf_counter() - submit_time) * 1000  # ms
                         response_times.append(response_time)
                         successful_requests += 1
-                    except Exception as e:
+                    except (ValueError, TypeError) as e:
                         errors.append(str(e))
                         failed_requests += 1
 
@@ -144,7 +144,7 @@ class LoadTester:
                     response_time = (time.perf_counter() - submit_time) * 1000
                     response_times.append(response_time)
                     successful_requests += 1
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     errors.append(str(e))
                     failed_requests += 1
 
@@ -200,7 +200,7 @@ class LoadTester:
                 # Default test operation
                 time.sleep(random.uniform(0.001, 0.01))  # Simulate work
                 return "success"
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             raise e
 
     def run_all_load_tests(self, target_function: Callable = None) -> dict[str, LoadTestResults]:
@@ -221,7 +221,7 @@ class LoadTester:
                 # Small delay between tests
                 time.sleep(10)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Load test {test_name} failed: {e}")
 
         return results
@@ -341,7 +341,7 @@ class ChaosEngineer:
                 performance = self._measure_system_performance()
                 performance_samples.append(performance)
                 time.sleep(1)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 error_details.append(f"Monitoring error at {i}s: {e}")
 
         # Wait for fault injection to complete
@@ -359,7 +359,7 @@ class ChaosEngineer:
                     recovery_time = datetime.now(UTC) - recovery_start
                     break
                 time.sleep(1)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 error_details.append(f"Recovery monitoring error: {e}")
 
         datetime.now(UTC)
@@ -468,7 +468,7 @@ class ChaosEngineer:
 
             return True
 
-        except Exception:
+        except (ValueError, TypeError):
             return False
 
     # Fault injection methods
@@ -611,7 +611,7 @@ class ProductionValidator:
             elif performance_score < 90:
                 warnings.append(f"Performance could be improved: {performance_score:.1f}% score")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             critical_failures.append(f"Performance testing failed: {e}")
             test_scores['performance'] = 0
 
@@ -629,7 +629,7 @@ class ProductionValidator:
             if reliability_score < self.validation_criteria['reliability']['min_score']:
                 critical_failures.append(f"Reliability tests failed: {reliability_score:.1f}% score")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             critical_failures.append(f"Reliability testing failed: {e}")
             test_scores['reliability'] = 0
 
@@ -642,7 +642,7 @@ class ProductionValidator:
             if security_score < self.validation_criteria['security']['min_score']:
                 critical_failures.append(f"Security tests failed: {security_score:.1f}% score")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             critical_failures.append(f"Security testing failed: {e}")
             test_scores['security'] = 0
 
@@ -655,7 +655,7 @@ class ProductionValidator:
             if functionality_score < self.validation_criteria['functionality']['min_score']:
                 critical_failures.append(f"Functionality tests failed: {functionality_score:.1f}% score")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             critical_failures.append(f"Functionality testing failed: {e}")
             test_scores['functionality'] = 0
 
@@ -668,7 +668,7 @@ class ProductionValidator:
             if compliance_score < self.validation_criteria['compliance']['min_score']:
                 critical_failures.append(f"Compliance tests failed: {compliance_score:.1f}% score")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             critical_failures.append(f"Compliance testing failed: {e}")
             test_scores['compliance'] = 0
 
@@ -830,9 +830,9 @@ class ProductionValidator:
     def _test_data_processing(self) -> float:
         """Test data processing functionality."""
         try:
-            import indicators
-
             from ai_trading import data_fetcher
+
+            import indicators
             return 90
         except ImportError:
             return 40

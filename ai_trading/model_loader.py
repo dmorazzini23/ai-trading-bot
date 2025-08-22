@@ -31,7 +31,7 @@ def train_and_save_model(symbol: str):
     start = end - timedelta(days=30)
     try:
         df = get_daily_df(symbol, start, end)
-    except Exception as exc:  # pragma: no cover - network may fail
+    except (ValueError, TypeError) as exc:  # pragma: no cover - network may fail
         logger.warning("Data fetch failed for %s: %s", symbol, exc)
         df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
 
@@ -43,7 +43,7 @@ def train_and_save_model(symbol: str):
     model = LinearRegression()
     try:
         model.fit(X, y)
-    except Exception as exc:  # pragma: no cover - unexpected sklearn failure
+    except (ValueError, TypeError) as exc:  # pragma: no cover - unexpected sklearn failure
         logger.exception("Model training failed: %s", exc)
         model = LinearRegression().fit([[0], [1]], [0, 1])
 
@@ -51,7 +51,7 @@ def train_and_save_model(symbol: str):
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         with open(MODELS_DIR / f"{symbol}.pkl", "wb") as f:
             pickle.dump(model, f)
-    except Exception as exc:  # pragma: no cover - disk issues
+    except (ValueError, TypeError) as exc:  # pragma: no cover - disk issues
         logger.warning("Failed saving model for %s: %s", symbol, exc)
 
     return model
@@ -65,7 +65,7 @@ def load_model(symbol: str):
         try:
             with open(path, "rb") as f:
                 model = pickle.load(f)
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning("Model load failed for %s: %s", symbol, exc)
             model = None
     if model is None:

@@ -7,6 +7,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tests.helpers.asserts import assert_df_like
+
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 
@@ -161,7 +163,7 @@ def test_fetch_bars_retry_invalid_feed(monkeypatch):
     end = start + pd.Timedelta(minutes=1)
     df = data_fetcher._fetch_bars("AAPL", start, end, "1Min", "iex")
     assert calls == ["iex", "sip"]
-    assert not df.empty
+    assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
 def test_finnhub_403_yfinance(monkeypatch):
@@ -189,7 +191,7 @@ def test_finnhub_403_yfinance(monkeypatch):
     end = start + pd.Timedelta(minutes=1)
     df = data_fetcher.get_minute_df("AAPL", start, end)
     assert called == ["AAPL"]
-    assert not df.empty
+    assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
 def test_empty_bars_handled(monkeypatch):

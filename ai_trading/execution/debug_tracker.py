@@ -115,7 +115,7 @@ class ExecutionDebugTracker:
             lock_acquired = self._lock.acquire(timeout=5.0)
             if lock_acquired:
                 self._active_orders[correlation_id] = execution_start
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(
                 "START_TRACKING_ERROR",
                 extra={"correlation_id": correlation_id, "error": str(e)},
@@ -194,7 +194,7 @@ class ExecutionDebugTracker:
                     self._active_orders[correlation_id][
                         "status"
                     ] = OrderStatus.CANCELLED.value
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             # AI-AGENT-REF: Graceful error handling for lock operations
             self.logger.error(
                 "EXECUTION_EVENT_ERROR",
@@ -271,7 +271,7 @@ class ExecutionDebugTracker:
 
                 # Remove from active orders
                 del self._active_orders[correlation_id]
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(
                 "ORDER_RESULT_ERROR",
                 extra={"correlation_id": correlation_id, "error": str(e)},

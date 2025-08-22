@@ -3,6 +3,7 @@ import logging
 try:  # AI-AGENT-REF: canonical env validation
     from ai_trading.validation.validate_env import Settings
     settings = Settings()
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     settings = None
 

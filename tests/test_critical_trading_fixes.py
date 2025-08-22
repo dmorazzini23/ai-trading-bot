@@ -25,7 +25,7 @@ import pytest
 # Import modules under test
 try:
     from ai_trading.analysis import sentiment
-except Exception:  # pragma: no cover - optional torch dependency
+except (ValueError, TypeError):  # pragma: no cover - optional torch dependency
     pytest.skip("sentiment module unavailable", allow_module_level=True)
 from ai_trading import config, meta_learning
 from ai_trading.broker.alpaca import AlpacaBroker
@@ -204,7 +204,7 @@ class TestMetaLearningSystemFixes(unittest.TestCase):
             try:
                 meta_learning._generate_bootstrap_training_data(self.trade_log_path, 10)
                 success = True
-            except Exception:
+            except (ValueError, TypeError):
                 success = False
 
             self.assertTrue(success)
@@ -750,7 +750,7 @@ def test_metalearn_invalid_prices_prevention():
         with patch('meta_learning.logger') as mock_logger:
             try:
                 retrain_meta_learner(trade_log_path=tmp_path, min_samples=1)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 # Training may fail due to missing sklearn, but that's OK for this test
                 mock_logger.warning.call_args_list.append(f"Meta learning training failed as expected: {e}")
 

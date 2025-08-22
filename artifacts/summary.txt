@@ -1,4 +1,10 @@
----- SUMMARY ----
-Ruff errors: 963
-Mypy status: success
-Pytest: failed (see artifacts/pytest.txt)
+core failed: 219
+AttributeError: 41
+AssertionError: 38
+TypeError: 26
+ModuleNotFoundError: 18
+ImportError: 17
+NameError: 14
+FileNotFoundError: 11
+Exception: 5
+integration failed: 0

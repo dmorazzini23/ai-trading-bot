@@ -221,6 +221,7 @@ def process_file(filepath: Path) -> bool:
                 f.write(content)
             return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 

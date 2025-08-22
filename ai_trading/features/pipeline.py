@@ -105,6 +105,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
             logger.debug("BuildFeatures fitted successfully")
             return self
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error fitting BuildFeatures: {e}")
             raise
@@ -159,6 +160,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
             )
             return features
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error transforming features: {e}")
             raise
@@ -187,6 +189,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
             return features
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error adding return features: {e}")
             return features
@@ -223,6 +226,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
             return features
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error adding volatility features: {e}")
             return features
@@ -260,6 +264,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
             return features
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error adding volume features: {e}")
             return features
@@ -321,6 +326,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
             return features
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error adding regime features: {e}")
             return features
@@ -374,6 +380,7 @@ def create_feature_pipeline(
         logger.info(f"Created feature pipeline with {len(pipeline_steps)} steps")
         return pipeline
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.error(f"Error creating feature pipeline: {e}")
         raise
@@ -427,6 +434,7 @@ def validate_pipeline_no_leakage(
         logger.debug("Pipeline validation passed - no obvious leakage detected")
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.error(f"Error validating pipeline: {e}")
         return False

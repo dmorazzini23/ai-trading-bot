@@ -3,6 +3,7 @@ AAPL,,150.0,,,10,buy,test,,,,
 <<<<<<< Updated upstream
 AAPL,,150.0,,,5,buy,TEST_MODE,,,,
 MSFT,,250.0,,,3,sell,TEST_MODE,,,,
+<<<<<<< HEAD
 =======
 AAPL,,150.0,,,10,buy,test,,,,
 AAPL,,150.0,,,10,buy,test,,,,
@@ -12,3 +13,11 @@ AAPL,,150.0,,,10,buy,test,,,,
 AAPL,,150.0,,,10,buy,test,,,,
 AAPL,,150.0,,,10,buy,test,,,,
 >>>>>>> Stashed changes
+=======
+AAPL,,150.0,,,10,buy,test,,,,
+AAPL,,150.0,,,5,buy,TEST_MODE,,,,
+MSFT,,250.0,,,3,sell,TEST_MODE,,,,
+AAPL,,150.0,,,10,buy,test,,,,
+AAPL,,150.0,,,5,buy,TEST_MODE,,,,
+MSFT,,250.0,,,3,sell,TEST_MODE,,,,
+>>>>>>> bfc465dbbe07710807368e1b16182a840c4e1703

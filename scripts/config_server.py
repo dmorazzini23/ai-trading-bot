@@ -48,6 +48,7 @@ def update_config():
 
     except ValueError as e:
         return jsonify({"error": f"Invalid number format: {str(e)}"}), 400
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         logging.exception("Config update failed")
         return jsonify({"error": "Internal server error"}), 500

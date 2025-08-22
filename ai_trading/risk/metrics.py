@@ -50,6 +50,7 @@ class RiskMetricsCalculator:
 
             return var
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating VaR: {e}")
             return 0.0
@@ -82,6 +83,7 @@ class RiskMetricsCalculator:
 
             return es
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating Expected Shortfall: {e}")
             return 0.0
@@ -107,6 +109,7 @@ class RiskMetricsCalculator:
             sharpe = mean_excess / std_excess * (252**0.5)
             return sharpe
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating Sharpe ratio: {e}")
             return 0.0
@@ -138,6 +141,7 @@ class RiskMetricsCalculator:
             sortino = mean_excess / downside_deviation * (252**0.5)
             return sortino
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating Sortino ratio: {e}")
             return 0.0
@@ -236,6 +240,7 @@ class DrawdownAnalyzer:
 
             return stats
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating drawdowns: {e}")
             return {}
@@ -263,6 +268,7 @@ class DrawdownAnalyzer:
             drawdown = (peak_value - current_value) / peak_value
             return True, drawdown
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error checking drawdown status: {e}")
             return False, 0.0
@@ -294,6 +300,7 @@ class DrawdownAnalyzer:
 
             return None  # Not recovered yet
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating recovery time: {e}")
             return None

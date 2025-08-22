@@ -49,7 +49,7 @@ def validate_sentiment_api_config():
         else:
             logging.info("❌ Sentiment API variables missing from config.py")
             return False
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error checking config.py: {e}")
         return False
 
@@ -76,7 +76,7 @@ def validate_process_detection():
         try:
             count = monitor._count_trading_bot_processes()
             logging.info(f"✅ Process detection works, found {count} trading bot processes")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logging.info(f"⚠️  Process detection method exists but failed to run: {e}")
             # This is not a failure in test environment
 
@@ -128,7 +128,7 @@ def validate_data_staleness():
 
         return True
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error validating data staleness: {e}")
         return False
 
@@ -200,7 +200,7 @@ def validate_backwards_compatibility():
 
         return True
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Backwards compatibility check failed: {e}")
         return False
 
@@ -229,7 +229,7 @@ def main():
                 passed_tests += 1
             else:
                 logging.info(f"❌ {test_name} validation failed")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logging.info(f"❌ {test_name} validation error: {e}")
 
     logging.info(str("\n" + "=" * 60))

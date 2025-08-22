@@ -155,7 +155,7 @@ class HealthChecker:
             details = {"timeout": True}
             self.consecutive_failures += 1
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             response_time = (time.time() - start_time) * 1000
             status = HealthStatus.CRITICAL
             message = f"Health check failed: {str(e)}"
@@ -321,7 +321,7 @@ class HealthMonitor:
                 # Wait for next interval
                 await asyncio.sleep(self.check_interval)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in monitoring loop: {e}")
                 await asyncio.sleep(10)  # Short delay before retry
 
@@ -419,7 +419,7 @@ class HealthMonitor:
             self.system_metrics_history.append(metrics)
             return metrics
 
-        except Exception as e:  # pragma: no cover - unexpected psutil errors
+        except (ValueError, TypeError) as e:  # pragma: no cover - unexpected psutil errors
             self.logger.error(f"Error collecting system metrics: {e}")
             return SystemMetrics(
                 cpu_percent=0,

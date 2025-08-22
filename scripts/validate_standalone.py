@@ -469,7 +469,7 @@ def main():
         try:
             test()
             passed += 1
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logging.info(f"  ✗ {test.__name__} failed: {e}")
             failed += 1
 

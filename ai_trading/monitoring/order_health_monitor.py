@@ -168,7 +168,7 @@ class OrderHealthMonitor:
                 # Sleep until next check
                 psleep(self.cleanup_interval)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(
                     "Error in order monitoring loop: %s", e, exc_info=True
                 )
@@ -210,7 +210,7 @@ class OrderHealthMonitor:
                                 "symbol": order_info.symbol,
                             },
                         )
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(
                         "Failed to cancel stale order %s: %s", order_info.order_id, e
                     )
@@ -272,7 +272,7 @@ class OrderHealthMonitor:
                         datetime.now(UTC)
                     )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(
                 "Partial fill retry failed for %s: %s", partial_info.order_id, e
             )
@@ -473,7 +473,7 @@ class OrderHealthMonitor:
 
             self.logger.info("Order health metrics exported to %s", filepath)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error("Failed to export metrics: %s", e)
 
 

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 try:
     import pandas_market_calendars as mcal  # optional
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
     mcal = None
 
 MARKET_CALENDAR_AVAILABLE = mcal is not None
@@ -24,7 +24,7 @@ def _get_calendar(cal_name: str):
         return None
     try:
         return mcal.get_calendar(cal_name)
-    except Exception as exc:  # pragma: no cover - best effort
+    except (ValueError, TypeError) as exc:  # pragma: no cover - best effort
         logger.warning(f"Failed to load {cal_name} calendar: {exc}")
         return None
 
@@ -80,7 +80,7 @@ class AlignedClock:
                 # Get exchange timezone from calendar
                 exchange_tz = self.calendar.tz
                 return utc_now.astimezone(exchange_tz)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.warning(
                     f"Failed to get exchange time: {e.__class__.__name__}: {e}"
                 )
@@ -155,7 +155,7 @@ class AlignedClock:
                             next_trading_day, next_close.time()
                         )
                         next_close = next_close.replace(tzinfo=next_close.tzinfo)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.warning(
                     f"Calendar check failed: {e.__class__.__name__}: {e}"
                 )
@@ -297,7 +297,7 @@ class AlignedClock:
 
             return market_open <= timestamp <= market_close
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.warning(
                 f"Market hours check failed: {e.__class__.__name__}: {e}"
             )

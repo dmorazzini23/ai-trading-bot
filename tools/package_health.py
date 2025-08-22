@@ -13,6 +13,7 @@ def _probe_psutil() -> bool:
     try:
         import psutil  # noqa: F401
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -23,6 +24,7 @@ def _probe_alpaca_trade_api() -> bool:
         import alpaca_trade_api  # type: ignore
         getattr(alpaca_trade_api, "__version__", "unknown")
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -34,6 +36,7 @@ def _probe_strategy_allocator() -> bool:
         )
         assert PerformanceBasedAllocator is not None
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -43,10 +46,12 @@ def _probe_async_testing() -> bool:
     ok = True
     try:
         import pytest_asyncio  # type: ignore  # noqa: F401
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         ok = False
     try:
         import anyio  # type: ignore  # noqa: F401
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         ok = False
     return ok
@@ -60,6 +65,7 @@ def _probe_model_and_universe():
     os.getenv('AI_TRADER_MODEL_MODULE')
     try:
         import joblib  # noqa
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         pass
 
@@ -77,6 +83,7 @@ def _probe_model_config():
         return False
     try:
         import joblib  # noqa: F401
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
     return True

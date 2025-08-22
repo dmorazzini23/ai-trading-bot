@@ -181,7 +181,7 @@ def request_json(
             except ValueError:
                 text = resp.text.strip()
                 return {"text": text}
-        except Exception as exc:
+        except (requests.RequestException, TimeoutError) as exc:
             key = f"{method}:{url}:{getattr(exc, 'args', '')}"
             log_fn = _log.warning if key not in _ERROR_LOGGED else _log.debug
             log_fn("HTTP_RETRY", extra={"attempt": attempt, "attempts": retries, "error": str(exc)})

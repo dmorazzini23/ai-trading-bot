@@ -267,7 +267,7 @@ class ProcessManager:
                 self.pidfile.close()
                 # Note: PID file will be automatically removed when process exits
                 # since we hold an exclusive lock on it
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.debug(f"Error cleaning up PID file: {e}")
 
     def check_service_status(self) -> dict:
@@ -491,7 +491,7 @@ class ProcessManager:
             self.logger.info(f"Process lock acquired (PID: {os.getpid()})")
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to acquire process lock: {e}")
             return False
 

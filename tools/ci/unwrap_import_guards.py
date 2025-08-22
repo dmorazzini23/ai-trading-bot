@@ -115,6 +115,7 @@ def main():
                 except SyntaxError:
                     continue
             files += 1
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             continue
 

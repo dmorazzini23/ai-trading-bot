@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-
 from ai_trading.strategies.performance_allocator import _compute_conf_multiplier
 
 

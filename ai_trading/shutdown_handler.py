@@ -25,7 +25,7 @@ PositionsHandler = Callable[[], list[dict[str, Any]]]
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     from alpaca.common.exceptions import APIError  # type: ignore
-except Exception:  # AI-AGENT-REF: fallback when SDK missing
+except (ValueError, TypeError):  # AI-AGENT-REF: fallback when SDK missing
     TradingClient = None  # type: ignore
 
     class APIError(Exception):

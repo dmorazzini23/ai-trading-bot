@@ -47,7 +47,7 @@ class TestCriticalIssuesResolution(unittest.TestCase):
         try:
             order.add_fill(1, Money(150.0))
             self.assertTrue(order.is_partially_filled)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.fail(f"Partial fill handling failed: {e}")
 
     def test_overtrading_prevention_cooldown_logic(self):
@@ -89,7 +89,7 @@ class TestCriticalIssuesResolution(unittest.TestCase):
                 # Simulate fallback to default behavior
                 fallback_result = {'status': 'fallback_active', 'reason': 'insufficient_data'}
                 self.assertEqual(fallback_result['status'], 'fallback_active')
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.fail(f"Fallback mechanism should not raise exceptions: {e}")
 
     def test_sentiment_rate_limiting_logic(self):
@@ -164,7 +164,7 @@ class TestOrderSpacingConfiguration(unittest.TestCase):
             spacing = risk_engine.order_spacing()
             self.assertIsInstance(spacing, float, "Order spacing should return float")
             self.assertGreaterEqual(spacing, 0, "Order spacing should be non-negative")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.fail(f"RiskEngine order spacing test failed: {e}")
 
     def test_trade_frequency_limits_logic(self):

@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
 import pandas as pd
-
 from ai_trading.portfolio import core as portfolio_core
+from ai_trading import utils as _utils  # type: ignore
 
 
 def test_price_snapshot_minute_fallback(monkeypatch):
@@ -12,7 +12,8 @@ def test_price_snapshot_minute_fallback(monkeypatch):
     )
 
     def fake_safe_get_stock_bars(client, request, symbol, context=""):
-        return pd.DataFrame({"timestamp": [pd.Timestamp.utcnow()], "close": [123.0]})
+        ts = _utils.time.utcnow()  # AI-AGENT-REF: avoid datetime.utcnow
+        return pd.DataFrame({"timestamp": [pd.Timestamp(ts)], "close": [123.0]})
 
     class DummyRequest:
         def __init__(self, *args, **kwargs):

@@ -230,7 +230,7 @@ class AdaptiveRiskController:
 
             return cluster_assignments
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Clustering failed: {e}")
             return dict.fromkeys(returns_data.columns, 0)
 

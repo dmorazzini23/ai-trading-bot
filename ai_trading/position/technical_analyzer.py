@@ -168,7 +168,7 @@ class TechnicalSignalAnalyzer:
 
             return signals
 
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self.logger.warning("analyze_signals failed for %s: %s", symbol, exc)
             return self._get_default_signals(symbol)
 

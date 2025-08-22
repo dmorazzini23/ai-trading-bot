@@ -88,6 +88,7 @@ class TestRiskEnginePackage(unittest.TestCase):
         # Should not raise with proper context
         try:
             re.update_exposure(context=MockContext())
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             self.fail(f"update_exposure failed with context: {e}")
 

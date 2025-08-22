@@ -25,7 +25,7 @@ _import_success = False
 try:
     from ai_trading.rebalancer import *
     _import_success = True
-except Exception:
+except (ValueError, TypeError):
     # Create minimal rebalancer functionality for testing if import fails
     pass
 

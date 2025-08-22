@@ -13,6 +13,7 @@ def _try_import(module_name: str, cls_name: str):
     try:
         mod = importlib.import_module(module_name)
         return getattr(mod, cls_name, None)
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         _log.error("Failed to import %s (%s): %s", module_name, cls_name, e)
         return None

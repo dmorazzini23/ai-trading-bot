@@ -52,6 +52,7 @@ def validate_sentiment_circuit_breaker():
 
         return actual_failures == expected_failures and actual_recovery == expected_recovery
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"Error validating sentiment circuit breaker: {e}")
         return False
@@ -78,6 +79,7 @@ def validate_meta_learning():
             logging.info("✗ Could not find min_trades parameter")
             return False
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"Error validating meta-learning: {e}")
         return False
@@ -99,6 +101,7 @@ def validate_pltr_sector():
             logging.info("✗ PLTR not found in Technology sector mapping")
             return False
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"Error validating PLTR sector: {e}")
         return False
@@ -129,6 +132,7 @@ def validate_execution_optimizations():
 
         return all_implemented
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"Error validating execution optimizations: {e}")
         return False
@@ -158,6 +162,7 @@ def validate_quantity_tracking():
 
         return all_implemented
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"Error validating quantity tracking: {e}")
         return False

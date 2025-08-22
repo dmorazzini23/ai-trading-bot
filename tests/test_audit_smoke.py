@@ -2,7 +2,6 @@ import csv
 from pathlib import Path
 
 import pytest
-
 from ai_trading import audit  # AI-AGENT-REF: canonical import
 
 
@@ -13,6 +12,7 @@ def force_coverage(mod):
         for attr_name in dir(mod):
             if not attr_name.startswith('_'):
                 getattr(mod, attr_name, None)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         # Fallback to original method if needed for coverage
         lines = Path(mod.__file__).read_text().splitlines()

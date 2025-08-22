@@ -223,6 +223,7 @@ class TestEnvironmentOrderAndLazyImport:
             try:
                 # If we get here, import succeeded despite missing .env
                 assert True
+            # noqa: BLE001 TODO: narrow exception
             except Exception as e:
                 pytest.fail(f"Import failed with missing .env file: {e}")
 

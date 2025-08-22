@@ -680,7 +680,7 @@ class ExecutionEngine:
                             ord_obj = self.broker_interface.get_order_by_id(oid)
                             if getattr(ord_obj, "status", "").lower() == "new":
                                 self.broker_interface.cancel_order_by_id(oid)
-                        except Exception:
+                        except (ValueError, TypeError):
                             pass
                     _active_orders.pop(oid, None)
                     removed += 1
@@ -700,7 +700,7 @@ class ExecutionEngine:
 
             positions = broker.list_positions() or []
             _log.debug("check_stops: inspected %d positions", len(positions))
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             _log.info("check_stops: suppressed exception: %s", e)
 
     # AI-AGENT-REF: expose short selling validation hook
@@ -722,7 +722,7 @@ class ExecutionEngine:
                     "PARTIAL_FILL_DETECTED",
                     extra={"symbol": symbol, "side": side, "filled": filled, "requested": requested_qty},
                 )
-        except Exception:
+        except (ValueError, TypeError):
             pass
 
     def execute_order(

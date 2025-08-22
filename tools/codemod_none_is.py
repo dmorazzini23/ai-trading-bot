@@ -30,6 +30,7 @@ def run(root="."):
             if out.code != src:
                 p.write_text(out.code, encoding="utf-8")
                 print(f"REWROTE {p}")
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             print(f"SKIP {p}: {e}", file=sys.stderr)
 

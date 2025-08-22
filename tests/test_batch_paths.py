@@ -1,9 +1,8 @@
 import types
 
-import pandas as pd
-
 import ai_trading.core.bot_engine as be
 import ai_trading.trade_logic as tl
+import pandas as pd
 
 
 def _mk_df():

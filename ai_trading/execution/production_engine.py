@@ -16,7 +16,7 @@ from ai_trading.logging import logger
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore
-except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+except (ValueError, TypeError):  # AI-AGENT-REF: local fallback when SDK missing
     TradingClient = None  # type: ignore
 
     class APIError(Exception):

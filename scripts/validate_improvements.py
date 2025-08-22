@@ -26,7 +26,7 @@ def test_alpaca_free_import():
         # This should work even without Alpaca
         logging.info("✓ ai_trading imported successfully without Alpaca packages")
         return True
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Failed to import ai_trading: {e}")
         return False
     finally:
@@ -40,7 +40,7 @@ def test_package_imports():
         # Test that we can import from the package structure
         logging.info("✓ Package-safe imports working correctly")
         return True
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Package import failed: {e}")
         return False
 
@@ -57,7 +57,7 @@ def test_timezone_usage():
         assert current_time.tzinfo is not None
         logging.info("✓ Timezone-aware datetime utilities working")
         return True
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Timezone utilities failed: {e}")
         return False
 
@@ -68,7 +68,7 @@ def test_idempotency_and_reconciliation():
     try:
         logging.info("✓ Idempotency and reconciliation modules available")
         return True
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Idempotency/reconciliation modules failed: {e}")
         return False
 
@@ -123,7 +123,7 @@ def run_basic_pytest():
     except subprocess.TimeoutExpired:
         logging.info("✗ Pytest timed out")
         return False
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"✗ Pytest check failed: {e}")
         return False
 
@@ -148,7 +148,7 @@ def main():
         try:
             result = test()
             results.append(result)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logging.info(f"✗ Test {test.__name__} failed with exception: {e}\n")
             results.append(False)
 

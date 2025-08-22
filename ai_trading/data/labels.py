@@ -56,7 +56,7 @@ def fixed_horizon_return(
 
         return net_returns
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error calculating fixed horizon returns: {e}")
         return pd.Series(dtype=float)
 
@@ -199,7 +199,7 @@ def triple_barrier_labels(
 
         return result_df
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error in triple barrier labeling: {e}")
         return pd.DataFrame(columns=['t1', 'ret', 'bin'])
 
@@ -224,6 +224,6 @@ def get_daily_vol(prices: pd.Series, span0: int = 100) -> pd.Series:
 
         return vol
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error calculating daily volatility: {e}")
         return pd.Series(dtype=float)

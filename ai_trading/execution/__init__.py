@@ -70,6 +70,7 @@ try:  # AI-AGENT-REF: optional production engine when Alpaca deps missing
         OrderRequest,
         ProductionExecutionCoordinator,
     )
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover
     ExecutionResult = OrderRequest = ProductionExecutionCoordinator = None  # type: ignore
 

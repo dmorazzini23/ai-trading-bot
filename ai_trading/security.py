@@ -26,7 +26,7 @@ try:  # AI-AGENT-REF: handle missing cryptography gracefully
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     _CRYPTOGRAPHY_AVAILABLE = True
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
     _CRYPTOGRAPHY_AVAILABLE = False
     class Fernet:  # type: ignore[override]
         def __init__(self, *args, **kwargs):
@@ -143,7 +143,7 @@ class SecureConfig:
             )
             key = base64.urlsafe_b64encode(kdf.derive(master_key_bytes))
             return Fernet(key)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to initialize encryption: {e}")
             return None
 
@@ -177,7 +177,7 @@ class SecureConfig:
         try:
             encrypted = self._fernet.encrypt(value.encode())
             return base64.urlsafe_b64encode(encrypted).decode()
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Encryption failed: {e}")
             return value
 
@@ -190,7 +190,7 @@ class SecureConfig:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_value.encode())
             decrypted = self._fernet.decrypt(encrypted_bytes)
             return decrypted.decode()
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Decryption failed: {e}")
             return encrypted_value
 
@@ -244,7 +244,7 @@ class SecureConfig:
             # Try to decode as base64
             base64.urlsafe_b64decode(value.encode())
             return True
-        except Exception:
+        except (ValueError, TypeError):
             # Any decoding error means it's not a valid token
             return False
 
@@ -496,7 +496,7 @@ class SecurityManager:
             )
 
             return True
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.safe_logger.error(f"Failed to rotate encryption key: {e}")
             return False
 

@@ -45,7 +45,7 @@ def test_risk_engine_methods_exist():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -87,7 +87,7 @@ def test_bot_context_alpaca_client():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -104,7 +104,7 @@ def test_process_manager_enhancements():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -128,7 +128,7 @@ def test_data_validation_module():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -150,7 +150,7 @@ def test_audit_permission_handling():
 
         return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 
@@ -174,7 +174,7 @@ def main():
                 passed += 1
             else:
                 failed += 1
-        except Exception:
+        except (ValueError, TypeError):
             failed += 1
 
 

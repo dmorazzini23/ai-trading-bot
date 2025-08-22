@@ -3558,7 +3558,7 @@ class DataFetcher:
                 mdf.index = idx
                 mdf = mdf.rename(columns=lambda c: c.lower())
                 return _resample_minutes_to_daily(mdf)
-            except Exception:  # noqa: BLE001
+            except (ValueError, TypeError):  # noqa: BLE001
                 return None
 
         try:
@@ -3585,7 +3585,7 @@ class DataFetcher:
                     _was_callable = True
                 try:
                     return _ensure_utc_dt(x, allow_callables=True)
-                except Exception:
+                except (ValueError, TypeError):
                     return default
 
             req.start = _sanitize_pre(
@@ -5766,7 +5766,7 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
                 _log.info(
                     "DATA_HEALTH_CHECK: no prior market session (weekend/holiday); skip minute fallback"
                 )
-        except Exception as e:  # pragma: no cover - defensive
+        except (ValueError, TypeError) as e:  # pragma: no cover - defensive
             _log.warning("DATA_HEALTH_CHECK: minute fallback exception: %s", e)
         if not is_market_open():
             _log.info(
@@ -5790,7 +5790,7 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     """
     try:
         from ai_trading.data_fetcher import last_minute_bar_age_seconds
-    except Exception as e:  # AI-AGENT-REF: soft-fail if import missing
+    except (ValueError, TypeError) as e:  # AI-AGENT-REF: soft-fail if import missing
         _log.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
     now_utc = utc_now_iso()
@@ -12875,7 +12875,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             if exec_engine is not None and hasattr(exec_engine, "check_stops"):
                 try:
                     exec_engine.check_stops()
-                except Exception as e:  # AI-AGENT-REF: guard check_stops
+                except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard check_stops
                     _log.info("check_stops raised but was suppressed: %s", e)
             else:
                 _log.debug("Execution engine lacks check_stops(); skipping")

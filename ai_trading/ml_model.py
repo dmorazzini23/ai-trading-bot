@@ -24,6 +24,7 @@ class _DummyPipe:
             raise AttributeError("not fitted")
         try:
             n = len(X)
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             n = 0
         return np.zeros(n)
@@ -105,5 +106,6 @@ def predict_model(model: Any, X: Iterable | pd.DataFrame | None) -> list[float]:
     preds = model.predict(df)
     try:
         return list(preds)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return []

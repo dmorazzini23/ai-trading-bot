@@ -22,7 +22,7 @@ from ai_trading.config import AlpacaConfig, get_alpaca_config
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore
-except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+except (ValueError, TypeError):  # AI-AGENT-REF: local fallback when SDK missing
     TradingClient = None  # type: ignore
 
     class APIError(Exception):
@@ -53,7 +53,7 @@ def submit_market_order(symbol: str, side: str, quantity: int):
         return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol}
     try:
         quantity = int(_pos_num("qty", quantity))
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         _log.error(
             "ORDER_INPUT_INVALID",
             extra={"cause": type(e).__name__, "detail": str(e)},
@@ -136,7 +136,7 @@ class AlpacaExecutionEngine:
                     from ai_trading.execution.mocks import (
                         MockTradingClient,  # AI-AGENT-REF: test mock
                     )
-                except Exception:
+                except (ValueError, TypeError):
                     MockTradingClient = None
                 if MockTradingClient:
                     self.trading_client = MockTradingClient()

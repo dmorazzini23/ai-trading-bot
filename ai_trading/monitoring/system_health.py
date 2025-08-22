@@ -4,6 +4,7 @@ from __future__ import annotations
 try:
     import psutil  # type: ignore
     _HAS_PSUTIL = True
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     psutil = None  # type: ignore
     _HAS_PSUTIL = False
@@ -20,6 +21,7 @@ def snapshot_basic() -> dict[str, float | bool]:
                     "mem_percent": psutil.virtual_memory().percent,
                 }
             )
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             # keep minimal snapshot if psutil misbehaves
             pass

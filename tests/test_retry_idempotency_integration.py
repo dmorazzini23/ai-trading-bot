@@ -3,10 +3,13 @@
 # Set PYTHONPATH to include our tenacity mock
 import sys
 import time
+import pytest
 
 sys.path.insert(0, '/tmp')
 
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+pytestmark = pytest.mark.integration
 
 
 class OrderIdempotencyManager:
@@ -66,6 +69,7 @@ def submit_order_with_retry(broker, idempotency_mgr, order_data):
         # Attempt broker submission
         result = broker.submit_order(order_data)
         return result
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         # If submission fails, we keep the idempotency mark
         # This prevents retry storms from causing duplicate orders

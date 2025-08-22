@@ -1,7 +1,6 @@
 import time
 
 import pandas as pd
-
 from ai_trading import signals
 
 

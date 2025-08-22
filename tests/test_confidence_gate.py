@@ -6,6 +6,7 @@ def _resolve():
     try:
         import ai_trading.strategy_allocator as s
         return s
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         import scripts.strategy_allocator as s
         return s

@@ -100,7 +100,7 @@ class ProductionIntegrator:
                     self.production_monitor = initialize_production_monitoring(alert_callback)
                     self.logger.info("✓ Production monitoring initialized")
                     success_count += 1
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(f"✗ Failed to initialize production monitoring: {e}")
 
             # Initialize performance optimizer
@@ -110,7 +110,7 @@ class ProductionIntegrator:
                     self.performance_optimizer = initialize_performance_optimizer(True)
                     self.logger.info("✓ Performance optimizer initialized")
                     success_count += 1
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(f"✗ Failed to initialize performance optimizer: {e}")
 
             # Initialize security manager
@@ -120,7 +120,7 @@ class ProductionIntegrator:
                     self.security_manager = initialize_security_manager(True)
                     self.logger.info("✓ Security manager initialized")
                     success_count += 1
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(f"✗ Failed to initialize security manager: {e}")
 
             # Initialize monitoring dashboard
@@ -130,7 +130,7 @@ class ProductionIntegrator:
                     self.monitoring_dashboard = initialize_monitoring_dashboard(5000)
                     self.logger.info("✓ Monitoring dashboard initialized")
                     success_count += 1
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(f"✗ Failed to initialize monitoring dashboard: {e}")
 
             # Setup circuit breakers
@@ -148,7 +148,7 @@ class ProductionIntegrator:
 
             return self.systems_initialized
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to initialize production systems: {e}")
             return False
 
@@ -208,7 +208,7 @@ class ProductionIntegrator:
 
             self.logger.info("Health check integration configured")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to setup health check integration: {e}")
 
     def start_monitoring(self):
@@ -230,7 +230,7 @@ class ProductionIntegrator:
             self.logger.info("✓ All monitoring systems started")
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to start monitoring: {e}")
             return False
 
@@ -246,7 +246,7 @@ class ProductionIntegrator:
             self.monitoring_active = False
             self.logger.info("✓ All monitoring systems stopped")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error stopping monitoring: {e}")
 
     def wrap_trading_function(self, func: Callable, operation_name: str = None) -> Callable:
@@ -284,7 +284,7 @@ class ProductionIntegrator:
 
                 return result
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 # Track failed execution
                 execution_time = (time.perf_counter() - start_time) * 1000
                 # AI-AGENT-REF: Add defensive null checks for production systems
@@ -358,7 +358,7 @@ class ProductionIntegrator:
                     symbol, side, quantity, price, order_id or "unknown", "system"
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error monitoring trade execution: {e}")
 
     def get_system_status(self) -> dict[str, Any]:
@@ -377,7 +377,7 @@ class ProductionIntegrator:
                     'status': 'active',
                     'performance_report': self.production_monitor.get_performance_report()
                 }
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 status['systems']['production_monitoring'] = {
                     'status': 'error',
                     'error': str(e)
@@ -391,7 +391,7 @@ class ProductionIntegrator:
                     'status': 'active',
                     'security_report': self.security_manager.get_security_report()
                 }
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 status['systems']['security'] = {
                     'status': 'error',
                     'error': str(e)
@@ -405,7 +405,7 @@ class ProductionIntegrator:
                     'status': 'active',
                     'performance_report': self.performance_optimizer.get_performance_report()
                 }
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 status['systems']['performance'] = {
                     'status': 'error',
                     'error': str(e)
@@ -416,7 +416,7 @@ class ProductionIntegrator:
             try:
                 from health_check import get_health_status
                 status['systems']['health'] = get_health_status()
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 status['systems']['health'] = {
                     'status': 'error',
                     'error': str(e)
@@ -453,7 +453,7 @@ class ProductionIntegrator:
                         security_audit['recommendations']
                     )
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 audit_results['security_audit'] = {'error': str(e)}
 
         # Performance audit
@@ -478,7 +478,7 @@ class ProductionIntegrator:
                         f"Performance violations detected: {len(violations)}"
                     )
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 audit_results['performance_audit'] = {'error': str(e)}
 
         # Health audit
@@ -504,7 +504,7 @@ class ProductionIntegrator:
                         f"Health status: {health_status['overall_status']}"
                     )
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 audit_results['health_audit'] = {'error': str(e)}
 
         # Calculate overall score

@@ -41,6 +41,7 @@ try:  # new-style guarded import
     Histogram = _Histogram
     Summary = _Summary
     start_http_server = _start_http_server
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     # Minimal no-op fallbacks so imports & tests never crash if the pkg is missing
     class _NoopRegistry:

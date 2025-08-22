@@ -80,6 +80,7 @@ def test_production_scenarios():
                 all_passed = False
             else:
                 raise
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logging.info(f"   ⚠️  Other exception (acceptable): {type(e).__name__}")
 
@@ -105,6 +106,7 @@ def test_production_scenarios():
                 all_passed = False
             else:
                 raise
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             logging.info(f"   ✅ {description}: handled gracefully")
 

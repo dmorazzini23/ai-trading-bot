@@ -99,6 +99,7 @@ class TestShortSellingImplementation(unittest.TestCase):
                         # Test that sell_short orders reach the validation step (don't get blocked by SKIP_NO_POSITION)
                         try:
                             result = engine.execute_order("AAPL", 10, "sell_short")
+                        # noqa: BLE001 TODO: narrow exception
                         except Exception:
                             # Expected to reach this point, meaning it passed the initial validation
                             pass

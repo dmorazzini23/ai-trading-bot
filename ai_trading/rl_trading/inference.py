@@ -237,6 +237,7 @@ class UnifiedRLInference:
 
             return signal
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             self.logger.error(f"RL prediction failed: {e}")
             return None
