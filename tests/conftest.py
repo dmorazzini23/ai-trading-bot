@@ -5,6 +5,7 @@ import types
 
 import pytest
 from ai_trading.utils.optional_import import optional_import
+from datetime import UTC, datetime
 
 
 def _has(mod: str) -> bool:
@@ -20,16 +21,39 @@ def pytest_collection_modifyitems(config, items):
         "alpha_vantage": "alpha_vantage",
         "newsapi": "newsapi",
     }
+    skip_integ = None
+    if os.environ.get("AI_TRADER_ONLINE") != "1":
+        skip_integ = pytest.mark.skip(reason="integration test (set AI_TRADER_ONLINE=1 to run)")
     for item in items:
         marks = {m.name for m in item.iter_markers()}
         for vendor, mod in vendor_to_mod.items():
             if vendor in marks and not _has(mod):
                 item.add_marker(missing_mark)
+        if skip_integ and "integration" in marks:
+            item.add_marker(skip_integ)
 
 os.environ.setdefault("ALPACA_KEY_ID", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 # AI-AGENT-REF: seed dummy Finnhub key for tests
 os.environ.setdefault("FINNHUB_API_KEY", "dummy-ci-key")
+
+
+@pytest.fixture(autouse=True)
+def _force_utc_env(monkeypatch):
+    """Force UTC for all tests and patch utils.time.utcnow."""  # AI-AGENT-REF
+    monkeypatch.setenv("TZ", "UTC")
+    from ai_trading import utils as _utils  # type: ignore
+    if hasattr(_utils, "time") and hasattr(_utils.time, "utcnow"):
+        monkeypatch.setattr(_utils.time, "utcnow", lambda: datetime.now(UTC), raising=True)
+
+
+@pytest.fixture(autouse=True)
+def _dummy_vendor_keys(monkeypatch):
+    """Prevent accidental live vendor calls."""  # AI-AGENT-REF
+    monkeypatch.setenv("ALPACA_API_KEY", "test")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("AI_TRADER_OFFLINE", "1")
 
 
 @pytest.fixture

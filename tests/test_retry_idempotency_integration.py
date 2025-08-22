@@ -3,10 +3,13 @@
 # Set PYTHONPATH to include our tenacity mock
 import sys
 import time
+import pytest
 
 sys.path.insert(0, '/tmp')
 
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+pytestmark = pytest.mark.integration
 
 
 class OrderIdempotencyManager:
