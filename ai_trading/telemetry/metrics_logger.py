@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import logging
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +20,7 @@ def compute_max_drawdown(curve: Sequence[float]) -> float:
             v = float(x)
         except (TypeError, ValueError):
             continue
-        if v > peak:
-            peak = v
+        peak = max(peak, v)
         if peak:
             mdd = max(mdd, (peak - v) / peak)
     return mdd

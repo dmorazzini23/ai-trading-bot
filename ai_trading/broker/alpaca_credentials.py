@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.optional_import import optional_import

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import ai_trading.main as main
+from ai_trading import main
 
 
 def test_static_mode_nonpositive_is_autofixed(caplog):

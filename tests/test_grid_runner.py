@@ -41,7 +41,7 @@ def test_persist_artifacts():
         results_file = os.path.join(out_dir, "results.json")
         assert os.path.exists(results_file)
 
-        with open(results_file, "r") as f:
+        with open(results_file) as f:
             saved_data = json.load(f)
 
         assert saved_data["count"] == 1

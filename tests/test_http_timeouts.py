@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import ai_trading.utils.http as http
+from ai_trading.utils import http
 
 pytest_plugins = ("tests.watchdog_ext",)
 

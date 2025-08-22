@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 # AI-AGENT-REF: centralized time helpers
 NY = ZoneInfo("America/New_York")
-UTC = timezone.utc
+UTC = UTC
 
 
 def ensure_utc_datetime(

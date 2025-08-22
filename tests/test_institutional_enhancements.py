@@ -6,7 +6,7 @@ analysis, and tax-aware rebalancing functionality.
 """
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 
@@ -134,7 +134,7 @@ class TestPreTradeValidation(unittest.TestCase):
         validator = self.MarketHoursValidator()
 
         # Test during market hours (2:30 PM UTC = 9:30 AM EST)
-        market_time = datetime.now(timezone.utc).replace(hour=15, minute=0)
+        market_time = datetime.now(UTC).replace(hour=15, minute=0)
         result = validator.validate_market_hours(market_time)
 
         self.assertIn(result.status, [self.ValidationStatus.APPROVED, self.ValidationStatus.WARNING])
@@ -263,8 +263,8 @@ class TestMarketMicrostructure(unittest.TestCase):
         }
 
         trade_history = [
-            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
-            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
+            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
+            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
         ]
 
         features = analyzer.analyze_spread_features(market_data, trade_history)
@@ -281,8 +281,8 @@ class TestMarketMicrostructure(unittest.TestCase):
         analyzer = self.OrderFlowAnalyzer()
 
         trade_data = [
-            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
-            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
+            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
+            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(UTC)},  # AI-AGENT-REF: Use timezone-aware datetime
         ]
 
         quote_data = [
@@ -358,7 +358,7 @@ class TestTaxAwareRebalancing(unittest.TestCase):
         position = {
             "entry_price": 100.0,
             "quantity": 100,
-            "entry_date": datetime.now(timezone.utc) - timedelta(days=200)
+            "entry_date": datetime.now(UTC) - timedelta(days=200)
         }
 
         current_price = 120.0
@@ -381,12 +381,12 @@ class TestTaxAwareRebalancing(unittest.TestCase):
             "AAPL": {
                 "entry_price": 150.0,
                 "quantity": 100,
-                "entry_date": datetime.now(timezone.utc) - timedelta(days=100)
+                "entry_date": datetime.now(UTC) - timedelta(days=100)
             },
             "MSFT": {
                 "entry_price": 300.0,
                 "quantity": 50,
-                "entry_date": datetime.now(timezone.utc) - timedelta(days=200)
+                "entry_date": datetime.now(UTC) - timedelta(days=200)
             }
         }
 

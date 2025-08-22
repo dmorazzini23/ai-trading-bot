@@ -25,7 +25,7 @@ PATHS = [
     "ai_trading/risk/manager.py",
 ]
 
-p = subprocess.run([sys.executable, "tools/audit_exceptions.py", "--paths", *PATHS], capture_output=True, text=True)
+p = subprocess.run([sys.executable, "tools/audit_exceptions.py", "--paths", *PATHS], check=False, capture_output=True, text=True)
 assert p.returncode == 0, p.stderr
 data = json.loads(p.stdout.splitlines()[0])
 offenders = {f: hits for f, hits in data.get("by_file", {}).items() if hits}

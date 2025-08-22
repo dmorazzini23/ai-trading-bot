@@ -29,7 +29,7 @@ def test_sentiment_module():
     logging.info("🔍 Testing Sentiment Module...")
     try:
         # Test import
-        import ai_trading.analysis.sentiment as sentiment
+        from ai_trading.analysis import sentiment
         logging.info("  ✅ sentiment module imported successfully")
 
         # Test required functions exist

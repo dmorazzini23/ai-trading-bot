@@ -23,7 +23,7 @@ class TestCoreModuleInit:
 
     def test_core_exports_available(self):
         """Test that all required exports are available from core module."""
-        import ai_trading.core as core
+        from ai_trading import core
 
         # Test that all the exports mentioned in the problem statement exist
         required_exports = [
@@ -87,7 +87,7 @@ class TestCoreModuleInit:
 
     def test_all_exports_list(self):
         """Test that __all__ list contains expected exports."""
-        import ai_trading.core as core
+        from ai_trading import core
 
         expected_all = [
             "OrderSide", "OrderType", "OrderStatus", "RiskLevel",

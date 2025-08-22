@@ -48,7 +48,7 @@ def test_ohlcv_files_exist():
         print("✓ OHLCV normalizer file exists")
 
         # Check if it contains the standardize_ohlcv function
-        with open(ohlcv_path, 'r') as f:
+        with open(ohlcv_path) as f:
             content = f.read()
             if "def standardize_ohlcv" in content and "CANON" in content:
                 print("✓ OHLCV normalizer contains required functions")
@@ -69,7 +69,7 @@ def test_bot_engine_changes():
         print("✗ bot_engine.py not found")
         return False
 
-    with open(bot_engine_path, 'r') as f:
+    with open(bot_engine_path) as f:
         content = f.read()
 
     # Check for OHLCV fix
@@ -119,7 +119,7 @@ def test_top_level_shims():
             success = False
 
     # Check bot_engine.py has prepare_indicators
-    with open("bot_engine.py", 'r') as f:
+    with open("bot_engine.py") as f:
         content = f.read()
         if "prepare_indicators" in content:
             print("✓ bot_engine.py has prepare_indicators compatibility")

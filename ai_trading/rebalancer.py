@@ -671,11 +671,10 @@ def enhanced_maybe_rebalance(ctx) -> None:
                     portfolio_first_rebalance(ctx)
                     _last_rebalance = now
                     _log.info(f"PORTFOLIO_FIRST_REBALANCING_EXECUTED | {reason}")
-            else:
-                # Fallback to original logic
-                if drift > drift_threshold:
-                    rebalance_portfolio(ctx)
-                    _last_rebalance = now
+            # Fallback to original logic
+            elif drift > drift_threshold:
+                rebalance_portfolio(ctx)
+                _last_rebalance = now
 
         except (
             KeyError,

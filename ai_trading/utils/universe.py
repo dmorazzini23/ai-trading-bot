@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Set
 
 
-def load_universe(path_or_csv: str | None, limit: int | None = None) -> List[str]:
+def load_universe(path_or_csv: str | None, limit: int | None = None) -> list[str]:
     """Load symbols from file path or CSV string and return sanitized list."""
-    raw: List[str] = []
+    raw: list[str] = []
     if path_or_csv:
         p = Path(path_or_csv)
         if p.exists() and p.is_file():
@@ -20,8 +19,8 @@ def load_universe(path_or_csv: str | None, limit: int | None = None) -> List[str
             f"No tickers found at '{path_or_csv}'. Provide a tickers.csv or CSV env list."
         )
 
-    seen: Set[str] = set()
-    out: List[str] = []
+    seen: set[str] = set()
+    out: list[str] = []
     for sym in raw:
         up = sym.strip().upper()
         if up and up not in seen:
@@ -34,9 +33,9 @@ def load_universe(path_or_csv: str | None, limit: int | None = None) -> List[str
     return out
 
 
-def _split_symbols(s: str) -> List[str]:
+def _split_symbols(s: str) -> list[str]:
     s = s.replace("\r", "")
-    parts: List[str] = []
+    parts: list[str] = []
     for line in s.split("\n"):
         if "," in line:
             parts.extend(x.strip() for x in line.split(","))

@@ -7,7 +7,7 @@ and stale data detection to guard against poor quality market data.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,7 @@ class SanitizationConfig:
     # Outlier detection
     mad_threshold: float = 3.0  # MAD multiplier for outlier detection
     zscore_threshold: float = 4.0  # Z-score threshold for outlier detection
-    winsorize_limits: Tuple[float, float] = (0.01, 0.01)  # (lower, upper) percentiles
+    winsorize_limits: tuple[float, float] = (0.01, 0.01)  # (lower, upper) percentiles
 
     # Volume filtering
     min_volume_percentile: float = 5.0  # Minimum volume percentile
@@ -53,7 +53,7 @@ class DataSanitizer:
     volume filtering, stale data detection, and price validation.
     """
 
-    def __init__(self, config: Optional[SanitizationConfig] = None):
+    def __init__(self, config: SanitizationConfig | None = None):
         """
         Initialize data sanitizer.
         
@@ -78,7 +78,7 @@ class DataSanitizer:
         self,
         bars: pd.DataFrame,
         symbol: str = "UNKNOWN"
-    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
         """
         Sanitize OHLCV bar data.
         
@@ -144,7 +144,7 @@ class DataSanitizer:
 
         return clean_bars, report
 
-    def _validate_prices(self, bars: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+    def _validate_prices(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Validate price data for basic sanity checks."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -181,7 +181,7 @@ class DataSanitizer:
 
         return rejection_mask, rejection_reasons
 
-    def _detect_outliers(self, bars: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+    def _detect_outliers(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Detect outliers using MAD and Z-score methods."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -221,7 +221,7 @@ class DataSanitizer:
 
         return rejection_mask, rejection_reasons
 
-    def _filter_low_volume(self, bars: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+    def _filter_low_volume(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Filter bars with low volume."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -255,7 +255,7 @@ class DataSanitizer:
 
         return rejection_mask, rejection_reasons
 
-    def _detect_stale_data(self, bars: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
+    def _detect_stale_data(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Detect stale or suspicious data patterns."""
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
@@ -285,7 +285,7 @@ class DataSanitizer:
 
         return rejection_mask, rejection_reasons
 
-    def _get_price_columns(self, bars: pd.DataFrame) -> List[str]:
+    def _get_price_columns(self, bars: pd.DataFrame) -> list[str]:
         """Get price columns from DataFrame."""
         price_patterns = ['open', 'high', 'low', 'close', 'price', 'adj_close', 'vwap']
         price_cols = []
@@ -297,7 +297,7 @@ class DataSanitizer:
 
         return price_cols
 
-    def _get_volume_columns(self, bars: pd.DataFrame) -> List[str]:
+    def _get_volume_columns(self, bars: pd.DataFrame) -> list[str]:
         """Get volume columns from DataFrame."""
         volume_patterns = ['volume', 'vol', 'shares']
         volume_cols = []
@@ -343,7 +343,7 @@ class DataSanitizer:
                 bar_data = rejected_bars.loc[idx].to_dict()
                 self.logger.debug(f"Rejected bar {idx} for {symbol}: {reason} - {bar_data}")
 
-    def _count_rejection_reasons(self, reasons: pd.Series) -> Dict[str, int]:
+    def _count_rejection_reasons(self, reasons: pd.Series) -> dict[str, int]:
         """Count rejection reasons for reporting."""
         reason_counts = {}
 
@@ -360,7 +360,7 @@ class DataSanitizer:
 
         return reason_counts
 
-    def _get_time_range(self, bars: pd.DataFrame) -> Optional[Dict[str, str]]:
+    def _get_time_range(self, bars: pd.DataFrame) -> dict[str, str] | None:
         """Get time range of bars for reporting."""
         if bars.empty or not isinstance(bars.index, pd.DatetimeIndex):
             return None
@@ -373,7 +373,7 @@ class DataSanitizer:
     def winsorize_series(
         self,
         series: pd.Series,
-        limits: Optional[Tuple[float, float]] = None
+        limits: tuple[float, float] | None = None
     ) -> pd.Series:
         """
         Winsorize a series by capping extreme values.
@@ -397,7 +397,7 @@ class DataSanitizer:
 
         return series.clip(lower=lower_bound, upper=upper_bound)
 
-    def get_rejection_stats(self) -> Dict[str, Union[int, float]]:
+    def get_rejection_stats(self) -> dict[str, int | float]:
         """Get sanitization statistics."""
         stats = self._rejection_stats.copy()
 
@@ -418,10 +418,10 @@ class DataSanitizer:
 
 
 # Global sanitizer instance
-_global_sanitizer: Optional[DataSanitizer] = None
+_global_sanitizer: DataSanitizer | None = None
 
 
-def get_data_sanitizer(config: Optional[SanitizationConfig] = None) -> DataSanitizer:
+def get_data_sanitizer(config: SanitizationConfig | None = None) -> DataSanitizer:
     """Get or create global data sanitizer instance."""
     global _global_sanitizer
     if _global_sanitizer is None:
@@ -432,8 +432,8 @@ def get_data_sanitizer(config: Optional[SanitizationConfig] = None) -> DataSanit
 def sanitize_bars(
     bars: pd.DataFrame,
     symbol: str = "UNKNOWN",
-    config: Optional[SanitizationConfig] = None
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    config: SanitizationConfig | None = None
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """
     Convenience function to sanitize bars.
     
@@ -451,8 +451,8 @@ def sanitize_bars(
 
 def winsorize_dataframe(
     df: pd.DataFrame,
-    columns: Optional[List[str]] = None,
-    limits: Tuple[float, float] = (0.01, 0.01)
+    columns: list[str] | None = None,
+    limits: tuple[float, float] = (0.01, 0.01)
 ) -> pd.DataFrame:
     """
     Winsorize specified columns of a DataFrame.

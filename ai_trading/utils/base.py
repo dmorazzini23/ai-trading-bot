@@ -132,11 +132,10 @@ def log_warning(msg: str, *, exc: Exception | None = None, extra: dict | None = 
             logger.debug("%s: %s", msg, exc, extra=extra, exc_info=True)
         else:
             logger.warning("%s: %s", msg, exc, extra=extra, exc_info=True)
+    elif msg == "HEALTH_STALE_DATA":
+        logger.debug(msg, extra=extra)
     else:
-        if msg == "HEALTH_STALE_DATA":
-            logger.debug(msg, extra=extra)
-        else:
-            logger.warning(msg, extra=extra)
+        logger.warning(msg, extra=extra)
 
 
 # Cache of last logged stale timestamp per symbol

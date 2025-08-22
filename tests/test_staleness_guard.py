@@ -17,7 +17,7 @@ class TestStalenessGuard:
         from ai_trading.core.bot_engine import _ensure_data_fresh
 
         # Create a mock fetcher that returns fresh data
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         fresh_timestamp = now - datetime.timedelta(seconds=30)  # 30 seconds old
 
         # Create test dataframe with fresh timestamp
@@ -48,7 +48,7 @@ class TestStalenessGuard:
         from ai_trading.core.bot_engine import _ensure_data_fresh
 
         # Create a mock fetcher that returns stale data
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         stale_timestamp = now - datetime.timedelta(seconds=600)  # 10 minutes old
 
         # Create test dataframe with stale timestamp
@@ -97,7 +97,7 @@ class TestStalenessGuard:
         """Test staleness guard with multiple symbols."""
         from ai_trading.core.bot_engine import _ensure_data_fresh
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
 
         # Create mock fetcher that returns different data for different symbols
         def mock_get_minute_df(symbol, start, end):
@@ -138,7 +138,7 @@ class TestStalenessGuard:
 
         # Mock logger to capture log messages
         with patch('ai_trading.core.bot_engine.logger') as mock_logger:
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now = datetime.datetime.now(datetime.UTC)
             fresh_timestamp = now - datetime.timedelta(seconds=30)
 
             df = pd.DataFrame({
@@ -164,17 +164,17 @@ class TestStalenessGuard:
         """Test staleness guard handles timezone-aware and naive timestamps."""
         from ai_trading.core.bot_engine import _ensure_data_fresh
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
 
         # Test with timezone-naive timestamp (should be treated as UTC)
-        naive_timestamp = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(seconds=30)  # AI-AGENT-REF: Create naive datetime from UTC
+        naive_timestamp = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(seconds=30)  # AI-AGENT-REF: Create naive datetime from UTC
         df_naive = pd.DataFrame({
             'timestamp': [naive_timestamp],
             'close': [100.0]
         })
 
         # Test with timezone-aware timestamp
-        aware_timestamp = (now - datetime.timedelta(seconds=30)).replace(tzinfo=datetime.timezone.utc)
+        aware_timestamp = (now - datetime.timedelta(seconds=30)).replace(tzinfo=datetime.UTC)
         df_aware = pd.DataFrame({
             'timestamp': [aware_timestamp],
             'close': [100.0]

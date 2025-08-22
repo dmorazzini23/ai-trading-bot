@@ -23,7 +23,7 @@ def validate_sentiment_circuit_breaker():
     logging.info(str("="*50))
 
     try:
-        import ai_trading.analysis.sentiment as sentiment
+        from ai_trading.analysis import sentiment
 
         # Expected values from problem statement:
         # - Increase failure threshold from current to 15 (more tolerant)
@@ -39,7 +39,7 @@ def validate_sentiment_circuit_breaker():
         logging.info(f"Recovery timeout: {actual_recovery}s (expected: {expected_recovery}s) - {'✓' if actual_recovery == expected_recovery else '✗'}")
 
         # Also check bot_engine.py for consistency
-        with open('bot_engine.py', 'r') as f:
+        with open('bot_engine.py') as f:
             content = f.read()
 
         bot_failures = re.search(r'SENTIMENT_FAILURE_THRESHOLD = (\d+)', content)
@@ -62,7 +62,7 @@ def validate_meta_learning():
     logging.info(str("="*50))
 
     try:
-        with open('bot_engine.py', 'r') as f:
+        with open('bot_engine.py') as f:
             content = f.read()
 
         # Expected: Reduce minimum trade requirement from 10 to 3
@@ -88,7 +88,7 @@ def validate_pltr_sector():
     logging.info(str("="*50))
 
     try:
-        with open('bot_engine.py', 'r') as f:
+        with open('bot_engine.py') as f:
             content = f.read()
 
         # Expected: Add PLTR to Technology sector mapping
@@ -109,7 +109,7 @@ def validate_execution_optimizations():
     logging.info(str("="*50))
 
     try:
-        with open('trade_execution.py', 'r') as f:
+        with open('trade_execution.py') as f:
             content = f.read()
 
         optimizations = {
@@ -139,7 +139,7 @@ def validate_quantity_tracking():
     logging.info(str("="*50))
 
     try:
-        with open('trade_execution.py', 'r') as f:
+        with open('trade_execution.py') as f:
             content = f.read()
 
         # Check for clear field names in logging

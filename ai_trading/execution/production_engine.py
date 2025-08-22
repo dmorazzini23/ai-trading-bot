@@ -893,13 +893,12 @@ class ProductionExecutionCoordinator:
                         "avg_price": new_avg_price,
                         "last_updated": datetime.now(UTC),
                     }
-            else:
-                if quantity != 0:
-                    self.current_positions[symbol] = {
-                        "quantity": quantity,
-                        "avg_price": fill_price,
-                        "last_updated": datetime.now(UTC),
-                    }
+            elif quantity != 0:
+                self.current_positions[symbol] = {
+                    "quantity": quantity,
+                    "avg_price": fill_price,
+                    "last_updated": datetime.now(UTC),
+                }
 
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(

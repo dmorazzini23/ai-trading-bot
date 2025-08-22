@@ -20,7 +20,7 @@ for _m in ["dotenv"]:
     sys.modules.setdefault(_m, mod)
 
 try:
-    import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
+    from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
 except Exception:
     pytest.skip("alpaca_api not available", allow_module_level=True)
 try:

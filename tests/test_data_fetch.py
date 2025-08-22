@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -28,5 +28,5 @@ def test_bars_time_window_day():
     start, end = _bars_time_window(TimeFrame.Day)
     s_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
     e_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-    assert e_dt <= datetime.now(timezone.utc)
+    assert e_dt <= datetime.now(UTC)
     assert (e_dt - s_dt).days >= 10

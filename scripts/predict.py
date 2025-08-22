@@ -71,20 +71,19 @@ def fetch_sentiment(symbol: str) -> float:
                     "Using TTL cached sentiment for %s: %.2f", symbol, cached_score
                 )
                 return cached_score
-        else:
-            # Fallback manual cache management
-            if symbol in _sentiment_cache:
-                cached_score, cached_time = _sentiment_cache[symbol]
-                if current_time - cached_time < _cache_ttl:
-                    logger.debug(
-                        "Using manual cached sentiment for %s: %.2f",
-                        symbol,
-                        cached_score,
-                    )
-                    return cached_score
-                else:
-                    # Remove expired entry
-                    del _sentiment_cache[symbol]
+        # Fallback manual cache management
+        elif symbol in _sentiment_cache:
+            cached_score, cached_time = _sentiment_cache[symbol]
+            if current_time - cached_time < _cache_ttl:
+                logger.debug(
+                    "Using manual cached sentiment for %s: %.2f",
+                    symbol,
+                    cached_score,
+                )
+                return cached_score
+            else:
+                # Remove expired entry
+                del _sentiment_cache[symbol]
 
         # Check rate limiting
         if symbol in _last_request_time:

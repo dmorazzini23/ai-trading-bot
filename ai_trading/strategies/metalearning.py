@@ -133,13 +133,12 @@ class MetaLearning(BaseStrategy):
                         f"Insufficient data for {symbol}, returning neutral signal"
                     )
                     return self._neutral_signal()
-            else:
-                # Use provided data but validate it
-                if len(data) < self.parameters["min_data_points"]:
-                    logger.warning(
-                        f"Provided data insufficient for {symbol}, returning neutral signal"
-                    )
-                    return self._neutral_signal()
+            # Use provided data but validate it
+            elif len(data) < self.parameters["min_data_points"]:
+                logger.warning(
+                    f"Provided data insufficient for {symbol}, returning neutral signal"
+                )
+                return self._neutral_signal()
 
             # Check if model needs retraining
             if self._should_retrain():

@@ -124,7 +124,7 @@ def test_executor_env_validation():
 
 def test_executor_cleanup_available():
     """Test that executor cleanup function is available."""
-    import ai_trading.core.bot_engine as bot_engine
+    from ai_trading.core import bot_engine
 
     # Check that cleanup function exists
     assert hasattr(bot_engine, 'cleanup_executors')

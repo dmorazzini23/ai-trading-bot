@@ -7,7 +7,17 @@ import os
 
 import pytest
 
-from tests.mocks.validate_critical_fix_mocks import MockContext, MockSignal
+from tests.mocks.validate_critical_fix_mocks import MockContext
+
+try:
+    # AI-AGENT-REF: prefer real MockSignal if available
+    from ai_trading.signals import MockSignal  # type: ignore[assignment]
+except Exception:  # noqa: BLE001 - test fallback
+    class MockSignal:  # AI-AGENT-REF: minimal stub
+        def __init__(self, *_, **__): ...
+
+        def score(self, *_, **__):
+            return 0.0
 
 # Set testing environment
 os.environ['TESTING'] = '1'
@@ -111,8 +121,10 @@ class TestPortfolioSignalFiltering:
         assert reduction_ratio <= 1.0
 
         # Log the results for verification
-        print(f"Churn reduction test: {len(high_churn_signals)} -> {len(filtered_signals)} "
-              f"({reduction_ratio:.1%} passed)")
+        print(
+            f"Churn reduction test: {len(high_churn_signals)} -> {len(filtered_signals)} "
+            f"({reduction_ratio:.1%} passed)"
+        )  # noqa: T201 - test output
 
     def test_portfolio_optimization_fallback(self):
         """Test graceful fallback when portfolio optimization fails."""

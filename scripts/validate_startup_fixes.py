@@ -18,7 +18,7 @@ import os
 import sys
 import tempfile
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def test_no_import_time_crashes():
@@ -152,7 +152,7 @@ def test_utc_timestamp_format():
     logging.info(f"   ✓ utc_now_iso: {timestamp}")
 
     # Test format_datetime_utc
-    dt = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    dt = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
     formatted = format_datetime_utc(dt)
     if formatted != "2024-01-01T12:00:00Z" or formatted.count('Z') != 1:
         logging.info(f"   ✗ format_datetime_utc failed: {formatted}")

@@ -1,5 +1,5 @@
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -11,13 +11,13 @@ from ai_trading import data_fetcher
 
 @pytest.mark.parametrize("value,expected", [
     (
-        datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
-        datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
+        datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
+        datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
     ),
-    ("2024-01-01", datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)),
-    ("2024-01-01 05:30:00", datetime(2024, 1, 1, 5, 30, 0, tzinfo=timezone.utc)),
-    ("20240101", datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)),
-    ("2024-01-01T12:00:00Z", datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)),
+    ("2024-01-01", datetime(2024, 1, 1, 0, 0, tzinfo=UTC)),
+    ("2024-01-01 05:30:00", datetime(2024, 1, 1, 5, 30, 0, tzinfo=UTC)),
+    ("20240101", datetime(2024, 1, 1, 0, 0, tzinfo=UTC)),
+    ("2024-01-01T12:00:00Z", datetime(2024, 1, 1, 12, 0, tzinfo=UTC)),
 ])
 def test_ensure_datetime_valid(value, expected):
     result = data_fetcher.ensure_datetime(value)

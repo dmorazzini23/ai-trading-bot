@@ -3,7 +3,7 @@ import types
 import pytest
 
 try:
-    import ai_trading.core.bot_engine as bot_engine
+    from ai_trading.core import bot_engine
 except Exception:
     pytest.skip("bot engine not importable", allow_module_level=True)
 

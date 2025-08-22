@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC
 
 """Integration guide for enhanced execution debugging in existing bot engine.
 
@@ -218,9 +219,9 @@ def setup_error_alerting():
         """Check if timestamp was within last N minutes."""
         if not timestamp_str:
             return False
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
         timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        cutoff = datetime.now(UTC) - timedelta(minutes=minutes)
         return timestamp > cutoff
 
     def was_old(timestamp_str, minutes=60):

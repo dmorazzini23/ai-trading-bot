@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -64,7 +63,7 @@ def debug_environment() -> dict:
     return {"pythonpath": os.environ.get("PYTHONPATH", ""), "env": dict(os.environ)}
 
 
-def validate_specific_env_var(name: str, required: bool = False) -> Optional[str]:
+def validate_specific_env_var(name: str, required: bool = False) -> str | None:
     val = os.environ.get(name)
     if required and not val:
         raise RuntimeError(f"Missing required env var: {name}")

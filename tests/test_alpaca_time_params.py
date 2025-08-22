@@ -39,8 +39,8 @@ def test_intraday_uses_rfc3339z(mock_rest_cls):
     mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
     mock_rest_cls.return_value = mock_rest
 
-    start = dt.datetime(2025, 8, 19, 15, 0, 5, tzinfo=dt.timezone.utc)
-    end = dt.datetime(2025, 8, 19, 16, 0, 5, tzinfo=dt.timezone.utc)
+    start = dt.datetime(2025, 8, 19, 15, 0, 5, tzinfo=dt.UTC)
+    end = dt.datetime(2025, 8, 19, 16, 0, 5, tzinfo=dt.UTC)
     df = get_bars_df("SPY", "5Min", start=start, end=end, feed="iex", adjustment="all")
     assert not df.empty
     _, kwargs = mock_rest.get_bars.call_args

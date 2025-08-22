@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Optional, Tuple
 
 # AI-AGENT-REF: helper for lazy optional imports
 
-def try_import(module_name: str) -> Tuple[Optional[object], bool, Optional[Exception]]:
+def try_import(module_name: str) -> tuple[object | None, bool, Exception | None]:
     try:
         m = import_module(module_name)
         return m, True, None

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
+from ai_trading import strategy_allocator  # AI-AGENT-REF: normalized import
 from ai_trading.strategies import TradeSignal
 
 

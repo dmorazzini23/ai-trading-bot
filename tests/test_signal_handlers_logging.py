@@ -3,7 +3,7 @@ from __future__ import annotations
 import signal as _signal
 import types
 
-import ai_trading.main as main
+from ai_trading import main
 
 
 def test_install_signal_handlers_logs_service_signal(monkeypatch):

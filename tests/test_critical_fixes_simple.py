@@ -3,12 +3,12 @@
 Simplified test for critical trading bot fixes.
 Tests the specific issues identified in production logs.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def test_timestamp_format_includes_timezone():
     """Test that timestamps include proper timezone information for RFC3339 compliance."""
-    test_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=timezone.utc)
+    test_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
 
     # Test the fixed timestamp format
     result = test_dt.isoformat().replace('+00:00', 'Z')
@@ -134,8 +134,8 @@ def test_stale_data_bypass_startup():
 
 def test_rfc3339_timestamp_api_format():
     """Test that the actual API timestamp format is RFC3339 compliant."""
-    start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=timezone.utc)
-    end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=timezone.utc)
+    start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
+    end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=UTC)
 
     # Apply the fix from data_fetcher.py
     start_param = start_dt.isoformat().replace('+00:00', 'Z')

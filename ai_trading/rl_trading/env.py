@@ -294,8 +294,7 @@ class TradingEnv(EnvBase):  # type: ignore[misc]
         turnover_penalty = self.reward_config.turnover_penalty * trade_size
 
         # Drawdown tracking and penalty
-        if net_worth > self._drawdown_peak:
-            self._drawdown_peak = net_worth
+        self._drawdown_peak = max(self._drawdown_peak, net_worth)
 
         current_drawdown = (
             (self._drawdown_peak - net_worth) / self._drawdown_peak

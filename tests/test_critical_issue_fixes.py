@@ -33,7 +33,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
         # Test that the change exists in the source code by reading the file directly
         bot_engine_path = "bot_engine.py"
         if os.path.exists(bot_engine_path):
-            with open(bot_engine_path, 'r') as f:
+            with open(bot_engine_path) as f:
                 content = f.read()
                 # Check that the default value is now 20 instead of 10
                 self.assertIn('"20"', content, "MAX_PORTFOLIO_POSITIONS default should be 20")
@@ -47,7 +47,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
         # Test by reading the source code directly
         bot_engine_path = "bot_engine.py"
         if os.path.exists(bot_engine_path):
-            with open(bot_engine_path, 'r') as f:
+            with open(bot_engine_path) as f:
                 content = f.read()
                 # Check that thresholds have been improved
                 self.assertIn('SENTIMENT_FAILURE_THRESHOLD = 8', content,
@@ -64,7 +64,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
         # Test by reading the source code directly
         trade_execution_path = "trade_execution.py"
         if os.path.exists(trade_execution_path):
-            with open(trade_execution_path, 'r') as f:
+            with open(trade_execution_path) as f:
                 content = f.read()
                 # Check that FULL_FILL_SUCCESS now includes requested_qty
                 self.assertIn('"requested_qty": requested_qty', content,
@@ -82,7 +82,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
         # Test by reading the source code directly
         bot_engine_path = "bot_engine.py"
         if os.path.exists(bot_engine_path):
-            with open(bot_engine_path, 'r') as f:
+            with open(bot_engine_path) as f:
                 content = f.read()
                 # Check that the meta-learning trigger code exists
                 self.assertIn('from meta_learning import validate_trade_data_quality', content,

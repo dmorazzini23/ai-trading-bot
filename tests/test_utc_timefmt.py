@@ -5,7 +5,7 @@ Tests the ai_trading.utils.timefmt module to ensure proper UTC timestamp
 formatting without double "Z" suffixes and ISO-8601 compliance.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -30,13 +30,13 @@ class TestUTCTimestampFormatting:
 
         # Should be parseable
         parsed = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-        assert parsed.tzinfo == timezone.utc
+        assert parsed.tzinfo == UTC
 
     def test_utc_now_iso_is_recent(self):
         """Test that utc_now_iso() returns a recent timestamp."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         timestamp_str = utc_now_iso()
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
 
         # Parse the timestamp
         timestamp = parse_iso_utc(timestamp_str)
@@ -47,7 +47,7 @@ class TestUTCTimestampFormatting:
 
     def test_format_datetime_utc_with_utc_datetime(self):
         """Test formatting UTC datetime."""
-        dt = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
         result = format_datetime_utc(dt)
 
         assert result == "2024-01-01T12:00:00Z"
@@ -81,7 +81,7 @@ class TestUTCTimestampFormatting:
 
         # Should be recent
         parsed = parse_iso_utc(result)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         assert abs((now - parsed).total_seconds()) < 5  # Within 5 seconds
 
     def test_parse_iso_utc_with_z_suffix(self):
@@ -96,7 +96,7 @@ class TestUTCTimestampFormatting:
         assert result.hour == 12
         assert result.minute == 0
         assert result.second == 0
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
 
     def test_parse_iso_utc_with_offset(self):
         """Test parsing ISO timestamp with +00:00 offset."""
@@ -105,7 +105,7 @@ class TestUTCTimestampFormatting:
 
         assert result is not None
         assert result.year == 2024
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
 
     def test_parse_iso_utc_with_invalid_format(self):
         """Test parsing invalid timestamp returns None."""
@@ -141,7 +141,7 @@ class TestUTCTimestampFormatting:
 
     def test_roundtrip_formatting(self):
         """Test that format->parse->format is consistent."""
-        original_dt = datetime(2024, 6, 15, 14, 30, 45, tzinfo=timezone.utc)
+        original_dt = datetime(2024, 6, 15, 14, 30, 45, tzinfo=UTC)
 
         # Format to string
         formatted = format_datetime_utc(original_dt)
@@ -164,7 +164,7 @@ class TestUTCTimestampFormatting:
         assert now_iso.count('Z') == 1
 
         # Test format_datetime_utc with various inputs
-        dt_utc = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        dt_utc = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
         formatted_utc = format_datetime_utc(dt_utc)
         assert 'ZZ' not in formatted_utc
         assert formatted_utc.count('Z') == 1
@@ -181,7 +181,7 @@ class TestUTCTimestampFormatting:
 
     def test_microseconds_handling(self):
         """Test handling of microseconds in timestamps."""
-        dt = datetime(2024, 1, 1, 12, 0, 0, 123456, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 1, 12, 0, 0, 123456, tzinfo=UTC)
         formatted = format_datetime_utc(dt)
 
         # Should include microseconds

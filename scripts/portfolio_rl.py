@@ -4,8 +4,7 @@ import numpy as np
 
 try:
     import torch
-    import torch.nn as nn
-    import torch.optim as optim
+    from torch import nn, optim
     # AI-AGENT-REF: Successful import means PyTorch is available
     _TORCH_AVAILABLE = True
 

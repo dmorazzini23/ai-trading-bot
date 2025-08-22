@@ -7,7 +7,7 @@ import threading
 import time  # AI-AGENT-REF: tests patch main.time.sleep
 from threading import Thread
 import signal  # AI-AGENT-REF: handle graceful shutdown
-from datetime import datetime, timezone  # AI-AGENT-REF: structured signal logs
+from datetime import datetime, UTC  # AI-AGENT-REF: structured signal logs
 
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
 from dotenv import load_dotenv, find_dotenv
@@ -128,7 +128,7 @@ def _install_signal_handlers() -> None:
     def _handler(signum, frame):
         logger.info(
             "SERVICE_SIGNAL",
-            extra={"signal": signum, "ts": datetime.now(tz=timezone.utc).isoformat()},
+            extra={"signal": signum, "ts": datetime.now(tz=UTC).isoformat()},
         )
         _SHUTDOWN.set()
 
@@ -285,7 +285,7 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
         port = free_port
 
     # Defer app import to avoid import-time side effects
-    import ai_trading.app as app
+    from ai_trading import app
 
     application = app.create_app()
 

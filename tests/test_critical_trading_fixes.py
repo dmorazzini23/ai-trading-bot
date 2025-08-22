@@ -15,7 +15,7 @@ import os
 import tempfile
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -24,11 +24,10 @@ import pytest
 
 # Import modules under test
 try:
-    import ai_trading.analysis.sentiment as sentiment
+    from ai_trading.analysis import sentiment
 except Exception:  # pragma: no cover - optional torch dependency
     pytest.skip("sentiment module unavailable", allow_module_level=True)
-import ai_trading.config as config
-from ai_trading import meta_learning
+from ai_trading import config, meta_learning
 from ai_trading.broker.alpaca import AlpacaBroker
 from ai_trading.execution.engine import ExecutionEngine
 from ai_trading.monitoring.order_health_monitor import (
@@ -232,7 +231,7 @@ class TestMetaLearningSystemFixes(unittest.TestCase):
 
             for i in range(num_trades):
                 writer.writerow([
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                     f'TEST{i % 3}',  # Rotate between TEST0, TEST1, TEST2
                     'buy' if i % 2 == 0 else 'sell',
                     100.0 + i,
@@ -252,19 +251,19 @@ class TestMetaLearningSystemFixes(unittest.TestCase):
 
             # Good data
             writer.writerow([
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
                 'AAPL', 'buy', 150.0, 152.0, 10, 20.0, 'test_signal'
             ])
 
             # Bad data (invalid price)
             writer.writerow([
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
                 'MSFT', 'buy', 'invalid', 300.0, 10, 0.0, 'test_signal'
             ])
 
             # Good data
             writer.writerow([
-                datetime.now(timezone.utc).isoformat(),
+                datetime.now(UTC).isoformat(),
                 'GOOGL', 'sell', 2500.0, 2450.0, 5, 250.0, 'test_signal'
             ])
 
@@ -408,8 +407,8 @@ class TestIntegrationScenarios(unittest.TestCase):
         """Test complete flow when sentiment is rate limited but meta-learning works."""
         # This would be a more complex integration test
         # For now, just ensure modules can be imported together
-        import ai_trading.analysis.sentiment as sentiment
         from ai_trading import meta_learning
+        from ai_trading.analysis import sentiment
         from ai_trading.execution.engine import ExecutionEngine
 
         # Verify key functions exist

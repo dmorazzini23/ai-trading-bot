@@ -8,7 +8,7 @@ Tests for the fixes addressing the critical issues:
 4. Data validation functionality
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -63,8 +63,8 @@ def test_bot_context_alpaca_client_compatibility():
         volume_threshold=1000,
         entry_start_offset=timedelta(minutes=30),
         entry_end_offset=timedelta(minutes=30),
-        market_open=datetime.now(timezone.utc).time(),  # AI-AGENT-REF: Use timezone-aware datetime
-        market_close=datetime.now(timezone.utc).time(),  # AI-AGENT-REF: Use timezone-aware datetime
+        market_open=datetime.now(UTC).time(),  # AI-AGENT-REF: Use timezone-aware datetime
+        market_close=datetime.now(UTC).time(),  # AI-AGENT-REF: Use timezone-aware datetime
         regime_lookback=10,
         regime_atr_threshold=0.02,
         daily_loss_limit=0.05,
@@ -98,7 +98,7 @@ def test_data_validation_freshness():
     )
 
     # Create test data with different timestamps
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Fresh data (5 minutes old)
     fresh_data = pd.DataFrame({
@@ -153,7 +153,7 @@ def test_data_validation_emergency_check():
     """Test emergency data validation for critical trades."""
     from ai_trading.data_validation import emergency_data_check
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Valid data
     valid_data = pd.DataFrame({
@@ -215,7 +215,7 @@ def test_audit_permission_handling(mock_logger):
     # Test that log_trade function exists and can be called
     # In a real permission error scenario, it would attempt to repair permissions
     try:
-        log_trade("AAPL", 10, "buy", 150.0, datetime.now(timezone.utc), "test")
+        log_trade("AAPL", 10, "buy", 150.0, datetime.now(UTC), "test")
         # If it succeeds, that's fine - we're mainly testing the error handling path exists
     except Exception:
         # If it fails due to missing dependencies, that's also acceptable for this test
@@ -224,7 +224,7 @@ def test_audit_permission_handling(mock_logger):
     # The important thing is that the permission handling code exists in audit.py
     import inspect
 
-    import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
+    from ai_trading import audit  # AI-AGENT-REF: canonical import
 
     # Check that the enhanced permission handling code is present
     source = inspect.getsource(audit.log_trade)

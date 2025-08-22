@@ -8,7 +8,7 @@ import os
 
 os.environ["TESTING"] = "1"
 
-import ai_trading.config as config
+from ai_trading import config
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 
 

@@ -7,10 +7,9 @@ hard dependencies are present and import guards have been removed properly.
 """
 
 import sys
-from typing import Tuple
 
 
-def test_import(module_name: str, description: str = "") -> Tuple[bool, str]:
+def test_import(module_name: str, description: str = "") -> tuple[bool, str]:
     """Test importing a module."""
     try:
         __import__(module_name)
@@ -19,7 +18,7 @@ def test_import(module_name: str, description: str = "") -> Tuple[bool, str]:
         return False, f"❌ {module_name} {description}: {e}"
 
 
-def test_class_instantiation(module_name: str, class_name: str, args=None, kwargs=None, description: str = "") -> Tuple[bool, str]:
+def test_class_instantiation(module_name: str, class_name: str, args=None, kwargs=None, description: str = "") -> tuple[bool, str]:
     """Test importing and instantiating a class."""
     args = args or []
     kwargs = kwargs or {}

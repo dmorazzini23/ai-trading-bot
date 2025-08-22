@@ -210,7 +210,7 @@ def main():
                 logger.error("Universe file not found: %s", universe_file)
                 sys.exit(1)
 
-            with open(universe_file, 'r') as f:
+            with open(universe_file) as f:
                 symbols = [line.strip() for line in f if line.strip() and not line.startswith('#')]
         else:
             # Use default universe from config or common stocks

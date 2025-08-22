@@ -22,7 +22,7 @@ def validate_sentiment_api_config():
         logging.info("❌ .env file not found")
         return False
 
-    with open(env_file_path, 'r') as f:
+    with open(env_file_path) as f:
         env_content = f.read()
 
     required_vars = ['SENTIMENT_API_KEY', 'SENTIMENT_API_URL', 'NEWS_API_KEY']
@@ -40,7 +40,7 @@ def validate_sentiment_api_config():
 
     # Check config.py has the new variables
     try:
-        with open('config.py', 'r') as f:
+        with open('config.py') as f:
             config_content = f.read()
 
         if 'SENTIMENT_API_KEY' in config_content and 'SENTIMENT_API_URL' in config_content:
@@ -106,7 +106,7 @@ def validate_data_staleness():
 
     try:
         # Check if functions exist in data_validation.py
-        with open('data_validation.py', 'r') as f:
+        with open('data_validation.py') as f:
             data_val_content = f.read()
 
         required_functions = ['is_market_hours', 'get_staleness_threshold']

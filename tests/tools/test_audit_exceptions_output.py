@@ -6,7 +6,7 @@ import sys
 def test_audit_exceptions_first_line_is_json():
     p = subprocess.run(
         [sys.executable, "tools/audit_exceptions.py", "--paths", "ai_trading"],
-        capture_output=True,
+        check=False, capture_output=True,
         text=True,
     )
     assert p.returncode == 0

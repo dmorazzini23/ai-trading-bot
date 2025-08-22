@@ -26,7 +26,7 @@ def check_env_file():
         return False, "❌ .env file not found. Run: cp .env.example .env"
 
     try:
-        with open(env_path, 'r') as f:
+        with open(env_path) as f:
             content = f.read()
 
         # Check for required variables
@@ -131,7 +131,7 @@ def check_config_import():
 
 def print_setup_instructions():
     """Print setup instructions."""
-    logging.info(str("""
+    logging.info("""
 🔧 Setup Instructions:
 
 1. Get your API keys:
@@ -146,7 +146,7 @@ def print_setup_instructions():
    → Run this script again: python verify_config.py
 
 📖 For detailed instructions, see: docs/API_KEY_SETUP.md
-"""))
+""")
 
 
 def main():

@@ -10,7 +10,7 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 _log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 
@@ -25,7 +25,7 @@ def estimate_cost(quantity: float, price: float, bps: float = 1.0) -> float:
     return quantity * price * (bps / 10_000.0)
 
 
-def _finite_nonneg(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: input guard helper
+def _finite_nonneg(name: str, v: float | None) -> float:  # AI-AGENT-REF: input guard helper
     if v is None:
         raise ValueError(f"{name}_none")
     x = float(v)
@@ -34,14 +34,14 @@ def _finite_nonneg(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: inp
     return x
 
 
-def _bounded_rate(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: bounded rate guard
+def _bounded_rate(name: str, v: float | None) -> float:  # AI-AGENT-REF: bounded rate guard
     x = _finite_nonneg(name, v)
     if x > 1.0:
         raise ValueError(f"{name}_gt1:{v}")
     return x
 
 
-def _finite_pos(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: positive guard
+def _finite_pos(name: str, v: float | None) -> float:  # AI-AGENT-REF: positive guard
     x = _finite_nonneg(name, v)
     if x <= 0.0:
         raise ValueError(f"{name}_invalid:{v}")

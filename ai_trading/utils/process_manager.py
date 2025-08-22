@@ -8,7 +8,6 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 from time import monotonic
-from typing import Dict
 
 from .timing import sleep as psleep
 
@@ -65,11 +64,11 @@ def file_lock(name: str, timeout: float = 2.0):
 
 
 # Compatibility helpers used in tests
-def start_process(name: str) -> Dict[str, str]:
+def start_process(name: str) -> dict[str, str]:
     return {"status": "started", "name": name}
 
 
-def stop_process(name: str) -> Dict[str, str]:
+def stop_process(name: str) -> dict[str, str]:
     return {"status": "stopped", "name": name}
 
 

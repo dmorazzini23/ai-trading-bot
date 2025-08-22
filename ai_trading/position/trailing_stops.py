@@ -463,12 +463,11 @@ class TrailingStopManager:
                     stop_level.trigger_reason = (
                         f"Price {current_price:.2f} <= Stop {stop_price:.2f}"
                     )
-            else:  # Short position
-                if current_price >= stop_price:
-                    stop_level.is_triggered = True
-                    stop_level.trigger_reason = (
-                        f"Price {current_price:.2f} >= Stop {stop_price:.2f}"
-                    )
+            elif current_price >= stop_price:
+                stop_level.is_triggered = True
+                stop_level.trigger_reason = (
+                    f"Price {current_price:.2f} >= Stop {stop_price:.2f}"
+                )
 
             if stop_level.is_triggered:
                 self.logger.warning(

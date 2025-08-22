@@ -1467,7 +1467,7 @@ def stub_capital_scaling(monkeypatch):
 
     # Add TradingConfig stub to config module
     try:
-        import ai_trading.config as config
+        from ai_trading import config
         if not hasattr(config, 'TradingConfig'):
             # Set the attribute on the config module instance, not the class
             if hasattr(config, '__dict__'):

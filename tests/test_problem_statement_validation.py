@@ -5,7 +5,7 @@ package-safe imports, async modernization, and deployment hardening.
 
 import os
 import sys
-from datetime import timezone
+from datetime import UTC
 from unittest.mock import MagicMock, patch
 
 
@@ -87,7 +87,7 @@ def test_utc_datetime_handling():
 
     # Check that created_at has timezone info
     assert order.created_at.tzinfo is not None, "Order created_at should be timezone-aware"
-    assert order.created_at.tzinfo == timezone.utc, "Order should use UTC timezone"
+    assert order.created_at.tzinfo == UTC, "Order should use UTC timezone"
     print("✓ UTC datetime handling working in execution engine")
 
 
@@ -114,7 +114,7 @@ def test_async_modernization():
 
 def test_start_script_portability():
     """Test that start.sh is portable and doesn't contain hard-coded paths."""
-    with open('start.sh', 'r') as f:
+    with open('start.sh') as f:
         content = f.read()
 
     # Should not contain hard-coded paths
@@ -134,7 +134,7 @@ def test_start_script_portability():
 
 def test_python_version_requirements():
     """Test that pyproject.toml has correct Python version requirements."""
-    with open('pyproject.toml', 'r') as f:
+    with open('pyproject.toml') as f:
         content = f.read()
 
     # Should use flexible version range
@@ -148,7 +148,7 @@ def test_env_example_exists():
     """Test that .env.example exists and has required placeholders."""
     assert os.path.exists('.env.example'), ".env.example should exist"
 
-    with open('.env.example', 'r') as f:
+    with open('.env.example') as f:
         content = f.read()
 
     # Should have key placeholders
@@ -170,7 +170,7 @@ def test_no_inappropriate_shebangs():
 
     # Check ai_trading package files
     for py_file in glob.glob('ai_trading/**/*.py', recursive=True):
-        with open(py_file, 'r') as f:
+        with open(py_file) as f:
             first_line = f.readline().strip()
 
         # Non-CLI modules should not have shebangs

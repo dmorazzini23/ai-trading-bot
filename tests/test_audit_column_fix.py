@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
+from ai_trading import audit  # AI-AGENT-REF: canonical import
 
 
 def force_coverage(mod):
@@ -56,7 +56,7 @@ def test_csv_column_alignment(tmp_path, monkeypatch):
     )
 
     # Read and validate CSV structure
-    with open(path, 'r') as f:
+    with open(path) as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames
         rows = list(reader)
@@ -108,7 +108,7 @@ def test_no_uuid_corruption(tmp_path, monkeypatch):
         )
 
     # Validate no UUIDs in symbol columns
-    with open(path, 'r') as f:
+    with open(path) as f:
         reader = csv.DictReader(f)
         rows = list(reader)
 
