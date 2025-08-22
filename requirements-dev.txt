@@ -4,10 +4,16 @@
 pytest>=8.3
 pytest-xdist>=3.6
 pytest-cov>=5.0,<6.0
+pytest-mock>=3.12,<4  # AI-AGENT-REF: mocker fixture
 flake8
 isort
 pydantic>=2.6
 pydantic-settings>=2.2
+
+# --- Test utilities ---
+freezegun>=1.4,<2  # AI-AGENT-REF: time freezing
+requests-mock>=1.12,<2  # AI-AGENT-REF: HTTP isolation
+filelock>=3.12,<4  # AI-AGENT-REF: file locking
 
 # Market / data tooling used only in tests/CI
 pandas>=2.3

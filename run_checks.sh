@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-echo "[+] Running benchmarks..."
-make benchmark
+# AI-AGENT-REF: install runtime and dev dependencies
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt -r requirements-dev.txt
 
-echo "[+] Profiling indicators..."
-make profile
+# AI-AGENT-REF: lint and run tests
+ruff --force-exclude .
+pytest -n auto --disable-warnings -q
 
-echo "[+] Running backtest..."
-make backtest
-
-echo "[+] Running grid search..."
-make gridsearch
-
-echo "[+] All done!"

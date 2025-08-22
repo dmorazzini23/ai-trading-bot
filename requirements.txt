@@ -17,3 +17,7 @@ aiohttp>=3.9,<4
 # Explicit Pydantic v2 + settings
 pydantic>=2.7,<3
 pydantic-settings>=2.2,<3
+
+# Deterministic calendars & time zones
+tzdata>=2024.1  # AI-AGENT-REF: ensure timezone data
+pandas-market-calendars>=4.4,<6  # AI-AGENT-REF: exchange calendars
