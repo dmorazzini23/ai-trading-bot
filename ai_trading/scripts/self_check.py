@@ -2,11 +2,9 @@ import json
 import os
 
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df  # AI-AGENT-REF: market data helper
+from ai_trading.utils.optional_import import optional_import
 
-try:  # AI-AGENT-REF: optional import
-    from alpaca_trade_api.rest import TimeFrame
-except Exception:  # pragma: no cover
-    TimeFrame = None  # type: ignore
+TimeFrame = optional_import("alpaca_trade_api.rest", "TimeFrame")
 
 
 def main() -> None:

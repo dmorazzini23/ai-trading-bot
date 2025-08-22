@@ -389,3 +389,18 @@ def get_seed_int(default: int = 42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: robust seed accessor
     s = get_settings()
     return _to_int(getattr(s, "ai_trading_seed", default), default)
+
+
+# Backcompat for legacy imports / linters
+DEFAULT_CONFIG = None
+_DEFAULT_CONFIG = DEFAULT_CONFIG
+
+
+def ensure_default_config():
+    """Lazily initialize TradingConfig for backward compatibility."""
+    global DEFAULT_CONFIG, _DEFAULT_CONFIG
+    if DEFAULT_CONFIG is None:
+        from ai_trading.config.management import TradingConfig
+        DEFAULT_CONFIG = TradingConfig.from_env()
+        _DEFAULT_CONFIG = DEFAULT_CONFIG
+    return DEFAULT_CONFIG

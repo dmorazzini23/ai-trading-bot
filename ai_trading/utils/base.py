@@ -20,6 +20,7 @@ import pandas as pd
 
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
+from ai_trading.utils.optional_import import optional_import
 
 try:
     import pandas_market_calendars as mcal  # AI-AGENT-REF: optional dependency
@@ -33,10 +34,7 @@ from ai_trading.monitoring.system_health import (
 from ai_trading.settings import get_verbose_logging
 
 # Alpaca SDK imports - now required dependencies
-try:  # AI-AGENT-REF: optional dependency guard
-    from alpaca_trade_api.rest import REST
-except ImportError:  # AI-AGENT-REF: optional dependency  # pragma: no cover
-    REST = object
+REST = optional_import("alpaca_trade_api.rest", "REST") or object
 
 HAS_PANDAS = True
 Timestamp = pd.Timestamp

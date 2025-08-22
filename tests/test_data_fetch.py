@@ -4,11 +4,14 @@ from datetime import datetime, timezone
 import pytest
 
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df  # AI-AGENT-REF
+from ai_trading.utils.optional_import import optional_import
 
-try:  # AI-AGENT-REF: optional import
-    from alpaca_trade_api.rest import TimeFrame
-except Exception:  # pragma: no cover
-    TimeFrame = None  # type: ignore
+alpaca = optional_import("alpaca_trade_api")
+TimeFrame = optional_import("alpaca_trade_api.rest", "TimeFrame")
+
+pytestmark = pytest.mark.skipif(
+    alpaca is None or TimeFrame is None, reason="vendor modules not installed"
+)
 
 
 @pytest.mark.requires_credentials

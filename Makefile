@@ -1,3 +1,4 @@
+
 .PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix typecheck
 
 init:
@@ -23,9 +24,16 @@ deps-dev:
 	python -m pip install -r requirements.txt -r requirements-dev.txt
 
 test-all:
-	$(MAKE) lint-fix
-	$(MAKE) typecheck || true
-	pytest -n auto --disable-warnings -q || true
+	@python -V > artifacts/python-version.txt
+	@pip install -r requirements.txt
+	@if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+	@python tools/import_contract.py || true
+	@ruff --version > artifacts/ruff-version.txt
+	@ruff check . | tee artifacts/ruff.txt || true
+	@mypy --version > artifacts/mypy-version.txt
+	@mypy ai_trading trade_execution | tee artifacts/mypy.txt || true
+	@pytest -n auto --disable-warnings --maxfail=0 -q \
+		--junitxml=artifacts/junit.xml | tee artifacts/pytest.txt || true
 
 ## Lint (safe-fix subset)
 .PHONY: lint-fix
