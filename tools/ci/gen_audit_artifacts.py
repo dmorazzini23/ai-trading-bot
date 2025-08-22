@@ -1,6 +1,8 @@
 # tools/ci/gen_audit_artifacts.py
 from __future__ import annotations
-import re, csv
+
+import csv
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]  # repo root

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from ai_trading.core.bot_engine import fetch_minute_df_safe, DataFetchError
+from ai_trading.core.bot_engine import DataFetchError, fetch_minute_df_safe
 
 
 def test_empty_minute_raises(monkeypatch):

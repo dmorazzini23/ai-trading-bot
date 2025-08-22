@@ -1,8 +1,7 @@
-from concurrent.futures import ThreadPoolExecutor, Future
 import atexit
 import os
 import threading
-
+from concurrent.futures import Future, ThreadPoolExecutor
 
 # AI-AGENT-REF: standardized bounded worker pools
 _EXECUTORS: dict[str, ThreadPoolExecutor] = {}

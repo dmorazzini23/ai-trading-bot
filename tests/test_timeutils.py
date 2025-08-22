@@ -1,7 +1,7 @@
 from datetime import date
+from zoneinfo import ZoneInfo
 
 from ai_trading.data.timeutils import nyse_session_utc
-from zoneinfo import ZoneInfo
 
 
 def test_nyse_session_dst():

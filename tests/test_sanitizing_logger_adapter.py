@@ -12,7 +12,7 @@ class _CaptureHandler(logging.Handler):
         super().__init__()
         self.last: logging.LogRecord | None = None
 
-    def emit(self, record: logging.LogRecord) -> None:  # noqa: D401
+    def emit(self, record: logging.LogRecord) -> None:
         self.last = record
 
 

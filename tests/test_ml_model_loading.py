@@ -1,8 +1,9 @@
 import pickle
-import numpy as np
-from sklearn.dummy import DummyClassifier
 import sys
 import types
+
+import numpy as np
+from sklearn.dummy import DummyClassifier
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct imports from core module
 from ai_trading.core.bot_engine import _load_ml_model

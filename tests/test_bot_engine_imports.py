@@ -2,7 +2,7 @@
 Tests for bot engine import fallback functionality.
 """
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,12 +15,12 @@ class TestBotEngineImports:
         # Create a mock pipeline module
         mock_pipeline = MagicMock()
         mock_pipeline.model_pipeline = "mock_model_pipeline"
-        
+
         # Test primary path works when package import is available
         with patch.dict(sys.modules, {'ai_trading.pipeline': mock_pipeline}):
             # Remove from sys.modules to simulate fresh import
             sys.modules.pop('ai_trading.core.bot_engine', None)
-            
+
             # Mock the import to simulate successful package import
             with patch('builtins.__import__') as mock_import:
                 def side_effect(name, *args, **kwargs):
@@ -30,9 +30,9 @@ class TestBotEngineImports:
                         # This shouldn't be called if package import works
                         raise ImportError("Should not reach legacy import")
                     return MagicMock()
-                
+
                 mock_import.side_effect = side_effect
-                
+
                 # Test the import logic directly
                 try:
                     from ai_trading.pipeline import model_pipeline  # type: ignore
@@ -40,7 +40,7 @@ class TestBotEngineImports:
                     primary_success = True
                 except Exception:
                     primary_success = False
-                    
+
                 assert primary_success, "Primary import path should work"
 
     def test_model_pipeline_import_fallback_to_legacy(self, monkeypatch):
@@ -48,7 +48,7 @@ class TestBotEngineImports:
         # Create a mock legacy pipeline module
         mock_legacy_pipeline = MagicMock()
         mock_legacy_pipeline.model_pipeline = "mock_legacy_model_pipeline"
-        
+
         # Test fallback path when package import fails
         with patch.dict(sys.modules, {'pipeline': mock_legacy_pipeline}):
             # Mock the import to simulate package import failure
@@ -59,9 +59,9 @@ class TestBotEngineImports:
                     elif name == 'pipeline':
                         return mock_legacy_pipeline
                     return MagicMock()
-                
+
                 mock_import.side_effect = side_effect
-                
+
                 # Test the fallback logic
                 try:
                     try:
@@ -70,7 +70,7 @@ class TestBotEngineImports:
                     except Exception:  # pragma: no cover
                         from pipeline import model_pipeline  # type: ignore
                         fallback_triggered = True
-                        
+
                     assert fallback_triggered, "Should fall back to legacy import"
                     assert model_pipeline == "mock_legacy_model_pipeline"
                 except ImportError:
@@ -102,7 +102,7 @@ class TestBotEngineImports:
         """Test that type annotations are preserved in import statements."""
         # This is a basic check that the import statements have proper type ignore comments
         import ast
-        
+
         # Get the source of the import logic we're testing
         import_code = '''
 try:
@@ -110,21 +110,21 @@ try:
 except Exception:  # pragma: no cover
     from pipeline import model_pipeline  # type: ignore
 '''
-        
+
         # Parse and verify the AST contains type: ignore comments
         tree = ast.parse(import_code)
-        
+
         # We mainly care that the code parses without syntax errors
         # and that it follows the expected structure
         assert len(tree.body) == 1  # One try statement
         assert isinstance(tree.body[0], ast.Try)
-        
+
         # Verify we have the expected import structure
         try_body = tree.body[0].body
         assert len(try_body) == 1
         assert isinstance(try_body[0], ast.ImportFrom)
         assert try_body[0].module == 'ai_trading.pipeline'
-        
+
         # Verify exception handler
         handlers = tree.body[0].handlers
         assert len(handlers) == 1

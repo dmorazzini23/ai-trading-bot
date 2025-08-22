@@ -17,7 +17,7 @@ def unwrap_import_guards(text: str) -> tuple[str, bool]:
     while i < n:
         line = lines[i]
         stripped = line.lstrip()
-        
+
         # Look for try: statements
         if stripped.startswith("try:"):
             base_indent = indent_of(line)
@@ -26,7 +26,7 @@ def unwrap_import_guards(text: str) -> tuple[str, bool]:
             # Collect try-body (strictly deeper indent)
             j = body_start
             try_body_lines = []
-            
+
             while j < n:
                 if lines[j].strip() == "":
                     try_body_lines.append(lines[j])
@@ -42,7 +42,7 @@ def unwrap_import_guards(text: str) -> tuple[str, bool]:
             if j < n and "except ImportError" in lines[j]:
                 except_start = j + 1
                 k = except_start
-                
+
                 # Skip the except block
                 while k < n:
                     if lines[k].strip() == "":
@@ -56,7 +56,7 @@ def unwrap_import_guards(text: str) -> tuple[str, bool]:
                 # Extract ONLY import statements from try body
                 import_statements = []
                 non_import_statements = []
-                
+
                 for try_line in try_body_lines:
                     stripped_try = try_line.lstrip()
                     if stripped_try.startswith(("import ", "from ")) and " import " in stripped_try:
@@ -65,16 +65,16 @@ def unwrap_import_guards(text: str) -> tuple[str, bool]:
                         import_statements.append(import_stmt)
                     elif stripped_try.strip():  # Non-empty, non-import line
                         non_import_statements.append(try_line)
-                
+
                 # If we found import statements, unwrap them
                 if import_statements:
                     # Add the unwrapped imports
                     out.extend(import_statements)
-                    
+
                     # If there were non-import statements, preserve them outside the try/except
                     if non_import_statements:
                         out.extend(non_import_statements)
-                    
+
                     changed = True
                     # Skip the entire try/except block
                     i = except_end
@@ -103,7 +103,7 @@ def main():
         # Keep tests out of this pass
         if "/tests/" in p.as_posix():
             continue
-        
+
         try:
             txt = p.read_text(encoding="utf-8", errors="ignore")
             new, ch = unwrap_import_guards(txt)
@@ -121,7 +121,7 @@ def main():
         except Exception as e:
             print(f"Error processing {p.relative_to(ROOT)}: {e}")
             continue
-    
+
     print(f"files_scanned={files} files_modified={total}")
 
 if __name__ == "__main__":

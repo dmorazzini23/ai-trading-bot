@@ -14,16 +14,16 @@ def test_real_tenacity_import():
 def test_tenacity_functionality():
     """Test that real tenacity has expected functionality."""
     from tenacity import retry, stop_after_attempt, wait_exponential
-    
+
     # Test that these are callable
     assert callable(retry)
     assert callable(stop_after_attempt)
     assert callable(wait_exponential)
-    
+
     # Test basic decorator functionality
     @retry(stop=stop_after_attempt(2))
     def test_func():
         return "success"
-    
+
     result = test_func()
     assert result == "success"

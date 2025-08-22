@@ -41,7 +41,7 @@ try:  # new-style guarded import
     Histogram = _Histogram
     Summary = _Summary
     start_http_server = _start_http_server
-except Exception:  # noqa: BLE001
+except Exception:
     # Minimal no-op fallbacks so imports & tests never crash if the pkg is missing
     class _NoopRegistry:
         def register(self, *_, **__):
@@ -80,7 +80,7 @@ except Exception:  # noqa: BLE001
     start_http_server = _noop_start_http_server
 
 # AI-AGENT-REF: expose basic metrics helpers under canonical package
-from ai_trading.monitoring.metrics import safe_divide, calculate_atr  # noqa: E402
+from ai_trading.monitoring.metrics import calculate_atr, safe_divide
 
 
 def compute_basic_metrics(data):

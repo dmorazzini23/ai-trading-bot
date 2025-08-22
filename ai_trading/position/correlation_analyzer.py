@@ -11,7 +11,6 @@ AI-AGENT-REF: Portfolio correlation analysis for risk-aware position management
 """
 
 import logging
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,6 +21,8 @@ from typing import Any
 # Use hard imports since numpy and pandas are dependencies
 import numpy as np
 import pandas as pd
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 logger = logging.getLogger(__name__)
 

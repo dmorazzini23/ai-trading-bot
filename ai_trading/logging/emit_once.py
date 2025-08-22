@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from logging import Logger
 import threading
+from logging import Logger
 
 _emitted: set[str] = set()
 _lock = threading.Lock()

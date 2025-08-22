@@ -10,7 +10,7 @@ class _CaptureHandler(logging.Handler):
         super().__init__()
         self.last = None
 
-    def emit(self, record):  # noqa: D401 - simple capture
+    def emit(self, record):
         self.last = record
 
 

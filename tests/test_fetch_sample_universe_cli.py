@@ -1,4 +1,5 @@
-import importlib.util, pathlib
+import importlib.util
+import pathlib
 
 spec = importlib.util.spec_from_file_location(
     "ai_trading.tools.fetch_sample_universe",

@@ -1,7 +1,10 @@
 import json
 import os
+
 import pytest
+
 from ai_trading.core import bot_engine
+
 
 @pytest.mark.smoke
 def test_save_and_load_snapshot(tmp_path):

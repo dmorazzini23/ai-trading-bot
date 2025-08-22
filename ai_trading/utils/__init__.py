@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os  # noqa: F401  # AI-AGENT-REF: env overrides
+import os  # AI-AGENT-REF: env overrides
 
 # AI-AGENT-REF: alias stdlib time to avoid shadowing by our `time` submodule
 import time as _stdlib_time
@@ -40,7 +40,7 @@ from .timing import clamp_timeout as _clamp_timeout_new
 # AI-AGENT-REF: expose local time helpers without rebinding `time`
 try:  # pragma: no cover
     from . import time as utils_time  # type: ignore
-except Exception:  # pragma: no cover  # noqa: BLE001
+except Exception:  # pragma: no cover
     utils_time = None  # type: ignore
 
 # Back-compat alias
@@ -50,7 +50,7 @@ SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
 # AI-AGENT-REF: relative import to satisfy import contract
 try:  # pragma: no cover
     from . import process_manager  # type: ignore
-except Exception:  # pragma: no cover  # noqa: BLE001
+except Exception:  # pragma: no cover
     process_manager = None  # type: ignore
 
 
@@ -116,7 +116,7 @@ def get_latest_close(df: pd.DataFrame | None) -> float:
         return 0.0
     try:
         val = float(df["close"].dropna().iloc[-1])
-    except Exception:  # noqa: BLE001
+    except Exception:
         return 0.0
     return val
 
@@ -129,8 +129,8 @@ def clamp_timeout(
     value: float | int | None = None,
     *,
     # legacy names
-    min: float | int | None = None,  # noqa: A002 - back-compat
-    max: float | int | None = None,  # noqa: A002 - back-compat
+    min: float | int | None = None,
+    max: float | int | None = None,
     default: float | int | None = None,
     # new names
     min_s: float | None = None,

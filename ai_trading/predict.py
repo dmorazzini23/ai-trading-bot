@@ -7,7 +7,7 @@ try:  # AI-AGENT-REF: optional cachetools TTL cache
 
     _CACHETOOLS_AVAILABLE = True
     _sentiment_cache = TTLCache(maxsize=1000, ttl=3600)
-except Exception:  # noqa: BLE001
+except Exception:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
 
@@ -46,7 +46,7 @@ def fetch_sentiment(symbol: str) -> float:
         resp.raise_for_status()
         data = resp.json()
         score = float(data.get("score", 0.0))
-    except Exception:  # noqa: BLE001
+    except Exception:
         score = 0.0
 
     if _CACHETOOLS_AVAILABLE:

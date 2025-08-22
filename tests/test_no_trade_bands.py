@@ -1,5 +1,6 @@
 from ai_trading.rebalancer import apply_no_trade_bands
 
+
 def test_no_trade_bands_suppresses_small_moves():
     cur = {"AAPL": 0.20, "MSFT": 0.20}
     tgt = {"AAPL": 0.2019, "MSFT": 0.1981}  # deltas ~19 bps
@@ -24,12 +25,12 @@ def test_no_trade_bands_handles_missing_symbols():
 def test_no_trade_bands_custom_threshold():
     cur = {"AAPL": 0.20, "MSFT": 0.20}
     tgt = {"AAPL": 0.2030, "MSFT": 0.1970}  # deltas 30 bps
-    
+
     # With 25 bps threshold, moves should be allowed
     out = apply_no_trade_bands(cur, tgt, band_bps=25.0)
     assert out["AAPL"] == tgt["AAPL"]
     assert out["MSFT"] == tgt["MSFT"]
-    
+
     # With 50 bps threshold, moves should be suppressed
     out = apply_no_trade_bands(cur, tgt, band_bps=50.0)
     assert out["AAPL"] == cur["AAPL"]

@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-import pandas as pd  # noqa: F401
+import pandas as pd
 import pytz  # noqa: F401
 
 from ai_trading.core.runtime import build_runtime

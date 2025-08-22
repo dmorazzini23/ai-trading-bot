@@ -2,7 +2,9 @@
 
 import pandas as pd
 
-from ai_trading.strategies.moving_average_crossover import MovingAverageCrossoverStrategy
+from ai_trading.strategies.moving_average_crossover import (
+    MovingAverageCrossoverStrategy,
+)
 
 
 class DummyFetcher:

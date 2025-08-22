@@ -26,16 +26,16 @@ try:  # AI-AGENT-REF: handle missing cryptography gracefully
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     _CRYPTOGRAPHY_AVAILABLE = True
-except Exception:  # pragma: no cover  # noqa: BLE001
+except Exception:  # pragma: no cover
     _CRYPTOGRAPHY_AVAILABLE = False
     class Fernet:  # type: ignore[override]
         def __init__(self, *args, **kwargs):
             pass
 
-        def encrypt(self, data: bytes) -> bytes:  # noqa: D401 - dummy passthrough
+        def encrypt(self, data: bytes) -> bytes:
             return data
 
-        def decrypt(self, token: bytes) -> bytes:  # noqa: D401 - dummy passthrough
+        def decrypt(self, token: bytes) -> bytes:
             return token
 
     hashes = PBKDF2HMAC = None  # type: ignore

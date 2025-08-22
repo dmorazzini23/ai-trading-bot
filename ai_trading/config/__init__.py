@@ -3,9 +3,9 @@ import os
 import threading
 from typing import Any
 
-from .alpaca import AlpacaConfig, get_alpaca_config  # noqa: F401
+from .alpaca import AlpacaConfig, get_alpaca_config
 from .locks import LockWithTimeout
-from .settings import Settings, broker_keys, get_settings  # noqa: F401
+from .settings import Settings, broker_keys, get_settings
 
 logger = logging.getLogger(__name__)
 

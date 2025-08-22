@@ -1,9 +1,10 @@
+import importlib
+import sys
+import types
+
 import numpy as np
 import pandas as pd
 import pytest
-import sys
-import types
-import importlib
 
 np.random.seed(0)
 

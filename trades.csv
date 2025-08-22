@@ -1,1 +1,4 @@
 symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward
+AAPL,,150.0,,,10,buy,test,,,,
+AAPL,,150.0,,,5,buy,TEST_MODE,,,,
+MSFT,,250.0,,,3,sell,TEST_MODE,,,,

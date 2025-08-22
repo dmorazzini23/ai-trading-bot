@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+
 class MockOrder:
     """Simulates Alpaca order response with various filled_qty data types."""
     def __init__(self, filled_qty=None, status="filled", order_id="test-order"):

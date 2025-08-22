@@ -1,5 +1,6 @@
 import types
 
+
 class DummyAPI:
     def __init__(self):
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
@@ -10,17 +11,17 @@ class DummyAPI:
 
 def test_safe_submit_order_pending_new(monkeypatch):
     """Test safe_submit_order function with mock dependencies."""
-    
+
     # Import only after conftest.py has set up mocks
     from ai_trading.core import bot_engine
-    
+
     # Mock the required functions
     monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
     monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda x: True)
-    
+
     api = DummyAPI()
     req = types.SimpleNamespace(symbol="AAPL", qty=1, side="buy")
-    
+
     try:
         order = bot_engine.safe_submit_order(api, req)
         # Handle case where order submission returns None (degraded mode)

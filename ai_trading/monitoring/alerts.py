@@ -7,13 +7,15 @@ management for institutional trading operations.
 
 import threading
 import time
-from ai_trading.utils.timing import sleep as psleep  # AI-AGENT-REF: avoid circular import
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from ai_trading.utils.timing import (
+    sleep as psleep,  # AI-AGENT-REF: avoid circular import
+)
 
 from ..core.constants import PERFORMANCE_THRESHOLDS, RISK_PARAMETERS
 

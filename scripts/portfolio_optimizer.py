@@ -9,16 +9,16 @@ moved to ai_trading.portfolio.optimizer.
 
 from ai_trading.portfolio.optimizer import (
     PortfolioDecision,
-    PortfolioOptimizer,
     PortfolioMetrics,
+    PortfolioOptimizer,
     TradeImpactAnalysis,
-    create_portfolio_optimizer
+    create_portfolio_optimizer,
 )
 
 # Re-export all classes for backward compatibility
 __all__ = [
     "PortfolioDecision",
-    "PortfolioOptimizer", 
+    "PortfolioOptimizer",
     "PortfolioMetrics",
     "TradeImpactAnalysis",
     "create_portfolio_optimizer"

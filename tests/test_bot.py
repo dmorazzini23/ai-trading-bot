@@ -206,9 +206,9 @@ def test_screen_candidates_empty(monkeypatch):
     """screen_candidates returns an empty list when none pass."""
     monkeypatch.setattr(bot, "load_tickers", lambda path=bot.TICKERS_FILE: ["AAA"])
     monkeypatch.setattr(bot, "screen_universe", lambda candidates, runtime: [])
-    
+
     # Create a mock runtime object
     from unittest.mock import Mock
     mock_runtime = Mock()
-    
+
     assert bot.screen_candidates(mock_runtime) == []

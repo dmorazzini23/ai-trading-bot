@@ -1,10 +1,9 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
-
 import os
 import sys
+from typing import Iterable, Mapping
 
 from ai_trading.logging import get_logger
 

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterable
+from functools import lru_cache
+from typing import Any
+
 # AI-AGENT-REF: numpy is a hard dependency
 import numpy as np
 
 # pandas is a hard dependency
 import pandas as pd
-
-import logging
-from functools import lru_cache
-from typing import Any
-from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 

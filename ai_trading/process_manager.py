@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 # AI-AGENT-REF: test facade for legacy process manager imports
 class ProcessManager:
     """Minimal process manager for tests."""

@@ -23,6 +23,7 @@ SKLEARN_AVAILABLE = True
 
 # TA library for optimized technical analysis - hard dependency
 import ta
+
 TA_AVAILABLE = True
 logger.info("TA library loaded successfully for enhanced technical analysis")
 
@@ -30,13 +31,13 @@ logger.info("TA library loaded successfully for enhanced technical analysis")
 # Export commonly used items
 __all__ = [
     "np",
-    "pd", 
+    "pd",
     "metrics",
     "RandomForestClassifier",
     "train_test_split",
     "ta",
     "NUMPY_AVAILABLE",
-    "PANDAS_AVAILABLE", 
+    "PANDAS_AVAILABLE",
     "SKLEARN_AVAILABLE",
     "TA_AVAILABLE",
 ]

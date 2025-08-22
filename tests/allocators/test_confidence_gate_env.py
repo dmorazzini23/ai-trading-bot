@@ -1,8 +1,8 @@
 import logging
 
 from ai_trading.strategies.performance_allocator import (
-    PerformanceBasedAllocator,
     AllocatorConfig,
+    PerformanceBasedAllocator,
 )
 
 

@@ -6,17 +6,17 @@ capabilities for institutional trading strategies with
 meta-learning, stacking, and turnover management.
 """
 
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import statistics
 from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
+from sklearn.linear_model import Ridge
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
-
-from sklearn.linear_model import Ridge
 
 sklearn_available = True
 

@@ -5,10 +5,11 @@ Provides comprehensive risk monitoring, portfolio risk assessment,
 and real-time risk controls for institutional trading operations.
 """
 
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import math
 import statistics
 from datetime import UTC, datetime, timedelta
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

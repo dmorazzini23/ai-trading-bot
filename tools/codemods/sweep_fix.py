@@ -1,7 +1,7 @@
 # tools/codemods/sweep_fix.py
+import logging
 import pathlib
 import sys
-import logging
 
 import libcst as cst
 import libcst.matchers as m

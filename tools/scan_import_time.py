@@ -1,5 +1,7 @@
 # tools/scan_import_time.py
-import pathlib, re, sys
+import pathlib
+import re
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 INCLUDE = {"ai_trading", "tests"}

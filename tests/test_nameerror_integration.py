@@ -1,8 +1,8 @@
 """Integration test to verify the NameError fix for BUY_THRESHOLD"""
 import os
+import subprocess
 import sys
 import tempfile
-import subprocess
 from pathlib import Path
 
 
@@ -12,7 +12,7 @@ def test_bot_engine_import_no_nameerror():
     This test creates a controlled environment and tries to import bot_engine,
     specifically checking for the NameError that was occurring before the fix.
     """
-    
+
     # Create a test script that tries to import bot_engine
     test_script = '''
 import os
@@ -64,20 +64,20 @@ except Exception as e:
 
 sys.exit(exit_code)
 '''
-    
+
     # Write the test script to a temporary file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
         f.write(test_script)
         script_path = f.name
-    
+
     try:
         # Get the project root directory
         project_root = Path(__file__).resolve().parents[1]
-        
+
         # Run the test script in a subprocess with proper PYTHONPATH
         env = os.environ.copy()
         env['PYTHONPATH'] = str(project_root)
-        
+
         try:
             result = subprocess.run(
                 [sys.executable, script_path],
@@ -93,18 +93,18 @@ sys.exit(exit_code)
             print(f"Stdout so far: {e.stdout}")
             print(f"Stderr so far: {e.stderr}")
             assert False, "Subprocess timeout - bot_engine import took longer than 5 seconds"
-        
+
         print(f"Test script output: {result.stdout}")
         if result.stderr:
             print(f"Test script stderr: {result.stderr}")
-        
+
         # Check the exit code
         if result.returncode == 1:
             assert False, f"NameError for BUY_THRESHOLD or other trading parameter still occurs: {result.stdout}"
         elif result.returncode == 2:
             assert False, f"Unexpected NameError: {result.stdout}"
         # exit code 0 means success or expected exception
-        
+
     finally:
         # Clean up the temporary file
         os.unlink(script_path)

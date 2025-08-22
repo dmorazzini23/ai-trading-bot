@@ -1,16 +1,17 @@
+import types
+
+import joblib
 import pandas as pd
 import pytest
-import joblib
-import types
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with proper imports from core module
 from ai_trading.core.bot_engine import (
-    initialize_bot,
-    run_trading_cycle,
-    generate_signals,
     execute_trades,
-    load_model,
+    generate_signals,
     health_check,
+    initialize_bot,
+    load_model,
+    run_trading_cycle,
 )
 
 

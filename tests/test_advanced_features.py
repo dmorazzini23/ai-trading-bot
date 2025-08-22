@@ -2,6 +2,7 @@
 import sys
 import types
 from pathlib import Path
+
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -71,7 +72,9 @@ def test_maybe_rebalance(monkeypatch):
 
 
 def test_atr_stop_adjusts():
-    from ai_trading.risk.engine import calculate_atr_stop  # AI-AGENT-REF: normalized import
+    from ai_trading.risk.engine import (
+        calculate_atr_stop,  # AI-AGENT-REF: normalized import
+    )
     stop1 = calculate_atr_stop(100, 2, 1.5)
     stop2 = calculate_atr_stop(100, 5, 1.5)
     assert stop1 > stop2

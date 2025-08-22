@@ -1,9 +1,9 @@
 import logging
 
 import pytest
-from tests.conftest import reload_module
 
 import ai_trading.logging as logger  # Use centralized logging module
+from tests.conftest import reload_module
 
 
 def test_get_rotating_handler_fallback(monkeypatch, tmp_path, caplog):

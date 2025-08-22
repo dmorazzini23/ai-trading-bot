@@ -10,31 +10,33 @@ TradingConfig system.
 """
 
 import os
+
 os.environ["TESTING"] = "1"
 
-from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
+from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
+
 CONFIG = TradingConfig()
 
 def simulate_trading_session():
     """Simulate a volatile trading session with drawdown protection."""
-    
+
     logging.info("🤖 AI Trading Bot - Centralized Configuration Demo")
     logging.info(str("=" * 60))
-    
+
     # Get configuration for different modes
     conservative_config = config.TradingConfig.from_env("conservative")
-    balanced_config = config.TradingConfig.from_env("balanced") 
+    balanced_config = config.TradingConfig.from_env("balanced")
     aggressive_config = config.TradingConfig.from_env("aggressive")
-    
+
     logging.info("📊 Configuration Comparison:")
     logging.info(str("-" * 60))
     logging.info(f"Conservative: Max Drawdown = {conservative_config.max_drawdown_threshold:.1%}, Daily Loss = {conservative_config.daily_loss_limit:.1%}")
     logging.info(f"Balanced:     Max Drawdown = {balanced_config.max_drawdown_threshold:.1%}, Daily Loss = {balanced_config.daily_loss_limit:.1%}")
     logging.info(f"Aggressive:   Max Drawdown = {aggressive_config.max_drawdown_threshold:.1%}, Daily Loss = {aggressive_config.daily_loss_limit:.1%}")
     print()
-    
+
     # Use balanced mode for the simulation
     current_config = balanced_config
     logging.info("Using BALANCED mode configuration:")
@@ -43,10 +45,10 @@ def simulate_trading_session():
     logging.info(f"  • Kelly Fraction: {current_config.kelly_fraction}")
     logging.info(f"  • Confidence Threshold: {current_config.conf_threshold}")
     print()
-    
+
     # Initialize circuit breaker with centralized config
     breaker = DrawdownCircuitBreaker(max_drawdown=current_config.max_drawdown_threshold)
-    
+
     # Simulate trading session with equity updates
     trading_session = [
         ("09:30", 100000.0, "Market open - initial equity"),
@@ -61,26 +63,26 @@ def simulate_trading_session():
         ("15:45", 88000.0, "Recovery begins"),
         ("16:00", 95000.0, "Strong recovery - should resume trading"),
     ]
-    
+
     logging.info("📊 Trading Session Simulation:")
     logging.info(str("-" * 60))
-    
+
     for time, equity, description in trading_session:
         # This simulates the equity update that happens in run_all_trades_worker
         trading_allowed = breaker.update_equity(equity)
         status = breaker.get_status()
-        
+
         # Format output
         change = ""
         if status["peak_equity"] > 0:
             pct_change = ((equity - status["peak_equity"]) / status["peak_equity"]) * 100
             change = f"({pct_change:+.1f}% from peak)"
-        
+
         trading_status = "🟢 TRADING" if trading_allowed else "🔴 HALTED"
         drawdown_pct = status["current_drawdown"] * 100
-        
+
         logging.info(f"{time}: ${equity:>8,.0f} {change:<15} | {trading_status:<12} | Drawdown: {drawdown_pct:>4.1f}% | {description}")
-        
+
         # Additional logging for important events
         if not trading_allowed and status["current_drawdown"] > config.MAX_DRAWDOWN_THRESHOLD:
             logging.info(str(f"      💥 CIRCUIT BREAKER TRIGGERED: {status['current_drawdown']:.1%} > {config.MAX_DRAWDOWN_THRESHOLD:.1%}"))
@@ -88,7 +90,7 @@ def simulate_trading_session():
             recovery_ratio = equity / status["peak_equity"] if status["peak_equity"] > 0 else 0
             if recovery_ratio >= breaker.recovery_threshold:
                 logging.info(f"      🔄 TRADING RESUMED: Recovery to {recovery_ratio:.1%} of peak equity")
-    
+
     logging.info(str("\n" + "=" * 60))
     logging.info("📈 Session Summary:")
     final_status = breaker.get_status()
@@ -96,7 +98,7 @@ def simulate_trading_session():
     logging.info(f"Final Equity: ${equity:,.0f}")
     logging.info(str(f"Max Drawdown Experienced: {max([s['current_drawdown'] for _, e, _ in trading_session for s in [breaker.get_status()]]):.1%}"))
     logging.info(str(f"Final Status: {'🟢 Trading Allowed' if final_status['trading_allowed'] else '🔴 Trading Halted'}"))
-    
+
     logging.info("\n🛡️  Protection Summary:")
     logging.info("✅ Circuit breaker successfully protected portfolio during volatile session")
     logging.info("✅ Trading was automatically halted when 8% drawdown threshold was exceeded")

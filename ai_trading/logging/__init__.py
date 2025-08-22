@@ -247,14 +247,14 @@ class CompactJsonFormatter(JSONFormatter):
             "name": record.name,
             "msg": record.getMessage(),
         }
-        
+
         # In compact mode, only include essential extra fields
         essential_fields = {
             "bot_phase",
             "present",  # For config verification logs
             "timestamp",  # For trading events
         }
-        
+
         for k, v in record.__dict__.items():
             if k in essential_fields and k not in {
                 "msg", "message", "args", "levelname", "levelno", "name",
@@ -266,24 +266,24 @@ class CompactJsonFormatter(JSONFormatter):
                 if "key" in k.lower() or "secret" in k.lower():
                     v = _mask_secret(v)
                 payload[k] = v
-        
+
         if record.exc_info:
             exc_type, exc_value, _exc_tb = record.exc_info
             payload["exc"] = "".join(
                 traceback.format_exception_only(exc_type, exc_value)
             ).strip()
-        
+
         return json.dumps(payload, default=self._json_default, ensure_ascii=False, separators=(',', ':'))
 
 
 class EmitOnceLogger:
     """Logger wrapper that tracks emitted messages to prevent duplicates."""
-    
+
     def __init__(self, base_logger: logging.Logger):
         self._logger = base_logger
         self._emitted_keys: set[str] = set()
         self._lock = threading.Lock()
-    
+
     def _emit_if_new(self, level: str, key: str, msg: str, *args, **kwargs) -> None:
         """Emit log message only if key hasn't been seen before."""
         with self._lock:
@@ -291,22 +291,22 @@ class EmitOnceLogger:
                 self._emitted_keys.add(key)
                 log_method = getattr(self._logger, level.lower())
                 log_method(msg, *args, **kwargs)
-    
+
     def info(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
         """Log info message once per key (defaults to message text as key)."""
         emit_key = key or msg
         self._emit_if_new("info", emit_key, msg, *args, **kwargs)
-    
+
     def debug(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
         """Log debug message once per key (defaults to message text as key)."""
         emit_key = key or msg
         self._emit_if_new("debug", emit_key, msg, *args, **kwargs)
-    
+
     def warning(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
         """Log warning message once per key (defaults to message text as key)."""
         emit_key = key or msg
         self._emit_if_new("warning", emit_key, msg, *args, **kwargs)
-    
+
     def error(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
         """Log error message once per key (defaults to message text as key)."""
         emit_key = key or msg
@@ -499,7 +499,7 @@ def get_logger(name: str) -> SanitizingLoggerAdapter:
 
 logger = get_logger(__name__)  # AI-AGENT-REF: use sanitizing adapter
 
-# Create emit-once logger instance for preventing duplicate startup messages  
+# Create emit-once logger instance for preventing duplicate startup messages
 logger_once = EmitOnceLogger(logger)
 
 

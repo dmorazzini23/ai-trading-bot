@@ -1,6 +1,6 @@
 """Runtime settings with env aliases and safe defaults."""
 
-# ruff: noqa: F821,F841,I001
+# ruff: noqa: I001
 from __future__ import annotations
 
 from datetime import timedelta
@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:  # AI-AGENT-REF: tolerate pydantic internals missing
     from pydantic.fields import FieldInfo
-except Exception:  # noqa: BLE001  pragma: no cover
+except Exception:
     FieldInfo = object
 
 
@@ -257,7 +257,7 @@ class Settings(BaseSettings):
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=_to_int(getattr(self, "trade_cooldown_min", 15), 15))
 
-    model_config = SettingsConfigDict(  # noqa: F841
+    model_config = SettingsConfigDict(
         env_prefix="AI_TRADER_",
         extra="ignore",
         case_sensitive=False,
@@ -282,7 +282,7 @@ def get_rebalance_interval_min() -> int:
     val = getattr(s, "rebalance_interval_min", 60)
     try:
         return int(val)
-    except Exception:  # AI-AGENT-REF: tolerate FieldInfo during early imports  # noqa: BLE001
+    except Exception:  # AI-AGENT-REF: tolerate FieldInfo during early imports
         return 60
 
 

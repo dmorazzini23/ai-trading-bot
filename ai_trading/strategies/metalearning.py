@@ -6,17 +6,18 @@ and generate trading signals with confidence scoring and risk assessment.
 """
 
 import warnings
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 warnings.filterwarnings("ignore")
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
-from ai_trading.logging import logger
-
 # AI-AGENT-REF: Import dependencies - sklearn is a hard dependency
 import numpy as np
+
+from ai_trading.logging import logger
 
 NUMPY_AVAILABLE = True
 
@@ -24,18 +25,17 @@ NUMPY_AVAILABLE = True
 PANDAS_AVAILABLE = True
 
 # AI-AGENT-REF: Import data fetcher for historical data
-from ai_trading.data_fetcher import get_minute_df  # type: ignore
-
-
-# AI-AGENT-REF: Import base strategy framework
-from ..core.enums import OrderSide, RiskLevel
-from .base import BaseStrategy, StrategySignal
-
 # Machine learning imports - sklearn is a hard dependency
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+
+from ai_trading.data_fetcher import get_minute_df  # type: ignore
+
+# AI-AGENT-REF: Import base strategy framework
+from ..core.enums import OrderSide, RiskLevel
+from .base import BaseStrategy, StrategySignal
 
 ML_AVAILABLE = True
 

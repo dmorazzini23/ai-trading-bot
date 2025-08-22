@@ -2,6 +2,7 @@ import importlib
 import sys
 from types import ModuleType
 
+
 def test_engine_imports_without_meta_learning(monkeypatch):
     # Simulate missing module to ensure optional behavior works
     class _Missing(ModuleType): pass

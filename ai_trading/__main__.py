@@ -27,7 +27,7 @@ def run_trade() -> None:
     except KeyboardInterrupt:
         logger.info("Trade interrupted")
         sys.exit(0)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("Trade failed: %s", e, exc_info=True)
         sys.exit(1)
 
@@ -50,7 +50,7 @@ def run_backtest() -> None:
     except KeyboardInterrupt:
         logger.info("Backtest interrupted")
         sys.exit(0)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("Backtest failed: %s", e, exc_info=True)
         sys.exit(1)
 
@@ -72,7 +72,7 @@ def run_healthcheck() -> None:
     except KeyboardInterrupt:
         logger.info("Health check interrupted")
         sys.exit(0)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("Health check failed: %s", e, exc_info=True)
         sys.exit(1)
 
@@ -95,7 +95,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Main interrupted")
         sys.exit(0)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error("Main failed: %s", e, exc_info=True)
         sys.exit(1)
 
@@ -105,7 +105,7 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if "--dry-run" in sys.argv:
             logger.warning("dry-run: ignoring startup exception: %s", e)
             sys.exit(0)

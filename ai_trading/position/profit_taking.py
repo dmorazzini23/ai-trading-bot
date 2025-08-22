@@ -11,15 +11,16 @@ AI-AGENT-REF: Advanced profit taking with multi-tiered scale-out strategies
 """
 
 import logging
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 # AI-AGENT-REF: graceful imports with fallbacks
-# Use hard imports since numpy and pandas are dependencies 
+# Use hard imports since numpy and pandas are dependencies
 import pandas as pd
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 logger = logging.getLogger(__name__)
 

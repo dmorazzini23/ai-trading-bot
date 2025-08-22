@@ -7,8 +7,8 @@ import time
 import numpy as np
 import pandas as pd
 
-from ai_trading import signals
-from ai_trading import indicators
+from ai_trading import indicators, signals
+
 
 def profile(func, *args, **kwargs):
     start = time.perf_counter()

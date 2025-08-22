@@ -1,6 +1,7 @@
 import pathlib
 import re
 
+
 def test_no_root_level_imports_of_migrated_modules():
     root = pathlib.Path(__file__).resolve().parents[1]
     banned = {

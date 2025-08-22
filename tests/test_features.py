@@ -1,7 +1,9 @@
 import sys
 import types
+
 import pandas as pd
 import pytest
+
 from ai_trading.features import build_features_pipeline
 
 dotenv_stub = types.ModuleType("dotenv")
@@ -24,6 +26,7 @@ sys.modules.setdefault("validate_env", validate_stub)
 pytestmark = pytest.mark.usefixtures("default_env", "features_env")
 
 import pytest
+
 
 @pytest.fixture(autouse=True)
 def reload_utils_module(monkeypatch):
@@ -53,7 +56,7 @@ def test_features_pipeline():
     assert all(col in df.columns for col in ['macd', 'macds', 'atr', 'vwap']), "Missing computed columns"
     assert not df[['macd', 'macds', 'atr', 'vwap']].isnull().all().any(), "Indicators have all NaNs"
     na_counts = df[['macd', 'atr', 'vwap', 'macds']].isna().sum()
-    assert (na_counts <= 20).all(), f"Excessive NaNs in features: {na_counts}" 
+    assert (na_counts <= 20).all(), f"Excessive NaNs in features: {na_counts}"
 
 
 if __name__ == "__main__":

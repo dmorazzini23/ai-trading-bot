@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def test_slippage_limits():
     df = pd.read_csv("logs/slippage.csv")
     if df.empty:

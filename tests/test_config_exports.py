@@ -2,6 +2,7 @@
 
 import importlib
 
+
 def test_lazy_exports_resolve():
     cfg = importlib.import_module("ai_trading.config")
 

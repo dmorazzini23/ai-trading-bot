@@ -18,7 +18,11 @@ from ai_trading.exc import (
 )
 from ai_trading.logging import get_logger  # AI-AGENT-REF: centralized logging
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
-from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout, sleep  # AI-AGENT-REF: timeout clamp
+from ai_trading.utils.timing import (  # AI-AGENT-REF: timeout clamp
+    HTTP_TIMEOUT,
+    clamp_timeout,
+    sleep,
+)
 
 _log = get_logger(__name__)
 
@@ -177,7 +181,7 @@ def request_json(
             except ValueError:
                 text = resp.text.strip()
                 return {"text": text}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             key = f"{method}:{url}:{getattr(exc, 'args', '')}"
             log_fn = _log.warning if key not in _ERROR_LOGGED else _log.debug
             log_fn("HTTP_RETRY", extra={"attempt": attempt, "attempts": retries, "error": str(exc)})

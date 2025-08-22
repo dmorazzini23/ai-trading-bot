@@ -1,5 +1,7 @@
 import pandas as pd
-from ai_trading.data.universe import locate_tickers_csv, load_universe
+
+from ai_trading.data.universe import load_universe, locate_tickers_csv
+
 
 def test_env_overrides_packaged(monkeypatch, tmp_path):
     csv = tmp_path / "tick.csv"

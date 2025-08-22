@@ -201,7 +201,7 @@ class BaseStrategy(ABC):
 
             return True
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error validating signal: {e}")
             return False
 
@@ -210,7 +210,7 @@ class BaseStrategy(ABC):
         try:
             self.parameters.update(new_parameters)
             logger.info(f"Strategy {self.name} parameters updated: {new_parameters}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error updating strategy parameters: {e}")
 
     def add_symbol(self, symbol: str):
@@ -253,7 +253,7 @@ class BaseStrategy(ABC):
             if return_pct < 0:
                 self.max_drawdown = min(self.max_drawdown, return_pct)
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error updating performance: {e}")
 
     def get_performance_summary(self) -> dict:
@@ -326,7 +326,7 @@ class StrategyRegistry:
             logger.info(f"Strategy registered: {strategy.name} ({strategy.strategy_id})")
             return True
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error registering strategy: {e}")
             return False
 
@@ -353,7 +353,7 @@ class StrategyRegistry:
             logger.info(f"Strategy unregistered: {strategy.name} ({strategy_id})")
             return True
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error unregistering strategy: {e}")
             return False
 
@@ -379,7 +379,7 @@ class StrategyRegistry:
             logger.info(f"Strategy activated: {strategy.name}")
             return True
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error activating strategy {strategy_id}: {e}")
             return False
 
@@ -403,7 +403,7 @@ class StrategyRegistry:
                 logger.warning(f"Strategy {strategy_id} not active")
                 return False
 
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"Error deactivating strategy {strategy_id}: {e}")
             return False
 
@@ -440,7 +440,7 @@ class StrategyRegistry:
                         all_signals.append(signal)
                         strategy.signals_generated += 1
 
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error(f"Error generating signals from strategy {strategy.name}: {e}")
 
         logger.debug(
@@ -467,4 +467,4 @@ class StrategyRegistry:
 
 
 # AI-AGENT-REF: legacy base class alias
-Strategy = BaseStrategy  # noqa: N816
+Strategy = BaseStrategy

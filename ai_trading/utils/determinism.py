@@ -17,6 +17,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +41,7 @@ def set_random_seeds(seed: int = 42) -> None:
     # AI-AGENT-REF: optional lightgbm import with shim
     try:
         import importlib
-        lgb = importlib.import_module("lightgbm")  # noqa: F401
+        lgb = importlib.import_module("lightgbm")
     except Exception:  # pragma: no cover - optional dep
         from ai_trading.thirdparty import lightgbm_compat as lgb  # noqa: F401
     # Set environment variables for additional determinism

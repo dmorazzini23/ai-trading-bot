@@ -17,24 +17,24 @@ def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
     submit = getattr(alpaca_api, "submit_order", None)
     if submit is None:
         pytest.skip("submit_order not available")
-    
+
     # Mock the DRY_RUN setting to False so the actual client is used
     monkeypatch.setattr(alpaca_api, "DRY_RUN", False)
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
-    
-    # Create a simple order request object 
+
+    # Create a simple order request object
     class OrderReq:
         def __init__(self):
             self.symbol = "META"
             self.qty = 1
             self.side = "buy"
             self.time_in_force = "day"
-        
+
         def __getattr__(self, name):
             if name == '_test_scenario':
                 return False
             return None
-    
+
     order_req = OrderReq()
     res = submit(dummy_alpaca_client, order_req)
     assert res is not None

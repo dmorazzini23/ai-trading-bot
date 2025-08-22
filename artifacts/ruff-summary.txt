@@ -1,0 +1,1 @@
+Ruff errors: baseline=5791, after=1046, delta=4745, reduction=81.9%

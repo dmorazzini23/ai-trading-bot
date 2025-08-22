@@ -12,7 +12,7 @@ import numpy as np
 _log = logging.getLogger(__name__)
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
-    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
+    from alpaca.trading.client import TradingClient  # type: ignore
 except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
     TradingClient = None  # type: ignore
 
@@ -20,9 +20,9 @@ except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
         pass
 
 
+from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 from ai_trading.settings import get_rebalance_interval_min
-from ai_trading.config import get_settings
 
 
 def apply_no_trade_bands(

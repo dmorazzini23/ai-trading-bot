@@ -21,7 +21,7 @@ from ai_trading.config import AlpacaConfig, get_alpaca_config
 # Alpaca SDK imports
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
-    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
+    from alpaca.trading.client import TradingClient  # type: ignore
 except Exception:  # AI-AGENT-REF: local fallback when SDK missing
     TradingClient = None  # type: ignore
 

@@ -137,6 +137,7 @@ sys.modules["alpaca.trading.requests"].MarketOrderRequest = _Req
 sys.modules["alpaca.trading.requests"].GetOrdersRequest = _Req
 from enum import Enum
 
+
 class _Enum(str, Enum):
     pass
 
@@ -302,7 +303,7 @@ class _Alloc:
 
     def allocate(self, *a, **k):
         return []
-    
+
     def update_reward(self, strategy: str, reward: float) -> None:
         """Update reward for a strategy (placeholder for test compatibility)."""
         pass

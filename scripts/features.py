@@ -1,13 +1,9 @@
 # AI-AGENT-REF: guard pandas/numpy imports for test environments
-import pandas as pd
-
-
 import logging
 
-from ai_trading.indicators import ema
+import pandas as pd
 
-from ai_trading.indicators import atr
-
+from ai_trading.indicators import atr, ema
 
 logger = logging.getLogger(__name__)
 

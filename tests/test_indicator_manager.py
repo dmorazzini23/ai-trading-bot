@@ -1,5 +1,6 @@
 from ai_trading.indicator_manager import IndicatorManager, IndicatorSpec
 
+
 def test_indicator_manager_streaming_basic():
     mgr = IndicatorManager()
     mgr.add("sma10", IndicatorSpec(kind="sma", period=10))

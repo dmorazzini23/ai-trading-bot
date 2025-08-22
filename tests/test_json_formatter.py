@@ -1,5 +1,6 @@
 import json
 import logging
+
 import ai_trading.logging as logger  # Use centralized logging module
 
 
@@ -40,8 +41,9 @@ def test_json_formatter_exc_info():
 
 def test_json_formatter_serializes_nonstandard_types():
     fmt = logger.JSONFormatter("%(asctime)sZ")
+    from datetime import date, datetime
+
     import numpy as np
-    from datetime import datetime, date
 
     class Foo:
         def __str__(self):

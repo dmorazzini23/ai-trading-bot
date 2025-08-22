@@ -1,10 +1,12 @@
-import pandas as pd
 import os
+
+import pandas as pd
 
 # Set test environment before importing heavy modules
 os.environ['PYTEST_RUNNING'] = 'true'
 
 import ai_trading.features.indicators as ind
+
 
 def test_ensure_columns_accepts_symbol_arg():
     """Test that ensure_columns accepts optional symbol parameter"""

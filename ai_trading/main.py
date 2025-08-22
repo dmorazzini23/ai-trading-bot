@@ -1,4 +1,4 @@
-# ruff: noqa: E402, I001, BLE001
+# ruff: noqa: I001
 from __future__ import annotations
 
 import argparse
@@ -125,7 +125,7 @@ def _get_int_env(var: str, default: int | None = None) -> int | None:
 def _install_signal_handlers() -> None:
     """Install SIGINT/SIGTERM handlers."""  # AI-AGENT-REF
 
-    def _handler(signum, frame):  # noqa: ARG001
+    def _handler(signum, frame):
         logger.info(
             "SERVICE_SIGNAL",
             extra={"signal": signum, "ts": datetime.now(tz=timezone.utc).isoformat()},
