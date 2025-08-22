@@ -433,7 +433,6 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
         # QueueListener.start() creates a daemon thread by default; do not mutate daemon
         _listener.start()
-        _LOGGING_LISTENER = _listener
         atexit.register(_safe_shutdown_logging)
 
         _configured = True

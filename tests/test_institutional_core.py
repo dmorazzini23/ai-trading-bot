@@ -135,7 +135,7 @@ class TestTradingConstants:
 
         for param in required_params:
             assert param in risk_params
-            assert isinstance(risk_params[param], (int, float))
+            assert isinstance(risk_params[param], int | float)
 
     def test_kelly_parameters_exist(self):
         """Test Kelly Criterion parameters are defined."""
@@ -151,7 +151,7 @@ class TestTradingConstants:
 
         for param in required_params:
             assert param in kelly_params
-            assert isinstance(kelly_params[param], (int, float))
+            assert isinstance(kelly_params[param], int | float)
 
     def test_execution_parameters_exist(self):
         """Test execution parameters are defined."""
@@ -167,7 +167,7 @@ class TestTradingConstants:
 
         for param in required_params:
             assert param in exec_params
-            assert isinstance(exec_params[param], (int, float))
+            assert isinstance(exec_params[param], int | float)
 
     def test_parameter_value_ranges(self):
         """Test parameter values are within reasonable ranges."""
@@ -223,7 +223,7 @@ class TestConstantsIntegration:
         # Numeric parameters should be numbers
         risk_params = TRADING_CONSTANTS["RISK_PARAMETERS"]
         for param_key, param_value in risk_params.items():
-            assert isinstance(param_value, (int, float))
+            assert isinstance(param_value, int | float)
 
     def test_constants_consistency(self):
         """Test consistency between related constants."""

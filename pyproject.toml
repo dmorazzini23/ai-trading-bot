@@ -18,21 +18,20 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.black]
-line-length = 100
+line-length = 120
+target-version = ["py311"]
 
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 120
+src = ["ai_trading", "trade_execution", "tests", "tools"]
 extend-exclude = ["artifacts", "build", "dist", ".venv", "venv", ".tox", ".mypy_cache"]
-fix = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "DTZ", "T201", "BLE", "UP", "PL"]
+select = ["E", "F", "I", "UP", "BLE", "T201", "PL", "DTZ"]
 ignore = ["E501"]
 dummy-variable-rgx = "^(_|unused_|ignore_|ignored_|_unused|_ignored|dummy|.*_unused)$"
 
 [tool.ruff.lint.per-file-ignores]
-"**/__init__.py" = ["F401", "F403"]
-"tests/**" = ["E402"]
-"tools/**" = ["E402"]
+"**/__init__.py" = ["F401"]

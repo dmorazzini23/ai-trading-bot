@@ -157,7 +157,6 @@ def transform_file(p: pathlib.Path):
         new = ensure_timezone_import(new)
     if new.code != src:
         p.write_text(new.code, encoding="utf-8")
-        print(f"Updated {p}")
 
 
 if __name__ == "__main__":

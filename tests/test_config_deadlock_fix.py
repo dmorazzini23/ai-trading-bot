@@ -6,7 +6,6 @@ import time
 from unittest.mock import patch
 
 import pytest
-
 from ai_trading import config
 
 
@@ -135,10 +134,10 @@ def test_main_import_no_hang():
 
     try:
         # This is the specific test case mentioned in the problem statement
-        print('Import successful')
-    except Exception as e:
+        pass
+    except Exception:
         # Import might fail due to missing dependencies, but it shouldn't hang
-        print(f'Import failed (expected): {e}')
+        pass
 
     elapsed = time.time() - start_time
     assert elapsed < 10.0, f"Import took too long (possible hang): {elapsed:.2f} seconds"
@@ -160,4 +159,3 @@ def test_deadlock_scenario_resolved():
     elapsed = time.time() - start_time
     assert elapsed < 5.0, f"Deadlock scenario took too long: {elapsed:.2f} seconds"
 
-    print(f"Deadlock scenario completed in {elapsed:.3f} seconds - no hang!")

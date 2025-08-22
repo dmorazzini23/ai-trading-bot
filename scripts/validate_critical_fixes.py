@@ -40,7 +40,7 @@ def test_sentiment_module():
 
         # Test basic functionality
         result = sentiment.predict_text_sentiment('This is a test')
-        assert isinstance(result, (int, float)), "predict_text_sentiment should return a number"
+        assert isinstance(result, int | float), "predict_text_sentiment should return a number"
         logging.info(f"  ✅ predict_text_sentiment works: {result}")
 
         return True
@@ -139,7 +139,6 @@ def main():
     """Run all validation tests."""
     logging.info("🔧 AI Trading Bot - Critical Fixes Validation")
     logging.info(str("=" * 50))
-    print()
 
     tests = [
         ("Sentiment Module", test_sentiment_module),
@@ -158,20 +157,17 @@ def main():
             logging.info(f"✅ {test_name} test PASSED")
         else:
             logging.info(f"❌ {test_name} test FAILED")
-        print()
 
     logging.info(str("=" * 50))
     logging.info(f"📊 Test Results: {passed}/{total} tests passed")
 
     if passed == total:
         logging.info("🎉 ALL CRITICAL FIXES VALIDATED SUCCESSFULLY!")
-        print()
         logging.info("📋 Summary of fixes:")
         logging.info("   ✅ Missing sentiment module created")
         logging.info("   ✅ MetaLearning method signature supports both patterns")
         logging.info("   ✅ Alpaca API endpoints correctly configured")
         logging.info("   ✅ All imports work with proper fallbacks")
-        print()
         logging.info("🚀 The AI trading bot should now function properly!")
         return 0
     else:

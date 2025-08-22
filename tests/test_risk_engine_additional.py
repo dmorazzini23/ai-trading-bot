@@ -1,8 +1,7 @@
 
+import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 import numpy as np
 import pytest
-
-import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 from ai_trading.strategies import TradeSignal
 
 

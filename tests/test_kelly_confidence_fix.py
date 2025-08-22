@@ -93,4 +93,3 @@ def test_kelly_input_validation():
 if __name__ == "__main__":
     test_kelly_confidence_normalization()
     test_kelly_input_validation()
-    print("✅ All Kelly confidence fix tests passed!")

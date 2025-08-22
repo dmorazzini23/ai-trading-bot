@@ -212,7 +212,7 @@ def demonstrate_pnl_attribution():
         update_position_for_pnl,
     )
 
-    attributor = get_pnl_attributor()
+    get_pnl_attributor()
 
     # Simulate various PnL events
     logging.info("Recording PnL events...")
@@ -372,7 +372,7 @@ def main():
 
     try:
         # Demonstrate each feature
-        correlation_id = demonstrate_signal_to_execution_debugging()
+        demonstrate_signal_to_execution_debugging()
         demonstrate_position_reconciliation()
         demonstrate_pnl_attribution()
         demonstrate_debugging_a_problem()

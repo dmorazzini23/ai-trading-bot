@@ -31,7 +31,6 @@ def main():
     # Extract the components we need
     np = imports_module.np
     pd = imports_module.pd
-    sklearn = imports_module.sklearn
     get_ta_lib = imports_module.get_ta_lib
     NUMPY_AVAILABLE = imports_module.NUMPY_AVAILABLE
     PANDAS_AVAILABLE = imports_module.PANDAS_AVAILABLE

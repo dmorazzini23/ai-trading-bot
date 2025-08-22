@@ -324,7 +324,6 @@ if __name__ == '__main__':
     logging.info(str("=" * 50))
     logging.info("This file shows how to integrate the new debugging features")
     logging.info("into your existing trading bot code.")
-    print()
     logging.info("Key integration points:")
     logging.info("1. Enable debugging at startup")
     logging.info("2. Add correlation tracking to signal generation")
@@ -332,5 +331,4 @@ if __name__ == '__main__':
     logging.info("4. Add PnL tracking to order fills")
     logging.info("5. Setup periodic reconciliation checks")
     logging.info("6. Add error alerting for execution issues")
-    print()
     logging.info("See the function examples above for implementation details.")

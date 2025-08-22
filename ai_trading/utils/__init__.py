@@ -68,7 +68,7 @@ def safe_subprocess_run(
     import subprocess  # AI-AGENT-REF: lazy import to respect contract
 
     to = _clamp_timeout_new(timeout, default_non_test=SUBPROCESS_TIMEOUT_S, min_s=0.1)
-    res = subprocess.run(cmd, timeout=to, capture_output=True, **kwargs)
+    res = subprocess.run(cmd, timeout=to, capture_output=True, **kwargs, check=False)
     out = res.stdout
     if isinstance(out, bytes):
         return out.decode(errors="ignore")

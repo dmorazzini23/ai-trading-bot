@@ -17,10 +17,9 @@ os.environ['TESTING'] = '1'
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from ai_trading.strategies.regime_detector import create_regime_detector
 from portfolio_optimizer import PortfolioDecision, create_portfolio_optimizer
 from transaction_cost_calculator import create_transaction_cost_calculator
-
-from ai_trading.strategies.regime_detector import create_regime_detector
 
 
 def demonstrate_portfolio_optimization():
@@ -28,7 +27,6 @@ def demonstrate_portfolio_optimization():
     logging.info(str("=" * 80))
     logging.info("Portfolio-Level Churn Reduction Strategy Demonstration")
     logging.info(str("=" * 80))
-    print()
 
     # Initialize components
     logging.info("🔧 Initializing Portfolio Optimization Components...")
@@ -36,7 +34,6 @@ def demonstrate_portfolio_optimization():
     transaction_calculator = create_transaction_cost_calculator()
     regime_detector = create_regime_detector()
     logging.info("✅ Components initialized successfully")
-    print()
 
     # Sample portfolio and market data
     current_positions = {
@@ -87,7 +84,6 @@ def demonstrate_portfolio_optimization():
     logging.info(f"   Regime Confidence: {metrics.regime_confidence:.3f}")
     logging.info(f"   Dynamic Rebalance Threshold: {thresholds.rebalance_drift_threshold:.3f}")
     logging.info(f"   Trade Frequency Multiplier: {thresholds.trade_frequency_multiplier:.2f}")
-    print()
 
     # Demonstrate portfolio Kelly efficiency
     logging.info("📊 Portfolio Kelly Efficiency Analysis...")
@@ -97,11 +93,9 @@ def demonstrate_portfolio_optimization():
         market_data['prices']
     )
     logging.info(f"   Current Portfolio Kelly Efficiency: {kelly_efficiency:.3f}")
-    print()
 
     # Demonstrate trade proposals and portfolio-level filtering
     logging.info("🔍 Trade Proposal Analysis (Demonstrating Churn Reduction)...")
-    print()
 
     trade_proposals = [
         ('AAPL', 'Small Increase', 110.0),  # Small position increase
@@ -155,7 +149,6 @@ def demonstrate_portfolio_optimization():
             rejected_trades += 1
             logging.info(f"      ❌ REJECTED: {reasoning}")
 
-        print()
 
     # Churn reduction summary
     total_proposals = len(trade_proposals)
@@ -167,7 +160,6 @@ def demonstrate_portfolio_optimization():
     logging.info(f"   Rejected: {rejected_trades}")
     logging.info(f"   Deferred: {deferred_trades}")
     logging.info(f"   Churn Reduction: {reduction_percentage:.1f}%")
-    print()
 
     # Demonstrate rebalancing logic
     logging.info("⚖️  Portfolio Rebalancing Analysis...")
@@ -186,7 +178,6 @@ def demonstrate_portfolio_optimization():
 
     logging.info(str(f"   Should Rebalance: {'YES' if should_rebalance else 'NO'}"))
     logging.info(f"   Reason: {reason}")
-    print()
 
     # Summary of capabilities
     logging.info("🎯 Portfolio Optimization Capabilities Demonstrated:")
@@ -198,13 +189,11 @@ def demonstrate_portfolio_optimization():
     logging.info(f"   ✅ Achieved {reduction_percentage:.1f}% churn reduction in this demonstration")
     logging.info("   ✅ Tax-aware quarterly rebalancing prioritization")
     logging.info("   ✅ Crisis and volatility regime protective measures")
-    print()
 
     logging.info("🚀 The portfolio-level churn reduction strategy is ready for deployment!")
     logging.info("   This system transforms signal-driven trading into intelligent")
     logging.info("   portfolio-first decision making, dramatically reducing churn")
     logging.info("   while improving risk-adjusted returns through mathematical optimization.")
-    print()
     logging.info(str("=" * 80))
 
 

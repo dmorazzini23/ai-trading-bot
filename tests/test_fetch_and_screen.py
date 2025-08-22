@@ -3,7 +3,6 @@ import sys
 import types
 
 import pandas as pd
-
 from ai_trading import data_fetcher
 from ai_trading.utils.base import health_check
 
@@ -29,7 +28,7 @@ def test_fetch_fallback_to_daily(monkeypatch):
     mock_module.atr = lambda *a, **k: pd.Series([1])
     monkeypatch.setitem(sys.modules, "pandas_ta", mock_module)
 
-    ctx = types.SimpleNamespace(data_fetcher=data_fetcher)
+    types.SimpleNamespace(data_fetcher=data_fetcher)
     result = data_fetcher.get_minute_df("AAPL", dt.date.today(), dt.date.today())
     if result is None:
         result = data_fetcher.get_daily_df("AAPL", dt.date.today(), dt.date.today())

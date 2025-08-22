@@ -34,7 +34,6 @@ def run_command(cmd, description):
 def main():
     """Run all validation checks."""
     logging.info("=== Profit-Critical Features Validation ===")
-    print()
 
     checks = [
         # Core feature validation
@@ -57,13 +56,11 @@ logging.info(f'Money(1.005).quantize(0.01) = {result}')
     ]
 
     logging.info("Running validation checks...")
-    print()
 
     results = []
     for cmd, description in checks:
         success = run_command(cmd, description)
         results.append(success)
-        print()
 
     logging.info("=== Summary ===")
 
@@ -71,11 +68,9 @@ logging.info(f'Money(1.005).quantize(0.01) = {result}')
     total = len(results)
 
     logging.info(f"Validation checks: {passed}/{total} passed")
-    print()
 
     if all(results):
         logging.info("🎉 All profit-critical features validated successfully!")
-        print()
         logging.info("Implemented features:")
         logging.info("✅ Exact money math with Decimal precision")
         logging.info("✅ Symbol specifications for tick/lot sizing")
@@ -88,7 +83,6 @@ logging.info(f'Money(1.005).quantize(0.01) = {result}')
         logging.info("✅ Model governance with dataset hash verification")
         logging.info("✅ SLO monitoring with circuit breakers")
         logging.info("✅ Comprehensive documentation and smoke tests")
-        print()
         logging.info("The implementation successfully addresses:")
         logging.info("• Silent P&L drag through exact decimal arithmetic")
         logging.info("• Short selling costs and overnight carry")

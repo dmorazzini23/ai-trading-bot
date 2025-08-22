@@ -4,6 +4,7 @@ Focused test suite for the specific critical trading bot issues described in the
 """
 
 import os
+import sys
 import unittest
 
 # Set up minimal environment for imports
@@ -36,7 +37,6 @@ class TestProblemStatementFixes(unittest.TestCase):
             self.assertEqual(sentiment.SENTIMENT_RECOVERY_TIMEOUT, expected_recovery,
                            f"SENTIMENT_RECOVERY_TIMEOUT should be {expected_recovery}s, got {sentiment.SENTIMENT_RECOVERY_TIMEOUT}s")
 
-            print("✓ Sentiment circuit breaker meets problem statement requirements")
 
         except ImportError as e:
             self.fail(f"Failed to import sentiment module: {e}")
@@ -58,7 +58,6 @@ class TestProblemStatementFixes(unittest.TestCase):
                 expected_value = 2  # Updated from 3 to 2
                 self.assertEqual(current_value, expected_value,
                                f"METALEARN_MIN_TRADES default should be {expected_value}, got {current_value}")
-                print("✓ Meta-learning minimum trades meets problem statement requirements")
             else:
                 self.fail("Could not find METALEARN_MIN_TRADES parameter in load_global_signal_performance")
         else:
@@ -74,7 +73,7 @@ class TestProblemStatementFixes(unittest.TestCase):
 
             # Check if PLTR is in the Technology sector mapping
             if '"PLTR": "Technology"' in content:
-                print("✓ PLTR sector classification meets problem statement requirements")
+                pass
             else:
                 self.fail("PLTR not found in Technology sector mapping")
         else:
@@ -99,14 +98,12 @@ class TestProblemStatementFixes(unittest.TestCase):
                 self.assertIn('"total_filled_qty":', content,
                             "ORDER_FILL_CONSOLIDATED should use clear total_filled_qty field name")
 
-                print("✓ Order quantity tracking has clear field names")
         else:
             self.fail("trade_execution.py not found")
 
 
 def run_problem_statement_tests():
     """Run the problem statement focused tests."""
-    print("\n=== Problem Statement Requirements Test Suite ===")
 
     # Create test suite
     suite = unittest.TestSuite()
@@ -122,24 +119,18 @@ def run_problem_statement_tests():
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
 
-    print("\n=== Test Results Summary ===")
-    print(f"Tests run: {result.testsRun}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
 
     if result.failures:
-        print("\nFailures:")
         for test, traceback in result.failures:
-            print(f"  - {test}: {traceback}")
+            pass
 
     if result.errors:
-        print("\nErrors:")
         for test, traceback in result.errors:
-            print(f"  - {test}: {traceback}")
+            pass
 
     return result.wasSuccessful()
 
 
 if __name__ == "__main__":
     success = run_problem_statement_tests()
-    exit(0 if success else 1)
+    sys.exit(0 if success else 1)

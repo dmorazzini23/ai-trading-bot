@@ -2,7 +2,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from ai_trading.strategies import TradeSignal
 
 # Add the project root to sys.path to ensure we can import the real module

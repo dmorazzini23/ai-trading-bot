@@ -48,7 +48,6 @@ def test_talib_import_enforcement():
         assert hasattr(ta, "trend"), "Expected ta to have trend module"
         assert hasattr(ta, "momentum"), "Expected ta to have momentum module"
         assert hasattr(ta, "volatility"), "Expected ta to have volatility module"
-        print("✅ TA library import successful")
     except ImportError as e:
         pytest.fail(
             f"TA library import should not raise ImportError with fallback: {e}"

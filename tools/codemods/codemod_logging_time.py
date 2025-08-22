@@ -120,11 +120,9 @@ def process_file(filepath: Path) -> bool:
         if content != original_content:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)
-            print(f"Modified: {filepath}")
             return True
 
-    except Exception as e:
-        print(f"Error processing {filepath}: {e}")
+    except Exception:
         return False
 
     return False
@@ -141,16 +139,13 @@ def main():
 
     for target_dir in target_dirs:
         if not target_dir.exists():
-            print(f"Directory {target_dir} does not exist, skipping...")
             continue
 
-        print(f"Processing directory: {target_dir}")
 
         for py_file in target_dir.rglob("*.py"):
             if process_file(py_file):
                 total_modified += 1
 
-    print(f"\nCompleted: {total_modified} files modified")
 
 
 if __name__ == "__main__":

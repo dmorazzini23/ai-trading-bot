@@ -167,7 +167,6 @@ def main():
     logging.info("Critical Trading Bot Fixes - Manual Validation")
     logging.info(str("="*60))
     logging.info("Validating implementation of fixes from problem statement...")
-    print()
 
     results = []
 
@@ -190,7 +189,6 @@ def main():
         if not passed:
             all_passed = False
 
-    print()
     if all_passed:
         logging.info("🎉 ALL FIXES VALIDATED SUCCESSFULLY!")
         logging.info("The trading bot critical issues have been resolved according to the problem statement.")

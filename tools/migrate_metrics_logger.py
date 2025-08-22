@@ -47,7 +47,6 @@ def main() -> int:
         if new != text:
             p.write_text(new, encoding="utf-8")
             changed += 1
-    print(f"metrics_logger migration: updated {changed} files")
     return 0
 
 if __name__ == "__main__":

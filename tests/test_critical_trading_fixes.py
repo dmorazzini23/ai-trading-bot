@@ -204,9 +204,8 @@ class TestMetaLearningSystemFixes(unittest.TestCase):
             try:
                 meta_learning._generate_bootstrap_training_data(self.trade_log_path, 10)
                 success = True
-            except Exception as e:
+            except Exception:
                 success = False
-                print(f"Bootstrap generation failed: {e}")
 
             self.assertTrue(success)
 

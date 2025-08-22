@@ -3,7 +3,6 @@ import inspect
 import numpy as np
 import pandas as pd
 import pytest
-
 from ai_trading import indicators, signals
 
 df = pd.DataFrame({
@@ -21,7 +20,6 @@ for module in modules:
     for name, func in inspect.getmembers(module, inspect.isfunction):
         # skip private functions
         if name.startswith("_"):
-            print(f"Skipping private function {module.__name__}.{name}")
             continue
         sig = inspect.signature(func)
         required_positional = [
@@ -33,14 +31,11 @@ for module in modules:
         ]
         # must have exactly 1 required positional argument
         if len(required_positional) != 1:
-            print(f"Skipping {module.__name__}.{name}: requires {len(required_positional)} positional args.")
             continue
         # skip if explicitly takes str, not intended for DataFrames
         if required_positional[0].annotation == str:
-            print(f"Skipping {module.__name__}.{name}: expects str arg.")
             continue
         if hasattr(func, "py_func") or name == "jit":
-            print(f"Skipping decorator or jit function {module.__name__}.{name}")
             continue
         params.append(pytest.param(func, id=f"{module.__name__}.{name}"))
 

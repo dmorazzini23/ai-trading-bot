@@ -37,8 +37,6 @@ def check_package(import_name: str, package_name: str) -> tuple[bool, str]:
 
 def main():
     """Main validation function."""
-    print("🔍 Validating test environment dependencies...")
-    print("=" * 50)
 
     missing_packages = []
     available_packages = []
@@ -48,27 +46,17 @@ def main():
 
         if success:
             available_packages.append((package_name, info))
-            print(f"✅ {package_name}: {info}")
         else:
             missing_packages.append((package_name, info))
-            print(f"❌ {package_name}: {info}")
 
-    print("\n" + "=" * 50)
-    print("📊 Summary:")
-    print(f"   Available: {len(available_packages)}")
-    print(f"   Missing:   {len(missing_packages)}")
 
     if missing_packages:
-        print("\n🚨 Missing packages:")
         for package_name, error in missing_packages:
-            print(f"   - {package_name}")
+            pass
 
-        print("\n💡 To install missing packages:")
-        print("   pip install -r requirements-dev.txt")
 
         return 1
     else:
-        print("\n🎉 All test dependencies are available!")
         return 0
 
 if __name__ == "__main__":

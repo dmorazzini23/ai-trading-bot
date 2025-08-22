@@ -133,7 +133,7 @@ def demo_meta_learning_trigger():
         logging.info(str(f"📈 TRADE_EXECUTED: {trade['symbol']} {trade['side']} {trade['qty']} @ ${trade['price']:.2f}"))
 
         # Simulate meta-learning trigger
-        trade_data = {
+        {
             **trade,
             'timestamp': datetime.now(UTC).isoformat(),
             'status': 'filled'
@@ -143,7 +143,6 @@ def demo_meta_learning_trigger():
         logging.info(str(f"   ➜ 🧠 META_LEARNING_TRIGGERED | symbol={trade['symbol']}"))
         logging.info("   ➜ 📊 Converting audit format to meta-learning format")
         logging.info("   ➜ 💾 Storing for strategy optimization")
-        print()
 
     logging.info("Key Benefits:")
     logging.info("• Trade data automatically flows to meta-learning system")

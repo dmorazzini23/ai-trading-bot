@@ -3,7 +3,6 @@
 from datetime import UTC, datetime
 
 import pandas as pd
-
 from ai_trading.data import bars
 
 

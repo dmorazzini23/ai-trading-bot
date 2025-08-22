@@ -23,17 +23,16 @@ def test_position_holding_standalone():
 
     # Test holding profitable position
     result = should_hold_position("AAPL", None, 8.5, 2)
-    assert result == True, "Should hold profitable position with >5% gain"
+    assert result is True, "Should hold profitable position with >5% gain"
 
     # Test holding new position
     result = should_hold_position("AAPL", None, 2.0, 1)
-    assert result == True, "Should hold new position for at least 3 days"
+    assert result is True, "Should hold new position for at least 3 days"
 
     # Test not holding old losing position
     result = should_hold_position("AAPL", None, -3.0, 5)
-    assert result == False, "Should not hold losing position after min hold period"
+    assert result is False, "Should not hold losing position after min hold period"
 
-    print("✓ Position holding logic tests passed")
 
 
 def test_position_score_standalone():
@@ -50,7 +49,6 @@ def test_position_score_standalone():
     assert isinstance(score, float), "Should return a float score"
     assert 0.0 <= score <= 1.0, "Score should be between 0 and 1"
 
-    print("✓ Position scoring tests passed")
 
 
 def test_meta_learning_functions():
@@ -79,7 +77,6 @@ def test_meta_learning_functions():
         assert result['side'] == 'buy', "Side should be preserved"
         assert result['classification'] == 'converted', "Should be marked as converted"
 
-        print("✓ Meta-learning conversion tests passed")
 
 
 def test_signal_filtering():
@@ -119,7 +116,6 @@ def test_signal_filtering():
         assert len(filtered_signals) == 1, "Should filter out 2 signals"
         assert filtered_signals[0]['symbol'] == 'MSFT', "MSFT signal should remain"
 
-        print("✓ Signal filtering tests passed")
 
 
 if __name__ == "__main__":
@@ -128,9 +124,7 @@ if __name__ == "__main__":
         test_position_score_standalone()
         test_meta_learning_functions()
         test_signal_filtering()
-        print("\n🎉 All simplified tests passed!")
-    except Exception as e:
-        print(f"❌ Test failed: {e}")
+    except Exception:
         import traceback
         traceback.print_exc()
         sys.exit(1)

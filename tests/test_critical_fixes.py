@@ -120,13 +120,13 @@ def test_data_validation_freshness():
 
     # Test freshness check for fresh data
     fresh_result = check_data_freshness(fresh_data, "AAPL", max_staleness_minutes=15)
-    assert fresh_result['is_fresh'] == True
+    assert fresh_result['is_fresh'] is True
     assert fresh_result['symbol'] == "AAPL"
     assert fresh_result['minutes_stale'] < 15
 
     # Test freshness check for stale data
     stale_result = check_data_freshness(stale_data, "MSFT", max_staleness_minutes=15)
-    assert stale_result['is_fresh'] == False
+    assert stale_result['is_fresh'] is False
     assert stale_result['symbol'] == "MSFT"
     assert stale_result['minutes_stale'] > 15
 
@@ -140,8 +140,8 @@ def test_data_validation_freshness():
 
     assert 'AAPL' in validation_results
     assert 'MSFT' in validation_results
-    assert validation_results['AAPL']['trading_ready'] == True
-    assert validation_results['MSFT']['trading_ready'] == False
+    assert validation_results['AAPL']['trading_ready'] is True
+    assert validation_results['MSFT']['trading_ready'] is False
 
     # Test stale symbols detection
     stale_symbols = get_stale_symbols(validation_results)
@@ -168,10 +168,10 @@ def test_data_validation_emergency_check():
     empty_data = pd.DataFrame()
 
     # Test valid data passes
-    assert emergency_data_check(valid_data, "AAPL") == True
+    assert emergency_data_check(valid_data, "AAPL") is True
 
     # Test empty data fails
-    assert emergency_data_check(empty_data, "MSFT") == False
+    assert emergency_data_check(empty_data, "MSFT") is False
 
 
 def test_risk_engine_exposure_tracking():
@@ -266,4 +266,3 @@ if __name__ == "__main__":
     test_risk_engine_exposure_tracking()
     test_process_manager_multiple_instances_check()
     test_integration_risk_engine_methods()
-    print("All critical fixes tests passed!")

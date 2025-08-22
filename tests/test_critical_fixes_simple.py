@@ -13,12 +13,10 @@ def test_timestamp_format_includes_timezone():
     # Test the fixed timestamp format
     result = test_dt.isoformat().replace('+00:00', 'Z')
 
-    print(f"Fixed timestamp format: {result}")
 
     # The fix should include 'Z' suffix for RFC3339 compliance
     assert result.endswith('Z'), f"Timestamp {result} should end with 'Z' for RFC3339 compliance"
     assert 'T' in result, f"Timestamp {result} should contain 'T' separator"
-    print("✓ RFC3339 timestamp format test passed")
 
 
 def test_position_sizing_minimum_viable():
@@ -31,16 +29,13 @@ def test_position_sizing_minimum_viable():
 
     # Original calculation that resulted in 0
     raw_qty = int(balance * target_weight / current_price)
-    print(f"Original qty calculation: {raw_qty}")
 
     # Fixed logic - ensure minimum position size when cash available
     if raw_qty <= 0 and balance > 1000 and target_weight > 0.001 and current_price > 0:
         raw_qty = max(1, int(1000 / current_price))  # Minimum $1000 position
-        print(f"Using minimum position size: {raw_qty} shares")
 
     assert raw_qty > 0, f"Should compute positive quantity with ${balance:.0f} cash available"
     assert raw_qty >= 1, "Should have at least 1 share for minimum position"
-    print("✓ Position sizing minimum viable test passed")
 
 
 def test_meta_learning_price_conversion():
@@ -71,13 +66,11 @@ def test_meta_learning_price_conversion():
         except (ValueError, TypeError):
             continue  # Skip invalid rows
 
-    print(f"Converted data: {len(valid_rows)} valid rows from {len(test_data)} total")
 
     # Should have 3 valid rows (invalid row should be filtered out)
     assert len(valid_rows) == 3, f"Should have 3 valid price rows, got {len(valid_rows)}"
     assert all(row['entry_price'] > 0 for row in valid_rows), "All entry prices should be positive"
     assert all(row['exit_price'] > 0 for row in valid_rows), "All exit prices should be positive"
-    print("✓ Meta learning price conversion test passed")
 
 
 def test_liquidity_minimum_position():
@@ -98,11 +91,9 @@ def test_liquidity_minimum_position():
     else:
         result = 1
 
-    print(f"Liquidity factor: {liquidity_factor}, Cash: ${cash:.0f}, Result: {result}")
 
     assert result > 0, "Should allow minimum position even with low liquidity when cash > $5000"
     assert result >= 1, "Should have at least 1 share minimum"
-    print("✓ Liquidity minimum position test passed")
 
 
 def test_stale_data_bypass_startup():
@@ -115,7 +106,6 @@ def test_stale_data_bypass_startup():
     # Test that bypass allows trading to proceed
     if stale_symbols and allow_stale_on_startup:
         trading_allowed = True
-        print(f"BYPASS_STALE_DATA_STARTUP: Allowing trading with {len(stale_symbols)} stale symbols")
     else:
         trading_allowed = False
 
@@ -129,7 +119,6 @@ def test_stale_data_bypass_startup():
         trading_allowed = True
 
     assert not trading_allowed, "Should block trading when stale data bypass is disabled"
-    print("✓ Stale data bypass test passed")
 
 
 def test_rfc3339_timestamp_api_format():
@@ -141,19 +130,15 @@ def test_rfc3339_timestamp_api_format():
     start_param = start_dt.isoformat().replace('+00:00', 'Z')
     end_param = end_dt.isoformat().replace('+00:00', 'Z')
 
-    print(f"API start param: {start_param}")
-    print(f"API end param: {end_param}")
 
     # Verify RFC3339 compliance
     assert start_param.endswith('Z'), "Start timestamp should end with 'Z'"
     assert end_param.endswith('Z'), "End timestamp should end with 'Z'"
     assert 'T' in start_param, "Should contain ISO datetime separator 'T'"
     assert '+00:00' not in start_param, "Should not contain +00:00 offset"
-    print("✓ RFC3339 API timestamp format test passed")
 
 
 if __name__ == "__main__":
-    print("Running critical trading bot fix tests\n")
 
     test_timestamp_format_includes_timezone()
     test_position_sizing_minimum_viable()
@@ -162,10 +147,3 @@ if __name__ == "__main__":
     test_stale_data_bypass_startup()
     test_rfc3339_timestamp_api_format()
 
-    print("\n🎉 All critical fix tests passed!")
-    print("\nFixed issues:")
-    print("1. ✓ RFC3339 timestamp formatting for Alpaca API")
-    print("2. ✓ Position sizing minimum viable quantities")
-    print("3. ✓ Meta learning price data type conversion")
-    print("4. ✓ Liquidity minimum position logic")
-    print("5. ✓ Stale data bypass for initial deployment")

@@ -13,12 +13,10 @@ from pathlib import Path
 
 def test_model_registry():
     """Test model registry functionality."""
-    print("Testing model registry...")
     try:
         import numpy as np
-        from sklearn.linear_model import LinearRegression
-
         from ai_trading.model_registry import ModelRegistry
+        from sklearn.linear_model import LinearRegression
 
         with tempfile.TemporaryDirectory() as tmpdir:
             registry = ModelRegistry(base_path=tmpdir)
@@ -35,16 +33,13 @@ def test_model_registry():
 
             assert latest == model_id
             assert isinstance(loaded, LinearRegression)
-            print("✓ Model registry: register → latest_for → load_model workflow works")
             return True
-    except Exception as e:
-        print(f"✗ Model registry test failed: {e}")
+    except Exception:
         traceback.print_exc()
         return False
 
 def test_disable_daily_retrain():
     """Test DISABLE_DAILY_RETRAIN parsing."""
-    print("Testing DISABLE_DAILY_RETRAIN parsing...")
     try:
         test_cases = [
             ("true", True),
@@ -60,15 +55,12 @@ def test_disable_daily_retrain():
             result = env_val.lower() in ("true", "1")
             assert result == expected, f"For '{env_val}', expected {expected}, got {result}"
 
-        print("✓ DISABLE_DAILY_RETRAIN parsing works for all test cases")
         return True
-    except Exception as e:
-        print(f"✗ DISABLE_DAILY_RETRAIN test failed: {e}")
+    except Exception:
         return False
 
 def test_executor_sizing():
     """Test executor auto-sizing logic."""
-    print("Testing executor auto-sizing...")
     try:
         # Clear environment variables
         for var in ["EXECUTOR_WORKERS", "PREDICTION_WORKERS"]:
@@ -97,15 +89,12 @@ def test_executor_sizing():
         assert _exec_workers == 6
         assert _pred_workers == 3
 
-        print("✓ Executor auto-sizing and environment overrides work")
         return True
-    except Exception as e:
-        print(f"✗ Executor sizing test failed: {e}")
+    except Exception:
         return False
 
 def test_minute_cache_helpers():
     """Test minute cache helper functions."""
-    print("Testing minute cache helpers...")
     try:
         import pandas as pd
 
@@ -141,15 +130,12 @@ def test_minute_cache_helpers():
         assert isinstance(age, int)
         assert 25 <= age <= 35  # Should be around 30 seconds
 
-        print("✓ Minute cache helpers work correctly")
         return True
-    except Exception as e:
-        print(f"✗ Minute cache helpers test failed: {e}")
+    except Exception:
         return False
 
 def test_import_hardening():
     """Test that import hardening patterns are in place."""
-    print("Testing import hardening...")
     try:
         # Check bot_engine.py for hardened imports
         bot_engine_path = Path("ai_trading/core/bot_engine.py")
@@ -183,15 +169,12 @@ def test_import_hardening():
                     assert "from ai_trading." in content, f"Missing ai_trading imports in {filename}"
                 assert "except Exception:" in content, f"Missing fallback imports in {filename}"
 
-        print("✓ Import hardening patterns are in place")
         return True
-    except Exception as e:
-        print(f"✗ Import hardening test failed: {e}")
+    except Exception:
         return False
 
 def test_http_timeouts():
     """Test that HTTP timeouts are implemented."""
-    print("Testing HTTP timeouts...")
     try:
         bot_engine_path = Path("ai_trading/core/bot_engine.py")
         if bot_engine_path.exists():
@@ -208,15 +191,12 @@ def test_http_timeouts():
             assert "timeout=2" in content, "Should have health probe timeout=2"
             assert "timeout=10" in content, "Should have API timeout=10"
 
-        print("✓ HTTP timeouts are implemented")
         return True
-    except Exception as e:
-        print(f"✗ HTTP timeouts test failed: {e}")
+    except Exception:
         return False
 
 def test_data_fetcher_helpers():
     """Test that data_fetcher helpers are exported."""
-    print("Testing data_fetcher helper exports...")
     try:
         data_fetcher_path = Path("data_fetcher.py")
         if data_fetcher_path.exists():
@@ -227,15 +207,12 @@ def test_data_fetcher_helpers():
             assert "def last_minute_bar_age_seconds" in content
             assert "pd.Timestamp.now(tz=\"UTC\")" in content
 
-        print("✓ Data fetcher helpers are exported")
         return True
-    except Exception as e:
-        print(f"✗ Data fetcher helpers test failed: {e}")
+    except Exception:
         return False
 
 def main():
     """Run all integration tests."""
-    print("Running integration tests for problem statement fixes...\n")
 
     # Set testing environment
     os.environ["TESTING"] = "1"
@@ -259,18 +236,13 @@ def main():
                 passed += 1
             else:
                 failed += 1
-        except Exception as e:
-            print(f"✗ Test {test.__name__} failed with exception: {e}")
+        except Exception:
             failed += 1
-        print()
 
-    print(f"Results: {passed} passed, {failed} failed")
 
     if failed == 0:
-        print("🎉 All integration tests passed!")
         return 0
     else:
-        print("❌ Some tests failed.")
         return 1
 
 if __name__ == "__main__":

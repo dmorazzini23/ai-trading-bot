@@ -95,7 +95,6 @@ def patch_file(p: pathlib.Path) -> bool:
     new = patch_text(src)
     if new and new != src:
         p.write_text(new, encoding="utf-8")
-        print(f"UPDATED {p}")
         return True
     return False
 
@@ -107,9 +106,8 @@ def main():
         if py.name == "settings.py" and py.parts[-2] == "ai_trading": continue
         try:
             if patch_file(py): changed += 1
-        except Exception as e:
-            print(f"PATCH_FAIL {py}: {e}")
-    print(f"Done. Files changed: {changed}")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()

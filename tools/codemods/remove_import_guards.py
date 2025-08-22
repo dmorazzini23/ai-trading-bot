@@ -29,7 +29,7 @@ class StripImportGuards(cst.CSTTransformer):
         for stmt in body.body:
             if isinstance(stmt, cst.SimpleStatementLine):
                 for substmt in stmt.body:
-                    if isinstance(substmt, (cst.Import, cst.ImportFrom)):
+                    if isinstance(substmt, cst.Import | cst.ImportFrom):
                         import_statements.append(stmt)
                         break
                 else:
@@ -53,8 +53,8 @@ def transform_file(p: Path) -> bool:
         if new.code != src:
             p.write_text(new.code, encoding="utf-8")
             return True
-    except Exception as e:
-        print(f"Error transforming {p}: {e}")
+    except Exception:
+        pass
     return False
 
 def main():
@@ -62,8 +62,6 @@ def main():
     for py in ROOT.rglob("*.py"):
         if transform_file(py):
             changed += 1
-            print(f"Removed import guards from: {py}")
-    print(f"import-guard removal: changed {changed} files")
 
 if __name__ == "__main__":
     main()

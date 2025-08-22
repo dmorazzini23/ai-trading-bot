@@ -1,4 +1,3 @@
-import json
 import os
 
 from ai_trading.alpaca_api import (  # AI-AGENT-REF: market data helper
@@ -16,7 +15,7 @@ def main() -> None:
         df_day = get_bars_df("SPY", TimeFrame.Day)
         df_min = get_bars_df("SPY", TimeFrame.Minute)
         start, end = _bars_time_window(TimeFrame.Day)
-        payload = {
+        {
             "msg": "SELF_CHECK",
             "feed": feed,
             "spy_day_rows": len(df_day),
@@ -24,9 +23,7 @@ def main() -> None:
             "start": start,
             "end": end,
         }
-        print(json.dumps(payload))
-    except Exception as exc:
-        print(json.dumps({"msg": "SELF_CHECK_FAIL", "error": str(exc)}))
+    except Exception:
         raise SystemExit(1)
 
 

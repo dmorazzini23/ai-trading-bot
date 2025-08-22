@@ -116,7 +116,6 @@ def main():
         except Exception as e:
             logging.info(f"✗ Test {test.__name__} failed: {e}")
             results.append(False)
-        print()
 
     success_count = sum(results)
     total_count = len(results)

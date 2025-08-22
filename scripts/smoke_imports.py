@@ -25,7 +25,7 @@ def test_class_instantiation(module_name: str, class_name: str, args=None, kwarg
     try:
         module = __import__(module_name, fromlist=[class_name])
         cls = getattr(module, class_name)
-        instance = cls(*args, **kwargs)
+        cls(*args, **kwargs)
         return True, f"✅ {module_name}.{class_name} {description}"
     except Exception as e:
         return False, f"❌ {module_name}.{class_name} {description}: {e}"
@@ -133,27 +133,20 @@ def main():
         tests.append((False, f"❌ StrategyAllocator instantiation failed: {e}"))
 
     # Print results
-    print("Import Smoke Tests")
-    print("=" * 50)
 
     passed = 0
     failed = 0
 
     for success, message in tests:
-        print(message)
         if success:
             passed += 1
         else:
             failed += 1
 
-    print("\n" + "=" * 50)
-    print(f"Results: {passed} passed, {failed} failed")
 
     if failed > 0:
-        print(f"\n❌ {failed} tests failed. Check dependencies and import paths.")
         sys.exit(1)
     else:
-        print("\n✅ All smoke tests passed! Import guards removed successfully.")
         sys.exit(0)
 
 

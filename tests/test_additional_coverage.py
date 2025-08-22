@@ -12,7 +12,6 @@ import pytest
 
 try:
     import pydantic_settings  # noqa: F401
-
     from ai_trading import config, meta_learning
 except Exception:
     pytest.skip("pydantic v2 required", allow_module_level=True)
@@ -27,6 +26,7 @@ from ai_trading import (
     utils,
 )
 from ai_trading.strategies.mean_reversion import MeanReversionStrategy
+
 from tests.mocks.app_mocks import MockConfig
 
 
@@ -80,7 +80,7 @@ def test_create_flask_routes():
     sys.modules["flask.testing"].FlaskClient = DummyClient
     sys.modules.pop("ai_trading.main", None)
     sys.modules.pop("ai_trading.app", None)  # Also remove app module
-    main_mod = importlib.import_module("ai_trading.main")
+    importlib.import_module("ai_trading.main")
     import ai_trading.app as app_mod
 
     app = app_mod.create_app()
@@ -284,7 +284,7 @@ def test_runner_main_loop(monkeypatch):
     bot_mod = types.ModuleType("bot")
     bot_mod.main = lambda: (_ for _ in ()).throw(SystemExit(0))
     sys.modules["bot"] = bot_mod
-    module = runpy.run_module("runner", run_name="__main__")
+    runpy.run_module("runner", run_name="__main__")
 
 
 def test_mean_reversion_nan_and_short(monkeypatch):

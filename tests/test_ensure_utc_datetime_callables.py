@@ -1,7 +1,6 @@
 from datetime import UTC, datetime
 
 import pytest
-
 from ai_trading.data.timeutils import ensure_utc_datetime
 
 

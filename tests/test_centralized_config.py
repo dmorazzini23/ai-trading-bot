@@ -251,7 +251,7 @@ def test_trading_config_has_max_drawdown_threshold():
 
     cfg = TradingConfig.from_env("balanced")
     assert hasattr(cfg, "max_drawdown_threshold"), "TradingConfig missing max_drawdown_threshold"
-    assert isinstance(cfg.max_drawdown_threshold, (int, float))
+    assert isinstance(cfg.max_drawdown_threshold, int | float)
     assert 0 <= cfg.max_drawdown_threshold <= 1, "max_drawdown_threshold should be a fraction (0..1)"
 
 
@@ -263,8 +263,8 @@ def test_trading_config_to_dict_includes_capital_and_drawdown():
     data = cfg.to_dict()
     assert "capital_cap" in data, "to_dict() missing capital_cap"
     assert "max_drawdown_threshold" in data, "to_dict() missing max_drawdown_threshold"
-    assert isinstance(data["capital_cap"], (int, float))
-    assert isinstance(data["max_drawdown_threshold"], (int, float))
+    assert isinstance(data["capital_cap"], int | float)
+    assert isinstance(data["max_drawdown_threshold"], int | float)
 
 
 def test_trading_config_legacy_params_keys():

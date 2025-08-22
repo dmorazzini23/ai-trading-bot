@@ -12,10 +12,8 @@ if str(ROOT) not in sys.path:
 def _probe_psutil() -> bool:
     try:
         import psutil  # noqa: F401
-        print("[health] psutil: ok")
         return True
-    except Exception as e:
-        print("[health] psutil: MISSING ->", e)
+    except Exception:
         return False
 
 
@@ -23,11 +21,9 @@ def _probe_psutil() -> bool:
 def _probe_alpaca_trade_api() -> bool:
     try:
         import alpaca_trade_api  # type: ignore
-        ver = getattr(alpaca_trade_api, "__version__", "unknown")
-        print(f"[health] alpaca_trade_api: ok (version={ver})")
+        getattr(alpaca_trade_api, "__version__", "unknown")
         return True
-    except Exception as e:
-        print("[health] alpaca_trade_api: MISSING ->", e)
+    except Exception:
         return False
 
 
@@ -37,10 +33,8 @@ def _probe_strategy_allocator() -> bool:
             PerformanceBasedAllocator,
         )
         assert PerformanceBasedAllocator is not None
-        print("[health] strategy_allocator: ok")
         return True
-    except Exception as e:
-        print("[health] strategy_allocator: MISSING/INVALID ->", e)
+    except Exception:
         return False
 
 
@@ -49,32 +43,25 @@ def _probe_async_testing() -> bool:
     ok = True
     try:
         import pytest_asyncio  # type: ignore  # noqa: F401
-        print("[health] pytest-asyncio: ok")
-    except Exception as e:
+    except Exception:
         ok = False
-        print("[health] pytest-asyncio: MISSING ->", e)
     try:
         import anyio  # type: ignore  # noqa: F401
-        print("[health] anyio: ok")
-    except Exception as e:
+    except Exception:
         ok = False
-        print("[health] anyio: MISSING ->", e)
     return ok
 
 
 def _probe_model_and_universe():
     import os
-    tp = os.getenv('AI_TRADER_TICKERS_FILE', 'tickers.csv')
-    tc = os.getenv('AI_TRADER_TICKERS_CSV')
-    mp = os.getenv('AI_TRADER_MODEL_PATH')
-    mm = os.getenv('AI_TRADER_MODEL_MODULE')
-    print('[health] universe source:', tc and 'CSV(env)' or tp)
-    print('[health] model source:', mp and f'path:{mp}' or (mm and f'module:{mm}') or 'MISSING')
+    os.getenv('AI_TRADER_TICKERS_FILE', 'tickers.csv')
+    os.getenv('AI_TRADER_TICKERS_CSV')
+    os.getenv('AI_TRADER_MODEL_PATH')
+    os.getenv('AI_TRADER_MODEL_MODULE')
     try:
         import joblib  # noqa
-        print('[health] joblib: ok')
-    except Exception as e:
-        print('[health] joblib: MISSING ->', e)
+    except Exception:
+        pass
 
 
 def _probe_model_config():
@@ -83,17 +70,14 @@ def _probe_model_config():
     p = os.getenv("AI_TRADER_MODEL_PATH")
     m = os.getenv("AI_TRADER_MODEL_MODULE")
     if p:
-        print(f"[health] model: path -> {p}")
+        pass
     elif m:
-        print(f"[health] model: module -> {m}")
+        pass
     else:
-        print("[health] model: MISSING (required)")
         return False
     try:
         import joblib  # noqa: F401
-        print("[health] joblib: ok")
-    except Exception as e:
-        print("[health] joblib: MISSING ->", e)
+    except Exception:
         return False
     return True
 

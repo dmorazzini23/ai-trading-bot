@@ -25,8 +25,7 @@ try:
     from ai_trading import meta_learning
     from ai_trading.core import bot_engine
     from ai_trading.monitoring.order_health_monitor import _order_tracking_lock
-except ImportError as e:
-    print(f"Import error: {e}")
+except ImportError:
     # Create minimal mocks for missing imports
     bot_engine = MagicMock()
     meta_learning = MagicMock()
@@ -85,18 +84,17 @@ class TestOrderExecutionTracking(unittest.TestCase):
             # Test that we can access the POV submit function
             if hasattr(bot_engine, 'pov_submit'):
                 # This would expose the quantity tracking issue
-                result = bot_engine.pov_submit(self.mock_ctx, symbol, total_qty, side)
+                bot_engine.pov_submit(self.mock_ctx, symbol, total_qty, side)
 
                 # Verify that submit_order was called with sliced quantities
                 self.assertTrue(mock_submit.called)
                 calls = mock_submit.call_args_list
 
                 # Calculate total intended vs actual filled
-                total_intended = sum(call[0][2] for call in calls)  # qty parameter
+                sum(call[0][2] for call in calls)  # qty parameter
                 # The issue: we track total_intended but actual filled might be different
 
                 # This test currently fails because we don't track actual fills properly
-                print(f"Total intended: {total_intended}, Order filled_qty: {self.mock_order.filled_qty}")
 
     def test_order_status_polling_integration(self):
         """Test that order status polling properly feeds back to slicing logic."""
@@ -259,15 +257,13 @@ class TestLiquidityManagement(unittest.TestCase):
         mock_quote.spread = 0.05  # Exactly at threshold
 
         # Mock volume data
-        avg_vol = 500000  # Good volume
 
         with patch.object(self.mock_ctx.data_client, 'get_stock_latest_quote', return_value=mock_quote):
             if hasattr(bot_engine, 'liquidity_factor'):
-                factor = bot_engine.liquidity_factor(self.mock_ctx, symbol)
+                bot_engine.liquidity_factor(self.mock_ctx, symbol)
 
                 # With current logic, spread of 0.05 reduces liquidity factor significantly
                 # This is too conservative for normal market conditions
-                print(f"Liquidity factor with 0.05 spread: {factor}")
 
                 # Should be more reasonable with dynamic thresholds
 
@@ -302,10 +298,9 @@ class TestLiquidityManagement(unittest.TestCase):
                 slice_qty = min(int(vol * pct), total_qty)
 
             # This shows excessive reduction due to conservative threshold
-            normal_slice = int(vol * pct)  # 100,000
+            int(vol * pct)  # 100,000
             reduced_slice = int(vol * pct * 0.5)  # 50,000
 
-            print(f"Normal slice: {normal_slice}, Reduced slice: {reduced_slice}")
             self.assertEqual(slice_qty, min(reduced_slice, total_qty))
 
     def test_volatility_retry_frequency(self):

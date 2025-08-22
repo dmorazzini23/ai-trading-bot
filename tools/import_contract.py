@@ -21,7 +21,6 @@ def _run_import_in_subprocess(module: str, timeout: float) -> subprocess.Complet
     env.setdefault("AI_TRADING_IMPORT_CONTRACT", "1")
 
     # Allow tests to simulate a hang without touching real modules
-    simulate = "IMPORT_CONTRACT_SIMULATE_HANG" in env
 
     # Build a tiny Python snippet that imports the module; optionally sleeps to simulate hang
     code = (
@@ -34,8 +33,7 @@ def _run_import_in_subprocess(module: str, timeout: float) -> subprocess.Complet
     return subprocess.run(
         args,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
@@ -56,8 +54,6 @@ def main(argv: list[str] | None = None) -> int:
         try:
             cp = _run_import_in_subprocess(mod, args.timeout)
         except subprocess.TimeoutExpired:
-            msg = f"TIMEOUT importing {mod} after {args.timeout:.1f}s"
-            print(msg, file=sys.stderr)
             if args.ci:
                 return 124
             overall_rc = overall_rc or 124
@@ -65,16 +61,15 @@ def main(argv: list[str] | None = None) -> int:
 
         if cp.returncode != 0:
             # Surface stderr in CI for debugging
-            print(f"IMPORT_FAIL {mod}: rc={cp.returncode}", file=sys.stderr)
             if cp.stdout:
-                print(cp.stdout, file=sys.stderr)
+                pass
             if cp.stderr:
-                print(cp.stderr, file=sys.stderr)
+                pass
             if args.ci:
                 return cp.returncode
             overall_rc = overall_rc or cp.returncode
         elif not args.ci:
-            print(cp.stdout.strip())
+            pass
 
     return overall_rc
 

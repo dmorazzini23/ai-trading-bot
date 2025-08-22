@@ -2,7 +2,6 @@ import datetime
 import types
 
 import pandas as pd
-
 from ai_trading.core import bot_engine
 
 

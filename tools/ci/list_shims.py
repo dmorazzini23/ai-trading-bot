@@ -20,8 +20,7 @@ def main():
     for p in ROOT.rglob("*.py"):
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
-        except Exception as e:
-            print(f"Error reading {p}: {e}")
+        except Exception:
             continue
 
         for name, rx in PATTERNS.items():
@@ -43,7 +42,6 @@ def main():
         for r in rows:
             w.writerow(r)
 
-    print(f"Wrote {len(rows)} targets to {out}")
 
 if __name__ == "__main__":
     main()

@@ -127,7 +127,7 @@ class LoadTester:
                 completed_futures = [f for f in futures if f[0].done()]
                 for future, submit_time in completed_futures:
                     try:
-                        result = future.result()
+                        future.result()
                         response_time = (time.perf_counter() - submit_time) * 1000  # ms
                         response_times.append(response_time)
                         successful_requests += 1
@@ -140,7 +140,7 @@ class LoadTester:
             # Wait for remaining futures
             for future, submit_time in futures:
                 try:
-                    result = future.result(timeout=30)
+                    future.result(timeout=30)
                     response_time = (time.perf_counter() - submit_time) * 1000
                     response_times.append(response_time)
                     successful_requests += 1
@@ -315,7 +315,7 @@ class ChaosEngineer:
         """Run a specific chaos engineering test."""
         self.logger.info(f"Starting chaos test: {fault_type}")
 
-        start_time = datetime.now(UTC)
+        datetime.now(UTC)
 
         # Baseline measurements
         baseline_performance = self._measure_system_performance()
@@ -349,7 +349,6 @@ class ChaosEngineer:
 
         # Measure recovery
         recovery_start = datetime.now(UTC)
-        recovery_performance = None
         recovery_time = None
 
         # Give system time to recover
@@ -357,14 +356,13 @@ class ChaosEngineer:
             try:
                 performance = self._measure_system_performance()
                 if self._is_performance_recovered(baseline_performance, performance):
-                    recovery_performance = performance
                     recovery_time = datetime.now(UTC) - recovery_start
                     break
                 time.sleep(1)
             except Exception as e:
                 error_details.append(f"Recovery monitoring error: {e}")
 
-        end_time = datetime.now(UTC)
+        datetime.now(UTC)
 
         # Calculate impact metrics
         if performance_samples:
@@ -824,7 +822,7 @@ class ProductionValidator:
         """Test risk management functionality."""
         try:
             from ai_trading.core.bot_engine import get_risk_engine
-            RiskEngine = get_risk_engine()
+            get_risk_engine()
             return 90
         except ImportError:
             return 40
@@ -832,9 +830,9 @@ class ProductionValidator:
     def _test_data_processing(self) -> float:
         """Test data processing functionality."""
         try:
-            import indicators
-
             from ai_trading import data_fetcher
+
+            import indicators
             return 90
         except ImportError:
             return 40

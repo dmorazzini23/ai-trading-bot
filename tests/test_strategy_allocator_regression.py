@@ -58,7 +58,7 @@ class TestStrategyAllocatorRegression:
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
 
         # Should not raise exception and should use default threshold
-        out1 = alloc.select_signals({"s1": [sig]})
+        alloc.select_signals({"s1": [sig]})
         out2 = alloc.select_signals({"s1": [sig]})
 
         # With default min_confidence (0.6) and signal confidence (1.0), should confirm
@@ -81,7 +81,7 @@ class TestStrategyAllocatorRegression:
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
 
         # Should not raise exception and should use default threshold
-        out1 = alloc.select_signals({"s1": [sig]})
+        alloc.select_signals({"s1": [sig]})
         out2 = alloc.select_signals({"s1": [sig]})
 
         # With default min_confidence (0.6) and signal confidence (1.0), should confirm
@@ -112,7 +112,7 @@ class TestStrategyAllocatorRegression:
 
             sig = TradeSignal(symbol="AAPL", side="buy", confidence=sig_conf, strategy="s1")
 
-            out1 = alloc.select_signals({"s1": [sig]})
+            alloc.select_signals({"s1": [sig]})
             out2 = alloc.select_signals({"s1": [sig]})
 
             if should_confirm:
@@ -136,7 +136,7 @@ class TestStrategyAllocatorRegression:
         # Test high confidence (> 1.0)
         sig_high = TradeSignal(symbol="AAPL", side="buy", confidence=2.0, strategy="s1")
 
-        out1 = alloc.select_signals({"s1": [sig_high]})
+        alloc.select_signals({"s1": [sig_high]})
         out2 = alloc.select_signals({"s1": [sig_high]})
 
         # Should handle gracefully and still confirm
@@ -151,7 +151,7 @@ class TestStrategyAllocatorRegression:
 
         sig_neg = TradeSignal(symbol="AAPL", side="buy", confidence=-0.5, strategy="s1")
 
-        out1 = alloc_fresh.allocate({"s1": [sig_neg]})
+        alloc_fresh.allocate({"s1": [sig_neg]})
         out2 = alloc_fresh.allocate({"s1": [sig_neg]})
 
         # Should handle gracefully (confidence normalized to 0, still >= 0.0 threshold)

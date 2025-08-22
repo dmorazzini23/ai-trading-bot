@@ -121,10 +121,6 @@ class TestPortfolioSignalFiltering:
         assert reduction_ratio <= 1.0
 
         # Log the results for verification
-        print(
-            f"Churn reduction test: {len(high_churn_signals)} -> {len(filtered_signals)} "
-            f"({reduction_ratio:.1%} passed)"
-        )  # noqa: T201 - test output
 
     def test_portfolio_optimization_fallback(self):
         """Test graceful fallback when portfolio optimization fails."""

@@ -108,7 +108,7 @@ def test_centralized_logging_thread_safety():
                 'ALPACA_SECRET_KEY': 'test',
                 'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
             }):
-                logger = setup_logging(debug=True)
+                setup_logging(debug=True)
                 results.append(len(logging.getLogger().handlers))
         except Exception as e:
             exceptions.append(e)
@@ -149,4 +149,3 @@ if __name__ == "__main__":
     test_centralized_logging_prevents_duplicates()
     test_deprecated_modules_removed()
     test_centralized_logging_thread_safety()
-    print("All centralized logging tests passed!")

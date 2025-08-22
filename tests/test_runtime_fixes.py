@@ -10,63 +10,51 @@ import sys
 
 def test_legacy_imports():
     """Test that legacy import shims work"""
-    print("Testing legacy import shims")
 
     # Test signals import
     try:
-        print("✓ signals import successful")
         success = True
-    except Exception as e:
-        print(f"✗ signals import failed: {e}")
+    except Exception:
         success = False
 
     # Test indicators import
     try:
-        print("✓ indicators import successful")
-    except Exception as e:
-        print(f"✗ indicators import failed: {e}")
+        pass
+    except Exception:
         success = False
 
     # Test rebalancer import (expected to fail due to config requirements)
     try:
-        print("✓ rebalancer import successful")
+        pass
     except Exception as e:
         if "ALPACA_API_KEY" in str(e) or "pydantic_settings" in str(e):
-            print("✓ rebalancer import failed as expected (missing env vars or deps)")
+            pass
         else:
-            print(f"✗ rebalancer import failed unexpectedly: {e}")
             success = False
 
     return success
 
 def test_ohlcv_files_exist():
     """Test OHLCV normalizer files exist"""
-    print("\nTesting OHLCV normalizer")
 
     ohlcv_path = "ai_trading/utils/ohlcv.py"
     if os.path.exists(ohlcv_path):
-        print("✓ OHLCV normalizer file exists")
 
         # Check if it contains the standardize_ohlcv function
         with open(ohlcv_path) as f:
             content = f.read()
             if "def standardize_ohlcv" in content and "CANON" in content:
-                print("✓ OHLCV normalizer contains required functions")
                 return True
             else:
-                print("✗ OHLCV normalizer missing required functions")
                 return False
     else:
-        print("✗ OHLCV normalizer file missing")
         return False
 
 def test_bot_engine_changes():
     """Test that bot_engine.py has the required changes"""
-    print("\nTesting bot_engine.py changes")
 
     bot_engine_path = "ai_trading/core/bot_engine.py"
     if not os.path.exists(bot_engine_path):
-        print("✗ bot_engine.py not found")
         return False
 
     with open(bot_engine_path) as f:
@@ -74,16 +62,14 @@ def test_bot_engine_changes():
 
     # Check for OHLCV fix
     if "standardize_ohlcv" in content and "_compute_regime_features" in content:
-        print("✓ OHLCV normalization added to _compute_regime_features")
+        pass
     else:
-        print("✗ OHLCV normalization missing from _compute_regime_features")
         return False
 
     # Check for prometheus fix
     if "_init_metrics" in content and "_METRICS_READY" in content:
-        print("✓ Prometheus lazy initialization added")
+        pass
     else:
-        print("✗ Prometheus lazy initialization missing")
         return False
 
     # Check that module-level Counter definitions are removed
@@ -95,45 +81,38 @@ def test_bot_engine_changes():
             module_level_counters.append((i+1, line.strip()))
 
     if module_level_counters:
-        print("✗ Module-level Counter definitions still present:")
         for line_num, line in module_level_counters:
-            print(f"   Line {line_num}: {line}")
+            pass
         return False
     else:
-        print("✓ Module-level Counter definitions removed")
+        pass
 
     return True
 
 def test_top_level_shims():
     """Test that top-level shim files exist"""
-    print("\nTesting top-level shim files")
 
     shims = ["signals.py", "rebalancer.py", "indicators.py"]
     success = True
 
     for shim in shims:
         if os.path.exists(shim):
-            print(f"✓ {shim} shim exists")
+            pass
         else:
-            print(f"✗ {shim} shim missing")
             success = False
 
     # Check bot_engine.py has prepare_indicators
     with open("bot_engine.py") as f:
         content = f.read()
         if "prepare_indicators" in content:
-            print("✓ bot_engine.py has prepare_indicators compatibility")
+            pass
         else:
-            print("✗ bot_engine.py missing prepare_indicators compatibility")
             success = False
 
     return success
 
 def main():
     """Run all validation tests"""
-    print("=" * 60)
-    print("VALIDATION: Testing fixes for three runtime blockers")
-    print("=" * 60)
 
     tests = [
         test_legacy_imports,
@@ -148,17 +127,13 @@ def main():
         try:
             if test_func():
                 passed += 1
-        except Exception as e:
-            print(f"✗ Test {test_func.__name__} crashed: {e}")
+        except Exception:
+            pass
 
-    print("\n" + "=" * 60)
-    print(f"RESULTS: {passed}/{len(tests)} tests passed")
 
     if passed == len(tests):
-        print("✓ All fixes appear to be working correctly!")
         return 0
     else:
-        print("⚠ Some tests failed")
         return 1
 
 if __name__ == "__main__":

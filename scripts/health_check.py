@@ -481,7 +481,7 @@ def _check_trading_system(self) -> HealthCheckResult:
 
         try:
             from ai_trading.core.bot_engine import get_risk_engine
-            RiskEngine = get_risk_engine()
+            get_risk_engine()
             details["risk_engine"] = "OK"
         except ImportError as e:
             issues.append(f"risk_engine import failed: {e}")

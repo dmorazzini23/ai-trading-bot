@@ -2,7 +2,6 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-
 from ai_trading.exc import RequestException
 from ai_trading.utils import http
 

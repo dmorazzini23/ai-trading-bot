@@ -6,7 +6,6 @@ import time
 
 import numpy as np
 import pandas as pd
-
 from ai_trading import indicators, signals
 
 

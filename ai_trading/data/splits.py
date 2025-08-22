@@ -170,11 +170,10 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
 
             if hasattr(full_index, 'to_series'):
                 test_start_time = full_index[test_start_idx]
-                test_end_time = full_index[test_end_idx]
+                full_index[test_end_idx]
             else:
                 # For non-datetime indices, use index positions
                 test_start_time = test_start_idx
-                test_end_time = test_end_idx
 
             # Find training observations that don't overlap
             purged_train = []

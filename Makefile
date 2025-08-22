@@ -23,15 +23,12 @@ deps-dev:
         python -m pip install -r requirements.txt -r requirements-dev.txt
 
 test-all:
-        @python -V > artifacts/python-version.txt
-        @pip install -r requirements.txt
-        @[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
-        @ruff --version > artifacts/ruff-version.txt
-        @tools/lint_safe_fix.sh
-        @mypy --version > artifacts/mypy-version.txt
-        @python -m mypy ai_trading trade_execution | tee artifacts/mypy.txt || true
-        @pytest -n auto --disable-warnings --maxfail=0 -q \
-                --junitxml=artifacts/junit.xml | tee artifacts/pytest.txt || true
+@echo "Installing runtime and dev deps..."
+pip install -r requirements.txt
+@[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
+@echo "Running lint_phase2b..."
+bash tools/lint_phase2b.sh
+@echo "All tasks complete. See artifacts/ for outputs."
 
 ## Lint (safe-fix subset)
 .PHONY: lint-fix

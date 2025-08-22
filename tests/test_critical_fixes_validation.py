@@ -150,7 +150,7 @@ class TestCriticalFixes(unittest.TestCase):
             try:
                 if (
                     cached_data
-                    and isinstance(cached_data, (list, tuple))
+                    and isinstance(cached_data, list | tuple)
                     and len(cached_data) > 0
                 ):
                     return cached_data[-1]  # Use last cached value
@@ -213,8 +213,6 @@ class TestCriticalFixes(unittest.TestCase):
 
 if __name__ == "__main__":
     # Run the tests
-    print("Running Critical Fixes Validation Tests")
-    print("=" * 60)
 
     # Set up the test environment
     loader = unittest.TestLoader()
@@ -223,12 +221,7 @@ if __name__ == "__main__":
     result = runner.run(suite)
 
     # Report results
-    print("\n" + "=" * 60)
     if result.wasSuccessful():
-        print("🎉 All critical fixes validation tests PASSED!")
-        print(f"   Ran {result.testsRun} tests successfully")
+        pass
     else:
-        print("❌ Some tests FAILED!")
-        print(f"   Failures: {len(result.failures)}")
-        print(f"   Errors: {len(result.errors)}")
         sys.exit(1)

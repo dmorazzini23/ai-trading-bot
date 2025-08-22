@@ -241,7 +241,7 @@ def test_drift_monitoring():
 
             # Create bins
             bin_width = (baseline_max - baseline_min) / n_bins
-            bins = [baseline_min + i * bin_width for i in range(n_bins + 1)]
+            [baseline_min + i * bin_width for i in range(n_bins + 1)]
 
             # Count distributions
             baseline_counts = [0] * n_bins

@@ -105,7 +105,7 @@ def test_field_validator_functionality():
 
             # These should trigger validation errors due to invalid values
             try:
-                settings = validate_env.Settings()
+                validate_env.Settings()
                 # If we get here, check that the problematic values were caught
                 # by validators or set to defaults
             except Exception as e:
@@ -123,4 +123,3 @@ if __name__ == "__main__":
     test_pydantic_v2_migration_syntax()
     test_validate_env_import()
     test_field_validator_functionality()
-    print("✅ All Pydantic V2 migration tests passed!")

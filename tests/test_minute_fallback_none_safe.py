@@ -1,8 +1,7 @@
 import types
 
-import pandas as pd
-
 import ai_trading.data.bars as data_bars
+import pandas as pd
 from ai_trading.data.bars import safe_get_stock_bars
 
 

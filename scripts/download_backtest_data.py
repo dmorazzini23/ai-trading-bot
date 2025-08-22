@@ -11,10 +11,9 @@ import os
 from pathlib import Path
 
 import pandas as pd
+from ai_trading.utils.base import _get_alpaca_rest
 from alpaca_trade_api import TimeFrame
 from dotenv import load_dotenv
-
-from ai_trading.utils.base import _get_alpaca_rest
 
 
 def main() -> None:
@@ -42,7 +41,6 @@ def main() -> None:
     for symbol in symbols:
         out_file = data_dir / f"{symbol}.csv"
         if out_file.exists():
-            print(f"{out_file} already exists; skipping")
             continue
 
         try:
@@ -53,12 +51,10 @@ def main() -> None:
                 end=end,
                 adjustment="raw",
             ).df
-        except Exception as exc:  # pragma: no cover - network call
-            print(f"Failed to fetch {symbol}: {exc}")
+        except Exception:  # pragma: no cover - network call
             continue
 
         if bars is None or bars.empty:
-            print(f"No data returned for {symbol}")
             continue
 
         if isinstance(bars.index, pd.MultiIndex):
@@ -78,14 +74,12 @@ def main() -> None:
         df = df[[c for c in expected_cols if c in df.columns]]
 
         if df.empty or "Close" not in df.columns:
-            print(f"Warning: {symbol} data missing required columns")
             continue
 
         try:
             df.to_csv(out_file, index=False)
-            print(f"Saved {len(df)} rows to {out_file}")
-        except OSError as exc:  # pragma: no cover - disk error
-            print(f"Failed to write {out_file}: {exc}")
+        except OSError:  # pragma: no cover - disk error
+            pass
 
 
 if __name__ == "__main__":  # pragma: no cover - manual utility

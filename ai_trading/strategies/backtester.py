@@ -353,7 +353,7 @@ def main(argv: list[str] | None = None) -> None:
         {},
         DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars),
     )
-    risk_engine_instance = get_risk_engine()
+    get_risk_engine()
     results: dict[str, BacktestResult] = {}
 
     for symbol in args.symbols:

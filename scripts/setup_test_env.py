@@ -11,4 +11,3 @@ os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
 os.environ.setdefault('WEBHOOK_SECRET', 'test_webhook_secret')
 os.environ.setdefault('FLASK_PORT', '5000')
 
-print("Test environment configured with required variables")

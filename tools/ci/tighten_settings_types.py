@@ -54,4 +54,3 @@ def tighten():
 
 if __name__ == "__main__":
     tighten()
-    print("Settings types tightened.")

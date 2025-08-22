@@ -18,12 +18,11 @@ def test_walkforward_artifacts_directory():
             # Import and create evaluator
             from ai_trading.evaluation.walkforward import WalkForwardEvaluator
 
-            evaluator = WalkForwardEvaluator()
+            WalkForwardEvaluator()
 
             # Check that directory was created
             expected_dir = os.path.join(custom_artifacts, "walkforward")
             assert os.path.exists(expected_dir), f"Directory {expected_dir} should exist"
-            print(f"✓ Walkforward artifacts directory created: {expected_dir}")
 
         finally:
             # Clean up environment variable
@@ -42,11 +41,10 @@ def test_model_registry_directory():
             # Import and create registry
             from ai_trading.model_registry import ModelRegistry
 
-            registry = ModelRegistry()
+            ModelRegistry()
 
             # Check that directory was created
             assert os.path.exists(custom_registry), f"Directory {custom_registry} should exist"
-            print(f"✓ Model registry directory created: {custom_registry}")
 
         finally:
             # Clean up environment variable
@@ -57,4 +55,3 @@ def test_model_registry_directory():
 if __name__ == "__main__":
     test_walkforward_artifacts_directory()
     test_model_registry_directory()
-    print("✓ All artifacts directory tests passed")

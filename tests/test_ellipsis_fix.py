@@ -110,7 +110,7 @@ class TestEllipsisFix(unittest.TestCase):
     def test_update_risk_engine_exposure_with_context(self):
         """Test risk exposure update works with valid context."""
         with patch('ai_trading.core.bot_engine._get_runtime_context_or_none') as mock_get_ctx:
-            with patch('ai_trading.core.bot_engine._log') as mock_log:
+            with patch('ai_trading.core.bot_engine._log'):
                 # Setup mock context with risk engine
                 mock_context = Mock()
                 mock_risk_engine = Mock()

@@ -77,4 +77,3 @@ for root in TARGETS:
         if txt != txt0:
             write(p, txt); changed += 1
 
-print(f"Files changed: {changed}")

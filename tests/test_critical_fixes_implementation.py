@@ -98,7 +98,6 @@ def test_sentiment_cache_memory_leak_prevention():
     from ai_trading import predict
 
     # Test cache bounds
-    original_cache = predict._sentiment_cache
 
     # If TTLCache is available, test it
     if predict._CACHETOOLS_AVAILABLE:
@@ -246,7 +245,6 @@ def test_configuration_validation():
     """Test configuration validation."""
     # Test basic configuration functionality without importing complex modules
     # Since config validation passed during import, the functionality works
-    print("✅ Configuration functionality verified through import")
 
 
 def test_dependency_injection():
@@ -302,36 +300,24 @@ def test_performance_optimizations():
 
 if __name__ == "__main__":
     # Run tests
-    print("Running critical fixes tests")
 
     test_metrics_division_by_zero_protection()
-    print("✅ Division by zero protection tests passed")
 
     test_algorithm_optimizer_thread_safety()
-    print("✅ Thread safety tests passed")
 
     test_sentiment_cache_memory_leak_prevention()
-    print("✅ Memory leak prevention tests passed")
 
     test_circular_buffer_memory_efficiency()
-    print("✅ Circular buffer tests passed")
 
     test_incremental_indicators()
-    print("✅ Incremental indicators tests passed")
 
     test_market_data_validation()
-    print("✅ Market data validation tests passed")
 
     test_security_manager()
-    print("✅ Security manager tests passed")
 
     test_configuration_validation()
-    print("✅ Configuration validation tests passed")
 
     test_dependency_injection()
-    print("✅ Dependency injection tests passed")
 
     test_performance_optimizations()
-    print("✅ Performance optimization tests passed")
 
-    print("\n🎉 All critical fixes tests passed successfully!")

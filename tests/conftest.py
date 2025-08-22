@@ -4,7 +4,6 @@ import sys
 import types
 
 import pytest
-
 from ai_trading.utils.optional_import import optional_import
 
 
@@ -418,12 +417,12 @@ except Exception:  # pragma: no cover - optional dependency
             return self
 
         def __sub__(self, other):
-            if isinstance(other, (list, ArrayStub)):
+            if isinstance(other, list | ArrayStub):
                 return ArrayStub([a - b for a, b in zip(self, other, strict=False)])
             return ArrayStub([x - other for x in self])
 
         def __truediv__(self, other):
-            if isinstance(other, (list, ArrayStub)):
+            if isinstance(other, list | ArrayStub):
                 return ArrayStub([a / b if b != 0 else 0 for a, b in zip(self, other, strict=False)])
             return ArrayStub([x / other if other != 0 else 0 for x in self])
 
@@ -468,7 +467,7 @@ except Exception:  # pragma: no cover - optional dependency
     numpy_mod.maximum = MaximumStub()
     numpy_mod.minimum = min
     numpy_mod.max = lambda x: max(x) if x else 0
-    numpy_mod.isscalar = lambda x: isinstance(x, (int, float, complex))
+    numpy_mod.isscalar = lambda x: isinstance(x, int | float | complex)
     numpy_mod.bool_ = bool
     numpy_mod.linspace = lambda start, stop, num: ArrayStub([start + (stop - start) * i / (num - 1) for i in range(num)])
 
@@ -763,7 +762,7 @@ except Exception:  # pragma: no cover - optional dependency
         @staticmethod
         def now(tz=None):
             from datetime import datetime
-            if tz == "UTC" or tz == dt.UTC:
+            if tz in ("UTC", dt.UTC):
                 return datetime.now(dt.UTC)
             return datetime.now(dt.UTC)
 
