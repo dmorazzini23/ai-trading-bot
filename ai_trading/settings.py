@@ -110,6 +110,17 @@ class Settings(BaseSettings):
     score_confidence_min: float | None = Field(
         default=None, alias="SCORE_CONFIDENCE_MIN"
     )  # AI-AGENT-REF: optional score confidence gate
+    # AI-AGENT-REF: confidence→size curve knobs (opt-in; 1.0 = disabled)
+    score_size_max_boost: float = Field(
+        1.0,
+        alias="SCORE_SIZE_MAX_BOOST",
+        description="Upper bound of raw size multiplier at confidence=1.0",
+    )
+    score_size_gamma: float = Field(
+        1.0,
+        alias="SCORE_SIZE_GAMMA",
+        description="Shape parameter: 1.0 linear, <1 concave, >1 convex",
+    )
     # Min model buy score
     buy_threshold: float = Field(default=0.4, env="AI_TRADER_BUY_THRESHOLD")
     # Max daily loss fraction before halt

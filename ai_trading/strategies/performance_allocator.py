@@ -45,6 +45,26 @@ def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
     return 0.60
 
 
+def _compute_conf_multiplier(
+    conf: float,
+    th: float,
+    max_boost: float,
+    gamma: float,
+) -> float:
+    """Monotonic size multiplier in [1, max_boost]."""  # AI-AGENT-REF: size curve
+    if not (0.0 <= conf <= 1.0):
+        return 1.0
+    th = min(max(th, 0.0), 0.999999)
+    max_boost = max(1.0, float(max_boost))
+    gamma = max(1e-6, float(gamma))
+    if conf <= th:
+        return 1.0
+    span = max(1e-9, 1.0 - th)
+    frac = (conf - th) / span
+    mult = 1.0 + (max_boost - 1.0) * (frac ** gamma)
+    return float(min(max(mult, 1.0), max_boost))
+
+
 class PerformanceBasedAllocator:
     """
     Dynamic strategy allocator based on rolling performance metrics.
@@ -82,19 +102,33 @@ class PerformanceBasedAllocator:
         logger.info("PerformanceBasedAllocator initialized with %d day window", self.window_days)
 
     def allocate(self, strategies: Dict[str, List[Any]], config: TradingConfig) -> Dict[str, List[Any]]:
-        """Filter out low-confidence signals before sizing."""  # AI-AGENT-REF: confidence gate
+        """Filter low-confidence signals and bias weights by confidence."""  # AI-AGENT-REF
         th = _resolve_conf_threshold(config)
+        s = get_settings()
+        max_boost = float(getattr(s, "score_size_max_boost", 1.0) or 1.0)
+        gamma = float(getattr(s, "score_size_gamma", 1.0) or 1.0)
+        use_boost = max_boost > 1.0
         gated: Dict[str, List[Any]] = {}
+        boost_stats: List[tuple[str, float, float]] = []
         for name, sigs in (strategies or {}).items():
             kept: List[Any] = []
             dropped = 0
-            for s in sigs or []:
+            mults: List[float] = []
+            for s_ in sigs or []:
                 try:
-                    c = float(getattr(s, "confidence", 0.0))
+                    c = float(getattr(s_, "confidence", 0.0))
                 except Exception:
                     c = 0.0
                 if c >= th:
-                    kept.append(s)
+                    if use_boost:
+                        m = _compute_conf_multiplier(c, th, max_boost, gamma)
+                        try:
+                            base = float(getattr(s_, "weight", 1.0))
+                        except Exception:
+                            base = 1.0
+                        s_.weight = base * m
+                        mults.append(m)
+                    kept.append(s_)
                 else:
                     dropped += 1
             if dropped:
@@ -104,6 +138,21 @@ class PerformanceBasedAllocator:
                 )
             if kept:
                 gated[name] = kept
+                if use_boost and mults:
+                    boost_stats.append((name, sum(mults) / len(mults), max(mults)))
+        if use_boost and boost_stats:
+            for name, avg_mult, mx in boost_stats:
+                logger.info(
+                    "CONFIDENCE_BOOST",
+                    extra={
+                        "strategy": name,
+                        "threshold": th,
+                        "max_boost": max_boost,
+                        "gamma": gamma,
+                        "avg_mult": round(float(avg_mult), 4),
+                        "max_mult": round(float(mx), 4),
+                    },
+                )
         return gated
     
     def record_trade_result(self, strategy_name: str, trade_result: Dict):
