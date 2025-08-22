@@ -224,25 +224,52 @@ class AlpacaBroker:
         return positions
 
     def get_open_position(self, symbol: str) -> Optional[Any]:
-        """Return a single open position object or None."""  # AI-AGENT-REF
+        """Return position for ``symbol`` or None."""  # AI-AGENT-REF
+        # Try SDK method first
         try:
-            if hasattr(self._api, "get_position"):
-                p = self._call_with_retry(
-                    "get_position", lambda: self._api.get_position(symbol)
-                )
-                sym = p.symbol if hasattr(p, "symbol") else p["symbol"]
-                qty = int(p.qty) if hasattr(p, "qty") else int(p["qty"])
-                aep = (
-                    float(p.avg_entry_price)
-                    if hasattr(p, "avg_entry_price")
-                    else float(p["avg_entry_price"])
-                )
-                return SimpleNamespace(symbol=sym, qty=qty, avg_entry_price=aep)
-        except SAFE_EXC:  # AI-AGENT-REF: narrow exception
-            pass
-        for p in self.list_open_positions():
-            if getattr(p, "symbol", "").upper() == symbol.upper():
-                return p
+            if hasattr(self._api, "get_open_position"):
+                p = self._api.get_open_position(symbol)
+            elif hasattr(self._api, "get_position"):
+                p = self._api.get_position(symbol)
+            else:
+                raise AttributeError
+            sym = p.symbol if hasattr(p, "symbol") else p["symbol"]
+            qty = int(p.qty) if hasattr(p, "qty") else int(p["qty"])
+            aep = (
+                float(p.avg_entry_price)
+                if hasattr(p, "avg_entry_price")
+                else float(p["avg_entry_price"])
+            )
+            return SimpleNamespace(symbol=sym, qty=qty, avg_entry_price=aep)
+        except AttributeError:
+            _log.warning("ALPACA_SDK_MISSING_METHOD", extra={"method": "get_position"})
+        except (APIError, HTTPError) as e:
+            msg = str(e).lower()
+            if "404" not in msg and "not found" not in msg:
+                _log.warning("ALPACA_SDK_ERROR", extra={"error": msg})
+            else:
+                return None
+
+        # REST fallback
+        session = getattr(self._api, "_session", None)
+        if session is None:
+            return None
+        try:
+            resp = session.get(f"/v2/positions/{symbol}")
+            if getattr(resp, "status_code", 0) == 404:
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+            sym = data.get("symbol")
+            qty = int(data.get("qty"))
+            aep = float(data.get("avg_entry_price"))
+            return SimpleNamespace(symbol=sym, qty=qty, avg_entry_price=aep)
+        except HTTPError as e:
+            if getattr(e.response, "status_code", None) == 404:
+                return None
+            _log.warning("ALPACA_REST_ERROR", extra={"error": str(e)})
+        except (KeyError, TypeError, ValueError, AttributeError):
+            _log.warning("ALPACA_REST_PARSE_ERROR")
         return None
 
     # Back-compat alias some codebases expect  # AI-AGENT-REF

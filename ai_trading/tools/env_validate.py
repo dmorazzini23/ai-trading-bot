@@ -1,40 +1,48 @@
 
 from __future__ import annotations
 
-import json
-import logging
+from typing import Iterable, Mapping
+
 import os
 import sys
 
-logger = logging.getLogger(__name__)
+from ai_trading.logging import get_logger
 
-# Test suite expects ALPACA_BASE_URL; keep CLI simple and consistent
-REQUIRED = ("ALPACA_BASE_URL",)
+logger = get_logger(__name__)
+
+REQUIRED_KEYS: tuple[str, ...] = (
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_BASE_URL",
+)
 
 
-def validate_env(env: dict[str, str] | None = None) -> list[str]:
+def validate_env(env: Mapping[str, str] | None = None) -> list[str]:
     """Return list of missing required environment keys."""  # AI-AGENT-REF
     env = env or os.environ
-    return [k for k in REQUIRED if not env.get(k)]
+    return [k for k in REQUIRED_KEYS if not env.get(k)]
 
 
-def _main(argv: list[str] | None = None) -> int:
-    """CLI entry point returning process exit code with JSON on stdout.
-
-    Contract: print {"ok": bool, "missing": [...]} and exit 0/1.
-    """  # AI-AGENT-REF
-    _ = argv or sys.argv[1:]
+def main(argv: Iterable[str] | None = None) -> int:
+    """CLI entry point returning process exit code."""  # AI-AGENT-REF
+    _ = list(argv or sys.argv[1:])
     missing = validate_env()
-    ok = not bool(missing)
-    try:
-        print(json.dumps({"ok": ok, "missing": missing}))
-    except Exception:  # noqa: BLE001
-        print('{"ok": false, "missing": []}')
-    return 0 if ok else 1
+    if not missing:
+        logger.info("ENV_VALIDATE_OK", extra={"missing": 0})
+        return 0
+    logger.error(
+        "ENV_VALIDATE_MISSING", extra={"missing_keys": missing, "count": len(missing)}
+    )
+    return 1
+
+
+# Back-compat entrypoint
+def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin wrapper
+    return main(argv)
 
 
 if __name__ == "__main__":
-    raise SystemExit(_main())
+    raise SystemExit(main())
 
 
-__all__ = ["validate_env", "_main"]
+__all__ = ["validate_env", "main", "_main"]
