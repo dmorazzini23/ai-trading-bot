@@ -1,0 +1,9 @@
+ai_trading/broker/alpaca.py
+ai_trading/broker/alpaca_credentials.py
+ai_trading/config/alpaca_creds.py
+ai_trading/config/management.py
+ai_trading/data_fetcher.py
+scripts/download_backtest_data.py
+scripts/validate_startup_fixes.py
+scripts/validate_unified_config.py
+tests/test_env_contract_py.py

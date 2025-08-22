@@ -5,7 +5,7 @@ import logging
 Test script to validate settings singleton, Money math, and rate limiting.
 
 Validates the critical features required by the problem statement:
-- Settings singleton with aliases
+- Settings singleton
 - Money math with quantization
 - Rate limiter functionality
 - Final-bar gating
@@ -18,7 +18,7 @@ import sys
 sys.path.append('.')
 
 def test_settings_singleton():
-    """Test settings singleton with Alpaca credential aliases."""
+    """Test settings singleton with Alpaca credentials."""  # AI-AGENT-REF: remove APCA aliases
     logging.info("Testing Settings Singleton...")
 
     from ai_trading.config.settings_singleton import get_masked_config, get_settings
@@ -29,9 +29,9 @@ def test_settings_singleton():
     assert settings1 is settings2, "Settings should be singleton"
     logging.info("✓ Singleton pattern works")
 
-    # Test alias support
-    os.environ["APCA_API_KEY_ID"] = "test_key_123"
-    os.environ["APCA_API_SECRET_KEY"] = "test_secret_456"
+    # Test credential loading
+    os.environ["ALPACA_API_KEY"] = "test_key_123"
+    os.environ["ALPACA_SECRET_KEY"] = "test_secret_456"
 
     # Clear cache to pick up new env vars
     get_settings.cache_clear()
@@ -40,7 +40,7 @@ def test_settings_singleton():
     api_key, secret_key = settings.get_alpaca_keys()
     assert api_key == "test_key_123", f"Expected test_key_123, got {api_key}"
     assert secret_key == "test_secret_456", f"Expected test_secret_456, got {secret_key}"
-    logging.info("✓ Alpaca credential aliases work")
+    logging.info("✓ Alpaca credentials loaded")
 
     # Test masked config
     masked = get_masked_config()

@@ -1395,28 +1395,9 @@ def validate_env_vars():
 
 
 def _resolve_alpaca_env() -> tuple[str | None, str | None, str]:
-    """Resolve Alpaca credentials using dual-schema rules."""
+    """Resolve Alpaca credentials from ALPACA_* environment variables."""  # AI-AGENT-REF: drop legacy aliases
     creds = resolve_alpaca_credentials()
     return creds.get("API_KEY"), creds.get("SECRET_KEY"), creds["BASE_URL"]
-
-
-def _warn_duplicate_env_keys() -> None:
-    """Warn about potentially risky duplicate environment keys."""
-    risky_duplicates = [
-        ("ALPACA_API_KEY", "APCA_API_KEY_ID"),
-        ("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"),
-        ("ALPACA_BASE_URL", "APCA_API_BASE_URL"),
-    ]
-
-    for alpaca_key, apca_key in risky_duplicates:
-        alpaca_val = os.getenv(alpaca_key)
-        apca_val = os.getenv(apca_key)
-
-        if alpaca_val and apca_val and alpaca_val != apca_val:
-            logger.warning(
-                f"Conflicting environment variables detected: {alpaca_key} and {apca_key} have different values. "
-                f"Using {alpaca_key} (ALPACA_* takes precedence)"
-            )
 
 
 # Re-export settings components for direct import
@@ -1431,9 +1412,9 @@ def validate_alpaca_credentials() -> None:
     if not creds.get("API_KEY") or not creds.get("SECRET_KEY"):
         missing = []
         if not creds.get("API_KEY"):
-            missing.append("ALPACA_API_KEY or APCA_API_KEY_ID")
+            missing.append("ALPACA_API_KEY")
         if not creds.get("SECRET_KEY"):
-            missing.append("ALPACA_SECRET_KEY or APCA_API_SECRET_KEY")
+            missing.append("ALPACA_SECRET_KEY")
         raise RuntimeError("Missing Alpaca credentials: " + ", ".join(missing))
     logger.info("Alpaca credentials resolved successfully")
 
@@ -1463,9 +1444,6 @@ def reload_env(env_file: str | os.PathLike[str] | None = None) -> None:
             "ALPACA_API_KEY",
             "ALPACA_SECRET_KEY",
             "ALPACA_BASE_URL",
-            "APCA_API_KEY_ID",
-            "APCA_API_SECRET_KEY",
-            "APCA_API_BASE_URL",
         ]
     }
 

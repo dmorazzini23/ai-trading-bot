@@ -2,27 +2,21 @@ from __future__ import annotations
 import pathlib, re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GLOBS = [
-    "ai_trading/core/**/*.py",
-    "ai_trading/execution/**/*.py",
-    "ai_trading/risk/**/*.py",
-    "trade_execution/**/*.py",
-]
+FILES = [p for p in ROOT.rglob("*.py")
+         if "tests" not in str(p)
+         and "venv" not in str(p)
+         and ".venv" not in str(p)
+         and "node_modules" not in str(p)]
 
-FILES = []
-for g in GLOBS:
-    FILES += [p for p in ROOT.glob(g)]
+def _t(p): return p.read_text(encoding="utf-8", errors="ignore")
 
-def _t(p: pathlib.Path) -> str:
-    return p.read_text(encoding="utf-8", errors="ignore")
-
-def test_no_apca_env_in_core():
+def test_no_apca_env_anywhere_in_python():
     offenders = [p for p in FILES if "APCA_" in _t(p)]
     assert not offenders, f"Forbidden APCA_* in: {offenders}"
 
-def _find_bad_ctor(pattern: str, need_kw: str):
-    bad = []
+def _find_bad_ctor(pattern, need_kw):
     rx = re.compile(pattern, re.DOTALL)
+    bad = []
     for p in FILES:
         txt = _t(p)
         for m in rx.finditer(txt):
@@ -30,7 +24,7 @@ def _find_bad_ctor(pattern: str, need_kw: str):
                 bad.append(p); break
     return bad
 
-def test_explicit_creds_in_core():
+def test_all_python_has_explicit_alpaca_creds():
     bad = []
     bad += _find_bad_ctor(r"\bREST\s*\([^)]*\)", "key_id=")
     bad += _find_bad_ctor(r"\bTradingClient\s*\([^)]*\)", "api_key=")

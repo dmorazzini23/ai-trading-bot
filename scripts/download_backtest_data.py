@@ -24,11 +24,6 @@ def main() -> None:
     secret_key = os.getenv("ALPACA_SECRET_KEY")
     base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
-    if api_key:
-        os.environ.setdefault("APCA_API_KEY_ID", api_key)
-    if secret_key:
-        os.environ.setdefault("APCA_API_SECRET_KEY", secret_key)
-
     api = _get_alpaca_rest()(api_key, secret_key, base_url)
 
     symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "TSLA", "META"]

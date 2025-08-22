@@ -184,9 +184,8 @@ def build_fetcher(config: Any):
     from ai_trading.alpaca_api import ALPACA_AVAILABLE
     from ai_trading.core.bot_engine import DataFetcher, DataFetchError  # noqa: F401
 
-    apca_ok = bool(os.getenv("APCA_API_KEY_ID") and os.getenv("APCA_API_SECRET_KEY"))
     alpaca_ok = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
-    has_keys = apca_ok or alpaca_ok
+    has_keys = alpaca_ok
 
     if ALPACA_AVAILABLE and has_keys:
         logger.info("DATA_FETCHER_BUILD", extra={"source": "alpaca"})
