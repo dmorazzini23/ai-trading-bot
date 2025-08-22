@@ -1,8 +1,9 @@
 """
 Canonical strategies public API.
 """
-from .momentum import MomentumStrategy
 from .mean_reversion import MeanReversionStrategy
+from .momentum import MomentumStrategy
+
 try:  # AI-AGENT-REF: lazy meta-learning import
     from .meta_learning import MetaLearning
 except Exception:  # pragma: no cover

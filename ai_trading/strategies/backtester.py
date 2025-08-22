@@ -13,6 +13,7 @@ import pandas as pd
 # AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore
 from ai_trading.core.bot_engine import get_risk_engine
+
 # Instantiate if needed:
 risk_engine_instance = get_risk_engine()
 

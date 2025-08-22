@@ -13,7 +13,7 @@ def _get_session_type():
     """Resolve the requests Session type robustly."""  # AI-AGENT-REF: mirror plugin lookup
     import importlib
 
-    import requests  # noqa: F401
+    import requests
 
     Session = getattr(requests, "Session", None)
     if Session is None:

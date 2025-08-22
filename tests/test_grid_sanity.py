@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def test_grid_search_results():
     try:
         df = pd.read_csv("logs/grid_results.csv")

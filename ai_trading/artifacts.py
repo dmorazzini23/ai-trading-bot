@@ -1,5 +1,6 @@
 import os
 
+
 def get_model_registry_dir(base: str) -> str:
     path = os.path.join(base, "custom_models")
     os.makedirs(path, exist_ok=True)

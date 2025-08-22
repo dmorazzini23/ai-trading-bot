@@ -1,7 +1,4 @@
-from ai_trading.broker.alpaca import AlpacaBroker
-
-
-from ai_trading.broker.alpaca import APIError
+from ai_trading.broker.alpaca import AlpacaBroker, APIError
 
 
 class FakeClient:

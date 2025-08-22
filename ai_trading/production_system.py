@@ -5,16 +5,16 @@ Integrates all production-ready components into a unified trading system
 with comprehensive risk management, monitoring, and execution capabilities.
 """
 
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from typing import Any
 
-# Use the centralized logger as per AGENTS.md
-from ai_trading.logging import logger
-
 from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from ai_trading.execution.liquidity import LiquidityManager
 from ai_trading.execution.production_engine import ProductionExecutionCoordinator
+
+# Use the centralized logger as per AGENTS.md
+from ai_trading.logging import logger
 from ai_trading.monitoring import (
     AlertManager,
     AlertSeverity,

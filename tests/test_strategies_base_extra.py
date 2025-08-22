@@ -1,5 +1,5 @@
-from ai_trading.strategies.base import Strategy
 from ai_trading.core.bot_engine import asset_class_for
+from ai_trading.strategies.base import Strategy
 
 
 def test_asset_class_for_crypto():

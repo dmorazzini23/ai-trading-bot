@@ -59,7 +59,7 @@ class BotRuntime:
     cfg: TradingConfig
     params: dict[str, Any] = field(default_factory=dict)
     tickers: list[str] = field(default_factory=list)  # AI-AGENT-REF: runtime-selected tickers
-    
+
     # Additional runtime attributes will be set by _ensure_initialized
     # These are forwarded from the underlying LazyBotContext
     api: Any = None
@@ -90,7 +90,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     params = {}
     for k, dflt in REQUIRED_PARAM_DEFAULTS.items():
         params[k] = float(_cfg_coalesce(cfg, k, dflt))
-    
+
     # Add any additional keys the loop expects if needed
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get("allocator"))
     runtime.model = NullAlphaModel()
@@ -110,7 +110,7 @@ def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any, **kwarg
     """
     # Forward key attributes from the lazy context
     runtime.api = getattr(lazy_context, 'api', None)
-    runtime.data_client = getattr(lazy_context, 'data_client', None) 
+    runtime.data_client = getattr(lazy_context, 'data_client', None)
     runtime.data_fetcher = getattr(lazy_context, 'data_fetcher', None)
     runtime.signal_manager = getattr(lazy_context, 'signal_manager', None)
     runtime.risk_engine = getattr(lazy_context, 'risk_engine', None)

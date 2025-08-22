@@ -11,11 +11,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-# Use the centralized logger as per AGENTS.md
-from ai_trading.logging import logger
-
 # Import enhanced features if available
 import numpy as np
+
+# Use the centralized logger as per AGENTS.md
+from ai_trading.logging import logger
 
 NUMPY_AVAILABLE = True
 

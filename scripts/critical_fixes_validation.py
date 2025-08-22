@@ -29,9 +29,9 @@ class TestCriticalFixesValidation(unittest.TestCase):
         """Test P0 CRITICAL: Quantity calculation bug fix."""
         logging.info("\n🔧 Testing P0 Fix: Quantity Calculation Bug")
 
-        from trade_execution import ExecutionEngine
         # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
-        from tests.mocks.critical_fixes_validation_mocks import MockOrder, MockContext
+        from tests.mocks.critical_fixes_validation_mocks import MockContext, MockOrder
+        from trade_execution import ExecutionEngine
 
         # Test the fixed _reconcile_partial_fills method
         ctx = MockContext()
@@ -117,9 +117,9 @@ class TestCriticalFixesValidation(unittest.TestCase):
         """Test P2 MEDIUM: Short selling validation foundation."""
         logging.info("\n🔧 Testing P2 Fix: Short Selling Validation (Foundation)")
 
-        from trade_execution import ExecutionEngine
         # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
         from tests.mocks.critical_fixes_validation_mocks import MockContextShortSelling
+        from trade_execution import ExecutionEngine
 
         ctx = MockContextShortSelling()
         engine = ExecutionEngine(ctx)

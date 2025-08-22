@@ -50,9 +50,9 @@ class TestCriticalIssueFixes(unittest.TestCase):
             with open(bot_engine_path, 'r') as f:
                 content = f.read()
                 # Check that thresholds have been improved
-                self.assertIn('SENTIMENT_FAILURE_THRESHOLD = 8', content, 
+                self.assertIn('SENTIMENT_FAILURE_THRESHOLD = 8', content,
                             "SENTIMENT_FAILURE_THRESHOLD should be 8")
-                self.assertIn('SENTIMENT_RECOVERY_TIMEOUT = 900', content, 
+                self.assertIn('SENTIMENT_RECOVERY_TIMEOUT = 900', content,
                             "SENTIMENT_RECOVERY_TIMEOUT should be 900 (15 minutes)")
                 print("✓ Issue 2 Fix: Sentiment circuit breaker thresholds improved")
         else:
@@ -97,36 +97,36 @@ class TestCriticalIssueFixes(unittest.TestCase):
 def run_critical_fixes_tests():
     """Run the critical fixes tests."""
     print("\n=== Critical Trading Bot Issue Fixes Test Suite ===")
-    
+
     # Create test suite
     suite = unittest.TestSuite()
     test_class = TestCriticalIssueFixes
-    
+
     # Add specific tests
     suite.addTest(test_class('test_issue_4_position_limit_increase'))
     suite.addTest(test_class('test_issue_2_sentiment_circuit_breaker_thresholds'))
     suite.addTest(test_class('test_issue_3_quantity_tracking_logging'))
     suite.addTest(test_class('test_issue_1_meta_learning_trigger_exists'))
-    
+
     # Run the tests
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
-    
+
     print("\n=== Test Results Summary ===")
     print(f"Tests run: {result.testsRun}")
     print(f"Failures: {len(result.failures)}")
     print(f"Errors: {len(result.errors)}")
-    
+
     if result.failures:
         print("\nFailures:")
         for test, traceback in result.failures:
             print(f"  - {test}: {traceback}")
-    
+
     if result.errors:
         print("\nErrors:")
         for test, traceback in result.errors:
             print(f"  - {test}: {traceback}")
-    
+
     return result.wasSuccessful()
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Quick health probes for CI diagnostics."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -33,7 +33,9 @@ def _probe_alpaca_trade_api() -> bool:
 
 def _probe_strategy_allocator() -> bool:
     try:
-        from ai_trading.strategies.performance_allocator import PerformanceBasedAllocator
+        from ai_trading.strategies.performance_allocator import (
+            PerformanceBasedAllocator,
+        )
         assert PerformanceBasedAllocator is not None
         print("[health] strategy_allocator: ok")
         return True

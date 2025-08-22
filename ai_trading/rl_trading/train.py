@@ -1,12 +1,13 @@
 """Enhanced RL training with reward shaping and evaluation callbacks."""
 
 import json
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import os
 from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

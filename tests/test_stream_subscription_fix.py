@@ -5,10 +5,10 @@ This test validates that the bot_engine module can be imported and the stream
 subscription code handles None gracefully without throwing AttributeError.
 """
 
-import unittest
-from unittest.mock import patch, MagicMock
-import sys
 import logging
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
 
 
 class TestStreamSubscriptionFix(unittest.TestCase):
@@ -36,23 +36,23 @@ class TestStreamSubscriptionFix(unittest.TestCase):
 
         # Mock logger to capture log messages
         mock_logger = MagicMock()
-        
+
         # Test the stream subscription logic directly
         stream = None  # This simulates when Alpaca is unavailable
-        
+
         # This should not raise AttributeError
         try:
             if stream is not None:
                 stream.subscribe_trade_updates(lambda x: None)
             else:
                 mock_logger.info("Trade updates stream not available - running in degraded mode")
-            
+
             # Test passed - no AttributeError was raised
             success = True
         except AttributeError as e:
             success = False
             self.fail(f"Stream subscription should handle None gracefully, but got: {e}")
-        
+
         self.assertTrue(success, "Stream subscription should not fail when stream is None")
         mock_logger.info.assert_called_with("Trade updates stream not available - running in degraded mode")
 
@@ -61,18 +61,18 @@ class TestStreamSubscriptionFix(unittest.TestCase):
         # Mock a valid stream
         mock_stream = MagicMock()
         mock_callback = MagicMock()
-        
+
         # Test with valid stream
         if mock_stream is not None:
             mock_stream.subscribe_trade_updates(mock_callback)
-        
+
         # Verify the subscription was called
         mock_stream.subscribe_trade_updates.assert_called_once_with(mock_callback)
 
     def test_bot_engine_import_with_stream_fix(self):
         """Test that bot_engine can be imported without stream subscription errors."""
         # This test ensures the fix is present in the actual module
-        
+
         # Mock the necessary dependencies to prevent import errors
         with patch.dict('sys.modules', {
             'config': MagicMock(),
@@ -99,7 +99,7 @@ class TestStreamSubscriptionFix(unittest.TestCase):
                     import importlib
                     if 'bot_engine' in sys.modules:
                         importlib.reload(sys.modules['bot_engine'])
-                    
+
                     # If we get here without AttributeError, the fix is working
                     success = True
                 except AttributeError as e:
@@ -111,7 +111,7 @@ class TestStreamSubscriptionFix(unittest.TestCase):
                 except Exception:
                     # Other import errors are expected due to missing dependencies
                     success = True
-                
+
                 self.assertTrue(success)
 
 

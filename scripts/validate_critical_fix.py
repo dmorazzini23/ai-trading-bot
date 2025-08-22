@@ -29,9 +29,9 @@ os.environ.update({
 sys.path.append('.')
 
 # (mocks removed; see tests/mocks/validate_critical_fix_mocks.py)
-from tests.mocks.validate_critical_fix_mocks import MockOrder, MockContext
-
 from ai_trading.trade_execution import ExecutionEngine
+from tests.mocks.validate_critical_fix_mocks import MockContext, MockOrder
+
 
 def test_production_scenarios():
     """Test the exact scenarios from production logs."""

@@ -1,4 +1,5 @@
 import types
+
 import pandas as pd
 
 import ai_trading.data.bars as data_bars

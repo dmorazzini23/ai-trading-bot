@@ -10,11 +10,12 @@ import logging
 import random
 import threading
 import time
-from ai_trading.utils import sleep as psleep
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
+
+from ai_trading.utils import sleep as psleep
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ class RateLimiter:
             global_rate: Global refill rate (tokens per second) (override)
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-        
+
         # Use config values if provided, otherwise use defaults
         if config is not None:
             capacity = getattr(config, 'capacity', global_capacity)

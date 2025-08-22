@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, MutableMapping  # AI-AGENT-REF: type hints for helpers
+from collections.abc import (  # AI-AGENT-REF: type hints for helpers
+    Mapping,
+    MutableMapping,
+)
 from typing import Any
 
 
 def _as_lower_str(value: Any) -> str:
     try:
         return str(value).strip().lower()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 

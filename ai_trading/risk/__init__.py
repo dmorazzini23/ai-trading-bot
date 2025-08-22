@@ -18,6 +18,14 @@ risk controls, monitoring, and compliance capabilities.
 """
 
 # Core risk management components
+from ai_trading.settings import (
+    _DEFAULT_CONFIG as SETTINGS_DEFAULT_CONFIG,
+)
+from ai_trading.settings import (
+    ensure_default_config,
+)
+
+from . import kelly as _kelly
 from .circuit_breakers import (
     CircuitBreakerState,
     DeadMansSwitch,
@@ -28,16 +36,11 @@ from .circuit_breakers import (
 )
 from .engine import RiskEngine
 from .kelly import (
+    InstitutionalKelly,
     KellyCalculator,
     KellyCriterion,
     KellyParams,
-    InstitutionalKelly,
     institutional_kelly,
-)
-from . import kelly as _kelly
-from ai_trading.settings import (
-    _DEFAULT_CONFIG as SETTINGS_DEFAULT_CONFIG,
-    ensure_default_config,
 )
 from .manager import PortfolioRiskAssessor, RiskManager
 

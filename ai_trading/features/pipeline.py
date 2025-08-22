@@ -10,13 +10,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-# Use the centralized logger as per AGENTS.md
-from ai_trading.logging import logger
-
 # sklearn is a hard dependency
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler, StandardScaler
+
+# Use the centralized logger as per AGENTS.md
+from ai_trading.logging import logger
 
 
 class BuildFeatures(BaseEstimator, TransformerMixin):

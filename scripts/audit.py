@@ -6,13 +6,14 @@ import uuid
 try:  # AI-AGENT-REF: canonical env validation
     from ai_trading.validation.validate_env import Settings
     settings = Settings()
-except Exception:  # noqa: BLE001
+except Exception:
     settings = None
 
 import json
 
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
+
 CONFIG = TradingConfig()
 
 TRADE_LOG_FILE = config.TRADE_LOG_FILE

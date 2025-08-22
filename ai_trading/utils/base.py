@@ -184,7 +184,7 @@ def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: fl
     exp = base * (2 ** max(0, attempt - 1))
     delay = min(exp, cap)
     if jitter > 0:
-        jitter_amt = random.uniform(-jitter * delay, jitter * delay)  # noqa: S311
+        jitter_amt = random.uniform(-jitter * delay, jitter * delay)
         delay = max(0.0, delay + jitter_amt)
     return delay
 
@@ -840,7 +840,7 @@ def get_order_column(df, name):
     )
 
 
-def get_ohlcv_columns(df):  # noqa: F811  # AI-AGENT-REF: coexist with typed variant
+def get_ohlcv_columns(df):  # AI-AGENT-REF: coexist with typed variant
     """Return the names of the OHLCV columns if present."""
 
     if not isinstance(df, DataFrame):

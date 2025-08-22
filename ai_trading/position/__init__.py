@@ -4,7 +4,7 @@ from __future__ import annotations
 
 try:
     from .core import MarketRegime  # AI-AGENT-REF: real enum if available
-except Exception:  # noqa: BLE001
+except Exception:
     from enum import Enum
 
     class MarketRegime(Enum):

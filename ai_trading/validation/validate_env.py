@@ -5,7 +5,6 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-
 # AI-AGENT-REF: facade for environment validation
 
 

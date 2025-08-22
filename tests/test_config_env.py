@@ -15,7 +15,7 @@ class TestConfigEnvParsing:
         """Test DISABLE_DAILY_RETRAIN defaults to False when unset."""
         # Clear any existing value
         os.environ.pop("DISABLE_DAILY_RETRAIN", None)
-        
+
         # Test the parsing logic directly
         result = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")
         assert result is False

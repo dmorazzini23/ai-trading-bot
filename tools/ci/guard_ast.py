@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import sys
 from pathlib import Path
+
 import libcst as cst
 import libcst.matchers as m
 
@@ -72,7 +74,7 @@ def main() -> int:
     for d in TARGET_DIRS:
         print(f"Scanning directory: {d}")
         code |= scan_dir(Path(d))
-    
+
     print(f"Total failures found: {len(FAILURES)}")
     if FAILURES:
         for p, ln, msg in FAILURES[:2000]:

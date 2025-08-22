@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import joblib
-import pandas as pd
-import numpy as np
-import joblib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
+
+import joblib
+import numpy as np
+import pandas as pd
 
 
 @dataclass

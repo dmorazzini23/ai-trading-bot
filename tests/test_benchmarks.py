@@ -1,9 +1,10 @@
-import pandas as pd
-import numpy as np
 import inspect
-from ai_trading import signals
-from ai_trading import indicators
+
+import numpy as np
+import pandas as pd
 import pytest
+
+from ai_trading import indicators, signals
 
 df = pd.DataFrame({
     'open': np.random.random(500_000) * 100,

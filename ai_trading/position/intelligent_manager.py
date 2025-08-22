@@ -12,11 +12,12 @@ AI-AGENT-REF: Main intelligent position management orchestrator
 """
 
 import logging
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 from .correlation_analyzer import PortfolioAnalysis, PortfolioCorrelationAnalyzer
 from .market_regime import MarketRegime, MarketRegimeDetector, RegimeMetrics

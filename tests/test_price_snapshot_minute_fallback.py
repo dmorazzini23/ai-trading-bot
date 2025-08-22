@@ -1,5 +1,6 @@
-import pandas as pd
 from types import SimpleNamespace
+
+import pandas as pd
 
 from ai_trading.portfolio import core as portfolio_core
 

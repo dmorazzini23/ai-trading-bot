@@ -2,6 +2,7 @@ import logging
 
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
+
 CONFIG = TradingConfig()
 
 # Map old names if needed

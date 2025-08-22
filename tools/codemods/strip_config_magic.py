@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import libcst as cst
 import libcst.matchers as m
 
@@ -14,7 +16,7 @@ class StripConfigMagic(cst.CSTTransformer):
 def remove_uppercase_properties(settings_path: Path) -> None:
     if not settings_path.exists():
         return
-        
+
     src = settings_path.read_text(encoding="utf-8")
     mod = cst.parse_module(src)
 
@@ -26,7 +28,7 @@ def remove_uppercase_properties(settings_path: Path) -> None:
                 if m.matches(decorator, m.Decorator(decorator=m.Name("property"))):
                     has_property_decorator = True
                     break
-            
+
             if has_property_decorator and o.name.value.isupper():
                 return cst.RemovalSentinel.REMOVE
             return u
@@ -46,10 +48,10 @@ def main():
                 print(f"Removed __getattr__ from: {CFG_INIT}")
         except Exception as e:
             print(f"Error processing {CFG_INIT}: {e}")
-    
+
     settings = Path("ai_trading/config/settings.py")
     remove_uppercase_properties(settings)
-    
+
     # Also check management.py for __getattr__
     management = Path("ai_trading/config/management.py")
     if management.exists():

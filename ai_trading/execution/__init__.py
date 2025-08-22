@@ -21,10 +21,6 @@ execution controls, monitoring, and compliance capabilities.
 """
 
 # Import execution components
-from .engine import ExecutionAlgorithm, ExecutionEngine, Order  # AI-AGENT-REF: expose ExecutionEngine
-from .transaction_costs import estimate_cost
-
-
 # Import enhanced debugging and tracking modules
 from .debug_tracker import (
     ExecutionPhase,
@@ -36,6 +32,11 @@ from .debug_tracker import (
     log_order_outcome,
     log_position_change,
     log_signal_to_execution,
+)
+from .engine import (  # AI-AGENT-REF: expose ExecutionEngine
+    ExecutionAlgorithm,
+    ExecutionEngine,
+    Order,
 )
 from .liquidity import LiquidityAnalyzer, LiquidityLevel, LiquidityManager, MarketHours
 from .pnl_attributor import (
@@ -61,6 +62,8 @@ from .position_reconciler import (
     stop_position_monitoring,
     update_bot_position,
 )
+from .transaction_costs import estimate_cost
+
 try:  # AI-AGENT-REF: optional production engine when Alpaca deps missing
     from .production_engine import (
         ExecutionResult,

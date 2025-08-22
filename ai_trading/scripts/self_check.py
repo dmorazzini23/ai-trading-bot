@@ -1,7 +1,10 @@
 import json
 import os
 
-from ai_trading.alpaca_api import _bars_time_window, get_bars_df  # AI-AGENT-REF: market data helper
+from ai_trading.alpaca_api import (  # AI-AGENT-REF: market data helper
+    _bars_time_window,
+    get_bars_df,
+)
 from ai_trading.utils.optional_import import optional_import
 
 TimeFrame = optional_import("alpaca_trade_api.rest", "TimeFrame")
@@ -22,7 +25,7 @@ def main() -> None:
             "end": end,
         }
         print(json.dumps(payload))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(json.dumps({"msg": "SELF_CHECK_FAIL", "error": str(exc)}))
         raise SystemExit(1)
 

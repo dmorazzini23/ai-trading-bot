@@ -1,7 +1,8 @@
 import os
 from importlib.resources import files as pkg_files
-import pandas as pd
 from typing import List, Optional
+
+import pandas as pd
 
 from ai_trading.logging import logger  # AI-AGENT-REF: structured logging
 

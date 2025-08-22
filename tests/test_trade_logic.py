@@ -1,9 +1,9 @@
 import pandas as pd
 
 from ai_trading.trade_logic import (
-    should_enter_trade,
     compute_order_price,
     extract_price,
+    should_enter_trade,
 )
 
 

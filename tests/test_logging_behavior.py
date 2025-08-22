@@ -1,10 +1,12 @@
-import types
 import time
+import types
+
 import pytest
 
+import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
 from ai_trading import utils
 from ai_trading.core import bot_engine
-import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
+
 try:
     from ai_trading.strategies.base import TradeSignal
 except Exception:  # pragma: no cover - optional strategies package
@@ -49,6 +51,7 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     # Ensure we capture logs from the strategy_allocator module
     caplog.set_level("INFO", logger="strategy_allocator")
     import importlib
+
     import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
     strategy_allocator = importlib.reload(strategy_allocator)
     alloc = strategy_allocator.StrategyAllocator()
@@ -60,7 +63,7 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     alloc.last_direction = {"AAPL": "buy"}
     t = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
-    
+
     alloc.select_signals({"s": [sig]})
     assert any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
     caplog.clear()

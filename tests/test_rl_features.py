@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
-from ai_trading.rl_trading.features import compute_features, FeatureConfig
+
+from ai_trading.rl_trading.features import FeatureConfig, compute_features
+
 
 def test_compute_features_shape_and_finite():
     n = 100

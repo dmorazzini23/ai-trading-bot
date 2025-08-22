@@ -8,12 +8,11 @@ Moved from root features.py for package-safe imports.
 """
 
 # AI-AGENT-REF: pandas and numpy are hard dependencies
-import pandas as pd
-
 import logging
 
-from ai_trading.indicators import ema, atr  # type: ignore
+import pandas as pd
 
+from ai_trading.indicators import atr, ema  # type: ignore
 
 logger = logging.getLogger(__name__)
 

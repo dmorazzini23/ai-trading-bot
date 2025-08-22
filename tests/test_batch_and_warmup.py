@@ -1,5 +1,7 @@
-import pytest
 from datetime import datetime, timedelta, timezone
+
+import pytest
+
 try:
     from ai_trading.data_fetcher import get_bars_batch, warmup_cache
 except Exception:

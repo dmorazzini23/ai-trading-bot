@@ -19,7 +19,7 @@ class _Resp:
 def _stub_session(monkeypatch, status: int, payload: dict) -> None:
     sess = get_global_session()
 
-    def fake_get(url, headers=None):  # noqa: D401
+    def fake_get(url, headers=None):
         return _Resp(status, payload)
 
     monkeypatch.setattr(sess, "get", fake_get, raising=True)

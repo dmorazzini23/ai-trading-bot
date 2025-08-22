@@ -1,6 +1,8 @@
-import pytest
-import os
 import json
+import os
+
+import pytest
+
 
 @pytest.mark.skipif(not os.path.exists('best_hyperparams.json'), reason='best_hyperparams.json not present')
 def test_best_hyperparams_sensible():

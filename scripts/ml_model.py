@@ -29,7 +29,7 @@ else:
 
     def mean_squared_error(y_true, y_pred):
         return 0.0
-    
+
     logger.warning("scikit-learn not available; using fallback implementations")
 
 
@@ -49,7 +49,7 @@ else:
 
         def predict(self, X):
             return [0] * len(X)
-    
+
     logger.warning("sklearn.linear_model not available; using fallback LinearRegression")
 
 

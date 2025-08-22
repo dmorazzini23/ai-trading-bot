@@ -32,11 +32,11 @@ def test_start_rebalancer(monkeypatch):
                     # Catch any exceptions from the loop to prevent infinite execution
                     pass
         return T()
-    
+
     # Mock the infinite loop to exit after one iteration
     original_maybe_rebalance = rebalancer.maybe_rebalance
     call_count = [0]
-    
+
     def mock_maybe_rebalance(ctx):
         call_count[0] += 1
         called.append("maybe-rebalance")
@@ -46,6 +46,6 @@ def test_start_rebalancer(monkeypatch):
 
     monkeypatch.setattr(rebalancer.threading, "Thread", fake_thread)
     monkeypatch.setattr(rebalancer, "maybe_rebalance", mock_maybe_rebalance)
-    
+
     t = rebalancer.start_rebalancer("ctx")
     assert "start-called" in called

@@ -7,12 +7,13 @@ institutional-grade trading strategies.
 """
 
 # AI-AGENT-REF: use standard imports for hard dependencies
-from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 import pandas as pd
+
+from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

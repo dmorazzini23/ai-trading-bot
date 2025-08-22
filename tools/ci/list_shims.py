@@ -1,7 +1,8 @@
 # tools/ci/list_shims.py
 from __future__ import annotations
-import re
+
 import csv
+import re
 from pathlib import Path
 
 ROOT = Path("ai_trading")
@@ -22,7 +23,7 @@ def main():
         except Exception as e:
             print(f"Error reading {p}: {e}")
             continue
-        
+
         for name, rx in PATTERNS.items():
             for m in rx.finditer(text):
                 ln = text.count("\n", 0, m.start()) + 1

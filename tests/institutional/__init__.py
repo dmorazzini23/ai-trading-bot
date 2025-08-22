@@ -6,13 +6,13 @@ live trading functionality, risk management, and compliance requirements.
 """
 
 from .framework import (
+    ComplianceTestSuite,
     MockMarketDataProvider,
     TradingScenarioRunner,
-    ComplianceTestSuite
 )
 
 __all__ = [
     "MockMarketDataProvider",
-    "TradingScenarioRunner", 
+    "TradingScenarioRunner",
     "ComplianceTestSuite"
 ]

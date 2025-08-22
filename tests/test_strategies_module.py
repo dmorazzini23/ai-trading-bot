@@ -59,8 +59,8 @@ finnhub_stub = types.ModuleType("finnhub")
 finnhub_stub.FinnhubAPIException = type("FinnhubAPIException", (Exception,), {})
 sys.modules["finnhub"] = finnhub_stub
 
-from ai_trading.core.bot_engine import get_strategies
 from ai_trading.config import settings as settings_module
+from ai_trading.core.bot_engine import get_strategies
 
 
 def _prep_settings(strategies):

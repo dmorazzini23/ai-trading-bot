@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from ai_trading.core.runtime import build_runtime, NullAlphaModel
+from ai_trading.core.runtime import NullAlphaModel, build_runtime
 
 
 def test_runtime_has_model():

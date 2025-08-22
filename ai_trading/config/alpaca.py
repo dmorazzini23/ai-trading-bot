@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from .settings import get_settings, broker_keys
+from .settings import broker_keys, get_settings
 
 
 @dataclass(frozen=True)

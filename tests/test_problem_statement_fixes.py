@@ -25,19 +25,19 @@ class TestProblemStatementFixes(unittest.TestCase):
         """
         try:
             import ai_trading.analysis.sentiment as sentiment
-            
+
             # Problem statement requires 15 failures, not 5 or 8
             expected_failures = 15
             self.assertEqual(sentiment.SENTIMENT_FAILURE_THRESHOLD, expected_failures,
                            f"SENTIMENT_FAILURE_THRESHOLD should be {expected_failures}, got {sentiment.SENTIMENT_FAILURE_THRESHOLD}")
-            
+
             # Problem statement requires 1800s (30 minutes), not 600s or 900s
             expected_recovery = 1800
             self.assertEqual(sentiment.SENTIMENT_RECOVERY_TIMEOUT, expected_recovery,
                            f"SENTIMENT_RECOVERY_TIMEOUT should be {expected_recovery}s, got {sentiment.SENTIMENT_RECOVERY_TIMEOUT}s")
-            
+
             print("✓ Sentiment circuit breaker meets problem statement requirements")
-            
+
         except ImportError as e:
             self.fail(f"Failed to import sentiment module: {e}")
 
@@ -48,7 +48,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         if os.path.exists(bot_engine_path):
             with open(bot_engine_path, 'r') as f:
                 content = f.read()
-            
+
             # Look for the environment variable default
             import re
             pattern = r'METALEARN_MIN_TRADES.*"(\d+)"'
@@ -71,7 +71,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         if os.path.exists(bot_engine_path):
             with open(bot_engine_path, 'r') as f:
                 content = f.read()
-            
+
             # Check if PLTR is in the Technology sector mapping
             if '"PLTR": "Technology"' in content:
                 print("✓ PLTR sector classification meets problem statement requirements")
@@ -88,17 +88,17 @@ class TestProblemStatementFixes(unittest.TestCase):
         if os.path.exists(trade_execution_path):
             with open(trade_execution_path, 'r') as f:
                 content = f.read()
-                
+
                 # Check for clear quantity field names in FULL_FILL_SUCCESS
                 self.assertIn('"requested_qty":', content,
                             "FULL_FILL_SUCCESS should include clear requested_qty field")
                 self.assertIn('"filled_qty":', content,
                             "FULL_FILL_SUCCESS should include clear filled_qty field")
-                
+
                 # Check for clear quantity field names in ORDER_FILL_CONSOLIDATED
                 self.assertIn('"total_filled_qty":', content,
                             "ORDER_FILL_CONSOLIDATED should use clear total_filled_qty field name")
-                
+
                 print("✓ Order quantity tracking has clear field names")
         else:
             self.fail("trade_execution.py not found")
@@ -107,36 +107,36 @@ class TestProblemStatementFixes(unittest.TestCase):
 def run_problem_statement_tests():
     """Run the problem statement focused tests."""
     print("\n=== Problem Statement Requirements Test Suite ===")
-    
+
     # Create test suite
     suite = unittest.TestSuite()
     test_class = TestProblemStatementFixes
-    
+
     # Add specific tests based on problem statement
     suite.addTest(test_class('test_sentiment_circuit_breaker_requirements'))
     suite.addTest(test_class('test_meta_learning_minimum_trades_requirement'))
     suite.addTest(test_class('test_pltr_sector_classification'))
     suite.addTest(test_class('test_order_quantity_tracking_clarity'))
-    
+
     # Run the tests
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
-    
+
     print("\n=== Test Results Summary ===")
     print(f"Tests run: {result.testsRun}")
     print(f"Failures: {len(result.failures)}")
     print(f"Errors: {len(result.errors)}")
-    
+
     if result.failures:
         print("\nFailures:")
         for test, traceback in result.failures:
             print(f"  - {test}: {traceback}")
-    
+
     if result.errors:
         print("\nErrors:")
         for test, traceback in result.errors:
             print(f"  - {test}: {traceback}")
-    
+
     return result.wasSuccessful()
 
 

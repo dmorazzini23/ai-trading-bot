@@ -20,6 +20,7 @@ from typing import Any
 
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
+
 CONFIG = TradingConfig()
 
 logger = logging.getLogger(__name__)

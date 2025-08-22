@@ -2,10 +2,13 @@ import logging
 
 import pytest
 
-from ai_trading.strategies.performance_allocator import PerformanceBasedAllocator, _resolve_conf_threshold
 from ai_trading.config.management import TradingConfig
 from ai_trading.config.settings import get_settings
 from ai_trading.settings import get_settings as base_get_settings
+from ai_trading.strategies.performance_allocator import (
+    PerformanceBasedAllocator,
+    _resolve_conf_threshold,
+)
 
 
 class Sig:

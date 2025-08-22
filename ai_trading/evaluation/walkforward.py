@@ -40,6 +40,8 @@ def _ensure_matplotlib() -> None:
 
 from ..data.splits import walkforward_splits
 from ..features.pipeline import create_feature_pipeline
+
+
 # Lazy import to avoid heavy dependencies at module import time
 def _get_ml_trainer():
     from ..training.train_ml import MLTrainer

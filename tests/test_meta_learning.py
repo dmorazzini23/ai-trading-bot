@@ -1,8 +1,8 @@
 import types
-import torch.nn as nn
 
 import numpy as np
 import pytest
+import torch.nn as nn
 
 np.random.seed(0)
 

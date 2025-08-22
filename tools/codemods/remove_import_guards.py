@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import libcst as cst
 
 ROOT = Path("ai_trading")
@@ -10,18 +12,18 @@ class StripImportGuards(cst.CSTTransformer):
         # replace the whole try/except with just the import statements.
         if not updated.handlers:
             return updated
-        
+
         # Check if all handlers are ImportError
         if not all(
-            isinstance(h.type, cst.Name) and h.type.value == "ImportError" 
+            isinstance(h.type, cst.Name) and h.type.value == "ImportError"
             for h in updated.handlers if h.type
         ):
             return updated
-        
+
         body = updated.body
         if not isinstance(body, cst.IndentedBlock):
             return updated
-        
+
         # Check if all statements in try block are import statements
         import_statements = []
         for stmt in body.body:
@@ -36,7 +38,7 @@ class StripImportGuards(cst.CSTTransformer):
             else:
                 # Non-simple statement found
                 return updated
-        
+
         # Return only the import statements (flatten)
         if import_statements:
             return cst.FlattenSentinel(import_statements)

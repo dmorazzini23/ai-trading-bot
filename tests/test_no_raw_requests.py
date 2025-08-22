@@ -1,4 +1,5 @@
-import pathlib, re
+import pathlib
+import re
 
 
 def test_no_raw_requests_in_src():

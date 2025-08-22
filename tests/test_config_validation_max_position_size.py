@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 import logging
+from types import SimpleNamespace
 
 import ai_trading.main as main
 

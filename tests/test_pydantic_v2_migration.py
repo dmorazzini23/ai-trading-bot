@@ -4,10 +4,11 @@ Test cases for the Pydantic V2 migration in validate_env.py.
 This module tests that the environment validation works correctly
 with Pydantic V2 field_validator decorators.
 """
-import pytest
 import os
 import sys
 from unittest.mock import patch
+
+import pytest
 
 
 def test_pydantic_v2_migration_syntax():
@@ -15,14 +16,14 @@ def test_pydantic_v2_migration_syntax():
     validate_env_path = os.path.join(
         os.path.dirname(__file__), '..', 'ai_trading', 'validation', 'validate_env.py'
     )
-    
+
     with open(validate_env_path, 'r') as f:
         content = f.read()
-    
+
     # Verify V2 imports
     assert 'from pydantic import field_validator, Field' in content
     assert 'from pydantic import validator' not in content
-    
+
     # Verify V2 decorators
     v2_decorators = [
         '@field_validator(\'ALPACA_API_KEY\')',
@@ -32,10 +33,10 @@ def test_pydantic_v2_migration_syntax():
         '@field_validator(\'TRADING_MODE\')',
         '@field_validator(\'FORCE_TRADES\')'
     ]
-    
+
     for decorator in v2_decorators:
         assert decorator in content, f"Missing V2 decorator: {decorator}"
-    
+
     # Verify no V1 decorators remain
     v1_decorators = [
         '@validator(\'ALPACA_API_KEY\')',
@@ -45,10 +46,10 @@ def test_pydantic_v2_migration_syntax():
         '@validator(\'TRADING_MODE\')',
         '@validator(\'FORCE_TRADES\')'
     ]
-    
+
     for decorator in v1_decorators:
         assert decorator not in content, f"Found old V1 decorator: {decorator}"
-    
+
     # Verify classmethod decorators are present
     assert content.count('@classmethod') >= 6
 
@@ -57,7 +58,7 @@ def test_validate_env_import():
     """Test that validate_env can be imported without errors."""
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-        
+
         # Mock environment variables to avoid validation errors
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'TEST_API_KEY_123456789',
@@ -68,15 +69,15 @@ def test_validate_env_import():
             'FORCE_TRADES': 'false'
         }):
             import ai_trading.validation.validate_env as validate_env  # AI-AGENT-REF: normalized import
-            
+
             # Test that Settings class can be instantiated
             settings = validate_env.Settings()
-            
+
             # Verify some basic fields
             assert hasattr(settings, 'ALPACA_API_KEY')
             assert hasattr(settings, 'ALPACA_SECRET_KEY')
             assert hasattr(settings, 'BOT_MODE')
-            
+
     except ImportError as e:
         pytest.skip(f"Cannot import validate_env module: {e}")
     except Exception as e:
@@ -92,7 +93,7 @@ def test_field_validator_functionality():
     """Test that field validators work correctly with V2 syntax."""
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-        
+
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'INVALID_KEY',  # Should trigger validation warning
             'ALPACA_SECRET_KEY': 'short',     # Should trigger validation error
@@ -101,7 +102,7 @@ def test_field_validator_functionality():
             'TRADING_MODE': 'invalid',        # Should trigger validation error
         }):
             import ai_trading.validation.validate_env as validate_env  # AI-AGENT-REF: normalized import
-            
+
             # These should trigger validation errors due to invalid values
             try:
                 settings = validate_env.Settings()
@@ -113,7 +114,7 @@ def test_field_validator_functionality():
                        "ALPACA_BASE_URL must use HTTPS" in str(e) or \
                        "BOT_MODE must be one of" in str(e) or \
                        "Invalid TRADING_MODE" in str(e)
-                
+
     except ImportError:
         pytest.skip("Cannot import validate_env module")
 

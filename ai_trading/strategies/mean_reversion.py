@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import pandas as pd
-from .base import StrategySignal
+
 from ai_trading.logging import logger as log
+
+from .base import StrategySignal
 
 
 class MeanReversionStrategy:

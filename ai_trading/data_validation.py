@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
-
-import pandas as pd
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+import pandas as pd
 
 from ai_trading.data_fetcher import get_bars
 
@@ -55,7 +55,7 @@ def check_data_freshness(
             "is_fresh": minutes <= max_staleness_minutes,
             "minutes_stale": minutes,
         }
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {"symbol": symbol, "is_fresh": False, "minutes_stale": float("inf")}
 
 
@@ -126,7 +126,7 @@ def emergency_data_check(
             df = fetch(sym, "1Min", start, end)
             if df is not None and not df.empty:
                 return True
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     return False
 
@@ -193,7 +193,7 @@ def validate_trade_log_integrity(path: str | Path) -> dict[str, Any]:
     try:
         df = pd.read_csv(p)
         report["file_readable"] = True
-    except Exception:  # noqa: BLE001
+    except Exception:
         return report
     required = {"timestamp", "symbol", "side", "entry_price", "exit_price", "quantity", "pnl"}
     report["valid_format"] = required.issubset(df.columns)
@@ -208,7 +208,7 @@ def validate_trade_log_integrity(path: str | Path) -> dict[str, Any]:
             float(row["exit_price"])
             int(row["quantity"])
             float(row["pnl"])
-        except Exception:  # noqa: BLE001
+        except Exception:
             corrupted.append(idx)
     report["corrupted_rows"] = corrupted
     report["data_consistent"] = not corrupted

@@ -64,38 +64,38 @@ try:
     from hypothesis import HealthCheck, given, settings
 except Exception:
     import types
-    
+
     def given(**strategy_kwargs):
         def decorator(f):
             # For now, just skip hypothesis-based tests to avoid complexity
             import pytest
             return pytest.mark.skip("hypothesis-based test - skipped in simple test mode")(f)
         return decorator
-    
+
     def settings(*args, **kwargs):
         def decorator(f):
             return f
         return decorator
-    
+
     class HealthCheck:
         too_slow = "too_slow"
         filter_too_much = "filter_too_much"
         function_scoped_fixture = "function_scoped_fixture"
-    
+
     # Add strategies module
     class Strategies:
         @staticmethod
         def text():
             return "test_string"
-        
+
         @staticmethod
         def integers(min_value=None, max_value=None):
             return 42
-            
+
         @staticmethod
         def floats(min_value=None, max_value=None, allow_nan=True, allow_infinity=True, **kwargs):
             return 1.0
-            
+
         @staticmethod
         def lists(elements, min_size=0, max_size=None, **kwargs):
             # Generate a list based on the element strategy
@@ -103,7 +103,7 @@ except Exception:
             if callable(elements):
                 return [elements() for _ in range(size)]
             return [1.0] * size
-    
+
     hypothesis_mod = types.ModuleType("hypothesis")
     hypothesis_mod.given = given
     hypothesis_mod.settings = settings
@@ -124,7 +124,7 @@ except Exception:
             return self
         def __exit__(self, *args):
             pass
-    
+
     portalocker_mod = types.ModuleType("portalocker")
     portalocker_mod.Lock = LockStub
     portalocker_mod.LOCK_EX = 1
@@ -144,7 +144,7 @@ except Exception:
             return self
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
-    
+
     schedule_mod = types.ModuleType("schedule")
     schedule_mod.every = lambda *a: ScheduleStub()
     schedule_mod.run_pending = lambda: None
@@ -156,43 +156,43 @@ try:
     pass
 except Exception:
     import types
-    
+
     class Space:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     class Discrete(Space):
         def __init__(self, n):
             self.n = n
-    
+
     class Box(Space):
         def __init__(self, low, high, shape=None, dtype=None):
             self.low = low
             self.high = high
             self.shape = shape
             self.dtype = dtype
-    
+
     class Spaces:
         Discrete = Discrete
         Box = Box
-    
+
     class Env:
         def __init__(self):
             self.action_space = None
             self.observation_space = None
-        
+
         def reset(self):
             return None, {}
-        
+
         def step(self, action):
             return None, 0, False, False, {}
-        
+
         def render(self):
             pass
-        
+
         def close(self):
             pass
-    
+
     gymnasium_mod = types.ModuleType("gymnasium")
     gymnasium_mod.Env = Env
     gymnasium_mod.spaces = Spaces()
@@ -206,7 +206,7 @@ except Exception:
     import types
     hmmlearn_mod = types.ModuleType("hmmlearn")
     hmm_mod = types.ModuleType("hmmlearn.hmm")
-    
+
     class GaussianHMM:
         def __init__(self, *args, **kwargs):
             pass
@@ -214,7 +214,7 @@ except Exception:
             return self
         def predict(self, *args, **kwargs):
             return [0, 1, 0, 1]  # Mock regime predictions
-    
+
     hmm_mod.GaussianHMM = GaussianHMM
     hmmlearn_mod.hmm = hmm_mod
     hmmlearn_mod.__file__ = "stub"
@@ -226,19 +226,19 @@ try:
     pass
 except Exception:
     import types
-    
+
     class FinnhubAPIException(Exception):
         def __init__(self, *args, status_code=None, **kwargs):
             self.status_code = status_code
             super().__init__(*args)
-    
+
     class Client:
         def __init__(self, api_key=None):
             self.api_key = api_key
-        
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
-    
+
     finnhub_mod = types.ModuleType("finnhub")
     finnhub_mod.FinnhubAPIException = FinnhubAPIException
     finnhub_mod.Client = Client
@@ -250,41 +250,41 @@ try:
     pass
 except Exception:
     import types
-    
+
     class Parameter:
         def __init__(self, data):
             self.data = data
-    
+
     class Module:
         def __init__(self):
             pass
-        
+
         def parameters(self):
             return [Parameter([1.0, 2.0])]
-        
+
         def __call__(self, *args, **kwargs):
             return self.forward(*args, **kwargs)
-        
+
         def forward(self, x):
             return x
-    
+
     class Linear(Module):
         def __init__(self, in_features, out_features):
             super().__init__()
             self.in_features = in_features
             self.out_features = out_features
-    
+
     class ReLU(Module):
         pass
-    
+
     class Tanh(Module):
         pass
-    
+
     class Sequential(Module):
         def __init__(self, *layers):
             super().__init__()
             self.layers = layers
-    
+
     class Tensor:
         def __init__(self, data):
             self.data = data
@@ -293,7 +293,7 @@ except Exception:
         def numpy(self):
             import numpy as np
             return np.array([0.2, 0.2, 0.2, 0.2, 0.2])  # Mock equal weight portfolio
-    
+
     class OptimModule:
         class Adam:
             def __init__(self, parameters, lr=1e-3):
@@ -303,18 +303,18 @@ except Exception:
                 pass
             def zero_grad(self):
                 pass
-    
+
     def tensor(data, dtype=None):
         return Tensor(data)
-    
+
     def manual_seed(seed):
         pass
-    
+
     class Softmax(Module):
         def __init__(self, dim=-1):
             super().__init__()
             self.dim = dim
-    
+
     torch_mod = types.ModuleType("torch")
     torch_mod.nn = types.ModuleType("torch.nn")
     torch_mod.optim = OptimModule()
@@ -345,33 +345,33 @@ try:
     )
 except Exception:
     import types
-    
+
     def retry(*args, **kwargs):
         def decorator(f):
             return f
         return decorator
-    
+
     class WaitStub:
         def __add__(self, other):
             return self
         def __radd__(self, other):
             return self
-    
+
     def wait_exponential(*args, **kwargs):
         return WaitStub()
-    
+
     def wait_random(*args, **kwargs):
         return WaitStub()
-    
+
     def stop_after_attempt(*args, **kwargs):
         return None
-    
+
     def retry_if_exception_type(*args, **kwargs):
         return None
-    
+
     class RetryError(Exception):
         pass
-    
+
     tenacity_mod = types.ModuleType("tenacity")
     tenacity_mod.retry = retry
     tenacity_mod.wait_exponential = wait_exponential
@@ -395,44 +395,44 @@ os.environ.update({
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import types
+from datetime import UTC
 from pathlib import Path
 
 import pytest
-from datetime import UTC
 
 # AI-AGENT-REF: Add numpy stub before any imports that might need it
 try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class ArrayStub(list):
         def __init__(self, data=None, dtype=None):
             super().__init__(data or [])
             self.dtype = dtype
-            
+
         def __array__(self):
             return self
-            
+
         def reshape(self, *args):
             return self
-            
+
         def __sub__(self, other):
             if isinstance(other, (list, ArrayStub)):
                 return ArrayStub([a - b for a, b in zip(self, other, strict=False)])
             return ArrayStub([x - other for x in self])
-            
+
         def __truediv__(self, other):
             if isinstance(other, (list, ArrayStub)):
                 return ArrayStub([a / b if b != 0 else 0 for a, b in zip(self, other, strict=False)])
             return ArrayStub([x / other if other != 0 else 0 for x in self])
-            
+
         def max(self):
             return max(self) if self else 0
-            
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
-    
+
     numpy_mod = types.ModuleType("numpy")
     numpy_mod.array = ArrayStub
     numpy_mod.ndarray = ArrayStub
@@ -447,7 +447,7 @@ except Exception:  # pragma: no cover - optional dependency
     numpy_mod.sum = sum
     numpy_mod.exp = lambda x: 2.718281828 ** x
     numpy_mod.log = lambda x: 0.0
-    
+
     # Create maximum with accumulate method
     class MaximumStub:
         @staticmethod
@@ -461,17 +461,17 @@ except Exception:  # pragma: no cover - optional dependency
                 max_so_far = max(max_so_far, val)
                 result.append(max_so_far)
             return ArrayStub(result)
-        
+
         def __call__(self, *args):
             return max(*args) if args else 0
-    
+
     numpy_mod.maximum = MaximumStub()
     numpy_mod.minimum = min
     numpy_mod.max = lambda x: max(x) if x else 0
     numpy_mod.isscalar = lambda x: isinstance(x, (int, float, complex))
     numpy_mod.bool_ = bool
     numpy_mod.linspace = lambda start, stop, num: ArrayStub([start + (stop - start) * i / (num - 1) for i in range(num)])
-    
+
     # Add random module stub
     class RandomStub:
         @staticmethod
@@ -498,7 +498,7 @@ except Exception:  # pragma: no cover - optional dependency
                 size = kwargs['size']
                 return [0.0] * size
             return 0.0
-    
+
     numpy_mod.random = RandomStub()
     numpy_mod.__file__ = "stub"
     sys.modules["numpy"] = numpy_mod
@@ -517,10 +517,10 @@ try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     # Create pandas stub module
     pandas_mod = types.ModuleType("pandas")
-    
+
     # Create minimal DataFrame stub
     class DataFrameStub:
         def __init__(self, data=None, **kwargs):
@@ -539,10 +539,10 @@ except Exception:  # pragma: no cover - optional dependency
                 self._length = 5
             # Initialize index attribute for getting/setting
             self._index = None
-                
+
         def __len__(self):
             return self._length
-            
+
         def __getitem__(self, key):
             # Handle list of column names (multiple column selection)
             if isinstance(key, list):
@@ -558,11 +558,11 @@ except Exception:  # pragma: no cover - optional dependency
             if isinstance(self.data, dict) and key in self.data:
                 return SeriesStub(self.data[key])
             return SeriesStub([1, 2, 3])  # Fallback for missing keys
-            
+
         def iloc(self):
             return self
-            
-        @property 
+
+        @property
         def columns(self):
             class ColumnsStub(list):
                 def __init__(self, data):
@@ -572,7 +572,7 @@ except Exception:  # pragma: no cover - optional dependency
             if isinstance(self.data, dict):
                 return ColumnsStub(list(self.data.keys()))
             return ColumnsStub(["open", "high", "low", "close", "volume"])  # Default columns
-            
+
         @property
         def index(self):
             if self._index is None:
@@ -584,20 +584,20 @@ except Exception:  # pragma: no cover - optional dependency
                         return (1, 2)  # Return a tuple for MultiIndex-like behavior
                     def tz_localize(self, tz):
                         return self  # Return self for method chaining
-                    @property 
+                    @property
                     def tz(self):
                         return None  # No timezone by default
                 self._index = IndexStub()
             return self._index
-            
-        @index.setter 
+
+        @index.setter
         def index(self, value):
             self._index = value
-            
+
         @property
         def empty(self):
             return self._length == 0
-            
+
         def isna(self):
             """Return a DataFrame-like object with all False values (no NaN in test data)."""
             class IsNaResult:
@@ -609,30 +609,30 @@ except Exception:  # pragma: no cover - optional dependency
                             return False
                     return AnyResult()
             return IsNaResult()
-            
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
-    
+
     # Create minimal Series stub
     class SeriesStub(list):
         def __init__(self, data=None):
             super().__init__(data or [1, 2, 3])
-            
+
         @property
         def is_monotonic_increasing(self):
             return True  # Mock for monotonic check
-            
+
         @property
         def empty(self):
             return len(self) == 0
-            
+
         @property
         def iloc(self):
             """Support iloc indexing for accessing elements by position."""
             class IlocAccessor:
                 def __init__(self, series):
                     self.series = series
-                
+
                 def __getitem__(self, idx):
                     if isinstance(idx, int):
                         # Handle negative indexing like pandas
@@ -641,18 +641,18 @@ except Exception:  # pragma: no cover - optional dependency
                         return self.series[idx] if 0 <= idx < len(self.series) else 0
                     return self.series[idx] if hasattr(self.series, '__getitem__') else 0
             return IlocAccessor(self)
-        
+
         def dropna(self):
             """Return self since we're mocking without actual NaN values."""
             return SeriesStub([x for x in self if x is not None and str(x) != 'nan'])
-        
+
         def rolling(self, window):
             """Mock rolling window operations."""
             class RollingStub:
                 def __init__(self, series, window):
                     self.series = series
                     self.window = window
-                
+
                 def mean(self):
                     # For testing mean reversion, return a series where the last value
                     # creates a high z-score when compared to the moving average
@@ -664,12 +664,12 @@ except Exception:  # pragma: no cover - optional dependency
                             if i < self.window - 1:
                                 result.append(float('nan'))  # Not enough data for window
                             else:
-                                # Mock rolling mean - for our test case, make it around 1.5 
+                                # Mock rolling mean - for our test case, make it around 1.5
                                 # so that when series value is 5, z-score is high
                                 result.append(1.5)
                         return SeriesStub(result)
                     return SeriesStub([1.5] * len(self.series))
-                
+
                 def std(self, ddof=0):
                     # For z-score calculation, return std that will give us expected result
                     if len(self.series) >= 2:
@@ -683,12 +683,12 @@ except Exception:  # pragma: no cover - optional dependency
                                 result.append(1.5)  # (5 - 1.5) / 1.5 = 2.33 > 1.0
                         return SeriesStub(result)
                     return SeriesStub([1.5] * len(self.series))
-                
+
             return RollingStub(self, window)
-            
+
         def accumulate(self, *args, **kwargs):
             return SeriesStub(self)  # Return self for accumulate
-        
+
         def __sub__(self, other):
             """Support subtraction for z-score calculation."""
             if isinstance(other, SeriesStub):
@@ -700,7 +700,7 @@ except Exception:  # pragma: no cover - optional dependency
                         result.append(self[i] - other[i])
                 return SeriesStub(result)
             return SeriesStub([x - other if str(x) != 'nan' else float('nan') for x in self])
-        
+
         def __truediv__(self, other):
             """Support division for z-score calculation."""
             if isinstance(other, SeriesStub):
@@ -712,10 +712,10 @@ except Exception:  # pragma: no cover - optional dependency
                         result.append(self[i] / other[i])
                 return SeriesStub(result)
             return SeriesStub([x / other if str(x) != 'nan' and other != 0 else float('nan') for x in self])
-            
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
-    
+
     # Create minimal Timestamp stub
     class TimestampStub:
         def __init__(self, *args, **kwargs):
@@ -729,7 +729,7 @@ except Exception:  # pragma: no cover - optional dependency
                     self.value = str(args[0])
             else:
                 self.value = datetime.now(dt.UTC).isoformat()
-            
+
             # Handle timezone parameter
             if 'tz' in kwargs or len(args) > 1:
                 tz = kwargs.get('tz', args[1] if len(args) > 1 else None)
@@ -748,51 +748,51 @@ except Exception:  # pragma: no cover - optional dependency
                     self._dt = datetime.now(UTC)
             else:
                 self._dt = datetime.now(UTC)
-                
+
         def __str__(self):
             return self.value
-            
+
         def __repr__(self):
             return f"TimestampStub('{self.value}')"
-            
+
         @staticmethod
         def utcnow():
             from datetime import datetime
             return datetime.now(dt.UTC)
-            
+
         @staticmethod
         def now(tz=None):
             from datetime import datetime
             if tz == "UTC" or tz == dt.UTC:
                 return datetime.now(dt.UTC)
             return datetime.now(dt.UTC)
-            
+
         def __sub__(self, other):
             # Support timestamp arithmetic for comparisons
             from datetime import datetime, timedelta
             return datetime.now(dt.UTC) - timedelta(days=1)  # Return a reasonable past time
-        
+
         def __add__(self, other):
             # Support timestamp + timedelta operations
             from datetime import timedelta
             if hasattr(other, 'td'):  # TimedeltaStub
                 return TimestampStub(str(self._dt + other.td))
             return TimestampStub(str(self._dt + timedelta(minutes=1)))
-        
+
         def to_pydatetime(self):
             """Return the underlying datetime object."""
             return self._dt
-    
+
     # Add pandas functions
     def read_csv(*args, **kwargs):
         return DataFrameStub()
-    
+
     def read_parquet(*args, **kwargs):
         return DataFrameStub()
-    
+
     def concat(*args, **kwargs):
         return DataFrameStub()
-        
+
     def to_datetime(*args, **kwargs):
         # Return an index-like object that supports tz_localize
         class DatetimeIndexStub:
@@ -809,13 +809,13 @@ except Exception:  # pragma: no cover - optional dependency
             def tz(self):
                 return kwargs.get('utc') if 'utc' in kwargs else None
         return DatetimeIndexStub(*args, **kwargs)
-        
+
     def isna(obj):
         """Check for NaN values."""
         if hasattr(obj, '__iter__') and not isinstance(obj, str):
             return [str(x) == 'nan' for x in obj]
         return str(obj) == 'nan'
-        
+
     class MultiIndex:
         def __init__(self, *args, **kwargs):
             pass
@@ -825,13 +825,13 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, days=0, **kwargs):
             from datetime import timedelta
             self.td = timedelta(days=days, **kwargs)
-        
+
         def __rmul__(self, other):
             return self
-        
+
         def __sub__(self, other):
             return self.td
-            
+
         def __rsub__(self, other):
             from datetime import datetime
             if hasattr(other, '__sub__'):
@@ -849,14 +849,14 @@ except Exception:  # pragma: no cover - optional dependency
     pandas_mod.to_datetime = to_datetime
     pandas_mod.isna = isna
     pandas_mod.NaT = None  # Not a Time - represents missing timestamp
-    
+
     # Add testing module
     class TestingStub:
         @staticmethod
         def assert_frame_equal(df1, df2, **kwargs):
             """Mock assert_frame_equal - just pass for testing."""
             pass
-    
+
     pandas_mod.testing = TestingStub()
     pandas_mod.__file__ = "stub"
     sys.modules["pandas"] = pandas_mod
@@ -896,13 +896,13 @@ try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     def jit_stub(*args, **kwargs):
         """Stub for numba.jit decorator - just returns the function unchanged."""
         if len(args) == 1 and callable(args[0]):
             return args[0]  # Direct decoration
         return lambda func: func  # Parameterized decoration
-    
+
     numba_mod = types.ModuleType("numba")
     numba_mod.jit = jit_stub
     numba_mod.__file__ = "stub"
@@ -912,7 +912,7 @@ try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class BaseSettingsStub:
         def __init__(self, **kwargs):
             # Read from environment variables
@@ -970,33 +970,33 @@ except Exception:  # pragma: no cover - optional dependency
             self.regime_symbols_csv = os.getenv("REGIME_SYMBOLS_CSV", "SPY")
             for k, v in kwargs.items():
                 setattr(self, k, v)
-                
+
         @staticmethod
         def model_json_schema():
             return {}
-        
+
         def effective_executor_workers(self, cpu_count=None):
             """Return a reasonable number of workers."""
             cpu_count = cpu_count or 2
             return max(2, min(4, cpu_count))
-        
+
         def effective_prediction_workers(self, cpu_count=None):
             """Return a reasonable number of prediction workers."""
             cpu_count = cpu_count or 2
             return max(2, min(4, cpu_count))
-        
+
         def get_alpaca_keys(self):
             """Return Alpaca API credentials."""
             return self.ALPACA_API_KEY, self.ALPACA_SECRET_KEY
-    
+
     class SettingsConfigDictStub:
         def __init__(self, **kwargs):
             pass
-    
+
     pydantic_settings_mod = types.ModuleType("pydantic_settings")
     pydantic_settings_mod.BaseSettings = BaseSettingsStub
     pydantic_settings_mod.SettingsConfigDict = SettingsConfigDictStub
-    
+
     # Create a get_settings function that returns a properly configured instance
     _settings_instance = None
     def get_settings():
@@ -1004,7 +1004,7 @@ except Exception:  # pragma: no cover - optional dependency
         if _settings_instance is None:
             _settings_instance = BaseSettingsStub()
         return _settings_instance
-    
+
     pydantic_settings_mod.get_settings = get_settings
     pydantic_settings_mod.__file__ = "stub"
     sys.modules["pydantic_settings"] = pydantic_settings_mod
@@ -1013,26 +1013,26 @@ try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class FieldStub:
         def __init__(self, *args, **kwargs):
             self.default = args[0] if args else None
             self.kwargs = kwargs
-            
+
         def __call__(self, *args, **kwargs):
             # For Field decorators, just return the default value
             return self.default
-    
+
     def model_validator(*args, **kwargs):
         """Stub for pydantic model_validator decorator."""
         def decorator(func):
             return func
         return decorator
-    
+
     class AliasChoices:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     pydantic_mod = types.ModuleType("pydantic")
     pydantic_mod.Field = FieldStub()
     pydantic_mod.model_validator = model_validator
@@ -1045,17 +1045,17 @@ try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     alpaca_mod = types.ModuleType("alpaca_trade_api")
     rest_mod = types.ModuleType("alpaca_trade_api.rest")
-    
+
     class RESTStub:
         def __init__(self, *args, **kwargs):
             pass
-            
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
-    
+
     class APIError(Exception):
         pass
 
@@ -1072,42 +1072,42 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     import types
     from enum import Enum
-    
+
     # Common module
     common_mod = types.ModuleType("alpaca.common")
     exceptions_mod = types.ModuleType("alpaca.common.exceptions")
-    
+
     class APIError(Exception):
         pass
-    
+
     exceptions_mod.APIError = APIError
     common_mod.exceptions = exceptions_mod
-    
-    # Data module  
+
+    # Data module
     data_mod = types.ModuleType("alpaca.data")
     models_mod = types.ModuleType("alpaca.data.models")
     requests_mod = types.ModuleType("alpaca.data.requests")
     historical_mod = types.ModuleType("alpaca.data.historical")
     timeframe_mod = types.ModuleType("alpaca.data.timeframe")
-    
+
     class Quote:
         bid_price = 0
         ask_price = 0
-    
+
     class StockLatestQuoteRequest:
         def __init__(self, symbol_or_symbols):
             self.symbols = symbol_or_symbols
-    
+
     class StockBarsRequest:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     class StockHistoricalDataClient:
         def __init__(self, *args, **kwargs):
             pass
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
-    
+
     class TimeFrame:
         DAY = "day"
         Day = "day"  # Add this for compatibility
@@ -1123,7 +1123,7 @@ except Exception:  # pragma: no cover - optional dependency
     data_mod.requests = requests_mod
     data_mod.historical = historical_mod
     data_mod.timeframe = timeframe_mod
-    
+
     # Trading module
     trading_mod = types.ModuleType("alpaca.trading")
     client_mod = types.ModuleType("alpaca.trading.client")
@@ -1131,32 +1131,32 @@ except Exception:  # pragma: no cover - optional dependency
     trading_models_mod = types.ModuleType("alpaca.trading.models")
     trading_requests_mod = types.ModuleType("alpaca.trading.requests")
     trading_stream_mod = types.ModuleType("alpaca.trading.stream")
-    
+
     class TradingClient:
         def __init__(self, *args, **kwargs):
             pass
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
-    
+
     class OrderSide:
         BUY = "buy"
         SELL = "sell"
-    
+
     class TimeInForce:
         DAY = "day"
-    
+
     class AlpacaOrderClass(str, Enum):
         SIMPLE = "simple"
         MLEG = "mleg"
         BRACKET = "bracket"
         OCO = "oco"
         OTO = "oto"
-    
+
     class QueryOrderStatus(str, Enum):
         OPEN = "open"
         CLOSED = "closed"
         ALL = "all"
-    
+
     class OrderStatus(str, Enum):
         NEW = "new"
         PARTIALLY_FILLED = "partially_filled"
@@ -1175,10 +1175,10 @@ except Exception:  # pragma: no cover - optional dependency
         REJECTED = "rejected"
         SUSPENDED = "suspended"
         CALCULATED = "calculated"
-    
+
     class Order(dict):
         pass
-    
+
     class MarketOrderRequest(dict):
         def __init__(self, symbol, qty, side, time_in_force):
             super().__init__(
@@ -1197,21 +1197,21 @@ except Exception:  # pragma: no cover - optional dependency
                 time_in_force=time_in_force,
                 limit_price=limit_price,
             )
-    
+
     class GetOrdersRequest(dict):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
-    
+
     class GetAssetsRequest(dict):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
-    
+
     class TradingStream:
         def __init__(self, *args, **kwargs):
             pass
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
-    
+
     client_mod.TradingClient = TradingClient
     enums_mod.OrderSide = OrderSide
     enums_mod.TimeInForce = TimeInForce
@@ -1229,13 +1229,13 @@ except Exception:  # pragma: no cover - optional dependency
     trading_mod.models = trading_models_mod
     trading_mod.requests = trading_requests_mod
     trading_mod.stream = trading_stream_mod
-    
+
     # Main alpaca module
     alpaca_main_mod = types.ModuleType("alpaca")
     alpaca_main_mod.common = common_mod
     alpaca_main_mod.data = data_mod
     alpaca_main_mod.trading = trading_mod
-    
+
     sys.modules["alpaca"] = alpaca_main_mod
     sys.modules["alpaca.common"] = common_mod
     sys.modules["alpaca.common.exceptions"] = exceptions_mod
@@ -1274,20 +1274,20 @@ try:
     from bs4 import BeautifulSoup
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class BeautifulSoup:
         def __init__(self, *args, **kwargs):
             pass
-        
+
         def find(self, *args, **kwargs):
             return None
-        
+
         def find_all(self, *args, **kwargs):
             return []
-        
+
         def get_text(self, *args, **kwargs):
             return ""
-    
+
     bs4_mod = types.ModuleType("bs4")
     bs4_mod.BeautifulSoup = BeautifulSoup
     bs4_mod.__file__ = "stub"
@@ -1298,22 +1298,22 @@ try:
     from flask import Flask
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class Flask:
         def __init__(self, *args, **kwargs):
             pass
-        
+
         def route(self, *args, **kwargs):
             def decorator(f):
                 return f
             return decorator
-        
+
         def run(self, *args, **kwargs):
             pass
-        
+
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
-    
+
     flask_mod = types.ModuleType("flask")
     flask_mod.Flask = Flask
     flask_mod.request = types.SimpleNamespace()
@@ -1326,15 +1326,15 @@ try:
     from ratelimit import limits, sleep_and_retry
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     def limits(*args, **kwargs):
         def decorator(f):
             return f
         return decorator
-    
+
     def sleep_and_retry(f):
         return f
-    
+
     ratelimit_mod = types.ModuleType("ratelimit")
     ratelimit_mod.limits = limits
     ratelimit_mod.sleep_and_retry = sleep_and_retry
@@ -1346,20 +1346,20 @@ try:
     pass
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class CircuitBreaker:
         def __init__(self, *args, **kwargs):
             pass
-        
+
         def __call__(self, func):
             return func
-        
+
         def __enter__(self):
             return self
-        
+
         def __exit__(self, *args):
             pass
-    
+
     pybreaker_mod = types.ModuleType("pybreaker")
     pybreaker_mod.CircuitBreaker = CircuitBreaker
     pybreaker_mod.__file__ = "stub"
@@ -1370,7 +1370,7 @@ try:
     from prometheus_client import Counter, Gauge, Histogram, start_http_server
 except Exception:  # pragma: no cover - optional dependency
     import types
-    
+
     class Counter:
         def __init__(self, *args, **kwargs):
             pass
@@ -1378,7 +1378,7 @@ except Exception:  # pragma: no cover - optional dependency
             pass
         def labels(self, *args, **kwargs):
             return self
-    
+
     class Gauge:
         def __init__(self, *args, **kwargs):
             pass
@@ -1386,7 +1386,7 @@ except Exception:  # pragma: no cover - optional dependency
             pass
         def labels(self, *args, **kwargs):
             return self
-    
+
     class Histogram:
         def __init__(self, *args, **kwargs):
             pass
@@ -1400,10 +1400,10 @@ except Exception:  # pragma: no cover - optional dependency
             pass
         def labels(self, *args, **kwargs):
             return self
-    
+
     def start_http_server(*args, **kwargs):
         pass
-    
+
     prometheus_mod = types.ModuleType("prometheus_client")
     prometheus_mod.Counter = Counter
     prometheus_mod.Gauge = Gauge
@@ -1464,7 +1464,7 @@ def reload_utils_module():
 @pytest.fixture(autouse=True)
 def stub_capital_scaling(monkeypatch):
     """Provide simple stubs for heavy capital scaling functions."""
-    
+
     # Add TradingConfig stub to config module
     try:
         import ai_trading.config as config
@@ -1473,15 +1473,15 @@ def stub_capital_scaling(monkeypatch):
             if hasattr(config, '__dict__'):
                 config.TradingConfig = MockTradingConfig
             else:
-                # If config is an instance, set it as an attribute 
+                # If config is an instance, set it as an attribute
                 config.TradingConfig = MockTradingConfig
     except ImportError as e:
-        # AI-AGENT-REF: Log config import failure for debugging 
+        # AI-AGENT-REF: Log config import failure for debugging
         import logging
         logger = logging.getLogger(__name__)
         logger.debug(f"Could not import config module for mocking: {e}")
         pass
-    
+
     try:
         import ai_trading.capital_scaling as cs
         # Only set attributes if they exist
@@ -1495,7 +1495,7 @@ def stub_capital_scaling(monkeypatch):
         logger = logging.getLogger(__name__)
         logger.debug(f"Could not import capital_scaling module for mocking: {e}")
         pass
-    
+
     # Add missing bot_engine functions
     try:
         from ai_trading.core import bot_engine
@@ -1510,8 +1510,8 @@ def stub_capital_scaling(monkeypatch):
     except Exception:
         # If bot_engine import fails due to config issues, skip it for now
         pass
-    
-        
+
+
     yield
 
 
@@ -1658,7 +1658,7 @@ except Exception:
 
 # AI-AGENT-REF: stub pydantic_settings for v1 installs
 try:
-    import pydantic_settings as _pydantic_settings  # noqa: F401
+    import pydantic_settings as _pydantic_settings
 except Exception:
     import types as _types2
     _pydantic_settings = _types2.ModuleType("pydantic_settings")

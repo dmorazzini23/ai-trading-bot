@@ -2,9 +2,9 @@
 Feature engineering public API.
 """
 from .indicators import (
+    compute_atr,
     compute_macd,
     compute_macds,
-    compute_atr,
     compute_vwap,
     ensure_columns,
 )

@@ -814,8 +814,8 @@ class ProductionValidator:
         """Test trading engine functionality."""
         try:
             # Test imports
-            from ai_trading.core import bot_engine  # AI-AGENT-REF: canonical import
             import trade_execution
+            from ai_trading.core import bot_engine  # AI-AGENT-REF: canonical import
             return 95
         except ImportError:
             return 50
@@ -832,8 +832,9 @@ class ProductionValidator:
     def _test_data_processing(self) -> float:
         """Test data processing functionality."""
         try:
-            from ai_trading import data_fetcher
             import indicators
+
+            from ai_trading import data_fetcher
             return 90
         except ImportError:
             return 40

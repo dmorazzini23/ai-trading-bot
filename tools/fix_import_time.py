@@ -1,5 +1,6 @@
 # tools/fix_import_time.py
-import pathlib, re
+import pathlib
+import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXCLUDE = {".venv", ".git", "__pycache__", "tools"}

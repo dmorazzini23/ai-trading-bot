@@ -68,13 +68,13 @@ def test_fractional_kelly_drawdown(monkeypatch, tmp_path):
         unlock=lambda f: None,     # Mock unlock function
         LOCK_EX=1                  # Mock lock constant
     ))
-    
+
     # Mock the open function to return DummyLock instance
     import builtins
     def mock_open(filename, mode='r'):
         return DummyLock()
     monkeypatch.setattr(builtins, 'open', mock_open)
-    
+
     size1 = bot.fractional_kelly_size(ctx, 10000, 50, 2.0, 0.6)
     DummyLock.data = str(10600)
     monkeypatch.setattr(bot.os.path, 'exists', lambda p: True)
