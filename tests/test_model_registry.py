@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+
 from ai_trading.model_registry import ModelRegistry
 
 

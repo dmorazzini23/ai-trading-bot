@@ -1,5 +1,6 @@
 
 import pytest
+
 from ai_trading import config
 
 

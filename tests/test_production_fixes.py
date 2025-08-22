@@ -126,6 +126,7 @@ class TestDataStalenessThresholds(unittest.TestCase):
         """Set up data validation test."""
         try:
             import pandas as pd
+
             from ai_trading.data_validation import (
                 check_data_freshness,
                 get_staleness_threshold,

@@ -1,5 +1,4 @@
 from ai_trading.core import bot_engine  # replace old bot import
-
 from tests.test_bot import _DummyTradingClient
 
 

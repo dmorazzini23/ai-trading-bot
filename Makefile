@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 typecheck
+.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r typecheck
 
 init:
 	python tools/check_python_version.py
@@ -19,21 +19,18 @@ test: contract
 contract:
 	python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
 
-deps-dev:
-	python -m pip install -r requirements.txt -r requirements-dev.txt
-
-test-all:
-	@echo "Installing runtime and dev deps..."
+dev-deps:
+	python -m pip install --upgrade pip setuptools wheel
 	pip install -r requirements.txt
-	@[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
-	pip install ruff mypy pytest pytest-xdist pytest-cov libcst requests types-requests
-	@echo "Running lint-fix-phase3..."
-	$(MAKE) lint-fix-phase3
-	@echo "Running typecheck..."
-	$(MAKE) typecheck || true
-	@echo "Running tests..."
-	pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest-phase3.txt || true
-	@echo "All tasks complete. See artifacts/ for outputs."
+	[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt -c constraints-dev.txt --no-deps || true
+	python -m ruff --version | tee artifacts/ruff-version.txt || true
+	python -m mypy --version | tee artifacts/mypy-version.txt || true
+	python -m pytest --version | tee artifacts/pytest-version.txt || true
+
+test-all: dev-deps
+	       $(MAKE) lint-fix-phase4r
+	       $(MAKE) typecheck
+		       pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest.txt || true
 
 ## Lint (safe-fix subset)
 .PHONY: lint-fix
@@ -46,7 +43,11 @@ lint-fix-phase2:
 
 .PHONY: lint-fix-phase3
 lint-fix-phase3:
-	bash tools/lint_phase3.sh
+	       bash tools/lint_phase3.sh
+
+.PHONY: lint-fix-phase4r
+lint-fix-phase4r:
+	       bash tools/lint_phase4r.sh
 
 .PHONY: lint
 lint:

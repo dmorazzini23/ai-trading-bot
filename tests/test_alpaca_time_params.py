@@ -2,6 +2,7 @@ import datetime as dt
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+
 from ai_trading.alpaca_api import get_bars_df
 
 

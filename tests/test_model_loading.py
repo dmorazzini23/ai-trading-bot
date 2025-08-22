@@ -1,6 +1,7 @@
 import types
 
 import joblib
+
 from ai_trading.core.bot_engine import _load_required_model
 
 

@@ -3,10 +3,10 @@ import sys
 import types
 
 import numpy as np
+from sklearn.dummy import DummyClassifier
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct imports from core module
 from ai_trading.core.bot_engine import _load_ml_model
-from sklearn.dummy import DummyClassifier
 
 # Setup stub for model loader dependency
 stub = types.ModuleType("ai_trading.model_loader")

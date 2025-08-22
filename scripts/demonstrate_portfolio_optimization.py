@@ -17,9 +17,10 @@ os.environ['TESTING'] = '1'
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from ai_trading.strategies.regime_detector import create_regime_detector
 from portfolio_optimizer import PortfolioDecision, create_portfolio_optimizer
 from transaction_cost_calculator import create_transaction_cost_calculator
+
+from ai_trading.strategies.regime_detector import create_regime_detector
 
 
 def demonstrate_portfolio_optimization():

@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 import pandas as pd
+
 from ai_trading.core import bot_engine as be
 
 

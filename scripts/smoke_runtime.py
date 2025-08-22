@@ -108,6 +108,7 @@ def test_empty_dataframe_helper():
     """Test the empty DataFrame helper creates valid indexes."""
     try:
         import pandas as pd
+
         from ai_trading.core.bot_engine import _create_empty_bars_dataframe
 
         # Test the helper function

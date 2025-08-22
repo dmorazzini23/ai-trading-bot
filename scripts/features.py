@@ -2,6 +2,7 @@
 import logging
 
 import pandas as pd
+
 from ai_trading.indicators import atr, ema
 
 logger = logging.getLogger(__name__)

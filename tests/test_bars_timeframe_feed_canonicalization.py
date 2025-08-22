@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+
 from ai_trading.data import bars as bars_mod
 
 # AI-AGENT-REF: test central helpers

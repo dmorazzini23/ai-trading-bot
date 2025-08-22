@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 
 import requests
+
 from ai_trading.net.http import TimeoutSession, build_retrying_session
 
 

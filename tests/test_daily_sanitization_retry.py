@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import ai_trading.core.bot_engine as be_mod
 import pandas as pd
+
+import ai_trading.core.bot_engine as be_mod
 from ai_trading.core.bot_engine import DataFetcher
 
 

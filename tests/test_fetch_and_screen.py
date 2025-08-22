@@ -3,6 +3,7 @@ import sys
 import types
 
 import pandas as pd
+
 from ai_trading import data_fetcher
 from ai_trading.utils.base import health_check
 
