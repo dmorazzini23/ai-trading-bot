@@ -34,7 +34,7 @@ from ai_trading.logging.normalize import (
 
 try:  # AI-AGENT-REF: yfinance fallback for market data
     import yfinance as yf
-except Exception:  # pragma: no cover  # noqa: BLE001
+except ImportError:  # pragma: no cover
     yf = None
 
 from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
@@ -57,17 +57,19 @@ try:  # pragma: no cover
     if yf is not None and hasattr(yf, "set_tz_cache_location"):
         os.makedirs("/tmp/py-yfinance", exist_ok=True)
         yf.set_tz_cache_location("/tmp/py-yfinance")
-except Exception:  # noqa: BLE001
+except OSError:  # AI-AGENT-REF: narrow OS error
     pass
 
 try:  # AI-AGENT-REF: prefer internal HTTP helper when available
     from ai_trading.utils import http as _http
-except Exception:  # pragma: no cover  # noqa: BLE001
+    logger.debug("HTTP_INIT_PRIMARY", extra={"transport": "ai_trading.utils.http"})
+except ImportError:  # pragma: no cover
+    logger.debug("HTTP_INIT_FALLBACK", extra={"transport": "requests"})
     _http = None
 
 try:  # AI-AGENT-REF: fallback to requests if internal helper missing
-    import requests as _requests
-except Exception:  # pragma: no cover  # noqa: BLE001
+    import requests as _requests  # type: ignore
+except ImportError:  # pragma: no cover
     _requests = None
 requests = _requests
 
@@ -226,7 +228,7 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
                 df.columns = df.columns.get_level_values(0)
             else:
                 df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
-        except Exception:  # noqa: BLE001
+        except (AttributeError, IndexError, TypeError):  # AI-AGENT-REF: narrow flatten errors
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
 
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
@@ -239,7 +241,7 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
             tz = df.index.tz
             if tz is not None:
                 df.index = df.index.tz_convert("UTC").tz_localize(None)
-        except Exception:  # noqa: BLE001
+        except (AttributeError, TypeError, ValueError):  # AI-AGENT-REF: narrow tz normalization
             pass
         df = df[~df.index.duplicated(keep="last")].sort_index()
 
@@ -340,7 +342,7 @@ def _fetch_bars(
             if "json" in ctype:
                 try:
                     payload = resp.json()
-                except Exception:  # noqa: BLE001
+                except ValueError:  # AI-AGENT-REF: narrow JSON decode
                     payload = {}
 
         data = []
@@ -395,7 +397,7 @@ def _fetch_bars(
                         feed=_feed,
                         adjustment=adjustment,
                     )
-                except Exception:  # noqa: BLE001
+                except (ValueError, RuntimeError):  # AI-AGENT-REF: narrow fetch fallback errors
                     mdf = pd.DataFrame()
                 if not mdf.empty:
                     try:
@@ -406,10 +408,11 @@ def _fetch_bars(
                             mdf.set_index("timestamp", inplace=True)
                         from ai_trading.data.bars import _resample_minutes_to_daily as _resample_to_daily
                         rdf = _resample_to_daily(mdf)
+                    except (ImportError, ValueError, TypeError, KeyError):  # AI-AGENT-REF: narrow resample errors
+                        mdf = pd.DataFrame()
+                    else:
                         if rdf is not None and not rdf.empty:
                             return rdf
-                    except Exception:  # noqa: BLE001
-                        pass
             _now = datetime.now(UTC)
             _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
             if _empty_should_emit(_key, _now):
@@ -492,7 +495,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 if fh_fetcher is not None
                 else None
             )
-        except Exception as e:  # noqa: BLE001
+        except (FinnhubAPIException, ValueError) as e:
             logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
             df = None
     else:
@@ -503,7 +506,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     if df is None or getattr(df, "empty", True):
         try:
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
-        except Exception as e:  # noqa: BLE001
+        except (ValueError, RuntimeError) as e:
             logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
             df = None
 
@@ -587,7 +590,7 @@ def get_bars_df(
             feed=feed,
             adjustment=adjustment,
         )
-    except Exception as e:  # noqa: BLE001
+    except (ValueError, RuntimeError) as e:
         logger.warning("ALPACA_DAILY_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
         df = None
     if df is None or getattr(df, "empty", True):
