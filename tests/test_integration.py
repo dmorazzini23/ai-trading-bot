@@ -4,8 +4,11 @@ Test Money math integration with execution engine.
 """
 
 import sys
+import pytest
 
 sys.path.append('.')
+
+pytestmark = pytest.mark.integration
 
 def test_money_execution_integration():
     """Test Money math integration with execution engine."""

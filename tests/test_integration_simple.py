@@ -5,11 +5,14 @@ Tests the core functionality without complex mocking.
 """
 
 import os
+import pytest
 
 os.environ["TESTING"] = "1"
 
 from ai_trading import config
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
+
+pytestmark = pytest.mark.integration
 
 
 def test_integration():

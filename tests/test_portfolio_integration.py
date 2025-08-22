@@ -7,6 +7,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from tests.mocks.validate_critical_fix_mocks import MockContext
 
 try:

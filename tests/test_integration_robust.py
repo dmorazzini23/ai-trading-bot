@@ -19,6 +19,8 @@ except Exception:
     sys.modules["pandas"].Series = MagicMock()
     sys.modules["pandas"].concat = MagicMock()
 
+pytestmark = pytest.mark.integration
+
 try:
     import numpy  # type: ignore  # noqa: F401
 # noqa: BLE001 TODO: narrow exception

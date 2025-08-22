@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
+.PHONY: init test lint verify test-all test-core test-integration contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
 
 init:
 	python tools/check_python_version.py
@@ -30,11 +30,20 @@ dev-deps:
 	@python -c "import xdist;print(xdist.__version__)"                     | tee artifacts/versions/xdist.txt
 	@python -c "import execnet;print(execnet.__version__)"                 | tee artifacts/versions/execnet.txt  # AI-AGENT-REF: record dev tool versions
 
-test-all:
-	@$(MAKE) dev-deps
-	@$(MAKE) lint-fix-phase4r
-	@mypy ai_trading trade_execution | tee artifacts/mypy.txt || true
-	@pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest.txt || true
+test-core:
+	pytest tests -m "not integration and not slow" -n auto --disable-warnings --maxfail=0 --junitxml=artifacts/junit.xml -q | tee artifacts/pytest-core.txt
+
+test-integration:
+	pytest tests -m "integration" --disable-warnings --maxfail=0 -q | tee artifacts/pytest-integration.txt
+
+test-all: dev-deps
+	ruff --version | tee artifacts/ruff-version.txt
+	ruff check . --select F401,F841,UP,DTZ,T201 --ignore E501 | tee artifacts/ruff.txt || true
+	grep -E '^[^:]+:[0-9]+:[0-9]+: [A-Z]+[0-9]{3}' artifacts/ruff.txt | wc -l > artifacts/ruff-count.txt
+	python -m mypy --version | tee artifacts/mypy-version.txt
+	python -m mypy ai_trading trade_execution | tee artifacts/mypy.txt || true
+	make test-core
+	make test-integration || true
 
 ## Lint (safe-fix subset)
 .PHONY: lint-fix
