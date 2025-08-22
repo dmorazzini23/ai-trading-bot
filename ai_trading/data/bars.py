@@ -31,6 +31,7 @@ from ai_trading.logging.normalize import (
 from ai_trading.utils.time import now_utc
 
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
+from dataclasses import dataclass
 
 _log = get_logger(__name__)
 
@@ -57,17 +58,21 @@ def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_ut
         pass
 
 # Light, local Alpaca adapters so this module never needs bot_engine
+
+
+@dataclass
+class StockBarsRequest:  # AI-AGENT-REF: minimal request holder
+    symbol_or_symbols: Any
+    timeframe: Any
+    start: Any | None = None
+    end: Any | None = None
+    limit: int | None = None
+    feed: Any | None = None
+
+
 try:
-    from alpaca.data.requests import StockBarsRequest  # type: ignore
-except (ValueError, TypeError):  # pragma: no cover
-
-    class StockBarsRequest:  # type: ignore
-        pass
-
-
-try:
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # type: ignore
-except (ValueError, TypeError):  # pragma: no cover
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit  # type: ignore
+except (ValueError, TypeError, ImportError):  # pragma: no cover
 
     class TimeFrame:  # type: ignore
         def __init__(self, n: int, unit: Any) -> None:

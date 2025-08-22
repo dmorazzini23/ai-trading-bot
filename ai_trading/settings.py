@@ -178,6 +178,14 @@ class Settings(BaseSettings):
     dollar_risk_limit: float = Field(
         0.05, env="DOLLAR_RISK_LIMIT"
     )  # AI-AGENT-REF: per-position risk
+    max_position_size: float | None = Field(
+        default=None,
+        description=(
+            "Absolute max dollars per position. If None, derive from equity * "
+            "capital_cap; if equity unknown, use static fallback."
+        ),
+        alias="MAX_POSITION_SIZE",
+    )  # AI-AGENT-REF: optional max position cap
     """Single source of truth for runtime configuration."""
 
     # loop control

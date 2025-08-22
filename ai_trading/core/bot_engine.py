@@ -6,8 +6,9 @@ import importlib
 import importlib.util
 import os
 import sys
-from typing import Dict, Iterable
+from typing import Any, Dict, Iterable
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
+from functools import cached_property
 
 from json import JSONDecodeError
 # Safe 'requests' import with stub + RequestException binding
@@ -52,7 +53,13 @@ from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
 )
+from ai_trading.config.management import derive_cap_from_settings
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
+
+try:  # AI-AGENT-REF: optional Alpaca trading client
+    from alpaca.trading.client import TradingClient  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    TradingClient = None  # type: ignore
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
     warnings.filterwarnings("default", category=DeprecationWarning)
@@ -289,6 +296,36 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
         pipeline = None  # type: ignore  # AI-AGENT-REF: fallback when pipeline absent
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
+
+
+class BotEngine:
+    """Minimal engine exposing memoized Alpaca clients."""
+
+    def __init__(self) -> None:
+        self.logger = get_logger(__name__)
+
+    @cached_property
+    def trading_client(self):
+        """alpaca-py TradingClient for order/trade ops."""
+        cls = TradingClient  # type: ignore[misc]
+        if cls is None:  # pragma: no cover - optional dependency
+            raise RuntimeError("alpaca-py not installed")
+        return cls(
+            api_key=os.environ["ALPACA_API_KEY"],
+            secret_key=os.environ["ALPACA_SECRET_KEY"],
+            paper="paper" in os.environ.get("ALPACA_BASE_URL", "").lower(),
+        )
+
+    @cached_property
+    def data_client(self):
+        """alpaca-trade-api REST for historical/market data."""
+        from alpaca_trade_api import REST  # type: ignore
+
+        return REST(
+            key_id=os.environ["ALPACA_API_KEY"],
+            secret_key=os.environ["ALPACA_SECRET_KEY"],
+            base_url=os.environ["ALPACA_BASE_URL"],
+        )
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
 _finbert_logged = False
@@ -1390,7 +1427,7 @@ class APIErrorStub(Exception):
 
 
 # Assign lightweight stubs for Alpaca SDK types; keep TimeFrame separate for constants.
-StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = (
+Quote = StockBarsRequest = StockLatestQuoteRequest = (
     TradingClient
 ) = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
 APIError = APIErrorStub
@@ -2421,6 +2458,20 @@ def _fetch_universe_bars_chunked(
     for i in range(0, len(symbols), batch_size):
         chunk = symbols[i : i + batch_size]
         out.update(_fetch_universe_bars(ctx, chunk, timeframe, start, end, feed))
+    total_symbols = len(out)
+    try:
+        bars_loaded = sum(len(v) for v in out.values())
+    except Exception:
+        bars_loaded = 0
+    first_symbol = next(iter(out.keys()), None)
+    _log.info(
+        "FETCH_SUMMARY",
+        extra={
+            "total_symbols": total_symbols,
+            "bars_loaded": bars_loaded,
+            "first_symbol": first_symbol,
+        },
+    )
     return out
 
 
@@ -2503,6 +2554,20 @@ def _fetch_intraday_bars_chunked(
                 if v is not None and not getattr(v, "empty", False)
             }
         )
+    total_symbols = len(out)
+    try:
+        bars_loaded = sum(len(v) for v in out.values())
+    except Exception:
+        bars_loaded = 0
+    first_symbol = next(iter(out.keys()), None)
+    _log.info(
+        "FETCH_SUMMARY",
+        extra={
+            "total_symbols": total_symbols,
+            "bars_loaded": bars_loaded,
+            "first_symbol": first_symbol,
+        },
+    )
     return out
 
 
@@ -2802,9 +2867,8 @@ LIMIT_ORDER_SLIPPAGE = params.get(
         getattr(state.mode_obj.config, "limit_order_slippage", 0.001),
     ),
 )
-MAX_POSITION_SIZE = getattr(
-    S, "max_position_size", getattr(state.mode_obj.config, "max_position_size", 1.0)
-)
+_capital_cap = getattr(S, "capital_cap", getattr(state.mode_obj.config, "capital_cap", 0.04))
+MAX_POSITION_SIZE = derive_cap_from_settings(S, None, 8000.0, _capital_cap)
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get(
     "POV_SLICE_PCT",
@@ -3529,9 +3593,12 @@ class DataFetcher:
             _log.error(f"Missing Alpaca credentials for {symbol}")
             return None
 
-        client = StockHistoricalDataClient(
-            api_key=api_key,
-            secret_key=api_secret,
+        from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+
+        client = AlpacaREST(
+            api_key,
+            api_secret,
+            get_settings().alpaca_base_url,
         )
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
@@ -3800,9 +3867,12 @@ class DataFetcher:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
             )
-        client = StockHistoricalDataClient(
-            api_key=api_key,
-            secret_key=api_secret,
+        from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+
+        client = AlpacaREST(
+            api_key,
+            api_secret,
+            get_settings().alpaca_base_url,
         )
 
         try:
@@ -4047,9 +4117,12 @@ def prefetch_daily_data(
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
         )
-    client = StockHistoricalDataClient(
-        api_key=alpaca_key,
-        secret_key=alpaca_secret,
+    from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+
+    client = AlpacaREST(
+        alpaca_key,
+        alpaca_secret,
+        get_settings().alpaca_base_url,
     )
 
     try:
@@ -5022,7 +5095,7 @@ class BotContext:
     # Trading client using the new Alpaca SDK
     api: AlpacaBroker
     # Separate market data client
-    data_client: StockHistoricalDataClient
+    data_client: Any
     data_fetcher: DataFetcher
     signal_manager: SignalManager
     trade_logger: TradeLogger
@@ -5315,8 +5388,8 @@ def _initialize_alpaca_clients():
         return
     # Lazy-import SDK only when needed
     try:
-        from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.trading.client import TradingClient
+        from alpaca_trade_api import REST as AlpacaREST
 
         _log.debug("Successfully imported Alpaca SDK classes")
     except (
@@ -5332,14 +5405,12 @@ def _initialize_alpaca_clients():
         _log.error(
             "alpaca_trade_api import failed; cannot initialize clients", exc_info=e
         )
-        # In test environments, don't raise - just skip initialization
         if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
             _log.info(
                 "Test environment detected, skipping Alpaca client initialization"
             )
             return
         raise
-    # Initialize proper alpaca-py clients (do NOT use legacy REST for data)
     is_paper = base_url.find("paper") != -1  # Determine if paper trading based on URL
     raw_client = TradingClient(
         api_key=key,
@@ -5347,9 +5418,10 @@ def _initialize_alpaca_clients():
         paper=is_paper,
     )  # AI-AGENT-REF: drop base_url parameter
     trading_client = AlpacaBroker(raw_client)
-    data_client = StockHistoricalDataClient(
-        api_key=key,
+    data_client = AlpacaREST(
+        key_id=key,
         secret_key=secret,
+        base_url=base_url,
     )
     _log.info("ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()}))
     stream = None  # initialize stream lazily elsewhere if/when required

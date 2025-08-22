@@ -16,8 +16,8 @@ from ai_trading.logging import get_logger
 from ai_trading.utils.optdeps import module_ok  # AI-AGENT-REF: optional import helper
 
 try:  # AI-AGENT-REF: optional Alpaca dependency
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-except (ValueError, TypeError):  # pragma: no cover - handled gracefully  # noqa: BLE001
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
+except (ValueError, TypeError, ImportError):  # pragma: no cover - handled gracefully  # noqa: BLE001
     TimeFrame = None  # type: ignore
     TimeFrameUnit = types.SimpleNamespace(  # type: ignore
         Minute="Minute", Hour="Hour", Day="Day", Week="Week", Month="Month"
@@ -84,9 +84,9 @@ def _get(obj, key, default=None):
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
-        from alpaca.data.timeframe import TimeFrame
-    except (ValueError, TypeError):
-        TimeFrame = None
+        from alpaca_trade_api.rest import TimeFrame  # type: ignore
+    except (ValueError, TypeError, ImportError):
+        TimeFrame = None  # type: ignore
     if isinstance(tf_raw, str):
         s = tf_raw.strip()
         return s if s[:1].isdigit() else f"1{s.capitalize()}"
