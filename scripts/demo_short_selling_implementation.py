@@ -140,7 +140,7 @@ def demonstrate_meta_learning():
     logging.info("\n=== Meta-Learning Graceful Degradation Demonstration ===")
 
     try:
-        from ai_trading.bot_engine import load_global_signal_performance
+        from ai_trading.core.bot_engine import load_global_signal_performance
 
         # Test with no trade history (new deployment scenario)
         with patch('os.path.exists', return_value=False):

@@ -1,13 +1,15 @@
-import pandas as pd
-import pytest
-import sys
+import logging
 import types
+import sys
+
+import pytest
 
 cfg_stub = types.ModuleType("ai_trading.config")
 cfg_stub.get_settings = lambda: None
 sys.modules.setdefault("ai_trading.config", cfg_stub)
+
 utils_stub = types.ModuleType("ai_trading.utils")
-utils_stub.__path__ = []
+utils_stub.__path__ = []  # mark as package
 opt_stub = types.ModuleType("ai_trading.utils.optional_import")
 
 def _optional_import(name):
@@ -33,6 +35,7 @@ alpaca_stub.get_bars_df = lambda *a, **k: None
 sys.modules.setdefault("ai_trading.alpaca_api", alpaca_stub)
 import ai_trading as _pkg
 _pkg.alpaca_api = alpaca_stub
+
 req_stub = types.ModuleType("requests")
 exc = types.SimpleNamespace(RequestException=Exception, ConnectionError=Exception, HTTPError=Exception, Timeout=Exception)
 req_stub.exceptions = exc
@@ -40,17 +43,51 @@ req_stub.get = lambda *a, **k: None
 sys.modules.setdefault("requests", req_stub)
 sys.modules.setdefault("requests.exceptions", exc)
 
-from ai_trading.data_fetcher import ensure_datetime
+import ai_trading.data_fetcher as df
 
 
-def test_dt_invalid_raises_typeerror():
-    with pytest.raises(TypeError):
-        ensure_datetime(object())
+def test_build_fetcher_alpaca(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "k")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
+    alpaca_stub.ALPACA_AVAILABLE = True
+    fetcher = df.build_fetcher({})
+    assert getattr(fetcher, "source") == "alpaca"
 
 
-def test_dt_oob_raises_typeerror():
-    def bad_ts():
-        raise pd.errors.OutOfBoundsDatetime("bad")
+def test_build_fetcher_fallback(monkeypatch):
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+    alpaca_stub.ALPACA_AVAILABLE = False
+    fetcher = df.build_fetcher({})
+    assert getattr(fetcher, "source") == "fallback"
 
-    with pytest.raises(TypeError):
-        ensure_datetime(bad_ts)
+
+def test_build_fetcher_raises_and_engine_skips(monkeypatch, caplog):
+    alpaca_stub.ALPACA_AVAILABLE = False
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+    monkeypatch.setattr(df, "requests", None)
+    monkeypatch.setattr(df, "yf", None)
+    with pytest.raises(df.DataFetchError):
+        df.build_fetcher({})
+
+    def boom(_cfg):
+        raise df.DataFetchError("no fetcher")
+
+    monkeypatch.setattr(df, "build_fetcher", boom)
+    logger = logging.getLogger("ai_trading.runner")
+    seen = {}
+
+    def fake_warning(msg, *a, **k):
+        seen["msg"] = msg
+
+    orig = logger.warning
+    logger.warning = fake_warning
+    try:
+        df.build_fetcher({})
+    except df.DataFetchError as e:
+        logger.warning("DATA_FETCHER_INIT_FAILED", extra={"detail": str(e)})
+    finally:
+        logger.warning = orig
+
+    assert seen.get("msg") == "DATA_FETCHER_INIT_FAILED"

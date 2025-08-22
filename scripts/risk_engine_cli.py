@@ -1249,7 +1249,7 @@ def apply_trailing_atr_stop(
                     ) and not ctx.risk_engine.position_exists(ctx.api, symbol):
                         logger.info("No position to sell for %s, skipping.", symbol)
                         return
-                    from ai_trading.bot_engine import send_exit_order
+                    from ai_trading.core.bot_engine import send_exit_order
 
                     send_exit_order(ctx, symbol, abs(int(qty)), price, "atr_stop")
                 except (ValueError, TypeError) as exc:  # pragma: no cover - best effort

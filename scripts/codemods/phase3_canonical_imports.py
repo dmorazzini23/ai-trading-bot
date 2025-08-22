@@ -13,7 +13,7 @@ from libcst.metadata import PositionProvider, QualifiedNameProvider, ScopeProvid
 
 # Map legacy module names (previous root-level duplicates) to canonical targets.
 LEGACY_TO_CANON = {
-    "bot_engine":       "ai_trading.bot_engine",
+    "bot_engine":       "ai_trading.core.bot_engine",
     "data_fetcher":     "ai_trading.data_fetcher",
     "data_validation":  "ai_trading.data_validation",
     "indicators":       "ai_trading.indicators",
@@ -42,7 +42,7 @@ class CanonicalizeImports(cst.CSTTransformer):
             if new != updated.name.value:
                 return updated.with_changes(name=cst.parse_module(new).body[0].body[0].names[0].name)
         elif isinstance(updated.name, cst.Attribute):
-            # import bot_engine.something -> ai_trading.bot_engine.something
+            # import bot_engine.something -> ai_trading.core.bot_engine.something
             base = updated.name.value
             code = cst.Module([]).code_for_node(base)
             root = code.split(".")[0]
