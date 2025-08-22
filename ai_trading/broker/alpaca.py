@@ -8,6 +8,7 @@ from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from ai_trading.logging import get_logger
 from ai_trading.utils.optional_import import optional_import
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
+from .alpaca_credentials import resolve_alpaca_credentials  # AI-AGENT-REF: explicit creds
 
 try:  # AI-AGENT-REF: Stage 2.1 optional requests import
     from requests.exceptions import HTTPError
@@ -311,11 +312,21 @@ class AlpacaBroker:
         return self._call_with_retry("submit_order", lambda: self._api.submit_order(**kwargs))
 
 
-def initialize(*args, **kwargs) -> AlpacaBroker | None:
-    """Create an :class:`AlpacaBroker` if the SDK is available."""
+def initialize(
+    api_key: str | None = None,
+    secret_key: str | None = None,
+    base_url: str | None = None,
+    **kwargs,
+) -> AlpacaBroker | None:
+    """Create an :class:`AlpacaBroker` if the SDK is available."""  # AI-AGENT-REF: enforce explicit creds
     if not (ALPACA_AVAILABLE and TradingClient):
         return None
-    client = TradingClient(*args, **kwargs)
+    if api_key is None or secret_key is None or base_url is None:
+        creds = resolve_alpaca_credentials()
+        api_key = api_key or creds.API_KEY
+        secret_key = secret_key or creds.SECRET_KEY
+        base_url = base_url or creds.BASE_URL
+    client = TradingClient(api_key=api_key, secret_key=secret_key, base_url=base_url, **kwargs)
     return AlpacaBroker(client)
 
 

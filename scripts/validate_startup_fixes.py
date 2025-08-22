@@ -9,7 +9,7 @@ have been implemented correctly:
 
 1. Defer Alpaca validation to runtime (no sys.exit during import)
 2. Load .env before constructing settings, lazy-import the engine  
-3. Accept both ALPACA_* and APCA_* credentials, with safe redacted logging
+3. Accept ALPACA_* credentials with safe redacted logging
 4. Fix UTC timestamp format (no double "Z")
 5. Add utilities and tests so this regression can't recur
 """
@@ -26,7 +26,7 @@ def test_no_import_time_crashes():
     logging.info("1. Testing no import-time crashes...")
 
     # Clear credentials
-    for key in ['ALPACA_API_KEY', 'APCA_API_KEY_ID', 'ALPACA_SECRET_KEY', 'APCA_API_SECRET_KEY']:
+    for key in ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY']:
         os.environ.pop(key, None)
 
     try:
@@ -47,13 +47,12 @@ def test_no_import_time_crashes():
         return False
 
 
-def test_dual_credential_schema():
-    """Test both ALPACA_* and APCA_* credential schemas work."""
-    logging.info("2. Testing dual credential schema support...")
+def test_alpaca_credential_schema():
+    """Test ALPACA_* credential schema works."""  # AI-AGENT-REF: drop legacy schema
+    logging.info("2. Testing Alpaca credential schema support...")
 
     from ai_trading.config.management import _resolve_alpaca_env
 
-    # Test ALPACA_* schema
     os.environ.clear()
     os.environ['ALPACA_API_KEY'] = 'alpaca_test_key'
     os.environ['ALPACA_SECRET_KEY'] = 'alpaca_test_secret'
@@ -63,27 +62,6 @@ def test_dual_credential_schema():
         logging.info("   ✗ ALPACA_* schema failed")
         return False
     logging.info("   ✓ ALPACA_* schema works")
-
-    # Test APCA_* schema
-    os.environ.clear()
-    os.environ['APCA_API_KEY_ID'] = 'apca_test_key'
-    os.environ['APCA_API_SECRET_KEY'] = 'apca_test_secret'
-
-    api_key, secret_key, base_url = _resolve_alpaca_env()
-    if api_key != 'apca_test_key' or secret_key != 'apca_test_secret':
-        logging.info("   ✗ APCA_* schema failed")
-        return False
-    logging.info("   ✓ APCA_* schema works")
-
-    # Test precedence (ALPACA takes priority)
-    os.environ['ALPACA_API_KEY'] = 'alpaca_priority'
-    os.environ['APCA_API_KEY_ID'] = 'apca_fallback'
-
-    api_key, secret_key, base_url = _resolve_alpaca_env()
-    if api_key != 'alpaca_priority':
-        logging.info("   ✗ ALPACA_* precedence failed")
-        return False
-    logging.info("   ✓ ALPACA_* precedence works")
 
     return True
 
@@ -267,7 +245,7 @@ def main():
     if passed == total:
         logging.info("\n🎉 ALL TESTS PASSED!")
         logging.info("✓ Service no longer crashes at import")
-        logging.info("✓ Bot starts with either ALPACA_* or APCA_* credentials")
+        logging.info("✓ Bot starts with ALPACA_* credentials")
         logging.info("✓ Credentials are handled securely with redacted logging")
         logging.info("✓ UTC timestamps have single trailing Z (no 'ZZ')")
         logging.info("✓ Lazy imports prevent import-time side effects")
