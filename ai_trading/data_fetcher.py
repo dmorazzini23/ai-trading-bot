@@ -37,10 +37,10 @@ from ai_trading.logging.normalize import (
     normalize_extra as _norm_extra,  # AI-AGENT-REF: canonicalize logging extras
 )
 from ai_trading.utils.optional_import import optional_import
+from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
 
 yf = optional_import("yfinance")
-
-from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
+YF_AVAILABLE = yf is not None
 
 # ---------------------------------------------------------------------------
 # Backwards compatibility wrappers around central canonicalizers
@@ -177,29 +177,31 @@ class FinnhubAPIException(Exception):
         super().__init__(str(status_code))
 
 
-def build_fetcher(config: Any) -> Any:
-    """Return an initialized market data fetcher or raise ``DataFetchError``."""
+# NOTE: Import DataFetcher lazily inside build_fetcher() to avoid circular import.
+def build_fetcher(config: Any):
+    """Return a market data fetcher with safe fallbacks."""  # AI-AGENT-REF
+
     from ai_trading.alpaca_api import ALPACA_AVAILABLE
-    try:
-        from ai_trading.core.bot_engine import DataFetcher
-    except Exception:  # pragma: no cover - lightweight fallback for tests
-        class DataFetcher:  # type: ignore
-            def get_daily_df(self, *a, **k):
-                return None
+    from ai_trading.core.bot_engine import DataFetcher, DataFetchError  # noqa: F401
 
-            def get_minute_df(self, *a, **k):
-                return None
+    apca_ok = bool(os.getenv("APCA_API_KEY_ID") and os.getenv("APCA_API_SECRET_KEY"))
+    alpaca_ok = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
+    has_keys = apca_ok or alpaca_ok
 
-    has_keys = os.getenv("APCA_API_KEY_ID") and os.getenv("APCA_API_SECRET_KEY")
     if ALPACA_AVAILABLE and has_keys:
-        f = DataFetcher()
-        setattr(f, "source", "alpaca")
-        return f
-    if yf is not None or requests is not None:
-        f = DataFetcher()
-        setattr(f, "source", "fallback")
-        return f
-    raise DataFetchError("cannot build data fetcher")
+        logger.info("DATA_FETCHER_BUILD", extra={"source": "alpaca"})
+        return DataFetcher()
+    elif YF_AVAILABLE and (requests is not None):
+        logger.info("DATA_FETCHER_BUILD", extra={"source": "yfinance"})
+        return DataFetcher()
+    elif requests is not None:
+        logger.warning(
+            "DATA_FETCHER_BUILD_FALLBACK", extra={"source": "yahoo-requests"}
+        )
+        return DataFetcher()
+    # Last resort: build a fetcher that yields empty data without network access
+    logger.error("DATA_FETCHER_UNAVAILABLE", extra={"reason": "no deps"})
+    return DataFetcher()
 
 
 # ---------------------------------------------------------------------------

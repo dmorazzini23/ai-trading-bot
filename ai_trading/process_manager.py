@@ -1,18 +1,70 @@
+"""Production ProcessManager (migrated from scripts/process_manager.py)."""
+
 from __future__ import annotations
 
+import atexit
+import os
+import pathlib
+import signal
+import sys
 
-# AI-AGENT-REF: test facade for legacy process manager imports
+import fcntl
+
+
 class ProcessManager:
-    """Minimal process manager for tests."""
+    """Ensure only one ai-trading instance runs at a time."""  # AI-AGENT-REF
 
-    def acquire_process_lock(self, path: str) -> bool:  # pragma: no cover
+    def __init__(
+        self, lock_name: str = "ai-trading", dir_env: str = "AI_TRADING_RUNTIME_DIR"
+    ) -> None:
+        runtime_dir = pathlib.Path(os.getenv(dir_env, "/tmp")).resolve()
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._lockfile = runtime_dir / f"{lock_name}.lock"
+        self._fd: int | None = None
+
+    def lockfile_path(self) -> str:
+        """Return absolute path to the process lock file."""  # AI-AGENT-REF
+
+        return str(self._lockfile)
+
+    def ensure_single_instance(self) -> bool:
+        """Acquire lock or return False if another instance is running."""  # AI-AGENT-REF
+
+        self._fd = os.open(self._lockfile, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.write(self._fd, str(os.getpid()).encode("utf-8"))
+            os.fsync(self._fd)
+        except OSError:
+            return False
+        atexit.register(self._cleanup)
+        signal.signal(signal.SIGTERM, self._sigexit)
+        signal.signal(signal.SIGINT, self._sigexit)
         return True
 
-    def find_python_processes(self) -> list[dict]:  # pragma: no cover
-        return []
+    def _sigexit(self, *_args) -> None:
+        """Handle termination signals and release lock."""  # AI-AGENT-REF
 
-    def _is_trading_process(self, proc: dict) -> bool:  # pragma: no cover
+        self._cleanup()
+        sys.exit(0)
+
+    def _cleanup(self) -> None:
+        """Release file lock and remove lockfile."""  # AI-AGENT-REF
+
+        try:
+            if self._fd is not None:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                os.close(self._fd)
+            if self._lockfile.exists():
+                self._lockfile.unlink(missing_ok=True)
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
+
+    def __enter__(self) -> ProcessManager:
+        if not self.ensure_single_instance():
+            raise SystemExit("Another ai-trading instance is already running.")
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        self._cleanup()
         return False
-
-    def check_multiple_instances(self) -> dict:  # pragma: no cover
-        return {"total_instances": 1, "multiple_instances": False, "recommendations": []}

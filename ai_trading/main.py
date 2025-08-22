@@ -1,4 +1,4 @@
-# ruff: noqa: I001
+# ruff: noqa: I001, E402
 from __future__ import annotations
 
 import argparse
@@ -166,11 +166,16 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                 # AI-AGENT-REF: update only when field exists
                 if hasattr(tcfg, "max_position_size"):
                     tcfg.max_position_size = float(fallback)
-                elif getattr(getattr(tcfg, "position_sizing", None), "max_position_size", None) is not None:
-                    tcfg.position_sizing.max_position_size = float(fallback)
                 else:
                     import os  # AI-AGENT-REF: runtime env override
                     os.environ["AI_TRADING_MAX_POSITION_SIZE"] = str(float(fallback))
+                    logger.warning(
+                        "CONFIG_AUTOFIX_FALLBACK_APPLIED_VIA_ENV",
+                        extra={
+                            "field": "max_position_size",
+                            "fallback": float(fallback),
+                        },
+                    )
             except Exception as e:  # AI-AGENT-REF: log env fallback issues
                 logger.warning(
                     "CONFIG_AUTOFIX_FALLBACK_APPLIED_VIA_ENV",
