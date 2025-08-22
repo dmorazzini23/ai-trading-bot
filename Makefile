@@ -24,12 +24,46 @@ dev-deps:
 	python -m pip install -r requirements.txt -c constraints.txt
 	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt --no-deps -c constraints.txt; fi
 	python -m pip install -e .
-.PHONY: test-core test-int test-all test-core-seq
+.PHONY: test-core test-int test-all test-core-seq test-core-1p test-collect test-debug
 
 test-core:
-	@mkdir -p artifacts
-	# AI-AGENT-REF: load xdist and asyncio when autoload disabled
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -p xdist -p pytest_asyncio -n auto -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core.txt
+        @mkdir -p artifacts
+        # AI-AGENT-REF: load xdist, asyncio, timeout when autoload disabled
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+                -p xdist -p pytest_asyncio -p pytest_timeout \
+                -n auto \
+                -m "not integration and not slow" \
+                -q --disable-warnings \
+                | tee artifacts/pytest-core.txt
+
+.PHONY: test-core-1p
+test-core-1p:
+        @mkdir -p artifacts
+        # AI-AGENT-REF: single process verbose debug
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+                -p pytest_asyncio -p pytest_timeout -p no:xdist \
+                -m "not integration and not slow" \
+                -vv -s --maxfail=1 \
+                | tee artifacts/pytest-core-1p.txt
+
+.PHONY: test-collect
+test-collect:
+        @mkdir -p artifacts
+        # AI-AGENT-REF: collect-only run
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+                -p pytest_asyncio -p pytest_timeout -p no:xdist \
+                -m "not integration and not slow" \
+                --collect-only -q \
+                | tee artifacts/pytest-collect.txt
+
+.PHONY: test-debug
+test-debug:
+        @mkdir -p artifacts
+        # AI-AGENT-REF: trace active plugins/config
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+                -p xdist -p pytest_asyncio -p pytest_timeout \
+                --trace-config -q \
+                | tee artifacts/pytest-trace-config.txt
 
 test-int:
 	@mkdir -p artifacts
