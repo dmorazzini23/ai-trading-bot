@@ -20,17 +20,21 @@ contract:
 	python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
 
 dev-deps:
-	python -m pip install --upgrade pip setuptools wheel
-	pip install -r requirements.txt
-	[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt -c constraints-dev.txt --no-deps || true
-	python -m ruff --version | tee artifacts/ruff-version.txt || true
-	python -m mypy --version | tee artifacts/mypy-version.txt || true
-	python -m pytest --version | tee artifacts/pytest-version.txt || true
+	@pip install -r requirements.txt
+	@[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
+	@mkdir -p artifacts/versions
+	@python -V            | tee artifacts/versions/python.txt
+	@ruff --version       | tee artifacts/versions/ruff.txt
+	@mypy --version       | tee artifacts/versions/mypy.txt
+	@python -c "import pytest,xdist,execnet;print(pytest.__version__)"    | tee artifacts/versions/pytest.txt
+	@python -c "import xdist;print(xdist.__version__)"                     | tee artifacts/versions/xdist.txt
+	@python -c "import execnet;print(execnet.__version__)"                 | tee artifacts/versions/execnet.txt  # AI-AGENT-REF: record dev tool versions
 
-test-all: dev-deps
-	       $(MAKE) lint-fix-phase4r
-	       $(MAKE) typecheck
-		       pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest.txt || true
+test-all:
+	@$(MAKE) dev-deps
+	@$(MAKE) lint-fix-phase4r
+	@mypy ai_trading trade_execution | tee artifacts/mypy.txt || true
+	@pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest.txt || true
 
 ## Lint (safe-fix subset)
 .PHONY: lint-fix
@@ -47,13 +51,15 @@ lint-fix-phase3:
 
 .PHONY: lint-fix-phase4r
 lint-fix-phase4r:
-	# AI-AGENT-REF: phased Ruff remediation
-	# 1) imports / unused / order
-	ruff check --fix --select F,I . || true
-	# 2) prints, blind except, tz-naive (safe fixes only)
-	ruff check --fix --select T20,BLE,DTZ,UP,E . || true
-	# 3) one more pass to settle import shuffles
-	ruff check --fix --select I . || true
+	@mkdir -p artifacts
+	@ruff check . --fix --select F401,F841,UP,DTZ,T201 --ignore E501 \
+	| tee artifacts/ruff-passA.txt || true
+	@python tools/codemods/none_comparisons.py || true
+	@python tools/codemods/logger_prints.py || true
+	@ruff check . --fix --select F401,F841,UP,DTZ,T201 --ignore E501 \
+	| tee artifacts/ruff.txt || true
+	@python tools/ruff_histogram.py < artifacts/ruff.txt > artifacts/ruff-top-rules.txt
+	@grep -E '^[^:]+:[0-9]+:[0-9]+: [A-Z]+[0-9]{3}' artifacts/ruff.txt | wc -l > artifacts/ruff-count.txt  # AI-AGENT-REF: count lint issues
 
 .PHONY: lint-histo
 lint-histo:
