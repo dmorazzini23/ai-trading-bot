@@ -1,6 +1,7 @@
+import numpy as np
+
 import ai_trading.rl_trading.inference as inf
 import ai_trading.rl_trading.train as train_mod
-import numpy as np
 
 
 def test_rl_train_and_infer(monkeypatch, tmp_path):

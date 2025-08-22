@@ -1,6 +1,7 @@
 """Tests for moving average crossover strategy."""
 
 import pandas as pd
+
 from ai_trading.strategies.moving_average_crossover import (
     MovingAverageCrossoverStrategy,
 )

@@ -2,8 +2,9 @@ import threading
 import time
 import types
 
-import ai_trading.core.bot_engine as be
 import pandas as pd
+
+import ai_trading.core.bot_engine as be
 
 
 def _mk_df():

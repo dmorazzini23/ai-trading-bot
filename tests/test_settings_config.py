@@ -1,9 +1,10 @@
 import pytest
+from pydantic import ValidationError
+
 from ai_trading.config.settings import get_settings
 from ai_trading.core.bot_engine import _current_qty
 from ai_trading.main import logger
 from ai_trading.settings import Settings
-from pydantic import ValidationError
 
 
 def test_settings_defaults(monkeypatch):

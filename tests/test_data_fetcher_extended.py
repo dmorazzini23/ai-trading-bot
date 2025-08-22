@@ -3,6 +3,7 @@ import types
 
 import pandas as pd
 import pytest
+
 from ai_trading import data_fetcher
 
 

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytz  # noqa: F401
+
 from ai_trading.core.runtime import build_runtime
 from ai_trading.data.bars import safe_get_stock_bars
 

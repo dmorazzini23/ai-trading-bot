@@ -4,6 +4,7 @@ import sys
 import types
 
 import pytest
+
 from ai_trading.utils.optional_import import optional_import
 
 

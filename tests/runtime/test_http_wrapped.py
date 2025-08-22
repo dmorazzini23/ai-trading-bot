@@ -1,4 +1,5 @@
 import requests
+
 from ai_trading.utils import http
 from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout
 

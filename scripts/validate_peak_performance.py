@@ -84,6 +84,7 @@ def test_basic_functionality():
     try:
         # Test determinism
         import numpy as np
+
         from ai_trading.utils.determinism import set_random_seeds
 
         set_random_seeds(42)

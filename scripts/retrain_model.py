@@ -13,6 +13,7 @@ import numpy as np
 
 # AI-AGENT-REF: graceful pandas fallback for testing
 import pandas as pd
+
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 

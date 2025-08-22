@@ -11,9 +11,10 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from ai_trading.utils.base import _get_alpaca_rest
 from alpaca_trade_api import TimeFrame
 from dotenv import load_dotenv
+
+from ai_trading.utils.base import _get_alpaca_rest
 
 
 def main() -> None:

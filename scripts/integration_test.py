@@ -15,8 +15,9 @@ def test_model_registry():
     """Test model registry functionality."""
     try:
         import numpy as np
-        from ai_trading.model_registry import ModelRegistry
         from sklearn.linear_model import LinearRegression
+
+        from ai_trading.model_registry import ModelRegistry
 
         with tempfile.TemporaryDirectory() as tmpdir:
             registry = ModelRegistry(base_path=tmpdir)

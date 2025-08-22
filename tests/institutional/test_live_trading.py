@@ -285,7 +285,6 @@ class TestTradingBotIntegration:
         try:
             # Import key modules
             from ai_trading.execution.live_trading import AlpacaExecutionEngine
-
             from tests.institutional.framework import TradingScenarioRunner
 
             # Create and initialize components

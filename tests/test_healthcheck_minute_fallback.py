@@ -1,8 +1,9 @@
 import logging
 from types import SimpleNamespace
 
-import ai_trading.data.bars as data_bars
 import pandas as pd
+
+import ai_trading.data.bars as data_bars
 from ai_trading import data_fetcher
 from ai_trading.core import bot_engine
 

@@ -1,7 +1,6 @@
 import types
 
 from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
-
 from tests.mocks.alpaca_mocks import MockClient
 
 

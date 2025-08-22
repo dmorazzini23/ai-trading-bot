@@ -15,7 +15,6 @@ import pandas as pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 from ai_trading.config.management import TradingConfig, reload_env
-
 from scripts.retrain import prepare_indicators
 
 CONFIG = TradingConfig()
