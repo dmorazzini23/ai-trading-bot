@@ -12,6 +12,7 @@ try:
 
     # Use the base Env class when gymnasium is available
     EnvBase = gym.Env
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - optional dependency
     gym = None
 

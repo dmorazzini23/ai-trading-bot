@@ -105,7 +105,7 @@ class CorporateActionRegistry:
 
                 self.logger.info(f"Loaded {len(self._actions)} symbols with corporate actions")
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error loading corporate actions: {e}")
                 self._actions = {}
 
@@ -129,7 +129,7 @@ class CorporateActionRegistry:
 
             self.logger.debug(f"Saved corporate actions to {actions_file}")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error saving corporate actions: {e}")
 
     def add_action(

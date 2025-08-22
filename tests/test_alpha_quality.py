@@ -35,7 +35,7 @@ def test_fixed_horizon_return():
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 
@@ -61,7 +61,7 @@ def test_no_leakage_validation():
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 
@@ -88,7 +88,7 @@ def test_slippage_calculation():
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 
@@ -127,7 +127,7 @@ def test_rl_reward_penalties():
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 
@@ -176,7 +176,7 @@ def test_model_registry():
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 
@@ -217,7 +217,7 @@ def test_walk_forward_monotone_timeline():
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 
@@ -255,13 +255,13 @@ def test_feature_pipeline_no_leakage():
         try:
             validate_pipeline_no_leakage(pipeline, X_train, X_test)
             # The test should pass (no obvious leakage)
-        except Exception:
+        except (ValueError, TypeError):
             # If validation fails due to missing dependencies, that's OK
             pass
 
     except ImportError:
         pass
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 

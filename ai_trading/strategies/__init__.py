@@ -6,6 +6,7 @@ from .momentum import MomentumStrategy
 
 try:  # AI-AGENT-REF: lazy meta-learning import
     from .meta_learning import MetaLearning
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover
     MetaLearning = None  # type: ignore
 from .base import StrategySignal as TradeSignal

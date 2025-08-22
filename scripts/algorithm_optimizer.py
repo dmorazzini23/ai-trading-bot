@@ -225,7 +225,7 @@ class AlgorithmOptimizer:
             self.market_regimes.append(conditions)
             return conditions
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error detecting market regime: {e}")
             # Return default conditions on error
             return MarketConditions(
@@ -323,7 +323,7 @@ class AlgorithmOptimizer:
             self.logger.info(f"Parameters optimized for {market_conditions.regime.value} regime")
             return optimized
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error optimizing parameters: {e}")
             return self.current_parameters
 
@@ -511,7 +511,7 @@ class AlgorithmOptimizer:
 
                 return final_shares
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error calculating position size: {e}")
                 return 0
 
@@ -558,7 +558,7 @@ class AlgorithmOptimizer:
 
             return kelly_fraction
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error calculating Kelly fraction: {e}")
             return 0.02  # Conservative default
             # Default to minimum position
@@ -614,7 +614,7 @@ class AlgorithmOptimizer:
 
             return round(stop_price, 2)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error calculating stop loss: {e}")
             # Default stop loss
             if side.upper() == 'BUY':
@@ -638,7 +638,7 @@ class AlgorithmOptimizer:
 
             return round(take_profit_price, 2)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error calculating take profit: {e}")
             # Default take profit
             if side.upper() == 'BUY':
@@ -666,7 +666,7 @@ class AlgorithmOptimizer:
             assert test_size <= 100, "Position size should be reasonable for test account"
             validation_results['tests_passed'] += 1
             validation_results['tests_run'].append('position_sizing')
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             validation_results['tests_failed'] += 1
             validation_results['issues_found'].append(f"Position sizing error: {e}")
 
@@ -676,7 +676,7 @@ class AlgorithmOptimizer:
             assert 90.0 <= stop <= 99.0, f"Stop loss {stop} should be reasonable"
             validation_results['tests_passed'] += 1
             validation_results['tests_run'].append('stop_loss_calculation')
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             validation_results['tests_failed'] += 1
             validation_results['issues_found'].append(f"Stop loss calculation error: {e}")
 
@@ -686,7 +686,7 @@ class AlgorithmOptimizer:
             assert profit > 100.0, f"Take profit {profit} should be above entry"
             validation_results['tests_passed'] += 1
             validation_results['tests_run'].append('take_profit_calculation')
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             validation_results['tests_failed'] += 1
             validation_results['issues_found'].append(f"Take profit calculation error: {e}")
 
@@ -699,7 +699,7 @@ class AlgorithmOptimizer:
             assert hasattr(optimized, 'position_size_multiplier'), "Optimized parameters missing attributes"
             validation_results['tests_passed'] += 1
             validation_results['tests_run'].append('parameter_optimization')
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             validation_results['tests_failed'] += 1
             validation_results['issues_found'].append(f"Parameter optimization error: {e}")
 

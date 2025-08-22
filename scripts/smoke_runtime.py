@@ -31,6 +31,7 @@ def test_pandas_multiindex_usage():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -51,6 +52,7 @@ def test_lazy_bot_context_params():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -94,12 +96,14 @@ def test_prepare_run_signature():
                 return False
             else:
                 pass
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             # Other exceptions are fine, we just want to test params access
             pass
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -108,7 +112,6 @@ def test_empty_dataframe_helper():
     """Test the empty DataFrame helper creates valid indexes."""
     try:
         import pandas as pd
-
         from ai_trading.core.bot_engine import _create_empty_bars_dataframe
 
         # Test the helper function
@@ -123,6 +126,7 @@ def test_empty_dataframe_helper():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -144,6 +148,7 @@ def main():
                 passed += 1
             else:
                 pass
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

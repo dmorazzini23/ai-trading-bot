@@ -4,7 +4,6 @@ import sys
 import types
 
 import pytest
-
 from ai_trading.utils.optional_import import optional_import
 
 
@@ -50,7 +49,7 @@ def MockYfinance(monkeypatch):
 
 try:
     from dotenv import load_dotenv
-except Exception:
+except (ValueError, TypeError):
     def load_dotenv(*a, **k):
         pass
     import types
@@ -62,7 +61,7 @@ except Exception:
 # AI-AGENT-REF: Add hypothesis stub early
 try:
     from hypothesis import HealthCheck, given, settings
-except Exception:
+except (ValueError, TypeError):
     import types
 
     def given(**strategy_kwargs):
@@ -115,7 +114,7 @@ except Exception:
 # AI-AGENT-REF: Add portalocker stub early
 try:
     pass
-except Exception:
+except (ValueError, TypeError):
     import types
     class LockStub:
         def __init__(self, *args, **kwargs):
@@ -135,7 +134,7 @@ except Exception:
 # AI-AGENT-REF: Add schedule stub early
 try:
     pass
-except Exception:
+except (ValueError, TypeError):
     import types
     class ScheduleStub:
         def __init__(self):
@@ -154,7 +153,7 @@ except Exception:
 # AI-AGENT-REF: Add gymnasium stub for RL tests
 try:
     pass
-except Exception:
+except (ValueError, TypeError):
     import types
 
     class Space:
@@ -202,7 +201,7 @@ except Exception:
 # AI-AGENT-REF: Add hmmlearn stub
 try:
     pass
-except Exception:
+except (ValueError, TypeError):
     import types
     hmmlearn_mod = types.ModuleType("hmmlearn")
     hmm_mod = types.ModuleType("hmmlearn.hmm")
@@ -224,7 +223,7 @@ except Exception:
 # AI-AGENT-REF: Add finnhub stub
 try:
     pass
-except Exception:
+except (ValueError, TypeError):
     import types
 
     class FinnhubAPIException(Exception):
@@ -248,7 +247,7 @@ except Exception:
 # AI-AGENT-REF: Add torch stub for RL tests
 try:
     pass
-except Exception:
+except (ValueError, TypeError):
     import types
 
     class Parameter:
@@ -343,7 +342,7 @@ try:
         stop_after_attempt,
         wait_exponential,
     )
-except Exception:
+except (ValueError, TypeError):
     import types
 
     def retry(*args, **kwargs):
@@ -403,7 +402,7 @@ import pytest
 # AI-AGENT-REF: Add numpy stub before any imports that might need it
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class ArrayStub(list):
@@ -506,7 +505,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     import urllib3
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
     urllib3 = types.ModuleType("urllib3")
     urllib3.__file__ = "stub"
@@ -515,7 +514,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add pandas stub for strategy allocator tests
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     # Create pandas stub module
@@ -863,7 +862,7 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["pd"] = pandas_mod
 try:
     pass  # ensure real package available
-except Exception:  # pragma: no cover - allow missing in test env
+except (ValueError, TypeError):  # pragma: no cover - allow missing in test env
     req_mod = types.ModuleType("requests")
     exc_mod = types.ModuleType("requests.exceptions")
     exc_mod.RequestException = Exception
@@ -876,7 +875,7 @@ except Exception:  # pragma: no cover - allow missing in test env
 # AI-AGENT-REF: Add additional dependency stubs for tests
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
     ta_mod = types.ModuleType("pandas_ta")
     ta_mod.rsi = lambda *a, **k: [50] * 14  # Return dummy RSI values
@@ -894,7 +893,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     def jit_stub(*args, **kwargs):
@@ -910,7 +909,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class BaseSettingsStub:
@@ -1011,7 +1010,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class FieldStub:
@@ -1043,7 +1042,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add alpaca_trade_api stubs
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     alpaca_mod = types.ModuleType("alpaca_trade_api")
@@ -1069,7 +1068,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add alpaca-py SDK stubs for newer API
 try:
     from alpaca.common.exceptions import APIError
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
     from enum import Enum
 
@@ -1254,7 +1253,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add other missing dependencies
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
     psutil_mod = types.ModuleType("psutil")
     psutil_mod.__file__ = "stub"
@@ -1262,7 +1261,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
     tzlocal_mod = types.ModuleType("tzlocal")
     tzlocal_mod.get_localzone = lambda: None
@@ -1272,7 +1271,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add BeautifulSoup stub
 try:
     from bs4 import BeautifulSoup
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class BeautifulSoup:
@@ -1296,7 +1295,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add Flask stub
 try:
     from flask import Flask
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class Flask:
@@ -1324,7 +1323,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add ratelimit stub
 try:
     from ratelimit import limits, sleep_and_retry
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     def limits(*args, **kwargs):
@@ -1344,7 +1343,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add pybreaker stub
 try:
     pass
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class CircuitBreaker:
@@ -1368,7 +1367,7 @@ except Exception:  # pragma: no cover - optional dependency
 # AI-AGENT-REF: Add prometheus_client stub
 try:
     from prometheus_client import Counter, Gauge, Histogram, start_http_server
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     import types
 
     class Counter:
@@ -1507,7 +1506,7 @@ def stub_capital_scaling(monkeypatch):
         logger = logging.getLogger(__name__)
         logger.debug(f"Could not import bot_engine for mocking: {e}")
         pass
-    except Exception:
+    except (ValueError, TypeError):
         # If bot_engine import fails due to config issues, skip it for now
         pass
 
@@ -1635,7 +1634,7 @@ _install_test_config_stub()
 # AI-AGENT-REF: stub pydantic AliasChoices for v1 installs
 try:
     from pydantic import AliasChoices as _AliasChoices  # noqa: F401
-except Exception:
+except (ValueError, TypeError):
     import pydantic as _pydantic
 
     class AliasChoices(str):  # minimal placeholder
@@ -1645,7 +1644,7 @@ except Exception:
 
 try:
     from pydantic import model_validator as _model_validator  # noqa: F401
-except Exception:
+except (ValueError, TypeError):
     import pydantic as _pydantic
 
     def model_validator(*args, **kwargs):
@@ -1659,7 +1658,7 @@ except Exception:
 # AI-AGENT-REF: stub pydantic_settings for v1 installs
 try:
     import pydantic_settings as _pydantic_settings
-except Exception:
+except (ValueError, TypeError):
     import types as _types2
     _pydantic_settings = _types2.ModuleType("pydantic_settings")
 

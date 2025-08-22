@@ -28,7 +28,7 @@ def test_start_rebalancer(monkeypatch):
                 # Execute the target once instead of starting infinite loop
                 try:
                     target()
-                except Exception:
+                except (ValueError, TypeError):
                     # Catch any exceptions from the loop to prevent infinite execution
                     pass
         return T()

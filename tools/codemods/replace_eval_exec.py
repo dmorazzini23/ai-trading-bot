@@ -43,6 +43,7 @@ def main():
             if changed:
                 p.write_text(new, encoding="utf-8")
                 changed_files += 1
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

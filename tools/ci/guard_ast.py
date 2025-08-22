@@ -64,7 +64,7 @@ def scan_dir(root: Path) -> int:
     for py in root.rglob("*.py"):
         try:
             mod = cst.parse_module(py.read_text(encoding="utf-8"))
-        except Exception:
+        except (ValueError, TypeError):
             continue
         mod.visit(Visitor(py))
     return 1 if FAILURES else 0

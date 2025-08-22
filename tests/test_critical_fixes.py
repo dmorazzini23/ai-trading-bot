@@ -217,7 +217,7 @@ def test_audit_permission_handling(mock_logger):
     try:
         log_trade("AAPL", 10, "buy", 150.0, datetime.now(UTC), "test")
         # If it succeeds, that's fine - we're mainly testing the error handling path exists
-    except Exception:
+    except (ValueError, TypeError):
         # If it fails due to missing dependencies, that's also acceptable for this test
         pass
 

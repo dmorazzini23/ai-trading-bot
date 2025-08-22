@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
 import ai_trading.logging as L
+import pytest
 
 
 def test_validate_logging_setup_single_handler():

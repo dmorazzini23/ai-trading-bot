@@ -42,7 +42,7 @@ def set_random_seeds(seed: int = 42) -> None:
     try:
         import importlib
         lgb = importlib.import_module("lightgbm")
-    except Exception:  # pragma: no cover - optional dep
+    except (ValueError, TypeError):  # pragma: no cover - optional dep
         from ai_trading.thirdparty import lightgbm_compat as lgb  # noqa: F401
     # Set environment variables for additional determinism
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -79,7 +79,7 @@ def hash_data(data: Any) -> str:
 
         return hashlib.sha256(content).hexdigest()[:16]  # First 16 chars
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.warning(f"Failed to hash data: {e}")
         return "unknown"
 
@@ -119,7 +119,7 @@ def hash_features(feature_data) -> str:
 
         return hash_data(hash_content)
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.warning(f"Failed to hash features: {e}")
         return "feature_hash_error"
 
@@ -207,7 +207,7 @@ class ModelSpecification:
                 # Check if spec is locked
                 self._is_locked = self._spec.get("locked", False)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Failed to load specification: {e}")
                 self._spec = {}
 
@@ -223,7 +223,7 @@ class ModelSpecification:
 
             self.logger.info(f"Saved model specification to {self.spec_file}")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to save specification: {e}")
 
     def update_spec(

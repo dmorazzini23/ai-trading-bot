@@ -176,7 +176,7 @@ class TestLiveTradingBot:
         try:
             execution_engine.submit_market_order("AAPL", "invalid_side", 100)
             # Should handle gracefully
-        except Exception:
+        except (ValueError, TypeError):
             # Error handling is working
             pass
 
@@ -285,6 +285,7 @@ class TestTradingBotIntegration:
         try:
             # Import key modules
             from ai_trading.execution.live_trading import AlpacaExecutionEngine
+
             from tests.institutional.framework import TradingScenarioRunner
 
             # Create and initialize components

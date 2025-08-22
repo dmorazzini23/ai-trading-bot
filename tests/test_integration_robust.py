@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:
     pass  # type: ignore
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     sys.modules["pandas"] = types.ModuleType("pandas")
     sys.modules["pandas"].DataFrame = MagicMock()
@@ -20,6 +21,7 @@ except Exception:
 
 try:
     import numpy  # type: ignore  # noqa: F401
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     sys.modules["numpy"] = types.ModuleType("numpy")
     sys.modules["numpy"].array = MagicMock()
@@ -30,6 +32,7 @@ except Exception:
 
 try:
     import pandas_ta  # type: ignore  # noqa: F401
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     sys.modules["pandas_ta"] = types.ModuleType("pandas_ta")
 if "pandas_ta" in sys.modules:
@@ -43,6 +46,7 @@ if "pandas_ta" in sys.modules:
 
 try:
     import pandas_market_calendars  # type: ignore  # noqa: F401
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     sys.modules["pandas_market_calendars"] = types.ModuleType("pandas_market_calendars")
 if not hasattr(sys.modules["pandas_market_calendars"], "get_calendar"):
@@ -422,6 +426,7 @@ def test_bot_main_signal_nan(monkeypatch):
         monkeypatch.setattr(bot, "main", lambda: None)
         try:
             bot.main()
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pytest.fail("Bot should handle NaN signal gracefully")
 

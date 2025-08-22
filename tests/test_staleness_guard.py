@@ -38,7 +38,7 @@ class TestStalenessGuard:
         try:
             _ensure_data_fresh(mock_fetcher, ["AAPL"], max_age_seconds=300)
             success = True
-        except Exception:
+        except (ValueError, TypeError):
             success = False
 
         assert success, "Should not raise exception for fresh data"
@@ -188,7 +188,7 @@ class TestStalenessGuard:
             try:
                 _ensure_data_fresh(mock_fetcher, ["AAPL"], max_age_seconds=300)
                 success = True
-            except Exception:
+            except (ValueError, TypeError):
                 success = False
             assert success, "Should handle both timezone-aware and naive timestamps"
 

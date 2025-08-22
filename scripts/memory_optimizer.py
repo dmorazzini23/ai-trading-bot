@@ -182,7 +182,7 @@ class MemoryOptimizer:
 
             self.logger.info(f"Cleaned up {collected} objects and {len(dead_refs)} dead references")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error during circular reference cleanup: {e}")
 
     def optimize_pandas_memory(self):
@@ -198,7 +198,7 @@ class MemoryOptimizer:
                 gc.collect()
 
                 self.logger.info("Pandas memory optimization applied")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.warning(f"Could not optimize pandas memory: {e}")
 
     def memory_monitoring_loop(self):
@@ -225,7 +225,7 @@ class MemoryOptimizer:
                 # Wait for next monitoring cycle
                 self.stop_monitoring.wait(30)  # Check every 30 seconds
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in memory monitoring: {e}")
                 self.stop_monitoring.wait(60)  # Wait longer on error
 

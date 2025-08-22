@@ -186,7 +186,7 @@ def load_hyperparams(file_path: str = "hyperparams.json") -> HyperparametersSche
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in hyperparams file {file_path}: {e}")
         return HyperparametersSchema()
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error loading hyperparams from {file_path}: {e}")
         return HyperparametersSchema()
 
@@ -227,7 +227,7 @@ def save_hyperparams(
         logger.info(f"Saved hyperparams to {file_path}")
         return True
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error saving hyperparams to {file_path}: {e}")
         return False
 
@@ -304,12 +304,12 @@ def validate_hyperparams_file(file_path: str = "hyperparams.json") -> dict[str, 
             try:
                 HyperparametersSchema(**data)
                 report["valid_schema"] = True
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 report["errors"].append(f"Schema validation failed: {e}")
 
         except json.JSONDecodeError as e:
             report["errors"].append(f"Invalid JSON: {e}")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             report["errors"].append(f"File read error: {e}")
     else:
         report["warnings"].append(f"File not found: {file_path}")

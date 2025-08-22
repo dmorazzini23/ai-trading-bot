@@ -77,6 +77,7 @@ def test_logging_formatter_imports():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -140,6 +141,7 @@ def main():
         try:
             if test_func():
                 passed += 1
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

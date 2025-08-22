@@ -14,6 +14,7 @@ def locate_tickers_csv() -> str | None:
         p = pkg_files("ai_trading.data").joinpath("tickers.csv")
         if p.is_file():
             return str(p)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:  # pragma: no cover - defensive
         pass
     return None

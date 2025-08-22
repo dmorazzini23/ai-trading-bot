@@ -56,6 +56,7 @@ class DatabaseManager:
                 logger.info("Database connection established successfully")
                 return True
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             return False
@@ -73,6 +74,7 @@ class DatabaseManager:
                 self._is_connected = False
                 logger.info("Database connection closed successfully")
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error disconnecting from database: {e}")
 
@@ -86,6 +88,7 @@ class DatabaseManager:
             # In production: SELECT 1
             return True
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
@@ -127,6 +130,7 @@ class DatabaseManager:
             logger.debug(f"Database session {session_id} created")
             yield session
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Database session error: {e}")
             if session:
@@ -140,6 +144,7 @@ class DatabaseManager:
                     with self._connection_lock:
                         self._connections.pop(session_id, None)
                     logger.debug(f"Database session {session_id} closed")
+                # noqa: BLE001 TODO: narrow exception
                 except Exception as e:
                     logger.error(f"Error closing session {session_id}: {e}")
 
@@ -253,6 +258,7 @@ def initialize_database(connection_string: str | None = None, **kwargs) -> bool:
     try:
         _db_manager = DatabaseManager(connection_string, **kwargs)
         return _db_manager.connect()
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         return False

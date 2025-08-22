@@ -14,7 +14,7 @@ from typing import Any
 
 try:
     from ai_trading.logging import logger  # project logger
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
     import logging
 
     logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class ModelRegistry:
             return {}
         try:
             return json.loads(self.index_file.read_text(encoding="utf-8"))
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.warning("Failed to load registry index: %s", e)
             return {}
 
@@ -63,7 +63,7 @@ class ModelRegistry:
         """Store model + metadata and return deterministic ID."""
         try:
             blob = pickle.dumps(model)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             raise RuntimeError(f"Model not picklable: {e}") from e
 
         # ID ties content to dataset fingerprint for reproducibility

@@ -121,7 +121,7 @@ class ParameterValidator:
 
             return validation_result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error during parameter validation: {e}")
             validation_result["overall_status"] = "ERROR"
             validation_result["violations"].append(f"Validation error: {e}")
@@ -182,7 +182,7 @@ class ParameterValidator:
 
             return result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error validating parameter change for {parameter_name}: {e}")
             result["status"] = "ERROR"
             result["violations"].append(f"Validation error: {e}")

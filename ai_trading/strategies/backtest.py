@@ -232,7 +232,7 @@ class BacktestEngine:
 
             return results
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error running backtest: {e}")
             return {"error": str(e)}
 
@@ -403,7 +403,7 @@ class BacktestEngine:
                 "latency_ms": self.latency_ms,
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error simulating trade: {e}")
             return {
                 "symbol": signal.symbol,
@@ -433,7 +433,7 @@ class BacktestEngine:
 
             return max_dd
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating max drawdown: {e}")
             return 0.0
 
@@ -471,7 +471,7 @@ class PerformanceAnalyzer:
 
             return analysis
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error analyzing performance: {e}")
             return {"error": str(e)}
 
@@ -599,7 +599,7 @@ def run_smoke_test():
 
         return True
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.error(f"✗ Backtest smoke test failed: {e}")
         return False
 

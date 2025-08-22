@@ -68,7 +68,7 @@ def enhance_existing_execution_engine():
                     'reason': 'execute_order returned None'
                 })
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             # Log error
             log_execution_phase(correlation_id, ExecutionPhase.ORDER_REJECTED, {
                 'error': str(e)
@@ -257,7 +257,7 @@ def complete_integration_example():
                 # Run health checks
                 self.run_health_checks()
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logging.info(f"Trading cycle error: {e}")
                 # Your existing error handling
 

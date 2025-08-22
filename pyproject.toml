@@ -24,16 +24,33 @@ target-version = ["py311"]
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
-extend-exclude = ["artifacts", "dist", "build", ".venv", ".tox"]
+src = ["ai_trading", "trade_execution", "tests", "tools"]
+extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts"]
 
+# Focus on safe mechanical families only.
 [tool.ruff.lint]
-# Safe, mechanical buckets only
-select = ["E", "F", "I", "UP", "DTZ", "T201", "BLE", "PL"]
-ignore = ["E501"]  # keep line-length ignored repo-wide
+select = [
+  "E",   # pycodestyle (excluding E501 via ignore)
+  "F",   # pyflakes
+  "I",   # import order
+  "UP",  # pyupgrade (safe modernizations)
+  "BLE", # blind exception
+  "DTZ", # timezone-naive datetime
+  "T20", # print statements
+  "PL",  # pylint-inspired (we’ll manage risk via ignores below)
+]
 
+# Global risk trims
+ignore = [
+  "E501",    # line length
+  "PLR0913", # too-many-args (noise for strategies)
+  "PLR0912", # too-many-branches
+  "PLR0915", # too-many-statements
+]
+
+# Allow prints in tests/tools; allow re-export F401 in package __init__ files.
 [tool.ruff.lint.per-file-ignores]
-"ai_trading/**/__init__.py" = ["F401"]
-"trade_execution/**/__init__.py" = ["F401"]
-"ai_trading/**/reexports.py" = ["F401"]
-"ai_trading/scripts/**" = ["T201"]
+"tests/**/*" = ["T201", "F401", "F841", "PLR2004", "E402", "F821", "BLE001", "DTZ011"]
+"tools/**/*" = ["T201", "E701", "BLE001"]
+"scripts/**/*" = ["E402", "PLR2004"]
+"**/__init__.py" = ["F401", "F403"]

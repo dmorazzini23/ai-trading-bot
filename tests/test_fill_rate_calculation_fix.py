@@ -16,6 +16,7 @@ os.environ.update({
 
 try:
     from ai_trading import ExecutionEngine
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - optional component
     pytest.skip("ExecutionEngine not available", allow_module_level=True)
 

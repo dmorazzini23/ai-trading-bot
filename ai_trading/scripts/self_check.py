@@ -23,6 +23,7 @@ def main() -> None:
             "start": start,
             "end": end,
         }
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         raise SystemExit(1)
 

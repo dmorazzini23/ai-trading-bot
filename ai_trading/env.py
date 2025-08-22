@@ -46,5 +46,6 @@ def ensure_dotenv_loaded() -> None:
                 key=f"env_loaded:{loaded_from}",
                 extra={"dotenv_path": loaded_from},
             )
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         pass

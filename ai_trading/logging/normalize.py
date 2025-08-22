@@ -12,6 +12,7 @@ from typing import Any
 def _as_lower_str(value: Any) -> str:
     try:
         return str(value).strip().lower()
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return ""
 

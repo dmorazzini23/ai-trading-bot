@@ -105,6 +105,7 @@ class TradingBotValidator:
         """Ensure cleanup on garbage collection."""
         try:
             self.cleanup()
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

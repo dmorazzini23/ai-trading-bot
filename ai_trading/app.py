@@ -17,6 +17,7 @@ def create_app():
         # Lazy imports to avoid heavy side effects at module import time
         try:
             from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok  # type: ignore
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             sdk_ok = False
         try:
@@ -27,6 +28,7 @@ def create_app():
 
             key, secret, base_url = _resolve_alpaca_env()
             paper = bool(base_url and ("paper" in base_url))
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             trading_client, key, secret, base_url, paper = None, None, None, "", False
         shadow = bool(

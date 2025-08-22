@@ -66,6 +66,7 @@ class TestConfigEnvParsing:
                 # rather than importing the full module
                 result = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")
                 assert result is True
+            # noqa: BLE001 TODO: narrow exception
             except Exception as e:
                 # If import fails due to missing env vars, that's expected in test environment
                 # Just ensure our logic works

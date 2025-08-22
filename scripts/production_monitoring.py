@@ -205,7 +205,7 @@ class ProductionMonitor:
                 # Log performance summary
                 self._log_performance_summary(metrics)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in monitoring loop: {e}")
 
             time.sleep(interval_seconds)
@@ -235,7 +235,7 @@ class ProductionMonitor:
                 daily_pnl=0.0       # To be populated by trading system
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error collecting metrics: {e}")
             # Return zero metrics on error
             return PerformanceMetrics(
@@ -307,7 +307,7 @@ class ProductionMonitor:
                             'message': result.message
                         })
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Health check {name} failed: {e}")
                 self.last_health_results[name] = HealthCheckResult(
                     service=name,

@@ -4,9 +4,8 @@ import tempfile
 
 import numpy as np
 import pytest
-from sklearn.linear_model import LinearRegression
-
 from ai_trading.model_registry import ModelRegistry
+from sklearn.linear_model import LinearRegression
 
 
 def test_model_registry_roundtrip():

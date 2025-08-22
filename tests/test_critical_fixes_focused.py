@@ -65,7 +65,7 @@ class TestCriticalFixes(unittest.TestCase):
             for signal in result:
                 self.assertTrue(0 <= signal.confidence <= 1,
                               f"Signal confidence {signal.confidence} is not in [0,1] range")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.fail(f"Confidence normalization failed: {e}")
 
     def test_sector_classification_fallback(self):

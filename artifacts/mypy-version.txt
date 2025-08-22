@@ -1,1 +1,1 @@
-mypy 1.17.1 (compiled: yes)
+mypy 1.11.1 (compiled: yes)

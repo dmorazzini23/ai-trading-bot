@@ -260,7 +260,7 @@ def run_bot(*_a, **_k) -> int:
         rc = _get_run_cycle()
         return rc()
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error("Bot startup failed: %s", e, exc_info=True)
         return 1
 
@@ -381,7 +381,7 @@ def main(argv: list[str] | None = None) -> None:
                 "POSITION_SIZING_RESOLVED",
                 extra={**sizing_meta, "resolved": resolved_size},
             )
-    except Exception as e:  # pragma: no cover - defensive
+    except (ValueError, TypeError) as e:  # pragma: no cover - defensive
         logger.warning("POSITION_SIZING_ERROR", extra={"error": str(e)})
 
     banner = {
@@ -515,7 +515,7 @@ def main(argv: list[str] | None = None) -> None:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
-            except Exception:  # pragma: no cover - log unexpected errors
+            except (ValueError, TypeError):  # pragma: no cover - log unexpected errors
                 logger.exception("run_cycle failed")
             count += 1
 

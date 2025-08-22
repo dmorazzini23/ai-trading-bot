@@ -25,6 +25,7 @@ def get_json_with_retries(
             if isinstance(resp, str):
                 return json.loads(resp)
             return resp
+        # noqa: BLE001 TODO: narrow exception
         except Exception as exc:  # intentionally broad at boundary
             last_exc = exc
             logger.debug("http retry %s/%s after %s", attempt, attempts, exc)

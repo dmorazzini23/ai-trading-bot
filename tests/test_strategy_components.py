@@ -87,6 +87,7 @@ def test_multi_timeframe_analyzer():
 
     except ImportError:
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -132,6 +133,7 @@ def test_regime_detector():
 
     except ImportError:
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -182,6 +184,7 @@ def test_integrated_strategy_system():
 
     except ImportError:
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -232,6 +235,7 @@ def test_strategy_performance_scenarios():
 
     except ImportError:
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -273,5 +277,6 @@ if __name__ == "__main__":
         sys.exit(exit_code)
     except KeyboardInterrupt:
         sys.exit(1)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         sys.exit(1)

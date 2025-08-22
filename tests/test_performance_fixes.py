@@ -115,6 +115,7 @@ def test_latency_tracking():
     # Test latency calculation (this will fail on API calls, but that's expected in test)
     try:
         engine._handle_order_result("AAPL", "buy", mock_order, 150.00, 100, start_time)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         # Expected to fail on API calls in test environment
         pass
@@ -136,6 +137,7 @@ def test_comprehensive_fixes():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         import traceback
         traceback.print_exc()

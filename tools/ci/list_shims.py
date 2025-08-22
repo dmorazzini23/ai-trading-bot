@@ -20,6 +20,7 @@ def main():
     for p in ROOT.rglob("*.py"):
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             continue
 

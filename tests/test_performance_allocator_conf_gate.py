@@ -1,7 +1,6 @@
 import logging
 
 import pytest
-
 from ai_trading.config.management import TradingConfig
 from ai_trading.config.settings import get_settings
 from ai_trading.strategies.performance_allocator import (

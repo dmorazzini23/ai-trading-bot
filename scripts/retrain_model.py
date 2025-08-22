@@ -13,7 +13,6 @@ import numpy as np
 
 # AI-AGENT-REF: graceful pandas fallback for testing
 import pandas as pd
-
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 
@@ -50,7 +49,7 @@ from sklearn.preprocessing import StandardScaler
 
 try:
     import optuna
-except Exception as e:  # pragma: no cover - optional dependency
+except (ValueError, TypeError) as e:  # pragma: no cover - optional dependency
     logger.warning("Optuna import failed: %s", e)
     optuna = None
 
@@ -80,7 +79,7 @@ def get_git_hash() -> str:
             .decode()
             .strip()
         )
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.debug("git hash lookup failed: %s", e)
         return "unknown"
 
@@ -120,7 +119,7 @@ def load_reward_by_band(n: int = 200) -> dict:
         return {}
     try:
         df = pd.read_csv(REWARD_LOG_FILE).tail(n)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Failed to read reward log: %s", e)
         return {}
     if df.empty or "band" not in df.columns:
@@ -183,7 +182,7 @@ def fetch_sentiment(symbol: str) -> float:
 
         return max(-1.0, min(1.0, sentiment_score / max(len(articles), 1)))
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.warning("Failed to fetch sentiment for %s: %s", symbol, e)
         return 0.0
 
@@ -211,7 +210,7 @@ def detect_regime(df: pd.DataFrame) -> str:
             return "bear"
         else:
             return "chop"
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.warning("Regime detection failed: %s", e)
         return "chop"
 
@@ -279,7 +278,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["kc_lower"] = kc.iloc[:, 0].astype(float)
         df["kc_mid"] = kc.iloc[:, 1].astype(float)
         df["kc_upper"] = kc.iloc[:, 2].astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("KC indicator failed: %s", e)
 
     df["atr_band_upper"] = np.nan
@@ -298,7 +297,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         df["macd"] = macd["MACD_12_26_9"].astype(float)
         df["macds"] = macd["MACDs_12_26_9"].astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("MACD calculation failed: %s", e)
 
     # Additional indicators for richer ML features
@@ -310,7 +309,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["bb_upper"] = bb["BBU_20_2.0"].astype(float)
         df["bb_lower"] = bb["BBL_20_2.0"].astype(float)
         df["bb_percent"] = bb["BBP_20_2.0"].astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Bollinger Bands failed: %s", e)
 
     df["adx"] = np.nan
@@ -321,7 +320,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["adx"] = adx["ADX_14"].astype(float)
         df["dmp"] = adx["DMP_14"].astype(float)
         df["dmn"] = adx["DMN_14"].astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("ADX calculation failed: %s", e)
 
     df["cci"] = np.nan
@@ -330,7 +329,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
             df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(
                 float
             )
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("CCI calculation failed: %s", e)
 
     try:
@@ -343,7 +342,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         ).astype(float)
         df["mfi_14"] = mfi_vals
         df.dropna(subset=["mfi_14"], inplace=True)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("MFI calculation failed: %s", e)
         df["mfi_14"] = np.nan
 
@@ -351,7 +350,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     try:
         if hasattr(ta, "tema"):
             df["tema"] = ta.tema(df["close"], length=10).astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("TEMA calculation failed: %s", e)
 
     df["willr"] = np.nan
@@ -360,7 +359,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
             df["willr"] = ta.willr(
                 df["high"], df["low"], df["close"], length=14
             ).astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         # escape the % so logging doesn’t try to interpret %R as a format code
         logger.exception("Williams %%R calculation failed: %s", e)
 
@@ -370,7 +369,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         psar = ta.psar(df["high"], df["low"], df["close"])
         df["psar_long"] = psar["PSARl_0.02_0.2"].astype(float)
         df["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("PSAR calculation failed: %s", e)
 
     df["ichimoku_conv"] = np.nan
@@ -385,14 +384,14 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ichimoku_base"] = (
             base.iloc[:, 0] if hasattr(base, "iloc") else base
         ).astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Ichimoku calculation failed: %s", e)
 
     df["stochrsi"] = np.nan
     try:
         st = ta.stochrsi(df["close"])
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"].astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("StochRSI calculation failed: %s", e)
 
     # --- Multi-timeframe fusion ---
@@ -435,7 +434,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["mom_agg"] = (df["ret_5m"] + df["ret_1h"] + df["ret_d"]).astype(float)
         df["lag_close_1"] = df["close"].shift(1).astype(float)
         df["lag_close_3"] = df["close"].shift(3).astype(float)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Multi-timeframe features failed: %s", e)
 
     df.ffill(inplace=True)
@@ -459,7 +458,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
             if hasattr(ta, "sma"):
                 df["sma_50"] = ta.sma(df["close"], length=50).astype(float)
                 df["sma_200"] = ta.sma(df["close"], length=200).astype(float)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.exception("SMA calculation failed: %s", e)
         required += ["sma_50", "sma_200"]
     # only drop rows where *all* required indicators are missing
@@ -494,7 +493,7 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
         bars = None
         try:
             bars = ctx.data_fetcher.get_minute_df(ctx, sym)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             bars = None
             logger.exception("[gather_minute_data] %s fetch failed: %s", sym, e)
             logger.warning(
@@ -647,7 +646,7 @@ def log_hyperparam_result(
             if write_header:
                 w.writerow(header)
             w.writerow(row)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Failed to log hyperparameters: %s", e)
 
 
@@ -657,7 +656,7 @@ def save_model_version(clf, regime: str) -> str:
     path = os.path.join(MODELS_DIR, filename)
     try:
         atomic_joblib_dump(clf, path)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Failed to save model %s: %s", regime, e)
         raise
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
@@ -680,7 +679,7 @@ def save_model_version(clf, regime: str) -> str:
         if os.path.islink(link_path) or os.path.exists(link_path):
             os.remove(link_path)
         os.symlink(filename, link_path)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Failed to update symlink for %s: %s", regime, e)
     return path
 
@@ -709,7 +708,7 @@ def evolutionary_search(
             clf = LGBMClassifier(**cfg)
             try:
                 cv_scores = cross_val_score(clf, X, y, cv=3, scoring=scoring)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.exception("CV failed for params %s: %s", params, e)
                 continue
             if len(cv_scores) == 0:
@@ -834,7 +833,7 @@ def retrain_meta_learner(
             split_idx = int(len(subset) * 0.8)
             X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
             y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.exception("Feature preparation failed for %s: %s", regime, exc)
             continue
 
@@ -845,7 +844,7 @@ def retrain_meta_learner(
                     regime,
                 )
                 continue
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.exception("Error during sample size check for %s: %s", regime, e)
             continue
 
@@ -886,7 +885,7 @@ def retrain_meta_learner(
             continue
         try:
             pipe.fit(X_train, y_train)
-        except Exception as train_exc:
+        except (ValueError, TypeError) as train_exc:
             logger.exception("Model fit failed for %s: %s", regime, train_exc)
             continue
         logger.info("%s best params: %s", regime, best_hyper)
@@ -922,7 +921,7 @@ def retrain_meta_learner(
                 imp_df.to_csv(FEATURE_PERF_FILE, mode="a", header=False, index=False)
             else:
                 imp_df.to_csv(FEATURE_PERF_FILE, index=False)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.exception("Failed to log feature importances for %s: %s", regime, e)
 
         try:
@@ -945,7 +944,7 @@ def retrain_meta_learner(
                 }
             )
             trained_any = True
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.exception("Model training failed for %s: %s", regime, exc)
             continue
 
@@ -968,14 +967,14 @@ def retrain_meta_learner(
             current.difference_update(revived)
             with open(INACTIVE_FEATURES_FILE, "w") as f:
                 json.dump(sorted(current), f)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Failed updating inactive features: %s", e)
 
     try:
         band_rewards = load_reward_by_band()
         if band_rewards:
             logger.info("Avg rewards by band: %s", band_rewards)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.exception("Failed to load reward by band: %s", e)
 
     return trained_any

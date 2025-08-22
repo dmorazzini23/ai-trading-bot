@@ -426,7 +426,7 @@ class TestEnhancedRebalancer(unittest.TestCase):
         try:
             rebalance_portfolio(ctx)
             enhanced_maybe_rebalance(ctx)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.fail(f"Enhanced rebalancer raised exception: {e}")
 
 

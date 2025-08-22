@@ -28,7 +28,7 @@ def ensure_utc_datetime(
         if allow_callables:
             try:
                 value = value()
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 raise TypeError(f"datetime argument callable failed: {e}") from e
         else:
             raise TypeError("datetime argument was callable")
@@ -43,7 +43,7 @@ def ensure_utc_datetime(
             dt = tmp.astimezone(UTC) if tmp.tzinfo else tmp.replace(tzinfo=UTC)
         else:
             raise TypeError(f"Unsupported datetime type: {type(value).__name__}")
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         if default is not None:
             return ensure_utc_datetime(default, allow_callables=allow_callables, clamp_to=clamp_to)
         raise ValueError(f"Invalid datetime input: {value!r}") from e

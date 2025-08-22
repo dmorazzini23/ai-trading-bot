@@ -161,7 +161,7 @@ class PositionReconciler:
 
             return broker_positions
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(
                 "BROKER_POSITION_FETCH_ERROR",
                 extra={"error": str(e), "timestamp": datetime.now(UTC).isoformat()},
@@ -360,7 +360,7 @@ class PositionReconciler:
                 # Sleep until next reconciliation
                 time.sleep(self.reconciliation_interval)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(
                     "RECONCILIATION_LOOP_ERROR",
                     extra={"error": str(e), "timestamp": datetime.now(UTC).isoformat()},

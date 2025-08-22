@@ -33,7 +33,7 @@ def _should_refresh(ttl_seconds: float) -> bool:
 def _coerce_float(val: Any, default: float = 0.0) -> float:
     try:
         return float(val)
-    except Exception:
+    except (ValueError, TypeError):
         return default
 
 
@@ -107,7 +107,7 @@ def _get_equity_from_alpaca(cfg) -> float:
         data = resp.json()  # type: ignore[no-any-return]
         eq = _coerce_float(data.get("equity"), 0.0)
         return eq
-    except Exception:
+    except (ValueError, TypeError):
         return 0.0
 
 

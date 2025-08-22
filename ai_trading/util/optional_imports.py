@@ -8,6 +8,7 @@ def try_import(module_name: str) -> tuple[object | None, bool, Exception | None]
     try:
         m = import_module(module_name)
         return m, True, None
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:  # intentionally broad to capture env issues
         return None, False, e
 

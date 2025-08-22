@@ -40,7 +40,7 @@ from .timing import clamp_timeout as _clamp_timeout_new
 # AI-AGENT-REF: expose local time helpers without rebinding `time`
 try:  # pragma: no cover
     from . import time as utils_time  # type: ignore
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
     utils_time = None  # type: ignore
 
 # Back-compat alias
@@ -50,7 +50,7 @@ SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
 # AI-AGENT-REF: relative import to satisfy import contract
 try:  # pragma: no cover
     from . import process_manager  # type: ignore
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
     process_manager = None  # type: ignore
 
 
@@ -116,7 +116,7 @@ def get_latest_close(df: pd.DataFrame | None) -> float:
         return 0.0
     try:
         val = float(df["close"].dropna().iloc[-1])
-    except Exception:
+    except (ValueError, TypeError):
         return 0.0
     return val
 

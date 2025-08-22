@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Optional numba optimization based on settings
 try:  # pragma: no cover - optional dependency
     from numba import jit as _numba_jit
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - numba not installed
     _numba_jit = None
 

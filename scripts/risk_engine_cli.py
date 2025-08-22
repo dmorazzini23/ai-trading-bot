@@ -58,7 +58,7 @@ class RiskEngine:
                 )
                 exposure_cap = 0.8
             self.global_limit = exposure_cap
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(
                 "Error validating exposure_cap_aggressive: %s, using default", e
             )
@@ -73,7 +73,7 @@ class RiskEngine:
         self._volatility_cache: dict[str, tuple] = {}
         try:
             from data_client import DataClient
-        except Exception:  # pragma: no cover - optional dependency
+        except (ValueError, TypeError):  # pragma: no cover - optional dependency
             self.data_client = None
         else:
             self.data_client = DataClient()
@@ -179,7 +179,7 @@ class RiskEngine:
 
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning("ATR calculation error for %s: %s", symbol, exc)
             return None
 
@@ -243,7 +243,7 @@ class RiskEngine:
                 weight = qty * price / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
             self.exposure = exposure
-        except Exception as exc:  # pragma: no cover - best effort
+        except (ValueError, TypeError) as exc:  # pragma: no cover - best effort
             logger.warning("refresh_positions failed: %s", exc)
 
     def position_exists(self, api, symbol: str) -> bool:
@@ -252,7 +252,7 @@ class RiskEngine:
             for p in api.get_all_positions():
                 if getattr(p, "symbol", "") == symbol:
                     return True
-        except Exception as exc:  # pragma: no cover - best effort
+        except (ValueError, TypeError) as exc:  # pragma: no cover - best effort
             logger.warning("position_exists failed for %s: %s", symbol, exc)
         return False
 
@@ -451,7 +451,7 @@ class RiskEngine:
         try:
             self.refresh_positions(ctx.api)
             logger.debug("Exposure updated successfully")
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning("Failed to update exposure: %s", exc)
 
     def apply_risk_scaling(
@@ -492,7 +492,7 @@ class RiskEngine:
             # AI-AGENT-REF: Ensure signal.weight is float before arithmetic operations
             signal.weight = max(0.0, float(signal.weight) * scale)
             return signal
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.error("Risk scaling failed: %s", exc)
             return signal
 
@@ -557,7 +557,7 @@ class RiskEngine:
                 total_equity = float(getattr(account, "equity", cash))
             else:
                 total_equity = cash
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.warning("Error getting account equity: %s", e)
             total_equity = cash
 
@@ -596,7 +596,7 @@ class RiskEngine:
                 # Used when ATR data is unavailable or invalid
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning(
                 "ATR calculation failed for %s: %s",
                 getattr(signal, "symbol", "UNKNOWN"),
@@ -606,7 +606,7 @@ class RiskEngine:
                 # Secondary fallback to basic percentage-based sizing
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
-            except Exception:
+            except (ValueError, TypeError):
                 # AI-AGENT-REF: Fallback for completely invalid signals
                 logger.warning("Failed to calculate position size, returning 0")
                 return 0
@@ -657,7 +657,7 @@ class RiskEngine:
             else:
                 qty = max(int(raw_qty), int(min_qty))
             return max(qty, 0)  # Ensure non-negative result
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.warning("Error calculating final quantity: %s", exc)
             return 0
 
@@ -673,7 +673,7 @@ class RiskEngine:
             ):
                 logger.warning("Invalid signal object missing required attributes")
                 return 0.0
-        except Exception:
+        except (ValueError, TypeError):
             logger.warning("Error validating signal object")
             return 0.0
 
@@ -795,7 +795,7 @@ class RiskEngine:
                 garch_vol = float(np.sqrt(garch_vol))
             except (AttributeError, TypeError):
                 garch_vol = float(garch_vol**0.5)
-        except Exception:
+        except (ValueError, TypeError):
             garch_vol = std_vol
 
         primary_vol = std_vol  # Use standard deviation as primary volatility for test compatibility
@@ -905,7 +905,7 @@ class RiskEngine:
 
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error("Error checking position limits for %s: %s", symbol, e)
             return False  # Fail safe - reject if we can't validate
 
@@ -964,7 +964,7 @@ class RiskEngine:
 
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error("Error validating order size for %s: %s", symbol, e)
             return False  # Fail safe - reject if we can't validate
 
@@ -1252,12 +1252,12 @@ def apply_trailing_atr_stop(
                     from ai_trading.bot_engine import send_exit_order
 
                     send_exit_order(ctx, symbol, abs(int(qty)), price, "atr_stop")
-                except Exception as exc:  # pragma: no cover - best effort
+                except (ValueError, TypeError) as exc:  # pragma: no cover - best effort
                     logger.error("ATR stop exit failed: %s", exc)
             else:
                 logger.warning("ATR stop triggered but no context/qty provided")
             schedule_reentry_check(symbol, lookahead_days=2)
-    except Exception as e:  # pragma: no cover - defensive
+    except (ValueError, TypeError) as e:  # pragma: no cover - defensive
         logger.error("ATR stop error: %s", e)
 
 

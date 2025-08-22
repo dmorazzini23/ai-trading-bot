@@ -42,7 +42,7 @@ def test_no_import_time_crashes():
         logging.info(f"   ✓ ImportError (expected): {e}")
         logging.info("   ✓ No sys.exit() crashes - this is good!")
         return True
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"   ✗ Unexpected error: {e}")
         return False
 
@@ -212,7 +212,7 @@ def test_redacted_logging():
             logging.info("   ✗ Credential resolution failed")
             return False
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"   ✗ Redacted logging test failed: {e}")
         return False
 
@@ -236,7 +236,7 @@ def main():
         try:
             result = test()
             results.append(result)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logging.info(f"   ✗ Test failed with exception: {e}")
             traceback.print_exc()
             results.append(False)

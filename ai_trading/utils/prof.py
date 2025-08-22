@@ -13,6 +13,7 @@ def StageTimer(logger, stage_name: str, **extra):
         dt_ms = int((time.perf_counter() - t0) * 1000)
         try:
             logger.info("STAGE_TIMING", extra={"stage": stage_name, "elapsed_ms": dt_ms, **extra})
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

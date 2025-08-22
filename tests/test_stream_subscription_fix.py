@@ -108,6 +108,7 @@ class TestStreamSubscriptionFix(unittest.TestCase):
                     else:
                         # Other AttributeErrors might be expected due to mocking
                         success = True
+                # noqa: BLE001 TODO: narrow exception
                 except Exception:
                     # Other import errors are expected due to missing dependencies
                     success = True

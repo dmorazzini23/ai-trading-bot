@@ -169,7 +169,7 @@ class SymbolCostModel:
 
                 self.logger.info(f"Loaded cost data for {len(self._costs)} symbols")
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Failed to load cost data: {e}")
 
     def _save_cost_data(self) -> None:
@@ -191,7 +191,7 @@ class SymbolCostModel:
 
             self.logger.debug(f"Saved cost data for {len(self._costs)} symbols")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to save cost data: {e}")
 
     def get_costs(self, symbol: str) -> SymbolCosts:

@@ -201,7 +201,7 @@ def demonstrate_parameter_optimizations():
         logging.info("Please ensure all dependencies are properly installed.")
         return False
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"\n❌ Error during demonstration: {e}")
         logger.error(f"Demonstration error: {e}")
         return False

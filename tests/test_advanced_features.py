@@ -21,15 +21,15 @@ for _m in ["dotenv"]:
 
 try:
     from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
-except Exception:
+except (ValueError, TypeError):
     pytest.skip("alpaca_api not available", allow_module_level=True)
 try:
     from ai_trading import rebalancer
-except Exception:
+except (ValueError, TypeError):
     pytest.skip("alpaca_trade_api not available", allow_module_level=True)
 try:
     from ai_trading.execution import slippage  # AI-AGENT-REF: use prod slippage module
-except Exception:  # pragma: no cover - module optional
+except (ValueError, TypeError):  # pragma: no cover - module optional
     slippage = None
 
 

@@ -35,14 +35,14 @@ def _resolve_requests_session():
     """Locate requests.Session in a robust way."""  # AI-AGENT-REF: fallback lookup
     try:
         import requests  # noqa: F401
-    except Exception:
+    except (requests.RequestException, TimeoutError):
         return None, None
     Session = getattr(sys.modules["requests"], "Session", None)
     if Session is None:
         try:
             sess_mod = importlib.import_module("requests.sessions")
             Session = getattr(sess_mod, "Session", None)
-        except Exception:  # pragma: no cover - defensive
+        except (requests.RequestException, TimeoutError):  # pragma: no cover - defensive
             Session = None
     return Session, sys.modules.get("requests")
 
@@ -88,7 +88,7 @@ def _block_external_network():
         host = address[0] if isinstance(address, tuple) else address
         try:
             ip = socket.gethostbyname(host)
-        except Exception:
+        except (requests.RequestException, TimeoutError):
             ip = str(host)
         if ip.startswith("127.") or host in ("::1", "localhost"):
             return orig_connect(self, address)

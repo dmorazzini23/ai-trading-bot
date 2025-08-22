@@ -50,6 +50,7 @@ class TestCriticalFixesValidation(unittest.TestCase):
             engine._reconcile_partial_fills("NFLX", 10, 5, "buy", mock_order)
             logging.info("  ✓ Quantity calculation uses actual order filled_qty")
             logging.info("  ✓ Fixed discrepancy between calculated vs actual quantities")
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             self.fail(f"Quantity fix failed: {e}")
 

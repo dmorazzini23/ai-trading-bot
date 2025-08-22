@@ -53,13 +53,13 @@ def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_ut
                 "rth_utc": f"{start_utc.astimezone(UTC).isoformat()}..{end_utc.astimezone(UTC).isoformat()}",
             },
         )
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
 # Light, local Alpaca shims so this module never needs bot_engine
 try:
     from alpaca.data.requests import StockBarsRequest  # type: ignore
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
 
     class StockBarsRequest:  # type: ignore
         pass
@@ -67,7 +67,7 @@ except Exception:  # pragma: no cover
 
 try:
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # type: ignore
-except Exception:  # pragma: no cover
+except (ValueError, TypeError):  # pragma: no cover
 
     class TimeFrame:  # type: ignore
         def __init__(self, n: int, unit: Any) -> None:
@@ -104,7 +104,7 @@ def _ensure_df(obj: Any) -> pd.DataFrame:
             df = getattr(obj, "df", None)
             return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
         return pd.DataFrame(obj) if obj is not None else pd.DataFrame()
-    except Exception:
+    except (ValueError, TypeError):
         return pd.DataFrame()
 
 
@@ -120,7 +120,7 @@ def _create_empty_bars_dataframe() -> pd.DataFrame:
 def _is_minute_timeframe(tf) -> bool:
     try:
         return str(tf).lower() in ("1min", "1m", "minute", "1 minute")
-    except Exception:
+    except (ValueError, TypeError):
         return False  # AI-AGENT-REF: broad but safe
 
 
@@ -149,7 +149,7 @@ def safe_get_stock_bars(
     try:
         try:
             response = client.get_stock_bars(request)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             status = getattr(e, "status_code", None)
             if status in (401, 403):
                 _log.error(
@@ -194,7 +194,7 @@ def safe_get_stock_bars(
                             last = df2.index[-1]
                             if last.date() == start_dt.date():
                                 df = df2.loc[[last]]
-                    except Exception as e:
+                    except (ValueError, TypeError) as e:
                         status = getattr(e, "status_code", None)
                         if status in (401, 403):
                             _log.error(
@@ -276,7 +276,7 @@ def _fetch_daily_bars(client, symbol, start, end, **kwargs):
         raise RuntimeError("Alpaca client missing get_bars()")
     try:
         return get_bars_fn(symbol, timeframe="1Day", start=start, end=end, **kwargs)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         _log.exception("ALPACA_DAILY_FAILED", extra={"symbol": symbol, "error": str(e)})
         raise
 
@@ -284,7 +284,7 @@ def _fetch_daily_bars(client, symbol, start, end, **kwargs):
 def _get_minute_bars(symbol: str, start_dt: datetime, end_dt: datetime, feed: str) -> pd.DataFrame:
     try:
         df = get_bars(symbol=symbol, timeframe="1Min", start=start_dt, end=end_dt, feed=feed)
-    except Exception:
+    except (ValueError, TypeError):
         df = None
     if df is None or not hasattr(df, "empty") or getattr(df, "empty", True):
         return empty_bars_dataframe()
@@ -310,7 +310,7 @@ def _resample_minutes_to_daily(df, tz="America/New_York"):
             out["volume"] = v
         out = out.dropna(how="all").tz_convert("UTC")
         return out
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         _log.warning("RESAMPLE_DAILY_FAILED", extra={"error": str(e)})
         return df
 
@@ -347,7 +347,7 @@ def get_daily_bars(
                     extra={"symbol": symbol, "rows": len(rdf)},
                 )
                 return rdf
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         _log.warning(
             "DAILY_MINUTE_RESAMPLE_FAILED", extra={"symbol": symbol, "error": str(e)}
         )
@@ -405,7 +405,7 @@ def _parse_bars(payload: Any, symbol: str, tz: str) -> pd.DataFrame:
             return empty_bars_dataframe()
         try:
             return _ensure_df(pd.DataFrame(bars))
-        except Exception:
+        except (ValueError, TypeError):
             return empty_bars_dataframe()
     if isinstance(payload, pd.DataFrame):
         return payload

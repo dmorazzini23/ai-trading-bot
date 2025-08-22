@@ -22,6 +22,7 @@ def check_file_syntax(filepath):
         return True, ""
     except SyntaxError as e:
         return False, f"Syntax error: {e}"
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         return False, f"Error: {e}"
 
@@ -38,6 +39,7 @@ def extract_imports(filepath):
                 for alias in node.names:
                     imports.append(f"from {module} import {alias.name}")
         return imports
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return []
 

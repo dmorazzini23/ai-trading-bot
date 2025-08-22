@@ -127,6 +127,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._record_success()
             return result
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             self._record_failure()
             raise
@@ -290,6 +291,7 @@ def health_check_service(name: str, check_func: Callable[[], bool], timeout: int
         finally:
             signal.alarm(0)  # Disable alarm
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.warning(f"Health check for {name} failed: {e}")
         return False

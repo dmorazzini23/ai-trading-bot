@@ -14,6 +14,7 @@ def test_import(module_name: str, description: str = "") -> tuple[bool, str]:
     try:
         __import__(module_name)
         return True, f"✅ {module_name} {description}"
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         return False, f"❌ {module_name} {description}: {e}"
 
@@ -27,6 +28,7 @@ def test_class_instantiation(module_name: str, class_name: str, args=None, kwarg
         cls = getattr(module, class_name)
         cls(*args, **kwargs)
         return True, f"✅ {module_name}.{class_name} {description}"
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         return False, f"❌ {module_name}.{class_name} {description}: {e}"
 
@@ -118,6 +120,7 @@ def main():
         else:
             tests.append((False, "❌ TradingConfig.to_dict(safe=True) does not redact secrets properly"))
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         tests.append((False, f"❌ TradingConfig.from_env() failed: {e}"))
 
@@ -129,6 +132,7 @@ def main():
             tests.append((True, "✅ StrategyAllocator resolves to real implementation"))
         else:
             tests.append((False, "❌ StrategyAllocator missing allocate method"))
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         tests.append((False, f"❌ StrategyAllocator instantiation failed: {e}"))
 

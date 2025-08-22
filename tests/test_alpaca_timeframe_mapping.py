@@ -3,11 +3,11 @@ import types
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-
 from ai_trading.alpaca_api import get_bars_df
 
 try:
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - inject stub
     mod = types.ModuleType("alpaca.data.timeframe")
 

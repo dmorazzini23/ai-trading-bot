@@ -29,6 +29,7 @@ def scan():
             continue
         try:
             text = p.read_text(encoding="utf-8", errors="ignore")
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             continue
         for name, rx in PATTERNS.items():
@@ -47,6 +48,7 @@ def pycompile_errors():
             continue
         try:
             compile(p.read_text(encoding="utf-8", errors="ignore"), srel, "exec")
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             errs.append({"file": srel, "error": repr(e)})
     return errs

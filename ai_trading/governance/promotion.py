@@ -118,7 +118,7 @@ class ModelPromotion:
             )
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error starting shadow testing for {model_id}: {e}")
             return False
 
@@ -200,7 +200,7 @@ class ModelPromotion:
                 f"Updated shadow metrics for model {model_id}: {current_metrics.sessions_completed} sessions"
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error updating shadow metrics for {model_id}: {e}")
 
     def check_promotion_eligibility(self, model_id: str) -> tuple[bool, dict[str, Any]]:
@@ -275,7 +275,7 @@ class ModelPromotion:
 
             return eligible, evaluation
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(
                 f"Error checking promotion eligibility for {model_id}: {e}"
             )
@@ -330,7 +330,7 @@ class ModelPromotion:
             )
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error promoting model {model_id}: {e}")
             return False
 
@@ -383,7 +383,7 @@ class ModelPromotion:
                 error_rate=data.get("error_rate", 0.0),
                 last_updated=last_updated,
             )
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error loading shadow metrics for {model_id}: {e}")
             return None
 
@@ -406,7 +406,7 @@ class ModelPromotion:
                 f"Created active symlink for {strategy}: {symlink_path} -> {model_path}"
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error creating active symlink for {strategy}: {e}")
 
     def _remove_active_symlink(self, strategy: str) -> None:
@@ -416,7 +416,7 @@ class ModelPromotion:
             if symlink_path.exists() or symlink_path.is_symlink():
                 symlink_path.unlink()
                 self.logger.debug(f"Removed active symlink for {strategy}")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error removing active symlink for {strategy}: {e}")
 
     def get_active_model_path(self, strategy: str) -> str | None:
@@ -459,7 +459,7 @@ class ModelPromotion:
 
                     shadow_models.append(shadow_info)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.debug(
                     f"Error checking shadow status for model {model_id}: {e}"
                 )

@@ -142,7 +142,7 @@ class MarketHoursValidator:
                 ],
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error validating market hours: {e}")
             return ValidationResult(
                 category=ValidationCategory.MARKET_HOURS,
@@ -270,7 +270,7 @@ class LiquidityValidator:
                 ),
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error validating liquidity for {symbol}: {e}")
             return ValidationResult(
                 category=ValidationCategory.LIQUIDITY,
@@ -458,7 +458,7 @@ class RiskValidator:
                 recommendations=warnings,
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error validating position risk for {symbol}: {e}")
             return ValidationResult(
                 category=ValidationCategory.RISK_LIMITS,
@@ -550,7 +550,7 @@ class RiskValidator:
                 ),
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error validating portfolio risk: {e}")
             return ValidationResult(
                 category=ValidationCategory.RISK_LIMITS,
@@ -798,7 +798,7 @@ class PreTradeValidator:
 
             return final_result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error in pre-trade validation: {e}")
             return PreTradeCheckResult(
                 symbol=trade_request.get("symbol", "UNKNOWN"),
@@ -829,7 +829,7 @@ class PreTradeValidator:
                 recommendations=[],
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return ValidationResult(
                 category=ValidationCategory.SYSTEM_HEALTH,
                 status=ValidationStatus.WARNING,

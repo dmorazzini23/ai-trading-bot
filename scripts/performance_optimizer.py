@@ -126,7 +126,7 @@ class PerformanceOptimizer:
 
         try:
             result = func(*args, **kwargs)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.warning(f"Function {func_name} failed during profiling: {e}")
             raise
         finally:

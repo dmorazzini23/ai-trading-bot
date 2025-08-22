@@ -138,7 +138,7 @@ class SystemDiagnostic:
                 'list_objects': len([obj for obj in all_objects if isinstance(obj, list)]),
                 'function_objects': len([obj for obj in all_objects if callable(obj)])
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             gc_info['object_counts'] = {'error': str(e)}
 
         return gc_info
@@ -162,7 +162,7 @@ class SystemDiagnostic:
                         file_info['sample_fds'].append(f'{fd}: {link}')
                     except OSError:
                         continue
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             file_info['error'] = str(e)
 
         return file_info
@@ -276,7 +276,7 @@ class SystemDiagnostic:
 
             disk_info['large_files'] = sorted(large_files, key=lambda x: x[1], reverse=True)[:10]
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             disk_info['error'] = str(e)
 
         return disk_info
@@ -314,7 +314,7 @@ class SystemDiagnostic:
                 diagnostic_results[check_name] = result
                 diagnostic_results[f'{check_name}_time_ms'] = check_time * 1000
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in {check_name}: {str(e)}")
                 diagnostic_results[check_name] = {'error': str(e)}
 

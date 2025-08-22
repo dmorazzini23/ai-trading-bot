@@ -44,6 +44,7 @@ def main():
             new = cst.parse_module(src).visit(StripConfigMagic())
             if new.code != src:
                 CFG_INIT.write_text(new.code, encoding="utf-8")
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 
@@ -58,6 +59,7 @@ def main():
             new = cst.parse_module(src).visit(StripConfigMagic())
             if new.code != src:
                 management.write_text(new.code, encoding="utf-8")
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

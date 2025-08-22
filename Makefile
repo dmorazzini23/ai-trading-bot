@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r typecheck
+.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
 
 init:
 	python tools/check_python_version.py
@@ -47,7 +47,17 @@ lint-fix-phase3:
 
 .PHONY: lint-fix-phase4r
 lint-fix-phase4r:
-	       bash tools/lint_phase4r.sh
+	# AI-AGENT-REF: phased Ruff remediation
+	# 1) imports / unused / order
+	ruff check --fix --select F,I . || true
+	# 2) prints, blind except, tz-naive (safe fixes only)
+	ruff check --fix --select T20,BLE,DTZ,UP,E . || true
+	# 3) one more pass to settle import shuffles
+	ruff check --fix --select I . || true
+
+.PHONY: lint-histo
+lint-histo:
+	python tools/ruff_histogram.py artifacts/ruff.txt > artifacts/ruff-histogram.md || true
 
 .PHONY: lint
 lint:

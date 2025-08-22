@@ -191,7 +191,7 @@ class BacktestEngine:
         if hasattr(bot_engine, "apply_fill"):
             try:
                 bot_engine.apply_fill(fill)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.debug("Failed to apply fill in backtester: %s", e)
         qty = fill.order.qty if fill.order.side.lower() == "buy" else -fill.order.qty
         cost = fill.fill_price * qty
@@ -230,13 +230,13 @@ class BacktestEngine:
                 ):
                     try:
                         bot_engine.update_market_data(sym, df.loc[ts])
-                    except Exception as e:
+                    except (ValueError, TypeError) as e:
                         logger.debug("Failed to update market data for %s: %s", sym, e)
             orders = []
             if hasattr(bot_engine, "next_cycle"):
                 try:
                     orders = bot_engine.next_cycle()
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     logger.debug("Failed to execute next_cycle: %s", e)
                     orders = []
             for order in orders:

@@ -1,5 +1,4 @@
 import pandas as pd
-
 from ai_trading.features import compute_macd, compute_macds, ensure_columns
 
 

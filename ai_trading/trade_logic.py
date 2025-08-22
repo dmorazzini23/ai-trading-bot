@@ -11,7 +11,7 @@ try:
     from ai_trading.capital_scaling import (
         drawdown_adjusted_kelly_alt as drawdown_adjusted_kelly,
     )
-except Exception:  # pragma: no cover - fallback for older installs
+except (ValueError, TypeError):  # pragma: no cover - fallback for older installs
     from ai_trading.capital_scaling import (
         drawdown_adjusted_kelly,
     )
@@ -38,7 +38,7 @@ def should_enter_trade(price_data, signals, risk_params):
             return False
         last_price, prev_price = float(price_data[-1]), float(price_data[-2])
         recent_gain = (last_price - prev_price) / max(prev_price, 1e-9)
-    except Exception:
+    except (ValueError, TypeError):
         # if indexing fails return False
         log.warning("Failed to calculate recent gain from price data")
         return False
@@ -99,7 +99,7 @@ def extract_price(data: Any) -> float:
         else:
             val = float(data)
         return float(val or 1e-3)
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         logger.warning("extract_price failed: %s", exc)
         return 1e-3
 
@@ -181,7 +181,7 @@ def evaluate_entries(ctx, candidates):
             sig = _compute_entry_signal(ctx, sym, df)
             if sig is not None:
                 signals[sym] = sig
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             ctx.logger.warning("Entry eval failed for %s: %s", sym, exc)
     return signals
 
@@ -215,7 +215,7 @@ def evaluate_exits(ctx, open_positions):
             sig = _compute_exit_signal(ctx, sym, df)
             if sig:
                 exits[sym] = sig
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             ctx.logger.warning("Exit eval failed for %s: %s", sym, exc)
     return exits
 
