@@ -1,6 +1,6 @@
 """Runtime settings with env aliases and safe defaults."""
 
-# ruff: noqa: F821,F841
+# ruff: noqa: F821,F841,I001
 from __future__ import annotations
 
 from datetime import timedelta
@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from ai_trading.env import ensure_dotenv_loaded  # AI-AGENT-REF: re-export for CLI
+from ai_trading.env import ensure_dotenv_loaded  # AI-AGENT-REF: re-export for CLI  # noqa: F401
 
 from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     log_market_fetch: bool = Field(True, alias="LOG_MARKET_FETCH")  # AI-AGENT-REF: fetch logging
     healthcheck_port: int = Field(9001, alias="HEALTHCHECK_PORT")  # AI-AGENT-REF: health server port
     min_health_rows: int = Field(120, alias="MIN_HEALTH_ROWS")  # AI-AGENT-REF: health rows threshold
+
+    # --- API server configuration ---
+    api_host: str = Field("0.0.0.0", alias="API_HOST")  # AI-AGENT-REF: API bind host
+    api_port: int = Field(9001, alias="API_PORT")  # AI-AGENT-REF: API bind port
 
     # Finnhub API calls per minute (rate limit budget)
     finnhub_rpm: int = Field(default=55, env="AI_TRADER_FINNHUB_RPM")
@@ -264,7 +268,7 @@ def get_rebalance_interval_min() -> int:
     val = getattr(s, "rebalance_interval_min", 60)
     try:
         return int(val)
-    except Exception:  # AI-AGENT-REF: tolerate FieldInfo during early imports
+    except Exception:  # AI-AGENT-REF: tolerate FieldInfo during early imports  # noqa: BLE001
         return 60
 
 
