@@ -28,9 +28,9 @@ os.environ.update({
 
 sys.path.append('.')
 
-# (mocks removed; see tests/mocks/validate_critical_fix_mocks.py)
+# (mocks centralized; see tests/support/mocks.py)
 from ai_trading.trade_execution import ExecutionEngine
-from tests.mocks.validate_critical_fix_mocks import MockContext, MockOrder
+from tests.support.mocks import MockContext, MockOrder
 
 
 def test_production_scenarios():

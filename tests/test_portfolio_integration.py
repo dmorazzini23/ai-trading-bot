@@ -9,18 +9,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-from tests.mocks.validate_critical_fix_mocks import MockContext
-
-try:
-    # AI-AGENT-REF: prefer real MockSignal if available
-    from ai_trading.signals import MockSignal  # type: ignore[assignment]
-# noqa: BLE001 TODO: narrow exception
-except Exception:  # noqa: BLE001 - test fallback
-    class MockSignal:  # AI-AGENT-REF: minimal stub
-        def __init__(self, *_, **__): ...
-
-        def score(self, *_, **__):
-            return 0.0
+from tests.support.mocks import MockContext, MockSignal
 
 # Set testing environment
 os.environ['TESTING'] = '1'

@@ -17,6 +17,10 @@ test = ["pytest>=7.4", "pytest-cov>=4.1"]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["ai_trading*", "trade_execution*"]
+exclude = ["tests*", "scripts*", "artifacts*"]
+
 [tool.black]
 line-length = 120
 target-version = ["py311"]
@@ -39,3 +43,17 @@ ignore = ["E501"]
 "tools/**" = ["T201", "E402"]
 "scripts/**" = ["T201", "E402"]
 "**/__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = [
+  "tests"
+]
+markers = [
+  "integration: tests that require network or vendor APIs",
+  "slow: tests that are slow or long-running"
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
