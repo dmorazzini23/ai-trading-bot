@@ -14,7 +14,7 @@ from typing import Any
 
 _log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 
-from ai_trading.core.constants import (  # AI-AGENT-REF: direct import without shim
+from ai_trading.core.constants import (  # AI-AGENT-REF: direct import
     EXECUTION_PARAMETERS,
     RISK_PARAMETERS,
 )

@@ -461,21 +461,3 @@ def ensure_final_bar(symbol: str, timeframe: str) -> bool:
     return calendar.ensure_final_bar(symbol, timeframe)
 
 
-@dataclass
-class SessionWindow:
-    open: pd.Timestamp
-    close: pd.Timestamp
-
-
-def last_market_session(now: pd.Timestamp) -> SessionWindow | None:
-    """Return previous market session window for NYSE."""  # AI-AGENT-REF: session helper
-    cal = get_calendar_registry()
-    current = now.tz_convert("UTC").date()
-    for _ in range(10):
-        start, end = cal.get_session_bounds("SPY", current)
-        if start and end and end <= now.to_pydatetime():
-            return SessionWindow(
-                pd.Timestamp(start).tz_convert("UTC"), pd.Timestamp(end).tz_convert("UTC")
-            )
-        current -= timedelta(days=1)
-    return None

@@ -17,7 +17,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-# AI-AGENT-REF: import configuration without legacy trade_execution shim
+# AI-AGENT-REF: import configuration without legacy trade_execution layer
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 from ai_trading.utils.timing import (
@@ -27,7 +27,7 @@ from ai_trading.utils.timing import (
 CONFIG = TradingConfig()
 
 
-# AI-AGENT-REF: local order tracking helpers replacing trade_execution shim
+# AI-AGENT-REF: local order tracking helpers replacing trade_execution module
 @dataclass(slots=True)
 class OrderInfo:
     order_id: str

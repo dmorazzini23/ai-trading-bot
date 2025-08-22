@@ -37,7 +37,7 @@ def psleep(_=None) -> None:
 
 
 def clamp_timeout(df):
-    """Benchmark-friendly shim returning input."""  # AI-AGENT-REF
+    """Benchmark-friendly helper returning input."""  # AI-AGENT-REF
     _ = _clamp_timeout(1.0, min_s=0.1, max_s=10.0, default_non_test=1.0)
     return df
 

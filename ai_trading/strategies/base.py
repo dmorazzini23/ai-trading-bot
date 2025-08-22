@@ -138,7 +138,7 @@ class BaseStrategy(ABC):
             List of trading signals
         """
 
-    # --- Back-compat shim -------------------------------------------------
+    # --- Back-compat path -------------------------------------------------
     def generate(self, ctx: Any) -> list[StrategySignal]:
         """Return list of signals from market context (dict-compat)."""
         # AI-AGENT-REF: adapt runtime context to market_data dict

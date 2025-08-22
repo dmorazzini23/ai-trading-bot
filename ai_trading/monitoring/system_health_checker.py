@@ -17,7 +17,7 @@ class SystemHealth:
 
 
 def collect_system_health() -> SystemHealth:
-    # AI-AGENT-REF: removed ResourceMonitor shim; return basic snapshot
+    # AI-AGENT-REF: removed ResourceMonitor layer; return basic snapshot
     ohm = get_order_health_monitor()
     return SystemHealth(
         cpu=0.0,

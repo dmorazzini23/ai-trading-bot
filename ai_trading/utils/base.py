@@ -163,7 +163,7 @@ def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool
 
 def get_trading_calendar(name: str = "XNYS"):
     """Return a trading calendar, with fallback when mcal is missing."""
-    # AI-AGENT-REF: optional calendar shim
+    # AI-AGENT-REF: optional calendar adapter
     if mcal is not None:
         return mcal.get_calendar(name)
     import pandas as pd  # AI-AGENT-REF: fallback calendar

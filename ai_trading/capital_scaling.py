@@ -1,14 +1,32 @@
-"""capital_scaling.py
+"""Utilities for adaptive capital allocation and risk-based position sizing."""
 
-Utilities for adaptive capital allocation and risk-based position sizing.
-"""
+from __future__ import annotations
 
-import logging
 import math
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from ai_trading.logging import get_logger
+
+log = get_logger(__name__)
+
+
+def capital_scaler_update(runtime, equity) -> None:
+    """Safely update the capital scaler if present; otherwise do nothing."""
+    cs = getattr(runtime, "capital_scaler", None)
+    if cs is not None and hasattr(cs, "update"):
+        cs.update(runtime, equity)
+
+
+def capital_scale(runtime) -> float:
+    """Return current scale or 1.0 if no scaler is configured."""
+    cs = getattr(runtime, "capital_scaler", None)
+    if cs is not None and hasattr(cs, "current_scale"):
+        try:
+            return float(cs.current_scale())
+        except Exception:
+            return 1.0
+    return 1.0
 
 
 class _CapScaler:
@@ -51,6 +69,7 @@ class CapitalScalingEngine:
         self._base: float | None = (
             initial_equity if initial_equity and initial_equity > 0 else None
         )
+        self._latest_equity: float = initial_equity or 0.0
 
     def scale_position(
         self,
@@ -164,11 +183,16 @@ class CapitalScalingEngine:
         """
         try:
             if equity and equity > 0:
+                self._latest_equity = equity
                 if self._base is None or equity > self._base:
                     self._base = equity
         except (TypeError, ValueError) as e:
-            logger.warning(f"Failed to update baseline equity: {e}")
+            log.warning(f"Failed to update baseline equity: {e}")
             # Continue execution - this is not critical
+
+    def current_scale(self) -> float:
+        """Return the most recently computed compression factor."""
+        return self.compression_factor(self._latest_equity)
 
     def update_baseline(self, equity: float) -> None:
         """Update the baseline equity for compression calculations."""
@@ -275,6 +299,8 @@ def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
 
 
 __all__ = [
+    "capital_scaler_update",
+    "capital_scale",
     "CapitalScalingEngine",
     "volatility_parity_position",
     "dynamic_fractional_kelly",

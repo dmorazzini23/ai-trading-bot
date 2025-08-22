@@ -56,7 +56,7 @@ def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_ut
     except (ValueError, TypeError):
         pass
 
-# Light, local Alpaca shims so this module never needs bot_engine
+# Light, local Alpaca adapters so this module never needs bot_engine
 try:
     from alpaca.data.requests import StockBarsRequest  # type: ignore
 except (ValueError, TypeError):  # pragma: no cover

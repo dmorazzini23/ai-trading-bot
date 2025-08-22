@@ -38,7 +38,7 @@ def set_random_seeds(seed: int = 42) -> None:
     # TensorFlow (if available)
     # PyTorch (if available)
     # LightGBM (if available)
-    # AI-AGENT-REF: optional lightgbm import with shim
+    # AI-AGENT-REF: optional lightgbm import with fallback
     try:
         import importlib
         lgb = importlib.import_module("lightgbm")
