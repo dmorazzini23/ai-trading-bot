@@ -1,22 +1,39 @@
+import asyncio
 import os
+import socket
 import sys
-import time
 from datetime import datetime, timezone
 import pathlib
 
 import pytest
+from freezegun import freeze_time
 
-# --- Keep tests in UTC ---
-os.environ.setdefault("TZ", "UTC")
-if hasattr(time, "tzset"):
-    time.tzset()
 
-# --- Seed dummy keys to avoid live calls ---
-os.environ.setdefault("ALPACA_API_KEY", "test_key")
-os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
+@pytest.fixture(autouse=True, scope="session")
+def _event_loop_policy():
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
-# --- Block network by default (opt-in via RUN_INTEGRATION=1) ---
-from tests._netblock import block_network, should_block  # noqa: E402
+
+@pytest.fixture(autouse=True)
+def _freeze_clock():
+    with freeze_time("2024-01-02 15:04:05", tz_offset=0):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _block_network(monkeypatch):
+    def guard(*a, **k):
+        raise RuntimeError("Network disabled in tests")
+
+    monkeypatch.setattr(socket, "create_connection", guard, raising=True)
+
+
+@pytest.fixture(autouse=True)
+def _env_defaults(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("TZ", "UTC")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -26,12 +43,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "slow: long-running tests")
     pathlib.Path("artifacts").mkdir(exist_ok=True)
     pathlib.Path("artifacts/utc.txt").write_text(config._utc_stamp)
-    if should_block():
-        block_network()
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    if should_block():
+    if os.environ.get("RUN_INTEGRATION") not in {"1", "true", "TRUE", "yes"}:
         skip_integration = pytest.mark.skip(reason="integration tests require RUN_INTEGRATION=1")
         for item in items:
             if "integration" in item.keywords:
