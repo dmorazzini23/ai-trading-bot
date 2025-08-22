@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from ai_trading.logging import get_logger
+from ai_trading.utils.optional_import import optional_import
 
 log = get_logger(__name__)
 
@@ -32,18 +33,16 @@ def resolve_alpaca_credentials(env: Mapping[str, str] | None = None, *, prefer: 
 
 
 def check_alpaca_available() -> bool:
-    try:
-        import alpaca_trade_api  # type: ignore  # noqa: F401
-        return True
-    except Exception:  # pragma: no cover - optional dep
-        return False
+    return optional_import("alpaca_trade_api") is not None
 
 
 def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
     creds = resolve_alpaca_credentials(env)
     if shadow or not check_alpaca_available():
         return object()
-    from alpaca_trade_api import REST as TradeApiREST  # type: ignore
+    TradeApiREST = optional_import("alpaca_trade_api", "REST")
+    if TradeApiREST is None:  # pragma: no cover - guard for optional dep
+        return object()
     return TradeApiREST(creds.API_KEY, creds.SECRET_KEY, creds.BASE_URL)
 
 
