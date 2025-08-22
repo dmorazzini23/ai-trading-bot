@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     # Min confidence threshold
     # Confidence thresholds tuned to test expectations
     conf_threshold: float = Field(default=0.75, env="AI_TRADER_CONF_THRESHOLD")
+    score_confidence_min: float | None = Field(
+        default=None, alias="SCORE_CONFIDENCE_MIN"
+    )  # AI-AGENT-REF: optional score confidence gate
     # Min model buy score
     buy_threshold: float = Field(default=0.4, env="AI_TRADER_BUY_THRESHOLD")
     # Max daily loss fraction before halt
