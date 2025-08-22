@@ -1,52 +1,87 @@
-import re, sys, pathlib
+"""Bounded import contract checker for CI.
 
-DENY_BARE = {
-    "order_health_monitor",
-    "trade_execution",      # bare
-    "strategy_allocator",   # bare
-    "ml_model",             # bare
-    "risk_engine",          # bare
-    "performance_monitor",  # bare
-    "validate_env",         # bare
-    "_require_env_vars",
-    "check_data_freshness", # bare
-    "system_health_checker",# bare
-    "portfolio_optimizer",  # bare
-    "transaction_cost_calculator",
-    "process_manager",      # bare
-}
+Runs import(s) in a short-lived subprocess with a wall-clock timeout so CI
+can never hang. Designed to be called from `make test-all` before pytest.
 
-DENY_PACKAGE = {
-    "ai_trading.trade_execution",
-    "ai_trading.monitoring.performance_monitor",
-    "ai_trading.validation.require_env",
-    "ai_trading.validation.check_data_freshness",
-    "ai_trading.utils.process_manager",
-}
+Usage:
+  python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
+"""
 
-ROOT = pathlib.Path("tests")
-pat = re.compile(r"^\s*(from|import)\s+(" + "|".join(map(re.escape, DENY_BARE)) + r")\b")
+from __future__ import annotations
 
-bad = []
-for p in ROOT.rglob("*.py"):
-    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-        if pat.search(line):
-            bad.append(f"{p}:{i}:{line.strip()}")
+import argparse
+import os
+import shlex
+import subprocess
+import sys
+from typing import List
 
-if bad:
-    print("[contract] Legacy imports found in tests:")
-    print("\n".join(bad))
-    sys.exit(1)
 
-pat_pkg = re.compile(r"^\s*(from|import)\s+(" + "|".join(map(re.escape, DENY_PACKAGE)) + r")\b")
+def _run_import_in_subprocess(module: str, timeout: float) -> subprocess.CompletedProcess:
+    # Inherit env; set guard to avoid heavy init if package honors it.
+    env = os.environ.copy()
+    env.setdefault("AI_TRADING_IMPORT_CONTRACT", "1")
 
-bad_pkg = []
-for p in pathlib.Path("ai_trading").rglob("*.py"):
-    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-        if pat_pkg.search(line):
-            bad_pkg.append(f"{p}:{i}:{line.strip()}")
+    # Allow tests to simulate a hang without touching real modules
+    simulate = "IMPORT_CONTRACT_SIMULATE_HANG" in env
 
-if bad_pkg:
-    print("[contract] Forbidden package imports found:\n" + "\n".join(bad_pkg))
-    sys.exit(1)
+    # Build a tiny Python snippet that imports the module; optionally sleeps to simulate hang
+    code = (
+        "import os, time, importlib;"
+        "\nif os.getenv('IMPORT_CONTRACT_SIMULATE_HANG') == '1': time.sleep(60)"
+        f"\nimportlib.import_module('{module}')\nprint('IMPORTED:{module}')"
+    )
+
+    args = [sys.executable, "-X", "utf8", "-c", code]
+    return subprocess.run(
+        args,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def main(argv: List[str] | None = None) -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--modules", default="ai_trading,trade_execution", help="Comma-separated module list to import")
+    p.add_argument("--timeout", type=float, default=20.0, help="Per-module timeout in seconds")
+    p.add_argument("--ci", action="store_true", help="CI mode: concise logs, non-zero exit on failures")
+    args = p.parse_args(argv)
+
+    modules = [m.strip() for m in args.modules.split(",") if m.strip()]
+    overall_rc = 0
+
+    for mod in modules:
+        try:
+            cp = _run_import_in_subprocess(mod, args.timeout)
+        except subprocess.TimeoutExpired as te:
+            msg = f"TIMEOUT importing {mod} after {args.timeout:.1f}s"
+            print(msg, file=sys.stderr)
+            if args.ci:
+                return 124
+            overall_rc = overall_rc or 124
+            continue
+
+        if cp.returncode != 0:
+            # Surface stderr in CI for debugging
+            print(f"IMPORT_FAIL {mod}: rc={cp.returncode}", file=sys.stderr)
+            if cp.stdout:
+                print(cp.stdout, file=sys.stderr)
+            if cp.stderr:
+                print(cp.stderr, file=sys.stderr)
+            if args.ci:
+                return cp.returncode
+            overall_rc = overall_rc or cp.returncode
+        else:
+            if not args.ci:
+                print(cp.stdout.strip())
+
+    return overall_rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 

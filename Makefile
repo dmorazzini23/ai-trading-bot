@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract audit-exceptions self-check
+.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev
 
 init:
 	python tools/check_python_version.py
@@ -17,9 +17,18 @@ test: contract
 	PYTHONPATH=. pytest --maxfail=100 --disable-warnings --strict-markers -vv
 
 contract:
-	python tools/import_contract.py
+        python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
 
-test-all: test
+deps-dev:
+        python -m pip install -r requirements.txt -r requirements-dev.txt
+
+test-all: deps-dev
+        # Bounded pre-flight import contract; never hang CI
+        python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
+        # Run tests with artifacts; do not stop on first failure
+        pytest -n auto --disable-warnings --maxfail=0 --durations=20 \
+          --junitxml=artifacts/junit.xml --cov=ai_trading --cov=trade_execution \
+          --cov-report=xml:artifacts/coverage.xml -q
 
 lint:
 	python -m py_compile $(shell git ls-files '*.py')
