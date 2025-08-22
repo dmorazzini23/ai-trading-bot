@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 from ai_trading.data import bars
+from tests.support.assert_df_like import assert_df_like
 
 
 def test_get_daily_bars_resamples_minutes(monkeypatch):
@@ -38,6 +39,7 @@ def test_get_daily_bars_resamples_minutes(monkeypatch):
     out = bars.get_daily_bars(
         "SPY", None, datetime(2024, 1, 2, tzinfo=UTC), datetime(2024, 1, 3, tzinfo=UTC)
     )
+    assert_df_like(out, columns=["open", "high", "low", "close", "volume"])
     assert not out.empty
     assert len(out) == 1
     assert float(out.iloc[0]["open"]) == 1

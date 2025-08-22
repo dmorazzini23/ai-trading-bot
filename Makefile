@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all test-core test-integration contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
+.PHONY: init test lint verify test-all test-core test-int contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
 
 init:
 	python tools/check_python_version.py
@@ -20,30 +20,24 @@ contract:
 	python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
 
 dev-deps:
-	@pip install -r requirements.txt
-	@[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
-	@mkdir -p artifacts/versions
-	@python -V            | tee artifacts/versions/python.txt
-	@ruff --version       | tee artifacts/versions/ruff.txt
-	@mypy --version       | tee artifacts/versions/mypy.txt
-	@python -c "import pytest,xdist,execnet;print(pytest.__version__)"    | tee artifacts/versions/pytest.txt
-	@python -c "import xdist;print(xdist.__version__)"                     | tee artifacts/versions/xdist.txt
-	@python -c "import execnet;print(execnet.__version__)"                 | tee artifacts/versions/execnet.txt  # AI-AGENT-REF: record dev tool versions
+	python -m pip install --upgrade pip
+	python -m pip install -r requirements.txt
+	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; fi
+	python -m pip install -e .
+.PHONY: test-core test-int test-all
 
-test-core:
-	pytest tests -m "not integration and not slow" -n auto --disable-warnings --maxfail=0 --junitxml=artifacts/junit.xml -q | tee artifacts/pytest-core.txt
+test-core: dev-deps
+	@mkdir -p artifacts
+	pytest -n auto -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core.txt
 
-test-integration:
-	pytest tests -m "integration" --disable-warnings --maxfail=0 -q | tee artifacts/pytest-integration.txt
+test-int: dev-deps
+	@mkdir -p artifacts
+	RUN_INTEGRATION=1 pytest -n auto -q -m "integration" --disable-warnings | tee artifacts/pytest-integration.txt
 
 test-all: dev-deps
-	ruff --version | tee artifacts/ruff-version.txt
-	ruff check . --select F401,F841,UP,DTZ,T201 --ignore E501 | tee artifacts/ruff.txt || true
-	grep -E '^[^:]+:[0-9]+:[0-9]+: [A-Z]+[0-9]{3}' artifacts/ruff.txt | wc -l > artifacts/ruff-count.txt
-	python -m mypy --version | tee artifacts/mypy-version.txt
-	python -m mypy ai_trading trade_execution | tee artifacts/mypy.txt || true
-	make test-core
-	make test-integration || true
+	$(MAKE) test-core
+	@echo "--- Integration (opt-in) ---"
+	@RUN_INTEGRATION=${RUN_INTEGRATION} $(MAKE) -s test-int || true
 
 ## Lint (safe-fix subset)
 .PHONY: lint-fix

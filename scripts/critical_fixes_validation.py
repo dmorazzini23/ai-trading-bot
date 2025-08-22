@@ -29,8 +29,8 @@ class TestCriticalFixesValidation(unittest.TestCase):
         """Test P0 CRITICAL: Quantity calculation bug fix."""
         logging.info("\n🔧 Testing P0 Fix: Quantity Calculation Bug")
 
-        # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
-        from tests.mocks.critical_fixes_validation_mocks import MockContext, MockOrder
+        # (mocks centralized; see tests/support/mocks.py)
+        from tests.support.mocks import MockContext, MockOrder
         from trade_execution import ExecutionEngine
 
         # Test the fixed _reconcile_partial_fills method
@@ -75,8 +75,8 @@ class TestCriticalFixesValidation(unittest.TestCase):
         allocator = self.strategy_allocator.StrategyAllocator()
 
         # Create signals with out-of-range confidence from production logs
-        # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
-        from tests.mocks.critical_fixes_validation_mocks import MockSignal
+        # (mocks centralized; see tests/support/mocks.py)
+        from tests.support.mocks import MockSignal
 
         signals_by_strategy = {
             "test_strategy": [
@@ -118,8 +118,8 @@ class TestCriticalFixesValidation(unittest.TestCase):
         """Test P2 MEDIUM: Short selling validation foundation."""
         logging.info("\n🔧 Testing P2 Fix: Short Selling Validation (Foundation)")
 
-        # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
-        from tests.mocks.critical_fixes_validation_mocks import MockContextShortSelling
+        # (mocks centralized; see tests/support/mocks.py)
+        from tests.support.mocks import MockContextShortSelling
         from trade_execution import ExecutionEngine
 
         ctx = MockContextShortSelling()

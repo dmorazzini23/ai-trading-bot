@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from datetime import UTC
 
-from tests.mocks.critical_fixes_validation_mocks import MockContext, MockSignal
+from tests.support.mocks import MockContext, MockSignal
 
 # Set testing environment
 os.environ['TESTING'] = '1'

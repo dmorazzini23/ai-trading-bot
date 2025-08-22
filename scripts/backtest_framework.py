@@ -70,8 +70,8 @@ class TradingBotValidator:
         assert vol_with_outliers["mad"] < vol_with_outliers["std_vol"]
 
     def test_position_sizing(self):
-        # (mocks removed; see tests/mocks/backtest_framework_mocks.py)
-        from tests.mocks.backtest_framework_mocks import MockSignal
+        # (mocks centralized; see tests/support/mocks.py)
+        from tests.support.mocks import MockSignal
 
         signal = MockSignal()
 
