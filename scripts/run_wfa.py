@@ -20,9 +20,7 @@ try:
     from ai_trading.evaluation.walkforward import WalkForwardEvaluator
     from ai_trading.logging import logger
     from ai_trading.signals import SignalDecisionPipeline, generate_cost_aware_signals
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Make sure PYTHONPATH includes the project root directory")
+except ImportError:
     sys.exit(1)
 
 
@@ -227,9 +225,6 @@ def main():
 
         if args.dry_run:
             logger.info("Dry run mode - validation setup looks good")
-            print("✓ Configuration loaded successfully")
-            print(f"✓ Universe contains {len(symbols)} symbols")
-            print("✓ Ready to run walk-forward validation")
             return
 
         # Run validation
@@ -238,26 +233,19 @@ def main():
         # Print summary
         if results and "performance_summary" in results:
             perf = results["performance_summary"]
-            print("\n" + "="*50)
-            print("WALK-FORWARD VALIDATION RESULTS")
-            print("="*50)
 
             if "sharpe_ratio" in perf:
-                print(f"Average Sharpe Ratio: {perf['sharpe_ratio'].get('mean', 0):.3f}")
+                pass
             if "hit_rate" in perf:
-                print(f"Average Hit Rate: {perf['hit_rate'].get('mean', 0):.1f}%")
+                pass
             if "max_drawdown" in perf:
-                print(f"Average Max Drawdown: {perf['max_drawdown'].get('mean', 0):.3f}")
+                pass
 
-            grade = results.get("performance_grade", "N/A")
-            print(f"Performance Grade: {grade}")
+            results.get("performance_grade", "N/A")
 
-            validation_summary = results.get("validation_summary", {})
-            print(f"Valid Windows: {validation_summary.get('valid_windows', 0)}/{validation_summary.get('total_windows', 0)}")
+            results.get("validation_summary", {})
 
-            print("\nArtifacts saved to: artifacts/wfa/")
         else:
-            print("❌ Walk-forward validation failed - check logs for details")
             sys.exit(1)
 
     except KeyboardInterrupt:

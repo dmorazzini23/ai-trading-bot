@@ -54,7 +54,6 @@ def test_production_scenarios():
     logging.info("Testing production crash scenarios:")
     logging.info("Before fix: ❌ TypeError on every trade")
     logging.info("After fix:  ✅ All trades complete successfully")
-    print()
 
     all_passed = True
 
@@ -84,7 +83,6 @@ def test_production_scenarios():
         except Exception as e:
             logging.info(f"   ⚠️  Other exception (acceptable): {type(e).__name__}")
 
-    print()
     logging.info("🧪 TESTING EDGE CASES:")
 
     edge_cases = [
@@ -110,18 +108,15 @@ def test_production_scenarios():
         except Exception:
             logging.info(f"   ✅ {description}: handled gracefully")
 
-    print()
     logging.info(str("=" * 60))
 
     if all_passed:
         logging.info("🎉 ALL TESTS PASSED - CRITICAL FIX VALIDATED")
-        print()
         logging.info("✅ Production Issue RESOLVED:")
         logging.info("   - No more TypeError crashes during trade reconciliation")
         logging.info("   - String filled_qty values are safely converted to integers")
         logging.info("   - Invalid values fall back to calculated quantities")
         logging.info("   - Proper logging for type conversion failures")
-        print()
         logging.info("🚀 READY FOR PRODUCTION DEPLOYMENT")
         return True
     else:

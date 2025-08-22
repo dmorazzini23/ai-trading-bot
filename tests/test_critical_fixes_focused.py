@@ -43,7 +43,6 @@ class TestCriticalFixes(unittest.TestCase):
             1800,
             "Sentiment recovery timeout should be increased to 1800 seconds (30 minutes)",
         )
-        print("✓ Sentiment circuit breaker thresholds correctly updated")
 
     def test_confidence_normalization_exists(self):
         """Test that confidence normalization logic is in place."""
@@ -66,7 +65,6 @@ class TestCriticalFixes(unittest.TestCase):
             for signal in result:
                 self.assertTrue(0 <= signal.confidence <= 1,
                               f"Signal confidence {signal.confidence} is not in [0,1] range")
-            print("✓ Confidence normalization handles out-of-range values")
         except Exception as e:
             self.fail(f"Confidence normalization failed: {e}")
 
@@ -79,7 +77,6 @@ class TestCriticalFixes(unittest.TestCase):
         sector = bot_engine.get_sector("BABA")
         self.assertNotEqual(sector, "Unknown", "BABA should have a fallback sector classification")
         self.assertEqual(sector, "Technology", "BABA should be classified as Technology")
-        print("✓ Sector classification fallback includes BABA")
 
     def test_trade_execution_quantity_fix_exists(self):
         """Test that trade execution has the quantity calculation fix."""
@@ -96,7 +93,6 @@ class TestCriticalFixes(unittest.TestCase):
         # Verify the method exists and takes the expected parameters
         self.assertTrue(hasattr(engine, '_reconcile_partial_fills'),
                        "_reconcile_partial_fills method should exist")
-        print("✓ Trade execution quantity fix method exists")
 
     def test_short_selling_validation_exists(self):
         """Test that short selling validation method exists."""
@@ -109,12 +105,9 @@ class TestCriticalFixes(unittest.TestCase):
         # Verify the short selling validation method exists
         self.assertTrue(hasattr(engine, '_validate_short_selling'),
                        "_validate_short_selling method should exist")
-        print("✓ Short selling validation method exists")
 
 
 if __name__ == '__main__':
-    print("Running critical trading bot fixes test suite")
-    print("=" * 60)
 
     # Create test suite
     suite = unittest.TestSuite()
@@ -131,14 +124,10 @@ if __name__ == '__main__':
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
 
-    print("=" * 60)
     if result.wasSuccessful():
-        print("✅ All critical fixes validated successfully!")
         sys.exit(0)
     else:
-        print("❌ Some critical fixes failed validation!")
         sys.exit(1)
-    print(f"Fixed timestamp format: {result}")
 
     # The fix should include 'Z' suffix for RFC3339 compliance
     assert result.endswith('Z'), f"Timestamp {result} should end with 'Z' for RFC3339 compliance"
@@ -155,12 +144,10 @@ def test_position_sizing_minimum_viable():
 
     # Original calculation that resulted in 0
     raw_qty = int(balance * target_weight / current_price)
-    print(f"Original qty calculation: {raw_qty}")
 
     # Fixed logic - ensure minimum position size when cash available
     if raw_qty <= 0 and balance > 1000 and target_weight > 0.001 and current_price > 0:
         raw_qty = max(1, int(1000 / current_price))  # Minimum $1000 position
-        print(f"Using minimum position size: {raw_qty} shares")
 
     assert raw_qty > 0, f"Should compute positive quantity with ${balance:.0f} cash available"
     assert raw_qty >= 1, "Should have at least 1 share for minimum position"
@@ -205,7 +192,6 @@ def test_meta_learning_price_conversion():
         # Validate that we have reasonable price data
         df = df[(df["entry_price"] > 0) & (df["exit_price"] > 0)]
 
-        print(f"Converted dataframe: {len(df)} valid rows")
 
         # Should have 3 valid rows (INVALID row should be filtered out)
         assert len(df) == 3, f"Should have 3 valid price rows, got {len(df)}"
@@ -225,7 +211,6 @@ def test_liquidity_minimum_position():
     liquidity_factor = 0.1  # Very low liquidity (< 0.2 threshold)
 
     # Original logic would return 0
-    original_result = 0 if liquidity_factor < 0.2 else 1
 
     # Fixed logic - allow minimum position with sufficient cash
     if liquidity_factor < 0.2:
@@ -237,7 +222,6 @@ def test_liquidity_minimum_position():
     else:
         result = 1
 
-    print(f"Liquidity factor: {liquidity_factor}, Cash: ${cash:.0f}, Result: {result}")
 
     assert result > 0, "Should allow minimum position even with low liquidity when cash > $5000"
     assert result >= 1, "Should have at least 1 share minimum"
@@ -253,7 +237,6 @@ def test_stale_data_bypass_startup():
     # Test that bypass allows trading to proceed
     if stale_symbols and allow_stale_on_startup:
         trading_allowed = True
-        print(f"BYPASS_STALE_DATA_STARTUP: Allowing trading with {len(stale_symbols)} stale symbols")
     else:
         trading_allowed = False
 
@@ -281,8 +264,6 @@ def test_rfc3339_timestamp_api_format():
     start_param = start_dt.isoformat().replace('+00:00', 'Z')
     end_param = end_dt.isoformat().replace('+00:00', 'Z')
 
-    print(f"API start param: {start_param}")
-    print(f"API end param: {end_param}")
 
     # Verify RFC3339 compliance
     assert start_param.endswith('Z'), "Start timestamp should end with 'Z'"
@@ -298,4 +279,3 @@ if __name__ == "__main__":
     test_liquidity_minimum_position()
     test_stale_data_bypass_startup()
     test_rfc3339_timestamp_api_format()
-    print("All critical fix tests passed!")

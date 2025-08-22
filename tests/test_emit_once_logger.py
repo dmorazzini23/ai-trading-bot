@@ -4,7 +4,6 @@ import logging
 from io import StringIO
 
 import pytest
-
 from ai_trading.logging import EmitOnceLogger
 
 
@@ -106,7 +105,6 @@ def test_emit_once_thread_safe():
     logger.handlers.clear()
     emit_once = EmitOnceLogger(logger)
 
-    results = []
 
     def emit_messages():
         for i in range(100):

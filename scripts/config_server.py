@@ -33,7 +33,7 @@ def update_config():
         )
 
         for level, value in pyramid_levels.items():
-            if not isinstance(value, (int, float)) or not (0.0 <= value <= 1.0):
+            if not isinstance(value, int | float) or not (0.0 <= value <= 1.0):
                 return jsonify({"error": f"Invalid pyramid level {level}: {value}"}), 400
 
         set_runtime_config(volume_thr, ml_thr, pyramid_levels)

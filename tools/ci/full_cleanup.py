@@ -136,8 +136,6 @@ def main():
             write(p, txt)
             changed += 1
     ensure_settings_fields(PKG / "config" / "settings.py", upper_needed)
-    print(f"Files changed: {changed}")
-    print(f"Settings fields added for: {sorted(upper_needed)}")
 
 if __name__ == "__main__":
     main()

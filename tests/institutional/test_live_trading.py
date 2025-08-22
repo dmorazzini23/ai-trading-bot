@@ -165,16 +165,16 @@ class TestLiveTradingBot:
             pytest.skip("No execution engine available")
 
         # Test invalid symbol
-        invalid_result = execution_engine.submit_market_order("INVALID_SYMBOL", "buy", 100)
+        execution_engine.submit_market_order("INVALID_SYMBOL", "buy", 100)
         # Should handle gracefully (may succeed in mock environment)
 
         # Test invalid quantity
-        zero_qty_result = execution_engine.submit_market_order("AAPL", "buy", 0)
+        execution_engine.submit_market_order("AAPL", "buy", 0)
         # Should handle gracefully
 
         # Test invalid side
         try:
-            invalid_side_result = execution_engine.submit_market_order("AAPL", "invalid_side", 100)
+            execution_engine.submit_market_order("AAPL", "invalid_side", 100)
             # Should handle gracefully
         except Exception:
             # Error handling is working
@@ -285,6 +285,7 @@ class TestTradingBotIntegration:
         try:
             # Import key modules
             from ai_trading.execution.live_trading import AlpacaExecutionEngine
+
             from tests.institutional.framework import TradingScenarioRunner
 
             # Create and initialize components

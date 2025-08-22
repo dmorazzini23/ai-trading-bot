@@ -43,8 +43,6 @@ def extract_imports(filepath):
 
 def main():
     """Run migration validation."""
-    print("Portfolio Optimizer & Transaction Costs Migration Validation")
-    print("=" * 60)
 
     # Files that should exist
     required_files = [
@@ -56,36 +54,29 @@ def main():
     ]
 
     # Check file existence
-    print("\n1. Checking file existence...")
     all_files_exist = True
     for filepath in required_files:
         if check_file_exists(filepath):
-            print(f"✓ {filepath}")
+            pass
         else:
-            print(f"❌ {filepath} - Missing!")
             all_files_exist = False
 
     if not all_files_exist:
-        print("\n❌ Some required files are missing!")
         return 1
 
     # Check syntax
-    print("\n2. Checking syntax...")
     all_syntax_ok = True
     for filepath in required_files:
         valid, error = check_file_syntax(filepath)
         if valid:
-            print(f"✓ {filepath}")
+            pass
         else:
-            print(f"❌ {filepath} - {error}")
             all_syntax_ok = False
 
     if not all_syntax_ok:
-        print("\n❌ Some files have syntax errors!")
         return 1
 
     # Check import structure
-    print("\n3. Checking import structure...")
 
     # Check signals.py imports transaction costs correctly
     signals_imports = extract_imports("ai_trading/signals.py")
@@ -93,9 +84,8 @@ def main():
     incorrect_tc_import = any("scripts.transaction_cost" in imp for imp in signals_imports)
 
     if correct_tc_import and not incorrect_tc_import:
-        print("✓ ai_trading/signals.py imports transaction costs from correct location")
+        pass
     else:
-        print("❌ ai_trading/signals.py has incorrect transaction cost imports")
         return 1
 
     # Check portfolio __init__.py exports optimizer classes
@@ -103,9 +93,8 @@ def main():
     has_optimizer_imports = any("optimizer" in imp for imp in portfolio_imports)
 
     if has_optimizer_imports:
-        print("✓ ai_trading/portfolio/__init__.py imports from optimizer module")
+        pass
     else:
-        print("❌ ai_trading/portfolio/__init__.py missing optimizer imports")
         return 1
 
     # Check shims import from ai_trading
@@ -114,13 +103,11 @@ def main():
         has_ai_trading_imports = any("ai_trading" in imp for imp in shim_imports)
 
         if has_ai_trading_imports:
-            print(f"✓ {shim_file} imports from ai_trading package")
+            pass
         else:
-            print(f"❌ {shim_file} missing ai_trading imports")
             return 1
 
     # Check no scripts imports in ai_trading
-    print("\n4. Checking for scripts imports in production code...")
     ai_trading_files = [
         "ai_trading/signals.py",
         "ai_trading/rebalancer.py",
@@ -133,25 +120,15 @@ def main():
             imports = extract_imports(filepath)
             scripts_imports = [imp for imp in imports if "scripts." in imp]
             if scripts_imports:
-                print(f"❌ {filepath} still imports from scripts:")
                 for imp in scripts_imports:
-                    print(f"   {imp}")
+                    pass
                 scripts_imports_found = True
 
     if not scripts_imports_found:
-        print("✓ No scripts imports found in production code")
+        pass
     else:
         return 1
 
-    print("\n" + "=" * 60)
-    print("✅ All validation checks passed!")
-    print("✅ Migration completed successfully!")
-    print("\nKey improvements:")
-    print("• Portfolio optimizer moved to ai_trading.portfolio.optimizer")
-    print("• Transaction costs moved to ai_trading.execution.transaction_costs")
-    print("• Production code no longer imports from scripts/")
-    print("• Backward compatibility maintained via shims")
-    print("• Exception handling improved in signals.py")
 
     return 0
 

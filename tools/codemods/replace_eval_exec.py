@@ -43,10 +43,8 @@ def main():
             if changed:
                 p.write_text(new, encoding="utf-8")
                 changed_files += 1
-                print(f"Replaced eval/exec in: {p}")
-        except Exception as e:
-            print(f"Error processing {p}: {e}")
-    print(f"eval/exec replacements: changed {changed_files} files")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()

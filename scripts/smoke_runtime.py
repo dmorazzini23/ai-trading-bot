@@ -25,16 +25,13 @@ def test_pandas_multiindex_usage():
 
         # Test that pandas MultiIndex is available and works
         multi_idx = pd.MultiIndex.from_arrays([['A'], [1]], names=['sym', 'field'])
-        print(f"✓ pandas.MultiIndex works: {type(multi_idx)}")
 
         # Test isinstance check (this is what the fixed code uses)
-        is_multiindex = isinstance(multi_idx, pd.MultiIndex)
-        print(f"✓ isinstance(columns, pd.MultiIndex) works: {is_multiindex}")
+        isinstance(multi_idx, pd.MultiIndex)
 
         return True
 
-    except Exception as e:
-        print(f"✗ pandas MultiIndex test failed: {e}")
+    except Exception:
         return False
 
 
@@ -48,15 +45,13 @@ def test_lazy_bot_context_params():
 
         # Test that params property exists and is accessible
         has_params = hasattr(runtime, 'params')
-        print(f"✓ LazyBotContext has params attribute: {has_params}")
 
         if not has_params:
             return False
 
         return True
 
-    except Exception as e:
-        print(f"✗ LazyBotContext params test failed: {e}")
+    except Exception:
         return False
 
 
@@ -94,21 +89,18 @@ def test_prepare_run_signature():
         # Note: It may raise other errors due to missing dependencies, but not AttributeError on params
         try:
             _prepare_run(runtime, state)
-            print("✓ _prepare_run executed successfully")
         except AttributeError as e:
             if "params" in str(e):
-                print(f"✗ _prepare_run still has params AttributeError: {e}")
                 return False
             else:
-                print(f"✓ _prepare_run params access works (other AttributeError: {e})")
-        except Exception as e:
+                pass
+        except Exception:
             # Other exceptions are fine, we just want to test params access
-            print(f"✓ _prepare_run params access works (other error: {type(e).__name__})")
+            pass
 
         return True
 
-    except Exception as e:
-        print(f"✗ _prepare_run test failed: {e}")
+    except Exception:
         return False
 
 
@@ -116,33 +108,26 @@ def test_empty_dataframe_helper():
     """Test the empty DataFrame helper creates valid indexes."""
     try:
         import pandas as pd
-
         from ai_trading.core.bot_engine import _create_empty_bars_dataframe
 
         # Test the helper function
         empty_df = _create_empty_bars_dataframe("daily")
 
-        print(f"✓ Empty DataFrame created: {empty_df.shape}")
-        print(f"✓ Index type: {type(empty_df.index)}")
 
         # Verify it's a proper DatetimeIndex with UTC timezone
         assert isinstance(empty_df.index, pd.DatetimeIndex)
         assert str(empty_df.index.tz) == "UTC"
         assert empty_df.index.name == "timestamp"
 
-        print("✓ Empty DataFrame has valid DatetimeIndex with UTC timezone")
 
         return True
 
-    except Exception as e:
-        print(f"✗ Empty DataFrame helper test failed: {e}")
+    except Exception:
         return False
 
 
 def main():
     """Run smoke tests for pandas index and runtime context fixes."""
-    print("Running smoke tests for pandas index and runtime context fixes...")
-    print()
 
     tests = [
         test_pandas_multiindex_usage,
@@ -153,24 +138,18 @@ def main():
 
     passed = 0
     for test in tests:
-        print(f"Running {test.__name__}...")
         try:
             if test():
                 passed += 1
-                print("✓ PASSED")
             else:
-                print("✗ FAILED")
-        except Exception as e:
-            print(f"✗ FAILED with exception: {e}")
-        print()
+                pass
+        except Exception:
+            pass
 
-    print(f"Smoke test results: {passed}/{len(tests)} tests passed")
 
     if passed == len(tests):
-        print("🎉 All tests passed - OK")
         return 0
     else:
-        print("❌ Some tests failed")
         return 1
 
 

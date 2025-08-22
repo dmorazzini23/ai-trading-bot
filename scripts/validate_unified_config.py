@@ -45,7 +45,7 @@ def test_settings_singleton():
     # Test masked config
     masked = get_masked_config()
     assert "test..._123" in masked['alpaca_api_key'] or "***MASKED***" in masked['alpaca_api_key']
-    assert masked['has_credentials'] == True
+    assert masked['has_credentials'] is True
     logging.info("✓ Masked config logging works")
 
     logging.info("Settings Singleton: PASS\n")
@@ -92,13 +92,13 @@ def test_rate_limiter():
 
     # Test basic acquisition
     acquired = limiter.acquire_sync("test_route", tokens=1, timeout=5.0)
-    assert acquired == True, "Should acquire tokens successfully"
+    assert acquired is True, "Should acquire tokens successfully"
     logging.info("✓ Basic token acquisition works")
 
     # Test status
     status = limiter.get_status("orders")
     assert "available_tokens" in status, "Status should include available tokens"
-    assert status["enabled"] == True, "Orders route should be enabled"
+    assert status["enabled"] is True, "Orders route should be enabled"
     logging.info("✓ Rate limiter status works")
 
     logging.info("Rate Limiter: PASS\n")
@@ -147,7 +147,7 @@ def test_hyperparams_schema():
 
     # Test validation
     validation_report = validate_hyperparams_file("nonexistent_file.json")
-    assert validation_report["file_exists"] == False
+    assert validation_report["file_exists"] is False
     assert len(validation_report["warnings"]) > 0
     logging.info("✓ Validation report works")
 

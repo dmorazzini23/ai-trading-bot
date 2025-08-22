@@ -97,7 +97,7 @@ class RiskEngine:
         # AI-AGENT-REF: Add comprehensive validation for risk parameters
         try:
             exposure_cap = getattr(self.config, "exposure_cap_aggressive", 0.8)
-            if not isinstance(exposure_cap, (int, float)) or not (
+            if not isinstance(exposure_cap, int | float) or not (
                 0 < exposure_cap <= 1.0
             ):
                 logger.warning(
@@ -276,7 +276,7 @@ class RiskEngine:
 
         # Handle missing config attributes gracefully
         volatility_lookback_days = getattr(self.config, "volatility_lookback_days", 10)
-        exposure_cap_conservative = getattr(
+        getattr(
             self.config, "exposure_cap_conservative", 1.0
         )
 
@@ -760,12 +760,12 @@ class RiskEngine:
             except (AttributeError, TypeError):
                 # Additional fallback
                 is_raw_qty_finite = (
-                    isinstance(raw_qty, (int, float))
+                    isinstance(raw_qty, int | float)
                     and raw_qty == raw_qty
                     and abs(raw_qty) != float("inf")
                 )
                 is_min_qty_finite = (
-                    isinstance(min_qty, (int, float))
+                    isinstance(min_qty, int | float)
                     and min_qty == min_qty
                     and abs(min_qty) != float("inf")
                 )
@@ -1217,10 +1217,10 @@ def calculate_position_size(*args, **kwargs) -> int:
     if len(args) == 2 and not kwargs:
         cash, price = args
         # Validate inputs
-        if not isinstance(cash, (int, float)) or cash <= 0:
+        if not isinstance(cash, int | float) or cash <= 0:
             logging.warning(f"Invalid cash amount: {cash}")
             return 0
-        if not isinstance(price, (int, float)) or price <= 0:
+        if not isinstance(price, int | float) or price <= 0:
             logging.warning(f"Invalid price: {price}")
             return 0
 
@@ -1233,10 +1233,10 @@ def calculate_position_size(*args, **kwargs) -> int:
         signal, cash, price = args[:3]
 
         # Validate inputs
-        if not isinstance(cash, (int, float)) or cash <= 0:
+        if not isinstance(cash, int | float) or cash <= 0:
             logging.warning(f"Invalid cash amount: {cash}")
             return 0
-        if not isinstance(price, (int, float)) or price <= 0:
+        if not isinstance(price, int | float) or price <= 0:
             logging.warning(f"Invalid price: {price}")
             return 0
         if not hasattr(signal, "confidence") or not hasattr(signal, "symbol"):
@@ -1288,10 +1288,10 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
     max_dd = state.get("max_drawdown", 0)
 
     # Validate drawdown values
-    if not isinstance(current_dd, (int, float)) or current_dd < 0:
+    if not isinstance(current_dd, int | float) or current_dd < 0:
         logging.warning(f"Invalid current_drawdown: {current_dd}")
         return False
-    if not isinstance(max_dd, (int, float)) or max_dd <= 0:
+    if not isinstance(max_dd, int | float) or max_dd <= 0:
         logging.warning(f"Invalid max_drawdown: {max_dd}")
         return False
 
@@ -1504,7 +1504,7 @@ def correlation_position_weights(
 
 def drawdown_circuit(drawdowns: Sequence[float], limit: float = 0.2) -> bool:
     """Return True if cumulative drawdown exceeds ``limit``."""
-    dd = abs(min(0.0, min(drawdowns))) if drawdowns else 0.0
+    dd = abs(min(0.0, *drawdowns)) if drawdowns else 0.0
     return dd > limit
 
 

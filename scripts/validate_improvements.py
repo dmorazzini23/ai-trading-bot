@@ -148,7 +148,6 @@ def main():
         try:
             result = test()
             results.append(result)
-            print()
         except Exception as e:
             logging.info(f"✗ Test {test.__name__} failed with exception: {e}\n")
             results.append(False)

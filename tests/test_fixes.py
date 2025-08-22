@@ -12,11 +12,9 @@ from pathlib import Path
 
 def test_tickers_csv():
     """Test that tickers.csv has been expanded correctly."""
-    print("🔍 Testing tickers.csv expansion")
 
     tickers_file = Path("tickers.csv")
     if not tickers_file.exists():
-        print("❌ tickers.csv not found!")
         return False
 
     with open(tickers_file) as f:
@@ -29,25 +27,20 @@ def test_tickers_csv():
         'IWM', 'JPM', 'JNJ', 'PG', 'KO', 'XOM', 'CVX', 'BABA'
     ]
 
-    print(f"📊 Found {len(tickers)} tickers in tickers.csv")
-    print(f"🎯 Expected {len(expected_tickers)} tickers")
 
     missing = set(expected_tickers) - set(tickers)
     extra = set(tickers) - set(expected_tickers)
 
     if missing:
-        print(f"❌ Missing tickers: {missing}")
         return False
 
     if extra:
-        print(f"ℹ️ Extra tickers: {extra}")
+        pass
 
-    print("✅ Tickers.csv expansion successful!")
     return True
 
 def test_talib_imports():
     """Test TA-Lib imports and fallback handling."""
-    print("\n🔍 Testing TA-Lib imports")
 
     try:
         # Set dummy environment variables to avoid config errors
@@ -58,25 +51,21 @@ def test_talib_imports():
         os.environ.setdefault('FLASK_PORT', '5000')
 
         from ai_trading.strategies.imports import TA_AVAILABLE, ta
-        print(f"📦 TA library available: {TA_AVAILABLE}")
 
         # Test that ta object is always available (real or mock)
         if hasattr(ta, 'trend'):
-            print("✅ TA trend indicators available")
+            pass
         else:
-            print("❌ TA trend indicators not available")
             return False
 
         if hasattr(ta, 'momentum'):
-            print("✅ TA momentum indicators available")
+            pass
         else:
-            print("❌ TA momentum indicators not available")
             return False
 
         if hasattr(ta, 'volatility'):
-            print("✅ TA volatility indicators available")
+            pass
         else:
-            print("❌ TA volatility indicators not available")
             return False
 
         # Test basic functionality with small dataset
@@ -86,25 +75,21 @@ def test_talib_imports():
             test_series = pd.Series(test_data)
             sma_result = ta.trend.sma_indicator(test_series, window=10)
             if sma_result is not None and len(sma_result) == len(test_data):
-                print("✅ SMA calculation working")
+                pass
             else:
-                print("✅ SMA calculation working (fallback mode)")
-        except Exception as e:
-            print(f"⚠️ SMA calculation issue: {e}")
+                pass
+        except Exception:
+            pass
 
-        print("✅ TA-Lib imports and fallback working correctly!")
         return True
 
-    except ImportError as e:
-        print(f"❌ Failed to import TA-Lib modules: {e}")
+    except ImportError:
         return False
-    except Exception as e:
-        print(f"❌ Error testing TA-Lib: {e}")
+    except Exception:
         return False
 
 def test_screen_universe_logging():
     """Test that screen_universe function has enhanced logging."""
-    print("\n🔍 Testing screen_universe logging enhancements")
 
     try:
         with open('bot_engine.py') as f:
@@ -112,33 +97,27 @@ def test_screen_universe_logging():
 
         # Check for enhanced logging statements
         if 'logger.info(f"[SCREEN_UNIVERSE] Starting screening of' in content:
-            print("✅ Enhanced screening start logging found")
+            pass
         else:
-            print("❌ Enhanced screening start logging not found")
             return False
 
         if 'filtered_out[sym] = "no_data"' in content:
-            print("✅ Detailed filtering reason tracking found")
+            pass
         else:
-            print("❌ Detailed filtering reason tracking not found")
             return False
 
         if 'f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates' in content:
-            print("✅ Enhanced summary logging found")
+            pass
         else:
-            print("❌ Enhanced summary logging not found")
             return False
 
-        print("✅ Screen universe logging enhancements verified!")
         return True
 
-    except Exception as e:
-        print(f"❌ Error checking screen_universe logging: {e}")
+    except Exception:
         return False
 
 def main():
     """Run all tests."""
-    print("🚀 Running Trading Bot Fixes Validation Tests\n")
 
     tests = [
         test_tickers_csv,
@@ -150,19 +129,13 @@ def main():
     for test in tests:
         try:
             results.append(test())
-        except Exception as e:
-            print(f"❌ Test {test.__name__} failed with exception: {e}")
+        except Exception:
             results.append(False)
 
-    print("\n📊 Test Results:")
-    print(f"✅ Passed: {sum(results)}/{len(results)}")
-    print(f"❌ Failed: {len(results) - sum(results)}/{len(results)}")
 
     if all(results):
-        print("\n🎉 All tests passed! Trading bot fixes are working correctly.")
         return 0
     else:
-        print("\n⚠️ Some tests failed. Please review the issues above.")
         return 1
 
 if __name__ == "__main__":

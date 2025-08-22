@@ -78,9 +78,8 @@ except Exception as e:
                 check=True
             )
 
-            print("STDOUT:", result.stdout)
             if result.stderr:
-                print("STDERR:", result.stderr)
+                pass
 
             # Check that script succeeded
             assert result.returncode == 0, f"Script failed with return code {result.returncode}"
@@ -198,9 +197,8 @@ print("✓ All UTC timestamp functions work correctly")
 
         try:
             result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30, check=True)  # AI-AGENT-REF: Added timeout and check for security
-            print("STDOUT:", result.stdout)
             if result.stderr:
-                print("STDERR:", result.stderr)
+                pass
             assert result.returncode == 0, f"UTC test failed: {result.stderr}"
 
         finally:
@@ -236,9 +234,8 @@ print("✓ Lazy import mechanism working correctly")
 
         try:
             result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30, check=True)  # AI-AGENT-REF: Added timeout and check for security
-            print("STDOUT:", result.stdout)
             if result.stderr:
-                print("STDERR:", result.stderr)
+                pass
             assert result.returncode == 0, f"Lazy import test failed: {result.stderr}"
 
         finally:

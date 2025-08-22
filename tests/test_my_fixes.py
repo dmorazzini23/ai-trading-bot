@@ -20,7 +20,6 @@ class TestMyFixes(unittest.TestCase):
         # Should have reduced performance threshold from 0.4 to 0.3
         self.assertIn('METALEARN_PERFORMANCE_THRESHOLD", "0.3"', content)
 
-        print("✓ Meta-learning thresholds reduced: min_trades=2, threshold=0.3")
 
     def test_duplicate_logging_fix(self):
         """Test that duplicate event logging is eliminated."""
@@ -36,7 +35,6 @@ class TestMyFixes(unittest.TestCase):
             duplicate_pattern = 'else:\n                # Log only key phases in normal mode\n                if phase in'
             self.assertNotIn(duplicate_pattern, content)
 
-            print("✓ Duplicate event logging eliminated")
 
     def test_confidence_normalization_improved(self):
         """Test that confidence score normalization is improved."""
@@ -52,7 +50,6 @@ class TestMyFixes(unittest.TestCase):
         # Should preserve original value for logging
         self.assertIn('original_confidence', content)
 
-        print("✓ Confidence normalization improved with tanh-based algorithm")
 
     def test_position_limit_rebalancing(self):
         """Test that position limits allow rebalancing."""
@@ -66,7 +63,6 @@ class TestMyFixes(unittest.TestCase):
         self.assertIn('ALLOW_REBALANCING', content)
         self.assertIn('existing_symbols', content)
 
-        print("✓ Position limit rebalancing implemented")
 
     def test_liquidity_thresholds_increased(self):
         """Test that liquidity thresholds are made less aggressive."""
@@ -79,7 +75,6 @@ class TestMyFixes(unittest.TestCase):
         # Volatility threshold increased from 0.02 to 0.08
         self.assertIn('LIQUIDITY_VOL_THRESHOLD", "0.08"', content)
 
-        print("✓ Liquidity thresholds made less aggressive: spread=15%, vol=8%")
 
     def test_data_quality_handling_improved(self):
         """Test that data quality validation is improved."""
@@ -95,7 +90,6 @@ class TestMyFixes(unittest.TestCase):
         # Should use adaptive calculations
         self.assertIn('min(5, len(df))', content)
 
-        print("✓ Data quality validation improved: min 3 rows, adaptive calculations")
 
     def test_confidence_algorithm_correctness(self):
         """Test that the confidence normalization algorithm works correctly."""
@@ -127,7 +121,6 @@ class TestMyFixes(unittest.TestCase):
         self.assertGreaterEqual(meta_normalized, 0.5)
         self.assertGreaterEqual(shop_normalized, 0.5)
 
-        print(f"✓ Confidence normalization: META {meta_confidence:.3f}→{meta_normalized:.3f}, SHOP {shop_confidence:.3f}→{shop_normalized:.3f}")
 
     def test_meta_learning_would_activate(self):
         """Test that meta-learning would now activate with reasonable data."""
@@ -156,7 +149,6 @@ class TestMyFixes(unittest.TestCase):
         # With 50% win rate and 0.3 threshold, signals should qualify
         self.assertGreater(len(qualified_signals), 0, "Some signals should qualify with new thresholds")
 
-        print(f"✓ Meta-learning simulation: {len(qualified_signals)}/{len(signals)} signals would qualify")
 
 
 if __name__ == "__main__":

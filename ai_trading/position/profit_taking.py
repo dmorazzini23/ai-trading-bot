@@ -421,9 +421,7 @@ class ProfitTakingEngine:
             current_price = plan.current_price
 
             if (
-                target.strategy == ProfitTakingStrategy.RISK_MULTIPLE
-                or target.strategy == ProfitTakingStrategy.TECHNICAL_LEVELS
-                or target.strategy == ProfitTakingStrategy.PERCENTAGE_BASED
+                target.strategy in (ProfitTakingStrategy.RISK_MULTIPLE, ProfitTakingStrategy.TECHNICAL_LEVELS, ProfitTakingStrategy.PERCENTAGE_BASED)
             ):
                 return current_price >= target.level
 

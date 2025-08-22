@@ -31,9 +31,7 @@ try:
         TrailingStopManager,
         TrailingStopType,
     )
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Testing import fallback")
+except ImportError:
 
     # Test basic imports
     import sys
@@ -461,23 +459,15 @@ if __name__ == "__main__":
 
     # Basic smoke tests
     manager = IntelligentPositionManager()
-    print("✓ IntelligentPositionManager initialized successfully")
 
     detector = MarketRegimeDetector()
     regime_params = detector.get_regime_parameters(MarketRegime.TRENDING_BULL)
-    print(f"✓ Regime parameters: {regime_params}")
 
     analyzer = TechnicalSignalAnalyzer()
-    print("✓ TechnicalSignalAnalyzer initialized successfully")
 
     trail_manager = TrailingStopManager()
-    print("✓ TrailingStopManager initialized successfully")
 
     profit_engine = ProfitTakingEngine()
-    print("✓ ProfitTakingEngine initialized successfully")
 
     corr_analyzer = PortfolioCorrelationAnalyzer()
-    print("✓ PortfolioCorrelationAnalyzer initialized successfully")
 
-    print("\n✅ All advanced position management components initialized successfully!")
-    print("🎯 Ready for intelligent position holding strategies implementation!")

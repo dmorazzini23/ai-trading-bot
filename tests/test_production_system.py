@@ -21,8 +21,7 @@ try:
         TradingHaltManager,
     )
     from ai_trading.risk.position_sizing import ATRPositionSizer, DynamicPositionSizer
-except ImportError as e:
-    print(f"Import error (expected in test environment): {e}")
+except ImportError:
     # Create mock classes for testing
     class RiskLevel:
         CONSERVATIVE = "conservative"
@@ -57,21 +56,17 @@ def test_atr_position_sizer():
         expected_size = int(2000 / (2.0 * 2.0))
 
         assert position_size == expected_size, f"Expected {expected_size}, got {position_size}"
-        print(f"✓ ATR Position Sizer: {position_size} shares for ${account_equity:,} account")
 
         # Test stop levels
         stop_levels = sizer.calculate_stop_levels(entry_price, atr_value, "long")
         assert stop_levels["stop_loss"] < entry_price, "Stop loss should be below entry for long"
         assert stop_levels["take_profit"] > entry_price, "Take profit should be above entry for long"
-        print(f"✓ Stop levels: SL=${stop_levels['stop_loss']:.2f}, TP=${stop_levels['take_profit']:.2f}")
 
         return True
 
     except ImportError:
-        print("⚠ ATR Position Sizer test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ ATR Position Sizer test failed: {e}")
+    except Exception:
         return False
 
 
@@ -87,30 +82,24 @@ def test_drawdown_circuit_breaker():
         breaker = DrawdownCircuitBreaker(max_drawdown=0.10)
 
         # Test normal operation
-        assert breaker.update_equity(100000) == True, "Trading should be allowed initially"
-        print("✓ Circuit breaker allows trading initially")
+        assert breaker.update_equity(100000) is True, "Trading should be allowed initially"
 
         # Test drawdown within limits
-        assert breaker.update_equity(95000) == True, "5% drawdown should be allowed"
-        print("✓ Circuit breaker allows 5% drawdown")
+        assert breaker.update_equity(95000) is True, "5% drawdown should be allowed"
 
         # Test drawdown exceeding limits
-        assert breaker.update_equity(85000) == False, "15% drawdown should halt trading"
-        print("✓ Circuit breaker halts trading at 15% drawdown")
+        assert breaker.update_equity(85000) is False, "15% drawdown should halt trading"
 
         # Test status
         status = breaker.get_status()
         assert status["current_drawdown"] >= 0.10, "Drawdown should be >= 10%"
         assert not status["trading_allowed"], "Trading should be halted"
-        print(f"✓ Circuit breaker status: {status['current_drawdown']:.1%} drawdown, halted")
 
         return True
 
     except ImportError:
-        print("⚠ Drawdown Circuit Breaker test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Drawdown Circuit Breaker test failed: {e}")
+    except Exception:
         return False
 
 
@@ -123,35 +112,29 @@ def test_trading_halt_manager():
 
         # Test initial state
         status = halt_manager.is_trading_allowed()
-        assert status["trading_allowed"] == True, "Trading should be allowed initially"
-        print("✓ Trading halt manager allows trading initially")
+        assert status["trading_allowed"] is True, "Trading should be allowed initially"
 
         # Test manual halt
         halt_manager.manual_halt_trading("Test halt")
         status = halt_manager.is_trading_allowed()
-        assert status["trading_allowed"] == False, "Trading should be halted after manual halt"
+        assert status["trading_allowed"] is False, "Trading should be halted after manual halt"
         assert "Manual halt" in status["reasons"][0], "Reason should mention manual halt"
-        print("✓ Manual halt working correctly")
 
         # Test resume
         halt_manager.resume_trading("Test resume")
         status = halt_manager.is_trading_allowed()
-        assert status["trading_allowed"] == True, "Trading should resume after manual resume"
-        print("✓ Manual resume working correctly")
+        assert status["trading_allowed"] is True, "Trading should resume after manual resume"
 
         # Test emergency stop
         halt_manager.emergency_stop_all("Test emergency")
         status = halt_manager.is_trading_allowed()
-        assert status["trading_allowed"] == False, "Trading should be halted after emergency stop"
-        print("✓ Emergency stop working correctly")
+        assert status["trading_allowed"] is False, "Trading should be halted after emergency stop"
 
         return True
 
     except ImportError:
-        print("⚠ Trading Halt Manager test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Trading Halt Manager test failed: {e}")
+    except Exception:
         return False
 
 
@@ -174,7 +157,6 @@ def test_alert_manager():
         )
 
         assert alert_id != "", "Alert ID should not be empty"
-        print(f"✓ Alert sent successfully: {alert_id}")
 
         # Test trading alert
         trading_alert_id = alert_manager.send_trading_alert(
@@ -185,24 +167,19 @@ def test_alert_manager():
         )
 
         assert trading_alert_id != "", "Trading alert ID should not be empty"
-        print(f"✓ Trading alert sent successfully: {trading_alert_id}")
 
         # Test alert stats
         stats = alert_manager.get_alert_stats()
         assert stats["total_alerts"] >= 2, "Should have at least 2 alerts"
-        print(f"✓ Alert stats: {stats['total_alerts']} total alerts")
 
         # Stop processing
         alert_manager.stop_processing()
-        print("✓ Alert manager processing stopped")
 
         return True
 
     except ImportError:
-        print("⚠ Alert Manager test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Alert Manager test failed: {e}")
+    except Exception:
         return False
 
 
@@ -230,31 +207,25 @@ async def test_production_execution_coordinator():
         )
 
         assert result["status"] in ["success", "rejected"], f"Unexpected status: {result['status']}"
-        print(f"✓ Order submission result: {result['status']} - {result.get('message', 'No message')}")
 
         # Test execution summary
         summary = coordinator.get_execution_summary()
         assert "execution_stats" in summary, "Summary should contain execution stats"
         assert summary["execution_stats"]["total_orders"] >= 1, "Should have at least 1 order"
-        print(f"✓ Execution summary: {summary['execution_stats']['total_orders']} total orders")
 
         # Test position tracking
-        positions = coordinator.get_current_positions()
-        print(f"✓ Current positions: {len(positions)} positions")
+        coordinator.get_current_positions()
 
         return True
 
     except ImportError:
-        print("⚠ Production Execution Coordinator test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Production Execution Coordinator test failed: {e}")
+    except Exception:
         return False
 
 
 async def run_all_tests():
     """Run all tests and report results."""
-    print("🚀 Running Production Trading System Tests\n")
 
     test_results = []
 
@@ -268,26 +239,19 @@ async def run_all_tests():
     test_results.append(("Production Execution Coordinator", await test_production_execution_coordinator()))
 
     # Report results
-    print("\n📊 Test Results Summary:")
-    print("=" * 50)
 
     passed = 0
     total = len(test_results)
 
     for test_name, result in test_results:
-        status = "PASS" if result else "FAIL"
-        icon = "✅" if result else "❌"
-        print(f"{icon} {test_name}: {status}")
         if result:
             passed += 1
 
-    print("=" * 50)
-    print(f"Total: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
 
     if passed == total:
-        print("\n🎉 All tests passed! Production system is ready.")
+        pass
     else:
-        print(f"\n⚠️  {total-passed} tests failed. Review implementation.")
+        pass
 
     return passed == total
 
@@ -297,10 +261,8 @@ if __name__ == "__main__":
     try:
         result = asyncio.run(run_all_tests())
         exit_code = 0 if result else 1
-        exit(exit_code)
+        sys.exit(exit_code)
     except KeyboardInterrupt:
-        print("\n\n⏹️  Tests interrupted by user")
-        exit(1)
-    except Exception as e:
-        print(f"\n\n💥 Test runner error: {e}")
-        exit(1)
+        sys.exit(1)
+    except Exception:
+        sys.exit(1)

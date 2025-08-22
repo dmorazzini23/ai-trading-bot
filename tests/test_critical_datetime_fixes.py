@@ -112,9 +112,8 @@ class TestSentimentCaching(unittest.TestCase):
         try:
             import time
 
-            from requests.exceptions import HTTPError
-
             from ai_trading.core.bot_engine import _SENTIMENT_CACHE, fetch_sentiment
+            from requests.exceptions import HTTPError
 
             # Clear cache
             _SENTIMENT_CACHE.clear()

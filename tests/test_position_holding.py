@@ -33,15 +33,15 @@ def test_position_manager_should_hold_profit():
 
     # Test holding profitable position (>5% gain)
     result = pm.should_hold_position("AAPL", position, 8.5, 2)
-    assert result == True, "Should hold profitable position with >5% gain"
+    assert result is True, "Should hold profitable position with >5% gain"
 
     # Test holding new position (<3 days)
     result = pm.should_hold_position("AAPL", position, 2.0, 1)
-    assert result == True, "Should hold new position for at least 3 days"
+    assert result is True, "Should hold new position for at least 3 days"
 
     # Test not holding losing position
     result = pm.should_hold_position("AAPL", position, -3.0, 5)
-    assert result == False, "Should not hold losing position after min hold period"
+    assert result is False, "Should not hold losing position after min hold period"
 
 
 def test_position_hold_signals_generation():
@@ -150,7 +150,7 @@ def test_meta_learning_trigger():
                 # Test trigger
                 result = trigger_meta_learning_conversion(trade_data)
 
-                assert result == True, "Meta-learning conversion should succeed"
+                assert result is True, "Meta-learning conversion should succeed"
                 mock_validate.assert_called_once()
                 mock_convert.assert_called_once()
 
@@ -219,4 +219,3 @@ if __name__ == "__main__":
     test_meta_learning_trigger()
     test_position_manager_cleanup()
     test_position_score_calculation()
-    print("All position holding and meta-learning tests passed!")

@@ -30,7 +30,6 @@ def main():
         p = ROOT / rel
         if p.exists():
             changed += ensure_block(p, module, flag)
-    print(f"optionalized_files={changed}")
 
 if __name__ == "__main__":
     main()

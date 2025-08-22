@@ -76,7 +76,7 @@ def test_retry_idempotency_integration():
     """Test that retry mechanism works with idempotency protection."""
     broker = MockBrokerAPI(fail_count=2)  # Fail 2 times, succeed on 3rd
     idempotency_mgr = OrderIdempotencyManager()
-    reconciler = PositionReconciler()
+    PositionReconciler()
 
     order_data = {
         "client_order_id": "test_order_123",
@@ -88,7 +88,6 @@ def test_retry_idempotency_integration():
     # Manually apply retry logic since we can't easily test the decorator
     attempt = 0
     max_attempts = 3
-    result = None
     order_id = order_data["client_order_id"]
 
     # Mark as submitted for idempotency
@@ -96,7 +95,7 @@ def test_retry_idempotency_integration():
 
     while attempt < max_attempts:
         try:
-            result = broker.submit_order(order_data)
+            broker.submit_order(order_data)
             break
         except ConnectionError:
             attempt += 1
@@ -132,7 +131,7 @@ def test_reconciliation_heals_state():
 
     # Submit order successfully (no retries needed)
     idempotency_mgr.mark_submitted(order_data["client_order_id"])
-    result = broker.submit_order(order_data)
+    broker.submit_order(order_data)
 
     # Simulate reconciliation after order submission
     reconciliation_result = reconciler.reconcile_positions_and_orders()
@@ -195,4 +194,3 @@ if __name__ == "__main__":
     test_retry_idempotency_integration()
     test_reconciliation_heals_state()
     test_retry_exhaustion_with_idempotency()
-    print("All integration tests passed!")

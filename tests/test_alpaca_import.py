@@ -34,7 +34,6 @@ def test_ai_trading_import_without_alpaca():
         assert TradingClient is not None
         assert OrderSide is not None
 
-        print("SUCCESS: ai_trading imported successfully without Alpaca packages")
 
     finally:
         # Clean up environment

@@ -240,7 +240,6 @@ def main():
             logging.info(f"   ✗ Test failed with exception: {e}")
             traceback.print_exc()
             results.append(False)
-        print()
 
     logging.info(str("=" * 60))
     logging.info("VALIDATION SUMMARY:")

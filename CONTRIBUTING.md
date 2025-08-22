@@ -28,6 +28,14 @@
 - Service: `sudo systemctl restart ai-trading.service`
 - Logs: `journalctl -u ai-trading.service -f | sed -n '1,200p'`
 
+## Lint & Tests
+- Run `make test-all` before committing.
+- Outputs are saved under `artifacts/`:
+  - `tool-versions.txt` for Python and tool versions
+  - `ruff.txt` and `ruff-top-rules.txt` for lint results
+  - `mypy.txt` for type-checking
+  - `pytest.txt` for test execution
+
 ## PR Task Prompt (required)
 **Title**  
 **Repository Context**  

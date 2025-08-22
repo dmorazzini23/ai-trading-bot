@@ -35,7 +35,6 @@ def simulate_trading_session():
     logging.info(f"Conservative: Max Drawdown = {conservative_config.max_drawdown_threshold:.1%}, Daily Loss = {conservative_config.daily_loss_limit:.1%}")
     logging.info(f"Balanced:     Max Drawdown = {balanced_config.max_drawdown_threshold:.1%}, Daily Loss = {balanced_config.daily_loss_limit:.1%}")
     logging.info(f"Aggressive:   Max Drawdown = {aggressive_config.max_drawdown_threshold:.1%}, Daily Loss = {aggressive_config.daily_loss_limit:.1%}")
-    print()
 
     # Use balanced mode for the simulation
     current_config = balanced_config
@@ -44,7 +43,6 @@ def simulate_trading_session():
     logging.info(f"  • Daily Loss Limit: {current_config.daily_loss_limit:.1%}")
     logging.info(f"  • Kelly Fraction: {current_config.kelly_fraction}")
     logging.info(f"  • Confidence Threshold: {current_config.conf_threshold}")
-    print()
 
     # Initialize circuit breaker with centralized config
     breaker = DrawdownCircuitBreaker(max_drawdown=current_config.max_drawdown_threshold)

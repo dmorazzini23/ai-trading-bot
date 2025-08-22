@@ -162,7 +162,6 @@ def main():
         except Exception as e:
             logging.info(f"✗ {test.__name__} failed with error: {e}")
             failed += 1
-        print()
 
     logging.info("=== Summary ===")
     logging.info(f"Passed: {passed}")

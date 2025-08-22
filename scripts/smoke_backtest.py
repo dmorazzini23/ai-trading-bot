@@ -12,8 +12,6 @@ def run_backtest_smoke_test():
     """
     Run smoke test to verify net < gross due to all costs.
     """
-    print("=== Backtest Smoke Test ===")
-    print("Testing that net < gross due to all costs...")
 
     try:
         # Import Money class directly without package initialization
@@ -22,7 +20,6 @@ def run_backtest_smoke_test():
         from money import Money
 
         # Mock a simple backtest scenario
-        print("Simulating backtest with costs...")
 
         # Trade scenario: Buy at $100, sell at $102, 100 shares
         entry_price = Money('100.00')
@@ -31,7 +28,6 @@ def run_backtest_smoke_test():
 
         # Gross P&L calculation (no costs)
         gross_pnl = (exit_price - entry_price) * quantity
-        print(f"Gross P&L: ${gross_pnl}")
 
         # Apply realistic costs
         position_value = entry_price * quantity
@@ -53,11 +49,6 @@ def run_backtest_smoke_test():
         # Net P&L after costs
         net_pnl = gross_pnl - total_costs
 
-        print(f"Execution cost (5 bps): ${execution_cost}")
-        print(f"Overnight cost (2 bps): ${overnight_cost}")
-        print(f"Commission: ${commission}")
-        print(f"Total costs: ${total_costs}")
-        print(f"Net P&L: ${net_pnl}")
 
         # Critical validation: net must be less than gross
         if net_pnl >= gross_pnl:
@@ -65,19 +56,14 @@ def run_backtest_smoke_test():
 
         # Additional checks
         cost_drag_bps = (total_costs / position_value) * 10000
-        print(f"Total cost drag: {cost_drag_bps:.1f} bps")
 
         if cost_drag_bps < 5.0:
             raise AssertionError(f"Cost drag ({cost_drag_bps:.1f} bps) seems too low")
 
-        print("✓ Net P&L is correctly less than gross P&L due to costs")
-        print(f"✓ Cost drag of {cost_drag_bps:.1f} bps is realistic")
-        print("✓ Backtest smoke test passed!")
 
         return True
 
-    except Exception as e:
-        print(f"✗ Backtest smoke test failed: {e}")
+    except Exception:
         return False
 
 if __name__ == "__main__":

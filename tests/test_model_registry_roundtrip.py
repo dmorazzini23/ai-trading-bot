@@ -4,9 +4,8 @@ import tempfile
 
 import numpy as np
 import pytest
-from sklearn.linear_model import LinearRegression
-
 from ai_trading.model_registry import ModelRegistry
+from sklearn.linear_model import LinearRegression
 
 
 def test_model_registry_roundtrip():
@@ -124,6 +123,7 @@ def test_model_registry_errors():
         assert result is None
 
         # Test non-picklable model
-        non_picklable = lambda x: x  # lambda is not picklable
+        def non_picklable(x):
+            return x  # lambda is not picklable
         with pytest.raises(RuntimeError, match="Model not picklable"):
             registry.register_model(non_picklable, "test", "lambda")

@@ -55,7 +55,7 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
 
     # AI-AGENT-REF: Robust parameter validation with auto-correction for common mistakes
     # Handle potential parameter order issues from tests
-    if isinstance(side, (int, float)) and isinstance(qty, str):
+    if isinstance(side, int | float) and isinstance(qty, str):
         # Detected parameter order issue: qty and side are swapped
         logger.warning("Parameter order correction: swapping qty and side parameters")
         qty, side = side, qty
@@ -67,10 +67,10 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     if not side or not isinstance(side, str):
         logger.error("Invalid side provided: %s", side)
         return
-    if not isinstance(qty, (int, float)) or qty == 0:
+    if not isinstance(qty, int | float) or qty == 0:
         logger.error("Invalid quantity: %s", qty)
         return
-    if not isinstance(fill_price, (int, float)) or fill_price <= 0:
+    if not isinstance(fill_price, int | float) or fill_price <= 0:
         logger.error("Invalid fill_price: %s", fill_price)
         return
 

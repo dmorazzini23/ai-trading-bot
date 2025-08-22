@@ -194,7 +194,7 @@ class TestMetaLearning:
     def test_fallback_prediction(self):
         """Test fallback prediction when ML is not available."""
         # Temporarily disable ML
-        original_ml = self.strategy.__class__.__module__.replace('metalearning', 'metalearning')
+        self.strategy.__class__.__module__.replace('metalearning', 'metalearning')
 
         prediction = self.strategy._fallback_prediction(self.mock_data)
 
@@ -285,13 +285,10 @@ def test_no_metalearn_invalid_prices_error():
 
 if __name__ == '__main__':
     # Run a basic test to ensure the strategy works
-    print("Running basic MetaLearning strategy test")
 
     test_metalearning_import()
-    print("✅ Import test passed")
 
     test_no_metalearn_invalid_prices_error()
-    print("✅ Error handling test passed")
 
     # Create and test strategy
     from ai_trading.strategies.metalearning import MetaLearning
@@ -300,13 +297,9 @@ if __name__ == '__main__':
     # Test with mock data
     mock_data = create_mock_price_data()
     features = strategy.extract_features(mock_data)
-    print(f"✅ Feature extraction: {len(features.columns)} features extracted")
 
     success = strategy.train_model(mock_data)
-    print(f"✅ Model training: {'Success' if success else 'Failed'}")
 
     if success:
         prediction = strategy.predict_price_movement(mock_data)
-        print(f"✅ Prediction: {prediction['direction']} (confidence: {prediction['confidence']:.2f})")
 
-    print("✅ All basic tests passed!")

@@ -21,7 +21,6 @@ def test_alpaca_availability_detection():
     # Test normal case (should return False in our test environment)
     result = _alpaca_available()
     assert isinstance(result, bool)
-    print(f"✓ Alpaca availability detected correctly: {result}")
 
 
 def test_alpaca_import_exception_handling():
@@ -37,10 +36,10 @@ def test_alpaca_import_exception_handling():
 
             # This should not crash, should fallback gracefully
             try:
-                result = mock_available()
+                mock_available()
                 assert False, "Should have raised TypeError"
             except TypeError:
-                print("✓ TypeError in Alpaca import handled gracefully")
+                pass
 
 
 def test_package_safe_imports():
@@ -53,17 +52,14 @@ def test_package_safe_imports():
     from ai_trading.logging import get_logger, setup_logging
     assert callable(setup_logging)
     assert callable(get_logger)
-    print("✓ ai_trading.logging imports work")
 
     # Test core imports
     from ai_trading.core.bot_engine import _alpaca_available
     assert callable(_alpaca_available)
-    print("✓ ai_trading.core.bot_engine imports work")
 
     # Test runner imports
     from ai_trading.runner import run_cycle
     assert callable(run_cycle)
-    print("✓ ai_trading.runner imports work")
 
 
 def test_utc_datetime_handling():
@@ -88,7 +84,6 @@ def test_utc_datetime_handling():
     # Check that created_at has timezone info
     assert order.created_at.tzinfo is not None, "Order created_at should be timezone-aware"
     assert order.created_at.tzinfo == UTC, "Order should use UTC timezone"
-    print("✓ UTC datetime handling working in execution engine")
 
 
 def test_async_modernization():
@@ -106,9 +101,8 @@ def test_async_modernization():
         # Should use get_running_loop() not get_event_loop()
         assert 'get_running_loop()' in source, "Should use modern get_running_loop()"
         assert 'get_event_loop()' not in source, "Should not use deprecated get_event_loop()"
-        print("✓ Async modernization implemented correctly")
-    except ImportError as e:
-        print(f"⚠ Skipping async test due to missing dependency: {e}")
+    except ImportError:
+        pass
         # This is OK in minimal test environment
 
 
@@ -129,7 +123,6 @@ def test_start_script_portability():
     # Should support VENV_PATH override
     assert 'VENV_PATH:-' in content, "Should support VENV_PATH environment variable"
 
-    print("✓ start.sh portability implemented correctly")
 
 
 def test_python_version_requirements():
@@ -141,7 +134,6 @@ def test_python_version_requirements():
     assert 'requires-python = ">=3.12,<3.13"' in content, "Should use flexible Python 3.12 range"
     assert 'requires-python = "==3.12.3"' not in content, "Should not pin exact version"
 
-    print("✓ Python version requirements updated correctly")
 
 
 def test_env_example_exists():
@@ -161,7 +153,6 @@ def test_env_example_exists():
     # Guard: test validation ensuring no real credentials leak into examples
     assert len([line for line in content.split('\n') if line.startswith('ALPACA_API_KEY=') and 'your_' not in line]) == 0, "Should not contain real API keys"
 
-    print("✓ .env.example created correctly with safe placeholders")
 
 
 def test_no_inappropriate_shebangs():
@@ -176,7 +167,6 @@ def test_no_inappropriate_shebangs():
         # Non-CLI modules should not have shebangs
         assert not first_line.startswith('#!'), f"File {py_file} should not have shebang (non-CLI module)"
 
-    print("✓ No inappropriate shebangs found in ai_trading package")
 
 
 if __name__ == "__main__":
@@ -193,26 +183,19 @@ if __name__ == "__main__":
         test_no_inappropriate_shebangs,
     ]
 
-    print("=== Testing Critical Fixes Implementation ===\n")
 
     passed = 0
     failed = 0
 
     for test_func in test_functions:
         try:
-            print(f"Running {test_func.__name__}")
             test_func()
             passed += 1
-            print(f"✅ {test_func.__name__} PASSED\n")
-        except Exception as e:
+        except Exception:
             failed += 1
-            print(f"❌ {test_func.__name__} FAILED: {e}\n")
 
-    print(f"=== Results: {passed} passed, {failed} failed ===")
 
     if failed == 0:
-        print("🎉 All critical fixes tests passed!")
         sys.exit(0)
     else:
-        print("💥 Some tests failed")
         sys.exit(1)

@@ -55,13 +55,11 @@ def test_validate_trading_parameters_no_name_error():
             undefined_params.append(param)
 
     if undefined_params:
-        print(f"Parameters referenced in validate_trading_parameters but not defined before call: {undefined_params}")
-        print(f"validate_trading_parameters called at line: {validate_call_line}")
         for param in referenced_params:
             if param in param_definitions:
-                print(f"  {param} defined at line {param_definitions[param]}")
+                pass
             else:
-                print(f"  {param} NOT DEFINED before call")
+                pass
 
     assert not undefined_params, f"Parameters {undefined_params} are referenced in validate_trading_parameters but not defined before the function call"
 
@@ -91,4 +89,3 @@ def test_buy_threshold_definition_order():
 if __name__ == "__main__":
     test_validate_trading_parameters_no_name_error()
     test_buy_threshold_definition_order()
-    print("All tests passed!")

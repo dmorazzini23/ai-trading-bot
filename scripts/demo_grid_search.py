@@ -72,10 +72,8 @@ def main():
     logging.info(str(f"Best Parameters: {best_result['params']}"))
     logging.info(str(f"Best Metrics: {best_result['metrics']}"))
     logging.info(str(f"Best Sharpe: {best_result['metrics']['sharpe']}"))
-    print()
     logging.info(str(f"Worst Parameters: {worst_result['params']}"))
     logging.info(str(f"Worst Sharpe: {worst_result['metrics']['sharpe']}"))
-    print()
 
     # Show parameter impact analysis
     logging.info("=== Parameter Impact Analysis ===")

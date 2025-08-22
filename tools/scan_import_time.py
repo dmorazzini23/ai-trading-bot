@@ -31,7 +31,6 @@ def main():
         hits = scan_file(py)
         if hits:
             any_hits = True
-            print(f"{py}: {', '.join(hits)}")
     sys.exit(1 if any_hits else 0)
 
 if __name__ == "__main__":

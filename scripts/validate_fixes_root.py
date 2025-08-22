@@ -18,15 +18,9 @@ def test_json_dumps_ensure_ascii():
 
     # Test with ensure_ascii=True (old behavior)
     ascii_json = json.dumps(test_data, ensure_ascii=True)
-    print("With ensure_ascii=True:")
-    print(ascii_json)
-    print()
 
     # Test with ensure_ascii=False (new behavior)
     unicode_json = json.dumps(test_data, ensure_ascii=False)
-    print("With ensure_ascii=False:")
-    print(unicode_json)
-    print()
 
     # Verify differences
     assert "\\u2014" in ascii_json, "Expected escaped Unicode in ensure_ascii=True"
@@ -34,7 +28,6 @@ def test_json_dumps_ensure_ascii():
     assert "\\u2026" in ascii_json, "Expected escaped ellipsis in ensure_ascii=True"
     assert "…" in unicode_json, "Expected actual ellipsis character in ensure_ascii=False"
 
-    print("✓ JSON Unicode handling test passed")
     return True
 
 def test_compilation():
@@ -48,10 +41,9 @@ def test_compilation():
 
     for file_path in files_to_check:
         if not compileall.compile_file(file_path, quiet=True):
-            print(f"✗ Compilation failed for {file_path}")
             return False
         else:
-            print(f"✓ Compilation succeeded for {file_path}")
+            pass
 
     return True
 
@@ -83,11 +75,9 @@ def test_logging_formatter_imports():
         assert "msg" in data
         assert "Unicode — characters" in data["msg"]
 
-        print("✓ Logging formatter test passed")
         return True
 
-    except Exception as e:
-        print(f"✗ Logging formatter test failed: {e}")
+    except Exception:
         return False
 
 def validate_bot_engine_functions():
@@ -105,16 +95,14 @@ def validate_bot_engine_functions():
 
     for func_name in required_functions:
         if f"def {func_name}(" in content:
-            print(f"✓ Function {func_name} found in bot_engine.py")
+            pass
         else:
-            print(f"✗ Function {func_name} not found in bot_engine.py")
             return False
 
     # Check for the scheduled task
     if 'target=_update_risk_engine_exposure' in content:
-        print("✓ Risk exposure update task scheduled")
+        pass
     else:
-        print("✗ Risk exposure update task not scheduled")
         return False
 
     return True
@@ -130,16 +118,12 @@ def validate_logging_changes():
     ensure_ascii_false_count = content.count('ensure_ascii=False')
 
     if ensure_ascii_false_count >= 2:
-        print(f"✓ Found {ensure_ascii_false_count} instances of ensure_ascii=False in logging.py")
         return True
     else:
-        print(f"✗ Expected at least 2 instances of ensure_ascii=False, found {ensure_ascii_false_count}")
         return False
 
 def main():
     """Run all validation tests."""
-    print("=== Validation Script for Ellipsis and Risk Exposure Fixes ===")
-    print()
 
     tests = [
         ("JSON Unicode handling", test_json_dumps_ensure_ascii),
@@ -153,22 +137,16 @@ def main():
     total = len(tests)
 
     for test_name, test_func in tests:
-        print(f"Running: {test_name}")
         try:
             if test_func():
                 passed += 1
-            print()
-        except Exception as e:
-            print(f"✗ {test_name} failed with exception: {e}")
-            print()
+        except Exception:
+            pass
 
-    print(f"=== Results: {passed}/{total} tests passed ===")
 
     if passed == total:
-        print("🎉 All validation tests passed!")
         return 0
     else:
-        print("❌ Some validation tests failed.")
         return 1
 
 if __name__ == '__main__':

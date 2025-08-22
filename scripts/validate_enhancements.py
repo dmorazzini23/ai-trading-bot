@@ -17,17 +17,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def test_monitoring_api():
     """Test monitoring API unification."""
-    print("Testing Monitoring API...")
 
     try:
         # Test imports
         from ai_trading.monitoring import MetricsCollector, PerformanceMonitor
-        print("  ✓ MetricsCollector and PerformanceMonitor imported successfully")
 
         # Test instantiation
         metrics_collector = MetricsCollector()
         performance_monitor = PerformanceMonitor()
-        print("  ✓ Monitoring classes instantiated")
 
         # Test functionality
         metrics_collector.inc_counter("test_trades", 1, {"symbol": "AAPL"})
@@ -45,21 +42,17 @@ def test_monitoring_api():
             "timestamp": "2024-01-01T10:00:00Z"
         })
 
-        summary = metrics_collector.get_metrics_summary()
-        perf_metrics = performance_monitor.get_performance_metrics()
+        metrics_collector.get_metrics_summary()
+        performance_monitor.get_performance_metrics()
 
-        print(f"  ✓ Metrics collected: {len(summary['counters'])} counters, {len(summary['gauges'])} gauges")
-        print(f"  ✓ Performance tracking: {perf_metrics['total_trades']} trades recorded")
 
         return True
 
-    except Exception as e:
-        print(f"  ✗ Monitoring API test failed: {e}")
+    except Exception:
         return False
 
 def test_cost_aware_signals():
     """Test cost-aware signal decision pipeline."""
-    print("\nTesting Cost-Aware Signal Pipeline...")
 
     try:
 
@@ -99,20 +92,17 @@ def test_cost_aware_signals():
             results.append((status, symbol, edge, expected, actual, result["reason"]))
 
         for status, symbol, edge, expected, actual, reason in results:
-            print(f"  {status} {symbol}: edge={edge:.4f}, expected={expected}, actual={actual} ({reason})")
+            pass
 
         passed = sum(1 for r in results if r[0] == "✓")
-        print(f"  ✓ Cost-aware signal tests: {passed}/{len(results)} passed")
 
         return passed == len(results)
 
-    except Exception as e:
-        print(f"  ✗ Cost-aware signal test failed: {e}")
+    except Exception:
         return False
 
 def test_performance_allocator():
     """Test performance-based allocation system."""
-    print("\nTesting Performance-Based Allocation...")
 
     try:
         from datetime import UTC, datetime
@@ -158,37 +148,30 @@ def test_performance_allocator():
         total_capital = 100000  # $100k
         allocations = allocator.calculate_strategy_allocations(strategies, total_capital)
 
-        print(f"  ✓ Allocation calculated for {len(allocations)} strategies")
 
         # Verify allocations
-        total_allocated = sum(allocations.values())
-        print(f"  ✓ Total capital allocated: ${total_allocated:,.0f} (target: ${total_capital:,.0f})")
+        sum(allocations.values())
 
         for strategy, allocation in allocations.items():
-            pct = allocation / total_capital * 100
-            print(f"    {strategy}: ${allocation:,.0f} ({pct:.1f}%)")
+            allocation / total_capital * 100
 
         # Check that momentum (best performer) gets highest allocation
         allocations_by_value = sorted(allocations.items(), key=lambda x: x[1], reverse=True)
-        best_strategy = allocations_by_value[0][0]
+        allocations_by_value[0][0]
 
-        print(f"  ✓ Highest allocation to: {best_strategy} (expected momentum based on simulated performance)")
 
         # Test rebalancing decision
-        should_rebalance = allocator.should_rebalance_allocations()
-        print(f"  ✓ Rebalancing decision: {should_rebalance}")
+        allocator.should_rebalance_allocations()
 
         return True
 
-    except Exception as e:
-        print(f"  ✗ Performance allocator test failed: {e}")
+    except Exception:
         import traceback
         traceback.print_exc()
         return False
 
 def test_exception_handling():
     """Test improved exception handling."""
-    print("\nTesting Exception Handling Improvements...")
 
     try:
         # Test the improved portfolio.py exception handling
@@ -199,25 +182,18 @@ def test_exception_handling():
             ("TypeError", "Type conversion test")
         ]
 
-        print("  ✓ Exception types identified for specific handling:")
         for exc_type, description in test_cases:
-            print(f"    - {exc_type}: {description}")
+            pass
 
         # Test that we're not using broad Exception catches inappropriately
-        print("  ✓ Broad exception patterns replaced with specific types")
-        print("  ✓ Structured logging with component and error_type context added")
 
         return True
 
-    except Exception as e:
-        print(f"  ✗ Exception handling test failed: {e}")
+    except Exception:
         return False
 
 def main():
     """Run comprehensive validation."""
-    print("=" * 60)
-    print("COMPREHENSIVE VALIDATION - AI TRADING BOT ENHANCEMENTS")
-    print("=" * 60)
 
     tests = [
         ("Monitoring API Unification", test_monitoring_api),
@@ -231,31 +207,20 @@ def main():
         try:
             result = test_func()
             results.append((test_name, result))
-        except Exception as e:
-            print(f"  ✗ {test_name} failed with error: {e}")
+        except Exception:
             results.append((test_name, False))
 
-    print("\n" + "=" * 60)
-    print("VALIDATION SUMMARY")
-    print("=" * 60)
 
     passed = 0
     for test_name, result in results:
-        status = "✓ PASS" if result else "✗ FAIL"
-        print(f"{status:8} | {test_name}")
         if result:
             passed += 1
 
-    print(f"\nOverall: {passed}/{len(results)} tests passed")
 
     if passed == len(results):
-        print("\n🎉 ALL VALIDATIONS PASSED!")
-        print("\nThe monitoring API unification, cost-aware trading logic,")
-        print("performance-based allocation, and exception handling improvements")
-        print("are working correctly and ready for production deployment.")
+        pass
     else:
-        print(f"\n⚠️  {len(results) - passed} validation(s) failed")
-        print("Review the failed tests before deployment.")
+        pass
 
     return passed == len(results)
 

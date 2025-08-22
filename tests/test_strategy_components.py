@@ -82,17 +82,12 @@ def test_multi_timeframe_analyzer():
         assert "action" in recommendation, "Recommendation should have action"
         assert "confidence" in recommendation, "Recommendation should have confidence"
 
-        print(f"✓ Multi-timeframe analysis: {len(signals)} timeframes analyzed")
-        print(f"  Recommendation: {recommendation['action']} (confidence: {recommendation['confidence']:.2f})")
-        print(f"  Overall score: {result['combined_analysis'].get('overall_score', 0):.2f}")
 
         return True
 
     except ImportError:
-        print("⚠ Multi-timeframe analyzer test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Multi-timeframe analyzer test failed: {e}")
+    except Exception:
         return False
 
 
@@ -132,19 +127,12 @@ def test_regime_detector():
         assert "strategy_type" in recommendations, "Should provide strategy recommendations"
         assert "position_size_multiplier" in recommendations, "Should provide position sizing advice"
 
-        print(f"✓ Regime detection: {regime.value} (confidence: {confidence:.2f})")
-        print(f"  Strategy type: {recommendations['strategy_type']}")
-        print(f"  Position multiplier: {recommendations['position_size_multiplier']:.2f}")
-        print(f"  Trend direction: {result['trend_analysis']['direction']}")
-        print(f"  Volatility regime: {result['volatility_analysis']['regime'].value}")
 
         return True
 
     except ImportError:
-        print("⚠ Regime detector test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Regime detector test failed: {e}")
+    except Exception:
         return False
 
 
@@ -181,7 +169,7 @@ def test_integrated_strategy_system():
             adjusted_multiplier = mtf_recommendation.get("position_size_multiplier", 1.0)
 
         # Create integrated recommendation
-        integrated_recommendation = {
+        {
             "action": mtf_recommendation["action"],
             "confidence": min(mtf_recommendation["confidence"], regime_result["confidence_score"]),
             "position_size_multiplier": adjusted_multiplier,
@@ -189,19 +177,12 @@ def test_integrated_strategy_system():
             "reasoning": f"MTF analysis: {mtf_recommendation['action']}, Market regime: {regime.value}"
         }
 
-        print("✓ Integrated strategy system:")
-        print(f"  Final action: {integrated_recommendation['action']}")
-        print(f"  Combined confidence: {integrated_recommendation['confidence']:.2f}")
-        print(f"  Adjusted position size: {integrated_recommendation['position_size_multiplier']:.2f}")
-        print(f"  Reasoning: {integrated_recommendation['reasoning']}")
 
         return True
 
     except ImportError:
-        print("⚠ Integrated strategy test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Integrated strategy test failed: {e}")
+    except Exception:
         return False
 
 
@@ -237,10 +218,6 @@ def test_strategy_performance_scenarios():
 
         volatile_result = detector.detect_regime(volatile_data)
 
-        print("✓ Strategy performance scenarios:")
-        print(f"  Bull market regime: {bull_result.get('primary_regime', 'Unknown')}")
-        print(f"  Bear market regime: {bear_result.get('primary_regime', 'Unknown')}")
-        print(f"  High volatility regime: {volatile_result.get('primary_regime', 'Unknown')}")
 
         # Test that different scenarios produce different regimes
         regimes = [
@@ -249,22 +226,18 @@ def test_strategy_performance_scenarios():
             str(volatile_result.get('primary_regime', 'Unknown'))
         ]
 
-        unique_regimes = len(set(regimes))
-        print(f"  Detected {unique_regimes} unique regimes across scenarios")
+        len(set(regimes))
 
         return True
 
     except ImportError:
-        print("⚠ Strategy performance scenarios test skipped - module not available")
         return True
-    except Exception as e:
-        print(f"✗ Strategy performance scenarios test failed: {e}")
+    except Exception:
         return False
 
 
 async def run_strategy_tests():
     """Run all strategy component tests."""
-    print("🚀 Running Advanced Strategy Component Tests\n")
 
     test_results = []
 
@@ -275,26 +248,19 @@ async def run_strategy_tests():
     test_results.append(("Strategy Performance Scenarios", test_strategy_performance_scenarios()))
 
     # Report results
-    print("\n📊 Strategy Test Results Summary:")
-    print("=" * 50)
 
     passed = 0
     total = len(test_results)
 
     for test_name, result in test_results:
-        status = "PASS" if result else "FAIL"
-        icon = "✅" if result else "❌"
-        print(f"{icon} {test_name}: {status}")
         if result:
             passed += 1
 
-    print("=" * 50)
-    print(f"Total: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
 
     if passed == total:
-        print("\n🎉 All strategy tests passed! Advanced components are ready.")
+        pass
     else:
-        print(f"\n⚠️  {total-passed} tests failed. Review implementation.")
+        pass
 
     return passed == total
 
@@ -304,10 +270,8 @@ if __name__ == "__main__":
     try:
         result = asyncio.run(run_strategy_tests())
         exit_code = 0 if result else 1
-        exit(exit_code)
+        sys.exit(exit_code)
     except KeyboardInterrupt:
-        print("\n\n⏹️  Tests interrupted by user")
-        exit(1)
-    except Exception as e:
-        print(f"\n\n💥 Test runner error: {e}")
-        exit(1)
+        sys.exit(1)
+    except Exception:
+        sys.exit(1)

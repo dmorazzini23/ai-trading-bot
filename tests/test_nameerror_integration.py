@@ -87,16 +87,12 @@ sys.exit(exit_code)
                 timeout=15,  # AI-AGENT-REF: Increase timeout to 15 seconds for more realistic import time
                 check=True
             )
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
             # Handle subprocess timeout gracefully
-            print("Subprocess timeout after 5 seconds")
-            print(f"Stdout so far: {e.stdout}")
-            print(f"Stderr so far: {e.stderr}")
             assert False, "Subprocess timeout - bot_engine import took longer than 5 seconds"
 
-        print(f"Test script output: {result.stdout}")
         if result.stderr:
-            print(f"Test script stderr: {result.stderr}")
+            pass
 
         # Check the exit code
         if result.returncode == 1:
@@ -112,4 +108,3 @@ sys.exit(exit_code)
 
 if __name__ == "__main__":
     test_bot_engine_import_no_nameerror()
-    print("Integration test passed!")

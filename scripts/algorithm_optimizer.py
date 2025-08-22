@@ -601,7 +601,7 @@ class AlgorithmOptimizer:
             atr_stop = atr * 2 / entry_price  # 2x ATR as percentage
 
             # Use the larger of volatility or ATR stop, but cap at reasonable level
-            stop_pct = min(0.05, max(base_stop_pct, max(volatility_stop, atr_stop)))
+            stop_pct = min(0.05, max(base_stop_pct, volatility_stop, atr_stop))
 
             # Apply parameter multiplier
             stop_pct *= self.current_parameters.stop_loss_multiplier

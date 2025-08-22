@@ -82,12 +82,10 @@ def safe_api_call(func: Callable, retries: int = 3, delay: float = 1.0) -> Any:
     """
     import time
 
-    last_error = None
     for attempt in range(retries + 1):
         try:
             return func()
         except Exception as e:
-            last_error = e
             if attempt < retries:
                 logger.warning(f"API call failed (attempt {attempt + 1}/{retries + 1}): {e}")
                 time.sleep(delay * (attempt + 1))  # Exponential backoff
@@ -123,7 +121,7 @@ def validate_trade_data(symbol: str, qty: int, side: str, price: float | None = 
             logger.error("Invalid side: %s", side)
             return False
 
-        if price is not None and (not isinstance(price, (int, float)) or price <= 0):
+        if price is not None and (not isinstance(price, int | float) or price <= 0):
             logger.error("Invalid price: %s", price)
             return False
 

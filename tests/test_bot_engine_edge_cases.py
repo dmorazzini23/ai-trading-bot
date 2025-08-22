@@ -7,14 +7,12 @@ from ai_trading.core.bot_engine import prepare_indicators
 
 
 def test_prepare_indicators_missing_close_column():
-    print('Testing prepare_indicators with missing Close column')
     df = pd.DataFrame({'open': [1, 2], 'high': [1, 2], 'low': [1, 2]})
     with pytest.raises(KeyError):
         prepare_indicators(df)
 
 
 def test_prepare_indicators_non_numeric_close(monkeypatch):
-    print('Testing prepare_indicators with non-numeric Close column')
     from ai_trading.core import bot_engine
 
     def fake_rsi(close, length=14):
@@ -29,14 +27,12 @@ def test_prepare_indicators_non_numeric_close(monkeypatch):
 
 
 def test_prepare_indicators_empty_dataframe():
-    print('Testing prepare_indicators with empty DataFrame')
     df = pd.DataFrame()
     with pytest.raises(KeyError):
         prepare_indicators(df)
 
 
 def test_prepare_indicators_single_row():
-    print('Testing prepare_indicators with single row DataFrame')
     df = pd.DataFrame({
         'open': [100.0],
         'high': [101.0],

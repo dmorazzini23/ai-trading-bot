@@ -84,7 +84,6 @@ def test_basic_functionality():
     try:
         # Test determinism
         import numpy as np
-
         from ai_trading.utils.determinism import set_random_seeds
 
         set_random_seeds(42)
@@ -141,7 +140,7 @@ def test_integration():
         )
 
         # Get costs for symbol
-        costs = cost_model.get_costs("TEST")
+        cost_model.get_costs("TEST")
 
         # Calculate limit price
         limit_price, order_type = router.calculate_limit_price(market_data, "buy")

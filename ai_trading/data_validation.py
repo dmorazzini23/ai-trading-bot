@@ -111,7 +111,7 @@ def emergency_data_check(
     if isinstance(symbols_or_df, pd.DataFrame) and isinstance(symbol, str):
         return not symbols_or_df.empty
 
-    if isinstance(symbols_or_df, (str, bytes)):
+    if isinstance(symbols_or_df, str | bytes):
         to_check = [symbols_or_df]
     elif isinstance(symbols_or_df, Sequence):  # type: ignore[redundant-expr]
         to_check = list(symbols_or_df)

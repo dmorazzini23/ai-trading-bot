@@ -75,6 +75,5 @@ if __name__ == "__main__":
         counts[r["marker"]] = counts.get(r["marker"], 0) + 1
     write_csv(OUT / "summary.csv", [{"marker":k,"count":v} for k,v in sorted(counts.items(), key=lambda x:-x[1])], ["marker","count"])
 
-    print("Artifacts written to tools/out/:")
     for fn in ("markers_all.csv","import_guards.csv","runtime_mocks.csv","compile_errors.csv","summary.csv"):
-        print(" -", (OUT / fn).as_posix())
+        pass

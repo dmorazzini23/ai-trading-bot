@@ -20,10 +20,9 @@ try:
     from ai_trading.math.money import Money
     from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import
     HAS_FULL_IMPORTS = True
-except ImportError as e:
+except ImportError:
     # Continue with minimal testing if imports fail
     HAS_FULL_IMPORTS = False
-    print(f"Limited imports available: {e}")
 
 
 class TestCriticalIssuesResolution(unittest.TestCase):

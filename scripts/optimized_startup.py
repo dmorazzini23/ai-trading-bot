@@ -190,7 +190,7 @@ def main():
     cleanup_duplicate_processes()
 
     # Start monitoring
-    monitoring_started = start_monitoring()
+    start_monitoring()
 
     # Import and start the main trading application
     try:

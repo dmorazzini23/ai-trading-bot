@@ -11,8 +11,7 @@ def _script_path() -> str:
 def test_import_contract_ok():
     cp = subprocess.run(
         [sys.executable, _script_path(), "--ci", "--timeout", "2", "--modules", "sys"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -24,8 +23,7 @@ def test_import_contract_timeout_simulated(monkeypatch):
     env["IMPORT_CONTRACT_SIMULATE_HANG"] = "1"
     cp = subprocess.run(
         [sys.executable, _script_path(), "--ci", "--timeout", "0.1", "--modules", "sys"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         env=env,
         check=False,

@@ -174,7 +174,7 @@ class TransactionCostCalculator:
                 return abs(trade_size) * price * estimated_spread_pct / 2
 
             spread = ask - bid
-            mid_price = (bid + ask) / 2
+            (bid + ask) / 2
 
             # Spread cost is half-spread times trade size
             spread_cost = abs(trade_size) * spread / 2

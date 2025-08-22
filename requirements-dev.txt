@@ -1,9 +1,9 @@
 ## Development & test dependencies
 
 # --- Core dev/test tools ---
-pytest>=8.3
-pytest-xdist>=3.6
-pytest-cov>=5.0,<6.0
+pytest==8.2.0
+pytest-xdist==3.6.1
+pytest-cov==5.0.0
 pytest-mock>=3.12,<4  # AI-AGENT-REF: mocker fixture
 flake8
 isort
@@ -24,8 +24,6 @@ cachetools>=5.3,<6.0
 # yfinance requires websockets>=13 which conflicts with alpaca-trade-api<11
 # move to optional extra or install only locally when needed
 # yfinance>=0.2.40,<0.3
-requests>=2.31,<3
-urllib3>=1.26,<2  # AI-AGENT-REF: align with Alpaca SDK
 certifi>=2023.7.22
 charset-normalizer>=3.2,<4
 idna>=3.4,<4
@@ -61,7 +59,11 @@ anyio>=4,<5
 aiohttp>=3.9,<3.10
 pre-commit>=3.7,<4
 detect-secrets==1.5.0
-libcst>=1.1.0  # AI-AGENT-REF: codemod support
-ruff>=0.5,<1
-black>=24,<25
-mypy>=1.10,<2
+libcst==1.5.1  # AI-AGENT-REF: codemod support
+ruff==0.5.6
+black==24.4.2
+mypy==1.10.0
+types-requests==2.32.0.20240712
+
+# Some scripts/tests assume requests exists
+requests>=2.31.0

@@ -9,6 +9,7 @@ and working as expected.
 """
 
 import os
+import sys
 from datetime import datetime
 
 
@@ -244,4 +245,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

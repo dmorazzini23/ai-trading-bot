@@ -36,7 +36,6 @@ def remove_uppercase_properties(settings_path: Path) -> None:
     new = mod.visit(KillUpperProps())
     if new.code != src:
         settings_path.write_text(new.code, encoding="utf-8")
-        print(f"Removed uppercase properties from: {settings_path}")
 
 def main():
     if CFG_INIT.exists():
@@ -45,9 +44,8 @@ def main():
             new = cst.parse_module(src).visit(StripConfigMagic())
             if new.code != src:
                 CFG_INIT.write_text(new.code, encoding="utf-8")
-                print(f"Removed __getattr__ from: {CFG_INIT}")
-        except Exception as e:
-            print(f"Error processing {CFG_INIT}: {e}")
+        except Exception:
+            pass
 
     settings = Path("ai_trading/config/settings.py")
     remove_uppercase_properties(settings)
@@ -60,9 +58,8 @@ def main():
             new = cst.parse_module(src).visit(StripConfigMagic())
             if new.code != src:
                 management.write_text(new.code, encoding="utf-8")
-                print(f"Removed __getattr__ from: {management}")
-        except Exception as e:
-            print(f"Error processing {management}: {e}")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()

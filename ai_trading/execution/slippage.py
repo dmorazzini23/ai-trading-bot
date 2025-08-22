@@ -9,7 +9,7 @@ def estimate(price: float, side: str, bps: float = 0.0) -> float:
     - side : 'buy' or 'sell'
     - bps  : basis points to add/subtract (default 0 for CI determinism)
     """
-    if not isinstance(price, (int, float)) or price <= 0:
+    if not isinstance(price, int | float) or price <= 0:
         raise ValueError("price must be a positive number")
     side_l = (side or "").lower()
     if side_l not in {"buy", "sell"}:

@@ -126,10 +126,8 @@ class PerformanceOptimizer:
 
         try:
             result = func(*args, **kwargs)
-            success = True
         except Exception as e:
             self.logger.warning(f"Function {func_name} failed during profiling: {e}")
-            success = False
             raise
         finally:
             # Calculate execution time
@@ -157,7 +155,7 @@ class PerformanceOptimizer:
         self.execution_times[func_name].append(execution_time_ms)
 
         # Update or create performance profile
-        times = list(self.execution_times[func_name])
+        list(self.execution_times[func_name])
 
         if func_name in self.function_profiles:
             profile = self.function_profiles[func_name]
@@ -292,7 +290,7 @@ class PerformanceOptimizer:
     def _cleanup_performance_data(self):
         """Clean up old performance data to free memory."""
         # Keep only recent performance data
-        cutoff_time = datetime.now(UTC) - timedelta(hours=24)
+        datetime.now(UTC) - timedelta(hours=24)
 
         # Clear old execution times
         for func_name in list(self.execution_times.keys()):

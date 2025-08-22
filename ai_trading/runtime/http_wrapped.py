@@ -20,7 +20,7 @@ def get_json_with_retries(
             resp = fetch()
             if hasattr(resp, "json"):
                 return resp.json()
-            if isinstance(resp, (bytes, bytearray)):
+            if isinstance(resp, bytes | bytearray):
                 return json.loads(resp.decode("utf-8"))
             if isinstance(resp, str):
                 return json.loads(resp)

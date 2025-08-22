@@ -171,7 +171,7 @@ def cmd_pnl(symbol=None):
             get_symbol_pnl_breakdown,
         )
 
-        attributor = get_pnl_attributor()
+        get_pnl_attributor()
 
         if symbol:
             # Show specific symbol breakdown

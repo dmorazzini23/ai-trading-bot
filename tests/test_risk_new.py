@@ -1,6 +1,5 @@
-import pandas as pd
-
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
+import pandas as pd
 
 
 def test_stop_levels():

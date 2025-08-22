@@ -2,13 +2,12 @@ import json
 import os
 
 import pytest
-
 from ai_trading.core import bot_engine
 
 
 @pytest.mark.smoke
 def test_save_and_load_snapshot(tmp_path):
-    fpath = tmp_path / "portfolio_snapshot.json"
+    tmp_path / "portfolio_snapshot.json"
     orig_cwd = os.getcwd()
     os.chdir(tmp_path)
 

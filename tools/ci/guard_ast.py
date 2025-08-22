@@ -72,15 +72,13 @@ def scan_dir(root: Path) -> int:
 def main() -> int:
     code = 0
     for d in TARGET_DIRS:
-        print(f"Scanning directory: {d}")
         code |= scan_dir(Path(d))
 
-    print(f"Total failures found: {len(FAILURES)}")
     if FAILURES:
         for p, ln, msg in FAILURES[:2000]:
-            print(f"{p}:{ln}: {msg}")
+            pass
     else:
-        print("No issues found!")
+        pass
     return code
 
 if __name__ == "__main__":

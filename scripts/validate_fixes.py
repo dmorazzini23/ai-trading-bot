@@ -9,6 +9,7 @@ the actual code changes rather than running complex tests.
 """
 import os
 import re
+import sys
 
 
 def validate_drawdown_circuit_breaker_fix():
@@ -186,7 +187,6 @@ def main():
     logging.info(str("=" * 60))
     logging.info("CRITICAL TRADING BOT FIXES VALIDATION")
     logging.info(str("=" * 60))
-    print()
 
     fixes = [
         validate_drawdown_circuit_breaker_fix,
@@ -199,7 +199,6 @@ def main():
     for fix_validator in fixes:
         result = fix_validator()
         results.append(result)
-        print()
 
     logging.info(str("=" * 60))
     logging.info("VALIDATION SUMMARY")
@@ -219,7 +218,6 @@ def main():
         if result:
             passed += 1
 
-    print()
     logging.info(f"Overall: {passed}/{len(results)} fixes validated successfully")
 
     if passed == len(results):
@@ -232,4 +230,4 @@ def main():
 
 if __name__ == "__main__":
     success = main()
-    exit(0 if success else 1)
+    sys.exit(0 if success else 1)

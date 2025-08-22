@@ -165,8 +165,7 @@ class AlertManager:
             # Log based on severity
             log_message = f"Alert created: {alert.severity.value.upper()} - {message}"
             if (
-                severity == AlertSeverity.CRITICAL
-                or severity == AlertSeverity.EMERGENCY
+                severity in (AlertSeverity.CRITICAL, AlertSeverity.EMERGENCY)
             ):
                 logger.error(log_message)
             elif severity == AlertSeverity.WARNING:

@@ -21,7 +21,7 @@ def test_regime_fallback_warns_but_continues(dummy_data_fetcher_empty, dummy_dat
         pytest.skip("pre_trade_health_check not available")
     with caplog.at_level("WARNING"):
         summary = fn(ctx, ["ABC", "SPY"], min_rows=5)
-    text = str(summary).lower()
+    str(summary).lower()
     # The test should verify that the function completes without crashing
     # even when some symbols have no data. Both symbols may fail in test environment.
     assert "checked" in summary, "Should return a valid summary dict"

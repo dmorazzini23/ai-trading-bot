@@ -256,7 +256,6 @@ class TestPositionReconciliation(unittest.TestCase):
 
     def test_discrepancy_classification(self):
         """Test different types of discrepancy classification."""
-        symbol = "TEST"
 
         # Test missing position (bot=0, broker=100)
         discrepancy_type = self.reconciler._classify_discrepancy(0, 100)
@@ -557,17 +556,11 @@ if __name__ == '__main__':
     result = runner.run(test_suite)
 
     # Print summary
-    print(f"\nTests run: {result.testsRun}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print(f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%")
 
     if result.failures:
-        print("\nFailures:")
         for test, traceback in result.failures:
-            print(f"- {test}: {traceback}")
+            pass
 
     if result.errors:
-        print("\nErrors:")
         for test, traceback in result.errors:
-            print(f"- {test}: {traceback}")
+            pass

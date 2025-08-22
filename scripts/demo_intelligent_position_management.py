@@ -60,7 +60,6 @@ def demo_market_regime_adaptation():
     ]
 
     logging.info("📊 Position Management Parameters by Market Regime:")
-    print()
 
     for regime in regimes:
         params = detector.get_regime_parameters(regime)
@@ -69,7 +68,6 @@ def demo_market_regime_adaptation():
         logging.info(str(f"   • Profit Patience: {params['profit_taking_patience']:.1f}x"))
         logging.info(str(f"   • Position Size: {params['position_size_multiplier']:.1f}x"))
         logging.info(str(f"   • Trail Aggression: {params['trail_aggressiveness']:.1f}"))
-        print()
 
     logging.info("💡 Key Insight: System automatically adapts holding strategy to market conditions!")
     logging.info("   • Bull trends → Wider stops, more patient profit taking")
@@ -83,10 +81,9 @@ def demo_technical_signal_analysis():
 
     from technical_analyzer import TechnicalSignalAnalyzer
 
-    analyzer = TechnicalSignalAnalyzer()
+    TechnicalSignalAnalyzer()
 
     logging.info("📈 Technical Analysis Components:")
-    print()
 
     # Demo momentum analysis
     logging.info("🔹 MOMENTUM ANALYSIS:")
@@ -128,7 +125,6 @@ def demo_dynamic_trailing_stops():
     stop_manager = TrailingStopManager()
 
     logging.info("🛡️ Adaptive Trailing Stop Algorithms:")
-    print()
 
     # Demo different stop types
     logging.info("🔹 VOLATILITY-ADJUSTED (ATR-based):")
@@ -166,7 +162,6 @@ def demo_multi_tiered_profit_taking():
     profit_engine = ProfitTakingEngine()
 
     logging.info("💰 Intelligent Profit Taking Strategies:")
-    print()
 
     # Demo risk-multiple targets
     logging.info("🔹 RISK-MULTIPLE TARGETS:")
@@ -207,7 +202,6 @@ def demo_portfolio_correlation_intelligence():
     corr_analyzer = PortfolioCorrelationAnalyzer()
 
     logging.info("🔗 Portfolio-Level Risk Management:")
-    print()
 
     # Demo concentration monitoring
     logging.info("🔹 CONCENTRATION MONITORING:")
@@ -228,7 +222,7 @@ def demo_portfolio_correlation_intelligence():
     logging.info("\n🔹 SECTOR EXPOSURE MANAGEMENT:")
     sectors = ['Technology', 'Financials', 'Healthcare']
     for sector in sectors:
-        classification = corr_analyzer._get_symbol_sector('AAPL' if sector == 'Technology' else 'JPM')
+        corr_analyzer._get_symbol_sector('AAPL' if sector == 'Technology' else 'JPM')
         logging.info(f"   • {sector}: Auto-classification and monitoring")
 
     logging.info("\n🔹 DYNAMIC REBALANCING:")
@@ -251,7 +245,6 @@ def demo_intelligent_integration():
     manager = IntelligentPositionManager()
 
     logging.info("🧠 Intelligent Position Decision Making:")
-    print()
 
     # Demo decision weights
     logging.info("🔹 ANALYSIS COMPONENT WEIGHTS:")

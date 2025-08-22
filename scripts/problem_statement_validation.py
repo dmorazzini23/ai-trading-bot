@@ -6,6 +6,7 @@ Problem statement validation script to check all requirements are satisfied.
 """
 
 import re
+import sys
 from pathlib import Path
 
 
@@ -144,28 +145,20 @@ def main():
 
     try:
         check_model_registry()
-        print()
 
         check_env_flag()
-        print()
 
         check_import_hardening()
-        print()
 
         check_executors()
-        print()
 
         check_timeouts()
-        print()
 
         check_minute_cache()
-        print()
 
         check_new_env_vars()
-        print()
 
         check_backward_compatibility()
-        print()
 
         logging.info("🎉 ALL REQUIREMENTS FROM PROBLEM STATEMENT SATISFIED!")
         logging.info("\nImplementation Summary:")
@@ -187,4 +180,4 @@ def main():
 
 if __name__ == "__main__":
     success = main()
-    exit(0 if success else 1)
+    sys.exit(0 if success else 1)

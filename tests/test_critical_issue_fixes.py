@@ -5,6 +5,7 @@ Tests the specific fixes for the four critical issues identified in the problem 
 """
 
 import os
+import sys
 import tempfile
 import unittest
 
@@ -37,9 +38,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
                 content = f.read()
                 # Check that the default value is now 20 instead of 10
                 self.assertIn('"20"', content, "MAX_PORTFOLIO_POSITIONS default should be 20")
-                print("✓ Issue 4 Fix: Position limit increased from 10 to 20")
         else:
-            print("⚠ Issue 4: bot_engine.py not found for testing")
             self.assertTrue(True)
 
     def test_issue_2_sentiment_circuit_breaker_thresholds(self):
@@ -54,9 +53,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
                             "SENTIMENT_FAILURE_THRESHOLD should be 8")
                 self.assertIn('SENTIMENT_RECOVERY_TIMEOUT = 900', content,
                             "SENTIMENT_RECOVERY_TIMEOUT should be 900 (15 minutes)")
-                print("✓ Issue 2 Fix: Sentiment circuit breaker thresholds improved")
         else:
-            print("⚠ Issue 2: bot_engine.py not found for testing")
             self.assertTrue(True)
 
     def test_issue_3_quantity_tracking_logging(self):
@@ -72,9 +69,7 @@ class TestCriticalIssueFixes(unittest.TestCase):
                 # Check that ORDER_FILL_CONSOLIDATED uses total_filled_qty
                 self.assertIn('"total_filled_qty": buf["qty"]', content,
                             "ORDER_FILL_CONSOLIDATED should use clear quantity field name")
-                print("✓ Issue 3 Fix: Order execution tracking improved")
         else:
-            print("⚠ Issue 3: trade_execution.py not found for testing")
             self.assertTrue(True)
 
     def test_issue_1_meta_learning_trigger_exists(self):
@@ -89,14 +84,11 @@ class TestCriticalIssueFixes(unittest.TestCase):
                             "Meta-learning trigger should import validation function")
                 self.assertIn('METALEARN_TRIGGER_CONVERSION', content,
                             "Meta-learning trigger should log conversion attempts")
-                print("✓ Issue 1 Fix: Meta-learning conversion trigger implemented")
         else:
-            print("⚠ Issue 1: bot_engine.py not found for testing")
             self.assertTrue(True)
 
 def run_critical_fixes_tests():
     """Run the critical fixes tests."""
-    print("\n=== Critical Trading Bot Issue Fixes Test Suite ===")
 
     # Create test suite
     suite = unittest.TestSuite()
@@ -112,23 +104,17 @@ def run_critical_fixes_tests():
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
 
-    print("\n=== Test Results Summary ===")
-    print(f"Tests run: {result.testsRun}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
 
     if result.failures:
-        print("\nFailures:")
         for test, traceback in result.failures:
-            print(f"  - {test}: {traceback}")
+            pass
 
     if result.errors:
-        print("\nErrors:")
         for test, traceback in result.errors:
-            print(f"  - {test}: {traceback}")
+            pass
 
     return result.wasSuccessful()
 
 if __name__ == "__main__":
     success = run_critical_fixes_tests()
-    exit(0 if success else 1)
+    sys.exit(0 if success else 1)

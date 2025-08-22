@@ -680,7 +680,7 @@ class AlpacaExecutionEngine:
             return True
         else:
             try:  # AI-AGENT-REF: structured broker call
-                resp = self.trading_client.cancel_order(order_id)
+                self.trading_client.cancel_order(order_id)
             except (APIError, TimeoutError, ConnectionError) as e:
                 _log.error(
                     "ORDER_API_FAILED",

@@ -36,7 +36,6 @@ def unwrap_import_guards(text: str) -> tuple[str, bool]:
                     break
                 try_body_lines.append(lines[j])
                 j += 1
-            body_end = j
 
             # Check if next block is "except ImportError"
             if j < n and "except ImportError" in lines[j]:
@@ -113,16 +112,12 @@ def main():
                     compile(new, str(p), 'exec')
                     p.write_text(new, encoding="utf-8")
                     total += 1
-                    print(f"Successfully unwrapped imports in: {p.relative_to(ROOT)}")
-                except SyntaxError as e:
-                    print(f"Syntax error would be introduced in {p.relative_to(ROOT)}, skipping: {e}")
+                except SyntaxError:
                     continue
             files += 1
-        except Exception as e:
-            print(f"Error processing {p.relative_to(ROOT)}: {e}")
+        except Exception:
             continue
 
-    print(f"files_scanned={files} files_modified={total}")
 
 if __name__ == "__main__":
     main()

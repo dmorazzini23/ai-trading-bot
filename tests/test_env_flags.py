@@ -55,7 +55,7 @@ def test_disable_daily_retrain_unset():
     from ai_trading import config
 
     # Should default to False
-    assert config.DISABLE_DAILY_RETRAIN == False
+    assert config.DISABLE_DAILY_RETRAIN is False
 
     # Clean up
     if 'config' in os.sys.modules:
@@ -75,11 +75,11 @@ def test_disable_daily_retrain_fallback_settings():
 
     # Check that fallback settings work
     fallback = config._FallbackSettings()
-    assert fallback.DISABLE_DAILY_RETRAIN == True
+    assert fallback.DISABLE_DAILY_RETRAIN is True
 
     os.environ["DISABLE_DAILY_RETRAIN"] = "false"
     fallback2 = config._FallbackSettings()
-    assert fallback2.DISABLE_DAILY_RETRAIN == False
+    assert fallback2.DISABLE_DAILY_RETRAIN is False
 
 
 def teardown_module():

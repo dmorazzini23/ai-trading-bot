@@ -294,7 +294,7 @@ class MonitoringDashboard:
             memory = psutil.virtual_memory()
 
             # Trading system metrics (simplified - would integrate with actual systems)
-            recent_orders = [o for o in self.active_orders.values()]
+            [o for o in self.active_orders.values()]
 
             kpis = PerformanceKPIs(
                 timestamp=datetime.now(UTC),
