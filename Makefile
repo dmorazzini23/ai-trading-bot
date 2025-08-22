@@ -28,11 +28,13 @@ dev-deps:
 
 test-core:
 	@mkdir -p artifacts
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -n auto -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core.txt
+	# AI-AGENT-REF: load xdist and asyncio when autoload disabled
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -p xdist -p pytest_asyncio -n auto -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core.txt
 
 test-int:
 	@mkdir -p artifacts
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 RUN_INTEGRATION=1 pytest -n auto -q -m "integration" --disable-warnings | tee artifacts/pytest-integration.txt
+	# AI-AGENT-REF: load xdist and asyncio when autoload disabled
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 RUN_INTEGRATION=1 pytest -p xdist -p pytest_asyncio -n auto -q -m "integration" --disable-warnings | tee artifacts/pytest-integration.txt
 
 test-all:  ## Run lint, types, and unit tests
 	python -m pip install --upgrade pip
