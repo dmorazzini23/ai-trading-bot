@@ -85,3 +85,6 @@ patch_full_cleanup.patch
 
 # Matplotlib cache
 .mpl_cache/
+
+# Runtime trade log
+/trades.csv
