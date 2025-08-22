@@ -1,5 +1,5 @@
 """Third-party compatibility shims used in tests."""
 
-from . import lightgbm_compat
+from . import lightgbm_compat as lightgbm_compat
 
 __all__ = ["lightgbm_compat"]

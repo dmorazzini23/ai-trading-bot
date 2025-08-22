@@ -1,0 +1,11 @@
+bringing up nodes...
+bringing up nodes...
+
+..........F...............................................F..F...F.FFF.............FFF.......FF.................F.F..... [ 12%]
+FF.......F.F.F.......F...ssssssssssssssss.....FFF.F..FFFF.......FFFF.F.FF.F.FFF....FFF.......F.FFF.FF.FF....F.F...F..... [ 25%]
+.F..FF...................F.....................F...........x............FFFFssssFsss.s..s.ss..ss.ssF.F.................. [ 37%]
+............F..F..F.E.FFFF.F..FF...F.....F....F...F.FF............F......F..s.......s....FF...FFF..F.....F.............. [ 50%]
+.....s..EEEEFFF....F.......F...F......FF...F.F.FFFFFF.FF.FFF..FFFFFsFFFFEFFFF.....F.FFFFFFF.Fs...........FFF.......F.... [ 62%]
+..FF..F.F..FFF.F.FFF.F...FFFFF.........F...F..F.ss.s.s.s..s.s.s.s...F.F.F.F..F.FF.Fss..F.F......FF.F...........FF..FF.F. [ 75%]
+.F...F.........FFFFFFF....F.FF.FF.....F.........F..FFF...FFFF....F.FFFFFF.FFFFFF..F..F...FFF.F.FF.FFF......FF.FFFF....FF [ 88%]
+F..F....FFFFFFFFFF...................F.F.F..FFF....F..FE.EF...EEEEEEEEEFEEFF.....F.F
