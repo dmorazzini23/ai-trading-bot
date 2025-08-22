@@ -2,7 +2,7 @@ import types
 import pandas as pd
 
 import ai_trading.data.bars as data_bars
-from ai_trading.data.bars import safe_get_stock_bars, TimeFrame, TimeFrameUnit
+from ai_trading.data.bars import safe_get_stock_bars
 
 
 def test_minute_fallback_none_safe(monkeypatch):

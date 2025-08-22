@@ -1,5 +1,4 @@
 from pathlib import Path
-from importlib.util import find_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = [

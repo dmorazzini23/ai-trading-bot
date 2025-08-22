@@ -62,9 +62,6 @@ def test_cost_aware_signals():
     print("\nTesting Cost-Aware Signal Pipeline...")
     
     try:
-        import pandas as pd
-        import numpy as np
-        from datetime import datetime, UTC
         
         # Create minimal signal pipeline - import locally to avoid dependency issues
         class TestSignalPipeline:

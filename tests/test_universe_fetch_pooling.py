@@ -1,4 +1,3 @@
-import types
 from ai_trading import data_fetcher
 from ai_trading.utils import http
 

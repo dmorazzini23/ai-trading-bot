@@ -4,7 +4,6 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-from ai_trading.config import get_settings
 
 # ML dependencies
 from sklearn.base import BaseEstimator, TransformerMixin

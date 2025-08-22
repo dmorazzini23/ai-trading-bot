@@ -1,7 +1,6 @@
 # AI-AGENT-REF: guard pandas/numpy imports for test environments
 import pandas as pd
 
-import numpy as np
 
 import logging
 

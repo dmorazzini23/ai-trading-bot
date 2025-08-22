@@ -9,7 +9,6 @@ Moved from root features.py for package-safe imports.
 
 # AI-AGENT-REF: pandas and numpy are hard dependencies
 import pandas as pd
-import numpy as np
 
 import logging
 

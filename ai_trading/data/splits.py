@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from typing import Iterator, Tuple, Optional, Union, List, Dict
 from datetime import datetime, timedelta
-import logging
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

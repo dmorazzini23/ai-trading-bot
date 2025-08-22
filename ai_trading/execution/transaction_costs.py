@@ -10,11 +10,10 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional, Dict
+from typing import Any, Optional
 
 _log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 
-from ai_trading.indicators import compute_atr  # AI-AGENT-REF: correct module
 from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS  # AI-AGENT-REF: direct import without shim
 
 

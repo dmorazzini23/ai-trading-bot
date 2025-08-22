@@ -3,7 +3,6 @@
 
 import json
 import sys
-import os
 import logging
 
 # Add the project root to the path
@@ -41,7 +40,6 @@ def test_json_dumps_ensure_ascii():
 def test_compilation():
     """Test that the modified files compile correctly."""
     import compileall
-    import pathlib
     
     files_to_check = [
         '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/logging.py',

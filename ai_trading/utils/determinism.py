@@ -35,9 +35,7 @@ def set_random_seeds(seed: int = 42) -> None:
         np.random.seed(seed)
 
     # TensorFlow (if available)
-    import tensorflow as tf
     # PyTorch (if available)
-    import torch
     # LightGBM (if available)
     # AI-AGENT-REF: optional lightgbm import with shim
     try:

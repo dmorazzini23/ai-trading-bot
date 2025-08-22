@@ -7,8 +7,7 @@ hard dependencies are present and import guards have been removed properly.
 """
 
 import sys
-import traceback
-from typing import List, Tuple
+from typing import Tuple
 
 
 def test_import(module_name: str, description: str = "") -> Tuple[bool, str]:

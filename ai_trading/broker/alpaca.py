@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any, Optional
 from types import SimpleNamespace
+from typing import Any
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from ai_trading.logging import get_logger
+from ai_trading.utils.optional_import import optional_import
 from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
 
 try:  # AI-AGENT-REF: Stage 2.1 optional requests import
@@ -16,14 +17,13 @@ except ImportError:  # pragma: no cover - requests optional
         pass
 
 
-try:  # AI-AGENT-REF: Stage 2.1 guard Alpaca dependency
-    from alpaca.common.exceptions import APIError  # type: ignore
-    from alpaca.trading.client import TradingClient  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    TradingClient = None  # type: ignore
-
-    class APIError(Exception):  # AI-AGENT-REF: fallback when SDK missing
-        pass
+APIError = optional_import("alpaca.common.exceptions", "APIError") or Exception
+TradingClient = optional_import("alpaca.trading.client", "TradingClient")
+if TradingClient is None:  # pragma: no cover - vendor optional
+    _tmp_logger = get_logger(__name__)
+    _tmp_logger.warning(
+        "VENDOR_MISSING: alpaca SDK not installed; using REST fallback/offline path"
+    )
 
 
 from ai_trading.exc import TRANSIENT_HTTP_EXC  # AI-AGENT-REF: Stage 2.1 centralized exc
@@ -223,7 +223,7 @@ class AlpacaBroker:
                 continue
         return positions
 
-    def get_open_position(self, symbol: str) -> Optional[Any]:
+    def get_open_position(self, symbol: str) -> Any | None:
         """Return position for ``symbol`` or None."""  # AI-AGENT-REF
         # Try SDK method first
         try:

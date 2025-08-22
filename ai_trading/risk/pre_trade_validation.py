@@ -5,7 +5,6 @@ Comprehensive pre-trade checks including liquidity analysis, risk validation,
 compliance checks, and market condition assessment for institutional trading.
 """
 
-import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime

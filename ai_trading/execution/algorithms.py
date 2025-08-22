@@ -5,7 +5,6 @@ Provides VWAP, TWAP, Implementation Shortfall, and other
 sophisticated execution algorithms.
 """
 
-import logging
 import time
 
 # Use the centralized logger as per AGENTS.md

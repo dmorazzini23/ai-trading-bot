@@ -3,9 +3,11 @@ Integration test for portfolio-level signal filtering.
 Tests the complete workflow with realistic signal objects.
 """
 
-import pytest
 import os
-from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from tests.mocks.validate_critical_fix_mocks import MockContext, MockSignal
 
 # Set testing environment
 os.environ['TESTING'] = '1'
@@ -144,7 +146,10 @@ class TestPortfolioRebalancingIntegration:
     
     def test_rebalancing_integration(self):
         """Test that portfolio optimization integrates with rebalancing logic."""
-        from ai_trading.rebalancer import portfolio_first_rebalance, _get_current_positions_for_rebalancing
+        from ai_trading.rebalancer import (
+            _get_current_positions_for_rebalancing,
+            portfolio_first_rebalance,
+        )
         
         # Test position extraction
         positions = _get_current_positions_for_rebalancing(self.ctx)

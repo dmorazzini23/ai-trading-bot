@@ -3,7 +3,6 @@ Test centralized logging system to ensure no duplicate logging setup.
 """
 import logging
 import os
-import sys
 import threading
 from unittest.mock import patch
 

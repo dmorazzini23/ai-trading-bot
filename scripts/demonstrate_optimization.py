@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
-from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 CONFIG = TradingConfig()
 

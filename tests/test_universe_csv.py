@@ -1,4 +1,3 @@
-import os
 import pandas as pd
 from ai_trading.data.universe import locate_tickers_csv, load_universe
 

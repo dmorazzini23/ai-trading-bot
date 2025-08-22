@@ -21,11 +21,22 @@ build-backend = "setuptools.build_meta"
 line-length = 100
 
 [tool.ruff]
+target-version = "py311"
 line-length = 100
-select = ["E","F","I","UP"]
-ignore = ["E501"]
-extend-select = ["BLE"]  # flake8-blind-except: flags broad `except Exception`
+extend-exclude = ["artifacts", "build", "dist", ".venv", ".tox"]
 
-[tool.ruff.lint.per-file-ignores]
-# Allow in test files if you need truly broad catches for fixtures
-"tests/*" = ["BLE001"]
+select = [
+  "E", "F", "I",
+  "UP", "SIM", "RET",
+  "B",
+  "DTZ005",
+  "BLE001",
+]
+
+ignore = [
+  "E501",
+]
+
+[tool.ruff.per-file-ignores]
+"tests/**" = ["S101", "DTZ005"]
+"ai_trading/__init__.py" = ["F401"]

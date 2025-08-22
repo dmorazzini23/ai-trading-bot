@@ -1,10 +1,31 @@
-import sys
-import os
 import datetime as dt
-import pandas as pd
-import pytest
-import pytz
+import os
+import sys
 import types
+
+import pytest
+
+from ai_trading.utils.optional_import import optional_import
+
+
+def _has(mod: str) -> bool:
+    return optional_import(mod) is not None
+
+
+def pytest_collection_modifyitems(config, items):
+    missing_mark = pytest.mark.skip(reason="Skipped: optional vendor missing in CI")
+    vendor_to_mod = {
+        "alpaca": "alpaca_trade_api",
+        "polygon": "polygon",
+        "finnhub": "finnhub",
+        "alpha_vantage": "alpha_vantage",
+        "newsapi": "newsapi",
+    }
+    for item in items:
+        marks = {m.name for m in item.iter_markers()}
+        for vendor, mod in vendor_to_mod.items():
+            if vendor in marks and not _has(mod):
+                item.add_marker(missing_mark)
 
 os.environ.setdefault("ALPACA_KEY_ID", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
@@ -40,7 +61,7 @@ except Exception:
 
 # AI-AGENT-REF: Add hypothesis stub early
 try:
-    from hypothesis import given, settings, HealthCheck
+    from hypothesis import HealthCheck, given, settings
 except Exception:
     import types
     
@@ -79,10 +100,9 @@ except Exception:
         def lists(elements, min_size=0, max_size=None, **kwargs):
             # Generate a list based on the element strategy
             size = max(min_size, 40)  # Use a size that meets min_size requirements
-            if hasattr(elements, '__call__'):
+            if callable(elements):
                 return [elements() for _ in range(size)]
-            else:
-                return [1.0] * size
+            return [1.0] * size
     
     hypothesis_mod = types.ModuleType("hypothesis")
     hypothesis_mod.given = given
@@ -317,7 +337,12 @@ except Exception:
 
 # AI-AGENT-REF: Add tenacity stub for retry decorators
 try:
-    from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+    from tenacity import (
+        retry,
+        retry_if_exception_type,
+        stop_after_attempt,
+        wait_exponential,
+    )
 except Exception:
     import types
     
@@ -369,10 +394,11 @@ os.environ.update({
 })
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import types
 from pathlib import Path
 
 import pytest
-import types
+from datetime import UTC
 
 # AI-AGENT-REF: Add numpy stub before any imports that might need it
 try:
@@ -393,12 +419,12 @@ except Exception:  # pragma: no cover - optional dependency
             
         def __sub__(self, other):
             if isinstance(other, (list, ArrayStub)):
-                return ArrayStub([a - b for a, b in zip(self, other)])
+                return ArrayStub([a - b for a, b in zip(self, other, strict=False)])
             return ArrayStub([x - other for x in self])
             
         def __truediv__(self, other):
             if isinstance(other, (list, ArrayStub)):
-                return ArrayStub([a / b if b != 0 else 0 for a, b in zip(self, other)])
+                return ArrayStub([a / b if b != 0 else 0 for a, b in zip(self, other, strict=False)])
             return ArrayStub([x / other if other != 0 else 0 for x in self])
             
         def max(self):
@@ -529,7 +555,7 @@ except Exception:  # pragma: no cover - optional dependency
                         selected_data[col] = [1] * self._length  # Fallback data
                 return DataFrameStub(selected_data)
             # Handle single column name
-            elif isinstance(self.data, dict) and key in self.data:
+            if isinstance(self.data, dict) and key in self.data:
                 return SeriesStub(self.data[key])
             return SeriesStub([1, 2, 3])  # Fallback for missing keys
             
@@ -673,8 +699,7 @@ except Exception:  # pragma: no cover - optional dependency
                     else:
                         result.append(self[i] - other[i])
                 return SeriesStub(result)
-            else:
-                return SeriesStub([x - other if str(x) != 'nan' else float('nan') for x in self])
+            return SeriesStub([x - other if str(x) != 'nan' else float('nan') for x in self])
         
         def __truediv__(self, other):
             """Support division for z-score calculation."""
@@ -686,8 +711,7 @@ except Exception:  # pragma: no cover - optional dependency
                     else:
                         result.append(self[i] / other[i])
                 return SeriesStub(result)
-            else:
-                return SeriesStub([x / other if str(x) != 'nan' and other != 0 else float('nan') for x in self])
+            return SeriesStub([x / other if str(x) != 'nan' and other != 0 else float('nan') for x in self])
             
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
@@ -695,7 +719,7 @@ except Exception:  # pragma: no cover - optional dependency
     # Create minimal Timestamp stub
     class TimestampStub:
         def __init__(self, *args, **kwargs):
-            from datetime import datetime, timezone
+            from datetime import datetime
             # Handle different timestamp creation patterns
             if args:
                 if isinstance(args[0], str):
@@ -704,7 +728,7 @@ except Exception:  # pragma: no cover - optional dependency
                 else:
                     self.value = str(args[0])
             else:
-                self.value = datetime.now(timezone.utc).isoformat()
+                self.value = datetime.now(dt.UTC).isoformat()
             
             # Handle timezone parameter
             if 'tz' in kwargs or len(args) > 1:
@@ -715,15 +739,15 @@ except Exception:  # pragma: no cover - optional dependency
                         try:
                             from datetime import datetime
                             dt = datetime.fromisoformat(args[0])
-                            self._dt = dt.replace(tzinfo=timezone.utc)
+                            self._dt = dt.replace(tzinfo=UTC)
                         except (ValueError, TypeError):
-                            self._dt = datetime.now(timezone.utc)
+                            self._dt = datetime.now(UTC)
                     else:
-                        self._dt = datetime.now(timezone.utc)
+                        self._dt = datetime.now(UTC)
                 else:
-                    self._dt = datetime.now(timezone.utc)
+                    self._dt = datetime.now(UTC)
             else:
-                self._dt = datetime.now(timezone.utc)
+                self._dt = datetime.now(UTC)
                 
         def __str__(self):
             return self.value
@@ -733,20 +757,20 @@ except Exception:  # pragma: no cover - optional dependency
             
         @staticmethod
         def utcnow():
-            from datetime import datetime, timezone
-            return datetime.now(timezone.utc)
+            from datetime import datetime
+            return datetime.now(dt.UTC)
             
         @staticmethod
         def now(tz=None):
-            from datetime import datetime, timezone
-            if tz == "UTC" or tz == timezone.utc:
-                return datetime.now(timezone.utc)
-            return datetime.now(timezone.utc)
+            from datetime import datetime
+            if tz == "UTC" or tz == dt.UTC:
+                return datetime.now(dt.UTC)
+            return datetime.now(dt.UTC)
             
         def __sub__(self, other):
             # Support timestamp arithmetic for comparisons
-            from datetime import datetime, timezone, timedelta
-            return datetime.now(timezone.utc) - timedelta(days=1)  # Return a reasonable past time
+            from datetime import datetime, timedelta
+            return datetime.now(dt.UTC) - timedelta(days=1)  # Return a reasonable past time
         
         def __add__(self, other):
             # Support timestamp + timedelta operations
@@ -779,8 +803,8 @@ except Exception:  # pragma: no cover - optional dependency
             def tz_convert(self, tz):
                 return self  # Return self for method chaining
             def __getitem__(self, idx):
-                from datetime import datetime, timezone
-                return datetime.now(timezone.utc)  # Return a timestamp
+                from datetime import datetime
+                return datetime.now(dt.UTC)  # Return a timestamp
             @property
             def tz(self):
                 return kwargs.get('utc') if 'utc' in kwargs else None
@@ -809,10 +833,10 @@ except Exception:  # pragma: no cover - optional dependency
             return self.td
             
         def __rsub__(self, other):
-            from datetime import datetime, timezone
+            from datetime import datetime
             if hasattr(other, '__sub__'):
                 return other - self.td
-            return datetime.now(timezone.utc) - self.td
+            return datetime.now(dt.UTC) - self.td
 
     pandas_mod.DataFrame = DataFrameStub
     pandas_mod.Timestamp = TimestampStub
@@ -877,8 +901,7 @@ except Exception:  # pragma: no cover - optional dependency
         """Stub for numba.jit decorator - just returns the function unchanged."""
         if len(args) == 1 and callable(args[0]):
             return args[0]  # Direct decoration
-        else:
-            return lambda func: func  # Parameterized decoration
+        return lambda func: func  # Parameterized decoration
     
     numba_mod = types.ModuleType("numba")
     numba_mod.jit = jit_stub
@@ -1451,7 +1474,7 @@ def stub_capital_scaling(monkeypatch):
                 config.TradingConfig = MockTradingConfig
             else:
                 # If config is an instance, set it as an attribute 
-                setattr(config, 'TradingConfig', MockTradingConfig)
+                config.TradingConfig = MockTradingConfig
     except ImportError as e:
         # AI-AGENT-REF: Log config import failure for debugging 
         import logging
@@ -1530,8 +1553,8 @@ def dummy_alpaca_client():
 
 
 def _make_df(rows: int = 10):
-    from datetime import datetime, timezone
-    now = datetime(2025, 8, 8, 15, 30, tzinfo=timezone.utc)
+    from datetime import datetime
+    now = datetime(2025, 8, 8, 15, 30, tzinfo=dt.UTC)
     try:
         import pandas as pd
         idx = pd.date_range(end=now, periods=max(rows, 1), freq="min")

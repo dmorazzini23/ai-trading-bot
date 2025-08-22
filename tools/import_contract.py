@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import subprocess
 import sys
 from typing import List
@@ -57,7 +56,7 @@ def main(argv: List[str] | None = None) -> int:
     for mod in modules:
         try:
             cp = _run_import_in_subprocess(mod, args.timeout)
-        except subprocess.TimeoutExpired as te:
+        except subprocess.TimeoutExpired:
             msg = f"TIMEOUT importing {mod} after {args.timeout:.1f}s"
             print(msg, file=sys.stderr)
             if args.ci:

@@ -5,23 +5,26 @@ This module provides comprehensive testing of the trading bot's live trading
 capabilities, including end-to-end workflows, risk management, and compliance.
 """
 
-import pytest
 import asyncio
-import os
 import datetime as dt
+import os
+
+import pytest
 import pytz
+
+pytestmark = pytest.mark.alpaca
 
 # Set test environment
 os.environ['PYTEST_RUNNING'] = '1'
 pytest.importorskip('alpaca_trade_api', reason='alpaca not installed')
 
+from ai_trading.execution.live_trading import AlpacaExecutionEngine
+
 from .framework import (
+    ComplianceTestSuite,
     MockMarketDataProvider,
     TradingScenarioRunner,
-    ComplianceTestSuite
 )
-
-from ai_trading.execution.live_trading import AlpacaExecutionEngine
 
 
 class TestLiveTradingBot:

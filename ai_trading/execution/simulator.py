@@ -5,7 +5,6 @@ Provides realistic execution simulation including slippage,
 partial fills, and market impact modeling.
 """
 
-import logging
 import math
 import random
 

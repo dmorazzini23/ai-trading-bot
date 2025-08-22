@@ -20,7 +20,6 @@ import numpy as np
 
 NUMPY_AVAILABLE = True
 
-import pandas as pd
 
 PANDAS_AVAILABLE = True
 
@@ -34,7 +33,7 @@ from .base import BaseStrategy, StrategySignal
 
 # Machine learning imports - sklearn is a hard dependency
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 

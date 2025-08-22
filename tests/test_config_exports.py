@@ -1,7 +1,6 @@
 # tests/test_config_exports.py
 
 import importlib
-import types
 
 def test_lazy_exports_resolve():
     cfg = importlib.import_module("ai_trading.config")

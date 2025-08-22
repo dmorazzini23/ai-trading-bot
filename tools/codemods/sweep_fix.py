@@ -143,12 +143,12 @@ def ensure_timezone_import(mod: cst.Module) -> cst.Module:
 def transform_file(p: pathlib.Path):
     try:
         src = p.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
+    except (OSError, UnicodeDecodeError):
         logger.exception(f"Failed to read file {p}")
         return
     try:
         mod = cst.parse_module(src)
-    except (cst.ParserError, ValueError) as e:
+    except (cst.ParserError, ValueError):
         logger.exception(f"Failed to parse file {p}")
         return
     t = Fixer()

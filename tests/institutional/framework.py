@@ -12,7 +12,6 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
-import logging
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

@@ -5,7 +5,6 @@ Provides comprehensive risk monitoring, portfolio risk assessment,
 and real-time risk controls for institutional trading operations.
 """
 
-import logging
 from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import math
 import statistics

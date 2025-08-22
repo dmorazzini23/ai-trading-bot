@@ -5,7 +5,6 @@ Provides comprehensive risk metrics calculation including VaR,
 drawdown analysis, and institutional risk measurement tools.
 """
 
-import logging
 import math
 import statistics
 

@@ -29,7 +29,7 @@ except Exception:  # pragma: no cover - optional torch dependency
 from ai_trading import meta_learning
 import ai_trading.config as config
 from ai_trading.broker.alpaca import AlpacaBroker
-from ai_trading.execution.engine import ExecutionEngine, OrderManager
+from ai_trading.execution.engine import ExecutionEngine
 from ai_trading.monitoring.order_health_monitor import (
     _active_orders,
     _order_tracking_lock,

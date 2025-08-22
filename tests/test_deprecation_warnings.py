@@ -2,7 +2,6 @@
 Test deprecation warnings for root module imports.
 """
 import warnings
-import pytest
 
 
 def test_bot_engine_deprecation_warning():

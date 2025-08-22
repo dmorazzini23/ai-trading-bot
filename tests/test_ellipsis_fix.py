@@ -1,7 +1,6 @@
 """Test fixes for message-shortening ellipsis and risk exposure task."""
 import json
 import logging
-import types
 import unittest
 from unittest.mock import Mock, patch
 

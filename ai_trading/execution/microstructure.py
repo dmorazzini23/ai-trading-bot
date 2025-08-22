@@ -5,7 +5,6 @@ Advanced market microstructure analysis including bid-ask spreads, order flow,
 market impact estimation, and liquidity metrics for institutional trading.
 """
 
-import logging
 import math
 import statistics
 from dataclasses import dataclass

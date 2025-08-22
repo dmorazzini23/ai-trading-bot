@@ -6,7 +6,6 @@ volatility-adjusted Kelly criterion, and dynamic risk-based position sizing
 for institutional-grade trading operations.
 """
 
-import logging
 from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 import math
 import statistics
