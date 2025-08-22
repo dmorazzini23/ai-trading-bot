@@ -1,0 +1,151 @@
+bringing up nodes...
+bringing up nodes...
+
+..................F.FF...........s......F...................................................
+=========================================================== FAILURES ===========================================================
+_______________________________________ test_get_open_position_uses_sdk_then_falls_back ________________________________________
+[gw3] linux -- Python 3.11.12 /workspace/ai-trading-bot/.venv/bin/python
+
+    def test_get_open_position_uses_sdk_then_falls_back():
+        broker = AlpacaBroker.__new__(AlpacaBroker)
+        broker._api = FakeClient([Obj("MSFT", "5", "300.0")])
+        broker._is_new = False
+        pos = broker.get_open_position("MSFT")
+        assert pos and pos.symbol == "MSFT" and int(pos.qty) == 5
+>       none = broker.get_open_position("NVDA")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_broker_alpaca.py:39: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+ai_trading/broker/alpaca.py:230: in get_open_position
+    p = self._call_with_retry(
+ai_trading/broker/alpaca.py:132: in _call_with_retry
+    return retry_call(
+ai_trading/utils/retry.py:31: in retry_call
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+ai_trading/broker/alpaca.py:118: in _wrapped
+    return func()
+           ^^^^^^
+ai_trading/broker/alpaca.py:231: in <lambda>
+    "get_position", lambda: self._api.get_position(symbol)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <tests.test_broker_alpaca.FakeClient object at 0x7fca3de07e10>, symbol = 'NVDA'
+
+    def get_position(self, symbol):
+        for p in self._positions:
+            if p.symbol == symbol:
+                return p
+>       raise Exception("not found")
+E       Exception: not found
+
+tests/test_broker_alpaca.py:15: Exception
+__________________________________________ test_static_mode_nonpositive_is_autofixed ___________________________________________
+[gw4] linux -- Python 3.11.12 /workspace/ai-trading-bot/.venv/bin/python
+
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7fd718a68450>
+
+    def test_static_mode_nonpositive_is_autofixed(caplog):
+        cfg = SimpleNamespace(
+            trading_mode="balanced",
+            alpaca_base_url="https://paper-api.alpaca.markets",
+            paper=True,
+            default_max_position_size=9000.0,
+        )
+        tcfg = SimpleNamespace(
+            capital_cap=0.04,
+            dollar_risk_limit=0.05,
+            max_position_mode="STATIC",
+            max_position_size=0.0,
+        )
+    
+        with caplog.at_level(logging.WARNING):
+            main._validate_runtime_config(cfg, tcfg)
+    
+        assert getattr(tcfg, "max_position_size", 0.0) == 9000.0
+    
+>       assert any(
+            r.__dict__.get("field") == "max_position_size"
+            and r.__dict__.get("reason") == "nonpositive"
+            for r in caplog.records
+        )
+E       assert False
+E        +  where False = any(<generator object test_static_mode_nonpositive_is_autofixed.<locals>.<genexpr> at 0x7fd730a0e260>)
+
+tests/test_config_validation_max_position_size.py:28: AssertionError
+____________________________________________________ test_validate_env_main ____________________________________________________
+[gw2] linux -- Python 3.11.12 /workspace/ai-trading-bot/.venv/bin/python
+
+mod_name = 'validate_env', error = <class 'ImportError'>
+
+>   ???
+
+<frozen runpy>:131: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+name = 'validate_env', package = None
+
+>   ???
+E   ValueError: validate_env.__spec__ is None
+
+<frozen importlib.util>:115: ValueError
+
+The above exception was the direct cause of the following exception:
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7fb3eacc7610>
+
+    def test_validate_env_main(monkeypatch):
+        """Running validate_env as script calls _main."""
+        # AI-AGENT-REF: Mock environment variables to ensure validation passes
+        monkeypatch.setenv(
+            "WEBHOOK_SECRET",
+            "fake_test_webhook_secret_that_is_at_least_32_characters_long_for_security_not_real",
+        )
+        monkeypatch.setenv(
+            "ALPACA_API_KEY", "FAKE_TEST_API_KEY_NOT_REAL_123456789012345"
+        )  # Realistic length
+        monkeypatch.setenv(
+            "ALPACA_SECRET_KEY",
+            "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789012345678901234567890ABCDEFGHIJKLMN",
+        )  # Realistic length
+        monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    
+        # AI-AGENT-REF: Clear sys.argv to prevent pytest args from interfering with validate_env argument parsing
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ["validate_env"]  # Simulate clean module execution
+>           runpy.run_module("validate_env", run_name="__main__")
+
+tests/test_additional_coverage.py:349: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<frozen runpy>:222: in run_module
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod_name = 'validate_env', error = <class 'ImportError'>
+
+>   ???
+E   ImportError: Error while finding module specification for 'validate_env' (ValueError: validate_env.__spec__ is None)
+
+<frozen runpy>:140: ImportError
+_______________________________________ test_data_fetcher_json_decode_is_valueerror_only _______________________________________
+[gw0] linux -- Python 3.11.12 /workspace/ai-trading-bot/.venv/bin/python
+
+    def test_data_fetcher_json_decode_is_valueerror_only():
+        src = _source(df_mod)
+        # The JSON decode guard around resp.json() should not be broad
+>       assert re.search(r"resp\.json\(\)\n\s*except ValueError:\n\s*payload\s*=\s*\{\}", src)
+E       assert None
+E        +  where None = <function search at 0x7f6225291e40>('resp\\.json\\(\\)\\n\\s*except ValueError:\\n\\s*payload\\s*=\\s*\\{\\}', 'from __future__ import annotations\n\nimport datetime as _dt\nimport os\nimport warnings  # AI-AGENT-REF: control yfi..._minute_yfinance",\n    "is_market_open",\n    "get_last_available_bar",\n    "fh_fetcher",\n    "get_minute_df",\n]\n')
+E        +    where <function search at 0x7f6225291e40> = re.search
+
+tests/runtime/test_exception_narrowing_df_main.py:22: AssertionError
+=================================================== short test summary info ====================================================
+FAILED tests/test_broker_alpaca.py::test_get_open_position_uses_sdk_then_falls_back - Exception: not found
+FAILED tests/test_config_validation_max_position_size.py::test_static_mode_nonpositive_is_autofixed - assert False
+FAILED tests/test_additional_coverage.py::test_validate_env_main - ImportError: Error while finding module specification for ...
+FAILED tests/runtime/test_exception_narrowing_df_main.py::test_data_fetcher_json_decode_is_valueerror_only - assert None
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 4 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! xdist.dsession.Interrupted: stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
