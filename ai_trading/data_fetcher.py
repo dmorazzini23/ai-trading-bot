@@ -38,6 +38,23 @@ yf = optional_import("yfinance")
 
 from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
 
+try:  # AI-AGENT-REF: re-export last_market_session for legacy imports
+    from ai_trading.utils.time import last_market_session  # type: ignore[attr-defined]
+except Exception:
+    try:
+        from ai_trading.market.calendars import last_market_session  # AI-AGENT-REF: fallback to calendars
+    except Exception:  # AI-AGENT-REF: simple offline stub
+        def last_market_session(now=None):
+            from datetime import datetime, UTC, timedelta
+
+            now = now or datetime.now(UTC)
+            d = now
+            while d.weekday() >= 5:
+                d -= timedelta(days=1)
+            return d.date()
+
+__all__ = [*globals().get("__all__", []), "last_market_session"]
+
 # ---------------------------------------------------------------------------
 # Backwards compatibility wrappers around central canonicalizers
 # ---------------------------------------------------------------------------
