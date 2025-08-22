@@ -161,11 +161,25 @@ def _validate_runtime_config(cfg, tcfg) -> None:
             pass
         else:
             eq = getattr(tcfg, "equity", getattr(cfg, "equity", None))
-            fallback = _resolve_max_position_size(max_pos, cap, eq)
+            fallback, _src = _resolve_max_position_size(max_pos, cap, eq)
             try:
-                setattr(tcfg, "max_position_size", float(fallback))
-            except (AttributeError, TypeError):
-                pass
+                # AI-AGENT-REF: update only when field exists
+                if hasattr(tcfg, "max_position_size"):
+                    tcfg.max_position_size = float(fallback)
+                elif getattr(getattr(tcfg, "position_sizing", None), "max_position_size", None) is not None:
+                    tcfg.position_sizing.max_position_size = float(fallback)
+                else:
+                    import os  # AI-AGENT-REF: runtime env override
+                    os.environ["AI_TRADING_MAX_POSITION_SIZE"] = str(float(fallback))
+            except Exception as e:  # AI-AGENT-REF: log env fallback issues
+                logger.warning(
+                    "CONFIG_AUTOFIX_FALLBACK_APPLIED_VIA_ENV",
+                    extra={
+                        "field": "max_position_size",
+                        "fallback": float(fallback),
+                        "error": repr(e),
+                    },
+                )
 
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
     paper = bool(getattr(cfg, "paper", True))

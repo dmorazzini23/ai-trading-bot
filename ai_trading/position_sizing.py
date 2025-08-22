@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import floor
 from typing import Any
+import os  # AI-AGENT-REF: env overrides for sizing
 
 from ai_trading.logging import get_logger  # AI-AGENT-REF: structured logging
 from ai_trading.net.http import get_global_session
@@ -51,10 +52,18 @@ def _resolve_max_position_size(
     equity: float | None,
     *,
     default_equity: float = 200_000.0,
-) -> float:
+) -> tuple[float, str]:
     """Autofix nonpositive max_position_size using equity caps."""  # AI-AGENT-REF
+    env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
+    if env_val:
+        try:
+            v = float(env_val)
+            if v > 0:
+                return v, "env_override"
+        except ValueError:
+            pass
     if provided > 0:
-        return float(provided)
+        return float(provided), "provided"
     basis = equity if (equity is not None and equity > 0) else default_equity
     resolved = float(round(capital_cap * basis, 2))
     _log.info(
@@ -68,7 +77,7 @@ def _resolve_max_position_size(
             "capital_cap": capital_cap,
         },
     )
-    return resolved
+    return resolved, "autofix"
 
 
 def _fallback_max_size(cfg, tcfg) -> float:
@@ -121,12 +130,14 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool = False) -> tupl
 
     if mode != "AUTO":  # Static path
         cur = _coerce_float(getattr(tcfg, "max_position_size", 0.0), 0.0)
+        source = "static"
         if cur <= 0.0:
-            cur = _fallback_max_size(cfg, tcfg)
+            eq = getattr(tcfg, "equity", getattr(cfg, "equity", None))
+            cur, source = _resolve_max_position_size(cur, cap, eq)  # AI-AGENT-REF: env override or autofix
         _CACHE.value, _CACHE.ts = cur, _now_utc()
         return cur, {
             "mode": mode,
-            "source": "static",
+            "source": source,
             "capital_cap": cap,
             "refreshed_at": _CACHE.ts.isoformat(),
         }

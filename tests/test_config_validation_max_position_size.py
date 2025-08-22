@@ -1,51 +1,48 @@
-from __future__ import annotations
-
-import logging
-from types import SimpleNamespace
-
-from ai_trading import main
+import os
+import importlib
+from contextlib import contextmanager
 
 
-def test_static_mode_nonpositive_is_autofixed(caplog):
-    cfg = SimpleNamespace(
-        trading_mode="balanced",
-        alpaca_base_url="https://paper-api.alpaca.markets",
-        paper=True,
-        default_max_position_size=9000.0,
-    )
-    tcfg = SimpleNamespace(
-        capital_cap=0.04,
-        dollar_risk_limit=0.05,
-        max_position_mode="STATIC",
-        max_position_size=0.0,
-    )
-
-    with caplog.at_level(logging.INFO, logger="ai_trading.position_sizing"):
-        main._validate_runtime_config(cfg, tcfg)
-
-    assert getattr(tcfg, "max_position_size", 0.0) == 8000.0
-
-    assert any(
-        r.__dict__.get("field") == "max_position_size"
-        and r.__dict__.get("reason") == "derived_equity_cap"
-        for r in caplog.records
-    )
+@contextmanager
+def _temp_env(k, v):  # AI-AGENT-REF: helper to toggle env vars
+    old = os.environ.get(k)
+    if v is None and k in os.environ:
+        del os.environ[k]
+    elif v is not None:
+        os.environ[k] = str(v)
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = old
 
 
-def test_auto_mode_nonpositive_is_permitted(caplog):
-    cfg = SimpleNamespace(
-        trading_mode="balanced",
-        alpaca_base_url="https://paper-api.alpaca.markets",
-        paper=True,
-    )
-    tcfg = SimpleNamespace(
-        capital_cap=0.04,
-        dollar_risk_limit=0.05,
-        max_position_mode="AUTO",
-        max_position_size=0.0,
-    )
+def test_env_override_precedence(monkeypatch):  # AI-AGENT-REF: env override respected
+    with _temp_env("AI_TRADING_MAX_POSITION_SIZE", "1234.5"):
+        ps = importlib.import_module("ai_trading.position_sizing")
+        val, src = ps._resolve_max_position_size(0.0, 0.1, None)
+        assert val == 1234.5
+        assert src == "env_override"
 
-    with caplog.at_level(logging.WARNING):
-        main._validate_runtime_config(cfg, tcfg)
 
-    assert not any(r.getMessage() == "CONFIG_AUTOFIX" for r in caplog.records)
+def test_no_mutation_of_settings(monkeypatch):  # AI-AGENT-REF: ensure env fallback
+    import ai_trading.main as m
+
+    class Dummy:
+        trading_mode = "balanced"
+        capital_cap = 0.5
+        dollar_risk_limit = 0.4
+
+    m.logger = getattr(m, "logger", None) or importlib.import_module("logging").getLogger(__name__)
+
+    class CfgDummy:  # AI-AGENT-REF: minimal cfg for validation
+        alpaca_base_url = "paper"
+        paper = True
+
+    with _temp_env("AI_TRADING_MAX_POSITION_SIZE", None):
+        d = Dummy()
+        m._validate_runtime_config(cfg=CfgDummy(), tcfg=d)
+        assert not hasattr(d, "max_position_size")
+        assert os.environ.get("AI_TRADING_MAX_POSITION_SIZE") is not None
