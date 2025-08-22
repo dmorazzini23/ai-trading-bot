@@ -22,24 +22,29 @@ contract:
 dev-deps:
 	python -m pip install --upgrade pip
 	python -m pip install -r requirements.txt
-	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; fi
+	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt --no-deps; fi
 	python -m pip install -e .
-.PHONY: test-core test-int test-all
+.PHONY: test-core test-int test-all test-core-seq
 
-test-core: dev-deps
+test-core:
 	@mkdir -p artifacts
-	pytest -n auto -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core.txt
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -n auto -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core.txt
 
-test-int: dev-deps
+test-int:
 	@mkdir -p artifacts
-	RUN_INTEGRATION=1 pytest -n auto -q -m "integration" --disable-warnings | tee artifacts/pytest-integration.txt
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 RUN_INTEGRATION=1 pytest -n auto -q -m "integration" --disable-warnings | tee artifacts/pytest-integration.txt
 
-test-all: dev-deps
+test-all:  ## Run lint, types, and unit tests
+	python -m pip install --upgrade pip
+	python -m pip install -r requirements.txt
+	python -m pip install -r requirements-dev.txt --no-deps
+	python -m pip install -e .
 	$(MAKE) test-core
 	@echo "--- Integration (opt-in) ---"
 	@RUN_INTEGRATION=${RUN_INTEGRATION} $(MAKE) -s test-int || true
 
-## Lint (safe-fix subset)
+test-core-seq:
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core-seq.txt
 .PHONY: lint-fix
 lint-fix:
 	tools/lint_safe_fix.sh
