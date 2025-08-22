@@ -111,8 +111,13 @@ def _get_int_env(var: str, default: int | None = None) -> int | None:
         return default
     try:
         return int(val)
-    except Exception:
-        logger.warning("Invalid integer for %s=%r; using default %r", var, val, default)
+    except ValueError:
+        logger.warning(
+            "Invalid integer for %s=%r; using default %r",
+            var,
+            val,
+            default,
+        )
         return default
 
 
@@ -157,7 +162,7 @@ def _validate_runtime_config(cfg, tcfg) -> None:
             fallback, meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
             try:
                 setattr(tcfg, "max_position_size", float(fallback))
-            except Exception:
+            except (AttributeError, TypeError):
                 pass
             logger.info(
                 "CONFIG_AUTOFIX",
@@ -310,6 +315,17 @@ def start_api(ready_signal: threading.Event = None) -> None:
     run_flask_app(port, ready_signal)
 
 
+def start_api_with_signal(
+    api_ready: threading.Event, api_error: threading.Event
+) -> None:
+    """Start API server and signal readiness/errors."""  # AI-AGENT-REF: explicit error handling
+    try:
+        start_api(api_ready)
+    except (OSError, RuntimeError) as e:
+        logger.error("Failed to start API: %s", str(e))
+        api_error.set()
+
+
 def parse_cli(argv: list[str] | None = None):
     """Parse CLI arguments, tolerating unknown flags."""  # AI-AGENT-REF: tolerant parser
     parser = argparse.ArgumentParser(description="AI Trading Bot")
@@ -332,7 +348,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     try:
         _validate_runtime_config(config, S)
-    except Exception as e:  # noqa: BLE001
+    except ValueError as e:  # AI-AGENT-REF: narrow runtime config errors
         logger.critical("RUNTIME_CONFIG_INVALID", extra={"error": str(e)})
         raise
 
@@ -362,7 +378,7 @@ def main(argv: list[str] | None = None) -> None:
         resolved_size, sizing_meta = resolve_max_position_size(config, S, force_refresh=True)
         try:
             setattr(S, "max_position_size", float(resolved_size))
-        except Exception:
+        except (AttributeError, TypeError):
             pass
         if sizing_meta.get("source") == "fallback":
             logger.warning(
@@ -396,19 +412,12 @@ def main(argv: list[str] | None = None) -> None:
     # Ensure API is ready before starting trading cycles
     api_ready = threading.Event()
     api_error = threading.Event()
-    api_exception = None
 
-    def start_api_with_signal():
-        try:
-            start_api(api_ready)  # Pass the ready signal to be set before blocking run
-        except Exception as e:
-            # AI-AGENT-REF: Add proper timeout error handling for API startup synchronization
-            nonlocal api_exception
-            api_exception = e
-            logger.error("Failed to start API: %s", e)
-            api_error.set()
-
-    t = Thread(target=start_api_with_signal, daemon=True)
+    t = Thread(
+        target=start_api_with_signal,
+        args=(api_ready, api_error),
+        daemon=True,
+    )
     t.start()
 
     # Wait for API to be ready with proper error handling
@@ -416,7 +425,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         # Check for immediate startup errors first
         if api_error.wait(timeout=2):  # Quick check for startup errors
-            raise RuntimeError(f"API failed to start: {api_exception}")
+            raise RuntimeError("API failed to start")
 
         # Wait for API ready signal with reasonable timeout
         if not api_ready.wait(timeout=10):  # Reduced timeout for test environments
@@ -446,7 +455,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     try:
         health_tick_seconds = int(raw_tick)
-    except Exception:
+    except ValueError:
         health_tick_seconds = 300
     last_health = time.monotonic()
 
@@ -466,7 +475,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     try:
         iterations = int(raw_iter)
-    except Exception:
+    except ValueError:
         iterations = 0
 
     raw_interval = (
@@ -474,7 +483,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     try:
         interval = int(raw_interval)
-    except Exception:
+    except ValueError:
         interval = 60
 
     seed = get_seed_int()
@@ -545,7 +554,7 @@ def main(argv: list[str] | None = None) -> None:
                     if float(getattr(S, "max_position_size", 0.0)) != resolved_size:
                         try:
                             setattr(S, "max_position_size", float(resolved_size))
-                        except Exception:
+                        except (AttributeError, TypeError):
                             pass
                         logger.info(
                             "POSITION_SIZING_REFRESHED",
