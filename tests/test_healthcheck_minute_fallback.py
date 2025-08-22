@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 import ai_trading.data.bars as data_bars
-import ai_trading.data_fetcher as data_fetcher
+from ai_trading import data_fetcher
 from ai_trading.core import bot_engine
 
 

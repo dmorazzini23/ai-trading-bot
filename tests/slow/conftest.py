@@ -5,4 +5,3 @@ def reload_module(module):
 
 def load_runner():
     print("Stub load_runner")
-    return None

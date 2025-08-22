@@ -6,7 +6,7 @@ and execution optimization for institutional-grade trading operations.
 """
 
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from json import JSONDecodeError
 from typing import Any
@@ -101,7 +101,7 @@ class LiquidityAnalyzer:
             Comprehensive liquidity analysis
         """
         try:
-            analysis_start = datetime.now(timezone.utc)
+            analysis_start = datetime.now(UTC)
 
             # Extract volume data
             volume_analysis = self._analyze_volume_patterns(market_data)
@@ -130,7 +130,7 @@ class LiquidityAnalyzer:
             # Update liquidity history
             analysis_result = {
                 "symbol": symbol,
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": datetime.now(UTC),
                 "liquidity_level": liquidity_level,
                 "volume_analysis": volume_analysis,
                 "spread_analysis": spread_analysis,
@@ -138,7 +138,7 @@ class LiquidityAnalyzer:
                 "market_hours_analysis": market_hours_analysis,
                 "execution_recommendations": execution_recommendations,
                 "analysis_time_seconds": (
-                    datetime.now(timezone.utc) - analysis_start
+                    datetime.now(UTC) - analysis_start
                 ).total_seconds(),
             }
 
@@ -347,7 +347,7 @@ class LiquidityAnalyzer:
     def _analyze_market_hours_liquidity(self) -> dict[str, Any]:
         """Analyze current market hours impact on liquidity."""
         try:
-            current_time = datetime.now(timezone.utc)
+            current_time = datetime.now(UTC)
             hour = current_time.hour
             minute = current_time.minute
             weekday = current_time.weekday()
@@ -855,7 +855,7 @@ class LiquidityManager:
                 "portfolio_assessment": portfolio_assessment,
                 "high_liquidity_percentage": high_liquidity_pct,
                 "low_liquidity_percentage": low_liquidity_pct,
-                "last_updated": datetime.now(timezone.utc),
+                "last_updated": datetime.now(UTC),
             }
 
         except COMMON_EXC as e:

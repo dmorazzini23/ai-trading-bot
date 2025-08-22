@@ -8,7 +8,7 @@ Tests the enhanced order management and comprehensive system health monitoring.
 import os
 import time
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 # Mock environment variables for testing
@@ -23,7 +23,7 @@ test_env = {
 }
 
 with patch.dict(os.environ, test_env):
-    import ai_trading.config as config
+    from ai_trading import config
     from ai_trading.monitoring.order_health_monitor import OrderHealthMonitor, OrderInfo
     from ai_trading.monitoring.system_health_checker import (  # AI-AGENT-REF: normalized import
         ComponentHealth,
@@ -166,8 +166,8 @@ class TestSystemHealthChecker(unittest.TestCase):
         """Test overall status determination from components."""
         # Test all healthy
         components = {
-            'comp1': ComponentHealth("comp1", "healthy", 0.9, datetime.now(timezone.utc)),
-            'comp2': ComponentHealth("comp2", "healthy", 0.8, datetime.now(timezone.utc))
+            'comp1': ComponentHealth("comp1", "healthy", 0.9, datetime.now(UTC)),
+            'comp2': ComponentHealth("comp2", "healthy", 0.8, datetime.now(UTC))
         }
         status = self.health_checker._determine_overall_status(components)
         self.assertEqual(status, "healthy")
@@ -192,8 +192,8 @@ class TestSystemHealthChecker(unittest.TestCase):
             mock_health = SystemHealthStatus(
                 overall_status="healthy",
                 components={
-                    'sentiment': ComponentHealth("sentiment", "healthy", 0.9, datetime.now(timezone.utc)),
-                    'meta_learning': ComponentHealth("meta_learning", "warning", 0.7, datetime.now(timezone.utc))
+                    'sentiment': ComponentHealth("sentiment", "healthy", 0.9, datetime.now(UTC)),
+                    'meta_learning': ComponentHealth("meta_learning", "warning", 0.7, datetime.now(UTC))
                 },
                 alerts=["Test alert"],
                 metrics={'test_metric': 0.85}

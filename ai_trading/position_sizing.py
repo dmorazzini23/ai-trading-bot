@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from math import floor
-from typing import Any, Optional
+from typing import Any
 
 from ai_trading.logging import get_logger  # AI-AGENT-REF: structured logging
 from ai_trading.net.http import get_global_session
@@ -21,7 +21,7 @@ _CACHE = _Cache()
 
 
 def _now_utc() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _should_refresh(ttl_seconds: float) -> bool:
@@ -48,7 +48,7 @@ def _clamp(val: float, vmin: float | None, vmax: float | None) -> float:
 def _resolve_max_position_size(
     provided: float,
     capital_cap: float,
-    equity: Optional[float],
+    equity: float | None,
     *,
     default_equity: float = 200_000.0,
 ) -> float:

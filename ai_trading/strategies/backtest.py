@@ -426,8 +426,7 @@ class BacktestEngine:
             max_dd = 0.0
 
             for value in portfolio_values:
-                if value > peak:
-                    peak = value
+                peak = max(peak, value)
 
                 drawdown = (peak - value) / peak if peak > 0 else 0
                 max_dd = max(max_dd, drawdown)

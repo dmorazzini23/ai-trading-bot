@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -141,19 +141,19 @@ class MetricsCollector:
 
     def __init__(self):
         """Initialize metrics collector."""
-        self.counters: Dict[str, int] = defaultdict(int)
-        self.histograms: Dict[str, list] = defaultdict(list)
-        self.gauges: Dict[str, float] = {}
+        self.counters: dict[str, int] = defaultdict(int)
+        self.histograms: dict[str, list] = defaultdict(list)
+        self.gauges: dict[str, float] = {}
         self.start_time = time.time()
 
         logger.info("MetricsCollector initialized")
 
-    def inc_counter(self, name: str, value: int = 1, labels: Optional[Dict[str, str]] = None):
+    def inc_counter(self, name: str, value: int = 1, labels: dict[str, str] | None = None):
         """Increment a counter metric."""
         key = f"{name}_{hash(str(labels) if labels else '')}"
         self.counters[key] += value
 
-    def observe_latency(self, name: str, latency_ms: float, labels: Optional[Dict[str, str]] = None):
+    def observe_latency(self, name: str, latency_ms: float, labels: dict[str, str] | None = None):
         """Record a latency observation."""
         key = f"{name}_{hash(str(labels) if labels else '')}"
         self.histograms[key].append(latency_ms)
@@ -162,7 +162,7 @@ class MetricsCollector:
         if len(self.histograms[key]) > 1000:
             self.histograms[key] = self.histograms[key][-500:]
 
-    def gauge_set(self, name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def gauge_set(self, name: str, value: float, labels: dict[str, str] | None = None):
         """Set a gauge metric value."""
         key = f"{name}_{hash(str(labels) if labels else '')}"
         self.gauges[key] = value
@@ -182,7 +182,7 @@ class MetricsCollector:
 
         self.gauge_set("last_trade_timestamp", time.time(), labels)
 
-    def get_metrics_summary(self) -> Dict[str, Any]:
+    def get_metrics_summary(self) -> dict[str, Any]:
         """Get a summary of all collected metrics."""
         summary = {
             "counters": dict(self.counters),
@@ -219,25 +219,25 @@ class PerformanceMonitor:
         """Initialize performance monitor."""
         self.metrics_collector = MetricsCollector()
         self.trade_history: list = []
-        self.performance_cache: Dict[str, Any] = {}
+        self.performance_cache: dict[str, Any] = {}
         self.last_cache_update = 0
         self.cache_ttl = 60  # seconds
 
         logger.info("PerformanceMonitor initialized")
 
-    def inc_counter(self, name: str, value: int = 1, labels: Optional[Dict[str, str]] = None):
+    def inc_counter(self, name: str, value: int = 1, labels: dict[str, str] | None = None):
         """Increment a counter metric."""
         self.metrics_collector.inc_counter(name, value, labels)
 
-    def observe_latency(self, name: str, latency_ms: float, labels: Optional[Dict[str, str]] = None):
+    def observe_latency(self, name: str, latency_ms: float, labels: dict[str, str] | None = None):
         """Record a latency observation."""
         self.metrics_collector.observe_latency(name, latency_ms, labels)
 
-    def gauge_set(self, name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def gauge_set(self, name: str, value: float, labels: dict[str, str] | None = None):
         """Set a gauge metric value."""
         self.metrics_collector.gauge_set(name, value, labels)
 
-    def record_trade(self, trade_data: Dict[str, Any]):
+    def record_trade(self, trade_data: dict[str, Any]):
         """Record a trade for performance analysis."""
         trade_data["timestamp"] = trade_data.get("timestamp", datetime.now(UTC))
         self.trade_history.append(trade_data)
@@ -256,7 +256,7 @@ class PerformanceMonitor:
             success=trade_data.get("success", False)
         )
 
-    def get_performance_metrics(self, force_refresh: bool = False) -> Dict[str, Any]:
+    def get_performance_metrics(self, force_refresh: bool = False) -> dict[str, Any]:
         """Get comprehensive performance metrics."""
         current_time = time.time()
 

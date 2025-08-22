@@ -21,7 +21,7 @@ def force_coverage(mod):
 @pytest.mark.smoke
 @pytest.mark.xfail(reason="minimal data may produce no trades")
 def test_backtester_engine_basic(tmp_path, capsys):
-    import ai_trading.strategies.backtester as backtester
+    from ai_trading.strategies import backtester
 
     idx = pd.date_range("2024-01-01", periods=2, freq="D")
     df = pd.DataFrame(

@@ -1,4 +1,4 @@
-.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix typecheck
+.PHONY: init test lint verify test-all contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 typecheck
 
 init:
         python tools/check_python_version.py
@@ -25,7 +25,7 @@ deps-dev:
 test-all:
         @python -V > artifacts/python-version.txt
         @pip install -r requirements.txt
-        @if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+        @[ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || true
         @ruff --version > artifacts/ruff-version.txt
         @tools/lint_safe_fix.sh
         @mypy --version > artifacts/mypy-version.txt
@@ -38,13 +38,18 @@ test-all:
 lint-fix:
         tools/lint_safe_fix.sh
 
+.PHONY: lint-fix-phase2
+lint-fix-phase2:
+        tools/lint_safe_fix.sh  # AI-AGENT-REF: phase2b lint pass
+
 .PHONY: lint
 lint:
         ruff check .
 
 .PHONY: typecheck
 typecheck:
-        python -m mypy ai_trading trade_execution || true  # AI-AGENT-REF: ensure type safety
+        python -m mypy --version | tee artifacts/mypy-version.txt
+        python -m mypy ai_trading trade_execution | tee artifacts/mypy-phase2b.txt || true  # AI-AGENT-REF: ensure type safety
 
 verify:
         @if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi

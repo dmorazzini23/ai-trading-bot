@@ -11,7 +11,7 @@ class TestMyFixes(unittest.TestCase):
 
     def test_meta_learning_thresholds_reduced(self):
         """Test that meta-learning thresholds are reduced to allow easier activation."""
-        with open("bot_engine.py", 'r') as f:
+        with open("bot_engine.py") as f:
             content = f.read()
 
         # Should have reduced min_trades from 3 to 2
@@ -26,7 +26,7 @@ class TestMyFixes(unittest.TestCase):
         """Test that duplicate event logging is eliminated."""
         debug_tracker_path = "ai_trading/execution/debug_tracker.py"
         if os.path.exists(debug_tracker_path):
-            with open(debug_tracker_path, 'r') as f:
+            with open(debug_tracker_path) as f:
                 content = f.read()
 
             # Should use elif instead of else to prevent double logging
@@ -40,7 +40,7 @@ class TestMyFixes(unittest.TestCase):
 
     def test_confidence_normalization_improved(self):
         """Test that confidence score normalization is improved."""
-        with open("strategy_allocator.py", 'r') as f:
+        with open("strategy_allocator.py") as f:
             content = f.read()
 
         # Should use tanh-based normalization
@@ -56,7 +56,7 @@ class TestMyFixes(unittest.TestCase):
 
     def test_position_limit_rebalancing(self):
         """Test that position limits allow rebalancing."""
-        with open("bot_engine.py", 'r') as f:
+        with open("bot_engine.py") as f:
             content = f.read()
 
         # Function should accept symbol parameter
@@ -70,7 +70,7 @@ class TestMyFixes(unittest.TestCase):
 
     def test_liquidity_thresholds_increased(self):
         """Test that liquidity thresholds are made less aggressive."""
-        with open("config.py", 'r') as f:
+        with open("config.py") as f:
             content = f.read()
 
         # Spread threshold increased from 0.05 to 0.15
@@ -83,7 +83,7 @@ class TestMyFixes(unittest.TestCase):
 
     def test_data_quality_handling_improved(self):
         """Test that data quality validation is improved."""
-        with open("trade_execution.py", 'r') as f:
+        with open("trade_execution.py") as f:
             content = f.read()
 
         # Should require minimum 3 rows instead of 5

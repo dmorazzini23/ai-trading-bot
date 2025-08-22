@@ -16,7 +16,7 @@ def check_file_exists(filepath):
 def check_file_syntax(filepath):
     """Check if a Python file has valid syntax."""
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             content = f.read()
         ast.parse(content)
         return True, ""
@@ -28,7 +28,7 @@ def check_file_syntax(filepath):
 def extract_imports(filepath):
     """Extract import statements from a file."""
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath) as f:
             tree = ast.parse(f.read())
 
         imports = []

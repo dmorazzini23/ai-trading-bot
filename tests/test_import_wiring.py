@@ -11,7 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def run(cmd: list[str]) -> tuple[int, str]:
     proc = subprocess.run(
         cmd,
-        cwd=ROOT,
+        check=False, cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

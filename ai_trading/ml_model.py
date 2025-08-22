@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import joblib
 import numpy as np
@@ -14,7 +15,7 @@ class _DummyPipe:
     fitted: bool = False
     version: str = "1"
 
-    def fit(self, X: Iterable, y: Iterable) -> "_DummyPipe":
+    def fit(self, X: Iterable, y: Iterable) -> _DummyPipe:
         self.fitted = True
         return self
 
@@ -36,7 +37,7 @@ class MLModel:
         if not hasattr(self.model, name):
             raise TypeError(f"Model missing required method: {name}")
 
-    def fit(self, X: Sequence, y: Sequence, sample_weight=None) -> "MLModel":
+    def fit(self, X: Sequence, y: Sequence, sample_weight=None) -> MLModel:
         if not all(hasattr(self.model, m) for m in ("fit", "predict")):
             raise TypeError("Model missing required methods: fit, predict")
         import inspect
@@ -63,7 +64,7 @@ class MLModel:
         return str(path)
 
     @classmethod
-    def load(cls, path: str | Path) -> "MLModel":
+    def load(cls, path: str | Path) -> MLModel:
         return cls(joblib.load(path))
 
     @property

@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import UTC
 
 from tests.mocks.critical_fixes_validation_mocks import MockContext, MockSignal
 
@@ -24,8 +25,8 @@ class TestCriticalFixes(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         # Import modules after setting TESTING flag
-        import ai_trading.analysis.sentiment as sentiment
-        import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
+        from ai_trading import strategy_allocator  # AI-AGENT-REF: normalized import
+        from ai_trading.analysis import sentiment
         self.sentiment = sentiment
         self.strategy_allocator = strategy_allocator
 
@@ -270,11 +271,11 @@ def test_stale_data_bypass_startup():
 
 def test_rfc3339_timestamp_api_format():
     """Test that the actual API timestamp format is RFC3339 compliant."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     # Test the exact format used in data_fetcher.py
-    start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=timezone.utc)
-    end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=timezone.utc)
+    start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
+    end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=UTC)
 
     # Apply the fix from data_fetcher.py
     start_param = start_dt.isoformat().replace('+00:00', 'Z')

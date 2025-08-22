@@ -8,7 +8,7 @@ Demonstrates all implemented performance improvements for the AI Trading Bot.
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def print_header(title):
@@ -184,7 +184,7 @@ def demo_integration():
     try:
         # Test memory optimization integration in bot_engine
         logging.info("Checking bot_engine.py integration:")
-        with open('bot_engine.py', 'r') as f:
+        with open('bot_engine.py') as f:
             content = f.read()
 
         if 'MEMORY_OPTIMIZATION_AVAILABLE' in content:
@@ -196,7 +196,7 @@ def demo_integration():
 
         # Test performance monitoring integration in ai_trading/main.py
         logging.info("Checking ai_trading/main.py integration:")
-        with open('ai_trading/main.py', 'r') as f:
+        with open('ai_trading/main.py') as f:
             content = f.read()
 
         if 'PERFORMANCE_MONITORING_AVAILABLE' in content:
@@ -235,7 +235,7 @@ def demo_startup_optimization():
 def main():
     """Main demo function."""
     print_header("AI Trading Bot - Performance Optimization Demo")
-    logging.info(f"Demo time: {datetime.now(timezone.utc).isoformat()}")
+    logging.info(f"Demo time: {datetime.now(UTC).isoformat()}")
     logging.info(f"Python version: {sys.version}")
 
     # Run all demonstrations
@@ -266,9 +266,9 @@ def main():
         logging.info(f"  {i:2d}. {improvement}")
 
     logging.info("\nRecommended usage:")
-    logging.info(str("  • Use 'python optimized_startup.py' for production"))
-    logging.info(str("  • Run 'python system_diagnostic.py' for health checks"))
-    logging.info(str("  • Use 'python process_manager.py' for process cleanup"))
+    logging.info("  • Use 'python optimized_startup.py' for production")
+    logging.info("  • Run 'python system_diagnostic.py' for health checks")
+    logging.info("  • Use 'python process_manager.py' for process cleanup")
     logging.info("  • Monitor performance with built-in monitoring system")
 
     logging.info(str(f"\n{'='*60}"))

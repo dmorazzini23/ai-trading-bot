@@ -3,7 +3,7 @@
 Tests for peak performance hardening modules.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
@@ -43,7 +43,7 @@ def test_order_idempotency():
 
 def test_position_reconciliation():
     """Test position reconciliation logic."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from ai_trading.core.interfaces import Position
     from ai_trading.execution.reconcile import PositionReconciler
@@ -58,7 +58,7 @@ def test_position_reconciliation():
             market_value=15000.0,
             cost_basis=15000.0,
             unrealized_pnl=0.0,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(UTC)
         ),
         "GOOGL": Position(
             symbol="GOOGL",
@@ -66,7 +66,7 @@ def test_position_reconciliation():
             market_value=140000.0,
             cost_basis=140000.0,
             unrealized_pnl=0.0,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(UTC)
         )
     }
 
@@ -77,7 +77,7 @@ def test_position_reconciliation():
             market_value=15300.0,
             cost_basis=15300.0,
             unrealized_pnl=0.0,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(UTC)
         ),  # Small drift
         "MSFT": Position(
             symbol="MSFT",
@@ -85,7 +85,7 @@ def test_position_reconciliation():
             market_value=22500.0,
             cost_basis=22500.0,
             unrealized_pnl=0.0,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=datetime.now(UTC)
         )    # Missing locally
     }
 
@@ -117,7 +117,7 @@ def test_aligned_clock():
     assert hasattr(validation, 'skew_ms')
 
     # Test market hours (basic check)
-    test_time = datetime(2023, 6, 15, 14, 30, tzinfo=timezone.utc)  # Weekday 2:30 PM UTC
+    test_time = datetime(2023, 6, 15, 14, 30, tzinfo=UTC)  # Weekday 2:30 PM UTC
     is_open = clock.is_market_open("AAPL", test_time)
     assert isinstance(is_open, bool)
 

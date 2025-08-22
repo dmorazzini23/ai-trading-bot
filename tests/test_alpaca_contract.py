@@ -1,6 +1,6 @@
 import types
 
-import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
+from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
 from tests.mocks.alpaca_mocks import MockClient
 
 

@@ -12,8 +12,8 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
-from typing import Callable, Dict, List
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 # AI-AGENT-REF: Performance monitoring and alerting system
 
@@ -45,7 +45,7 @@ class ResourceMonitor:
 
         return logger
 
-    def _default_thresholds(self) -> Dict:
+    def _default_thresholds(self) -> dict:
         """Default alert thresholds."""
         return {
             'memory_usage_percent': 80,
@@ -57,10 +57,10 @@ class ResourceMonitor:
             'response_time_ms': 5000
         }
 
-    def get_system_metrics(self) -> Dict:
+    def get_system_metrics(self) -> dict:
         """Collect comprehensive system metrics."""
         metrics = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'collection_time_ms': 0
         }
 
@@ -93,13 +93,13 @@ class ResourceMonitor:
 
         return metrics
 
-    def _get_memory_metrics(self) -> Dict:
+    def _get_memory_metrics(self) -> dict:
         """Get memory-related metrics."""
         memory_metrics = {}
 
         try:
             # Read /proc/meminfo
-            with open('/proc/meminfo', 'r') as f:
+            with open('/proc/meminfo') as f:
                 meminfo = {}
                 for line in f:
                     key, value = line.split(':', 1)
@@ -133,13 +133,13 @@ class ResourceMonitor:
 
         return memory_metrics
 
-    def _get_cpu_metrics(self) -> Dict:
+    def _get_cpu_metrics(self) -> dict:
         """Get CPU-related metrics."""
         cpu_metrics = {}
 
         try:
             # Read /proc/loadavg
-            with open('/proc/loadavg', 'r') as f:
+            with open('/proc/loadavg') as f:
                 loadavg = f.read().strip().split()
                 cpu_metrics['load_1min'] = float(loadavg[0])
                 cpu_metrics['load_5min'] = float(loadavg[1])
@@ -156,7 +156,7 @@ class ResourceMonitor:
 
         return cpu_metrics
 
-    def _get_disk_metrics(self) -> Dict:
+    def _get_disk_metrics(self) -> dict:
         """Get disk usage metrics."""
         disk_metrics = {}
 
@@ -198,7 +198,7 @@ class ResourceMonitor:
 
         return disk_metrics
 
-    def _get_process_metrics(self) -> Dict:
+    def _get_process_metrics(self) -> dict:
         """Get process-related metrics."""
         process_metrics = {}
 
@@ -310,7 +310,7 @@ class ResourceMonitor:
                         # Check process start time via /proc if available
                         proc_stat_path = f'/proc/{pid_int}/stat'
                         if os.path.exists(proc_stat_path):
-                            with open(proc_stat_path, 'r') as f:
+                            with open(proc_stat_path) as f:
                                 stat_data = f.read().strip().split()
                                 # starttime is the 22nd field (index 21)
                                 if len(stat_data) > 21:
@@ -321,7 +321,7 @@ class ResourceMonitor:
                             # If we can't check /proc, but other criteria match, count it
                             trading_bot_count += 1
 
-                    except (ValueError, OSError, IOError):
+                    except (ValueError, OSError):
                         # If we can't validate the process, but it matches criteria, count it
                         if is_trading_bot and not is_temporary:
                             trading_bot_count += 1
@@ -346,7 +346,7 @@ class ResourceMonitor:
         except (subprocess.SubprocessError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
             return 1  # Assume at least this process is running
 
-    def _get_network_metrics(self) -> Dict:
+    def _get_network_metrics(self) -> dict:
         """Get basic network metrics."""
         network_metrics = {}
 
@@ -366,7 +366,7 @@ class ResourceMonitor:
 
         return network_metrics
 
-    def _get_python_metrics(self) -> Dict:
+    def _get_python_metrics(self) -> dict:
         """Get Python-specific metrics."""
         python_metrics = {}
 
@@ -389,7 +389,7 @@ class ResourceMonitor:
 
         return python_metrics
 
-    def check_alert_conditions(self, metrics: Dict) -> List[Dict]:
+    def check_alert_conditions(self, metrics: dict) -> list[dict]:
         """Check metrics against alert thresholds."""
         alerts = []
 
@@ -463,7 +463,7 @@ class ResourceMonitor:
 
         # Add timestamp to alerts
         for alert in alerts:
-            alert['timestamp'] = metrics.get('timestamp', datetime.now(timezone.utc).isoformat())
+            alert['timestamp'] = metrics.get('timestamp', datetime.now(UTC).isoformat())
 
         return alerts
 
@@ -501,7 +501,7 @@ class ResourceMonitor:
                 self.logger.error(f"Error in monitoring loop: {e}")
                 self.stop_monitoring.wait(60)  # Wait longer on error
 
-    def _log_summary(self, metrics: Dict):
+    def _log_summary(self, metrics: dict):
         """Log periodic summary of system state."""
         summary_parts = []
 
@@ -536,11 +536,11 @@ class ResourceMonitor:
             self.monitoring_thread.join(timeout=10)
             self.logger.info("Resource monitoring stopped")
 
-    def add_alert_callback(self, callback: Callable[[Dict], None]):
+    def add_alert_callback(self, callback: Callable[[dict], None]):
         """Add callback function for alert notifications."""
         self.alert_callbacks.append(callback)
 
-    def get_performance_report(self) -> Dict:
+    def get_performance_report(self) -> dict:
         """Generate comprehensive performance report."""
         if not self.metrics_history:
             return {'status': 'no_data', 'message': 'No metrics collected yet'}
@@ -559,7 +559,7 @@ class ResourceMonitor:
                     trends['memory_trend'] = last['memory']['usage_percent'] - first['memory']['usage_percent']
 
         report = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'current_metrics': current_metrics,
             'trends': trends,
             'recent_alerts': list(self.alerts_history)[-20:],  # Last 20 alerts
@@ -585,7 +585,7 @@ class TradingPerformanceMonitor:
     def record_trade_execution_time(self, execution_time_ms: float, trade_type: str):
         """Record trade execution time."""
         self.trade_metrics.append({
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'execution_time_ms': execution_time_ms,
             'trade_type': trade_type
         })
@@ -593,12 +593,12 @@ class TradingPerformanceMonitor:
     def record_api_response_time(self, endpoint: str, response_time_ms: float):
         """Record API response time."""
         self.api_response_times.append({
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'endpoint': endpoint,
             'response_time_ms': response_time_ms
         })
 
-    def get_trading_performance_report(self) -> Dict:
+    def get_trading_performance_report(self) -> dict:
         """Get trading performance report."""
         report = {
             'trade_execution': {

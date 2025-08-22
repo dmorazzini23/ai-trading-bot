@@ -10,7 +10,6 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -81,7 +80,7 @@ class CorporateActionRegistry:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
 
         # Registry of actions by symbol
-        self._actions: Dict[str, List[CorporateAction]] = {}
+        self._actions: dict[str, list[CorporateAction]] = {}
 
         # Load existing action data
         self._load_actions()
@@ -92,7 +91,7 @@ class CorporateActionRegistry:
 
         if actions_file.exists():
             try:
-                with open(actions_file, 'r') as f:
+                with open(actions_file) as f:
                     data = json.load(f)
 
                 for symbol, action_list in data.items():
@@ -136,7 +135,7 @@ class CorporateActionRegistry:
     def add_action(
         self,
         symbol: str,
-        ex_date: Union[date, str],
+        ex_date: date | str,
         action_type: str,
         ratio: float,
         dividend_amount: float = 0.0,
@@ -183,9 +182,9 @@ class CorporateActionRegistry:
     def get_actions(
         self,
         symbol: str,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None
-    ) -> List[CorporateAction]:
+        start_date: date | None = None,
+        end_date: date | None = None
+    ) -> list[CorporateAction]:
         """
         Get corporate actions for symbol within date range.
         
@@ -217,7 +216,7 @@ class CorporateActionRegistry:
         symbol: str,
         reference_date: date,
         target_date: date
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Get cumulative adjustment factors between two dates.
         
@@ -262,7 +261,7 @@ class CorporateActionRegistry:
 
 
 # Global registry instance
-_global_registry: Optional[CorporateActionRegistry] = None
+_global_registry: CorporateActionRegistry | None = None
 
 
 def get_corp_action_registry() -> CorporateActionRegistry:
@@ -276,7 +275,7 @@ def get_corp_action_registry() -> CorporateActionRegistry:
 def adjust_bars(
     bars: pd.DataFrame,
     symbol: str,
-    reference_date: Optional[date] = None
+    reference_date: date | None = None
 ) -> pd.DataFrame:
     """
     Adjust OHLCV bars for corporate actions.

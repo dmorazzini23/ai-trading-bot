@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, date, datetime
+from typing import Any
 
 # AI-AGENT-REF: timezone helpers for Alpaca compatibility
 
@@ -22,8 +22,8 @@ def ensure_datetime(x: Any) -> datetime:
     else:
         raise TypeError(f"Unsupported type for ensure_datetime: {type(x)!r}")
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def to_rfc3339z(dt: datetime) -> str:
@@ -41,11 +41,11 @@ def to_date_only(val: datetime | date | str) -> str:
     return dt_obj.date().isoformat()
 
 
-def compose_intraday_params(start: Any, end: Any) -> Dict[str, str]:
+def compose_intraday_params(start: Any, end: Any) -> dict[str, str]:
     return {"start": to_rfc3339z(ensure_datetime(start)), "end": to_rfc3339z(ensure_datetime(end))}
 
 
-def compose_daily_params(start: Any, end: Any) -> Dict[str, str]:
+def compose_daily_params(start: Any, end: Any) -> dict[str, str]:
     return {"start": to_date_only(start), "end": to_date_only(end)}
 
 

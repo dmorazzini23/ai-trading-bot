@@ -9,8 +9,7 @@ import os
 import signal
 import subprocess
 import time
-from datetime import datetime, timezone
-from typing import Dict, List
+from datetime import UTC, datetime
 
 # AI-AGENT-REF: Process management and service cleanup script
 
@@ -36,7 +35,7 @@ class ProcessManager:
 
         return logger
 
-    def find_python_processes(self) -> List[Dict]:
+    def find_python_processes(self) -> list[dict]:
         """Find all Python processes related to trading bot."""
         processes = []
 
@@ -96,7 +95,7 @@ class ProcessManager:
         command_lower = command.lower()
         return any(keyword.lower() in command_lower for keyword in trading_keywords)
 
-    def find_duplicate_processes(self) -> List[Dict]:
+    def find_duplicate_processes(self) -> list[dict]:
         """Find duplicate trading processes."""
         if not self.processes_info:
             self.find_python_processes()
@@ -153,7 +152,7 @@ class ProcessManager:
             self.logger.error(f"Failed to kill process {pid}: {e}")
             return False
 
-    def cleanup_duplicate_processes(self, dry_run: bool = True) -> Dict:
+    def cleanup_duplicate_processes(self, dry_run: bool = True) -> dict:
         """Clean up duplicate trading processes."""
         duplicates = self.find_duplicate_processes()
 
@@ -227,14 +226,14 @@ class ProcessManager:
             self.logger.info(f"Successfully acquired single instance lock (PID: {os.getpid()})")
             return True
 
-        except (IOError, OSError) as e:
+        except OSError as e:
             if hasattr(self, 'pidfile'):
                 self.pidfile.close()
 
             # Check if there's actually a running process
             if os.path.exists(pidfile_path):
                 try:
-                    with open(pidfile_path, 'r') as f:
+                    with open(pidfile_path) as f:
                         existing_pid = int(f.read().strip())
 
                     # Check if the process is still running
@@ -249,7 +248,7 @@ class ProcessManager:
                         # Try again
                         return self.ensure_single_instance(pidfile_path)
 
-                except (ValueError, IOError):
+                except (OSError, ValueError):
                     # Corrupted PID file, remove it and try again
                     self.logger.warning(f"Removing corrupted PID file: {pidfile_path}")
                     try:
@@ -271,7 +270,7 @@ class ProcessManager:
         except Exception as e:
             self.logger.debug(f"Error cleaning up PID file: {e}")
 
-    def check_service_status(self) -> Dict:
+    def check_service_status(self) -> dict:
         """Check status of trading-related systemd services."""
         services = [
             'ai-trading-bot.service',
@@ -315,7 +314,7 @@ class ProcessManager:
 
         return service_status
 
-    def fix_file_permissions(self, paths: List[str], target_user: str = 'aiuser') -> Dict:
+    def fix_file_permissions(self, paths: list[str], target_user: str = 'aiuser') -> dict:
         """Fix file ownership and permissions."""
         permission_report = {
             'paths_checked': len(paths),
@@ -365,7 +364,7 @@ class ProcessManager:
 
         return permission_report
 
-    def generate_process_report(self) -> Dict:
+    def generate_process_report(self) -> dict:
         """Generate comprehensive process management report."""
         processes = self.find_python_processes()
         duplicates = self.find_duplicate_processes()
@@ -376,7 +375,7 @@ class ProcessManager:
         max_memory_process = max(processes, key=lambda p: p['memory_mb']) if processes else None
 
         report = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'process_summary': {
                 'total_python_processes': len(processes),
                 'trading_processes': len(processes),
@@ -392,8 +391,8 @@ class ProcessManager:
 
         return report
 
-    def _generate_recommendations(self, processes: List[Dict], duplicates: List[Dict],
-                                 service_status: Dict) -> List[str]:
+    def _generate_recommendations(self, processes: list[dict], duplicates: list[dict],
+                                 service_status: dict) -> list[str]:
         """Generate recommendations based on process analysis."""
         recommendations = []
 
@@ -452,7 +451,7 @@ class ProcessManager:
             # Check if lock file exists and contains a valid PID
             if os.path.exists(lock_file):
                 try:
-                    with open(lock_file, 'r') as f:
+                    with open(lock_file) as f:
                         existing_pid = int(f.read().strip())
 
                     # Check if process with this PID is still running
@@ -481,7 +480,7 @@ class ProcessManager:
             def cleanup_lock():
                 try:
                     if os.path.exists(lock_file):
-                        with open(lock_file, 'r') as f:
+                        with open(lock_file) as f:
                             if int(f.read().strip()) == os.getpid():
                                 os.remove(lock_file)
                                 self.logger.info("Process lock released")
@@ -496,7 +495,7 @@ class ProcessManager:
             self.logger.error(f"Failed to acquire process lock: {e}")
             return False
 
-    def check_multiple_instances(self) -> Dict:
+    def check_multiple_instances(self) -> dict:
         """
         Check for multiple trading bot instances and provide recommendations.
         

@@ -1,13 +1,12 @@
 import os
 from importlib.resources import files as pkg_files
-from typing import List, Optional
 
 import pandas as pd
 
 from ai_trading.logging import logger  # AI-AGENT-REF: structured logging
 
 
-def locate_tickers_csv() -> Optional[str]:
+def locate_tickers_csv() -> str | None:
     env = os.getenv("AI_TRADER_TICKERS_CSV")
     if env and os.path.isfile(env):
         return os.path.abspath(env)
@@ -20,7 +19,7 @@ def locate_tickers_csv() -> Optional[str]:
     return None
 
 
-def load_universe() -> List[str]:
+def load_universe() -> list[str]:
     path = locate_tickers_csv()
     if not path:
         logger.error("TICKERS_FILE_MISSING", extra={"path": "ai_trading/data/tickers.csv", "fallback": "none"})

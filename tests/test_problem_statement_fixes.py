@@ -24,7 +24,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         - Extend recovery timeout to 1800s (30 minutes)
         """
         try:
-            import ai_trading.analysis.sentiment as sentiment
+            from ai_trading.analysis import sentiment
 
             # Problem statement requires 15 failures, not 5 or 8
             expected_failures = 15
@@ -46,7 +46,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         # Test by reading the source code directly to avoid import issues
         bot_engine_path = "bot_engine.py"
         if os.path.exists(bot_engine_path):
-            with open(bot_engine_path, 'r') as f:
+            with open(bot_engine_path) as f:
                 content = f.read()
 
             # Look for the environment variable default
@@ -69,7 +69,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         # Test by reading the source code directly to avoid import issues
         bot_engine_path = "bot_engine.py"
         if os.path.exists(bot_engine_path):
-            with open(bot_engine_path, 'r') as f:
+            with open(bot_engine_path) as f:
                 content = f.read()
 
             # Check if PLTR is in the Technology sector mapping
@@ -86,7 +86,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         # Check that the trade execution logs have clear field names
         trade_execution_path = "trade_execution.py"
         if os.path.exists(trade_execution_path):
-            with open(trade_execution_path, 'r') as f:
+            with open(trade_execution_path) as f:
                 content = f.read()
 
                 # Check for clear quantity field names in FULL_FILL_SUCCESS

@@ -3,7 +3,7 @@ Minimal test for critical fixes that can run without full environment setup.
 """
 
 import os
-from datetime import timezone
+from datetime import UTC
 from unittest.mock import Mock
 
 # Set minimal environment for testing
@@ -72,8 +72,8 @@ def test_bot_context_alpaca_client():
             volume_threshold=1000,
             entry_start_offset=timedelta(minutes=30),
             entry_end_offset=timedelta(minutes=30),
-            market_open=datetime.now(timezone.utc).time(),  # AI-AGENT-REF: Use timezone-aware datetime
-            market_close=datetime.now(timezone.utc).time(),  # AI-AGENT-REF: Use timezone-aware datetime
+            market_open=datetime.now(UTC).time(),  # AI-AGENT-REF: Use timezone-aware datetime
+            market_close=datetime.now(UTC).time(),  # AI-AGENT-REF: Use timezone-aware datetime
             regime_lookback=10,
             regime_atr_threshold=0.02,
             daily_loss_limit=0.05,
@@ -101,7 +101,7 @@ def test_process_manager_enhancements():
     print("Testing ProcessManager enhancements")
 
     try:
-        import ai_trading.utils.process_manager as process_manager
+        from ai_trading.utils import process_manager
 
         result = process_manager.start_process('demo')
         assert result['status'] == 'started'
@@ -121,7 +121,7 @@ def test_data_validation_module():
     print("Testing data validation module")
 
     try:
-        import ai_trading.data_validation as data_validation
+        from ai_trading import data_validation
 
         # Test required functions exist
         required_functions = [
@@ -150,7 +150,7 @@ def test_audit_permission_handling():
     try:
         import inspect
 
-        import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
+        from ai_trading import audit  # AI-AGENT-REF: canonical import
 
         # Check that log_trade function exists
         assert hasattr(audit, 'log_trade'), "log_trade function missing"

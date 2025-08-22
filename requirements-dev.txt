@@ -61,6 +61,7 @@ anyio>=4,<5
 aiohttp>=3.9,<3.10
 pre-commit>=3.7,<4
 detect-secrets==1.5.0
+libcst>=1.1.0  # AI-AGENT-REF: codemod support
 ruff>=0.5,<1
 black>=24,<25
 mypy>=1.10,<2

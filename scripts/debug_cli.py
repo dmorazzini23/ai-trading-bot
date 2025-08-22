@@ -218,7 +218,7 @@ def cmd_pnl(symbol=None):
                         logging.info(f"  {icon} {source}: ${amount:+.2f}")
 
             if summary['today_pnl']:
-                logging.info(str("\n📅 TODAY'S PnL:"))
+                logging.info("\n📅 TODAY'S PnL:")
                 for source, amount in summary['today_pnl'].items():
                     if amount != 0:
                         logging.info(f"  {source}: ${amount:+.2f}")

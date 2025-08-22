@@ -25,30 +25,14 @@ line-length = 100
 target-version = "py311"
 line-length = 100
 extend-exclude = ["artifacts", "build", "dist", ".venv", "venv", ".tox", ".mypy_cache"]
-
-# Prefer high-signal, safe-to-fix rules:
-select = [
-  "E",
-  "W",
-  "F401",
-  "F541",
-  "I",
-  "RUF100",
-]
-
-# Keep risky transforms (e.g., SIM/UP/PL) disabled for this pass.
-ignore = [
-  "E402",
-  "F403",
-  "F405",
-  "F821",
-]
-
-# Treat common “intentionally unused” names as OK.
-dummy-variable-rgx = "^(_|unused_|ignore_|ignored_|_unused|_ignored|dummy|.*_unused)$"
 fix = true
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint]
+select = ["E", "F", "I", "DTZ", "T201", "BLE", "UP", "PL"]
+ignore = ["E501"]
+dummy-variable-rgx = "^(_|unused_|ignore_|ignored_|_unused|_ignored|dummy|.*_unused)$"
+
+[tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401", "F403"]
 "tests/**" = ["E402"]
 "tools/**" = ["E402"]

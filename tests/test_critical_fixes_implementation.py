@@ -95,7 +95,7 @@ def test_algorithm_optimizer_thread_safety():
 def test_sentiment_cache_memory_leak_prevention():
     """Test sentiment cache prevents memory leaks."""
     # Mock the imports to avoid external dependencies
-    import ai_trading.predict as predict
+    from ai_trading import predict
 
     # Test cache bounds
     original_cache = predict._sentiment_cache

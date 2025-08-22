@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -14,5 +14,5 @@ def test_get_bars_batch_handles_empty_list():
 
 
 def test_warmup_cache_no_symbols():
-    n = warmup_cache([], "1D", datetime.now(timezone.utc)-timedelta(days=1), datetime.now(timezone.utc))
+    n = warmup_cache([], "1D", datetime.now(UTC)-timedelta(days=1), datetime.now(UTC))
     assert n == 0

@@ -5,8 +5,8 @@ Provides leak-proof data splitting for financial time series,
 including purged group time series splits and walk-forward analysis.
 """
 
+from collections.abc import Iterator
 from datetime import datetime, timedelta
-from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -29,7 +29,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
     def __init__(
         self,
         n_splits: int = 5,
-        test_size: Optional[Union[int, float]] = None,
+        test_size: int | float | None = None,
         embargo_pct: float = 0.01,
         purge_pct: float = 0.02
     ):
@@ -49,11 +49,11 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
 
     def split(
         self,
-        X: Union[pd.DataFrame, np.ndarray],
-        y: Optional[Union[pd.Series, np.ndarray]] = None,
-        groups: Optional[Union[pd.Series, np.ndarray]] = None,
-        t1: Optional[pd.Series] = None
-    ) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+        X: pd.DataFrame | np.ndarray,
+        y: pd.Series | np.ndarray | None = None,
+        groups: pd.Series | np.ndarray | None = None,
+        t1: pd.Series | None = None
+    ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         """
         Generate indices for train/test splits.
         
@@ -146,7 +146,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
         train_indices: np.ndarray,
         test_indices: np.ndarray,
         t1: pd.Series,
-        full_index: Union[pd.Index, np.ndarray]
+        full_index: pd.Index | np.ndarray
     ) -> np.ndarray:
         """
         Purge training observations that overlap with test period.
@@ -186,11 +186,10 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
                         # Check if observation ends before test period starts
                         if pd.isna(obs_end_time) or obs_end_time < test_start_time:
                             purged_train.append(idx)
-                    else:
-                        # If t1 index doesn't cover this observation, include it
-                        # only if it's well before the test period
-                        if idx < test_start_idx - len(test_indices):
-                            purged_train.append(idx)
+                    # If t1 index doesn't cover this observation, include it
+                    # only if it's well before the test period
+                    elif idx < test_start_idx - len(test_indices):
+                        purged_train.append(idx)
                 except (IndexError, KeyError, ValueError, TypeError):
                     # If there's any issue with the time comparison,
                     # err on the side of caution and exclude
@@ -204,21 +203,21 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
 
     def get_n_splits(
         self,
-        X: Optional[Union[pd.DataFrame, np.ndarray]] = None,
-        y: Optional[Union[pd.Series, np.ndarray]] = None,
-        groups: Optional[Union[pd.Series, np.ndarray]] = None
+        X: pd.DataFrame | np.ndarray | None = None,
+        y: pd.Series | np.ndarray | None = None,
+        groups: pd.Series | np.ndarray | None = None
     ) -> int:
         """Return the number of splitting iterations."""
         return self.n_splits
 
 
 def walkforward_splits(
-    dates: Union[pd.DatetimeIndex, List[datetime]],
+    dates: pd.DatetimeIndex | list[datetime],
     mode: str = "rolling",
-    train_span: Union[int, timedelta] = 252,  # 1 year of trading days
-    test_span: Union[int, timedelta] = 21,    # 1 month of trading days
+    train_span: int | timedelta = 252,  # 1 year of trading days
+    test_span: int | timedelta = 21,    # 1 month of trading days
     embargo_pct: float = 0.01
-) -> List[Dict[str, Union[datetime, List[datetime]]]]:
+) -> list[dict[str, datetime | list[datetime]]]:
     """
     Generate walk-forward analysis splits.
     
@@ -265,8 +264,7 @@ def walkforward_splits(
             test_end = test_start + test_span
 
             # Ensure test end doesn't exceed available data
-            if test_end > end_date:
-                test_end = end_date
+            test_end = min(test_end, end_date)
 
             # Get actual dates in the periods
             train_dates = dates[(dates >= train_start) & (dates < current_train_end)]
@@ -303,8 +301,8 @@ def walkforward_splits(
 def validate_no_leakage(
     train_indices: np.ndarray,
     test_indices: np.ndarray,
-    timeline: Union[pd.DatetimeIndex, np.ndarray],
-    t1: Optional[pd.Series] = None
+    timeline: pd.DatetimeIndex | np.ndarray,
+    t1: pd.Series | None = None
 ) -> bool:
     """
     Validate that there's no data leakage between train and test sets.

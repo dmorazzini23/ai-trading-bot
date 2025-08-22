@@ -94,7 +94,7 @@ def validate_bot_engine_functions():
     """Validate that the new functions exist in bot_engine without importing."""
     bot_engine_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/core/bot_engine.py'
 
-    with open(bot_engine_path, 'r') as f:
+    with open(bot_engine_path) as f:
         content = f.read()
 
     # Check for the new functions
@@ -123,7 +123,7 @@ def validate_logging_changes():
     """Validate that logging.py has the ensure_ascii=False changes."""
     logging_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/logging.py'
 
-    with open(logging_path, 'r') as f:
+    with open(logging_path) as f:
         content = f.read()
 
     # Check for ensure_ascii=False in json.dumps calls

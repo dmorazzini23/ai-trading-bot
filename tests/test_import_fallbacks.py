@@ -27,7 +27,7 @@ def test_bot_engine_import_fallbacks():
     # Check that the file contains the expected try/except patterns
     import inspect
 
-    import ai_trading.core.bot_engine as bot_engine
+    from ai_trading.core import bot_engine
 
     source = inspect.getsource(bot_engine)
 
@@ -57,7 +57,7 @@ def test_runner_import_fallbacks():
     """Test that runner.py import fallbacks are correctly implemented."""
     import inspect
 
-    import ai_trading.runner as runner
+    from ai_trading import runner
 
     source = inspect.getsource(runner)
 
@@ -75,7 +75,7 @@ def test_backtester_import_fallbacks():
     """Test that backtester.py import fallbacks are correctly implemented."""
     import inspect
 
-    import ai_trading.strategies.backtester as backtester
+    from ai_trading.strategies import backtester
 
     source = inspect.getsource(backtester)
 

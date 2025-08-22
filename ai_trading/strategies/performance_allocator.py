@@ -9,7 +9,7 @@ diversification and risk controls.
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any
 
 import numpy as np
 import pandas as pd  # noqa: F401  # AI-AGENT-REF: retained for downstream usage
@@ -81,7 +81,7 @@ class PerformanceBasedAllocator:
     diversification and risk bounds.
     """
 
-    def __init__(self, config: AllocatorConfig | Dict | None = None):
+    def __init__(self, config: AllocatorConfig | dict | None = None):
         """Initialize performance-based allocator."""
         if config is None:
             self.config = {}
@@ -108,8 +108,8 @@ class PerformanceBasedAllocator:
         self.drawdown_weight = self.config.get("drawdown_weight", 0.1)
 
         # Track strategy performance history
-        self.strategy_trades: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
-        self.strategy_allocations: Dict[str, float] = {}
+        self.strategy_trades: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
+        self.strategy_allocations: dict[str, float] = {}
         self.last_update = datetime.now(UTC)
 
         logger.info("PerformanceBasedAllocator initialized with %d day window", self.window_days)
@@ -134,19 +134,19 @@ class PerformanceBasedAllocator:
             return 0.0
         return max(0.0, min(1.0, s))
 
-    def allocate(self, strategies: Dict[str, List[Any]], config: TradingConfig) -> Dict[str, List[Any]]:
+    def allocate(self, strategies: dict[str, list[Any]], config: TradingConfig) -> dict[str, list[Any]]:
         """Filter low-confidence signals and bias weights by confidence."""  # AI-AGENT-REF
         th = _resolve_conf_threshold(config)
         s = get_settings()
         max_boost = float(getattr(s, "score_size_max_boost", 1.0) or 1.0)
         gamma = float(getattr(s, "score_size_gamma", 1.0) or 1.0)
         use_boost = max_boost > 1.0
-        gated: Dict[str, List[Any]] = {}
-        boost_stats: List[tuple[str, float, float]] = []
+        gated: dict[str, list[Any]] = {}
+        boost_stats: list[tuple[str, float, float]] = []
         for name, sigs in (strategies or {}).items():
-            kept: List[Any] = []
+            kept: list[Any] = []
             dropped = 0
-            mults: List[float] = []
+            mults: list[float] = []
             for s_ in sigs or []:
                 try:
                     c = float(getattr(s_, "confidence", 0.0))
@@ -188,7 +188,7 @@ class PerformanceBasedAllocator:
                 )
         return gated
 
-    def record_trade_result(self, strategy_name: str, trade_result: Dict):
+    def record_trade_result(self, strategy_name: str, trade_result: dict):
         """
         Record a trade result for a strategy.
         
@@ -231,8 +231,8 @@ class PerformanceBasedAllocator:
             logger.error("Unexpected error recording trade for strategy %s: %s", strategy_name, e,
                         extra={"component": "performance_allocator", "strategy": strategy_name, "error_type": "unexpected"})
 
-    def calculate_strategy_allocations(self, strategies: List[str],
-                                     total_capital: float) -> Dict[str, float]:
+    def calculate_strategy_allocations(self, strategies: list[str],
+                                     total_capital: float) -> dict[str, float]:
         """
         Calculate optimal capital allocation across strategies based on performance.
         
@@ -361,7 +361,7 @@ class PerformanceBasedAllocator:
             return 0.5
         return max(0.0, min(1.0, (value - min_val) / (max_val - min_val)))
 
-    def _scores_to_weights(self, scores: Dict[str, float]) -> Dict[str, float]:
+    def _scores_to_weights(self, scores: dict[str, float]) -> dict[str, float]:
         """Convert performance scores to allocation weights."""
         if not scores:
             return {}
@@ -379,7 +379,7 @@ class PerformanceBasedAllocator:
 
         return dict(zip(scores.keys(), weights))
 
-    def _apply_allocation_bounds(self, weights: Dict[str, float]) -> Dict[str, float]:
+    def _apply_allocation_bounds(self, weights: dict[str, float]) -> dict[str, float]:
         """Apply minimum and maximum allocation bounds."""
         if not weights:
             return {}
@@ -388,8 +388,7 @@ class PerformanceBasedAllocator:
 
         # Apply minimum allocation
         for strategy in bounded_weights:
-            if bounded_weights[strategy] < self.min_allocation:
-                bounded_weights[strategy] = self.min_allocation
+            bounded_weights[strategy] = max(bounded_weights[strategy], self.min_allocation)
 
         # Renormalize after applying minimums
         total_weight = sum(bounded_weights.values())
@@ -426,7 +425,7 @@ class PerformanceBasedAllocator:
 
         return bounded_weights
 
-    def get_strategy_performance_report(self, strategy_name: str) -> Dict:
+    def get_strategy_performance_report(self, strategy_name: str) -> dict:
         """Generate detailed performance report for a strategy."""
         try:
             trades = list(self.strategy_trades[strategy_name])

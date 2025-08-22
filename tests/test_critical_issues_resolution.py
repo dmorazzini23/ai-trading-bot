@@ -3,7 +3,7 @@
 import logging
 import os
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 # Set minimal environment variables for testing
@@ -57,7 +57,7 @@ class TestCriticalIssuesResolution(unittest.TestCase):
         trade_cooldowns = {}
 
         symbol = "AAPL"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Set a recent trade cooldown (within 5 minutes)
         trade_cooldowns[symbol] = now - timedelta(minutes=2)
@@ -173,7 +173,7 @@ class TestOrderSpacingConfiguration(unittest.TestCase):
         # Test that frequency limits logic is sound
         def check_trade_frequency(recent_trades, max_per_hour=10):
             """Check if trading frequency is within limits."""
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             hour_ago = now - timedelta(hours=1)
 
             trades_last_hour = len([t for t in recent_trades if t > hour_ago])
@@ -181,7 +181,7 @@ class TestOrderSpacingConfiguration(unittest.TestCase):
 
         # Test under limit
         recent_trades = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Add 5 trades in last hour (under limit of 10)
         for i in range(5):

@@ -12,7 +12,7 @@ def test_load_weights_save_fail(monkeypatch, tmp_path, caplog):
     p = tmp_path / "w.csv"
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: False)
     def fail(*a, **k):
-        raise IOError("fail")
+        raise OSError("fail")
     monkeypatch.setattr(meta_learning.np, "savetxt", fail)
     caplog.set_level("ERROR")
     arr = meta_learning.load_weights(str(p), default=np.array([1.0]))

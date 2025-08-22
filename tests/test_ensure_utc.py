@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -12,9 +12,9 @@ def test_reject_callable():
 
 def test_datetime_naive_to_utc():
     dt = ensure_utc_datetime(datetime(2025, 8, 20, 12, 0, 0))
-    assert dt.tzinfo == timezone.utc
+    assert dt.tzinfo == UTC
 
 
 def test_date_to_utc_midnight():
     dt = ensure_utc_datetime(date(2025, 8, 20))
-    assert dt.tzinfo == timezone.utc and dt.hour == 0
+    assert dt.tzinfo == UTC and dt.hour == 0

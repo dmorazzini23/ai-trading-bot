@@ -17,7 +17,7 @@ def test_pydantic_v2_migration_syntax():
         os.path.dirname(__file__), '..', 'ai_trading', 'validation', 'validate_env.py'
     )
 
-    with open(validate_env_path, 'r') as f:
+    with open(validate_env_path) as f:
         content = f.read()
 
     # Verify V2 imports
@@ -68,7 +68,7 @@ def test_validate_env_import():
             'TRADING_MODE': 'paper',
             'FORCE_TRADES': 'false'
         }):
-            import ai_trading.validation.validate_env as validate_env  # AI-AGENT-REF: normalized import
+            from ai_trading.validation import validate_env  # AI-AGENT-REF: normalized import
 
             # Test that Settings class can be instantiated
             settings = validate_env.Settings()
@@ -101,7 +101,7 @@ def test_field_validator_functionality():
             'BOT_MODE': 'invalid_mode',       # Should trigger validation error
             'TRADING_MODE': 'invalid',        # Should trigger validation error
         }):
-            import ai_trading.validation.validate_env as validate_env  # AI-AGENT-REF: normalized import
+            from ai_trading.validation import validate_env  # AI-AGENT-REF: normalized import
 
             # These should trigger validation errors due to invalid values
             try:

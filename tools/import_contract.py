@@ -13,7 +13,6 @@ import argparse
 import os
 import subprocess
 import sys
-from typing import List
 
 
 def _run_import_in_subprocess(module: str, timeout: float) -> subprocess.CompletedProcess:
@@ -43,7 +42,7 @@ def _run_import_in_subprocess(module: str, timeout: float) -> subprocess.Complet
     )
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--modules", default="ai_trading,trade_execution", help="Comma-separated module list to import")
     p.add_argument("--timeout", type=float, default=20.0, help="Per-module timeout in seconds")
@@ -74,9 +73,8 @@ def main(argv: List[str] | None = None) -> int:
             if args.ci:
                 return cp.returncode
             overall_rc = overall_rc or cp.returncode
-        else:
-            if not args.ci:
-                print(cp.stdout.strip())
+        elif not args.ci:
+            print(cp.stdout.strip())
 
     return overall_rc
 

@@ -12,7 +12,7 @@ This test suite validates the four main fixes:
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 # Add the project root to Python path for imports
@@ -35,7 +35,7 @@ class TestSentimentAPIConfiguration(unittest.TestCase):
 
     def test_sentiment_api_env_vars_in_config(self):
         """Test that sentiment API variables are properly configured."""
-        import ai_trading.config as config
+        from ai_trading import config
 
         # Test that the new environment variables are accessible
         self.assertTrue(hasattr(config, 'SENTIMENT_API_KEY') or 'SENTIMENT_API_KEY' in dir(config))
@@ -142,38 +142,38 @@ class TestDataStalenessThresholds(unittest.TestCase):
     def test_market_hours_detection(self):
         """Test market hours detection logic."""
         # Test during market hours (Tuesday 2:00 PM ET = 7:00 PM UTC)
-        market_time = datetime(2025, 8, 5, 19, 0, 0, tzinfo=timezone.utc)  # Tuesday 2 PM ET
+        market_time = datetime(2025, 8, 5, 19, 0, 0, tzinfo=UTC)  # Tuesday 2 PM ET
         self.assertTrue(self.is_market_hours(market_time))
 
         # Test outside market hours (Tuesday 6:00 PM ET = 11:00 PM UTC)
-        after_hours = datetime(2025, 8, 5, 23, 0, 0, tzinfo=timezone.utc)  # Tuesday 6 PM ET
+        after_hours = datetime(2025, 8, 5, 23, 0, 0, tzinfo=UTC)  # Tuesday 6 PM ET
         self.assertFalse(self.is_market_hours(after_hours))
 
         # Test weekend (Saturday)
-        weekend = datetime(2025, 8, 9, 19, 0, 0, tzinfo=timezone.utc)  # Saturday 2 PM ET
+        weekend = datetime(2025, 8, 9, 19, 0, 0, tzinfo=UTC)  # Saturday 2 PM ET
         self.assertFalse(self.is_market_hours(weekend))
 
     def test_staleness_threshold_logic(self):
         """Test that staleness thresholds adapt to market conditions."""
         # During market hours should have stricter threshold
-        market_time = datetime(2025, 8, 5, 19, 0, 0, tzinfo=timezone.utc)
+        market_time = datetime(2025, 8, 5, 19, 0, 0, tzinfo=UTC)
         market_threshold = self.get_staleness_threshold('AAPL', market_time)
         self.assertEqual(market_threshold, 15)  # 15 minutes during market hours
 
         # After hours should be more lenient
-        after_hours = datetime(2025, 8, 5, 23, 0, 0, tzinfo=timezone.utc)
+        after_hours = datetime(2025, 8, 5, 23, 0, 0, tzinfo=UTC)
         after_threshold = self.get_staleness_threshold('AAPL', after_hours)
         self.assertGreater(after_threshold, market_threshold)
 
         # Weekend should be most lenient
-        weekend = datetime(2025, 8, 9, 19, 0, 0, tzinfo=timezone.utc)
+        weekend = datetime(2025, 8, 9, 19, 0, 0, tzinfo=UTC)
         weekend_threshold = self.get_staleness_threshold('AAPL', weekend)
         self.assertGreater(weekend_threshold, after_threshold)
 
     def test_data_freshness_with_market_awareness(self):
         """Test that data freshness checks include market context."""
         # Create test dataframe with recent data
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recent_time = now - timedelta(minutes=10)
 
         df = self.pd.DataFrame({
@@ -264,7 +264,7 @@ class TestIntegration(unittest.TestCase):
         """Test that .env file contains the new sentiment configuration."""
         env_file_path = '.env'
         if os.path.exists(env_file_path):
-            with open(env_file_path, 'r') as f:
+            with open(env_file_path) as f:
                 content = f.read()
 
             # Should contain sentiment API configuration

@@ -7,7 +7,7 @@ financial time series validation and hyperparameter optimization.
 
 import json
 import pickle
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -160,7 +160,7 @@ class MLTrainer:
                 "feature_importance": self.feature_importance,
                 "train_samples": len(X),
                 "feature_count": X_processed.shape[1],
-                "training_time": datetime.now(timezone.utc).isoformat(),
+                "training_time": datetime.now(UTC).isoformat(),
             }
 
             logger.info(
@@ -445,7 +445,7 @@ class MLTrainer:
                 "best_params": self.best_params,
                 "cv_results": self.cv_results,
                 "feature_importance": self.feature_importance,
-                "training_timestamp": datetime.now(timezone.utc).isoformat(),
+                "training_timestamp": datetime.now(UTC).isoformat(),
                 "random_state": self.random_state,
             }
 

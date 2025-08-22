@@ -206,11 +206,10 @@ def safe_get_stock_bars(
                             "ALPACA_LIMIT_FETCH_FAILED",
                             extra={"symbol": symbol, "context": context, "error": str(e)},
                         )
+            elif _is_minute_timeframe(tf_str):
+                df = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
             else:
-                if _is_minute_timeframe(tf_str):
-                    df = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
-                else:
-                    df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
+                df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
             if df is None or df.empty:
                 return _create_empty_bars_dataframe()
 

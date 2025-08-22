@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Dict
+from typing import Any
 
 # AI-AGENT-REF: lightweight facade for system health tests
 from ai_trading.config import management as config
@@ -36,7 +36,7 @@ class sentiment:  # pragma: no cover - patched in tests
 
 class meta_learning:  # pragma: no cover - patched in tests
     @staticmethod
-    def validate_trade_data_quality() -> Dict[str, Any]:
+    def validate_trade_data_quality() -> dict[str, Any]:
         return {}
 
 
@@ -48,15 +48,15 @@ class ComponentHealth:
     last_check: datetime
     error_count: int = 0
     warning_count: int = 0
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class SystemHealthStatus:
     overall_status: str
-    components: Dict[str, ComponentHealth]
+    components: dict[str, ComponentHealth]
     alerts: list[str]
-    metrics: Dict[str, float]
+    metrics: dict[str, float]
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -81,7 +81,7 @@ class SystemHealthChecker:
         details = {"trade_count": trade_count, "min_required": min_required}
         return ComponentHealth("meta_learning", "healthy", 1.0, datetime.now(UTC), details=details)
 
-    def _determine_overall_status(self, components: Dict[str, ComponentHealth]) -> str:
+    def _determine_overall_status(self, components: dict[str, ComponentHealth]) -> str:
         if any(c.status == "critical" for c in components.values()):
             return "critical"
         if any(c.status == "warning" for c in components.values()):

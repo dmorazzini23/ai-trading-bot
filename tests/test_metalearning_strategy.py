@@ -4,7 +4,7 @@ Test suite for MetaLearning strategy.
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -22,8 +22,8 @@ def create_mock_price_data(days=100, start_price=100):
     """Create mock OHLCV price data for testing."""
     # Create minute-level data to match what the strategy expects
     # AI-AGENT-REF: Use timezone-aware datetime instead of naive
-    start_date = datetime.now(timezone.utc) - timedelta(days=days)
-    end_date = datetime.now(timezone.utc)
+    start_date = datetime.now(UTC) - timedelta(days=days)
+    end_date = datetime.now(UTC)
     dates = pd.date_range(start=start_date, end=end_date, freq='1H')  # Hourly data for reasonable size
 
     # Generate realistic price movements
@@ -166,7 +166,7 @@ class TestMetaLearning:
             mock_get_data.return_value = self.mock_data
 
             # Mock market data
-            market_data = {'timestamp': datetime.now(timezone.utc)}  # AI-AGENT-REF: Use timezone-aware datetime
+            market_data = {'timestamp': datetime.now(UTC)}  # AI-AGENT-REF: Use timezone-aware datetime
 
             signals = self.strategy.generate_signals(market_data)
 
@@ -228,7 +228,7 @@ class TestMetaLearning:
         assert not self.strategy._should_retrain()
 
         # Should retrain after time passes
-        old_date = datetime.now(timezone.utc) - timedelta(days=10)  # AI-AGENT-REF: Use timezone-aware datetime
+        old_date = datetime.now(UTC) - timedelta(days=10)  # AI-AGENT-REF: Use timezone-aware datetime
         self.strategy.last_training_date = old_date
         assert self.strategy._should_retrain()
 

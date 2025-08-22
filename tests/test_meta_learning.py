@@ -2,7 +2,7 @@ import types
 
 import numpy as np
 import pytest
-import torch.nn as nn
+from torch import nn
 
 np.random.seed(0)
 

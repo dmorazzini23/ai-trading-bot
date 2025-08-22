@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1) Pass 1: imports + trivial formatting
-ruff check . --select E,W,F401,I,RUF100 --fix || true
+# AI-AGENT-REF: phase2b lint and test runner
+mkdir -p artifacts
 
-# 2) Pass 2: re-run to clean newly-exposed issues
-ruff check . --select E,W,F401,I,RUF100 --fix || true
+# Baseline
+ruff --version | tee artifacts/ruff-version.txt
+ruff check . --statistics | tee artifacts/ruff-phase2b-baseline.txt || true
 
-# 3) Optional targeted codemod for None comparisons when Ruff left stragglers
-python tools/codemods/fix_none_comparisons.py || true
+# Pass 1: imports & top-of-file
+ruff check . --select I,E402 --fix || true
 
-# 4) Final sweep (don’t fail build; we only want the report)
-ruff check . --output-format=full --exit-zero | tee artifacts/ruff-after.txt
+# Pass 2: unuseds & None-comparisons
+ruff check . --select F401,F403,F405,F841,E711,E712 --fix || true
+python tools/codemods/none_comparison_fix.py || true
+
+# Pass 3: report DTZ/T201 needed manual spots (no auto-fix)
+ruff check . --select DTZ,T201 | tee artifacts/ruff-phase2b-dtz-t201.txt || true
+
+# Final stats
+ruff check . --statistics | tee artifacts/ruff-phase2b-final.txt || true
+
+# Typecheck & tests
+python -m mypy --version | tee artifacts/mypy-version.txt
+python -m mypy ai_trading trade_execution | tee artifacts/mypy-phase2b.txt || true
+pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest-phase2b.txt || true

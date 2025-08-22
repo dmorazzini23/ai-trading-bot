@@ -500,8 +500,7 @@ class AlpacaExecutionEngine:
                 result = func(*args, **kwargs)
 
                 # Reset circuit breaker on success
-                if self.circuit_breaker["failure_count"] > 0:
-                    self.circuit_breaker["failure_count"] = 0
+                self.circuit_breaker["failure_count"] = min(self.circuit_breaker["failure_count"], 0)
 
                 return result
 

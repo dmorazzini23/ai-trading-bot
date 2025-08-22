@@ -22,7 +22,7 @@ MODULES = [
 
 def test_stage2_modules_have_no_broad_except():
     cmd = [sys.executable, "tools/audit_exceptions.py", "--paths", *MODULES]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+    p = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert p.returncode == 0
     first_line = p.stdout.splitlines()[0]
     data = json.loads(first_line)

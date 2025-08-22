@@ -5,7 +5,6 @@ Provides explicit labelers for future returns, triple barrier labels,
 and other trading-specific target variables.
 """
 
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -15,7 +14,7 @@ from ai_trading.logging import logger
 
 
 def fixed_horizon_return(
-    prices: Union[pd.Series, pd.DataFrame],
+    prices: pd.Series | pd.DataFrame,
     horizon_bars: int,
     fee_bps: float = 0.0
 ) -> pd.Series:
@@ -63,13 +62,13 @@ def fixed_horizon_return(
 
 
 def triple_barrier_labels(
-    prices: Union[pd.Series, pd.DataFrame],
-    events: Optional[pd.DataFrame] = None,
-    pt_sl: Optional[tuple] = None,
-    t1: Optional[pd.Series] = None,
+    prices: pd.Series | pd.DataFrame,
+    events: pd.DataFrame | None = None,
+    pt_sl: tuple | None = None,
+    t1: pd.Series | None = None,
     min_ret: float = 0.0,
     num_threads: int = 1,
-    vertical_barrier_times: Optional[pd.Series] = None
+    vertical_barrier_times: pd.Series | None = None
 ) -> pd.DataFrame:
     """
     Triple barrier labeling method.

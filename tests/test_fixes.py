@@ -19,7 +19,7 @@ def test_tickers_csv():
         print("❌ tickers.csv not found!")
         return False
 
-    with open(tickers_file, 'r') as f:
+    with open(tickers_file) as f:
         reader = csv.reader(f)
         tickers = [row[0].strip().upper() for row in reader if row]
 
@@ -107,7 +107,7 @@ def test_screen_universe_logging():
     print("\n🔍 Testing screen_universe logging enhancements")
 
     try:
-        with open('bot_engine.py', 'r') as f:
+        with open('bot_engine.py') as f:
             content = f.read()
 
         # Check for enhanced logging statements

@@ -9,7 +9,7 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ai_trading.core import bot_engine  # AI-AGENT-REF: use packaged bot_engine
 
@@ -171,7 +171,7 @@ def main():
     """Main optimized startup function."""
     logging.info("AI Trading Bot - Optimized Startup")
     logging.info(str("=" * 40))
-    logging.info(f"Startup time: {datetime.now(timezone.utc).isoformat()}")
+    logging.info(f"Startup time: {datetime.now(UTC).isoformat()}")
 
     # Register cleanup function
     atexit.register(cleanup_on_exit)

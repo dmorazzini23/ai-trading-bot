@@ -3,7 +3,6 @@ from __future__ import annotations
 # AI-AGENT-REF: helpers for optional dependencies
 import importlib.util as _ils
 from types import ModuleType
-from typing import Optional
 
 
 def module_ok(name: str) -> bool:
@@ -14,7 +13,7 @@ def module_ok(name: str) -> bool:
         return False
 
 
-def try_import(name: str) -> Optional[ModuleType]:
+def try_import(name: str) -> ModuleType | None:
     """Attempt to import *name*, returning module or None."""  # AI-AGENT-REF
     try:
         return __import__(name)

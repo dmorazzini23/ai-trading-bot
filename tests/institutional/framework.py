@@ -10,8 +10,8 @@ This module provides comprehensive testing capabilities including:
 
 import asyncio
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
@@ -24,14 +24,14 @@ class MockMarketDataProvider:
     """
 
     def __init__(self) -> None:
-        self._prices: Dict[str, float] = {"AAPL": 170.0}
-        self._history: Dict[str, List[float]] = {"AAPL": [168.0, 169.0, 170.0]}
+        self._prices: dict[str, float] = {"AAPL": 170.0}
+        self._history: dict[str, list[float]] = {"AAPL": [168.0, 169.0, 170.0]}
 
-    def get_current_price(self, symbol: str) -> Optional[float]:
+    def get_current_price(self, symbol: str) -> float | None:
         """Return the latest price for *symbol*."""
         return self._prices.get(symbol)
 
-    def get_price_history(self, symbol: str) -> List[float]:
+    def get_price_history(self, symbol: str) -> list[float]:
         """Return recent price history for *symbol*."""
         return list(self._history.get(symbol, []))
 
@@ -57,14 +57,14 @@ class TradingScenarioRunner:
         self.market_data = MockMarketDataProvider()
         self.test_results = []
 
-    async def run_end_to_end_test(self) -> Dict[str, Any]:
+    async def run_end_to_end_test(self) -> dict[str, Any]:
         """Run comprehensive end-to-end trading test."""
         logger.info("Starting end-to-end trading test")
         start_time = time.time()
 
         results = {
             "test_name": "end_to_end_trading",
-            "start_time": datetime.now(timezone.utc),
+            "start_time": datetime.now(UTC),
             "scenarios": [],
             "overall_status": "unknown",
             "duration": 0.0
@@ -111,13 +111,13 @@ class TradingScenarioRunner:
         logger.info(f"End-to-end test completed: {passed}/{total} scenarios passed")
         return results
 
-    async def run_risk_scenario_tests(self) -> Dict[str, Any]:
+    async def run_risk_scenario_tests(self) -> dict[str, Any]:
         """Run risk management scenario tests."""
         logger.info("Starting risk scenario tests")
 
         results = {
             "test_name": "risk_scenarios",
-            "start_time": datetime.now(timezone.utc),
+            "start_time": datetime.now(UTC),
             "scenarios": [],
             "overall_status": "unknown"
         }
@@ -154,13 +154,13 @@ class TradingScenarioRunner:
 
         return results
 
-    async def run_performance_tests(self) -> Dict[str, Any]:
+    async def run_performance_tests(self) -> dict[str, Any]:
         """Run performance and latency tests."""
         logger.info("Starting performance tests")
 
         results = {
             "test_name": "performance",
-            "start_time": datetime.now(timezone.utc),
+            "start_time": datetime.now(UTC),
             "metrics": {},
             "overall_status": "unknown"
         }
@@ -204,7 +204,7 @@ class TradingScenarioRunner:
         return results
 
     # Individual test scenarios
-    async def _test_initialization(self) -> Dict[str, Any]:
+    async def _test_initialization(self) -> dict[str, Any]:
         """Test system initialization."""
         if self.execution_engine:
             success = self.execution_engine.initialize()
@@ -218,7 +218,7 @@ class TradingScenarioRunner:
                 "details": "No execution engine to test"
             }
 
-    async def _test_market_order(self) -> Dict[str, Any]:
+    async def _test_market_order(self) -> dict[str, Any]:
         """Test market order execution."""
         if not self.execution_engine:
             return {"status": "skipped", "details": "No execution engine"}
@@ -233,7 +233,7 @@ class TradingScenarioRunner:
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
-    async def _test_limit_order(self) -> Dict[str, Any]:
+    async def _test_limit_order(self) -> dict[str, Any]:
         """Test limit order execution."""
         if not self.execution_engine:
             return {"status": "skipped", "details": "No execution engine"}
@@ -251,7 +251,7 @@ class TradingScenarioRunner:
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
-    async def _test_order_cancellation(self) -> Dict[str, Any]:
+    async def _test_order_cancellation(self) -> dict[str, Any]:
         """Test order cancellation."""
         if not self.execution_engine:
             return {"status": "skipped", "details": "No execution engine"}
@@ -273,7 +273,7 @@ class TradingScenarioRunner:
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
-    async def _test_multiple_orders(self) -> Dict[str, Any]:
+    async def _test_multiple_orders(self) -> dict[str, Any]:
         """Test multiple simultaneous orders."""
         if not self.execution_engine:
             return {"status": "skipped", "details": "No execution engine"}
@@ -295,7 +295,7 @@ class TradingScenarioRunner:
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
-    async def _test_error_handling(self) -> Dict[str, Any]:
+    async def _test_error_handling(self) -> dict[str, Any]:
         """Test error handling with invalid orders."""
         if not self.execution_engine:
             return {"status": "skipped", "details": "No execution engine"}
@@ -319,7 +319,7 @@ class TradingScenarioRunner:
         except Exception as e:
             return {"status": "failed", "error": str(e)}
 
-    async def _test_circuit_breaker(self) -> Dict[str, Any]:
+    async def _test_circuit_breaker(self) -> dict[str, Any]:
         """Test circuit breaker functionality."""
         if not self.execution_engine:
             return {"status": "skipped", "details": "No execution engine"}
@@ -340,7 +340,7 @@ class TradingScenarioRunner:
             return {"status": "failed", "error": str(e)}
 
     # Risk scenario tests
-    async def _test_position_sizing(self) -> Dict[str, Any]:
+    async def _test_position_sizing(self) -> dict[str, Any]:
         """Test position sizing logic."""
         # Mock position sizing test
         return {
@@ -348,28 +348,28 @@ class TradingScenarioRunner:
             "details": "Position sizing validation passed"
         }
 
-    async def _test_max_drawdown(self) -> Dict[str, Any]:
+    async def _test_max_drawdown(self) -> dict[str, Any]:
         """Test maximum drawdown limits."""
         return {
             "status": "passed",
             "details": "Drawdown limits validation passed"
         }
 
-    async def _test_sector_exposure(self) -> Dict[str, Any]:
+    async def _test_sector_exposure(self) -> dict[str, Any]:
         """Test sector exposure limits."""
         return {
             "status": "passed",
             "details": "Sector exposure validation passed"
         }
 
-    async def _test_leverage_limits(self) -> Dict[str, Any]:
+    async def _test_leverage_limits(self) -> dict[str, Any]:
         """Test leverage limit enforcement."""
         return {
             "status": "passed",
             "details": "Leverage limits validation passed"
         }
 
-    async def _test_volatility_adjustment(self) -> Dict[str, Any]:
+    async def _test_volatility_adjustment(self) -> dict[str, Any]:
         """Test volatility-based position adjustment."""
         return {
             "status": "passed",
@@ -389,13 +389,13 @@ class ComplianceTestSuite:
         """Initialize compliance test suite."""
         self.test_results = []
 
-    async def run_compliance_tests(self) -> Dict[str, Any]:
+    async def run_compliance_tests(self) -> dict[str, Any]:
         """Run full compliance test suite."""
         logger.info("Starting compliance tests")
 
         results = {
             "test_name": "compliance",
-            "start_time": datetime.now(timezone.utc),
+            "start_time": datetime.now(UTC),
             "tests": [],
             "overall_status": "unknown"
         }
@@ -432,35 +432,35 @@ class ComplianceTestSuite:
 
         return results
 
-    async def _test_audit_trail(self) -> Dict[str, Any]:
+    async def _test_audit_trail(self) -> dict[str, Any]:
         """Test audit trail completeness."""
         return {
             "status": "passed",
             "details": "Audit trail validation passed"
         }
 
-    async def _test_trade_logging(self) -> Dict[str, Any]:
+    async def _test_trade_logging(self) -> dict[str, Any]:
         """Test trade logging compliance."""
         return {
             "status": "passed",
             "details": "Trade logging validation passed"
         }
 
-    async def _test_risk_limits(self) -> Dict[str, Any]:
+    async def _test_risk_limits(self) -> dict[str, Any]:
         """Test risk limit enforcement."""
         return {
             "status": "passed",
             "details": "Risk limits validation passed"
         }
 
-    async def _test_order_validation(self) -> Dict[str, Any]:
+    async def _test_order_validation(self) -> dict[str, Any]:
         """Test order validation compliance."""
         return {
             "status": "passed",
             "details": "Order validation compliance passed"
         }
 
-    async def _test_data_retention(self) -> Dict[str, Any]:
+    async def _test_data_retention(self) -> dict[str, Any]:
         """Test data retention compliance."""
         return {
             "status": "passed",

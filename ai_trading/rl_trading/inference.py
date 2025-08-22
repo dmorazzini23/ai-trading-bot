@@ -87,13 +87,12 @@ class UnifiedRLInference:
                         f"Action space mismatch: model has {model_action_space.n} actions, "
                         f"config expects {self.config.action_config.discrete_actions}"
                     )
-        else:
-            if hasattr(model_action_space, "shape"):
-                if model_action_space.shape[0] != 1:
-                    self.logger.error(
-                        f"Continuous action space mismatch: model shape {model_action_space.shape}, "
-                        f"expected (1,)"
-                    )
+        elif hasattr(model_action_space, "shape"):
+            if model_action_space.shape[0] != 1:
+                self.logger.error(
+                    f"Continuous action space mismatch: model shape {model_action_space.shape}, "
+                    f"expected (1,)"
+                )
 
         self.logger.info(
             f"Action space validation complete: {self.config.action_config.action_type}"
