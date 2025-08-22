@@ -1,5 +1,5 @@
 """
-Side-effect-free shim for bot_engine to satisfy tests and avoid import-time work.
+Side-effect-free facade for bot_engine to satisfy tests and avoid import-time work.
 
 This module performs validation on inputs and defers the heavy import of
 `ai_trading.core.bot_engine` until call time, preventing systemd-startup tests

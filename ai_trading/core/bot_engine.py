@@ -36,7 +36,8 @@ from ai_trading.data_fetcher import (
     get_bars_batch,
     get_minute_df,
 )
-from ai_trading.market.calendars import last_market_session
+from ai_trading.utils.time import last_market_session
+from ai_trading.capital_scaling import capital_scale, capital_scaler_update
 from ai_trading.utils.datetime import ensure_datetime
 from ai_trading.data.timeutils import (
     ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
@@ -1397,7 +1398,7 @@ StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest =
 ) = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
 APIError = APIErrorStub
 
-# Minimal enum-like shim so code can reference TimeFrame.Day etc.
+# Minimal enum-like placeholder so code can reference TimeFrame.Day etc.
 class _TimeFrame:  # AI-AGENT-REF: safe constants when Alpaca SDK not installed
     Day = "Day"
     Minute = "Minute"
@@ -1417,7 +1418,7 @@ class _TimeFrameUnit:
     Week = "Week"
     Month = "Month"
 
-# Expose shim under expected name
+# Expose placeholder under expected name
 TimeFrame = _TimeFrame
 TimeFrameUnit = _TimeFrameUnit
 
@@ -1622,7 +1623,7 @@ except ImportError:  # pragma: no cover - fallback  # AI-AGENT-REF: optional pyb
                     return self.call(func)
 
 
-# AI-AGENT-REF: optional prometheus_client dependency via shim
+# AI-AGENT-REF: optional prometheus_client dependency via adapter
 from ai_trading.metrics import (
     PROMETHEUS_AVAILABLE,
     REGISTRY,
@@ -5712,7 +5713,7 @@ def _initialize_bot_context_post_setup_legacy(ctx):
         OSError,
     ):  # AI-AGENT-REF: narrow exception
         equity_init = 0.0
-    ctx.capital_scaler.update(ctx, equity_init)
+    capital_scaler_update(ctx, equity_init)
     ctx.last_positions = load_portfolio_snapshot()
 
     # Warm up regime history cache so initial regime checks pass
@@ -7308,7 +7309,8 @@ def fractional_kelly_size(
         else:
             prev_peak = balance
 
-        base_frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
+        capital_scaler_update(ctx, balance)
+        base_frac = ctx.kelly_fraction * capital_scale(ctx)
 
         # Validate base_frac
         if not isinstance(base_frac, int | float) or base_frac < 0 or base_frac > 1:
@@ -10379,7 +10381,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-# --- Back-compat shim for tests that expect this symbol at module scope ---
+# --- Back-compat path for tests that expect this symbol at module scope ---
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute regime features; tolerate proxy bars that only include 'close'."""
     # 1) Canonicalize columns (o/h/l/c/v mapping, lowercase)
@@ -11263,7 +11265,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
             OSError,
         ):  # AI-AGENT-REF: narrow exception
             equity = 0.0
-        ctx.capital_scaler.update(ctx, equity)
+        capital_scaler_update(ctx, equity)
         params["get_capital_cap()"] = ctx.params["get_capital_cap()"]
         frac = params.get("KELLY_FRACTION", 0.6)
         if spy_atr and vol and spy_atr > vol * 1.5:
@@ -11958,7 +11960,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
         equity = 0.0
-    runtime.capital_scaler.update(runtime, equity)
+    capital_scaler_update(runtime, equity)
     params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.04)
     compute_spy_vol_stats(runtime)
 

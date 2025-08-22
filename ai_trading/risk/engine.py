@@ -18,7 +18,7 @@ import importlib
 import pandas as pd
 
 
-# AI-AGENT-REF: lazy optional pandas_ta import without central shim
+# AI-AGENT-REF: lazy optional pandas_ta import without central adapter
 def _optional_import(name: str):
     try:
         return importlib.import_module(name)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# AI-AGENT-REF: deterministic slippage estimator promoted from test shim
+# AI-AGENT-REF: deterministic slippage estimator promoted from test helper
 
 def estimate(price: float, side: str, bps: float = 0.0) -> float:
     """

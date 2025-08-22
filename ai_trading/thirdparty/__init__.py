@@ -1,4 +1,4 @@
-"""Third-party compatibility shims used in tests."""
+"""Third-party compatibility helpers used in tests."""
 
 from . import lightgbm_compat as lightgbm_compat
 

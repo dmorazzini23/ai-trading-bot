@@ -85,12 +85,12 @@ def optimize_memory():
 
 
 def get_performance_monitor():
-    # AI-AGENT-REF: shim removed; feature currently disabled
+    # AI-AGENT-REF: legacy feature currently disabled
     return None
 
 
 def start_performance_monitoring():
-    # AI-AGENT-REF: shim removed; no-op
+    # AI-AGENT-REF: legacy no-op
     return None
 
 

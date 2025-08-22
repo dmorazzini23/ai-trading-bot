@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-# AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
+# AI-AGENT-REF: removed legacy trade_execution import as part of cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore
 from ai_trading.core.bot_engine import get_risk_engine
 
