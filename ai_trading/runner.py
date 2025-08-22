@@ -151,6 +151,7 @@ def run_cycle() -> None:
         from ai_trading.core.bot_engine import get_ctx
         from ai_trading.core.runtime import build_runtime, REQUIRED_PARAM_DEFAULTS
         from ai_trading.config.management import TradingConfig
+        from ai_trading.data_fetcher import DataFetchError
         
         lazy_ctx = get_ctx()
         
@@ -177,7 +178,11 @@ def run_cycle() -> None:
         
         # Enhance runtime with lazy context attributes after initialization
         from ai_trading.core.runtime import enhance_runtime_with_context
-        runtime = enhance_runtime_with_context(runtime, lazy_ctx)
+        try:
+            runtime = enhance_runtime_with_context(runtime, lazy_ctx)
+        except DataFetchError as e:
+            log.warning("DATA_FETCHER_INIT_FAILED", extra={"detail": str(e)})
+            return
         
         # Execute the trading cycle
         run_all_trades_worker(state, runtime)

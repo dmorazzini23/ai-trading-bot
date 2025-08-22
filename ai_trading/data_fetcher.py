@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo  # AI-AGENT-REF: ET default for naive datetimes
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
 from pandas.errors import OutOfBoundsDatetime  # AI-AGENT-REF: datetime bounds
 
-from ai_trading.config import get_settings
+try:  # pragma: no cover - optional configuration module
+    from ai_trading.config import get_settings
+except Exception:  # AI-AGENT-REF: fallback when config dependencies missing
+    def get_settings():  # type: ignore
+        return None
 from ai_trading.data.timeutils import (
     ensure_utc_datetime,  # AI-AGENT-REF: unified datetime coercion
 )
@@ -171,6 +175,31 @@ class FinnhubAPIException(Exception):
     def __init__(self, status_code: int):
         self.status_code = status_code
         super().__init__(str(status_code))
+
+
+def build_fetcher(config: Any) -> Any:
+    """Return an initialized market data fetcher or raise ``DataFetchError``."""
+    from ai_trading.alpaca_api import ALPACA_AVAILABLE
+    try:
+        from ai_trading.core.bot_engine import DataFetcher
+    except Exception:  # pragma: no cover - lightweight fallback for tests
+        class DataFetcher:  # type: ignore
+            def get_daily_df(self, *a, **k):
+                return None
+
+            def get_minute_df(self, *a, **k):
+                return None
+
+    has_keys = os.getenv("APCA_API_KEY_ID") and os.getenv("APCA_API_SECRET_KEY")
+    if ALPACA_AVAILABLE and has_keys:
+        f = DataFetcher()
+        setattr(f, "source", "alpaca")
+        return f
+    if yf is not None or requests is not None:
+        f = DataFetcher()
+        setattr(f, "source", "fallback")
+        return f
+    raise DataFetchError("cannot build data fetcher")
 
 
 # ---------------------------------------------------------------------------
@@ -662,4 +691,6 @@ __all__ = [
     "get_last_available_bar",
     "fh_fetcher",
     "get_minute_df",
+    "build_fetcher",
+    "DataFetchError",
 ]

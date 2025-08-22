@@ -522,8 +522,8 @@ def get_pid_on_port(port: int) -> int | None:
 
 def get_rolling_atr(symbol: str, window: int = 14) -> float:
     """Return normalized ATR over ``window`` days."""
-    from ai_trading.bot_engine import (
-        fetch_minute_df_safe,  # lazy import to avoid cycles
+    from ai_trading.core.bot_engine import (
+        fetch_minute_df_safe,  # AI-AGENT-REF: lazy import to avoid cycles
     )
 
     df = fetch_minute_df_safe(symbol)
@@ -554,7 +554,7 @@ def get_rolling_atr(symbol: str, window: int = 14) -> float:
 
 def get_current_vwap(symbol: str) -> float:
     """Return simple intraday VWAP for ``symbol``."""
-    from ai_trading.bot_engine import fetch_minute_df_safe
+    from ai_trading.core.bot_engine import fetch_minute_df_safe
 
     df = fetch_minute_df_safe(symbol)
     if df is None or df.empty:
@@ -568,7 +568,7 @@ def get_current_vwap(symbol: str) -> float:
 
 def get_volume_spike_factor(symbol: str) -> float:
     """Return last minute volume over 20-period average."""
-    from ai_trading.bot_engine import fetch_minute_df_safe
+    from ai_trading.core.bot_engine import fetch_minute_df_safe
 
     df = fetch_minute_df_safe(symbol)
     if df is None or len(df) < 21:

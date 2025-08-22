@@ -31,13 +31,15 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
 from threading import Lock
 import warnings
 
+import ai_trading.data_fetcher as data_fetcher_module
 from ai_trading.data_fetcher import (
+    DataFetchError,
     get_bars,
     get_bars_batch,
     get_minute_df,
 )
 from ai_trading.utils.time import last_market_session
-from ai_trading.capital_scaling import capital_scale, capital_scaler_update
+from ai_trading.capital_scaling import capital_scale, update_if_present
 from ai_trading.utils.datetime import ensure_datetime
 from ai_trading.data.timeutils import (
     ensure_utc_datetime as _ensure_utc_dt,  # AI-AGENT-REF: callable-aware UTC coercion
@@ -5064,7 +5066,7 @@ class BotContext:
         return getattr(self, "api", None)
 
 
-data_fetcher = DataFetcher()
+data_fetcher: DataFetcher | None = None
 signal_manager = SignalManager()
 # AI-AGENT-REF: Lazy initialization for trade logger to speed up imports in testing
 _TRADE_LOGGER_SINGLETON = None
@@ -5378,7 +5380,7 @@ class LazyBotContext:
     def _ensure_initialized(self):
         """Ensure the context is initialized."""
         _init_metrics()
-        global _ctx, _exec_engine
+        global _ctx, _exec_engine, data_fetcher
 
         if self._initialized and self._context is not None:
             return
@@ -5402,10 +5404,11 @@ class LazyBotContext:
             ) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning("Failed to subscribe to trade updates: %s", e)
 
+        fetcher = data_fetcher_module.build_fetcher(params)
         self._context = BotContext(
             api=trading_client,
             data_client=data_client,
-            data_fetcher=data_fetcher,
+            data_fetcher=fetcher,
             signal_manager=signal_manager,
             trade_logger=get_trade_logger(),
             sem=Semaphore(4),
@@ -5450,6 +5453,7 @@ class LazyBotContext:
             self._context
         )  # AI-AGENT-REF: remove unsupported kwargs
         self._context.execution_engine = _exec_engine
+        data_fetcher = fetcher
         # One-time, mandatory model load
         self._context.model = _load_required_model()
 
@@ -5713,7 +5717,7 @@ def _initialize_bot_context_post_setup_legacy(ctx):
         OSError,
     ):  # AI-AGENT-REF: narrow exception
         equity_init = 0.0
-    capital_scaler_update(ctx, equity_init)
+    update_if_present(ctx, equity_init)
     ctx.last_positions = load_portfolio_snapshot()
 
     # Warm up regime history cache so initial regime checks pass
@@ -7309,7 +7313,7 @@ def fractional_kelly_size(
         else:
             prev_peak = balance
 
-        capital_scaler_update(ctx, balance)
+        update_if_present(ctx, balance)
         base_frac = ctx.kelly_fraction * capital_scale(ctx)
 
         # Validate base_frac
@@ -11265,7 +11269,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
             OSError,
         ):  # AI-AGENT-REF: narrow exception
             equity = 0.0
-        capital_scaler_update(ctx, equity)
+        update_if_present(ctx, equity)
         params["get_capital_cap()"] = ctx.params["get_capital_cap()"]
         frac = params.get("KELLY_FRACTION", 0.6)
         if spy_atr and vol and spy_atr > vol * 1.5:
@@ -11945,6 +11949,8 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     from ai_trading.utils import portfolio_lock
 
     """Prepare trading run by syncing positions and generating symbols."""
+    if getattr(runtime, "data_fetcher", None) is None:
+        raise DataFetchError("data_fetcher not available")
     cancel_all_open_orders(runtime)
     audit_positions(runtime)
     try:
@@ -11960,7 +11966,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
         equity = 0.0
-    capital_scaler_update(runtime, equity)
+    update_if_present(runtime, equity)
     params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.04)
     compute_spy_vol_stats(runtime)
 
@@ -12488,7 +12494,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             else:
                 _log.debug("MARKET_FETCH")
 
-            current_cash, regime_ok, symbols = _prepare_run(runtime, state)
+            try:
+                current_cash, regime_ok, symbols = _prepare_run(runtime, state)
+            except DataFetchError as e:
+                _log.warning("DATA_FETCHER_UNAVAILABLE", extra={"detail": str(e)})
+                return
 
             # AI-AGENT-REF: Add memory monitoring and cleanup to prevent resource issues
             if MEMORY_OPTIMIZATION_AVAILABLE:

@@ -11,11 +11,19 @@ from ai_trading.logging import get_logger
 log = get_logger(__name__)
 
 
-def capital_scaler_update(runtime, equity) -> None:
-    """Safely update the capital scaler if present; otherwise do nothing."""
+def update_if_present(runtime, equity) -> float:
+    """Safely update the capital scaler if present and return its value."""
     cs = getattr(runtime, "capital_scaler", None)
     if cs is not None and hasattr(cs, "update"):
-        cs.update(runtime, equity)
+        try:
+            return float(cs.update(runtime, equity))
+        except Exception:
+            return 1.0
+    return 1.0
+
+
+def capital_scaler_update(runtime, equity) -> float:  # pragma: no cover - legacy alias
+    return update_if_present(runtime, equity)
 
 
 def capital_scale(runtime) -> float:
@@ -299,6 +307,7 @@ def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
 
 
 __all__ = [
+    "update_if_present",
     "capital_scaler_update",
     "capital_scale",
     "CapitalScalingEngine",
