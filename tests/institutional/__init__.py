@@ -6,9 +6,9 @@ live trading functionality, risk management, and compliance requirements.
 """
 
 from .framework import (
-    ComplianceTestSuite,
-    MockMarketDataProvider,
-    TradingScenarioRunner,
+    ComplianceTestSuite as ComplianceTestSuite,
+    MockMarketDataProvider as MockMarketDataProvider,
+    TradingScenarioRunner as TradingScenarioRunner,
 )
 
 __all__ = [

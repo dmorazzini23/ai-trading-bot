@@ -24,14 +24,27 @@ target-version = ["py311"]
 
 [tool.ruff]
 target-version = "py311"
-line-length = 120
+line-length = 100
+exclude = [
+  "artifacts*", "build", "dist", ".venv*", "venv*", "env*", "node_modules",
+  "**/__pycache__",
+]
 src = ["ai_trading", "trade_execution", "tests", "tools"]
-extend-exclude = ["artifacts", "build", "dist", ".venv", "venv", ".tox", ".mypy_cache"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "BLE", "T201", "PL", "DTZ"]
-ignore = ["E501"]
-dummy-variable-rgx = "^(_|unused_|ignore_|ignored_|_unused|_ignored|dummy|.*_unused)$"
+# Safe, mechanical sets: E (pycodestyle), F (pyflakes), I (isort),
+# UP (pyupgrade), DTZ (timezone), BLE (no bare except), T20 (no print/debug)
+select = ["E", "F", "I", "UP", "DTZ", "BLE", "T20"]
+ignore = [
+  "E501",        # long lines ignored globally
+  "PLR2004",     # magic numbers (not safe to mass-fix)
+]
+
+# Allow Ruff to auto-fix only the safe sets above
+fixable = ["E", "F", "I", "UP", "DTZ", "BLE", "T20"]
+unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
-"**/__init__.py" = ["F401"]
+# Re-export hubs and tests often trigger F401/I003; keep intentional re-exports clean.
+"**/__init__.py" = ["F401", "F403", "I001", "I002"]
+"tests/**"       = ["T201"]  # allow prints in tests if present
