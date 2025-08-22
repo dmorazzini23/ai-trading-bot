@@ -1,6 +1,5 @@
 import pandas as pd
 import pytest
-
 from ai_trading.data_fetcher import ensure_datetime
 
 

@@ -136,7 +136,7 @@ class MarketRegimeDetector:
 
             return regime_metrics
 
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self.logger.warning("detect_regime failed: %s", exc)
             return self._get_default_regime()
 
@@ -216,7 +216,7 @@ class MarketRegimeDetector:
             # Fallback: return None to trigger default regime
             return None
 
-        except Exception:
+        except (ValueError, TypeError):
             return None
 
     def _analyze_trend(self, data: pd.DataFrame) -> dict[str, float]:
@@ -259,7 +259,7 @@ class MarketRegimeDetector:
 
             return {"strength": trend_strength, "direction": normalized_slope}
 
-        except Exception:
+        except (ValueError, TypeError):
             return {"strength": 0.0, "direction": 0.0}
 
     def _analyze_volatility(self, data: pd.DataFrame) -> dict[str, float]:
@@ -296,7 +296,7 @@ class MarketRegimeDetector:
 
             return {"percentile": percentile, "current_vol": current_vol}
 
-        except Exception:
+        except (ValueError, TypeError):
             return {"percentile": 50.0, "current_vol": 0.0}
 
     def _analyze_momentum(self, data: pd.DataFrame) -> dict[str, float]:
@@ -331,7 +331,7 @@ class MarketRegimeDetector:
 
             return {"score": momentum_score, "rsi": rsi if not pd.isna(rsi) else 50.0}
 
-        except Exception:
+        except (ValueError, TypeError):
             return {"score": 0.5, "rsi": 50.0}
 
     def _analyze_mean_reversion(self, data: pd.DataFrame) -> dict[str, float]:
@@ -362,7 +362,7 @@ class MarketRegimeDetector:
 
             return {"score": mean_reversion_score}
 
-        except Exception:
+        except (ValueError, TypeError):
             return {"score": 0.5}
 
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
@@ -383,7 +383,7 @@ class MarketRegimeDetector:
 
             return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
 
-        except Exception:
+        except (ValueError, TypeError):
             return 50.0
 
     def _classify_regime(
@@ -444,7 +444,7 @@ class MarketRegimeDetector:
 
             return max(0.0, min(1.0, confidence))
 
-        except Exception:
+        except (ValueError, TypeError):
             return 0.5
 
     def _calculate_regime_duration(self, current_regime: MarketRegime) -> int:
@@ -462,7 +462,7 @@ class MarketRegimeDetector:
 
             return duration
 
-        except Exception:
+        except (ValueError, TypeError):
             return 0
 
     def _get_default_regime(self) -> RegimeMetrics:

@@ -174,7 +174,7 @@ def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
         raise ValueError("Invalid input")
     try:
         return list(model.predict(X))
-    except Exception as exc:  # pragma: no cover - model may fail unexpectedly
+    except (ValueError, TypeError) as exc:  # pragma: no cover - model may fail unexpectedly
         logger.error("Model prediction failed: %s", exc)
         raise
 

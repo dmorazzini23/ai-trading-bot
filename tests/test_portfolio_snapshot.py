@@ -2,7 +2,6 @@ import json
 import os
 
 import pytest
-
 from ai_trading.core import bot_engine
 
 

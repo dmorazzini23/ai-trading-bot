@@ -35,6 +35,7 @@ def test_imports():
             __import__(module)
             imported.append(module)
             logging.info(f"  ✓ {module}")
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             failed.append((module, str(e)))
             logging.info(f"  ✗ {module}: {e}")
@@ -58,6 +59,7 @@ def test_basic_functionality():
         assert cache.is_duplicate(key)
         logging.info("  ✓ Idempotency system working")
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ✗ Idempotency test failed: {e}")
         return False
@@ -77,6 +79,7 @@ def test_basic_functionality():
         assert total_cost > 0
         logging.info("  ✓ Cost model working")
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ✗ Cost model test failed: {e}")
         return False
@@ -84,7 +87,6 @@ def test_basic_functionality():
     try:
         # Test determinism
         import numpy as np
-
         from ai_trading.utils.determinism import set_random_seeds
 
         set_random_seeds(42)
@@ -96,6 +98,7 @@ def test_basic_functionality():
         assert np.array_equal(random1, random2)
         logging.info("  ✓ Determinism working")
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ✗ Determinism test failed: {e}")
         return False
@@ -109,6 +112,7 @@ def test_basic_functionality():
         assert cache.get("test") == "value"
         logging.info("  ✓ Performance cache working")
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ✗ Performance cache test failed: {e}")
         return False
@@ -152,6 +156,7 @@ def test_integration():
         logging.info("  ✓ Module integration working")
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ✗ Integration test failed: {e}")
         return False

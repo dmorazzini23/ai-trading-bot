@@ -153,7 +153,7 @@ class DataEncryption:
         try:
             encrypted_data = self.cipher.encrypt(data.encode())
             return base64.urlsafe_b64encode(encrypted_data).decode()
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Encryption failed: {e}")
             raise
 
@@ -163,7 +163,7 @@ class DataEncryption:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_data.encode())
             decrypted_data = self.cipher.decrypt(encrypted_bytes)
             return decrypted_data.decode()
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Decryption failed: {e}")
             raise
 
@@ -480,7 +480,7 @@ class SecurityManager:
 
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Authentication error: {e}")
             self._handle_failed_auth(client_ip, f"Authentication error: {e}")
             return False

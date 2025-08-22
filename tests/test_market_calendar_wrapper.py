@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-
 from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 
 pmc = pytest.importorskip("pandas_market_calendars")

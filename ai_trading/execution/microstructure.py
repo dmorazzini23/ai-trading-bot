@@ -146,7 +146,7 @@ class BidAskSpreadAnalyzer:
 
             return features
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error analyzing spread features: {e}")
             return {}
 
@@ -179,7 +179,7 @@ class BidAskSpreadAnalyzer:
             else:
                 return MarketRegimeFeature.RETAIL_DOMINATED
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error classifying spread regime: {e}")
             return MarketRegimeFeature.RETAIL_DOMINATED
 
@@ -239,7 +239,7 @@ class BidAskSpreadAnalyzer:
 
             return avg_effective, avg_realized
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating trade spreads: {e}")
             return 0.0, 0.0
 
@@ -330,7 +330,7 @@ class OrderFlowAnalyzer:
 
             return features
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error analyzing order flow: {e}")
             return {}
 
@@ -368,7 +368,7 @@ class OrderFlowAnalyzer:
                 "recommendations": self._generate_flow_recommendations(flow_features),
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error detecting toxic flow: {e}")
             return {"is_toxic": False, "risk_level": "unknown", "error": str(e)}
 
@@ -693,7 +693,7 @@ class MarketMicrostructureEngine:
 
             return microstructure_data
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error analyzing market microstructure for {symbol}: {e}")
             return self._create_default_microstructure_data(symbol)
 
@@ -758,7 +758,7 @@ class MarketMicrostructureEngine:
                 "confidence_level": self._assess_impact_confidence(microstructure_data),
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error estimating execution impact: {e}")
             return {"error": str(e), "total_impact_bps": 999.0}
 
@@ -864,7 +864,7 @@ class MarketMicrostructureEngine:
 
             return features
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error analyzing microstructure volatility: {e}")
             return {
                 "realized_volatility": 0.0,

@@ -194,6 +194,7 @@ def main():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"\nTEST FAILED: {e}")
         import traceback

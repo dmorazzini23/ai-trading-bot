@@ -15,9 +15,8 @@ def test_model_registry():
     """Test model registry functionality."""
     try:
         import numpy as np
-        from sklearn.linear_model import LinearRegression
-
         from ai_trading.model_registry import ModelRegistry
+        from sklearn.linear_model import LinearRegression
 
         with tempfile.TemporaryDirectory() as tmpdir:
             registry = ModelRegistry(base_path=tmpdir)
@@ -35,6 +34,7 @@ def test_model_registry():
             assert latest == model_id
             assert isinstance(loaded, LinearRegression)
             return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         traceback.print_exc()
         return False
@@ -57,6 +57,7 @@ def test_disable_daily_retrain():
             assert result == expected, f"For '{env_val}', expected {expected}, got {result}"
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -91,6 +92,7 @@ def test_executor_sizing():
         assert _pred_workers == 3
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -132,6 +134,7 @@ def test_minute_cache_helpers():
         assert 25 <= age <= 35  # Should be around 30 seconds
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -171,6 +174,7 @@ def test_import_hardening():
                 assert "except Exception:" in content, f"Missing fallback imports in {filename}"
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -193,6 +197,7 @@ def test_http_timeouts():
             assert "timeout=10" in content, "Should have API timeout=10"
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -209,6 +214,7 @@ def test_data_fetcher_helpers():
             assert "pd.Timestamp.now(tz=\"UTC\")" in content
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -237,6 +243,7 @@ def main():
                 passed += 1
             else:
                 failed += 1
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             failed += 1
 

@@ -172,7 +172,7 @@ def main():
 
         return True
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Validation failed: {e}")
         import traceback
         traceback.print_exc()

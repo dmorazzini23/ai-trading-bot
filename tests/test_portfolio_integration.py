@@ -12,6 +12,7 @@ from tests.mocks.validate_critical_fix_mocks import MockContext
 try:
     # AI-AGENT-REF: prefer real MockSignal if available
     from ai_trading.signals import MockSignal  # type: ignore[assignment]
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # noqa: BLE001 - test fallback
     class MockSignal:  # AI-AGENT-REF: minimal stub
         def __init__(self, *_, **__): ...
@@ -168,6 +169,7 @@ class TestPortfolioRebalancingIntegration:
             portfolio_first_rebalance(self.ctx)
             # If it doesn't crash, that's a success in this test environment
             assert True
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             # Some failures are expected due to limited test environment
             # Just ensure it's handling errors gracefully

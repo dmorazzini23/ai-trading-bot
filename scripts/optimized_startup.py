@@ -99,7 +99,7 @@ def check_system_health():
     except ImportError:
         logging.info("System diagnostic not available, skipping health check")
         return True
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"Health check failed: {e}")
         return False
 
@@ -122,7 +122,7 @@ def cleanup_duplicate_processes():
 
     except ImportError:
         logging.info("Process manager not available, skipping duplicate cleanup")
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"Process cleanup failed: {e}")
 
 
@@ -148,7 +148,7 @@ def start_monitoring():
     except ImportError:
         logging.info("Monitoring systems not available")
         return False
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"Failed to start monitoring: {e}")
         return False
 
@@ -163,7 +163,7 @@ def cleanup_on_exit():
         logging.info(f"Emergency cleanup: {result.get('rss_mb', 0):.1f}MB memory")
     except ImportError:
         logging.debug("Memory optimizer not available, skipping emergency cleanup")
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.warning(f"Emergency memory cleanup failed: {e}")
 
 
@@ -208,7 +208,7 @@ def main():
     except KeyboardInterrupt:
         logging.info("\nShutdown requested by user")
         return 0
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"Trading application failed: {e}")
         logging.exception("Trading application error")
         return 1

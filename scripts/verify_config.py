@@ -56,6 +56,7 @@ def check_env_file():
 
     except ImportError:
         return False, "❌ python-dotenv not installed. Run: pip install python-dotenv"
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         return False, f"❌ Error reading .env file: {e}"
 
@@ -106,6 +107,7 @@ def check_api_keys():
 
     except ImportError:
         return False, "❌ python-dotenv not installed. Run: pip install python-dotenv"
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         return False, f"❌ Error checking API keys: {e}"
 
@@ -125,6 +127,7 @@ def check_config_import():
         else:
             return False, "⚠️  Configuration imports but API keys not properly set"
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         return False, f"❌ Error importing config: {e}"
 

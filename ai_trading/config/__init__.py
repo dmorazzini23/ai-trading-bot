@@ -60,6 +60,7 @@ def reload_env() -> None:
         from dotenv import load_dotenv
 
         load_dotenv(override=True)
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         pass
 
@@ -111,6 +112,7 @@ def validate_environment() -> None:
         try:
             try:
                 get_settings.cache_clear()
+            # noqa: BLE001 TODO: narrow exception
             except Exception:
                 pass
             _perform_env_validation()

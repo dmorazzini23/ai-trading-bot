@@ -106,6 +106,7 @@ def main():
         if py.name == "settings.py" and py.parts[-2] == "ai_trading": continue
         try:
             if patch_file(py): changed += 1
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

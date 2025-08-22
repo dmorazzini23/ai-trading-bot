@@ -202,7 +202,7 @@ if __name__ == "__main__":
         logging.info("• Learns from trading performance in real-time")
         logging.info("\nReady for deployment! 🎉")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Demo failed: {e}")
         import traceback
         traceback.print_exc()

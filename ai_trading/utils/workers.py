@@ -12,6 +12,7 @@ def _cfg_int(name: str, default: int) -> int:
     try:
         v = os.getenv(name)
         return int(v) if v is not None else default
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return default
 

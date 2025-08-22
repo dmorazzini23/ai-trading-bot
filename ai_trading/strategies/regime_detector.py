@@ -210,6 +210,7 @@ class RegimeDetector:
 
             return regime, metrics
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error detecting market regime: {e}")
             return self._fallback_regime_detection()
@@ -271,6 +272,7 @@ class RegimeDetector:
 
             return adjusted_thresholds
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating dynamic thresholds: {e}")
             # Return conservative defaults
@@ -329,6 +331,7 @@ class RegimeDetector:
 
             return trend_strength, direction
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating trend metrics: {e}")
             return 0.0, TrendDirection.SIDEWAYS
@@ -376,6 +379,7 @@ class RegimeDetector:
 
             return percentile, regime
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating volatility regime: {e}")
             return 0.5, VolatilityRegime.NORMAL
@@ -402,6 +406,7 @@ class RegimeDetector:
 
             return momentum
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating momentum: {e}")
             return 0.0
@@ -427,6 +432,7 @@ class RegimeDetector:
             avg_correlation = statistics.mean(correlations)
             return min(1.0, max(0.0, avg_correlation))
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error calculating correlation environment: {e}")
             return 0.3
@@ -443,6 +449,7 @@ class RegimeDetector:
 
             return None
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             return None
 
@@ -467,6 +474,7 @@ class RegimeDetector:
 
             return max(0.0, min(1.0, confidence))
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             return 0.5
 
@@ -512,6 +520,7 @@ class RegimeDetector:
             # Default to normal
             return MarketRegime.NORMAL
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logger.error(f"Error classifying market regime: {e}")
             return MarketRegime.NORMAL

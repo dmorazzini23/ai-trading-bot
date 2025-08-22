@@ -68,7 +68,9 @@ def test_validate_env_import():
             'TRADING_MODE': 'paper',
             'FORCE_TRADES': 'false'
         }):
-            from ai_trading.validation import validate_env  # AI-AGENT-REF: normalized import
+            from ai_trading.validation import (
+                validate_env,  # AI-AGENT-REF: normalized import
+            )
 
             # Test that Settings class can be instantiated
             settings = validate_env.Settings()
@@ -80,6 +82,7 @@ def test_validate_env_import():
 
     except ImportError as e:
         pytest.skip(f"Cannot import validate_env module: {e}")
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         # Don't fail if there are other validation issues, just check syntax works
         if "field_validator" in str(e) or "validator" in str(e):
@@ -101,13 +104,16 @@ def test_field_validator_functionality():
             'BOT_MODE': 'invalid_mode',       # Should trigger validation error
             'TRADING_MODE': 'invalid',        # Should trigger validation error
         }):
-            from ai_trading.validation import validate_env  # AI-AGENT-REF: normalized import
+            from ai_trading.validation import (
+                validate_env,  # AI-AGENT-REF: normalized import
+            )
 
             # These should trigger validation errors due to invalid values
             try:
                 validate_env.Settings()
                 # If we get here, check that the problematic values were caught
                 # by validators or set to defaults
+            # noqa: BLE001 TODO: narrow exception
             except Exception as e:
                 # Validation errors are expected with invalid inputs
                 assert "ALPACA_SECRET_KEY appears too short" in str(e) or \

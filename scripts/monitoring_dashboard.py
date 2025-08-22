@@ -186,7 +186,7 @@ class MonitoringDashboard:
         try:
             self.logger.info(f"Starting monitoring dashboard on port {self.port}")
             self.app.run(host='0.0.0.0', port=self.port, debug=debug, threaded=True)
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to start dashboard: {e}")
 
     def start_monitoring(self, interval_seconds: int = 60):
@@ -222,7 +222,7 @@ class MonitoringDashboard:
                 # Check alert conditions
                 self.check_alert_conditions()
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in monitoring loop: {e}")
 
             time.sleep(interval_seconds)
@@ -281,7 +281,7 @@ class MonitoringDashboard:
 
             self.trading_metrics.append(metrics)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error collecting trading metrics: {e}")
 
     def collect_performance_kpis(self):
@@ -312,7 +312,7 @@ class MonitoringDashboard:
 
             self.performance_kpis.append(kpis)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error collecting performance KPIs: {e}")
 
     def collect_risk_metrics(self):
@@ -351,7 +351,7 @@ class MonitoringDashboard:
 
             self.risk_metrics.append(risk_metrics)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error collecting risk metrics: {e}")
 
     def check_alert_conditions(self):
@@ -386,7 +386,7 @@ class MonitoringDashboard:
                     {'metric': 'drawdown', 'value': latest_risk['current_drawdown']}
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error checking alert conditions: {e}")
 
     def add_alert(self, level: str, message: str, details: dict[str, Any] = None):
@@ -412,7 +412,7 @@ class MonitoringDashboard:
         for callback in self.alert_callbacks:
             try:
                 callback(alert)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in alert callback: {e}")
 
     def add_alert_callback(self, callback: Callable):

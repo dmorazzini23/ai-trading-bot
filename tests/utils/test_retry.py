@@ -1,7 +1,6 @@
 import time
 
 import pytest
-
 from ai_trading.utils.retry import retry_call
 
 

@@ -2,7 +2,6 @@
 import logging
 
 import pandas as pd
-
 from ai_trading.indicators import atr, ema
 
 logger = logging.getLogger(__name__)
@@ -17,6 +16,7 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         df["ema12"] = ema(close, 12)
         df["ema26"] = ema(close, 26)
         df["macd"] = df["ema12"] - df["ema26"]
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.error("MACD calculation failed: %s", e)
     return df
@@ -75,6 +75,7 @@ def build_features_pipeline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         logger.debug(
             f"Feature pipeline complete for {symbol}. Last rows:\n{df.tail(3)}"
         )
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.exception(f"Feature pipeline failed for {symbol}: {e}")
     return df

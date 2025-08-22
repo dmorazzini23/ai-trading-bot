@@ -705,7 +705,7 @@ def retrain_meta_learner(
     )
     try:
         valid_rows = int(valid.sum())
-    except Exception:  # pragma: no cover - tolerate mock objects
+    except (ValueError, TypeError):  # pragma: no cover - tolerate mock objects
         valid_rows = total_rows
     cols_obj = getattr(df, "columns", [])
     try:

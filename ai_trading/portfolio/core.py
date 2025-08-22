@@ -61,6 +61,7 @@ def get_latest_price(ctx, symbol: str) -> float | None:
                     getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT_SIP"
                 )
             )
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         df_min = pd.DataFrame()
     return _last_close_from(df_min)
@@ -168,6 +169,7 @@ def log_portfolio_summary(ctx) -> None:
             exc,
             extra={"component": "portfolio_summary", "error_type": "data"},
         )
+    # noqa: BLE001 TODO: narrow exception
     except Exception as exc:  # Final safety net for unexpected errors
         logger.warning(
             "Portfolio summary failed - unexpected error: %s",

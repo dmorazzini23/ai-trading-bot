@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:  # AI-AGENT-REF: tolerate pydantic internals missing
     from pydantic.fields import FieldInfo
-except Exception:
+except (ValueError, TypeError):
     FieldInfo = object
 
 
@@ -41,7 +41,7 @@ def _to_int(val: Any, default: int | None = None) -> int:
         return int(val)
     try:
         return int(val)
-    except Exception:
+    except (ValueError, TypeError):
         if default is None:
             raise
         return int(default)
@@ -55,7 +55,7 @@ def _to_float(val: Any, default: float | None = None) -> float:
         return float(default)
     try:
         return float(val)
-    except Exception:
+    except (ValueError, TypeError):
         if default is None:
             raise
         return float(default)
@@ -282,7 +282,7 @@ def get_rebalance_interval_min() -> int:
     val = getattr(s, "rebalance_interval_min", 60)
     try:
         return int(val)
-    except Exception:  # AI-AGENT-REF: tolerate FieldInfo during early imports
+    except (ValueError, TypeError):  # AI-AGENT-REF: tolerate FieldInfo during early imports
         return 60
 
 

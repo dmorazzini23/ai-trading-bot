@@ -64,7 +64,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
 
         try:
             get_bars("AAPL", start_dt, end_dt)
-        except Exception as e:  # pragma: no cover - ensure no TZ errors
+        except (ValueError, TypeError) as e:  # pragma: no cover - ensure no TZ errors
             if "timezone" in str(e).lower():
                 self.fail(f"get_bars failed due to timezone issues: {e}")
 
@@ -112,9 +112,8 @@ class TestSentimentCaching(unittest.TestCase):
         try:
             import time
 
-            from requests.exceptions import HTTPError
-
             from ai_trading.core.bot_engine import _SENTIMENT_CACHE, fetch_sentiment
+            from requests.exceptions import HTTPError
 
             # Clear cache
             _SENTIMENT_CACHE.clear()

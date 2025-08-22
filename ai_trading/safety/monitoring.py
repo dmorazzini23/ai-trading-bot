@@ -131,7 +131,7 @@ class SafetyMonitor:
         for action in self.emergency_actions:
             try:
                 action(reason)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Error executing emergency action: {e}")
 
         # Send critical alert
@@ -314,7 +314,7 @@ class SafetyMonitor:
                 # Sleep between checks
                 time.sleep(1)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Error in monitoring loop: {e}")
                 time.sleep(5)  # Back off on error
 
@@ -341,7 +341,7 @@ class SafetyMonitor:
         for callback in self.alert_callbacks:
             try:
                 callback(alert)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Error in alert callback: {e}")
 
 
@@ -408,7 +408,7 @@ class KillSwitch:
 
                 time.sleep(1)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Error in kill switch monitor: {e}")
                 time.sleep(5)
 
@@ -421,7 +421,7 @@ class KillSwitch:
             # Remove the file to prevent repeated triggers
             try:
                 os.remove(self.kill_file_path)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Could not remove kill file: {e}")
             return True
         return False
@@ -557,7 +557,7 @@ def file_alert_callback(alert: dict[str, Any]):
     try:
         with open("trading_alerts.log", "a") as f:
             f.write(f"{json.dumps(alert)}\n")
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Failed to write alert to file: {e}")
 
 

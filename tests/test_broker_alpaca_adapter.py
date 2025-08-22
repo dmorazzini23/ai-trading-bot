@@ -1,5 +1,4 @@
 import pytest
-
 from ai_trading.broker.alpaca import AlpacaBroker
 
 pytestmark = pytest.mark.alpaca

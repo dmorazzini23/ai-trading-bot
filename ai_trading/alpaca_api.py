@@ -17,7 +17,7 @@ from ai_trading.utils.optdeps import module_ok  # AI-AGENT-REF: optional import 
 
 try:  # AI-AGENT-REF: optional Alpaca dependency
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-except Exception:  # pragma: no cover - handled gracefully  # noqa: BLE001
+except (ValueError, TypeError):  # pragma: no cover - handled gracefully  # noqa: BLE001
     TimeFrame = None  # type: ignore
     TimeFrameUnit = types.SimpleNamespace(  # type: ignore
         Minute="Minute", Hour="Hour", Day="Day", Week="Week", Month="Month"
@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover - handled gracefully  # noqa: BLE001
 try:  # AI-AGENT-REF: optional Alpaca dependency
     from alpaca_trade_api import REST as TradeApiREST
     from alpaca_trade_api.rest import APIError as TradeApiError
-except Exception:  # pragma: no cover - handled gracefully  # noqa: BLE001
+except (ValueError, TypeError):  # pragma: no cover - handled gracefully  # noqa: BLE001
     TradeApiREST = None  # type: ignore
     TradeApiError = Exception  # type: ignore
 
@@ -85,7 +85,7 @@ def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
         from alpaca.data.timeframe import TimeFrame
-    except Exception:
+    except (ValueError, TypeError):
         TimeFrame = None
     if isinstance(tf_raw, str):
         s = tf_raw.strip()
@@ -172,7 +172,7 @@ def get_bars_df(
         if TimeFrame is not None:
             try:
                 base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
-            except Exception:  # noqa: BLE001
+            except (ValueError, TypeError):  # noqa: BLE001
                 base_tf = TimeFrame(1, TimeFrameUnit.Day)
         if base_tf is not None:
             start, end = _bars_time_window(base_tf)
@@ -205,7 +205,7 @@ def get_bars_df(
         body = ""
         try:
             body = e.response.text
-        except Exception:  # noqa: BLE001
+        except (ValueError, TypeError):  # noqa: BLE001
             pass
         _log.error(
             "ALPACA_FAIL",
@@ -299,7 +299,7 @@ def submit_order(api, order_data=None, log=None, **kwargs):
     try:
         # Attempt live submit
         resp = submit_fn(**payload)
-    except Exception as e:  # noqa: BLE001  # AI-AGENT-REF: normalize errors
+    except (ValueError, TypeError) as e:  # noqa: BLE001  # AI-AGENT-REF: normalize errors
         status = int(
             getattr(e, "status", getattr(e, "status_code", getattr(e, "code", 0)))
             or 0
@@ -329,7 +329,7 @@ def submit_order(api, order_data=None, log=None, **kwargs):
             setattr(resp, "status", "submitted")
         if getattr(resp, "success", None) is None:
             setattr(resp, "success", True)
-    except Exception:  # noqa: BLE001
+    except (ValueError, TypeError):  # noqa: BLE001
         pass
     return resp
 

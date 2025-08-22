@@ -3,7 +3,6 @@ import inspect
 import numpy as np
 import pandas as pd
 import pytest
-
 from ai_trading import indicators, signals
 
 df = pd.DataFrame({

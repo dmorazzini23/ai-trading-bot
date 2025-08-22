@@ -35,7 +35,7 @@ def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
             v = float(v)
             if 0.0 <= v <= 1.0:
                 return v
-    except Exception:
+    except (ValueError, TypeError):
         pass
     s = get_settings()
     for cand in (
@@ -47,7 +47,7 @@ def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
                 x = float(cand)
                 if 0.0 <= x <= 1.0:
                     return x
-        except Exception:
+        except (ValueError, TypeError):
             continue
     return 0.60
 
@@ -150,14 +150,14 @@ class PerformanceBasedAllocator:
             for s_ in sigs or []:
                 try:
                     c = float(getattr(s_, "confidence", 0.0))
-                except Exception:
+                except (ValueError, TypeError):
                     c = 0.0
                 if c >= th:
                     if use_boost:
                         m = _compute_conf_multiplier(c, th, max_boost, gamma)
                         try:
                             base = float(getattr(s_, "weight", 1.0))
-                        except Exception:
+                        except (ValueError, TypeError):
                             base = 1.0
                         s_.weight = base * m
                         mults.append(m)
@@ -227,7 +227,7 @@ class PerformanceBasedAllocator:
         except (KeyError, ValueError, TypeError) as e:
             logger.warning("Failed to record trade result for strategy %s: %s", strategy_name, e,
                           extra={"component": "performance_allocator", "strategy": strategy_name, "error_type": "trade_record"})
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error("Unexpected error recording trade for strategy %s: %s", strategy_name, e,
                         extra={"component": "performance_allocator", "strategy": strategy_name, "error_type": "unexpected"})
 
@@ -278,7 +278,7 @@ class PerformanceBasedAllocator:
 
             return allocations
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error("Strategy allocation calculation failed: %s", e,
                         extra={"component": "performance_allocator", "error_type": "allocation"})
 
@@ -351,7 +351,7 @@ class PerformanceBasedAllocator:
         except (ValueError, TypeError) as e:
             logger.warning("Performance calculation failed for strategy %s: %s", strategy_name, e)
             return 0.3  # Below average for calculation errors
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error("Unexpected error calculating performance for strategy %s: %s", strategy_name, e)
             return 0.3
 
@@ -464,7 +464,7 @@ class PerformanceBasedAllocator:
 
             return report
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error("Performance report generation failed for strategy %s: %s", strategy_name, e)
             return {
                 "strategy": strategy_name,
@@ -500,6 +500,6 @@ class PerformanceBasedAllocator:
 
             return rank_changes >= significant_change_threshold
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.warning("Rebalance decision failed: %s", e)
             return False  # Conservative - don't rebalance on errors

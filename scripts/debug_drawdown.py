@@ -46,6 +46,7 @@ def test_drawdown_circuit_breaker():
         logging.info("✅ All tests completed successfully")
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"❌ Error in drawdown test: {e}")
         logging.info(f"Traceback: {traceback.format_exc()}")
@@ -70,6 +71,7 @@ def test_status_variable_issue():
                 result = breaker.update_equity(equity)
                 status = breaker.get_status()
                 logging.info(str(f"Update {i+1}: equity=${equity:.2f}, result={result}, state={status['state']}"))
+            # noqa: BLE001 TODO: narrow exception
             except Exception as e:
                 logging.info(f"❌ Error on update {i+1}: {e}")
                 logging.info(f"Traceback: {traceback.format_exc()}")
@@ -78,6 +80,7 @@ def test_status_variable_issue():
         logging.info("✅ Status variable test completed")
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"❌ Error in status variable test: {e}")
         logging.info(f"Traceback: {traceback.format_exc()}")

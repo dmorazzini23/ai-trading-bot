@@ -14,18 +14,21 @@ def test_legacy_imports():
     # Test signals import
     try:
         success = True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         success = False
 
     # Test indicators import
     try:
         pass
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         success = False
 
     # Test rebalancer import (expected to fail due to config requirements)
     try:
         pass
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         if "ALPACA_API_KEY" in str(e) or "pydantic_settings" in str(e):
             pass
@@ -127,6 +130,7 @@ def main():
         try:
             if test_func():
                 passed += 1
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 

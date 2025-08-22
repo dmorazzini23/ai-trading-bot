@@ -398,7 +398,7 @@ def main():
         logging.info("3. Monitor: Check logs for execution events and discrepancies")
         logging.info("4. Debug: Use correlation IDs to trace specific order issues")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"\nDemonstration failed: {e}")
         import traceback
         traceback.print_exc()

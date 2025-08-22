@@ -6,6 +6,7 @@ import uuid
 try:  # AI-AGENT-REF: canonical env validation
     from ai_trading.validation.validate_env import Settings
     settings = Settings()
+# noqa: BLE001 TODO: narrow exception
 except Exception:
     settings = None
 
@@ -212,17 +213,20 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                         )
                     logger.info("Trade log successfully written after permission repair")
                     return  # Success, don't disable logging
+                # noqa: BLE001 TODO: narrow exception
                 except Exception as retry_exc:
                     logger.error("Trade log retry failed after permission repair: %s", retry_exc)
             else:
                 logger.warning("Failed to repair file permissions automatically")
 
+        # noqa: BLE001 TODO: narrow exception
         except Exception as repair_exc:
             logger.warning("Permission repair attempt failed: %s", repair_exc)
 
         if not _disable_trade_log:
             _disable_trade_log = True
             logger.warning("Trade log disabled due to permission error")
+    # noqa: BLE001 TODO: narrow exception
     except Exception as exc:  # pragma: no cover - other I/O errors
         logger.error("Failed to record trade: %s", exc)
 
@@ -236,5 +240,6 @@ def log_json_audit(details: dict) -> None:
     try:
         with open(fname, "w", encoding="utf-8") as f:
             json.dump(details, f, indent=2, default=str)
+    # noqa: BLE001 TODO: narrow exception
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("Failed JSON audit log %s: %s", fname, exc)

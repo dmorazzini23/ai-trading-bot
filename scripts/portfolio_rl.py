@@ -13,9 +13,11 @@ try:
         # Test if we can create a basic Module - this will fail if there are version issues
         _test_module = nn.Module()
         _PYTORCH_WORKS = True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         _PYTORCH_WORKS = False
 
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - optional dependency
     # AI-AGENT-REF: Create comprehensive torch fallback that supports type annotations
     torch = types.ModuleType("torch")
@@ -49,6 +51,7 @@ class Actor(nn.Module if _TORCH_AVAILABLE and _PYTORCH_WORKS else object):
                 nn.Linear(64, action_dim),
                 nn.Softmax(dim=-1),
             )
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             # AI-AGENT-REF: Handle any PyTorch version compatibility issues during initialization
             self.state_dim = state_dim
@@ -68,6 +71,7 @@ class Actor(nn.Module if _TORCH_AVAILABLE and _PYTORCH_WORKS else object):
 
         try:
             return self.net(x)
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             # AI-AGENT-REF: Fallback if forward pass fails due to version issues
             if np is not None:
@@ -90,6 +94,7 @@ class PortfolioReinforcementLearner:
         try:
             self.actor = Actor(state_dim, action_dim)
             self.optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             # AI-AGENT-REF: Handle initialization errors due to version compatibility
             self.actor = Actor(state_dim, action_dim)
@@ -136,6 +141,7 @@ class PortfolioReinforcementLearner:
             if total == 0:
                 total = 1.0
             return weights / total
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             # AI-AGENT-REF: Fallback if PyTorch operations fail
             weights = self.actor.forward(state)

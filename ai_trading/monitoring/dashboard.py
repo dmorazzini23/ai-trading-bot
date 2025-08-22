@@ -69,7 +69,7 @@ class RealtimeMetrics:
             self._cache_timestamps[cache_key] = datetime.now(UTC)
             return result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating current P&L: {e}")
             return {"realized_pnl": 0.0, "trade_count": 0, "win_rate": 0.0}
 
@@ -105,7 +105,7 @@ class RealtimeMetrics:
             self._cache_timestamps[cache_key] = datetime.now(UTC)
             return result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating portfolio summary: {e}")
             return {"total_value": 0.0, "day_change": 0.0, "day_change_pct": 0.0}
 
@@ -140,7 +140,7 @@ class RealtimeMetrics:
             self._cache_timestamps[cache_key] = datetime.now(UTC)
             return result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating risk summary: {e}")
             return {"var_95": 0.0, "max_drawdown": 0.0, "current_drawdown": 0.0}
 
@@ -175,7 +175,7 @@ class RealtimeMetrics:
             self._cache_timestamps[cache_key] = datetime.now(UTC)
             return result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating execution summary: {e}")
             return {"orders_submitted": 0, "orders_filled": 0, "fill_rate": 0.0}
 
@@ -248,7 +248,7 @@ class DashboardDataProvider:
 
             return dashboard_data
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error generating dashboard data: {e}")
             return {
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -319,7 +319,7 @@ class DashboardDataProvider:
 
             return summary
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error generating trading activity summary: {e}")
             return {"total_trades": 0, "total_volume": 0.0}
 
@@ -354,7 +354,7 @@ class DashboardDataProvider:
                 ],  # Top 5 critical alerts
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error generating alert summary: {e}")
             return {"active_count": 0, "severity_breakdown": {}, "recent_count": 0}
 
@@ -392,7 +392,7 @@ class DashboardDataProvider:
                 "last_updated": latest["timestamp"].isoformat(),
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error generating system health: {e}")
             return {"status": "error", "cpu_usage": 0, "memory_usage": 0}
 
@@ -453,6 +453,6 @@ class DashboardDataProvider:
                 "trading_volume": volume_data,
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error generating chart data: {e}")
             return {"portfolio_value": [], "risk_metrics": [], "trading_volume": []}

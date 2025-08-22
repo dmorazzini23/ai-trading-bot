@@ -318,7 +318,7 @@ class SLOMonitor:
         for callback in callbacks:
             try:
                 callback(metric_name, current_value)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(
                     f"Error in circuit breaker callback for {metric_name}: {e}"
                 )
@@ -456,7 +456,7 @@ class SLOMonitor:
 
             self.logger.info(f"Loaded SLO configuration from {config_path}")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error loading SLO configuration: {e}")
 
 

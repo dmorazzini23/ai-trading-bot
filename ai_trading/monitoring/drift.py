@@ -120,7 +120,7 @@ class DriftMonitor:
                     f"Loaded baseline stats for {len(self._baseline_stats)} features"
                 )
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Failed to load baseline stats: {e}")
 
     def _save_baseline_stats(self) -> None:
@@ -135,7 +135,7 @@ class DriftMonitor:
                 f"Saved baseline stats for {len(self._baseline_stats)} features"
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to save baseline stats: {e}")
 
     def update_baseline(self, feature_data: pd.DataFrame) -> None:
@@ -205,7 +205,7 @@ class DriftMonitor:
 
             return float(psi)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.warning(f"PSI calculation failed: {e}")
             return 0.0
 
@@ -421,7 +421,7 @@ class DriftMonitor:
             with open(history_file, "w") as f:
                 json.dump(attribution_dicts, f, indent=2)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to save attribution history: {e}")
 
     def get_drift_summary(self, drift_metrics: list[DriftMetrics]) -> dict[str, Any]:
@@ -544,7 +544,7 @@ class ShadowMode:
             with open(log_file, "a") as f:
                 f.write(json.dumps(evaluation) + "\n")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Failed to log shadow evaluation: {e}")
 
 

@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-
 from ai_trading.rl_trading.features import FeatureConfig, compute_features
 
 

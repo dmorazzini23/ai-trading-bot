@@ -53,6 +53,7 @@ def transform_file(p: Path) -> bool:
         if new.code != src:
             p.write_text(new.code, encoding="utf-8")
             return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         pass
     return False

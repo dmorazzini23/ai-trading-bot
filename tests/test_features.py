@@ -3,7 +3,6 @@ import types
 
 import pandas as pd
 import pytest
-
 from ai_trading.features import build_features_pipeline
 
 dotenv_stub = types.ModuleType("dotenv")

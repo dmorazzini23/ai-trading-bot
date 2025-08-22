@@ -85,7 +85,7 @@ class ResourceMonitor:
             # Python-specific metrics
             metrics['python'] = self._get_python_metrics()
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Error collecting system metrics: {e}")
             metrics['error'] = str(e)
 
@@ -128,7 +128,7 @@ class ResourceMonitor:
                     'swap_usage_percent': (swap_used_mb / max(swap_total_mb, 1)) * 100
                 }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             memory_metrics['error'] = str(e)
 
         return memory_metrics
@@ -151,7 +151,7 @@ class ResourceMonitor:
             # Calculate CPU usage percentage (simplified)
             cpu_metrics['usage_percent'] = min(cpu_metrics['load_1min'] / cpu_metrics['cpu_count'] * 100, 100)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             cpu_metrics['error'] = str(e)
 
         return cpu_metrics
@@ -193,7 +193,7 @@ class ResourceMonitor:
 
             disk_metrics['large_files_count'] = len(large_files)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             disk_metrics['error'] = str(e)
 
         return disk_metrics
@@ -230,11 +230,11 @@ class ResourceMonitor:
             # Trading-bot specific process count (improved logic)
             try:
                 process_metrics['python_processes'] = self._count_trading_bot_processes()
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.warning(f"Error counting trading bot processes: {e}")
                 process_metrics['python_processes'] = 1
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             process_metrics['error'] = str(e)
 
         return process_metrics
@@ -329,7 +329,7 @@ class ResourceMonitor:
         except (subprocess.SubprocessError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             self.logger.warning(f"Error getting process list: {e}")
             return self._count_python_processes_fallback()
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error(f"Unexpected error counting trading bot processes: {e}")
             return self._count_python_processes_fallback()
 
@@ -361,7 +361,7 @@ class ResourceMonitor:
 
         except (subprocess.SubprocessError, subprocess.CalledProcessError):
             network_metrics['established_connections'] = 0
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             network_metrics['error'] = str(e)
 
         return network_metrics
@@ -384,7 +384,7 @@ class ResourceMonitor:
                                   ['trading', 'alpaca', 'ai_trading'])]
             python_metrics['trading_modules_loaded'] = len(trading_modules)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             python_metrics['error'] = str(e)
 
         return python_metrics
@@ -487,7 +487,7 @@ class ResourceMonitor:
                         for callback in self.alert_callbacks:
                             try:
                                 callback(alert)
-                            except Exception as e:
+                            except (ValueError, TypeError) as e:
                                 self.logger.error(f"Error in alert callback: {e}")
 
                 # Log summary periodically
@@ -497,7 +497,7 @@ class ResourceMonitor:
                 # Wait for next cycle
                 self.stop_monitoring.wait(self.monitoring_interval)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error(f"Error in monitoring loop: {e}")
                 self.stop_monitoring.wait(60)  # Wait longer on error
 

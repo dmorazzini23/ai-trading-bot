@@ -124,6 +124,7 @@ if __name__ == "__main__":
         test_position_score_standalone()
         test_meta_learning_functions()
         test_signal_filtering()
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         import traceback
         traceback.print_exc()

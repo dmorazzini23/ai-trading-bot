@@ -37,6 +37,7 @@ def test_ticker_loading():
                             t = row[0].strip().upper()
                             if t and t not in tickers:
                                 tickers.append(t)
+            # noqa: BLE001 TODO: narrow exception
             except Exception as e:
                 logging.info(f"Error reading {path}: {e}")
             return tickers
@@ -65,6 +66,7 @@ def test_ticker_loading():
             logging.info(f"❌ Expected 20+ tickers, found {len(tickers)}")
             return False
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"❌ Error testing ticker loading: {e}")
         return False
@@ -97,6 +99,7 @@ def verify_readme_updates():
         logging.info(f"📊 README checks passed: {passed}/{len(checks)}")
         return passed == len(checks)
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"❌ Error checking README: {e}")
         return False
@@ -114,6 +117,7 @@ def main():
     for test in tests:
         try:
             results.append(test())
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logging.info(f"❌ Test {test.__name__} failed: {e}")
             results.append(False)

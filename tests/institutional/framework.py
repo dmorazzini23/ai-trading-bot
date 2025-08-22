@@ -96,7 +96,7 @@ class TradingScenarioRunner:
                 else:
                     logger.error(f"❌ {scenario_name} failed: {scenario_result.get('error', 'Unknown error')}")
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"❌ {scenario_name} failed with exception: {e}")
                 results["scenarios"].append({
                     "name": scenario_name,
@@ -142,7 +142,7 @@ class TradingScenarioRunner:
                 if scenario_result["status"] == "passed":
                     passed += 1
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 results["scenarios"].append({
                     "name": scenario_name,
                     "status": "failed",
@@ -230,7 +230,7 @@ class TradingScenarioRunner:
                 "details": f"Market order result: {result}",
                 "order_id": result.get("id") if result else None
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"status": "failed", "error": str(e)}
 
     async def _test_limit_order(self) -> dict[str, Any]:
@@ -248,7 +248,7 @@ class TradingScenarioRunner:
                 "details": f"Limit order result: {result}",
                 "order_id": result.get("id") if result else None
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"status": "failed", "error": str(e)}
 
     async def _test_order_cancellation(self) -> dict[str, Any]:
@@ -270,7 +270,7 @@ class TradingScenarioRunner:
                 "status": "passed" if cancel_result else "failed",
                 "details": f"Cancellation result: {cancel_result}"
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"status": "failed", "error": str(e)}
 
     async def _test_multiple_orders(self) -> dict[str, Any]:
@@ -292,7 +292,7 @@ class TradingScenarioRunner:
                 "status": "passed" if len(successful_orders) >= 2 else "failed",
                 "details": f"Successfully submitted {len(successful_orders)}/{len(symbols)} orders"
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"status": "failed", "error": str(e)}
 
     async def _test_error_handling(self) -> dict[str, Any]:
@@ -316,7 +316,7 @@ class TradingScenarioRunner:
                 "status": "passed" if errors_handled else "failed",
                 "details": "Error handling validation"
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"status": "failed", "error": str(e)}
 
     async def _test_circuit_breaker(self) -> dict[str, Any]:
@@ -336,7 +336,7 @@ class TradingScenarioRunner:
                 "status": "passed" if has_circuit_breaker else "failed",
                 "details": "Circuit breaker status check"
             }
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"status": "failed", "error": str(e)}
 
     # Risk scenario tests
@@ -420,7 +420,7 @@ class ComplianceTestSuite:
                 if test_result["status"] == "passed":
                     passed += 1
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 results["tests"].append({
                     "name": test_name,
                     "status": "failed",

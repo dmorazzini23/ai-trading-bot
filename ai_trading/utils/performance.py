@@ -212,7 +212,7 @@ class ParallelProcessor:
                 try:
                     result = future.result()
                     results[chunk_index] = result
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     self.logger.error(f"Parallel task failed: {e}")
                     results[chunk_index] = None
 
@@ -261,7 +261,7 @@ class ParallelProcessor:
                         for col in result.columns:
                             chunk_results[f"{indicator_name}_{col}"] = result[col]
 
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     logger.warning(
                         f"Failed to calculate {config.get('name', 'unknown')}: {e}"
                     )
@@ -410,7 +410,7 @@ def benchmark_operation(
 
     try:
         import psutil  # type: ignore
-    except Exception:
+    except (ValueError, TypeError):
         psutil = None  # type: ignore  # AI-AGENT-REF: degrade if psutil missing
 
     # Force garbage collection before benchmark

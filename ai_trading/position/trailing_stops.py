@@ -162,7 +162,7 @@ class TrailingStopManager:
 
             return stop_level
 
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self.logger.warning("update_trailing_stop failed for %s: %s", symbol, exc)
             return None
 
@@ -273,7 +273,7 @@ class TrailingStopManager:
 
             return new_stop
 
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self.logger.warning(
                 "_calculate_adaptive_stop failed for %s: %s", symbol, exc
             )
@@ -476,7 +476,7 @@ class TrailingStopManager:
                     stop_level.trigger_reason,
                 )
 
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self.logger.warning("_check_stop_trigger failed: %s", exc)
 
     def _get_market_data(self, symbol: str) -> pd.DataFrame | None:

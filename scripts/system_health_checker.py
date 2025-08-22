@@ -137,7 +137,7 @@ class SystemHealthChecker:
 
                 time.sleep(self._check_interval)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 self.logger.error("Error in health monitoring loop: %s", e, exc_info=True)
                 time.sleep(30)  # Back off on errors
 
@@ -233,7 +233,7 @@ class SystemHealthChecker:
                 }
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error("Failed to check sentiment health: %s", e)
             return ComponentHealth(
                 name="sentiment",
@@ -292,7 +292,7 @@ class SystemHealthChecker:
                     details={'issue': 'Trade log path not configured'}
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error("Failed to check meta-learning health: %s", e)
             return ComponentHealth(
                 name="meta_learning",
@@ -374,7 +374,7 @@ class SystemHealthChecker:
                     }
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error("Failed to check order execution health: %s", e)
             return ComponentHealth(
                 name="order_execution",
@@ -423,7 +423,7 @@ class SystemHealthChecker:
                 }
             )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error("Failed to check liquidity management health: %s", e)
             return ComponentHealth(
                 name="liquidity",
@@ -515,7 +515,7 @@ class SystemHealthChecker:
 
             self.logger.info("Health report exported to %s", filepath)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             self.logger.error("Failed to export health report: %s", e)
 
 

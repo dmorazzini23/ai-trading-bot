@@ -9,7 +9,6 @@ import os
 from unittest.mock import patch
 
 import pytest
-
 from ai_trading.config.management import (
     _resolve_alpaca_env,
     _warn_duplicate_env_keys,

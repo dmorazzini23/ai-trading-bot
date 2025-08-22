@@ -59,7 +59,7 @@ def cmd_status():
         else:
             logging.info("🔴 System Status: ISSUES DETECTED")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error getting status: {e}")
 
 
@@ -108,7 +108,7 @@ def cmd_executions(limit=10):
         if not successes and not failures and not active:
             logging.info("No recent executions found.")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error getting executions: {e}")
 
 
@@ -151,7 +151,7 @@ def cmd_positions():
         else:
             logging.info("\n✅ No discrepancies found - positions are in sync")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error checking positions: {e}")
 
 
@@ -223,7 +223,7 @@ def cmd_pnl(symbol=None):
                     if amount != 0:
                         logging.info(f"  {source}: ${amount:+.2f}")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error getting PnL data: {e}")
 
 
@@ -276,7 +276,7 @@ def cmd_trace(correlation_id):
             for correlation_id in sorted(all_ids):
                 logging.info(f"  {correlation_id}")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error tracing execution: {e}")
 
 
@@ -335,7 +335,7 @@ def cmd_health():
         logging.info(f"  Position discrepancies: {len(discrepancies)}")
         logging.info(f"  PnL events tracked: {pnl_stats.get('total_events', 0)}")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"❌ Error running health check: {e}")
 
 
@@ -394,7 +394,7 @@ def main():
 
     except KeyboardInterrupt:
         logging.info("\n👋 Goodbye!")
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"\n❌ Unexpected error: {e}")
         sys.exit(1)
 

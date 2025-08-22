@@ -22,7 +22,7 @@ try:
     import importlib
     lgb = importlib.import_module("lightgbm")
     lgb_available = True
-except Exception:  # pragma: no cover - optional dependency
+except (ValueError, TypeError):  # pragma: no cover - optional dependency
     from ai_trading.thirdparty import lightgbm_compat as lgb
     lgb_available = False
 
@@ -168,7 +168,7 @@ class MLTrainer:
             )
             return results
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error in model training: {e}")
             raise
 
@@ -214,7 +214,7 @@ class MLTrainer:
             )
             return study.best_params
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error in hyperparameter optimization: {e}")
             return self._get_default_params()
 
@@ -336,7 +336,7 @@ class MLTrainer:
 
             return score
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating score: {e}")
             return 0.0
 
@@ -398,7 +398,7 @@ class MLTrainer:
 
             return cv_results
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error in CV evaluation: {e}")
             return {"mean_score": 0.0, "std_score": 0.0, "fold_scores": []}
 
@@ -419,7 +419,7 @@ class MLTrainer:
 
             logger.debug("Final model fitted successfully")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error fitting final model: {e}")
             raise
 
@@ -459,7 +459,7 @@ class MLTrainer:
 
             logger.info(f"Model saved to {model_file}")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error saving model: {e}")
             raise
 
@@ -488,7 +488,7 @@ class MLTrainer:
             logger.info(f"Model loaded from {model_file}")
             return model, metadata
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error loading model: {e}")
             raise
 
@@ -535,7 +535,7 @@ def train_model_cli(
             logger.info("Full training mode would require actual market data")
             logger.info("Placeholder for full training implementation")
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error in CLI training: {e}")
         raise
 

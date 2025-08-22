@@ -87,7 +87,7 @@ def create_cost_aware_strategy(config: TradingConfig):
                         # Cap the predicted edge
                         predicted_edge = max(-0.05, min(0.05, predicted_edge))
 
-                    except Exception:
+                    except (ValueError, TypeError):
                         predicted_edge = 0.0
 
                     # Evaluate signal with cost-awareness
@@ -131,7 +131,7 @@ def create_cost_aware_strategy(config: TradingConfig):
                             "timestamp": test_df.index[i] if hasattr(test_df.index[i], 'strftime') else str(test_df.index[i])
                         })
 
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     logger.debug("Signal generation failed for %s at %d: %s", symbol, i, e)
                     continue
 
@@ -152,7 +152,7 @@ def run_walkforward_validation(symbols: list, config: TradingConfig) -> dict:
         def data_provider(symbol: str, start_date: datetime, end_date: datetime):
             try:
                 return data_fetcher.get_historical_data(symbol, start_date, end_date)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.warning("Failed to get data for %s: %s", symbol, e)
                 return None
 
@@ -181,7 +181,7 @@ def run_walkforward_validation(symbols: list, config: TradingConfig) -> dict:
 
         return results
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error("Walk-forward validation failed: %s", e)
         raise
 
@@ -251,7 +251,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Walk-forward validation interrupted by user")
         sys.exit(0)
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error("Walk-forward validation error: %s", e, exc_info=True)
         sys.exit(1)
 

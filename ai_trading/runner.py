@@ -45,6 +45,8 @@ def _preflight_import_health() -> None:
     for mod in core_modules:
         try:
             importlib.import_module(mod)
+        # noqa: BLE001 TODO: narrow exception
+        # noqa: BLE001 TODO: narrow exception
         except Exception as exc:  # pragma: no cover - surface import issues
             log.error(
                 "IMPORT_PREFLIGHT_FAILED",
@@ -77,6 +79,8 @@ def _load_engine():
                 from ai_trading.core.bot_engine import _emit_once
                 import logging
                 _emit_once(log, "engine_components_loaded", logging.INFO, "Bot engine components loaded successfully")
+        # noqa: BLE001 TODO: narrow exception
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             log.error("Failed to load bot engine components: %s", e)
             raise RuntimeError(f"Cannot load bot engine: {e}")
@@ -94,6 +98,8 @@ def lazy_load_workers():
         return _LAZY_CACHE["workers"]
     try:
         from ai_trading.workers import run_all_trades_worker  # patched in tests
+    # noqa: BLE001 TODO: narrow exception
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:  # ImportError or anything raised during import
         raise RuntimeError(f"Failed to lazy import workers: {e}") from e
     _LAZY_CACHE["workers"] = run_all_trades_worker
@@ -135,6 +141,8 @@ def run_cycle() -> None:
                 _maybe_warm_cache(
                     state.ctx
                 )  # best-effort; ignores if disabled or already warmed
+        # noqa: BLE001 TODO: narrow exception
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             # Cache warming failed - log warning but continue execution
             log.warning("Failed to warm cache during state setup: %s", e)  # AI-AGENT-REF: use module logger
@@ -173,6 +181,8 @@ def run_cycle() -> None:
         
         # Execute the trading cycle
         run_all_trades_worker(state, runtime)
+    # noqa: BLE001 TODO: narrow exception
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         log.exception("Trading cycle failed: %s", e)
     finally:

@@ -191,7 +191,7 @@ def demonstrate_parameter_optimizations():
 
         return True
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logging.info(f"\n❌ Error during demonstration: {e}")
         return False
 

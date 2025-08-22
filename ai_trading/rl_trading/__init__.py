@@ -9,6 +9,7 @@ from typing import Any
 try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv
+# noqa: BLE001 TODO: narrow exception
 except Exception:  # pragma: no cover - optional dependency
     PPO = None  # type: ignore
     DummyVecEnv = None  # type: ignore
@@ -79,6 +80,7 @@ class RLAgent:
             action, _ = self.model.predict(state, deterministic=True)
             side = {0: "hold", 1: "buy", 2: "sell"}.get(int(action), "hold")
             return TradeSignal(symbol="RL", side=side, confidence=1.0, strategy="rl")
+        # noqa: BLE001 TODO: narrow exception
         except Exception as exc:
             logger.error("RL prediction failed: %s", exc)
             return None

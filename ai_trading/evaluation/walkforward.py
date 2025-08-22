@@ -205,7 +205,7 @@ class WalkForwardEvaluator:
             )
             return results
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error in walk-forward analysis: {e}")
             raise
 
@@ -295,7 +295,7 @@ class WalkForwardEvaluator:
 
             return fold_result
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error in fold {fold_idx}: {e}")
             return {"fold": fold_idx, "error": str(e)}
 
@@ -346,7 +346,7 @@ class WalkForwardEvaluator:
                 "period_days": (test_end - test_start).days,
             }
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating fold metrics: {e}")
             return {}
 
@@ -427,7 +427,7 @@ class WalkForwardEvaluator:
 
             return aggregate_metrics
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating aggregate metrics: {e}")
             return {}
 
@@ -445,7 +445,7 @@ class WalkForwardEvaluator:
 
             return drawdown
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating drawdown: {e}")
             return pd.Series(dtype=float)
 
@@ -497,7 +497,7 @@ class WalkForwardEvaluator:
             # Create plots
             self._create_plots(timestamp)
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error saving results: {e}")
 
     def _create_plots(self, timestamp: str) -> None:
@@ -584,7 +584,7 @@ class WalkForwardEvaluator:
 
             logger.info(f"Plots saved to {plot_file}")
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error creating plots: {e}")
 
 
@@ -644,7 +644,7 @@ def run_walkforward_smoke_test() -> None:
 
         return results
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error in smoke test: {e}")
         raise
 

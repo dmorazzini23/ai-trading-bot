@@ -113,6 +113,7 @@ def main():
         try:
             result = test()
             results.append(result)
+        # noqa: BLE001 TODO: narrow exception
         except Exception as e:
             logging.info(f"✗ Test {test.__name__} failed: {e}")
             results.append(False)

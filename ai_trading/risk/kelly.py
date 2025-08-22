@@ -138,7 +138,7 @@ class KellyCriterion:
 
             return kelly_fraction
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating Kelly fraction: {e}")
             return 0.0
 
@@ -192,7 +192,7 @@ class KellyCriterion:
 
             return kelly_fraction, stats
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating Kelly from returns: {e}")
             return 0.0, {"error": str(e)}
 
@@ -245,7 +245,7 @@ class KellyCriterion:
 
             return adjusted_kelly, confidence_interval
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating Kelly with confidence: {e}")
             return 0.0, 0.0
 
@@ -312,7 +312,7 @@ class KellyCalculator:
 
             return portfolio_kelly
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating portfolio Kelly: {e}")
             return {}
 
@@ -364,7 +364,7 @@ class KellyCalculator:
 
             return adjusted_kelly
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error adjusting Kelly fraction: {e}")
             return base_kelly * 0.5  # Conservative fallback
 
@@ -419,7 +419,7 @@ class KellyCalculator:
 
             return adjusted_kelly
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error calculating Kelly with correlation: {e}")
             return self.calculate_portfolio_kelly(asset_returns)
 
@@ -441,7 +441,7 @@ class KellyCalculator:
                 r for r in self.calculation_history if r["timestamp"] >= cutoff_date
             ]
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error recording Kelly calculation: {e}")
 
     def get_calculation_history(self, symbol: str | None = None) -> list[dict]:

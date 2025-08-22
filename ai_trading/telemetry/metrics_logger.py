@@ -29,6 +29,7 @@ def compute_max_drawdown(curve: Sequence[float]) -> float:
 def _ensure_parent(path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logger.warning("Could not create parent dir for %s: %s", path, e)
 
@@ -58,6 +59,7 @@ def log_metrics(
     if equity_curve and "max_drawdown" not in row:
         try:
             row["max_drawdown"] = compute_max_drawdown(equity_curve)
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             row["max_drawdown"] = ""
     _write_csv_row(filename, row)

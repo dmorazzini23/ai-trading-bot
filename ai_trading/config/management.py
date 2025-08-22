@@ -375,7 +375,7 @@ class ConfigManager:
             logger.info(f"Configuration loaded successfully from {config_path}")
             return config
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Failed to load configuration: {e}")
             raise
 
@@ -421,7 +421,7 @@ class ConfigManager:
             logger.info("Configuration saved successfully")
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Failed to save configuration: {e}")
             return False
 
@@ -483,7 +483,7 @@ class ConfigManager:
             logger.info(f"Configuration updated successfully: {updates}")
             return True
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Failed to update configuration: {e}")
             return False
 
@@ -525,7 +525,7 @@ class ConfigManager:
             else:
                 return False
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Failed to restore backup: {e}")
             return False
 
@@ -617,7 +617,7 @@ class ConfigManager:
         try:
             with open(self.audit_log_file, "a") as f:
                 f.write(f"{json.dumps(log_entry)}\n")
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Failed to write audit log: {e}")
 
 

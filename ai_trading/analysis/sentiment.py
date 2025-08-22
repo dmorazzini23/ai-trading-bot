@@ -53,7 +53,7 @@ def _load_bs4(log=logger):
         from bs4 import BeautifulSoup  # type: ignore
 
         _BS4 = BeautifulSoup
-    except Exception:
+    except (ValueError, TypeError):
         if "bs4" not in _SENT_DEPS_LOGGED:
             log.warning("SENTIMENT_OPTIONAL_DEP_MISSING", extra={"package": "bs4"})
             _SENT_DEPS_LOGGED.add("bs4")
@@ -76,7 +76,7 @@ def _load_transformers(log=logger):
         model.to(DEVICE)
         model.eval()
         _TRANSFORMERS = (torch, tokenizer, model)
-    except Exception:
+    except (ValueError, TypeError):
         if "transformers" not in _SENT_DEPS_LOGGED:
             log.warning(
                 "SENTIMENT_OPTIONAL_DEP_MISSING",
@@ -283,7 +283,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             logger.debug(
                 "Form4 fetch failed for %s - data parsing error: %s", ticker, e
             )
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.debug(
                 "Form4 fetch failed for %s - unexpected error: %s",
                 ticker,
@@ -304,7 +304,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
         return final_score
 
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.warning(f"Sentiment API request failed for {ticker}: {e}")
         _record_sentiment_failure()
 
@@ -320,7 +320,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             # No cache available, return neutral
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
         _record_sentiment_failure()
         with sentiment_lock:
@@ -352,7 +352,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
                     f"SENTIMENT_FALLBACK_SUCCESS | ticker={ticker} source={fallback_func.__name__} value={result}"
                 )
                 return result
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.debug(
                 f"SENTIMENT_FALLBACK_FAILED | ticker={ticker} source={fallback_func.__name__} error={e}"
             )
@@ -429,7 +429,7 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
             sentiment_score = data.get("sentiment_score", 0.0)
             if -1.0 <= sentiment_score <= 1.0:
                 return sentiment_score
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.debug(f"Alternative sentiment source failed for {ticker}: {e}")
 
     return None
@@ -542,7 +542,7 @@ def analyze_text(text: str, logger=logger) -> dict:
             probs = torch.softmax(logits, dim=0)
         neg, neu, pos = (float(x) for x in probs.tolist())
         return {"available": True, "pos": pos, "neg": neg, "neu": neu}
-    except Exception as exc:  # pragma: no cover - best effort
+    except (ValueError, TypeError) as exc:  # pragma: no cover - best effort
         logger.warning("analyze_text inference failed: %s", exc)
         return {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
 
@@ -602,6 +602,6 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
             # Additional parsing logic would go here
             # For now, return empty list to avoid parsing errors
         return filings
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.debug(f"Error fetching Form 4 filings for {ticker}: {e}")
         return []

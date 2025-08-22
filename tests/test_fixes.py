@@ -78,6 +78,7 @@ def test_talib_imports():
                 pass
             else:
                 pass
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             pass
 
@@ -85,6 +86,7 @@ def test_talib_imports():
 
     except ImportError:
         return False
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -113,6 +115,7 @@ def test_screen_universe_logging():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 
@@ -129,6 +132,7 @@ def main():
     for test in tests:
         try:
             results.append(test())
+        # noqa: BLE001 TODO: narrow exception
         except Exception:
             results.append(False)
 

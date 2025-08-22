@@ -4,7 +4,6 @@ import logging
 from io import StringIO
 
 import pytest
-
 from ai_trading.logging import EmitOnceLogger
 
 

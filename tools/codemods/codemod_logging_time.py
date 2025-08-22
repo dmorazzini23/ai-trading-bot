@@ -122,7 +122,7 @@ def process_file(filepath: Path) -> bool:
                 f.write(content)
             return True
 
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
     return False

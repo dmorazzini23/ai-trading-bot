@@ -44,6 +44,7 @@ def test_sentiment_module():
         logging.info(f"  ✅ predict_text_sentiment works: {result}")
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ❌ Sentiment module test failed: {e}")
         traceback.print_exc()
@@ -80,6 +81,7 @@ def test_metalearning_strategy():
         logging.info("  ✅ Method signature mismatch fixed - both calling patterns work")
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ❌ MetaLearning strategy test failed: {e}")
         traceback.print_exc()
@@ -111,6 +113,7 @@ def test_alpaca_api_endpoints():
 
         logging.info("  ✅ Alpaca API endpoints are correctly configured")
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ❌ Alpaca API test failed: {e}")
         traceback.print_exc()
@@ -130,6 +133,7 @@ def test_import_resolution():
         logging.info("  ✅ Missing dependencies handled gracefully with fallbacks")
 
         return True
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"  ❌ Import resolution test failed: {e}")
         traceback.print_exc()

@@ -63,6 +63,7 @@ def run_backtest_smoke_test():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 

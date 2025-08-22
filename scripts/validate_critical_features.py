@@ -27,6 +27,7 @@ def run_command(cmd, description):
             if result.stderr.strip():
                 logging.info(f"  Error: {result.stderr.strip()}")
             return False
+    # noqa: BLE001 TODO: narrow exception
     except Exception as e:
         logging.info(f"✗ {description} failed with exception: {e}")
         return False

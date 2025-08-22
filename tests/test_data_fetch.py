@@ -2,7 +2,6 @@ import os
 from datetime import UTC, datetime
 
 import pytest
-
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df  # AI-AGENT-REF
 from ai_trading.utils.optional_import import optional_import
 

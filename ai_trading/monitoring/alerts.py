@@ -175,7 +175,7 @@ class AlertManager:
 
             return alert
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error creating alert: {e}")
             # Return dummy alert to prevent cascading errors
             return Alert(
@@ -212,7 +212,7 @@ class AlertManager:
             logger.warning(f"Alert {alert_id} not found for acknowledgment")
             return False
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error acknowledging alert {alert_id}: {e}")
             return False
 
@@ -229,7 +229,7 @@ class AlertManager:
             logger.warning(f"Alert {alert_id} not found for resolution")
             return False
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error resolving alert {alert_id}: {e}")
             return False
 
@@ -243,7 +243,7 @@ class AlertManager:
         for handler in self.alert_handlers:
             try:
                 handler(alert)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Error in alert handler {handler.__name__}: {e}")
 
     def start_cleanup(self):
@@ -280,7 +280,7 @@ class AlertManager:
                 # Sleep for an hour
                 psleep(3600)
 
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.error(f"Error in alert cleanup: {e}")
                 psleep(300)  # Sleep 5 minutes on error
 
@@ -349,7 +349,7 @@ class RiskAlertEngine:
                     threshold=self.thresholds["MAX_VAR_95"],
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error checking portfolio risk: {e}")
 
     def check_position_risk(self, symbol: str, position_metrics: dict):
@@ -385,7 +385,7 @@ class RiskAlertEngine:
                     threshold=-0.10,
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error checking position risk for {symbol}: {e}")
 
     def check_execution_risk(self, execution_metrics: dict):
@@ -419,7 +419,7 @@ class RiskAlertEngine:
                     threshold=max_slippage_bps,
                 )
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error checking execution risk: {e}")
 
     def _create_risk_alert(
@@ -446,5 +446,5 @@ class RiskAlertEngine:
             # Update last alert time
             self.last_alert_times[alert_key] = current_time
 
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.error(f"Error creating risk alert: {e}")

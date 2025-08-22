@@ -53,6 +53,7 @@ def test_rate_limit_integration():
         limiter.get_status("orders")
 
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         pass
 
@@ -64,6 +65,7 @@ if __name__ == "__main__":
         test_rate_limit_integration()
 
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         import traceback
         traceback.print_exc()

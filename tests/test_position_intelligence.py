@@ -86,6 +86,7 @@ def test_intelligent_position_components():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         import traceback
         traceback.print_exc()
@@ -119,6 +120,7 @@ def test_integration_scenarios():
 
         return True
 
+    # noqa: BLE001 TODO: narrow exception
     except Exception:
         return False
 

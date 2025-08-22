@@ -27,7 +27,7 @@ rows = []
 for p in ROOT.rglob("*.py"):
     try:
         text = p.read_text(encoding="utf-8")
-    except Exception:
+    except (ValueError, TypeError):
         continue
     lines = text.splitlines()
     for issue, rx in patterns.items():
