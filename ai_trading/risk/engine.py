@@ -33,19 +33,16 @@ from ai_trading.config.management import SEED, TradingConfig
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore
+    from alpaca_trade_api import REST as AlpacaREST  # type: ignore
 except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
     TradingClient = None  # type: ignore
+    AlpacaREST = None  # type: ignore
 
     class APIError(Exception):
         pass
 
 
 from ai_trading.config.settings import get_settings
-
-try:
-    from alpaca.data.historical import StockHistoricalDataClient
-except ImportError:  # pragma: no cover - optional Alpaca dependency
-    StockHistoricalDataClient = None  # type: ignore
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
@@ -131,15 +128,15 @@ class RiskEngine:
         try:
             s = get_settings()
             if (
-                StockHistoricalDataClient
+                AlpacaREST
                 and getattr(s, "alpaca_api_key", None)
-                and getattr(
-                    s, "alpaca_secret_key_plain", None
-                )  # AI-AGENT-REF: ensure plain secret
+                and getattr(s, "alpaca_secret_key_plain", None)
+                and getattr(s, "alpaca_base_url", None)
             ):
-                self.data_client = StockHistoricalDataClient(
-                    api_key=s.alpaca_api_key,
-                    secret_key=s.alpaca_secret_key_plain,  # AI-AGENT-REF: use plain secret string
+                self.data_client = AlpacaREST(
+                    s.alpaca_api_key,
+                    s.alpaca_secret_key_plain,
+                    s.alpaca_base_url,
                 )
         except (
             APIError,
@@ -148,7 +145,7 @@ class RiskEngine:
             AttributeError,
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning("Could not initialize StockHistoricalDataClient: %s", e)
+            logger.warning("Could not initialize AlpacaREST: %s", e)
         self.hard_stop = False
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
         self._returns: list[float] = []

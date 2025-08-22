@@ -24,6 +24,7 @@ from pydantic import (
 )  # AI-AGENT-REF: allow extras
 from ai_trading.config.aliases import resolve_trading_mode
 from .alpaca_creds import resolve_alpaca_credentials
+from .settings import Settings  # AI-AGENT-REF: expose base settings
 from . import (
     MAX_DRAWDOWN_THRESHOLD as _MAX_DRAWDOWN_THRESHOLD,
     MODE_PARAMETERS as _MODE_PARAMETERS,
@@ -33,6 +34,40 @@ from . import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# AI-AGENT-REF: derive max position size with deterministic fallbacks
+def derive_cap_from_settings(
+    settings: Settings,
+    equity: float | None,
+    fallback: float,
+    capital_cap: float,
+) -> float:
+    """Return max dollar cap per position from settings and equity."""
+    cap = getattr(settings, "max_position_size", None)
+    if cap is None or cap <= 0:
+        if equity is not None:
+            cap = float(equity) * float(capital_cap)
+            logger.info(
+                "CONF_MAX_POSITION_SIZE_DERIVED",
+                extra={
+                    "field": "max_position_size",
+                    "equity": equity,
+                    "capital_cap": capital_cap,
+                    "computed": cap,
+                },
+            )
+        else:
+            cap = float(fallback)
+            logger.info(
+                "CONF_MAX_POSITION_SIZE_DEFAULTED",
+                extra={
+                    "field": "max_position_size",
+                    "fallback": cap,
+                    "reason": "equity_unknown",
+                },
+            )
+    return float(cap)
 
 
 # Helper functions to get settings without triggering import cascade
