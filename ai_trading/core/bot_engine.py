@@ -915,11 +915,6 @@ warnings.filterwarnings(
 
 import os
 
-if "ALPACA_API_KEY" in os.environ:
-    os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
-if "ALPACA_SECRET_KEY" in os.environ:
-    os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
-
 
 # Refresh environment variables on startup for reliability
 config.reload_env()
@@ -1534,11 +1529,10 @@ def _resolve_alpaca_env():
         ensure_dotenv_loaded()
     except COMMON_EXC:
         pass
-    key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
-    secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+    key = os.getenv("ALPACA_API_KEY")
+    secret = os.getenv("ALPACA_SECRET_KEY")
     base_url = (
         os.getenv("ALPACA_BASE_URL")
-        or os.getenv("APCA_API_BASE_URL")
         or getattr(config, "ALPACA_BASE_URL", None)
         or "https://paper-api.alpaca.markets"
     )
@@ -3535,7 +3529,10 @@ class DataFetcher:
             _log.error(f"Missing Alpaca credentials for {symbol}")
             return None
 
-        client = StockHistoricalDataClient(api_key, api_secret)
+        client = StockHistoricalDataClient(
+            api_key=api_key,
+            secret_key=api_secret,
+        )
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
             try:
@@ -3803,7 +3800,10 @@ class DataFetcher:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
             )
-        client = StockHistoricalDataClient(api_key, api_secret)
+        client = StockHistoricalDataClient(
+            api_key=api_key,
+            secret_key=api_secret,
+        )
 
         try:
             req = StockBarsRequest(
@@ -4047,7 +4047,10 @@ def prefetch_daily_data(
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
         )
-    client = StockHistoricalDataClient(alpaca_key, alpaca_secret)
+    client = StockHistoricalDataClient(
+        api_key=alpaca_key,
+        secret_key=alpaca_secret,
+    )
 
     try:
         req = StockBarsRequest(
@@ -5338,9 +5341,17 @@ def _initialize_alpaca_clients():
         raise
     # Initialize proper alpaca-py clients (do NOT use legacy REST for data)
     is_paper = base_url.find("paper") != -1  # Determine if paper trading based on URL
-    raw_client = TradingClient(key, secret, paper=is_paper)
+    raw_client = TradingClient(
+        api_key=key,
+        secret_key=secret,
+        paper=is_paper,
+        base_url=base_url,
+    )
     trading_client = AlpacaBroker(raw_client)
-    data_client = StockHistoricalDataClient(key, secret)
+    data_client = StockHistoricalDataClient(
+        api_key=key,
+        secret_key=secret,
+    )
     _log.info("ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()}))
     stream = None  # initialize stream lazily elsewhere if/when required
 
@@ -13095,7 +13106,7 @@ def main() -> None:
     if not api_key or not api_secret:
         _log.critical("Alpaca credentials missing – aborting startup")
         _log.critical(
-            "Please set ALPACA_API_KEY/APCA_API_KEY_ID and ALPACA_SECRET_KEY/APCA_API_SECRET_KEY"
+            "Please set ALPACA_API_KEY and ALPACA_SECRET_KEY"
         )
         sys.exit(2)
 
