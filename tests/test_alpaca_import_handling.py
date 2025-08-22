@@ -55,7 +55,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
             self.assertIsNotNone(TradingClient)
 
             # Test mock client instantiation
-            mock_client = TradingClient("fake_key", "fake_secret")
+            mock_client = TradingClient("fake_key", "fake_secret", paper=True)  # AI-AGENT-REF: ensure paper flag
             self.assertIsInstance(mock_client, MockTradingClient)
 
     def test_check_alpaca_available_function(self):

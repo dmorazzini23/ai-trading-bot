@@ -139,7 +139,7 @@ class AlpacaExecutionEngine:
                 except (ValueError, TypeError):
                     MockTradingClient = None
                 if MockTradingClient:
-                    self.trading_client = MockTradingClient()
+                    self.trading_client = MockTradingClient(paper=True)  # AI-AGENT-REF: ensure paper flag
                     self.is_initialized = True
                     return True
 
@@ -151,8 +151,7 @@ class AlpacaExecutionEngine:
                 api_key=self.config.key_id,
                 secret_key=self.config.secret_key,
                 paper=self.config.use_paper,
-                base_url=self.config.base_url,
-            )
+            )  # AI-AGENT-REF: drop base_url parameter
             logger.info(
                 f"Real Alpaca client initialized (paper={self.config.use_paper})"
             )

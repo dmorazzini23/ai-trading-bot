@@ -326,7 +326,13 @@ def initialize(
         api_key = api_key or creds.API_KEY
         secret_key = secret_key or creds.SECRET_KEY
         base_url = base_url or creds.BASE_URL
-    client = TradingClient(api_key=api_key, secret_key=secret_key, base_url=base_url, **kwargs)
+    paper = "paper" in (base_url or "")  # AI-AGENT-REF: infer paper mode from URL
+    client = TradingClient(
+        api_key=api_key,
+        secret_key=secret_key,
+        paper=paper,
+        **kwargs,
+    )  # AI-AGENT-REF: drop base_url parameter
     return AlpacaBroker(client)
 
 

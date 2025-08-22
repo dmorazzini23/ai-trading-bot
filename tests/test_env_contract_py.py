@@ -7,6 +7,7 @@ FILES = [p for p in ROOT.rglob("*.py")
          and "venv" not in str(p)
          and ".venv" not in str(p)
          and "node_modules" not in str(p)]
+PY = [p for p in ROOT.rglob("*.py") if "venv" not in str(p)]  # AI-AGENT-REF: include tests
 
 def _t(p): return p.read_text(encoding="utf-8", errors="ignore")
 
@@ -31,3 +32,23 @@ def test_all_python_has_explicit_alpaca_creds():
     bad += _find_bad_ctor(r"\bStockHistoricalDataClient\s*\([^)]*\)", "api_key=")
     bad += _find_bad_ctor(r"\bCryptoHistoricalDataClient\s*\([^)]*\)", "api_key=")
     assert not bad, f"Missing explicit Alpaca creds in: {sorted(set(bad))}"
+
+
+def test_tradingclient_has_no_base_url_and_has_paper_flag():
+    offenders_base = []
+    offenders_missing_paper = []
+    rx = re.compile(r"TradingClient\s*\((?P<args>[^)]*)\)", re.DOTALL)
+    for p in PY:
+        t = p.read_text(encoding="utf-8", errors="ignore")
+        for m in rx.finditer(t):
+            args = m.group("args")
+            if "base_url" in args:
+                offenders_base.append(p)
+            if "paper=" not in args:
+                offenders_missing_paper.append(p)
+    assert not offenders_base, (
+        f"TradingClient must not take base_url: {sorted(set(offenders_base))}"
+    )
+    assert not offenders_missing_paper, (
+        f"TradingClient must set paper=: {sorted(set(offenders_missing_paper))}"
+    )  # AI-AGENT-REF: enforce paper flag without base_url
