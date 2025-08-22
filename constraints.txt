@@ -1,3 +1,6 @@
+urllib3==1.26.20
+tzlocal==4.3
+portalocker==2.7.0
 alpaca-trade-api==3.2.0
 yfinance==0.2.37
 websockets==10.4

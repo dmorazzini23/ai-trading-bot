@@ -5,8 +5,8 @@ init:
 	python -m pip install --upgrade pip setuptools wheel
 	# purge any stale installations of this project (editable installs or wheels)
 	python -m pip uninstall -y ai-trading-bot || true
-	@if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-	@if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+	@if [ -f requirements.txt ]; then pip install -r requirements.txt -c constraints.txt; fi
+	@if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt --no-deps -c constraints.txt; fi
 	# safety net to ensure core test deps even if previous step was interrupted
 	python -m pip install "pytest" "pytest-xdist" "tzlocal>=5.2,<6" "psutil>=5.9,<6" "alpaca-trade-api>=3.0,<4" \
 	        "pytest-asyncio>=0.23,<0.24" "anyio>=4,<5" "aiohttp>=3.9,<3.10" "websockets>=12,<13"
@@ -21,8 +21,8 @@ contract:
 
 dev-deps:
 	python -m pip install --upgrade pip
-	python -m pip install -r requirements.txt
-	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt --no-deps; fi
+	python -m pip install -r requirements.txt -c constraints.txt
+	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt --no-deps -c constraints.txt; fi
 	python -m pip install -e .
 .PHONY: test-core test-int test-all test-core-seq
 
@@ -36,13 +36,15 @@ test-int:
 
 test-all:  ## Run lint, types, and unit tests
 	python -m pip install --upgrade pip
-	python -m pip install -r requirements.txt
-	python -m pip install -r requirements-dev.txt --no-deps
+	python -m pip install -r requirements.txt -c constraints.txt
+	# Ensure any old stubs that demand urllib3>=2 are gone
+	python -m pip uninstall -y types-requests urllib3-stubs || true
+	# Install dev tools without pulling transitive deps that override runtime pins
+	python -m pip install -r requirements-dev.txt --no-deps -c constraints.txt
 	python -m pip install -e .
 	$(MAKE) test-core
 	@echo "--- Integration (opt-in) ---"
 	@RUN_INTEGRATION=${RUN_INTEGRATION} $(MAKE) -s test-int || true
-
 test-core-seq:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not integration and not slow" --disable-warnings | tee artifacts/pytest-core-seq.txt
 .PHONY: lint-fix
@@ -83,10 +85,9 @@ typecheck:
 	python -m mypy ai_trading trade_execution | tee artifacts/mypy-phase3.txt || true  # AI-AGENT-REF: ensure type safety
 
 verify:
-	@if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+	@if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt --no-deps -c constraints.txt; fi
 	chmod +x scripts/quick_verify.sh
 	./scripts/quick_verify.sh
-
 audit-exceptions:
 	python tools/audit_exceptions.py --paths ai_trading --fail-over 300
 
