@@ -38,6 +38,7 @@ from ai_trading.net.http import (
 )  # AI-AGENT-REF: retrying HTTP session
 from ai_trading.position_sizing import (
     resolve_max_position_size,
+    _resolve_max_position_size,
 )  # AI-AGENT-REF: dynamic max position sizing
 
 
@@ -159,22 +160,12 @@ def _validate_runtime_config(cfg, tcfg) -> None:
             # AI-AGENT-REF: dynamic resolver will handle later
             pass
         else:
-            fallback, meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
+            eq = getattr(tcfg, "equity", getattr(cfg, "equity", None))
+            fallback = _resolve_max_position_size(max_pos, cap, eq)
             try:
                 setattr(tcfg, "max_position_size", float(fallback))
             except (AttributeError, TypeError):
                 pass
-            logger.info(
-                "CONFIG_AUTOFIX",
-                extra={
-                    "field": "max_position_size",
-                    "given": max_pos,
-                    "fallback": float(fallback),
-                    "reason": "derived_equity_cap",
-                    "equity": meta.get("equity"),
-                    "capital_cap": meta.get("capital_cap"),
-                },
-            )
 
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
     paper = bool(getattr(cfg, "paper", True))

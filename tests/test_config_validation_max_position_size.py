@@ -20,14 +20,14 @@ def test_static_mode_nonpositive_is_autofixed(caplog):
         max_position_size=0.0,
     )
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO, logger="ai_trading.position_sizing"):
         main._validate_runtime_config(cfg, tcfg)
 
-    assert getattr(tcfg, "max_position_size", 0.0) == 9000.0
+    assert getattr(tcfg, "max_position_size", 0.0) == 8000.0
 
     assert any(
         r.__dict__.get("field") == "max_position_size"
-        and r.__dict__.get("reason") == "nonpositive"
+        and r.__dict__.get("reason") == "derived_equity_cap"
         for r in caplog.records
     )
 

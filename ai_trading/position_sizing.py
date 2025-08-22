@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import floor
-from typing import Any
+from typing import Any, Optional
 
 from ai_trading.logging import get_logger  # AI-AGENT-REF: structured logging
 from ai_trading.net.http import get_global_session
@@ -43,6 +43,32 @@ def _clamp(val: float, vmin: float | None, vmax: float | None) -> float:
     if vmax is not None:
         val = min(val, vmax)
     return val
+
+
+def _resolve_max_position_size(
+    provided: float,
+    capital_cap: float,
+    equity: Optional[float],
+    *,
+    default_equity: float = 200_000.0,
+) -> float:
+    """Autofix nonpositive max_position_size using equity caps."""  # AI-AGENT-REF
+    if provided > 0:
+        return float(provided)
+    basis = equity if (equity is not None and equity > 0) else default_equity
+    resolved = float(round(capital_cap * basis, 2))
+    _log.info(
+        "CONFIG_AUTOFIX",
+        extra={
+            "field": "max_position_size",
+            "given": float(provided),
+            "fallback": resolved,
+            "reason": "derived_equity_cap" if equity in (None, 0) else "derived_from_equity",
+            "equity": equity,
+            "capital_cap": capital_cap,
+        },
+    )
+    return resolved
 
 
 def _fallback_max_size(cfg, tcfg) -> float:

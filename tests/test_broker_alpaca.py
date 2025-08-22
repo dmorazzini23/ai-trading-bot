@@ -1,6 +1,9 @@
 from ai_trading.broker.alpaca import AlpacaBroker
 
 
+from ai_trading.broker.alpaca import APIError
+
+
 class FakeClient:
     def __init__(self, positions):
         self._positions = positions
@@ -12,7 +15,7 @@ class FakeClient:
         for p in self._positions:
             if p.symbol == symbol:
                 return p
-        raise Exception("not found")
+        raise APIError({"code": 404, "message": "not found"}, None)
 
 
 class Obj:
