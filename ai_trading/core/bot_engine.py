@@ -5345,8 +5345,7 @@ def _initialize_alpaca_clients():
         api_key=key,
         secret_key=secret,
         paper=is_paper,
-        base_url=base_url,
-    )
+    )  # AI-AGENT-REF: drop base_url parameter
     trading_client = AlpacaBroker(raw_client)
     data_client = StockHistoricalDataClient(
         api_key=key,
