@@ -13,6 +13,7 @@ from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from ai_trading.logging.emit_once import emit_once  # AI-AGENT-REF: dedupe init log
 from json import JSONDecodeError
 
 # Consistent exception tuple without hard dependency on requests
@@ -84,9 +85,13 @@ class DrawdownCircuitBreaker:
         self.halt_timestamp = None
         self.reset_callbacks = []
 
-        logger.info(
-            f"DrawdownCircuitBreaker initialized with max_drawdown={self._safe_format_percentage(self.max_drawdown)}"
-        )
+        emit_once(
+            logger,
+            "DRAWDOWN_CB_INIT",
+            "info",
+            "DrawdownCircuitBreaker initialized",
+            max_drawdown=self._safe_format_percentage(self.max_drawdown),
+        )  # AI-AGENT-REF: emit init banner once
 
     def _safe_format_percentage(self, value) -> str:
         """

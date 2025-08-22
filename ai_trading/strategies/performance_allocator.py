@@ -6,16 +6,43 @@ to allocate more capital to better-performing strategies while maintaining
 diversification and risk controls.
 """
 
-import logging
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, UTC
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
-import pandas as pd
+import pandas as pd  # noqa: F401  # AI-AGENT-REF: retained for downstream usage
 
 # Use centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from ai_trading.config.settings import get_settings  # AI-AGENT-REF: env-backed settings
+from ai_trading.config.management import TradingConfig  # AI-AGENT-REF: config type
+
+
+def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
+    """Resolve confidence threshold in [0,1]."""
+    # AI-AGENT-REF: priority - TradingConfig → Settings → default
+    v = getattr(cfg, "score_confidence_min", None) if cfg else None
+    try:
+        if v is not None:
+            v = float(v)
+            if 0.0 <= v <= 1.0:
+                return v
+    except Exception:
+        pass
+    s = get_settings()
+    for cand in (
+        getattr(s, "score_confidence_min", None),
+        getattr(s, "conf_threshold", None),
+    ):
+        try:
+            if cand is not None:
+                x = float(cand)
+                if 0.0 <= x <= 1.0:
+                    return x
+        except Exception:
+            continue
+    return 0.60
 
 
 class PerformanceBasedAllocator:
@@ -51,8 +78,33 @@ class PerformanceBasedAllocator:
         self.strategy_trades: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self.strategy_allocations: Dict[str, float] = {}
         self.last_update = datetime.now(UTC)
-        
+
         logger.info("PerformanceBasedAllocator initialized with %d day window", self.window_days)
+
+    def allocate(self, strategies: Dict[str, List[Any]], config: TradingConfig) -> Dict[str, List[Any]]:
+        """Filter out low-confidence signals before sizing."""  # AI-AGENT-REF: confidence gate
+        th = _resolve_conf_threshold(config)
+        gated: Dict[str, List[Any]] = {}
+        for name, sigs in (strategies or {}).items():
+            kept: List[Any] = []
+            dropped = 0
+            for s in sigs or []:
+                try:
+                    c = float(getattr(s, "confidence", 0.0))
+                except Exception:
+                    c = 0.0
+                if c >= th:
+                    kept.append(s)
+                else:
+                    dropped += 1
+            if dropped:
+                logger.info(
+                    "CONFIDENCE_DROP",
+                    extra={"strategy": name, "threshold": th, "dropped": dropped, "kept": len(kept)},
+                )
+            if kept:
+                gated[name] = kept
+        return gated
     
     def record_trade_result(self, strategy_name: str, trade_result: Dict):
         """

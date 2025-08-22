@@ -21,6 +21,7 @@ from enum import Enum
 from typing import Any
 
 _log = logging.getLogger(__name__)
+from ai_trading.logging.emit_once import emit_once  # AI-AGENT-REF: dedupe init banners
 
 
 def _optional_import(name: str):
@@ -311,7 +312,7 @@ class OrderManager:
 
         self._idempotency_cache: OrderIdempotencyCache | None = None
 
-        _log.info("OrderManager initialized")
+        emit_once(_log, "ORDER_MANAGER_INIT", "info", "OrderManager initialized")  # AI-AGENT-REF: one-shot init log
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
         """Ensure idempotency cache is instantiated."""
@@ -650,7 +651,7 @@ class ExecutionEngine:
             "average_fill_time": 0.0,
         }
 
-        _log.info("ExecutionEngine initialized")
+        emit_once(_log, "EXECUTION_ENGINE_INIT", "info", "ExecutionEngine initialized")  # AI-AGENT-REF: one-shot init log
 
     def _assess_liquidity(self, symbol: str, quantity: int) -> tuple[int, bool]:
         """Assess liquidity and optionally adjust quantity."""
