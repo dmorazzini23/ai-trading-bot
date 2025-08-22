@@ -436,13 +436,9 @@ def main(argv: list[str] | None = None) -> None:
             logger.warning(
                 "API startup taking longer than expected, proceeding with degraded functionality"
             )
-    except RuntimeError:
-        # Re-raise runtime errors as-is
-        raise
-    except Exception as e:
-        # Handle any other synchronization errors
-        logger.error("Unexpected error during API startup synchronization: %s", e)
-        raise RuntimeError(f"API startup synchronization failed: {e}")
+    except (RuntimeError, TimeoutError, OSError) as e:
+        logger.error("Failed to start API", exc_info=e)
+        raise RuntimeError("API failed to start") from e
 
     import os  # AI-AGENT-REF: scheduler config
 
@@ -560,10 +556,8 @@ def main(argv: list[str] | None = None) -> None:
                             "POSITION_SIZING_REFRESHED",
                             extra={**meta, "resolved": resolved_size},
                         )
-            except Exception as e:  # pragma: no cover - defensive
-                logger.warning(
-                    "POSITION_SIZING_REFRESH_ERROR", extra={"error": str(e)}
-                )
+            except (ValueError, KeyError, TypeError) as e:  # pragma: no cover
+                logger.warning("RUNTIME_SIZING_UPDATE_FAILED", exc_info=e)
 
             _interruptible_sleep(int(max(1, interval)))
             if _SHUTDOWN.is_set():

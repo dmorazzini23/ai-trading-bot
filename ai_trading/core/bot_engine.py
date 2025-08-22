@@ -2047,9 +2047,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         df = get_minute_df(symbol, start_dt, now_utc)
 
     if df.empty:
-        _log.info("Fetch skipped: empty DataFrame after fallbacks | %s", symbol)  # AI-AGENT-REF
-        _log.info("SKIP_NO_DATA | %s", symbol)
-        return pd.DataFrame()
+        msg = "Minute bars DataFrame is empty after fallbacks; market likely closed"  # AI-AGENT-REF
+        _log.warning(
+            "FETCH_MINUTE_EMPTY",
+            extra={"reason": "empty", "context": "market_closed"},
+        )
+        raise DataFetchError(msg)
 
     # Check data freshness before proceeding with trading logic
     try:
