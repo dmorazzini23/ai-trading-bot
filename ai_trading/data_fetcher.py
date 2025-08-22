@@ -9,6 +9,7 @@ from ai_trading.config import get_settings
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: ET default for naive datetimes
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
+from pandas.errors import OutOfBoundsDatetime  # AI-AGENT-REF: datetime bounds
 
 from ai_trading.data.timeutils import (
     ensure_utc_datetime,  # AI-AGENT-REF: unified datetime coercion
@@ -72,6 +73,15 @@ try:  # AI-AGENT-REF: fallback to requests if internal helper missing
 except ImportError:  # pragma: no cover
     _requests = None
 requests = _requests
+try:  # AI-AGENT-REF: typed request exceptions
+    from requests.exceptions import (
+        RequestException,
+        Timeout,
+        ConnectionError,
+        HTTPError,
+    )
+except Exception:  # pragma: no cover - requests optional
+    RequestException = Timeout = ConnectionError = HTTPError = Exception  # type: ignore
 
 def _format_fallback_payload_df(
     tf_str: str, feed_str: str, start_dt: _dt.datetime, end_dt: _dt.datetime
@@ -184,14 +194,17 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     if callable(value):
         try:
             value = value()
-        except Exception as e:
-            raise TypeError(f"datetime argument callable failed: {e}") from e
+        except (TypeError, ValueError, AttributeError, OutOfBoundsDatetime) as e:
+            raise TypeError(f"Invalid datetime input: {e}") from e
 
     # AI-AGENT-REF: localize naive ET datetimes before UTC coercion
     if isinstance(value, _dt.datetime) and value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo("America/New_York"))
 
-    return ensure_utc_datetime(value, allow_callables=False)
+    try:
+        return ensure_utc_datetime(value, allow_callables=False)
+    except (TypeError, ValueError, AttributeError, OutOfBoundsDatetime) as e:
+        raise TypeError(f"Invalid datetime input: {e}") from e
 
 
 def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
@@ -333,10 +346,34 @@ def _fetch_bars(
             "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
             "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
         }
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        status = resp.status_code
-        text = (resp.text or "").strip()
-        ctype = (resp.headers.get("Content-Type") or "").lower()
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            status = resp.status_code
+            text = (resp.text or "").strip()
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+        except (Timeout, ConnectionError, HTTPError, RequestException, ValueError, KeyError) as e:
+            logger.warning(
+                "DATA_SOURCE_HTTP_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "error": str(e),
+                    }
+                ),
+            )
+            if fallback:
+                _interval, _feed, _start, _end = fallback
+                payload = _format_fallback_payload_df(
+                    _interval, _feed, _start, _end
+                )
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": payload},
+                )
+                return _req(None)
+            raise
         payload: dict[str, Any] | list[Any] = {}
         if status != 400 and text:
             if "json" in ctype:
@@ -519,12 +556,14 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
                 last_ts = int(pd.Timestamp(df.index[-1]).tz_convert("UTC").timestamp())
             elif "timestamp" in df.columns:
-                last_ts = int(pd.Timestamp(df["timestamp"].iloc[-1]).tz_convert("UTC").timestamp())
+                last_ts = int(
+                    pd.Timestamp(df["timestamp"].iloc[-1]).tz_convert("UTC").timestamp()
+                )
             else:
                 last_ts = None
             if last_ts is not None:
                 set_cached_minute_timestamp(symbol, last_ts)
-    except Exception:  # pragma: no cover - cache best effort  # noqa: BLE001
+    except (ValueError, TypeError, KeyError, AttributeError):  # pragma: no cover - cache best effort
         pass
 
     return _post_process(df)

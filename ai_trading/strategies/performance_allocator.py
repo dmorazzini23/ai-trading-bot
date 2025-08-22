@@ -7,6 +7,7 @@ diversification and risk controls.
 """
 
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, UTC
 from typing import Any, Dict, List
 
@@ -17,6 +18,11 @@ import pandas as pd  # noqa: F401  # AI-AGENT-REF: retained for downstream usage
 from ai_trading.logging import logger
 from ai_trading.config.settings import get_settings  # AI-AGENT-REF: env-backed settings
 from ai_trading.config.management import TradingConfig  # AI-AGENT-REF: config type
+
+
+@dataclass
+class AllocatorConfig:
+    score_confidence_min: float = 0.6  # AI-AGENT-REF: default confidence gate
 
 
 def _resolve_conf_threshold(cfg: TradingConfig | None) -> float:
@@ -74,9 +80,15 @@ class PerformanceBasedAllocator:
     diversification and risk bounds.
     """
     
-    def __init__(self, config: Dict = None):
+    def __init__(self, config: AllocatorConfig | Dict | None = None):
         """Initialize performance-based allocator."""
-        self.config = config or {}
+        if config is None:
+            self.config = {}
+        elif isinstance(config, dict):
+            self.config = config
+        else:
+            self.config = config.__dict__
+        self._logged_conf_gate_once = False  # AI-AGENT-REF: confidence gate log guard
         
         # Performance tracking configuration
         self.window_days = self.config.get("performance_window_days", 20)  # 20 trading days
@@ -100,6 +112,26 @@ class PerformanceBasedAllocator:
         self.last_update = datetime.now(UTC)
 
         logger.info("PerformanceBasedAllocator initialized with %d day window", self.window_days)
+
+    def score_to_weight(self, score: float) -> float:
+        """Map a confidence score to a weight with a minimum gate."""  # AI-AGENT-REF
+        th = float(self.config.get("score_confidence_min", 0.6))
+        try:
+            s = float(score)
+        except (TypeError, ValueError):
+            s = 0.0
+        if s < th:
+            if not self._logged_conf_gate_once:
+                logger.info(
+                    "ALLOC_CONFIDENCE_GATE",
+                    extra={
+                        "threshold": th,
+                        "note": "candidates below this score are zero-weighted",
+                    },
+                )
+                self._logged_conf_gate_once = True
+            return 0.0
+        return max(0.0, min(1.0, s))
 
     def allocate(self, strategies: Dict[str, List[Any]], config: TradingConfig) -> Dict[str, List[Any]]:
         """Filter low-confidence signals and bias weights by confidence."""  # AI-AGENT-REF
