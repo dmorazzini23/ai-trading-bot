@@ -5,7 +5,6 @@ Provides connection pooling, session management, and database utilities
 with proper error handling and connection lifecycle management.
 """
 
-import logging
 import threading
 import time
 from contextlib import contextmanager

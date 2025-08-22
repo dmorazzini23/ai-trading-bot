@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping
 
 from .settings import get_settings, broker_keys
 

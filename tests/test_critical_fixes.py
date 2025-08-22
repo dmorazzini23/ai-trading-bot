@@ -10,8 +10,6 @@ Tests for the fixes addressing the critical issues:
 
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-import os
-import tempfile
 from unittest.mock import Mock, patch
 
 

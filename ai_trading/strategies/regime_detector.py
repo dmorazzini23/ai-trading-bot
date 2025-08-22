@@ -5,7 +5,6 @@ This module identifies market regimes (trending, ranging, volatile, crisis) to
 dynamically adjust trading frequency and portfolio rebalancing thresholds.
 """
 
-import logging
 import math
 import statistics
 from dataclasses import dataclass

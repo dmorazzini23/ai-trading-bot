@@ -1,5 +1,4 @@
 from ai_trading.utils import http as H
-import requests
 
 
 class DummyResp:

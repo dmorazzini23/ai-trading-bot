@@ -6,10 +6,8 @@ by evaluating trades at the portfolio level rather than individual signal level.
 Integrates Kelly Criterion, correlation analysis, and tax-aware rebalancing.
 """
 
-import logging
 import statistics
 from dataclasses import dataclass
-import numpy as np
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -27,7 +25,6 @@ def optimize_equal_weight(symbols):
 
 
 # Import existing sophisticated infrastructure
-from ai_trading.core.constants import RISK_PARAMETERS
 try:
     from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
     from ai_trading.risk.kelly import KellyCalculator, KellyCriterion

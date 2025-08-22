@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 
-import ai_trading.logging as L
 from ai_trading.logging import SanitizingLoggerAdapter
 
 

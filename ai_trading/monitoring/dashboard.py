@@ -5,7 +5,6 @@ Provides data aggregation and formatting for institutional
 trading dashboards and real-time monitoring interfaces.
 """
 
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 

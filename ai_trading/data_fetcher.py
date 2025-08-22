@@ -5,12 +5,12 @@ import os
 import warnings  # AI-AGENT-REF: control yfinance warnings
 from datetime import UTC, datetime
 from typing import Any
-from ai_trading.config import get_settings
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: ET default for naive datetimes
 
 import pandas as pd  # AI-AGENT-REF: pandas already a project dependency
 from pandas.errors import OutOfBoundsDatetime  # AI-AGENT-REF: datetime bounds
 
+from ai_trading.config import get_settings
 from ai_trading.data.timeutils import (
     ensure_utc_datetime,  # AI-AGENT-REF: unified datetime coercion
 )
@@ -32,11 +32,9 @@ from ai_trading.logging.normalize import (
 from ai_trading.logging.normalize import (
     normalize_extra as _norm_extra,  # AI-AGENT-REF: canonicalize logging extras
 )
+from ai_trading.utils.optional_import import optional_import
 
-try:  # AI-AGENT-REF: yfinance fallback for market data
-    import yfinance as yf
-except ImportError:  # pragma: no cover
-    yf = None
+yf = optional_import("yfinance")
 
 from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
 
@@ -75,10 +73,10 @@ except ImportError:  # pragma: no cover
 requests = _requests
 try:  # AI-AGENT-REF: typed request exceptions
     from requests.exceptions import (
-        RequestException,
-        Timeout,
         ConnectionError,
         HTTPError,
+        RequestException,
+        Timeout,
     )
 except Exception:  # pragma: no cover - requests optional
     RequestException = Timeout = ConnectionError = HTTPError = Exception  # type: ignore
@@ -88,8 +86,8 @@ def _format_fallback_payload_df(
 ) -> list[str]:
     """UTC ISO payload for consistent logging."""  # AI-AGENT-REF: normalize fallback payload
 
-    s = ensure_datetime(start_dt).astimezone(_dt.timezone.utc).isoformat()
-    e = ensure_datetime(end_dt).astimezone(_dt.timezone.utc).isoformat()
+    s = ensure_datetime(start_dt).astimezone(UTC).isoformat()
+    e = ensure_datetime(end_dt).astimezone(UTC).isoformat()
     return [tf_str, feed_str, s, e]
 
 # ---------------------------------------------------------------------------
@@ -107,7 +105,7 @@ def get_cached_minute_timestamp(symbol: str) -> int | None:
 
 def set_cached_minute_timestamp(symbol: str, ts_epoch_s: int) -> None:
     """Store last bar timestamp with current insertion time."""  # AI-AGENT-REF: cache setter
-    now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
+    now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     _MINUTE_CACHE[symbol] = (int(ts_epoch_s), now_s)
 
 
@@ -118,7 +116,7 @@ def clear_cached_minute_timestamp(symbol: str) -> None:
 
 def age_cached_minute_timestamps(max_age_seconds: int) -> int:
     """Drop cache entries older than max_age_seconds (based on inserted time)."""  # AI-AGENT-REF: cache prune
-    now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
+    now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     to_del = [sym for sym, (_, ins) in _MINUTE_CACHE.items() if now_s - ins > max_age_seconds]
     for sym in to_del:
         _MINUTE_CACHE.pop(sym, None)
@@ -130,7 +128,7 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
     ts = get_cached_minute_timestamp(symbol)
     if ts is None:
         return None
-    now_s = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp())
+    now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     return max(0, now_s - int(ts))
 
 
@@ -209,7 +207,7 @@ def ensure_datetime(value: Any) -> _dt.datetime:
 
 def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
     """Derive [start, end] when callers omit them."""  # AI-AGENT-REF: legacy helper
-    now = _dt.datetime.now(tz=_dt.timezone.utc)
+    now = _dt.datetime.now(tz=UTC)
     end = now - _dt.timedelta(minutes=1)
     tf = str(timeframe).lower()
     if "day" in tf:
@@ -443,7 +441,9 @@ def _fetch_bars(
                                 mdf["timestamp"], utc=True
                             )
                             mdf.set_index("timestamp", inplace=True)
-                        from ai_trading.data.bars import _resample_minutes_to_daily as _resample_to_daily
+                        from ai_trading.data.bars import (
+                            _resample_minutes_to_daily as _resample_to_daily,
+                        )
                         rdf = _resample_to_daily(mdf)
                     except (ImportError, ValueError, TypeError, KeyError):  # AI-AGENT-REF: narrow resample errors
                         mdf = pd.DataFrame()

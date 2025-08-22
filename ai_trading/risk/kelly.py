@@ -1,20 +1,43 @@
-"""
-Kelly Criterion implementation for optimal position sizing.
+"""Kelly Criterion implementation for optimal position sizing."""
 
-Provides Kelly Criterion calculation, position sizing optimization,
-and risk-adjusted capital allocation for institutional trading.
-"""
+from __future__ import annotations
 
-import logging
 import math
 import statistics
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+
+# Import centralized configuration
+from ai_trading.config.management import TradingConfig
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 
-# Import centralized configuration
-from ai_trading.config.management import TradingConfig
+
+@dataclass(frozen=True)
+class KellyParams:
+    win_prob: float
+    win_loss_ratio: float
+    cap: float  # cap fraction, e.g., 0.04
+
+
+def institutional_kelly(p: KellyParams) -> float:
+    """Institutional-safe Kelly sizing.
+
+    f* = cap * max(0, p_win - (1 - p_win)/R)
+    Clamped to [0, cap].
+    """
+
+    raw = p.win_prob - (1.0 - p.win_prob) / max(p.win_loss_ratio, 1e-9)
+    frac = max(0.0, raw)
+    return max(0.0, min(p.cap * frac, p.cap))
+
+
+class InstitutionalKelly:
+    """Callable wrapper around :func:`institutional_kelly`."""
+
+    def __call__(self, params: KellyParams) -> float:  # pragma: no cover - thin wrapper
+        return institutional_kelly(params)
 class KellyCriterion:
     """
     Kelly Criterion calculator for optimal position sizing.

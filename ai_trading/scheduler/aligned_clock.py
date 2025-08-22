@@ -86,7 +86,6 @@ class AlignedClock:
                 )
 
         # Fallback to EST/EDT for NYSE
-        import pytz
         # Final fallback to UTC
         return utc_now
 

@@ -7,7 +7,6 @@ institutional-grade trading strategies.
 """
 
 # AI-AGENT-REF: use standard imports for hard dependencies
-import logging
 from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from enum import Enum

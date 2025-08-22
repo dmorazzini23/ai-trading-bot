@@ -2,7 +2,6 @@
 
 import json
 from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
-import logging
 import os
 from datetime import UTC, datetime
 from typing import Any

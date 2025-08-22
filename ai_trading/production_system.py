@@ -5,7 +5,6 @@ Integrates all production-ready components into a unified trading system
 with comprehensive risk management, monitoring, and execution capabilities.
 """
 
-import logging
 from ai_trading.exc import COMMON_EXC  # AI-AGENT-REF: narrow handler
 from datetime import UTC, datetime
 from typing import Any

@@ -1,6 +1,6 @@
 # tools/migrate_metrics_logger.py
 from __future__ import annotations
-import io, re, sys
+import re, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root (…/ai_trading)

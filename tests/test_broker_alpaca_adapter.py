@@ -1,5 +1,8 @@
-from ai_trading.broker.alpaca import AlpacaBroker
 import pytest
+
+from ai_trading.broker.alpaca import AlpacaBroker
+
+pytestmark = pytest.mark.alpaca
 
 # Fake “new” and “old” clients that expose just enough to be called.
 

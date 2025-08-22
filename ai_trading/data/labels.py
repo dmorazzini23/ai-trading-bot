@@ -8,7 +8,6 @@ and other trading-specific target variables.
 import numpy as np
 import pandas as pd
 from typing import Union, Optional
-import logging
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

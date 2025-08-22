@@ -3,7 +3,6 @@ import types
 
 import pandas as pd
 import pytest
-import pydantic
 
 try:
     import pydantic_settings  # noqa: F401

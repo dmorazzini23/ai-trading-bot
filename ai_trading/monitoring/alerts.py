@@ -5,7 +5,6 @@ Provides real-time alerts, risk monitoring, and notification
 management for institutional trading operations.
 """
 
-import logging
 import threading
 import time
 from ai_trading.utils.timing import sleep as psleep  # AI-AGENT-REF: avoid circular import

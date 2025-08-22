@@ -1,7 +1,6 @@
 """Integration test for retry/backoff and idempotency in order submission."""
 
 import time
-from datetime import datetime, timezone
 
 # Set PYTHONPATH to include our tenacity mock
 import sys

@@ -5,7 +5,6 @@ Ensures all trading parameters remain within safe institutional bounds
 and provides validation for parameter changes.
 """
 
-import logging
 from datetime import UTC, datetime
 from typing import Any
 

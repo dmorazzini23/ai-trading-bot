@@ -6,7 +6,6 @@ financial time series validation and hyperparameter optimization.
 """
 
 import json
-import logging
 import pickle
 from datetime import datetime, timezone
 from typing import Any
@@ -33,8 +32,6 @@ xgb_available = True
 
 from sklearn.linear_model import Ridge
 from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
     mean_squared_error,
 )
 

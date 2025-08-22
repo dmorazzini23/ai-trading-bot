@@ -2,7 +2,7 @@
 
 import pytest
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Ensure test environment
 os.environ.update({

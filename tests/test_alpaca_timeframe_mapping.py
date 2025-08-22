@@ -3,7 +3,6 @@ import types
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from ai_trading.alpaca_api import get_bars_df
 

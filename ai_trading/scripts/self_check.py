@@ -1,6 +1,5 @@
 import json
 import os
-from datetime import datetime, timezone
 
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df  # AI-AGENT-REF: market data helper
 

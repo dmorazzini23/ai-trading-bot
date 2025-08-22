@@ -3,8 +3,7 @@ Minimal test for critical fixes that can run without full environment setup.
 """
 
 import os
-import tempfile
-from datetime import datetime, timezone, timedelta
+from datetime import timezone
 from unittest.mock import Mock
 
 # Set minimal environment for testing

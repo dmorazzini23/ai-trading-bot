@@ -1,8 +1,6 @@
-import numpy as np
 import pandas as pd
 import pytest
 import joblib
-import logging
 import types
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with proper imports from core module
@@ -13,7 +11,6 @@ from ai_trading.core.bot_engine import (
     execute_trades,
     load_model,
     health_check,
-    EnsembleModel,
 )
 
 

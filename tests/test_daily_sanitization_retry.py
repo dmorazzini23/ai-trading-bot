@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 import ai_trading.core.bot_engine as be_mod
 from ai_trading.core.bot_engine import DataFetcher

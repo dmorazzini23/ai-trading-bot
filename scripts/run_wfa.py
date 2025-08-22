@@ -7,9 +7,8 @@ the enhanced cost-aware strategy logic to validate changes before live deploymen
 """
 
 import argparse
-import logging
 import sys
-from datetime import datetime, UTC
+from datetime import datetime
 from pathlib import Path
 
 # Set up Python path to include ai_trading package

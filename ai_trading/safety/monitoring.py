@@ -10,7 +10,6 @@ This module provides comprehensive production safety features including:
 """
 
 import json
-import logging
 import threading
 import time
 from collections.abc import Callable

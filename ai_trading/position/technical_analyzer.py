@@ -18,7 +18,6 @@ from typing import Any
 
 # AI-AGENT-REF: graceful imports with fallbacks
 # Use hard imports since numpy and pandas are dependencies
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)

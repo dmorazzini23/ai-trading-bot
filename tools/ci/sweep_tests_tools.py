@@ -1,5 +1,5 @@
 # tools/ci/sweep_tests_tools.py
-import re, sys
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]

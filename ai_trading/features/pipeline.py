@@ -5,7 +5,6 @@ Provides feature transformers and pipelines that ensure no future
 information leaks into training data during cross-validation.
 """
 
-import logging
 from typing import Any
 
 import numpy as np
