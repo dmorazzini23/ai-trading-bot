@@ -8,8 +8,8 @@ import difflib
 import importlib
 from pathlib import Path
 import sys
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # AI-AGENT-REF: ensure project root
-from typing import List, Tuple
 
 import libcst as cst
 from libcst.helpers import get_full_name_for_node
@@ -22,24 +22,23 @@ logger = get_logger(__name__)
 
 # Static rewrites for complex import cases
 STATIC_REWRITES: dict[str, str] = {
-    # Monitoring: prefer the public system_health module
-    "from ai_trading.monitoring.performance_monitor import ResourceMonitor": (
-        "from ai_trading.monitoring import system_health as _sh; ResourceMonitor = getattr(_sh, 'ResourceMonitor', None)"
-    ),
     # Short-selling: feature not present in OSS build → guarded import pattern
     "from ai_trading.risk.short_selling import validate_short_selling": (
         "import pytest\ntry:\n    from ai_trading.risk.short_selling import validate_short_selling  # type: ignore\nexcept Exception:\n    pytest.skip('short selling not available in this build', allow_module_level=True)"
     ),
 }
 
-STATIC_REWRITES.update({
-    # AI-AGENT-REF: legacy module path rewrites
-    "ai_trading.position.core": "ai_trading.position",
-    "ai_trading.performance_monitor": "ai_trading.monitoring",
-    "ai_trading.monitoring.performance_monitor": "ai_trading.monitoring",
-    "ai_trading.runtime.http_wrapped": "ai_trading.runtime.http",
-    "ai_trading.utils.timing": "ai_trading.utils",
-})
+STATIC_REWRITES.update(
+    {
+        # AI-AGENT-REF: legacy module path rewrites
+        "ai_trading.position.core": "ai_trading.position",
+        "ai_trading.performance_monitor": "ai_trading.monitoring.system_health",
+        "ai_trading.monitoring.performance_monitor": "ai_trading.monitoring.system_health",
+        "ai_trading.runtime.http_wrapped": "ai_trading.runtime.http",
+        "ai_trading.utils.timing.utils.timing": "ai_trading.utils.timing",
+    }
+)
+
 
 def load_rewrite_map(path: Path) -> dict[str, str]:
     mapping: dict[str, str] = {}
@@ -57,7 +56,7 @@ class ImportTransformer(cst.CSTTransformer):
 
     def __init__(self, mapping: dict[str, str]):
         self.mapping = mapping
-        self.applied: List[Tuple[str, str]] = []
+        self.applied: list[tuple[str, str]] = []
 
     def leave_ImportFrom(self, original_node: cst.ImportFrom, updated_node: cst.ImportFrom) -> cst.BaseStatement:
         module_name = None
@@ -86,7 +85,7 @@ class ImportTransformer(cst.CSTTransformer):
         return updated_node
 
 
-def find_ai_trading_imports(code: str, pkg: str) -> List[str]:
+def find_ai_trading_imports(code: str, pkg: str) -> list[str]:
     tree = ast.parse(code)
     modules: set[str] = set()
     for node in ast.walk(tree):
@@ -112,9 +111,9 @@ def main() -> int:
 
     mapping = load_rewrite_map(Path(args.rewrite_map))
     tests_path = Path(args.tests)
-    applied: List[Tuple[str, str, str]] = []
-    unresolved: List[Tuple[str, str]] = []
-    samples: List[dict[str, str]] = []
+    applied: list[tuple[str, str, str]] = []
+    unresolved: list[tuple[str, str]] = []
+    samples: list[dict[str, str]] = []
 
     for file in tests_path.rglob("*.py"):
         try:
@@ -126,7 +125,7 @@ def main() -> int:
             continue
 
         code = original_code
-        static_changes: List[Tuple[str, str]] = []
+        static_changes: list[tuple[str, str]] = []
         for old, new in STATIC_REWRITES.items():
             if old in code:
                 code = code.replace(old, new)

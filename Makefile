@@ -30,30 +30,22 @@ extras-rl:
         fi # AI-AGENT-REF: optional RL stack
 
 ensure-runtime:
-	@$(PYTHON) - <<'PY'\
-import importlib, subprocess, sys\
-mods = ['pydantic','pytest','pytest_asyncio','pytest_timeout','xdist']\
-try:\
-    [importlib.import_module(m) for m in mods]\
-except Exception:\
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt', '-c', 'constraints.txt'])\
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements-dev.txt', '--no-deps', '-c', 'constraints.txt'])\
-PY
-
+	@if [ "$(SKIP_INSTALL)" != "1" ]; then \
+		$(PYTHON) -m pip install -r requirements.txt -c constraints.txt ;\
+	fi
 .PHONY: test-collect-report
 ## test-collect-report: ensure runtime deps, run pytest --collect-only, and
 ## harvest import errors into artifacts/import-repair-report.md with env header.
 ## Setting SKIP_INSTALL=1 bypasses the ensure-runtime step.
-test-collect-report:
-	@if [ -z "$$SKIP_INSTALL" ]; then $(MAKE) ensure-runtime; fi
+test-collect-report: ensure-runtime
 	@mkdir -p $(dir $(IMPORT_REPAIR_REPORT))
-	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
-	@DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
-	$(PYTHON) tools/harvest_import_errors.py --top $(TOP_N) \
-	$(if $(filter 1,$(FAIL_ON_IMPORT_ERRORS)),--fail-on-errors,) \
-	--out $(IMPORT_REPAIR_REPORT)
+	$(PYTEST) $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only \
+	  || true
+	DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
+	  $(PYTHON) tools/harvest_import_errors.py --top $${TOP_N:-5} \
+	  $${FAIL_ON_IMPORT_ERRORS:+--fail-on-errors} \
+	  --out $(IMPORT_REPAIR_REPORT)
 	@echo "Wrote $(IMPORT_REPAIR_REPORT)"
-
 test-core:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) -m "$(MARK_EXPR)" $(PYTEST_NODES) $(TIMEOUT_FLAGS)
 

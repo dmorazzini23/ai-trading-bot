@@ -30,5 +30,7 @@ PY
           mypy ai_trading
       - name: Audit exceptions
         run: make audit-exceptions
+      - name: Legacy scan
+        run: make legacy-scan
       - name: Tests
         run: pytest -q -n auto --maxfail=1
