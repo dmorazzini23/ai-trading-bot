@@ -4,3 +4,8 @@ portalocker==2.7.0
 alpaca-trade-api==3.2.0
 yfinance==0.2.37
 websockets==10.4
+
+# Add exact pins for newly introduced deps to preserve reproducibility
+cachetools==5.3.3
+# Torch CPU wheels are published on PyPI; pin to a stable 2.x release compatible with Py3.12
+torch==2.3.1
