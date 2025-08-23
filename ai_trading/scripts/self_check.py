@@ -23,8 +23,7 @@ def main() -> None:
             "start": start,
             "end": end,
         }
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    except (KeyError, ValueError, TypeError):  # AI-AGENT-REF: narrow broad exception
         raise SystemExit(1)
 
 
