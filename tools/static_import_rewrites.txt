@@ -1,4 +1,3 @@
 ai_trading.position.core:ai_trading.position
 ai_trading.monitoring.performance_monitor:ai_trading.monitoring.system_health
-ai_trading.utils.timing.utils.timing:ai_trading.utils.timing
-ai_trading.runtime.http_wrapped:ai_trading.runtime.http
+ai_trading.runtime.http_wrapped:ai_trading.utils.http

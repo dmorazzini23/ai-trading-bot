@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .timing import HTTP_TIMEOUT, clamp_timeout, sleep
 from .base import (
     EASTERN_TZ,
     ensure_utc,
@@ -9,9 +10,14 @@ from .base import (
     is_market_open,
     market_open_between,
 )
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep
+
+# Keep submodules importable as ai_trading.utils.http, etc.
+from . import http  # noqa: F401
 
 __all__ = [
+    "HTTP_TIMEOUT",
+    "clamp_timeout",
+    "sleep",
     "EASTERN_TZ",
     "ensure_utc",
     "get_free_port",
@@ -19,7 +25,5 @@ __all__ = [
     "health_check",
     "is_market_open",
     "market_open_between",
-    "HTTP_TIMEOUT",
-    "clamp_timeout",
-    "sleep",
+    "http",
 ]

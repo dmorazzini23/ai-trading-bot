@@ -128,3 +128,19 @@ harvester/Makefile as the suite evolves.
 ### Legacy tests
 Run `make legacy-mark` to tag tests that still import legacy paths with `@pytest.mark.legacy`.
 Core test runs exclude them by default via `-m "not legacy ..."`. When you refactor or delete a legacy test, re-run `make legacy-mark` to keep tags consistent.
+
+### Quick smoke
+
+```bash
+# Print env header + Top-N in logs; return 0
+tools/ci_smoke.sh
+
+# Fail pipeline when import errors are present
+FAIL_ON_IMPORT_ERRORS=1 tools/ci_smoke.sh
+
+Knobs:
+• TOP_N (default 5)
+• FAIL_ON_IMPORT_ERRORS (0 or 1; exit code 101 on errors when 1)
+• DISABLE_ENV_ASSERT (set to 1 when running on a non-canonical host)
+• IMPORT_REPAIR_REPORT (artifact path, default artifacts/import-repair-report.md)
+```

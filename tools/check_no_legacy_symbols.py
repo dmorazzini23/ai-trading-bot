@@ -1,37 +1,25 @@
-from __future__ import annotations
-import re
+#!/usr/bin/env python3
 import sys
-from pathlib import Path
+import pathlib
+import re
 
-BLOCKLIST = [
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+bad = [
     r"\bResourceMonitor\b",
     r"\bperformance_monitor\b",
     r"\bposition\.core\b",
     r"\bhttp_wrapped\b",
 ]
-PAT = re.compile("|".join(f"(?:{p})" for p in BLOCKLIST))
-
-
-def main() -> int:
-    roots = [Path("ai_trading"), Path("tests")]
-    bad: list[tuple[str, int, str]] = []
-    for root in roots:
-        for p in root.rglob("*.py"):
-            try:
-                text = p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                continue
-            for i, line in enumerate(text.splitlines(), 1):
-                if PAT.search(line):
-                    bad.append((str(p), i, line.strip()))
-    if not bad:
-        print("OK: no legacy shim symbols found")
-        return 0
-    print("ERROR: legacy shim symbols detected:")
-    for f, ln, line in bad:
-        print(f"  {f}:{ln}: {line}")
-    return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+rx = re.compile("|".join(bad))
+violations = []
+for p in ROOT.rglob("*.py"):
+    if p.parts[0] == ".venv" or "/venv/" in str(p):
+        continue
+    if p.name in {"mark_legacy_tests.py", "repair_test_imports.py"} and p.parent.name == "tools":
+        continue
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    if rx.search(text):
+        violations.append(str(p))
+if violations:
+    print("Legacy symbols detected:\n" + "\n".join(sorted(violations)))
+    sys.exit(2)

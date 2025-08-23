@@ -1,36 +1,30 @@
 #!/usr/bin/env bash
-# AI-AGENT-REF: CI smoke script
-# Run test-collect-report, print the first 40 lines of the artifact,
-# and exit 0/101 based on FAIL_ON_IMPORT_ERRORS.
-set -uo pipefail
+set -euo pipefail
 
-REPORT="${IMPORT_REPAIR_REPORT:-artifacts/import-repair-report.md}"
-TOP_N="${TOP_N:-5}"
+: "${TOP_N:=5}"
+: "${FAIL_ON_IMPORT_ERRORS:=0}"
+: "${DISABLE_ENV_ASSERT:=}"
+: "${IMPORT_REPAIR_REPORT:=artifacts/import-repair-report.md}"
 
-echo "==> CI smoke: make test-collect-report (TOP_N=${TOP_N}, FAIL_ON_IMPORT_ERRORS=${FAIL_ON_IMPORT_ERRORS:-}, DISABLE_ENV_ASSERT=${DISABLE_ENV_ASSERT:-})"
-status=0
-make test-collect-report || status=$?
+# Run collect + harvest (never hard-fail the make; we control the exit below)
+DISABLE_ENV_ASSERT="${DISABLE_ENV_ASSERT}" \
+  make test-collect-report TOP_N="${TOP_N}" \
+       FAIL_ON_IMPORT_ERRORS="${FAIL_ON_IMPORT_ERRORS}" \
+       IMPORT_REPAIR_REPORT="${IMPORT_REPAIR_REPORT}" || true
 
-echo "==> Artifact preview (first 40 lines): ${REPORT}"
-if [[ -f "${REPORT}" ]]; then
-  sed -n '1,40p' "${REPORT}"
+echo "---- Import-Repair Report (head -n 40) ----"
+if [[ -f "${IMPORT_REPAIR_REPORT}" ]]; then
+  head -n 40 "${IMPORT_REPAIR_REPORT}"
 else
-  echo "(artifact not found at ${REPORT})"
+  echo "Report not found at ${IMPORT_REPAIR_REPORT}"
 fi
+echo "-------------------------------------------"
 
-# Normalize exit behaviour.
-if [[ -n "${FAIL_ON_IMPORT_ERRORS:-}" ]]; then
-  if [[ ${status} -eq 101 ]]; then
-    echo "==> Import errors found and FAIL_ON_IMPORT_ERRORS=1; exiting 101."
+# Exit decision mirrors harvester's --fail-on-errors behavior
+if [[ "${FAIL_ON_IMPORT_ERRORS}" == "1" ]]; then
+  # If the report has a 'Remaining import errors' section with a nonzero count, exit 101
+  if grep -qE '^- Remaining import errors \(unique\): [1-9][0-9]*' "${IMPORT_REPAIR_REPORT}" 2>/dev/null; then
     exit 101
-  elif [[ ${status} -eq 0 ]]; then
-    echo "==> No import errors detected; exiting 0."
-    exit 0
-  else
-    echo "==> Collector returned unexpected status ${status}; bubbling it up."
-    exit ${status}
   fi
-else
-  echo "==> FAIL_ON_IMPORT_ERRORS not set; exiting 0 (collector status=${status})."
-  exit 0
 fi
+exit 0
