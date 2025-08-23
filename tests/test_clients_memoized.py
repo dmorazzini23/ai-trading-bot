@@ -1,3 +1,8 @@
+import pytest
+
+pytest.importorskip("alpaca_trade_api", reason="vendor SDK not installed")
+
+
 def test_clients_built_once(monkeypatch):
     import ai_trading.core.bot_engine as be
 

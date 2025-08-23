@@ -112,6 +112,19 @@ def _install_vendor_stubs() -> None:
 
 _install_vendor_stubs()
 
+
+# Minimal timing helpers for tests only (no package shim).
+try:
+    from ai_trading.utils.timing import now, elapsed_ms  # preferred if it exists
+except Exception:
+    import time as _t
+
+    def now() -> float:  # AI-AGENT-REF: fallback timer
+        return _t.perf_counter()
+
+    def elapsed_ms(start: float) -> float:  # AI-AGENT-REF: fallback timer
+        return (_t.perf_counter() - start) * 1000.0
+
 import pandas as pd
 
 
