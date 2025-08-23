@@ -1,4 +1,4 @@
-## Central pytest knobs
+				## Central pytest knobs
 # AI-AGENT-REF: unify test harness
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 PYTEST_PLUGINS    = -p xdist -p pytest_timeout -p pytest_asyncio
@@ -13,7 +13,7 @@ PYTHON ?= $(shell readlink -f $$(command -v python))
 PYTEST  = $(PYTHON) -m pytest
 REPORT ?= artifacts/import-repair-report.md
 
-.PHONY: test-collect extras-rl test-collect-report test-core test-all repair-test-imports
+.PHONY: test-collect extras-rl ensure-runtime test-collect-report test-core test-all repair-test-imports
 
 test-collect:
 	$(PYTEST) $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only
@@ -24,18 +24,30 @@ extras-rl:
 	        echo "RL extras installed" ; \
 	else \
 	        echo "RL extras disabled (set WITH_RL=1 to enable)" ; \
-	fi # AI-AGENT-REF: optional RL stack
+        fi # AI-AGENT-REF: optional RL stack
+
+ensure-runtime:
+	@$(PYTHON) - <<'PY'\
+import importlib, subprocess, sys\
+mods = ['pydantic','pytest','pytest_asyncio','pytest_timeout','xdist']\
+try:\
+    [importlib.import_module(m) for m in mods]\
+except Exception:\
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt', '-c', 'constraints.txt'])\
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', 'requirements-dev.txt', '--no-deps', '-c', 'constraints.txt'])\
+PY
 
 .PHONY: test-collect-report
-## test-collect-report: run pytest --collect-only to surface import errors,
-## then harvest them into artifacts/import-repair-report.md.
-## The harvester prepends a normalized environment line and
-## asserts the exact combo on Ubuntu 24.04 / CPython 3.12.3.
+## test-collect-report: ensure runtime deps, run pytest --collect-only, and
+## harvest import errors into artifacts/import-repair-report.md with env header.
+## Setting SKIP_INSTALL=1 bypasses the ensure-runtime step.
 test-collect-report:
+@if [ "$(SKIP_INSTALL)" != "1" ]; then \
+	$(MAKE) ensure-runtime; \
+	fi
 	$(PYTEST) $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
-	# Prepend env header + assert canonical combo; writes $(REPORT)
-	IMPORT_REPAIR_REPORT=$(REPORT) $(PYTHON) tools/harvest_import_errors.py
-	@echo "Wrote $(REPORT)"
+	$(PYTHON) tools/harvest_import_errors.py --out $(REPORT)
+@echo "Wrote $(REPORT)"
 
 test-core:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_MARK_EXPR) $(PYTEST_NODES) $(TIMEOUT_FLAGS)

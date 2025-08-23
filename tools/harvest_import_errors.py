@@ -4,6 +4,7 @@
 # AI-AGENT-REF: env summary + assertion logic
 from __future__ import annotations
 
+import argparse
 import os
 import platform
 import re
@@ -53,6 +54,14 @@ def assert_expected_combo(line: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--out",
+        default=os.environ.get("IMPORT_REPAIR_REPORT", "artifacts/import-repair-report.md"),
+        help="Output report path",
+    )  # AI-AGENT-REF: expose output path
+    args = parser.parse_args()
+
     # AI-AGENT-REF: prepend env header and assert canonical combo
     env_line = compute_env_summary_line()
     assert_expected_combo(env_line)
@@ -113,7 +122,7 @@ def main() -> None:
         "- Treat others as **external**; fix by adding pins to `requirements.txt` + `constraints.txt` (not to dev-only)."
     )
 
-    artifact = Path(os.environ.get("IMPORT_REPAIR_REPORT", "artifacts/import-repair-report.md"))
+    artifact = Path(args.out)
     artifact.parent.mkdir(parents=True, exist_ok=True)
 
     lines = [f"**Environment**: {env_line}", ""]
