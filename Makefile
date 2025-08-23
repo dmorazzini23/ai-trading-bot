@@ -1,11 +1,10 @@
+# Reuse these everywhere to avoid plugin autoload issues
+PYTEST_PLUGINS = -p xdist -p pytest_timeout -p pytest_asyncio
+PYTEST_OPTS    = -q -o log_cli=true -o log_cli_level=INFO
 
 # --- Pytest config (autload disabled) ---
-export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-PYTEST_PLUGINS=-p xdist -p pytest_timeout -p pytest_asyncio
 
 # Common flags
-PYTEST_BASE=-q -o log_cli=true -o log_cli_level=INFO
-PYTEST_TMARK=-m "not integration and not slow"
 
 .PHONY: init test lint verify test-all test-core test-int contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
 
@@ -36,7 +35,7 @@ dev-deps:
 .PHONY: test-core test-int test-all test-core-seq test-core-1p test-collect test-debug repair-test-imports
 
 test-core:
-	pytest $(PYTEST_PLUGINS) $(PYTEST_BASE) $(PYTEST_TMARK) -n 2 --timeout=120 --timeout-method=thread tests
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest $(PYTEST_PLUGINS) $(PYTEST_OPTS) -m "not integration and not slow" -n 2 --timeout=120 --timeout-method=thread
 
 .PHONY: test-core-1p
 test-core-1p:
@@ -50,7 +49,7 @@ test-core-1p:
 
 .PHONY: test-collect
 test-collect:
-	pytest $(PYTEST_PLUGINS) $(PYTEST_BASE) --collect-only tests
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest $(PYTEST_PLUGINS) $(PYTEST_OPTS) --collect-only tests
 
 .PHONY: test-debug
 test-debug:
@@ -137,4 +136,4 @@ fix-import-time:
 refactor-config-hygiene: scan-import-time fix-import-time scan-import-time
 
 repair-test-imports:
-	tools/repair-test-imports.sh ai_trading tests
+	bash tools/repair-test-imports.sh

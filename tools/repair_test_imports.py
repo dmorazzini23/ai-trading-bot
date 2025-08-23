@@ -1,228 +1,182 @@
 #!/usr/bin/env python3
-"""
-Scan tests for stale internal imports and rewrite them safely using libcst.
-Focus: known breakages like `ai_trading.position.core` → `ai_trading.position`.
-Usage:
-  python tools/repair_test_imports.py --pkg ai_trading --tests tests --dry-run
-  python tools/repair_test_imports.py --pkg ai_trading --tests tests --write --report artifacts/import-repair-report.md
-"""
-# AI-AGENT-REF: AST/CST based import repair utility with reporting
+"""Repair stale test imports and generate a report."""
 from __future__ import annotations
-import argparse, pathlib, sys, importlib.util, subprocess, os, re, difflib
-from datetime import datetime, UTC
+
+import argparse
+import ast
+import difflib
+import importlib
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # AI-AGENT-REF: ensure project root
+from typing import List, Tuple
+
 import libcst as cst
-import libcst.helpers as cst_helpers
-from typing import Dict, Iterable
+from libcst.helpers import get_full_name_for_node
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))  # AI-AGENT-REF: ensure project importable
+from ai_trading.logging import get_logger
 
-# Static, hand-curated rewrites for known legacy paths that moved to a public API.
-# These are applied before any dynamic package scans. Use module:symbol notation
-# to keep intent clear.
-REWRITES_STATIC: Dict[str, str] = {
-    # position
-    "ai_trading.position.core:MarketRegime": "ai_trading.position:MarketRegime",
-    "ai_trading.position.core:RegimeState": "ai_trading.position:RegimeState",
-    "ai_trading.position.core": "ai_trading.position",
+logger = get_logger(__name__)
 
-    # (leave room for future hand-curated entries; do not add shims)
-}
+# AI-AGENT-REF: utility for repairing stale test imports
 
-def _expand_static_map(raw: Dict[str, str]) -> Dict[str, str]:
-    """Convert colon-separated mapping to dotted form for CST rewrites."""
-    out: Dict[str, str] = {}
-    for k, v in raw.items():
-        out[k.replace(":", ".")] = v.replace(":", ".")
-    return out
+def load_rewrite_map(path: Path) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        src, dst = line.split(":", 1)
+        mapping[src.strip()] = dst.strip()
+    return mapping
 
-def _module_exists(mod: str) -> bool:
-    return importlib.util.find_spec(mod) is not None
 
-class Rewriter(cst.CSTTransformer):
-    def __init__(self, changes: dict[str, str], log: list[str]) -> None:
-        self.changes = changes
-        self.log = log
+class ImportTransformer(cst.CSTTransformer):
+    """Rewrite imports based on a mapping."""
 
-    def leave_Import(self, node: cst.Import, updated: cst.Import) -> cst.Import:
-        names = []
-        for alias in updated.names:
-            full = cst_helpers.get_full_name_for_node(alias.name)
-            new = self.changes.get(full)
-            if new:
-                self.log.append(f"Import: {full} -> {new}")
-                names.append(alias.with_changes(name=cst.parse_expression(new)))
+    def __init__(self, mapping: dict[str, str]):
+        self.mapping = mapping
+        self.applied: List[Tuple[str, str]] = []
+
+    def leave_ImportFrom(self, original_node: cst.ImportFrom, updated_node: cst.ImportFrom) -> cst.BaseStatement:
+        module_name = None
+        if updated_node.module:
+            module_name = get_full_name_for_node(updated_node.module)
+        if module_name and module_name in self.mapping:
+            new_mod = cst.parse_expression(self.mapping[module_name])
+            self.applied.append((module_name, self.mapping[module_name]))
+            return updated_node.with_changes(module=new_mod)
+        return updated_node
+
+    def leave_Import(self, original_node: cst.Import, updated_node: cst.Import) -> cst.BaseStatement:
+        new_names = []
+        changed = False
+        for alias in updated_node.names:
+            mod_name = get_full_name_for_node(alias.name)
+            if mod_name in self.mapping:
+                new_name = cst.parse_expression(self.mapping[mod_name])
+                new_names.append(alias.with_changes(name=new_name))
+                self.applied.append((mod_name, self.mapping[mod_name]))
+                changed = True
             else:
-                names.append(alias)
-        return updated.with_changes(names=tuple(names))
-
-    def leave_ImportFrom(self, node: cst.ImportFrom, updated: cst.ImportFrom) -> cst.ImportFrom:
-        if updated.module is None:
-            return updated
-        full_mod = cst_helpers.get_full_name_for_node(updated.module)
-        module_new = self.changes.get(full_mod)
-        names = []
-        for alias in updated.names:
-            name_str = cst_helpers.get_full_name_for_node(alias.name)
-            fq = f"{full_mod}.{name_str}"
-            new_fq = self.changes.get(fq)
-            if new_fq:
-                new_mod, new_name = new_fq.rsplit(".", 1)
-                if module_new is None:
-                    module_new = new_mod
-                self.log.append(f"ImportFrom: {fq} -> {new_fq}")
-                names.append(alias.with_changes(name=cst.parse_expression(new_name)))
-            else:
-                names.append(alias)
-        if module_new:
-            return updated.with_changes(module=cst.parse_expression(module_new), names=tuple(names))
-        return updated.with_changes(names=tuple(names))
-
-def rewrite_file(path: pathlib.Path, mapping: dict[str, str]) -> tuple[bool, list[str], str, str]:
-    src = path.read_text(encoding="utf-8")
-    mod = cst.parse_module(src)
-    log: list[str] = []
-    updated = mod.visit(Rewriter(mapping, log))
-    new_code = updated.code
-    changed = new_code != src
-    diff = ""
-    if changed:
-        diff = "\n".join(
-            difflib.unified_diff(
-                src.splitlines(),
-                new_code.splitlines(),
-                fromfile=str(path),
-                tofile=str(path),
-            )
-        )
-    return changed, log, new_code, diff
-
-
-def collect_import_errors(test_root: pathlib.Path, pkg: str) -> tuple[list[str], str]:
-    """Run pytest collection and parse out missing modules."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "-q",
-        "--collect-only",
-        str(test_root),
-        "-p",
-        "xdist",
-        "-p",
-        "pytest_timeout",
-        "-p",
-        "pytest_asyncio",
-    ]
-    env = os.environ.copy()
-    env.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), env=env)
-    output = proc.stdout + "\n" + proc.stderr
-    missing: list[str] = []
-    pattern = re.compile(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]")
-    for line in output.splitlines():
-        m = pattern.search(line)
-        if m:
-            missing.append(m.group(1))
-    return missing, output
-
-
-def fill_block(template: str, start: str, end: str, lines: Iterable[str]) -> str:
-    """Replace placeholder blocks in the report template."""
-    start_tag = f"<!-- {start} -->"
-    end_tag = f"<!-- {end} -->"
-    body = "\n".join(lines) if lines else "*(none)*  "
-    return re.sub(
-        rf"{start_tag}.*?{end_tag}",
-        f"{start_tag}\n{body}\n{end_tag}",
-        template,
-        flags=re.DOTALL,
-    )
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--pkg", default="ai_trading")
-    ap.add_argument("--tests", default="tests")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--write", action="store_true")
-    ap.add_argument("--report", default="")
-    args = ap.parse_args(argv)
-
-    mapping_all = _expand_static_map(REWRITES_STATIC)
-    # Only keep mappings that point to real, resolvable modules
-    def _target_exists(target: str) -> bool:
-        mod = target.rsplit(".", 1)[0]
-        return _module_exists(mod)
-
-    mapping = {k: v for k, v in mapping_all.items() if _target_exists(v)}
-    test_root = pathlib.Path(args.tests)
-
-    rewrites_log: list[str] = []
-    diffs: list[str] = []
-    files_rewritten = 0
-
-    for py in test_root.rglob("*.py"):
-        changed, log, new_code, diff = rewrite_file(py, mapping)
-        if log:
-            rewrites_log.extend(log)
+                new_names.append(alias)
         if changed:
-            files_rewritten += 1
-            if args.write and not args.dry_run:
-                py.write_text(new_code, encoding="utf-8")
-            diffs.append(diff)
+            return updated_node.with_changes(names=new_names)
+        return updated_node
 
-    missing, _ = collect_import_errors(test_root, args.pkg)
-    internal_missing = sorted({m for m in missing if m.startswith(args.pkg)})
-    third_party_missing = sorted({m for m in missing if not m.startswith(args.pkg)})
 
-    static_fixed = len(rewrites_log)
-    internal_unresolved = len(internal_missing)
-    internal_total = internal_unresolved + static_fixed
-    total_errors = len(missing)
+def find_ai_trading_imports(code: str, pkg: str) -> List[str]:
+    tree = ast.parse(code)
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(pkg):
+                    modules.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.startswith(pkg):
+                modules.add(node.module)
+    return sorted(modules)
 
-    if args.report:
-        tpl_path = pathlib.Path(args.report)
-        tpl = tpl_path.read_text(encoding="utf-8")
-        replacements = {
-            "CMD": " ".join(sys.argv),
-            "DATE_UTC": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
-            "TOTAL_ERRORS": str(total_errors),
-            "INTERNAL_TOTAL": str(internal_total),
-            "INTERNAL_FIXED": str(static_fixed),
-            "STATIC_FIXED": str(static_fixed),
-            "INTERNAL_UNRESOLVED": str(internal_unresolved),
-            "THIRD_PARTY_TOTAL": str(len(third_party_missing)),
-            "FILES_REWRITTEN": str(files_rewritten),
-            "REEXPORTS_TOUCHED": str(static_fixed),
-        }
-        for k, v in replacements.items():
-            tpl = tpl.replace(f"{{{{{k}}}}}", v)
-        tpl = fill_block(
-            tpl,
-            "UNRESOLVED_INTERNAL_BEGIN",
-            "UNRESOLVED_INTERNAL_END",
-            [f"- {m}" for m in internal_missing],
-        )
-        tpl = fill_block(
-            tpl,
-            "THIRD_PARTY_MISSING_BEGIN",
-            "THIRD_PARTY_MISSING_END",
-            [f"- {m}" for m in third_party_missing],
-        )
-        diff_lines = ["```diff"] + (diffs if diffs else ["# none"]) + ["```"]
-        tpl = fill_block(
-            tpl,
-            "REWRITES_DIFF_BEGIN",
-            "REWRITES_DIFF_END",
-            diff_lines,
-        )
-        tpl_path.parent.mkdir(parents=True, exist_ok=True)
-        tpl_path.write_text(tpl, encoding="utf-8")
 
-    print("Done. Files rewritten:", files_rewritten)
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pkg", required=True)
+    parser.add_argument("--tests", required=True)
+    parser.add_argument("--rewrite-map", required=True)
+    parser.add_argument("--write", action="store_true")
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--sample-limit", type=int, default=5)
+    args = parser.parse_args()
+
+    mapping = load_rewrite_map(Path(args.rewrite_map))
+    tests_path = Path(args.tests)
+    applied: List[Tuple[str, str, str]] = []
+    unresolved: List[Tuple[str, str]] = []
+    samples: List[dict[str, str]] = []
+
+    for file in tests_path.rglob("*.py"):
+        try:
+            original_code = file.read_text()
+        except OSError as exc:  # pragma: no cover - I/O error
+            logger.error("failed to read %s: %s", file, exc)
+            if args.write:
+                return 1
+            continue
+
+        module = cst.parse_module(original_code)
+        transformer = ImportTransformer(mapping)
+        new_module = module.visit(transformer)
+        new_code = new_module.code
+
+        if transformer.applied:
+            if args.write:
+                try:
+                    file.write_text(new_code)
+                except OSError as exc:  # pragma: no cover - I/O error
+                    logger.error("failed to write %s: %s", file, exc)
+                    return 1
+            diff = "".join(
+                difflib.unified_diff(
+                    original_code.splitlines(),
+                    new_code.splitlines(),
+                    fromfile=str(file),
+                    tofile=str(file),
+                    lineterm="",
+                )
+            )
+            applied.extend((str(file), old, new) for old, new in transformer.applied)
+            if len(samples) < args.sample_limit:
+                samples.append({"file": str(file), "diff": diff})
+            logger.info("rewrote imports in %s", file)
+        code_to_check = new_code if transformer.applied else original_code
+
+        for mod in find_ai_trading_imports(code_to_check, args.pkg):
+            try:
+                importlib.import_module(mod)
+            except Exception:  # pragma: no cover - unresolved import
+                unresolved.append((str(file), mod))
+
+    report_path = Path(args.report)
+    try:
+        with report_path.open("w") as fh:
+            fh.write("# Import Repair Report\n\n")
+            fh.write("**When to read:** after running `make repair-test-imports`\n\n")
+            fh.write("## Summary\n")
+            fh.write(f"- Rewritten files: {len({f for f,_,_ in applied})}\n")
+            fh.write(f"- Unresolved import sites: {len(unresolved)}\n\n")
+
+            fh.write("## Applied Rewrites\n")
+            if applied:
+                for file, old, new in applied:
+                    fh.write(f"- {file}: `{old}` → `{new}`\n")
+            else:
+                fh.write("- None\n")
+
+            fh.write("\n## Unresolved Imports (needs human attention)\n")
+            if unresolved:
+                for file, imp in unresolved:
+                    fh.write(f"- {file}: `{imp}`\n")
+            else:
+                fh.write("- None\n")
+
+            fh.write(f"\n## Diff Samples (first {args.sample_limit})\n")
+            if samples:
+                for sample in samples:
+                    fh.write(f"<details><summary>{sample['file']}</summary>\n\n")
+                    fh.write("```diff\n")
+                    fh.write(f"{sample['diff']}\n")
+                    fh.write("\n</details>\n")
+            else:
+                fh.write("- No samples collected\n")
+
+            fh.write("\n\nGenerated by tools/repair_test_imports.py\n")
+    except OSError as exc:  # pragma: no cover - I/O error
+        logger.error("failed to write report %s: %s", report_path, exc)
+        return 1
+
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

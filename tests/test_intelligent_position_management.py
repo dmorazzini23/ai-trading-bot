@@ -12,29 +12,30 @@ Tests the new position management components:
 AI-AGENT-REF: Comprehensive tests for intelligent position management
 """
 
+import importlib.util
 import pytest
 from dataclasses import dataclass
 from unittest.mock import Mock
+# AI-AGENT-REF: skip if ai_trading.position not available
+if importlib.util.find_spec("ai_trading.position") is None:  # pragma: no cover
+    pytest.skip("ai_trading.position not available in this env", allow_module_level=True)
 
-# AI-AGENT-REF: ensure tests use public position API only
-# Import the new position management components via public API
-try:
-    from ai_trading.position import (
-        ConcentrationLevel,
-        DivergenceType,
-        IntelligentPositionManager,
-        MarketRegime,
-        MarketRegimeDetector,
-        PortfolioCorrelationAnalyzer,
-        ProfitTakingEngine,
-        ProfitTakingStrategy,
-        SignalStrength,
-        TechnicalSignalAnalyzer,
-        TrailingStopManager,
-        TrailingStopType,
-    )
-except ImportError:  # pragma: no cover
-    pytest.skip("ai_trading.position components missing", allow_module_level=True)
+from ai_trading.position import (
+    ConcentrationLevel,
+    DivergenceType,
+    IntelligentPositionManager,
+    MarketRegime,
+    MarketRegimeDetector,
+    PortfolioCorrelationAnalyzer,
+    ProfitTakingEngine,
+    ProfitTakingStrategy,
+    SignalStrength,
+    TechnicalSignalAnalyzer,
+    TrailingStopManager,
+    TrailingStopType,
+)
+
+
 
 
 @dataclass
