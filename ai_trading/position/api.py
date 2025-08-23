@@ -1,14 +1,15 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
-from collections.abc import Mapping
-
-
-class Allocator(Protocol):
-    def allocate(self, cash: float, prices: Mapping[str, float]) -> Mapping[str, float]: ...
+from .market_regime import MarketRegime, detect_market_regime
 
 
 @dataclass(frozen=True)
 class Allocation:
-    quantities: Mapping[str, float]
-    cash_left: float = 0.0
+    cash_pct: float
+    risk_pct: float = 0.0
+
+
+class Allocator(Protocol):
+    def allocate(self, regime: MarketRegime) -> Allocation: ...
+# AI-AGENT-REF: allocation protocol surface
