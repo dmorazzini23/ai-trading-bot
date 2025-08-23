@@ -21,9 +21,18 @@ extras-rl:
 	        echo "RL extras disabled (set WITH_RL=1 to enable)" ; \
 	fi # AI-AGENT-REF: optional RL stack
 
-test-collect-report: extras-rl
-	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
-	python tools/harvest_import_errors.py --write artifacts/import-repair-report.md || true
+.PHONY: test-collect-report
+## test-collect-report: run pytest --collect-only to surface import errors,
+## then harvest them into artifacts/import-repair-report.md.
+## The harvester prepends a normalized environment line and
+## asserts the exact combo on Ubuntu 24.04 / CPython 3.12.3.
+test-collect-report:
+	@mkdir -p artifacts
+	@echo "==> pytest --collect-only (import probing)"
+	@pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
+	@echo "==> harvest import errors (with env assertion)"
+	@python tools/harvest_import_errors.py
+	@echo "==> wrote artifacts/import-repair-report.md"
 
 test-core:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_MARK_EXPR) $(PYTEST_NODES) $(TIMEOUT_FLAGS)
