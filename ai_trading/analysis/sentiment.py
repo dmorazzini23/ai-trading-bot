@@ -16,8 +16,8 @@ from ai_trading.settings import get_news_api_key
 from ai_trading.config import get_settings
 from ai_trading.utils.timing import HTTP_TIMEOUT
 SENTIMENT_API_KEY = os.getenv('SENTIMENT_API_KEY', '')
-from ai_trading.utils.device import pick_torch_device, tensors_to_device
-DEVICE, _TORCH = pick_torch_device()
+from ai_trading.utils.device import get_device, tensors_to_device  # AI-AGENT-REF: guard torch import
+DEVICE = get_device()
 _BS4 = None
 _TRANSFORMERS = None
 _SENT_DEPS_LOGGED: set[str] = set()
