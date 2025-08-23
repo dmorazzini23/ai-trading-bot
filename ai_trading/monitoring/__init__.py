@@ -22,7 +22,5 @@ from .metrics import MetricsCollector, PerformanceMonitor
 from .order_health_monitor import OrderHealthMonitor, OrderInfo, _active_orders, _order_health_monitor, _order_tracking_lock, get_order_health_monitor
 from .performance_dashboard import AnomalyDetector, PerformanceDashboard, PerformanceMetrics, RealTimePnLTracker
 from .system_health_checker import collect_system_health
-from .system_health import ResourceMonitor  # AI-AGENT-REF: re-export monitor stub
 __all__ = ['AlertManager', 'EmailAlerter', 'SlackAlerter', 'Alert', 'AlertSeverity', 'AlertChannel', 'PerformanceDashboard', 'PerformanceMetrics', 'RealTimePnLTracker', 'AnomalyDetector', 'MetricsCollector', 'PerformanceMonitor', 'AlertType', 'RealtimeMetrics', 'collect_system_health']
 __all__ += ['OrderHealthMonitor', 'OrderInfo', 'get_order_health_monitor', '_active_orders', '_order_tracking_lock', '_order_health_monitor']
-__all__ += ['ResourceMonitor']

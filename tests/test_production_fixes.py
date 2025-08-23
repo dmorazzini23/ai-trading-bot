@@ -60,64 +60,19 @@ class TestSentimentAPIConfiguration(unittest.TestCase):
             self.assertEqual(sentiment_key, 'fallback_key')
 
 
-class TestProcessDetection(unittest.TestCase):
-    """Test improved process detection logic."""
+class TestSystemHealthSnapshot(unittest.TestCase):
+    """Test basic system health snapshot."""
 
-    def setUp(self):
-        """Set up performance monitor test."""
-        try:
-            from ai_trading.monitoring import system_health as _sh  # type: ignore
-            ResourceMonitor = getattr(_sh, "ResourceMonitor", None)
-            if ResourceMonitor is None:
-                raise AttributeError
-            self.monitor = ResourceMonitor()
-        except Exception:
-            self.skipTest("performance monitor not available")  # AI-AGENT-REF: fallback when missing
+    def test_snapshot_basic(self):
+        """snapshot_basic returns CPU and memory data structure."""
+        from ai_trading.monitoring.system_health import snapshot_basic
 
-    def test_trading_bot_process_detection(self):
-        """Test that trading bot process detection works correctly."""
-        # Test the new _count_trading_bot_processes method
-        if hasattr(self.monitor, '_count_trading_bot_processes'):
-            count = self.monitor._count_trading_bot_processes()
-            self.assertIsInstance(count, int)
-            self.assertGreaterEqual(count, 1)  # At least this test process
-
-    @patch('subprocess.run')
-    def test_process_filtering(self, mock_subprocess):
-        """Test that temporary processes are filtered out."""
-        # Mock ps aux output with trading bot and temporary processes
-        mock_output = """USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
-user      1234  0.1  1.0 123456  7890 ?        S    09:00   0:01 python bot_engine.py
-user      5678  0.0  0.1  12345   890 ?        S    09:30   0:00 python -c import sys; print("test")
-user      9999  0.2  1.5 234567  8901 ?        S    09:01   0:02 python runner.py --mode balanced
-user      1111  0.0  0.1  11111   111 ?        S    10:59   0:00 pgrep -f python
-"""
-
-        mock_subprocess.return_value.returncode = 0
-        mock_subprocess.return_value.stdout = mock_output
-
-        if hasattr(self.monitor, '_count_trading_bot_processes'):
-            count = self.monitor._count_trading_bot_processes()
-            # Should count bot_engine.py and runner.py, but not the test command or pgrep
-            self.assertGreaterEqual(count, 2)
-
-    def test_alert_threshold_adjustment(self):
-        """Test that multiple process alerts have appropriate thresholds."""
-        # Create mock metrics with multiple processes
-        metrics = {
-            'process': {
-                'python_processes': 3
-            }
-        }
-
-        alerts = self.monitor.check_alert_conditions(metrics)
-
-        # Should have an alert for multiple processes
-        multiple_proc_alerts = [a for a in alerts if 'multiple' in a.get('type', '')]
-        if multiple_proc_alerts:
-            alert = multiple_proc_alerts[0]
-            # Threshold should be 2 (allowing for main + backup process)
-            self.assertEqual(alert.get('threshold', 1), 2)
+        data = snapshot_basic()
+        self.assertIn("has_psutil", data)
+        # cpu_percent/mem_percent may be missing if psutil not available
+        if data.get("has_psutil"):
+            self.assertIsInstance(data.get("cpu_percent"), float)
+            self.assertIsInstance(data.get("mem_percent"), float)
 
 
 class TestDataStalenessThresholds(unittest.TestCase):

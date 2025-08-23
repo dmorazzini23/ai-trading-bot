@@ -3,7 +3,6 @@
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 PYTEST_PLUGINS    = -p xdist -p pytest_timeout -p pytest_asyncio
 PYTEST_FLAGS_BASE = -q -o log_cli=true -o log_cli_level=INFO
-PYTEST_MARK_EXPR  = -m "not integration and not slow"
 PYTEST_NODES      = -n auto
 TIMEOUT_FLAGS     = --timeout=120 --timeout-method=thread
 WITH_RL ?= 0
@@ -15,11 +14,12 @@ IMPORT_REPAIR_REPORT ?= artifacts/import-repair-report.md
 TOP_N ?= 5
 FAIL_ON_IMPORT_ERRORS ?= 0
 DISABLE_ENV_ASSERT ?= 0
+MARK_EXPR ?= not legacy
 
-.PHONY: test-collect extras-rl ensure-runtime test-collect-report test-core test-all repair-test-imports
+.PHONY: test-collect extras-rl ensure-runtime test-collect-report test-core test-all repair-test-imports legacy-scan
 
 test-collect:
-	$(PYTEST) $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only
+	$(PYTEST) $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only -m "$(MARK_EXPR)"
 
 extras-rl:
 	@if [ "$(WITH_RL)" = "1" ]; then \
@@ -55,10 +55,14 @@ test-collect-report:
 	@echo "Wrote $(IMPORT_REPAIR_REPORT)"
 
 test-core:
-	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_MARK_EXPR) $(PYTEST_NODES) $(TIMEOUT_FLAGS)
+	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) -m "$(MARK_EXPR)" $(PYTEST_NODES) $(TIMEOUT_FLAGS)
 
 test-all:
-	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_NODES) $(TIMEOUT_FLAGS)
+	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) -m "$(MARK_EXPR)" -k "not legacy" $(PYTEST_NODES) $(TIMEOUT_FLAGS)
 
 repair-test-imports:
 	bash tools/repair-test-imports.sh
+
+.PHONY: legacy-scan
+legacy-scan:
+	python tools/check_no_legacy_symbols.py
