@@ -25,11 +25,12 @@ pandas-market-calendars>=4.4,<6  # AI-AGENT-REF: exchange calendars
 schedule==1.2.2
 prometheus-client==0.20.0
 cachetools==5.3.3
+alpaca-py==0.42.0   # AI-AGENT-REF: modern SDK; tests import `alpaca`
 ratelimit==2.2.1
 # Explicit because main.py uses dotenv.load_dotenv directly
 python-dotenv==1.1.1
 tenacity==8.5.0
-# Used by code paths (not only tests)
-scikit-learn==1.5.2
+# ML stack used by non-RL code paths
+scikit-learn==1.5.1
 scipy==1.13.1
 threadpoolctl==3.5.0
