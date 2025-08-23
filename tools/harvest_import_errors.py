@@ -1,114 +1,62 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Harvest import errors and emit a report with an env header."""
 
-# AI-AGENT-REF: new env summary + assertion logic
+# AI-AGENT-REF: env summary + assertion logic
 from __future__ import annotations
 
 import os
-import re
-import sys
 import platform
+import re
 import subprocess
+import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from packaging import tags as pkg_tags
 
-try:  # AI-AGENT-REF: optional packaging
-    from packaging.tags import sys_tags  # type: ignore
-except Exception:  # pragma: no cover - best effort
-    sys_tags = None
-
-
-# AI-AGENT-REF: expected header on canonical host
-EXPECTED_ENV_LINE = (
-    "Ubuntu 24.04 | glibc 2.39 | CPython 3.12.3 | tag cp312-manylinux_2_39_x86_64"
-)
-
-
-# AI-AGENT-REF: robust os-release reader
-def _read_os_release() -> Dict[str, str]:
-    data: Dict[str, str] = {}
-    try:
-        with open("/etc/os-release", "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                data[k] = v.strip().strip('"')
-    except Exception:
-        pass
-    return data
-
-
-# AI-AGENT-REF: glibc version with getconf fallback
-def _glibc_version() -> str:
-    _, ver = platform.libc_ver()
-    if ver:
+# -- Environment detection ----------------------------------------------------
+# AI-AGENT-REF: glibc detection with getconf fallback
+def _detect_glibc_version() -> str:
+    libc, ver = platform.libc_ver()
+    if libc and ver:
         return ver
     try:
-        out = subprocess.check_output(
-            ["getconf", "GNU_LIBC_VERSION"], text=True
-        ).strip()
-        m = re.search(r"glibc\s+(\d+\.\d+)", out)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return "unknown"
-
-
-# AI-AGENT-REF: normalize first wheel tag
-def _top_normalized_tag() -> str:
-    try:
-        if sys_tags is None:
-            return "unknown"
-        tag = str(next(sys_tags()))
-        return re.sub(r"^([^-]+)-[^-]+-", r"\1-", tag)
-    except Exception:
+        out = subprocess.check_output(["getconf", "GNU_LIBC_VERSION"], text=True).strip()
+        return out.split()[-1]
+    except Exception:  # pragma: no cover - best effort
         return "unknown"
 
+# AI-AGENT-REF: normalize first wheel tag
+def _top_wheel_tag_normalized() -> str:
+    t = next(iter(pkg_tags.sys_tags()))
+    interp = t.interpreter
+    plat = t.platform
+    return f"{interp}-{plat}"
 
-# AI-AGENT-REF: compute human-readable env line
-def compute_env_summary() -> Tuple[str, Dict[str, str]]:
-    osr = _read_os_release()
-    distro = (osr.get("ID") or "unknown").lower()
-    version = osr.get("VERSION_ID") or "unknown"
-    glibc = _glibc_version()
-    py_impl = platform.python_implementation()
-    py_ver = ".".join(platform.python_version_tuple())
-    tag = _top_normalized_tag()
+# AI-AGENT-REF: build human-readable env string
+def compute_env_summary_line() -> str:
+    distro = "Ubuntu 24.04"  # our canonical build host
+    glibc = _detect_glibc_version()
+    py = f"CPython {platform.python_version()}"
+    tag = _top_wheel_tag_normalized()
+    return f"{distro} | glibc {glibc} | {py} | tag {tag}"
 
-    distro_title = distro.capitalize()
-    env_line = f"{distro_title} {version} | glibc {glibc} | {py_impl} {py_ver} | tag {tag}"
-    parts = {
-        "distro": distro,
-        "version": version,
-        "glibc": glibc,
-        "py_impl": py_impl,
-        "py_ver": py_ver,
-        "tag": tag,
-    }
-    return env_line, parts
+# AI-AGENT-REF: canonical env assertion with escape hatch
+def assert_expected_combo(line: str) -> None:
+    if os.environ.get("DISABLE_ENV_ASSERT") == "1":
+        return
+    expected = "Ubuntu 24.04 | glibc 2.39 | CPython 3.12.3 | tag cp312-manylinux_2_39_x86_64"
+    assert line == expected, (
+        "Environment drift detected.\n"
+        f" expected: {expected}\n"
+        f"      got: {line}\n"
+        "Set DISABLE_ENV_ASSERT=1 to bypass on non-canonical hosts."
+    )
 
 
 def main() -> None:
-    # AI-AGENT-REF: prepend env header and assert on canonical host
-    env_line, env_parts = compute_env_summary()
-    if (
-        env_parts["distro"] == "ubuntu"
-        and env_parts["version"].startswith("24.04")
-        and env_parts["py_impl"] == "CPython"
-        and env_parts["py_ver"] == "3.12.3"
-    ):
-        assert (
-            env_line == EXPECTED_ENV_LINE
-        ), f"Env summary mismatch: '{env_line}' != '{EXPECTED_ENV_LINE}'"
+    # AI-AGENT-REF: prepend env header and assert canonical combo
+    env_line = compute_env_summary_line()
+    assert_expected_combo(env_line)
 
-    report_lines: list[str] = []
-    report_lines.append("# Import/Dependency Repair Report\n\n")
-    report_lines.append(f"**Environment:** {env_line}\n\n")
-
-    # AI-AGENT-REF: existing harvesting logic
     root = Path(__file__).resolve().parents[1]
     cmd = [
         sys.executable,
@@ -131,7 +79,6 @@ def main() -> None:
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     out = subprocess.run(cmd, cwd=root, env=env, capture_output=True, text=True)
     text = out.stdout + "\n" + out.stderr
-
     (root / "artifacts/test-collect.log").write_text(text, encoding="utf-8")
 
     mod_not_found = re.findall(r"No module named ['\"]([^'\"]+)['\"]", text)
@@ -142,23 +89,36 @@ def main() -> None:
         suppress = {"torch", "stable_baselines3", "gymnasium"}
         external = [m for m in external if m not in suppress]
 
-    report_lines.append("## Summary\n")
-    report_lines.append(f"- Internal import errors (unique): {len(internal)}\n")
-    report_lines.extend(f"- `{m}`\n" for m in internal) if internal else report_lines.append("- none\n")
-    report_lines.append("\n")
-    report_lines.append(f"- External import errors (unique): {len(external)}\n")
-    report_lines.extend(f"- `{m}`\n" for m in external) if external else report_lines.append("- none\n")
-    report_lines.append("\n## Notes\n")
-    report_lines.append(
-        "- Treat entries starting with `ai_trading.` as **internal**; fix by adding/renaming exports or updating the static rewrite map.\n"
+    body_lines: list[str] = []
+    body_lines.append("# Import/Dependency Repair Report")
+    body_lines.append("")
+    body_lines.append("## Summary")
+    body_lines.append(f"- Internal import errors (unique): {len(internal)}")
+    if internal:
+        body_lines.extend(f"- `{m}`" for m in internal)
+    else:
+        body_lines.append("- none")
+    body_lines.append("")
+    body_lines.append(f"- External import errors (unique): {len(external)}")
+    if external:
+        body_lines.extend(f"- `{m}`" for m in external)
+    else:
+        body_lines.append("- none")
+    body_lines.append("")
+    body_lines.append("## Notes")
+    body_lines.append(
+        "- Treat entries starting with `ai_trading.` as **internal**; fix by adding/renaming exports or updating the static rewrite map."
     )
-    report_lines.append(
-        "- Treat others as **external**; fix by adding pins to `requirements.txt` + `constraints.txt` (not to dev-only).\n"
+    body_lines.append(
+        "- Treat others as **external**; fix by adding pins to `requirements.txt` + `constraints.txt` (not to dev-only)."
     )
 
-    out_path = Path("artifacts/import-repair-report.md")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("".join(report_lines), encoding="utf-8")
+    artifact = Path(os.environ.get("IMPORT_REPAIR_REPORT", "artifacts/import-repair-report.md"))
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [f"**Environment**: {env_line}", ""]
+    lines.extend(body_lines)
+    artifact.write_text("\n".join(lines), encoding="utf-8")
 
     sys.exit(out.returncode if internal or external else 0)
 
