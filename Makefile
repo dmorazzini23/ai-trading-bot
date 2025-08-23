@@ -1,6 +1,11 @@
 
-# Always load these explicitly because we run with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-PYTEST_PLUGINS := -p xdist -p pytest_timeout -p pytest_asyncio
+# --- Pytest config (autload disabled) ---
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+PYTEST_PLUGINS=-p xdist -p pytest_timeout -p pytest_asyncio
+
+# Common flags
+PYTEST_BASE=-q -o log_cli=true -o log_cli_level=INFO
+PYTEST_TMARK=-m "not integration and not slow"
 
 .PHONY: init test lint verify test-all test-core test-int contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
 
@@ -31,14 +36,7 @@ dev-deps:
 .PHONY: test-core test-int test-all test-core-seq test-core-1p test-collect test-debug repair-test-imports
 
 test-core:
-	@mkdir -p artifacts
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	pytest $(PYTEST_PLUGINS) \
-	  -n 2 -m "not integration and not slow" \
-	  --timeout=120 --timeout-method=thread \
-	  -q --disable-warnings \
-	  -o log_cli=true -o log_cli_level=INFO \
-	  | tee artifacts/pytest-core.txt
+	pytest $(PYTEST_PLUGINS) $(PYTEST_BASE) $(PYTEST_TMARK) -n 2 --timeout=120 --timeout-method=thread tests
 
 .PHONY: test-core-1p
 test-core-1p:
@@ -52,11 +50,7 @@ test-core-1p:
 
 .PHONY: test-collect
 test-collect:
-	@mkdir -p artifacts
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	pytest $(PYTEST_PLUGINS) -q --collect-only \
-	  -o log_cli=true -o log_cli_level=INFO \
-	  | tee artifacts/pytest-collect.txt
+	pytest $(PYTEST_PLUGINS) $(PYTEST_BASE) --collect-only tests
 
 .PHONY: test-debug
 test-debug:
@@ -143,7 +137,4 @@ fix-import-time:
 refactor-config-hygiene: scan-import-time fix-import-time scan-import-time
 
 repair-test-imports:
-	python tools/repair_test_imports.py \
-	  --pkg ai_trading --tests tests \
-	  --write \
-	  --report artifacts/import-repair-report.md
+	tools/repair-test-imports.sh ai_trading tests
