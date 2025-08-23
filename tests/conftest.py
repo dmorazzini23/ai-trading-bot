@@ -1,3 +1,40 @@
+"""
+Alpaca vendor stub wiring fix (tests only)
+-----------------------------------------
+Ensure `alpaca_trade_api` and `alpaca_trade_api.rest` resolve to the
+local test vendor stubs so imports like
+    from alpaca_trade_api import REST
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
+work during test collection. This is idempotent and does not affect runtime.
+"""
+import sys as _sys
+import importlib as _importlib
+
+try:
+    import alpaca_trade_api as _alpaca_mod  # may be real lib or existing stub
+except Exception:  # pragma: no cover - only hit in test bootstrap
+    _alpaca_mod = None
+
+# If the module is absent or lacks expected attributes, bind to our stub package.
+if _alpaca_mod is None or not hasattr(_alpaca_mod, "REST"):
+    _alpaca_mod = _importlib.import_module("tests.vendor_stubs.alpaca_trade_api")
+    _sys.modules["alpaca_trade_api"] = _alpaca_mod
+
+# Ensure `alpaca_trade_api.rest` submodule provides TimeFrame/TimeFrameUnit
+try:
+    import alpaca_trade_api.rest as _alpaca_rest
+except Exception:  # pragma: no cover
+    _alpaca_rest = None
+
+if (
+    _alpaca_rest is None
+    or not all(hasattr(_alpaca_rest, n) for n in ("TimeFrame", "TimeFrameUnit"))
+):
+    _alpaca_rest_stub = _importlib.import_module(
+        "tests.vendor_stubs.alpaca_trade_api.rest"
+    )
+    _sys.modules["alpaca_trade_api.rest"] = _alpaca_rest_stub
+
 import asyncio
 import os
 import socket
@@ -96,3 +133,4 @@ def dummy_data_fetcher_empty():
         def get_minute_bars(self, symbol, start=None, end=None, limit=None):
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     return DF()
+
