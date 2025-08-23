@@ -3,14 +3,24 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 import numpy as np
-try:
-    import gymnasium as gym
-    EnvBase = gym.Env
-except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError):
-    gym = None
 
+try:
+    import stable_baselines3  # noqa: F401
+    import gymnasium as gym  # noqa: F401
+    import torch  # noqa: F401
+    RL_AVAILABLE = True
+except Exception:
+    RL_AVAILABLE = False
+    gym = None
+# AI-AGENT-REF: optional RL stack
+
+if RL_AVAILABLE:
+    EnvBase = gym.Env
+else:
     class _EnvFallback:
         """Fallback base class when gymnasium is not installed."""
+        pass
+
     EnvBase = _EnvFallback
 
 @dataclass
@@ -72,7 +82,7 @@ class TradingEnv(EnvBase):
     """
 
     def __init__(self, data: np.ndarray, window: int=10, *, transaction_cost: float=0.001, slippage: float=0.0005, half_spread: float=0.0002, action_config: ActionSpaceConfig | None=None, reward_config: RewardConfig | None=None) -> None:
-        if gym is None:
+        if not RL_AVAILABLE or gym is None:
             raise ImportError('gymnasium required; install gymnasium to use TradingEnv')
         self.data = data.astype(np.float32)
         self.window = window

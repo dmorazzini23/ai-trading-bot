@@ -6,19 +6,25 @@ from typing import Any
 import numpy as np
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
+
 try:
+    import stable_baselines3  # noqa: F401
+    import gymnasium  # noqa: F401
+    import torch  # noqa: F401
+    RL_AVAILABLE = True
+except Exception as e:
+    RL_AVAILABLE = False
+    logger.warning('RL stack unavailable; RL features disabled: %s', e)
+# AI-AGENT-REF: optional RL stack
+
+if RL_AVAILABLE:
     from stable_baselines3 import A2C, DQN, PPO
     from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
     from stable_baselines3.common.env_util import make_vec_env
     from stable_baselines3.common.evaluation import evaluate_policy
     from stable_baselines3.common.vec_env import DummyVecEnv
-    sb3_available = True
-except COMMON_EXC as e:
-    sb3_available = False
-    logger.warning('stable-baselines3 unavailable; RL features disabled: %s', e)
-
+else:
     class _SB3Shim:
-
         def __init__(self, *a, **k):
             pass
 
@@ -31,15 +37,14 @@ except COMMON_EXC as e:
         @classmethod
         def load(cls, *a, **k):
             return cls()
+
     PPO = A2C = DQN = _SB3Shim
 
     class BaseCallback:
-
         def __init__(self, *a, **k):
             pass
 
     class EvalCallback(BaseCallback):
-
         def __init__(self, *a, **k):
             super().__init__(*a, **k)
 
@@ -52,8 +57,9 @@ except COMMON_EXC as e:
 
     def evaluate_policy(*a, **k):
         return (0.0, 0.0)
+
 from .env import TradingEnv
-if sb3_available:
+if RL_AVAILABLE:
 
     class EarlyStoppingCallback(BaseCallback):
         """
@@ -226,7 +232,7 @@ class RLTrainer:
         self.eval_env = None
         self.training_results = {}
         self.eval_callback = None
-        if not sb3_available:
+        if not RL_AVAILABLE:
             logger.warning('stable-baselines3 not available - RL training will use fallback mode')
         logger.info(f'RLTrainer initialized with {algorithm} algorithm')
 
@@ -243,7 +249,7 @@ class RLTrainer:
         Returns:
             Training results
         """
-        if not sb3_available:
+        if not RL_AVAILABLE:
             logger.warning('Stable-baselines3 not available - returning dummy results')
             return {'training_time': 0.0, 'final_evaluation': {'mean_reward': 0.0, 'std_reward': 0.0}, 'total_timesteps': 0, 'algorithm': self.algorithm}
         try:
@@ -374,7 +380,7 @@ class RLTrainer:
 
 def train_rl_model_cli() -> None:
     """CLI interface for RL training."""
-    if not sb3_available:
+    if not RL_AVAILABLE:
         logger.warning('Stable-baselines3 not available - RL training CLI disabled')
         return
     try:

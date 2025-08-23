@@ -3,12 +3,23 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any
+
 try:
+    import stable_baselines3  # noqa: F401
+    import gymnasium  # noqa: F401
+    import torch  # noqa: F401
+    RL_AVAILABLE = True
+except Exception:
+    RL_AVAILABLE = False
+# AI-AGENT-REF: optional RL stack guard
+
+if RL_AVAILABLE:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv
-except (KeyError, ValueError, TypeError):
+else:
     PPO = None
     DummyVecEnv = None
+
 from ai_trading.strategies.base import StrategySignal
 TradeSignal = StrategySignal
 logger = logging.getLogger(__name__)
@@ -66,6 +77,7 @@ class RLAgent:
 class RLTrader(RLAgent):
     """Backward-compatible alias used by bot_engine."""
     pass
+
 try:
     __all__.append('RLTrader')
 except NameError:
