@@ -11,6 +11,7 @@ prometheus-client==0.20.0
 schedule==1.2.2
 cachetools==5.3.3
 ratelimit==2.2.1
-scikit-learn==1.5.2
+scikit-learn==1.5.1
 scipy==1.13.1
 threadpoolctl==3.5.0
+alpaca-py==0.42.0

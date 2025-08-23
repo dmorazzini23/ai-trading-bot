@@ -1,0 +1,6 @@
+# Optional RL extras for Ubuntu 24.04 / CPython 3.12
+# AI-AGENT-REF: install only when WITH_RL=1
+# Install via: WITH_RL=1 make test-collect-report  (or `make extras-rl`)
+torch==2.3.1
+stable-baselines3==2.3.2
+gymnasium==0.29.1
