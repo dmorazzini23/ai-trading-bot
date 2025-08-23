@@ -1,1 +1,2 @@
 ai_trading.position.core:ai_trading.position
+ai_trading.monitoring.performance_monitor:ai_trading.monitoring.system_health
