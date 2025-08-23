@@ -118,3 +118,13 @@ Troubleshooting
 Questions or tweaks? Ping the secondary reader (that’s me) and we’ll tune the
 harvester/Makefile as the suite evolves.
 
+### Quick knobs (recap)
+
+- `TOP_N` (default 5): how many unique import errors to print in CI logs.
+- `FAIL_ON_IMPORT_ERRORS=1`: cause `test-collect-report` to exit with code 101 if any import errors are found.
+- `DISABLE_ENV_ASSERT=1`: bypass the environment assertion in the harvester (useful on non-canonical hosts).
+- `SKIP_INSTALL=1`: **local only**; skips `pip install` in make targets (CI should not set this).
+
+### Legacy tests
+Run `make legacy-mark` to tag tests that still import legacy paths with `@pytest.mark.legacy`.
+Core test runs exclude them by default via `-m "not legacy ..."`. When you refactor or delete a legacy test, re-run `make legacy-mark` to keep tags consistent.
