@@ -42,6 +42,7 @@ from ai_trading.logging.normalize import (
 )
 from ai_trading.utils.optional_import import optional_import
 from ai_trading.logging import logger  # AI-AGENT-REF: centralized logger
+from ai_trading.monitoring import metrics  # AI-AGENT-REF: direct metrics instrumentation
 
 yf = optional_import("yfinance")
 YF_AVAILABLE = yf is not None
@@ -360,6 +361,14 @@ def _fetch_bars(
     _interval = _canon_tf(timeframe)  # AI-AGENT-REF: centralized timeframe normalization
     _feed = _canon_feed(feed or _DEFAULT_FEED)  # AI-AGENT-REF: centralized feed normalization
 
+    def _tags() -> dict[str, str]:  # AI-AGENT-REF: metrics tags builder
+        return {
+            "provider": "alpaca",
+            "symbol": symbol,
+            "feed": _feed,
+            "timeframe": _interval,
+        }
+
     def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
         params = {
@@ -383,7 +392,7 @@ def _fetch_bars(
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()
-        except (Timeout, ConnectionError, HTTPError, RequestException, ValueError, KeyError) as e:
+        except Timeout as e:
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra(
@@ -395,8 +404,60 @@ def _fetch_bars(
                     }
                 ),
             )
+            metrics.incr("data.fetch.timeout", value=1.0, tags=_tags())  # AI-AGENT-REF: timeout metric
             if fallback:
                 _interval, _feed, _start, _end = fallback
+                metrics.incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())  # AI-AGENT-REF: fallback metric
+                payload = _format_fallback_payload_df(
+                    _interval, _feed, _start, _end
+                )
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": payload},
+                )
+                return _req(None)
+            raise
+        except ConnectionError as e:
+            logger.warning(
+                "DATA_SOURCE_HTTP_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "error": str(e),
+                    }
+                ),
+            )
+            metrics.incr("data.fetch.connection_error", value=1.0, tags=_tags())  # AI-AGENT-REF: connection error metric
+            if fallback:
+                _interval, _feed, _start, _end = fallback
+                metrics.incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())  # AI-AGENT-REF: fallback metric
+                payload = _format_fallback_payload_df(
+                    _interval, _feed, _start, _end
+                )
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": payload},
+                )
+                return _req(None)
+            raise
+        except (HTTPError, RequestException, ValueError, KeyError) as e:
+            logger.warning(
+                "DATA_SOURCE_HTTP_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "error": str(e),
+                    }
+                ),
+            )
+            metrics.incr("data.fetch.error", value=1.0, tags=_tags())  # AI-AGENT-REF: generic fetch error metric
+            if fallback:
+                _interval, _feed, _start, _end = fallback
+                metrics.incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())  # AI-AGENT-REF: fallback metric
                 payload = _format_fallback_payload_df(
                     _interval, _feed, _start, _end
                 )
@@ -431,6 +492,11 @@ def _fetch_bars(
             raise ValueError("Invalid feed or bad request")
 
         if status in (401, 403):
+            metrics.incr(
+                "data.fetch.unauthorized",
+                value=1.0,
+                tags=_tags(),
+            )  # AI-AGENT-REF: unauthorized metric
             logger.warning(
                 "UNAUTHORIZED_SIP" if _feed == "sip" else "DATA_SOURCE_UNAUTHORIZED",
                 extra=_norm_extra(
@@ -444,6 +510,11 @@ def _fetch_bars(
             )
             if _feed == "sip" and fallback:
                 _interval, _feed, _start, _end = fallback
+                metrics.incr(
+                    "data.fetch.fallback_attempt",
+                    value=1.0,
+                    tags=_tags(),
+                )  # AI-AGENT-REF: fallback metric
                 payload = _format_fallback_payload_df(
                     _interval, _feed, _start, _end
                 )
@@ -456,6 +527,11 @@ def _fetch_bars(
 
         # AI-AGENT-REF: explicit rate-limit observability and controlled fallback
         if status == 429:
+            metrics.incr(
+                "data.fetch.rate_limited",
+                value=1.0,
+                tags=_tags(),
+            )  # AI-AGENT-REF: rate limit metric
             logger.warning(
                 "DATA_SOURCE_RATE_LIMITED",
                 extra=_norm_extra(
@@ -469,6 +545,11 @@ def _fetch_bars(
             )
             if fallback:
                 _interval, _feed, _start, _end = fallback
+                metrics.incr(
+                    "data.fetch.fallback_attempt",
+                    value=1.0,
+                    tags=_tags(),
+                )  # AI-AGENT-REF: fallback metric
                 payload = _format_fallback_payload_df(
                     _interval, _feed, _start, _end
                 )
@@ -481,6 +562,12 @@ def _fetch_bars(
 
         df = pd.DataFrame(data)
         if df.empty:
+            if fallback:
+                metrics.incr(
+                    "data.fetch.empty",
+                    value=1.0,
+                    tags=_tags(),
+                )  # AI-AGENT-REF: empty payload metric
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
                     mdf = _fetch_bars(
@@ -529,6 +616,11 @@ def _fetch_bars(
                 )
             if fallback:
                 _interval, _feed, _start, _end = fallback
+                metrics.incr(
+                    "data.fetch.fallback_attempt",
+                    value=1.0,
+                    tags=_tags(),
+                )  # AI-AGENT-REF: fallback metric
                 payload = _format_fallback_payload_df(
                     _interval, _feed, _start, _end
                 )
@@ -562,6 +654,7 @@ def _fetch_bars(
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         df = df.dropna(subset=["open", "high", "low", "close"])
         df.set_index("timestamp", inplace=True, drop=False)
+        metrics.incr("data.fetch.success", value=1.0, tags=_tags())  # AI-AGENT-REF: success metric
         return df
 
     # AI-AGENT-REF: prepare alt feed for retry on empty/exception
