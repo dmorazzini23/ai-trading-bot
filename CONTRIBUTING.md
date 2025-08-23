@@ -36,6 +36,16 @@
   - `mypy.txt` for type-checking
   - `pytest.txt` for test execution
 
+## Keeping test imports current
+- Use `tools/repair_test_imports.py` to rewrite stale `ai_trading` imports in tests.
+- Run:
+
+  ```
+  python tools/repair_test_imports.py --pkg ai_trading --tests tests --write --report artifacts/import-repair-report.md
+  ```
+
+- Do not add compatibility shims; tests must reference the real modules.
+
 ## PR Task Prompt (required)
 **Title**  
 **Repository Context**  
