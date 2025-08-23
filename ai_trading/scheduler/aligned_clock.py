@@ -4,35 +4,29 @@ Exchange-aligned clock and scheduling module.
 Provides timing synchronization with exchange schedules and validates
 bar finality before signal generation.
 """
-
 import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-
 try:
-    import pandas_market_calendars as mcal  # optional
-except (ValueError, TypeError):  # pragma: no cover
+    import pandas_market_calendars as mcal
+except (ValueError, TypeError):
     mcal = None
-
 MARKET_CALENDAR_AVAILABLE = mcal is not None
 logger = logging.getLogger(__name__)
-
 
 def _get_calendar(cal_name: str):
     if mcal is None:
         return None
     try:
         return mcal.get_calendar(cal_name)
-    except (ValueError, TypeError) as exc:  # pragma: no cover - best effort
-        logger.warning(f"Failed to load {cal_name} calendar: {exc}")
+    except (ValueError, TypeError) as exc:
+        logger.warning(f'Failed to load {cal_name} calendar: {exc}')
         return None
-
 
 @dataclass
 class BarValidation:
     """Result of bar finality validation."""
-
     symbol: str
     timeframe: str
     is_final: bool
@@ -40,7 +34,6 @@ class BarValidation:
     bar_close_time: datetime
     skew_ms: float
     reason: str | None = None
-
 
 class AlignedClock:
     """
@@ -50,7 +43,7 @@ class AlignedClock:
     validates that bars are final before generating signals.
     """
 
-    def __init__(self, max_skew_ms: float = 250.0, exchange: str = "NYSE"):
+    def __init__(self, max_skew_ms: float=250.0, exchange: str='NYSE'):
         """
         Initialize aligned clock.
 
@@ -60,10 +53,8 @@ class AlignedClock:
         """
         self.max_skew_ms = max_skew_ms
         self.exchange = exchange
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
         self.calendar = _get_calendar(exchange)
-
-        # Cache for bar close times
         self._bar_close_cache: dict[str, datetime] = {}
 
     def get_exchange_time(self) -> datetime:
@@ -74,22 +65,15 @@ class AlignedClock:
             Current time in exchange timezone
         """
         utc_now = datetime.now(UTC)
-
         if self.calendar:
             try:
-                # Get exchange timezone from calendar
                 exchange_tz = self.calendar.tz
                 return utc_now.astimezone(exchange_tz)
             except (ValueError, TypeError) as e:
-                self.logger.warning(
-                    f"Failed to get exchange time: {e.__class__.__name__}: {e}"
-                )
-
-        # Fallback to EST/EDT for NYSE
-        # Final fallback to UTC
+                self.logger.warning(f'Failed to get exchange time: {e.__class__.__name__}: {e}')
         return utc_now
 
-    def next_bar_close(self, symbol: str, timeframe: str = "1m") -> datetime:
+    def next_bar_close(self, symbol: str, timeframe: str='1m') -> datetime:
         """
         Calculate next bar close time for symbol and timeframe.
 
@@ -100,86 +84,50 @@ class AlignedClock:
         Returns:
             Next bar close time in exchange timezone
         """
-        cache_key = f"{symbol}_{timeframe}"
-
-        # Check cache first
+        cache_key = f'{symbol}_{timeframe}'
         if cache_key in self._bar_close_cache:
             cached_close = self._bar_close_cache[cache_key]
             if cached_close > self.get_exchange_time():
                 return cached_close
-
         current_time = self.get_exchange_time()
-
-        # Parse timeframe
         interval_minutes = self._parse_timeframe_minutes(timeframe)
-
-        if interval_minutes >= 1440:  # Daily or longer
-            # Next market close
-            next_close = current_time.replace(
-                hour=16, minute=0, second=0, microsecond=0
-            )
+        if interval_minutes >= 1440:
+            next_close = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
             if next_close <= current_time:
                 next_close += timedelta(days=1)
         else:
-            # Intraday - round up to next interval
             minutes_since_midnight = current_time.hour * 60 + current_time.minute
-            next_interval = (
-                (minutes_since_midnight // interval_minutes) + 1
-            ) * interval_minutes
-
-            next_close = current_time.replace(
-                hour=next_interval // 60,
-                minute=next_interval % 60,
-                second=0,
-                microsecond=0,
-            )
-
-            # Handle day rollover
+            next_interval = (minutes_since_midnight // interval_minutes + 1) * interval_minutes
+            next_close = current_time.replace(hour=next_interval // 60, minute=next_interval % 60, second=0, microsecond=0)
             if next_close.day != current_time.day:
-                next_close = current_time.replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
+                next_close = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
                 next_close += timedelta(days=1)
-
-        # Skip weekends and holidays if calendar available
         if self.calendar:
             try:
-                trading_days = self.calendar.valid_days(
-                    start_date=next_close.date(),
-                    end_date=next_close.date() + timedelta(days=7),
-                )
+                trading_days = self.calendar.valid_days(start_date=next_close.date(), end_date=next_close.date() + timedelta(days=7))
                 if len(trading_days) > 0:
                     next_trading_day = trading_days[0].date()
                     if next_close.date() != next_trading_day:
-                        next_close = datetime.combine(
-                            next_trading_day, next_close.time()
-                        )
+                        next_close = datetime.combine(next_trading_day, next_close.time())
                         next_close = next_close.replace(tzinfo=next_close.tzinfo)
             except (ValueError, TypeError) as e:
-                self.logger.warning(
-                    f"Calendar check failed: {e.__class__.__name__}: {e}"
-                )
-
-        # Cache the result
+                self.logger.warning(f'Calendar check failed: {e.__class__.__name__}: {e}')
         self._bar_close_cache[cache_key] = next_close
-
         return next_close
 
     def _parse_timeframe_minutes(self, timeframe: str) -> int:
         """Parse timeframe string into minutes."""
         timeframe = timeframe.lower()
-
-        if timeframe.endswith("m"):
+        if timeframe.endswith('m'):
             return int(timeframe[:-1])
-        elif timeframe.endswith("h"):
+        elif timeframe.endswith('h'):
             return int(timeframe[:-1]) * 60
-        elif timeframe.endswith("d"):
+        elif timeframe.endswith('d'):
             return int(timeframe[:-1]) * 1440
         else:
-            # Default to 1 minute
             return 1
 
-    def check_skew(self, reference_time: datetime | None = None) -> float:
+    def check_skew(self, reference_time: datetime | None=None) -> float:
         """
         Check time skew against reference time.
 
@@ -191,25 +139,16 @@ class AlignedClock:
         """
         if reference_time is None:
             reference_time = datetime.now(UTC)
-
         exchange_time = self.get_exchange_time()
         local_utc = datetime.now(UTC)
-
-        # Convert exchange time to UTC for comparison
         exchange_utc = exchange_time.astimezone(UTC)
-
         skew_seconds = (local_utc - exchange_utc).total_seconds()
         skew_ms = skew_seconds * 1000
-
         if abs(skew_ms) > self.max_skew_ms:
-            self.logger.warning(
-                f"Time skew detected: {skew_ms:.1f}ms "
-                f"(max allowed: {self.max_skew_ms}ms)"
-            )
-
+            self.logger.warning(f'Time skew detected: {skew_ms:.1f}ms (max allowed: {self.max_skew_ms}ms)')
         return skew_ms
 
-    def ensure_final_bar(self, symbol: str, timeframe: str = "1m") -> BarValidation:
+    def ensure_final_bar(self, symbol: str, timeframe: str='1m') -> BarValidation:
         """
         Validate that the current bar is final before generating signals.
 
@@ -222,38 +161,17 @@ class AlignedClock:
         """
         current_time = self.get_exchange_time()
         next_close = self.next_bar_close(symbol, timeframe)
-
-        # Calculate time until next bar close
         time_to_close = (next_close - current_time).total_seconds()
-
-        # Check if we're too close to bar close (within skew tolerance)
         skew_ms = self.check_skew()
-        buffer_seconds = (self.max_skew_ms + 100) / 1000  # Add 100ms buffer
-
+        buffer_seconds = (self.max_skew_ms + 100) / 1000
         is_final = time_to_close > buffer_seconds
-
-        validation = BarValidation(
-            symbol=symbol,
-            timeframe=timeframe,
-            is_final=is_final,
-            current_time=current_time,
-            bar_close_time=next_close,
-            skew_ms=skew_ms,
-        )
-
+        validation = BarValidation(symbol=symbol, timeframe=timeframe, is_final=is_final, current_time=current_time, bar_close_time=next_close, skew_ms=skew_ms)
         if not is_final:
-            validation.reason = (
-                f"Too close to bar close: {time_to_close:.1f}s remaining "
-                f"(need >{buffer_seconds:.1f}s buffer)"
-            )
-
-            self.logger.warning(
-                f"Bar not final for {symbol} {timeframe}: {validation.reason}"
-            )
-
+            validation.reason = f'Too close to bar close: {time_to_close:.1f}s remaining (need >{buffer_seconds:.1f}s buffer)'
+            self.logger.warning(f'Bar not final for {symbol} {timeframe}: {validation.reason}')
         return validation
 
-    def is_market_open(self, symbol: str, timestamp: datetime | None = None) -> bool:
+    def is_market_open(self, symbol: str, timestamp: datetime | None=None) -> bool:
         """
         Check if market is open for trading.
 
@@ -268,44 +186,26 @@ class AlignedClock:
             timestamp = self.get_exchange_time()
         elif timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=UTC)
-
         if not self.calendar:
-            # Fallback - assume market hours 9:30 AM - 4:00 PM EST weekdays
-            if timestamp.weekday() >= 5:  # Weekend
+            if timestamp.weekday() >= 5:
                 return False
-
             market_open = timestamp.replace(hour=9, minute=30, second=0, microsecond=0)
             market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
-
             return market_open <= timestamp <= market_close
-
         try:
-            # Use calendar for accurate market hours
-            schedule = self.calendar.schedule(
-                start_date=timestamp.date(), end_date=timestamp.date()
-            )
-
+            schedule = self.calendar.schedule(start_date=timestamp.date(), end_date=timestamp.date())
             if schedule.empty:
                 return False
-
-            market_open = schedule.iloc[0]["market_open"]
-            market_close = schedule.iloc[0]["market_close"]
-
-            # Convert to same timezone as timestamp
+            market_open = schedule.iloc[0]['market_open']
+            market_close = schedule.iloc[0]['market_close']
             market_open = market_open.tz_convert(timestamp.tzinfo)
             market_close = market_close.tz_convert(timestamp.tzinfo)
-
             return market_open <= timestamp <= market_close
-
         except (ValueError, TypeError) as e:
-            self.logger.warning(
-                f"Market hours check failed: {e.__class__.__name__}: {e}"
-            )
+            self.logger.warning(f'Market hours check failed: {e.__class__.__name__}: {e}')
             return False
 
-    def wait_for_aligned_tick(
-        self, symbol: str, timeframe: str = "1m"
-    ) -> BarValidation:
+    def wait_for_aligned_tick(self, symbol: str, timeframe: str='1m') -> BarValidation:
         """
         Wait until we're properly aligned for the next trading tick.
 
@@ -316,28 +216,16 @@ class AlignedClock:
         Returns:
             BarValidation when aligned
         """
-        max_wait_seconds = 60  # Don't wait more than 1 minute
+        max_wait_seconds = 60
         start_time = time.time()
-
         while time.time() - start_time < max_wait_seconds:
             validation = self.ensure_final_bar(symbol, timeframe)
-
             if validation.is_final:
                 return validation
-
-            # Wait a bit before checking again
             time.sleep(0.1)
-
-        # Return last validation even if not final
-        self.logger.warning(
-            f"Timed out waiting for aligned tick for {symbol} {timeframe}"
-        )
+        self.logger.warning(f'Timed out waiting for aligned tick for {symbol} {timeframe}')
         return validation
-
-
-# Global aligned clock instance
 _global_clock: AlignedClock | None = None
-
 
 def get_aligned_clock() -> AlignedClock:
     """Get or create global aligned clock instance."""
@@ -346,8 +234,7 @@ def get_aligned_clock() -> AlignedClock:
         _global_clock = AlignedClock()
     return _global_clock
 
-
-def ensure_final_bar(symbol: str, timeframe: str = "1m") -> BarValidation:
+def ensure_final_bar(symbol: str, timeframe: str='1m') -> BarValidation:
     """
     Convenience function to validate bar finality.
 
@@ -361,8 +248,7 @@ def ensure_final_bar(symbol: str, timeframe: str = "1m") -> BarValidation:
     clock = get_aligned_clock()
     return clock.ensure_final_bar(symbol, timeframe)
 
-
-def is_market_open(symbol: str, timestamp: datetime | None = None) -> bool:
+def is_market_open(symbol: str, timestamp: datetime | None=None) -> bool:
     """
     Convenience function to check if market is open.
 

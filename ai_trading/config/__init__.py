@@ -2,34 +2,23 @@ import logging
 import os
 import threading
 from typing import Any
-
 from .alpaca import AlpacaConfig, get_alpaca_config
 from .locks import LockWithTimeout
 from .settings import Settings, broker_keys, get_settings
-
 logger = logging.getLogger(__name__)
-
 _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
 _lock_state = threading.local()
 _CONFIG_LOGGED = False
-
-# AI-AGENT-REF: liquidity management defaults
 LIQUIDITY_SPREAD_THRESHOLD = 0.01
 LIQUIDITY_VOL_THRESHOLD = 1000
 LIQUIDITY_REDUCTION_AGGRESSIVE = 0.75
-LIQUIDITY_REDUCTION_MODERATE = 0.90
+LIQUIDITY_REDUCTION_MODERATE = 0.9
 ORDER_TIMEOUT_SECONDS = 300
 ORDER_STALE_CLEANUP_INTERVAL = 60
-ORDER_FILL_RATE_TARGET = 0.80
-
-# AI-AGENT-REF: risk thresholds and mode parameters
+ORDER_FILL_RATE_TARGET = 0.8
 MAX_DRAWDOWN_THRESHOLD = 0.08
-MODE_PARAMETERS = {
-    "conservative": 0.85,
-    "balanced": 0.75,
-    "aggressive": 0.65,
-}
+MODE_PARAMETERS = {'conservative': 0.85, 'balanced': 0.75, 'aggressive': 0.65}
 SENTIMENT_ENHANCED_CACHING = True
 SENTIMENT_RECOVERY_TIMEOUT_SECS = 3600
 SENTIMENT_FALLBACK_SOURCES = []
@@ -38,44 +27,34 @@ META_LEARNING_MIN_TRADES_REDUCED = True
 SENTIMENT_SUCCESS_RATE_TARGET = 0.8
 META_LEARNING_BOOTSTRAP_WIN_RATE = 0.55
 
-
-def __getattr__(name: str):  # AI-AGENT-REF: lazy export for TradingConfig
-    if name == "TradingConfig":
+def __getattr__(name: str):
+    if name == 'TradingConfig':
         from .management import TradingConfig as _TC
         return _TC
     raise AttributeError(name)
 
-
 def _is_lock_held_by_current_thread() -> bool:
-    return bool(getattr(_lock_state, "held", False))
-
+    return bool(getattr(_lock_state, 'held', False))
 
 def _set_lock_held_by_current_thread(val: bool) -> None:
     _lock_state.held = bool(val)
-
 
 def reload_env() -> None:
     """Reload .env if python-dotenv is present; ignore failures."""
     try:
         from dotenv import load_dotenv
-
         load_dotenv(override=True)
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    except (KeyError, ValueError, TypeError):
         pass
 
-
-def get_env(
-    name: str, default: Any = None, *, reload: bool = False, required: bool = False
-) -> Any:
+def get_env(name: str, default: Any=None, *, reload: bool=False, required: bool=False) -> Any:
     """Return env var; if reload=True, call reload_env() first."""
     if reload:
         reload_env()
     val = os.getenv(name, default)
     if required and val is None:
-        raise RuntimeError(f"Missing required env var: {name}")
+        raise RuntimeError(f'Missing required env var: {name}')
     return val
-
 
 def _require_env_vars(*names: str) -> None:
     missing = [n for n in names if not os.getenv(n)]
@@ -84,23 +63,14 @@ def _require_env_vars(*names: str) -> None:
         logger.critical(msg)
         raise RuntimeError(msg)
 
-
 def _perform_env_validation() -> None:
-    required = [
-        "ALPACA_API_KEY",
-        "ALPACA_SECRET_KEY",
-        "ALPACA_BASE_URL",
-        "WEBHOOK_SECRET",
-    ]
+    required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL', 'WEBHOOK_SECRET']
     missing: list[str] = []
     for env_key in required:
-        if not os.getenv(env_key, "").strip():
+        if not os.getenv(env_key, '').strip():
             missing.append(env_key)
     if missing:
-        raise RuntimeError(
-            f"Missing required environment variables: {', '.join(missing)}"
-        )
-
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 def validate_environment() -> None:
     """Validate required environment variables with deadlock-safe locking."""
@@ -112,33 +82,23 @@ def validate_environment() -> None:
         try:
             try:
                 get_settings.cache_clear()
-            # noqa: BLE001 TODO: narrow exception
-            except Exception:
+            except (KeyError, ValueError, TypeError):
                 pass
             _perform_env_validation()
         finally:
             _set_lock_held_by_current_thread(False)
 
-
 def validate_alpaca_credentials() -> None:
-    api = str(globals().get("ALPACA_API_KEY", os.getenv("ALPACA_API_KEY", ""))).strip()
-    sec = str(
-        globals().get("ALPACA_SECRET_KEY", os.getenv("ALPACA_SECRET_KEY", ""))
-    ).strip()
-    url = str(
-        globals().get("ALPACA_BASE_URL", os.getenv("ALPACA_BASE_URL", ""))
-    ).strip()
+    api = str(globals().get('ALPACA_API_KEY', os.getenv('ALPACA_API_KEY', ''))).strip()
+    sec = str(globals().get('ALPACA_SECRET_KEY', os.getenv('ALPACA_SECRET_KEY', ''))).strip()
+    url = str(globals().get('ALPACA_BASE_URL', os.getenv('ALPACA_BASE_URL', ''))).strip()
     if not (api and sec and url):
-        raise RuntimeError("Alpaca credentials are missing or empty")
-
+        raise RuntimeError('Alpaca credentials are missing or empty')
 
 def validate_env_vars() -> None:
     return validate_environment()
 
-
-def log_config(
-    masked_keys: list[str] | None = None, secrets_to_redact: list[str] | None = None
-) -> dict:
+def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] | None=None) -> dict:
     """
     Return a sanitized snapshot of current config for diagnostics.
     MUST NOT log or print in tests.
@@ -146,46 +106,12 @@ def log_config(
     global _CONFIG_LOGGED
     _CONFIG_LOGGED = True
     s = get_settings()
-    conf = {
-        "ALPACA_API_KEY": "***" if s.alpaca_api_key else "",
-        "ALPACA_SECRET_KEY": "***REDACTED***" if s.alpaca_secret_key else "",
-        "ALPACA_BASE_URL": s.alpaca_base_url or "",
-        "CAPITAL_CAP": getattr(s, "capital_cap", None) or 0.25,
-        "CONF_THRESHOLD": getattr(s, "conf_threshold", None) or 0.75,
-        "DAILY_LOSS_LIMIT": getattr(s, "daily_loss_limit", None) or 0.03,
-    }
-    # Support legacy parameter name
+    conf = {'ALPACA_API_KEY': '***' if s.alpaca_api_key else '', 'ALPACA_SECRET_KEY': '***REDACTED***' if s.alpaca_secret_key else '', 'ALPACA_BASE_URL': s.alpaca_base_url or '', 'CAPITAL_CAP': getattr(s, 'capital_cap', None) or 0.25, 'CONF_THRESHOLD': getattr(s, 'conf_threshold', None) or 0.75, 'DAILY_LOSS_LIMIT': getattr(s, 'daily_loss_limit', None) or 0.03}
     if masked_keys is None and secrets_to_redact is not None:
         masked_keys = secrets_to_redact
     if masked_keys:
         for key in masked_keys:
             if key in conf:
-                conf[key] = "***"
+                conf[key] = '***'
     return conf
-
-
-__all__ = [
-    "Settings",
-    "get_settings",
-    "broker_keys",
-    "get_alpaca_config",
-    "AlpacaConfig",
-    "TradingConfig",
-    "get_env",
-    "_require_env_vars",
-    "reload_env",
-    "validate_environment",
-    "validate_alpaca_credentials",
-    "validate_env_vars",
-    "log_config",
-    "ORDER_FILL_RATE_TARGET",
-    "MAX_DRAWDOWN_THRESHOLD",
-    "MODE_PARAMETERS",
-    "SENTIMENT_ENHANCED_CACHING",
-    "SENTIMENT_RECOVERY_TIMEOUT_SECS",
-    "SENTIMENT_FALLBACK_SOURCES",
-    "META_LEARNING_BOOTSTRAP_ENABLED",
-    "META_LEARNING_MIN_TRADES_REDUCED",
-    "SENTIMENT_SUCCESS_RATE_TARGET",
-    "META_LEARNING_BOOTSTRAP_WIN_RATE",
-]
+__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'get_env', '_require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PARAMETERS', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']

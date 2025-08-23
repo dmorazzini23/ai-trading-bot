@@ -3,31 +3,13 @@ Canonical strategies public API.
 """
 from .mean_reversion import MeanReversionStrategy
 from .momentum import MomentumStrategy
-
-try:  # AI-AGENT-REF: lazy meta-learning import
+try:
     from .meta_learning import MetaLearning
-# noqa: BLE001 TODO: narrow exception
-except Exception:  # pragma: no cover
-    MetaLearning = None  # type: ignore
+except (KeyError, ValueError, TypeError):
+    MetaLearning = None
 from .base import StrategySignal as TradeSignal
-from .moving_average_crossover import (
-    MovingAverageCrossoverStrategy,  # AI-AGENT-REF: expose MA crossover strategy
-)
-
-# AI-AGENT-REF: central strategy registry
-REGISTRY = {
-    "momentum": MomentumStrategy,
-    "mean_reversion": MeanReversionStrategy,
-}
+from .moving_average_crossover import MovingAverageCrossoverStrategy
+REGISTRY = {'momentum': MomentumStrategy, 'mean_reversion': MeanReversionStrategy}
 if MetaLearning:
-    REGISTRY.update({"meta": MetaLearning, "metalearning": MetaLearning})
-
-# AI-AGENT-REF: expose canonical strategies
-__all__ = [
-    "MomentumStrategy",
-    "MeanReversionStrategy",
-    "MetaLearning",
-    "TradeSignal",
-    "MovingAverageCrossoverStrategy",
-    "REGISTRY",
-]
+    REGISTRY.update({'meta': MetaLearning, 'metalearning': MetaLearning})
+__all__ = ['MomentumStrategy', 'MeanReversionStrategy', 'MetaLearning', 'TradeSignal', 'MovingAverageCrossoverStrategy', 'REGISTRY']

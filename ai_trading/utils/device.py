@@ -1,45 +1,33 @@
 import logging
 import os
 from typing import Any
-
-_log = logging.getLogger(__name__)  # AI-AGENT-REF: structured logging
-
+_log = logging.getLogger(__name__)
 
 def pick_torch_device() -> tuple[str, Any | None]:
     try:
-        import torch  # type: ignore
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        _log.info(
-            "ML_DEVICE_SELECTED", extra={"device": "cpu", "reason": "torch_unavailable"}
-        )
-        return "cpu", None
-
-    if os.getenv("CPU_ONLY", "").strip() == "1":
-        dev = "cpu"
-    elif getattr(getattr(torch, "cuda", None), "is_available", lambda: False)():
-        dev = "cuda"
+        import torch
+    except (KeyError, ValueError, TypeError):
+        _log.info('ML_DEVICE_SELECTED', extra={'device': 'cpu', 'reason': 'torch_unavailable'})
+        return ('cpu', None)
+    if os.getenv('CPU_ONLY', '').strip() == '1':
+        dev = 'cpu'
+    elif getattr(getattr(torch, 'cuda', None), 'is_available', lambda: False)():
+        dev = 'cuda'
     else:
-        backends = getattr(torch, "backends", None)
-        if backends and getattr(backends, "mps", None) and backends.mps.is_available():
-            dev = "mps"
+        backends = getattr(torch, 'backends', None)
+        if backends and getattr(backends, 'mps', None) and backends.mps.is_available():
+            dev = 'mps'
         else:
-            dev = "cpu"
-
-    _log.info("ML_DEVICE_SELECTED", extra={"device": dev})
-    return dev, torch
-
+            dev = 'cpu'
+    _log.info('ML_DEVICE_SELECTED', extra={'device': dev})
+    return (dev, torch)
 
 def tensors_to_device(batch: dict, device: str):
     """Move a tokenizer batch (dict of tensors) to the target device."""
     tv = []
     try:
-        from torch import Tensor  # type: ignore
-
+        from torch import Tensor
         tv.append(Tensor)
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    except (KeyError, ValueError, TypeError):
         return batch
-    return {
-        k: (v.to(device) if isinstance(v, tuple(tv)) else v) for k, v in batch.items()
-    }
+    return {k: v.to(device) if isinstance(v, tuple(tv)) else v for k, v in batch.items()}

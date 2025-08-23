@@ -1,28 +1,17 @@
 from __future__ import annotations
-
-# AI-AGENT-REF: optional psutil snapshot
 try:
-    import psutil  # type: ignore
+    import psutil
     _HAS_PSUTIL = True
-# noqa: BLE001 TODO: narrow exception
-except Exception:
-    psutil = None  # type: ignore
+except (KeyError, ValueError, TypeError):
+    psutil = None
     _HAS_PSUTIL = False
-
 
 def snapshot_basic() -> dict[str, float | bool]:
     """Return a minimal health snapshot that works even without psutil."""
-    data: dict[str, float | bool] = {"has_psutil": _HAS_PSUTIL}
+    data: dict[str, float | bool] = {'has_psutil': _HAS_PSUTIL}
     if _HAS_PSUTIL:
         try:
-            data.update(
-                {
-                    "cpu_percent": psutil.cpu_percent(interval=None),
-                    "mem_percent": psutil.virtual_memory().percent,
-                }
-            )
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
-            # keep minimal snapshot if psutil misbehaves
+            data.update({'cpu_percent': psutil.cpu_percent(interval=None), 'mem_percent': psutil.virtual_memory().percent})
+        except (KeyError, ValueError, TypeError):
             pass
     return data

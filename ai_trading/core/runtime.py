@@ -4,28 +4,13 @@ Runtime context for trading bot with standardized parameters.
 This module provides a standardized runtime context that ensures consistent
 access to trading parameters and configuration across the system.
 """
-
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-
-from .protocols import AllocatorProtocol  # AI-AGENT-REF: avoid circular import
-
+from .protocols import AllocatorProtocol
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
-
-
-# Required parameter defaults as specified in the problem statement
-REQUIRED_PARAM_DEFAULTS = {
-    "CAPITAL_CAP": 0.04,          # fraction of equity cap per position
-    "DOLLAR_RISK_LIMIT": 0.05,    # fraction or absolute depending on your semantics
-    "MAX_POSITION_SIZE": 1.0,     # multiplier / lots
-    "KELLY_FRACTION": 0.6,        # Kelly criterion fraction
-    "BUY_THRESHOLD": 0.2,         # Buy signal threshold
-    "CONF_THRESHOLD": 0.75,       # Confidence threshold
-}
-
+REQUIRED_PARAM_DEFAULTS = {'CAPITAL_CAP': 0.04, 'DOLLAR_RISK_LIMIT': 0.05, 'MAX_POSITION_SIZE': 1.0, 'KELLY_FRACTION': 0.6, 'BUY_THRESHOLD': 0.2, 'CONF_THRESHOLD': 0.75}
 
 def _cfg_coalesce(cfg, key, default):
     """
@@ -33,20 +18,17 @@ def _cfg_coalesce(cfg, key, default):
     Prefer explicit cfg attributes if present.
     """
     lower = key.lower()
-    # prefer explicit cfg attributes if present
     if hasattr(cfg, lower):
         return getattr(cfg, lower)
     if hasattr(cfg, key):
         return getattr(cfg, key)
     return default
 
-
 class NullAlphaModel:
     """Fallback alpha model used when no model is configured."""
 
-    def predict(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover - simple no-op
+    def predict(self, *args: Any, **kwargs: Any) -> None:
         return None
-
 
 @dataclass
 class BotRuntime:
@@ -58,10 +40,7 @@ class BotRuntime:
     """
     cfg: TradingConfig
     params: dict[str, Any] = field(default_factory=dict)
-    tickers: list[str] = field(default_factory=list)  # AI-AGENT-REF: runtime-selected tickers
-
-    # Additional runtime attributes will be set by _ensure_initialized
-    # These are forwarded from the underlying LazyBotContext
+    tickers: list[str] = field(default_factory=list)
     api: Any = None
     data_client: Any = None
     data_fetcher: Any = None
@@ -72,7 +51,6 @@ class BotRuntime:
     drawdown_circuit_breaker: Any = None
     model: Any = None
     allocator: AllocatorProtocol | None = None
-
 
 def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     """
@@ -90,12 +68,9 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     params = {}
     for k, dflt in REQUIRED_PARAM_DEFAULTS.items():
         params[k] = float(_cfg_coalesce(cfg, k, dflt))
-
-    # Add any additional keys the loop expects if needed
-    runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get("allocator"))
+    runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     runtime.model = NullAlphaModel()
     return runtime
-
 
 def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any, **kwargs: Any) -> BotRuntime:
     """
@@ -108,7 +83,6 @@ def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any, **kwarg
     Returns:
         Enhanced runtime with context attributes
     """
-    # Forward key attributes from the lazy context
     runtime.api = getattr(lazy_context, 'api', None)
     runtime.data_client = getattr(lazy_context, 'data_client', None)
     runtime.data_fetcher = getattr(lazy_context, 'data_fetcher', None)
@@ -117,12 +91,7 @@ def enhance_runtime_with_context(runtime: BotRuntime, lazy_context: Any, **kwarg
     runtime.capital_scaler = getattr(lazy_context, 'capital_scaler', None)
     runtime.execution_engine = getattr(lazy_context, 'execution_engine', None)
     runtime.drawdown_circuit_breaker = getattr(lazy_context, 'drawdown_circuit_breaker', None)
-    runtime.model = getattr(
-        lazy_context,
-        'model',
-        getattr(lazy_context, 'alpha_model', runtime.model),
-    )
-    if "allocator" in kwargs:
-        runtime.allocator = kwargs["allocator"]
+    runtime.model = getattr(lazy_context, 'model', getattr(lazy_context, 'alpha_model', runtime.model))
+    if 'allocator' in kwargs:
+        runtime.allocator = kwargs['allocator']
     return runtime
-

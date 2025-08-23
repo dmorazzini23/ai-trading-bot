@@ -16,72 +16,15 @@ institutional trading operations including:
 The module is designed for institutional-scale operations with proper
 risk controls, monitoring, and compliance capabilities.
 """
-
-# Core risk management components
-from ai_trading.settings import (
-    _DEFAULT_CONFIG as SETTINGS_DEFAULT_CONFIG,
-)
-from ai_trading.settings import (
-    ensure_default_config,
-)
-
+from ai_trading.settings import _DEFAULT_CONFIG as SETTINGS_DEFAULT_CONFIG
+from ai_trading.settings import ensure_default_config
 from . import kelly as _kelly
-from .circuit_breakers import (
-    CircuitBreakerState,
-    DeadMansSwitch,
-    DrawdownCircuitBreaker,
-    SafetyLevel,
-    TradingHaltManager,
-    VolatilityCircuitBreaker,
-)
+from .circuit_breakers import CircuitBreakerState, DeadMansSwitch, DrawdownCircuitBreaker, SafetyLevel, TradingHaltManager, VolatilityCircuitBreaker
 from .engine import RiskEngine
-from .kelly import (
-    InstitutionalKelly,
-    KellyCalculator,
-    KellyCriterion,
-    KellyParams,
-    institutional_kelly,
-)
+from .kelly import InstitutionalKelly, KellyCalculator, KellyCriterion, KellyParams, institutional_kelly
 from .manager import PortfolioRiskAssessor, RiskManager
-
-# Import risk metrics
 from .metrics import DrawdownAnalyzer, RiskMetricsCalculator
-from .position_sizing import (
-    ATRPositionSizer,
-    DynamicPositionSizer,
-    PortfolioPositionManager,
-    VolatilityPositionSizer,
-)
-
+from .position_sizing import ATRPositionSizer, DynamicPositionSizer, PortfolioPositionManager, VolatilityPositionSizer
 ensure_default_config()
 _kelly._DEFAULT_CONFIG = SETTINGS_DEFAULT_CONFIG
-
-# Export all risk management classes
-__all__ = [
-    # Main risk engine
-    "RiskEngine",
-    # Kelly Criterion position sizing
-    "KellyCriterion",
-    "KellyCalculator",
-    "institutional_kelly",
-    "InstitutionalKelly",
-    "KellyParams",
-    # Risk management and monitoring
-    "RiskManager",
-    "PortfolioRiskAssessor",
-    # Position sizing
-    "ATRPositionSizer",
-    "VolatilityPositionSizer",
-    "DynamicPositionSizer",
-    "PortfolioPositionManager",
-    # Circuit breakers and safety
-    "DrawdownCircuitBreaker",
-    "VolatilityCircuitBreaker",
-    "TradingHaltManager",
-    "DeadMansSwitch",
-    "CircuitBreakerState",
-    "SafetyLevel",
-    # Risk metrics and analysis
-    "RiskMetricsCalculator",
-    "DrawdownAnalyzer",
-]
+__all__ = ['RiskEngine', 'KellyCriterion', 'KellyCalculator', 'institutional_kelly', 'InstitutionalKelly', 'KellyParams', 'RiskManager', 'PortfolioRiskAssessor', 'ATRPositionSizer', 'VolatilityPositionSizer', 'DynamicPositionSizer', 'PortfolioPositionManager', 'DrawdownCircuitBreaker', 'VolatilityCircuitBreaker', 'TradingHaltManager', 'DeadMansSwitch', 'CircuitBreakerState', 'SafetyLevel', 'RiskMetricsCalculator', 'DrawdownAnalyzer']

@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 PROMETHEUS_AVAILABLE = False
 REGISTRY = None
 CollectorRegistry = None
@@ -8,31 +7,14 @@ Counter = None
 Histogram = None
 Summary = None
 start_http_server = None
-
-try:  # new-style guarded import
-    # Try common symbols from prometheus_client
-    from prometheus_client import (
-        REGISTRY as _REGISTRY,
-    )
-    from prometheus_client import (
-        CollectorRegistry as _CollectorRegistry,
-    )
-    from prometheus_client import (
-        Counter as _Counter,
-    )
-    from prometheus_client import (
-        Gauge as _Gauge,
-    )
-    from prometheus_client import (
-        Histogram as _Histogram,
-    )
-    from prometheus_client import (
-        Summary as _Summary,
-    )
-    from prometheus_client import (
-        start_http_server as _start_http_server,
-    )
-
+try:
+    from prometheus_client import REGISTRY as _REGISTRY
+    from prometheus_client import CollectorRegistry as _CollectorRegistry
+    from prometheus_client import Counter as _Counter
+    from prometheus_client import Gauge as _Gauge
+    from prometheus_client import Histogram as _Histogram
+    from prometheus_client import Summary as _Summary
+    from prometheus_client import start_http_server as _start_http_server
     PROMETHEUS_AVAILABLE = True
     REGISTRY = _REGISTRY
     CollectorRegistry = _CollectorRegistry
@@ -41,10 +23,10 @@ try:  # new-style guarded import
     Histogram = _Histogram
     Summary = _Summary
     start_http_server = _start_http_server
-# noqa: BLE001 TODO: narrow exception
-except Exception:
-    # Minimal no-op fallbacks so imports & tests never crash if the pkg is missing
+except (KeyError, ValueError, TypeError):
+
     class _NoopRegistry:
+
         def register(self, *_, **__):
             pass
 
@@ -52,6 +34,7 @@ except Exception:
             pass
 
     class _NoopMetric:
+
         def __init__(self, *_, **__):
             pass
 
@@ -69,38 +52,20 @@ except Exception:
 
     def _noop_start_http_server(*_, **__):
         pass
-
     PROMETHEUS_AVAILABLE = False
     REGISTRY = _NoopRegistry()
 
-    class CollectorRegistry:  # type: ignore[override]
+    class CollectorRegistry:
+
         def __init__(self, *_, **__):
             pass
-
-    Gauge = Counter = Histogram = Summary = _NoopMetric  # type: ignore
+    Gauge = Counter = Histogram = Summary = _NoopMetric
     start_http_server = _noop_start_http_server
-
-# AI-AGENT-REF: expose basic metrics helpers under canonical package
 from ai_trading.monitoring.metrics import calculate_atr, safe_divide
 
-
 def compute_basic_metrics(data):
-    """Return minimal metrics dict."""  # AI-AGENT-REF
-    if hasattr(data, "empty") and data.empty:
-        return {"sharpe": 0.0, "max_drawdown": 0.0}
-    return {"sharpe": 0.0, "max_drawdown": 0.0}
-
-
-__all__ = [
-    "PROMETHEUS_AVAILABLE",
-    "REGISTRY",
-    "CollectorRegistry",
-    "Gauge",
-    "Counter",
-    "Histogram",
-    "Summary",
-    "start_http_server",
-    "safe_divide",
-    "calculate_atr",
-    "compute_basic_metrics",
-]
+    """Return minimal metrics dict."""
+    if hasattr(data, 'empty') and data.empty:
+        return {'sharpe': 0.0, 'max_drawdown': 0.0}
+    return {'sharpe': 0.0, 'max_drawdown': 0.0}
+__all__ = ['PROMETHEUS_AVAILABLE', 'REGISTRY', 'CollectorRegistry', 'Gauge', 'Counter', 'Histogram', 'Summary', 'start_http_server', 'safe_divide', 'calculate_atr', 'compute_basic_metrics']

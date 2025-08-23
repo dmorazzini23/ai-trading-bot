@@ -5,45 +5,36 @@ proper dependency injection, testing, and modular design.
 
 AI-AGENT-REF: Clean architecture interfaces for production trading platform
 """
-
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any
-
 import numpy as np
 import pandas as pd
 
-
-# Core Trading Types
 class OrderSide(Enum):
-    BUY = "buy"
-    SELL = "sell"
-
+    BUY = 'buy'
+    SELL = 'sell'
 
 class OrderType(Enum):
-    MARKET = "market"
-    LIMIT = "limit"
-    STOP = "stop"
-    STOP_LIMIT = "stop_limit"
-
+    MARKET = 'market'
+    LIMIT = 'limit'
+    STOP = 'stop'
+    STOP_LIMIT = 'stop_limit'
 
 class OrderStatus(Enum):
-    PENDING = "pending"
-    FILLED = "filled"
-    PARTIALLY_FILLED = "partially_filled"
-    CANCELED = "canceled"
-    REJECTED = "rejected"
-
+    PENDING = 'pending'
+    FILLED = 'filled'
+    PARTIALLY_FILLED = 'partially_filled'
+    CANCELED = 'canceled'
+    REJECTED = 'rejected'
 
 @dataclass
 class TradingSignal:
     """Trading signal data structure."""
-
     symbol: str
     side: OrderSide
     confidence: float
@@ -52,11 +43,9 @@ class TradingSignal:
     quantity: int | None = None
     metadata: dict[str, Any] = None
 
-
 @dataclass
 class Position:
     """Position data structure."""
-
     symbol: str
     quantity: int
     market_value: float
@@ -65,11 +54,9 @@ class Position:
     timestamp: datetime
     metadata: dict[str, Any] = None
 
-
 @dataclass
 class Order:
     """Order data structure."""
-
     id: str
     symbol: str
     side: OrderSide
@@ -82,11 +69,9 @@ class Order:
     timestamp: datetime
     metadata: dict[str, Any] = None
 
-
 @dataclass
 class MarketData:
     """Market data structure."""
-
     symbol: str
     timestamp: datetime
     open: float
@@ -96,21 +81,11 @@ class MarketData:
     volume: int
     metadata: dict[str, Any] = None
 
-
-# Data Provider Interfaces
-
-
 class IDataProvider(ABC):
     """Interface for market data providers."""
 
     @abstractmethod
-    async def get_market_data(
-        self,
-        symbol: str,
-        timeframe: str = "1min",
-        start: datetime | None = None,
-        end: datetime | None = None,
-    ) -> pd.DataFrame:
+    async def get_market_data(self, symbol: str, timeframe: str='1min', start: datetime | None=None, end: datetime | None=None) -> pd.DataFrame:
         """Get historical market data."""
 
     @abstractmethod
@@ -124,7 +99,6 @@ class IDataProvider(ABC):
     @abstractmethod
     async def get_market_status(self) -> dict[str, Any]:
         """Get market status information."""
-
 
 class IFundamentalDataProvider(ABC):
     """Interface for fundamental data providers."""
@@ -141,7 +115,6 @@ class IFundamentalDataProvider(ABC):
     async def get_analyst_ratings(self, symbol: str) -> dict[str, Any]:
         """Get analyst ratings and price targets."""
 
-
 class ISentimentProvider(ABC):
     """Interface for sentiment data providers."""
 
@@ -157,22 +130,11 @@ class ISentimentProvider(ABC):
     async def get_market_sentiment(self) -> dict[str, float]:
         """Get overall market sentiment indicators."""
 
-
-# Trading Engine Interfaces
-
-
 class IBrokerageAdapter(ABC):
     """Interface for brokerage/execution adapters."""
 
     @abstractmethod
-    async def submit_order(
-        self,
-        symbol: str,
-        side: OrderSide,
-        order_type: OrderType,
-        quantity: int,
-        price: float | None = None,
-    ) -> Order:
+    async def submit_order(self, symbol: str, side: OrderSide, order_type: OrderType, quantity: int, price: float | None=None) -> Order:
         """Submit a trading order."""
 
     @abstractmethod
@@ -195,7 +157,6 @@ class IBrokerageAdapter(ABC):
     async def get_buying_power(self) -> float:
         """Get current buying power."""
 
-
 class IOrderManager(ABC):
     """Interface for order management."""
 
@@ -214,7 +175,6 @@ class IOrderManager(ABC):
     @abstractmethod
     async def cancel_all_orders(self) -> int:
         """Cancel all active orders."""
-
 
 class IPositionManager(ABC):
     """Interface for position management."""
@@ -239,10 +199,6 @@ class IPositionManager(ABC):
     async def close_all_positions(self) -> list[Order]:
         """Close all positions."""
 
-
-# Strategy and Signal Generation Interfaces
-
-
 class IIndicatorCalculator(ABC):
     """Interface for technical indicator calculations."""
 
@@ -255,29 +211,22 @@ class IIndicatorCalculator(ABC):
         """Calculate Exponential Moving Average."""
 
     @abstractmethod
-    def calculate_rsi(self, data: pd.Series, period: int = 14) -> pd.Series:
+    def calculate_rsi(self, data: pd.Series, period: int=14) -> pd.Series:
         """Calculate Relative Strength Index."""
 
     @abstractmethod
-    def calculate_bollinger_bands(
-        self, data: pd.Series, period: int = 20, std: float = 2
-    ) -> tuple[pd.Series, pd.Series, pd.Series]:
+    def calculate_bollinger_bands(self, data: pd.Series, period: int=20, std: float=2) -> tuple[pd.Series, pd.Series, pd.Series]:
         """Calculate Bollinger Bands."""
 
     @abstractmethod
-    def calculate_macd(
-        self, data: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
-    ) -> tuple[pd.Series, pd.Series]:
+    def calculate_macd(self, data: pd.Series, fast: int=12, slow: int=26, signal: int=9) -> tuple[pd.Series, pd.Series]:
         """Calculate MACD."""
-
 
 class ITradingStrategy(ABC):
     """Interface for trading strategies."""
 
     @abstractmethod
-    async def generate_signal(
-        self, symbol: str, market_data: pd.DataFrame
-    ) -> TradingSignal | None:
+    async def generate_signal(self, symbol: str, market_data: pd.DataFrame) -> TradingSignal | None:
         """Generate trading signal based on market data."""
 
     @abstractmethod
@@ -292,7 +241,6 @@ class ITradingStrategy(ABC):
     def get_strategy_info(self) -> dict[str, Any]:
         """Get strategy information and current parameters."""
 
-
 class ISignalGenerator(ABC):
     """Interface for signal generation systems."""
 
@@ -301,9 +249,7 @@ class ISignalGenerator(ABC):
         """Generate signals for multiple symbols."""
 
     @abstractmethod
-    async def add_strategy(
-        self, strategy: ITradingStrategy, weight: float = 1.0
-    ) -> None:
+    async def add_strategy(self, strategy: ITradingStrategy, weight: float=1.0) -> None:
         """Add trading strategy with weight."""
 
     @abstractmethod
@@ -314,10 +260,6 @@ class ISignalGenerator(ABC):
     def get_active_strategies(self) -> list[str]:
         """Get list of active strategy names."""
 
-
-# Risk Management Interfaces
-
-
 class IRiskManager(ABC):
     """Interface for risk management."""
 
@@ -326,24 +268,16 @@ class IRiskManager(ABC):
         """Validate if signal meets risk criteria."""
 
     @abstractmethod
-    async def calculate_position_size(
-        self,
-        signal: TradingSignal,
-        account_value: float,
-        current_positions: list[Position],
-    ) -> int:
+    async def calculate_position_size(self, signal: TradingSignal, account_value: float, current_positions: list[Position]) -> int:
         """Calculate appropriate position size."""
 
     @abstractmethod
-    async def check_risk_limits(
-        self, positions: list[Position], orders: list[Order]
-    ) -> dict[str, bool]:
+    async def check_risk_limits(self, positions: list[Position], orders: list[Order]) -> dict[str, bool]:
         """Check if current state violates risk limits."""
 
     @abstractmethod
     async def get_risk_metrics(self) -> dict[str, float]:
         """Get current risk metrics."""
-
 
 class IPortfolioManager(ABC):
     """Interface for portfolio management."""
@@ -363,10 +297,6 @@ class IPortfolioManager(ABC):
     @abstractmethod
     async def get_allocation(self) -> dict[str, float]:
         """Get current portfolio allocation."""
-
-
-# Machine Learning Interfaces
-
 
 class IMLModel(ABC):
     """Interface for machine learning models."""
@@ -391,7 +321,6 @@ class IMLModel(ABC):
     def load_model(self, path: str) -> None:
         """Load model from file."""
 
-
 class IFeatureEngineer(ABC):
     """Interface for feature engineering."""
 
@@ -406,10 +335,6 @@ class IFeatureEngineer(ABC):
     @abstractmethod
     async def update_features(self, new_data: pd.DataFrame) -> pd.DataFrame:
         """Update features with new data."""
-
-
-# Monitoring and Logging Interfaces
-
 
 class IMetricsCollector(ABC):
     """Interface for metrics collection."""
@@ -430,20 +355,16 @@ class IMetricsCollector(ABC):
     async def get_metrics(self, start: datetime, end: datetime) -> dict[str, Any]:
         """Get metrics for time period."""
 
-
 class IAlertManager(ABC):
     """Interface for alert management."""
 
     @abstractmethod
-    async def send_alert(
-        self, level: str, message: str, details: dict[str, Any] | None = None
-    ) -> None:
+    async def send_alert(self, level: str, message: str, details: dict[str, Any] | None=None) -> None:
         """Send alert notification."""
 
     @abstractmethod
     async def configure_alerts(self, config: dict[str, Any]) -> None:
         """Configure alert settings."""
-
 
 class IHealthMonitor(ABC):
     """Interface for health monitoring."""
@@ -457,20 +378,14 @@ class IHealthMonitor(ABC):
         """Get system performance metrics."""
 
     @abstractmethod
-    async def register_component(
-        self, name: str, check_func: callable, interval: int = 60
-    ) -> None:
+    async def register_component(self, name: str, check_func: callable, interval: int=60) -> None:
         """Register component for health monitoring."""
-
-
-# Configuration and State Management Interfaces
-
 
 class IConfigManager(ABC):
     """Interface for configuration management."""
 
     @abstractmethod
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: str, default: Any=None) -> Any:
         """Get configuration value."""
 
     @abstractmethod
@@ -484,7 +399,6 @@ class IConfigManager(ABC):
     @abstractmethod
     def validate(self) -> list[str]:
         """Validate configuration and return errors."""
-
 
 class IStateManager(ABC):
     """Interface for state management."""
@@ -500,10 +414,6 @@ class IStateManager(ABC):
     @abstractmethod
     async def clear_state(self) -> None:
         """Clear saved state."""
-
-
-# Main Trading Engine Interface
-
 
 class ITradingEngine(ABC):
     """Main trading engine interface."""
@@ -528,17 +438,11 @@ class ITradingEngine(ABC):
     def is_running(self) -> bool:
         """Check if engine is running."""
 
-
-# Dependency Injection Container
-
-
 class IDependencyContainer(ABC):
     """Interface for dependency injection container."""
 
     @abstractmethod
-    def register(
-        self, interface: type, implementation: type, singleton: bool = False
-    ) -> None:
+    def register(self, interface: type, implementation: type, singleton: bool=False) -> None:
         """Register implementation for interface."""
 
     @abstractmethod
@@ -552,7 +456,6 @@ class IDependencyContainer(ABC):
     @abstractmethod
     def configure(self, config: dict[str, Any]) -> None:
         """Configure container with configuration."""
-
 
 class SimpleDependencyContainer(IDependencyContainer):
     """Simple implementation of dependency injection container."""
@@ -563,9 +466,7 @@ class SimpleDependencyContainer(IDependencyContainer):
         self._singletons: dict[type, Any] = {}
         self._singleton_flags: dict[type, bool] = {}
 
-    def register(
-        self, interface: type, implementation: type, singleton: bool = False
-    ) -> None:
+    def register(self, interface: type, implementation: type, singleton: bool=False) -> None:
         """Register implementation for interface."""
         self._registrations[interface] = implementation
         self._singleton_flags[interface] = singleton
@@ -576,35 +477,21 @@ class SimpleDependencyContainer(IDependencyContainer):
 
     def resolve(self, interface: type) -> Any:
         """Resolve implementation for interface."""
-        # Check for registered instance first
         if interface in self._instances:
             return self._instances[interface]
-
-        # Check for singleton
         if interface in self._singletons:
             return self._singletons[interface]
-
-        # Check for registered implementation
         if interface in self._registrations:
             implementation = self._registrations[interface]
             instance = implementation()
-
-            # Store as singleton if configured
             if self._singleton_flags.get(interface, False):
                 self._singletons[interface] = instance
-
             return instance
-
-        raise ValueError(f"No registration found for interface: {interface}")
+        raise ValueError(f'No registration found for interface: {interface}')
 
     def configure(self, config: dict[str, Any]) -> None:
         """Configure container with configuration."""
-        # This could configure implementations based on config
-
-
-# Global container instance
 _container: IDependencyContainer | None = None
-
 
 def get_container() -> IDependencyContainer:
     """Get or create global dependency container."""
@@ -613,18 +500,11 @@ def get_container() -> IDependencyContainer:
         _container = SimpleDependencyContainer()
     return _container
 
-
 def configure_dependencies(config: dict[str, Any]) -> None:
     """Configure dependency injection."""
     container = get_container()
     container.configure(config)
 
-
 def register_dependencies() -> None:
     """Register default dependencies."""
     get_container()
-
-    # Register default implementations here when available
-    # container.register(IDataProvider, AlpacaDataProvider, singleton=True)
-    # container.register(IBrokerageAdapter, AlpacaBrokerageAdapter, singleton=True)
-    # etc.
