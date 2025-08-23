@@ -1,3 +1,5 @@
+from __future__ import annotations  # AI-AGENT-REF: enable postponed evaluation of annotations
+
 import logging
 import os
 import random
@@ -82,7 +84,10 @@ MAX_DRAWDOWN = 0.05
 class RiskEngine:
     """Cross-strategy risk manager."""
 
-    _lock: threading.Lock | None = None
+    # NOTE: threading.Lock is a constructor (callable), not a type. Using it in a PEP 604 union
+    # triggers a runtime TypeError during class creation on Python 3.12. We annotate as object|None
+    # and instantiate with threading.Lock() in __init__/on-demand.
+    _lock: object | None = None  # AI-AGENT-REF: avoid TypeError from threading.Lock | None
 
     def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""
