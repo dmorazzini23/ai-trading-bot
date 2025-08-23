@@ -1,249 +1,98 @@
-import argparse
-import ast
-import importlib
-from collections import defaultdict
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
-
+#!/usr/bin/env python3
+"""
+Scan tests for stale internal imports and rewrite them safely using libcst.
+Focus: known breakages like `ai_trading.position.core` → `.market_regime`.
+Usage:
+  python tools/repair_test_imports.py --pkg ai_trading --tests tests --dry-run
+  python tools/repair_test_imports.py --pkg ai_trading --tests tests --write --report artifacts/import-repair-report.md
+"""
+# AI-AGENT-REF: AST/CST based import repair utility
+from __future__ import annotations
+import argparse, pathlib, sys, importlib.util
 import libcst as cst
-from libcst import helpers as cst_helpers
+import libcst.matchers as m
+import libcst.helpers as cst_helpers
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))  # AI-AGENT-REF: ensure project importable
 
-@dataclass
-class BrokenImport:
-    file: Path
-    lineno: int
-    import_type: str  # 'import' or 'from'
-    module: str
-    names: List[str]
-    alias: Optional[str] = None  # for 'import' statements
+# Minimal, explicit mapping (extendable but no heuristics/shims)
+STALE_TO_NEW = {
+    "ai_trading.position.core": "ai_trading.position.market_regime",
+}
 
+def _module_exists(mod: str) -> bool:
+    return importlib.util.find_spec(mod) is not None
 
-@dataclass
-class Rewrite:
-    file: Path
-    old: str
-    new: str
+class Rewriter(cst.CSTTransformer):
+    def __init__(self, changes: dict[str, str], log: list[str]) -> None:
+        self.changes = changes
+        self.log = log
 
-
-@dataclass
-class Unresolved:
-    file: Path
-    lineno: int
-    stmt: str
-
-
-def build_symbol_index(pkg_root: Path) -> Dict[str, Set[str]]:
-    """Build mapping of symbol name to modules exporting it."""
-    index: Dict[str, Set[str]] = defaultdict(set)
-    for py in pkg_root.rglob("*.py"):
-        if any(part in {"tests", "vendor", "__pycache__"} for part in py.parts):
-            continue
-        module = ".".join(py.with_suffix("").relative_to(pkg_root.parent).parts)
-        try:
-            tree = ast.parse(py.read_text())
-        except SyntaxError:
-            continue
-        exports: Set[str] = set()
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                exports.add(node.name)
-        for node in tree.body:
-            if isinstance(node, ast.Assign):
-                if any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
-                    if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
-                        for elt in node.value.elts:
-                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                                exports.add(elt.value)
-        for name in exports:
-            index[name].add(module)
-    return index
-
-
-def _gather_attr_uses(tree: ast.AST, alias: str) -> Set[str]:
-    uses: Set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == alias:
-            uses.add(node.attr)
-    return uses
-
-
-def find_broken_imports(test_path: Path) -> List[BrokenImport]:
-    broken: List[BrokenImport] = []
-    for py in test_path.rglob("*.py"):
-        rel = py.relative_to(test_path)
-        if rel.parts and rel.parts[0] in {"integration", "slow"}:
-            continue
-        try:
-            source = py.read_text()
-        except OSError:
-            continue
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module and node.module.startswith("ai_trading"):
-                    names = [a.name for a in node.names if a.name != "*"]
-                    try:
-                        mod = importlib.import_module(node.module)
-                        missing = []
-                        for n in names:
-                            if hasattr(mod, n):
-                                continue
-                            try:
-                                importlib.import_module(f"{node.module}.{n}")
-                            except ImportError:
-                                missing.append(n)
-                        if missing:
-                            broken.append(BrokenImport(py, node.lineno, "from", node.module, missing))
-                    except ImportError:
-                        broken.append(BrokenImport(py, node.lineno, "from", node.module, names))
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith("ai_trading"):
-                        try:
-                            importlib.import_module(alias.name)
-                        except ImportError:
-                            broken.append(BrokenImport(py, node.lineno, "import", alias.name, [], alias.asname or alias.name.split('.')[-1]))
-    return broken
-
-
-def _rewrite_import_from(file_path: Path, old_module: str, name: str, new_module: str) -> None:
-    mod = cst.parse_module(file_path.read_text())
-
-    class Transformer(cst.CSTTransformer):
-        def leave_ImportFrom(self, original: cst.ImportFrom, updated: cst.ImportFrom):
-            module_str = cst_helpers.get_full_name_for_node(original.module)
-            if module_str == old_module and len(original.names) == 1:
-                alias = original.names[0]
-                if isinstance(alias, cst.ImportAlias) and cst_helpers.get_full_name_for_node(alias.name) == name:
-                    return updated.with_changes(module=cst.parse_expression(new_module))
-            return updated
-
-    new_mod = mod.visit(Transformer())
-    file_path.write_text(new_mod.code)
-
-
-def _rewrite_import(file_path: Path, old_module: str, alias_name: str, new_module: str) -> None:
-    mod = cst.parse_module(file_path.read_text())
-
-    class Transformer(cst.CSTTransformer):
-        def leave_Import(self, original: cst.Import, updated: cst.Import):
-            new_names = []
-            changed = False
-            for import_alias in original.names:
-                name_str = cst_helpers.get_full_name_for_node(import_alias.name)
-                asname = import_alias.asname.name.value if import_alias.asname else None
-                if name_str == old_module and asname == alias_name:
-                    new_names.append(import_alias.with_changes(name=cst.parse_expression(new_module)))
-                    changed = True
-                else:
-                    new_names.append(import_alias)
-            if changed:
-                return updated.with_changes(names=new_names)
-            return updated
-
-    new_mod = mod.visit(Transformer())
-    file_path.write_text(new_mod.code)
-
-
-def resolve_and_rewrite(index: Dict[str, Set[str]], broken: List[BrokenImport], write: bool = False) -> Tuple[List[Rewrite], List[Unresolved]]:
-    rewrites: List[Rewrite] = []
-    unresolved: List[Unresolved] = []
-
-    for bi in broken:
-        if bi.import_type == "from":
-            for name in bi.names:
-                candidates = index.get(name, set())
-                if len(candidates) == 1:
-                    new_module = next(iter(candidates))
-                    old_stmt = f"from {bi.module} import {name}"
-                    new_stmt = f"from {new_module} import {name}"
-                    rewrites.append(Rewrite(bi.file, old_stmt, new_stmt))
-                    if write:
-                        _rewrite_import_from(bi.file, bi.module, name, new_module)
-                else:
-                    unresolved.append(Unresolved(bi.file, bi.lineno, f"from {bi.module} import {name}"))
-        else:  # import
-            assert bi.alias
-            try:
-                source = bi.file.read_text()
-                tree = ast.parse(source)
-            except Exception:
-                unresolved.append(Unresolved(bi.file, bi.lineno, f"import {bi.module} as {bi.alias}"))
-                continue
-            attrs = _gather_attr_uses(tree, bi.alias)
-            if not attrs:
-                unresolved.append(Unresolved(bi.file, bi.lineno, f"import {bi.module} as {bi.alias}"))
-                continue
-            candidates: Optional[Set[str]] = None
-            for attr in attrs:
-                mods = index.get(attr, set())
-                if len(mods) != 1:
-                    candidates = None
-                    break
-                mods = set(mods)
-                if candidates is None:
-                    candidates = mods
-                else:
-                    candidates &= mods
-            if candidates and len(candidates) == 1:
-                new_module = next(iter(candidates))
-                old_stmt = f"import {bi.module} as {bi.alias}"
-                new_stmt = f"import {new_module} as {bi.alias}"
-                rewrites.append(Rewrite(bi.file, old_stmt, new_stmt))
-                if write:
-                    _rewrite_import(bi.file, bi.module, bi.alias, new_module)
+    def leave_Import(self, node: cst.Import, updated: cst.Import) -> cst.Import:
+        names = []
+        for alias in updated.names:
+            full = cst_helpers.get_full_name_for_node(alias.name)
+            new = self.changes.get(full)
+            if new:
+                self.log.append(f"Import: {full} -> {new}")
+                names.append(alias.with_changes(name=cst.parse_expression(new)))
             else:
-                unresolved.append(Unresolved(bi.file, bi.lineno, f"import {bi.module} as {bi.alias}"))
-    return rewrites, unresolved
+                names.append(alias)
+        return updated.with_changes(names=tuple(names))
 
+    def leave_ImportFrom(self, node: cst.ImportFrom, updated: cst.ImportFrom) -> cst.ImportFrom:
+        if updated.module is None:
+            return updated
+        full = cst_helpers.get_full_name_for_node(updated.module)
+        new = self.changes.get(full)
+        if new:
+            self.log.append(f"ImportFrom: {full} -> {new}")
+            return updated.with_changes(module=cst.parse_expression(new))
+        return updated
 
-def write_report(report_path: Path, rewrites: List[Rewrite], unresolved: List[Unresolved]) -> None:
-    lines = ["# Import Repair Report", ""]
-    lines.append("## Rewritten")
-    if rewrites:
-        for r in rewrites:
-            lines.append(f"- {r.file}: `{r.old}` → `{r.new}`")
-    else:
-        lines.append("- None")
-    lines.append("")
-    lines.append("## Unresolved")
-    if unresolved:
-        for u in unresolved:
-            lines.append(f"- {u.file}:{u.lineno}: `{u.stmt}`")
-    else:
-        lines.append("- None")
-    report_path.write_text("\n".join(lines))
+def rewrite_file(path: pathlib.Path, mapping: dict[str, str]) -> tuple[bool, list[str], str]:
+    src = path.read_text(encoding="utf-8")
+    mod = cst.parse_module(src)
+    log: list[str] = []
+    updated = mod.visit(Rewriter(mapping, log))
+    changed = updated.code != src
+    return changed, log, updated.code
 
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pkg", default="ai_trading")
+    ap.add_argument("--tests", default="tests")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--write", action="store_true")
+    ap.add_argument("--report", default="")
+    args = ap.parse_args(argv)
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Repair stale ai_trading imports in tests.")
-    parser.add_argument("--pkg", required=True, help="Package root (e.g., ai_trading)")
-    parser.add_argument("--tests", required=True, help="Path to tests directory")
-    parser.add_argument("--dry-run", action="store_true", help="Show proposed changes without writing")
-    parser.add_argument("--write", action="store_true", help="Apply changes to files")
-    parser.add_argument("--report", help="Path to write markdown report")
-    args = parser.parse_args()
+    # Only keep mappings that point to real, resolvable modules
+    mapping = {k: v for k, v in STALE_TO_NEW.items() if _module_exists(v)}
+    test_root = pathlib.Path(args.tests)
+    report_lines = []
+    changed_any = False
 
-    pkg_root = Path(args.pkg).resolve()
-    tests_root = Path(args.tests).resolve()
-
-    index = build_symbol_index(pkg_root)
-    broken = find_broken_imports(tests_root)
-    rewrites, unresolved = resolve_and_rewrite(index, broken, write=args.write and not args.dry_run)
-
-    for r in rewrites:
-        print(f"REWRITE: {r.old} -> {r.new} ({r.file})")
-    for u in unresolved:
-        print(f"UNRESOLVED: {u.stmt} ({u.file}:{u.lineno})")
+    for py in test_root.rglob("*.py"):
+        changed, log, new_code = rewrite_file(py, mapping)
+        if log:
+            report_lines.append(f"### {py}\n" + "\n".join(f"- {line}" for line in log) + "\n")
+        if changed:
+            changed_any = True
+            if args.write and not args.dry_run:
+                py.write_text(new_code, encoding="utf-8")
 
     if args.report:
-        write_report(Path(args.report), rewrites, unresolved)
+        out = pathlib.Path(args.report)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        hdr = "# Import repair report\n\n" if report_lines else "# Import repair report\n\n_No changes needed._\n"
+        out.write_text(hdr + "\n".join(report_lines), encoding="utf-8")
 
+    print("Done. Changes applied:", changed_any)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
+

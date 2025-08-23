@@ -2,7 +2,11 @@ import types
 
 import numpy as np
 import pytest
-from torch import nn
+try:
+    pytest.importorskip("torch", reason="Optional heavy dependency; guard at import time")
+    from torch import nn
+except Exception:
+    pytest.skip("torch import failed", allow_module_level=True)
 
 np.random.seed(0)
 

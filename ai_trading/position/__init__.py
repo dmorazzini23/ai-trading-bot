@@ -1,12 +1,9 @@
-"""Minimal position package exports."""
-from __future__ import annotations
-try:
-    from .core import MarketRegime
-except (KeyError, ValueError, TypeError):
-    from enum import Enum
+"""
+Public exports for the `ai_trading.position` package.
+The canonical implementation lives in `ai_trading.position.market_regime`.
+No fallbacks.
+"""
+from .market_regime import MarketRegime  # AI-AGENT-REF: expose MarketRegime
 
-    class MarketRegime(Enum):
-        BULL = 'bull'
-        BEAR = 'bear'
-        SIDEWAYS = 'sideways'
-__all__ = ['MarketRegime']
+__all__ = ["MarketRegime"]
+
