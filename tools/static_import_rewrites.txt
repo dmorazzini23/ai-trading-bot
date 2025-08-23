@@ -1,12 +1,18 @@
-ai_trading.position.core -> ai_trading.position
-from ai_trading.position.core import -> from ai_trading.position import
-import ai_trading.position.core as -> import ai_trading.position as
-ai_trading.runtime.http_wrapped -> ai_trading.utils.http
-from ai_trading.runtime.http_wrapped import -> from ai_trading.utils.http import
-import ai_trading.runtime.http_wrapped as -> import ai_trading.utils.http as
-ai_trading.monitoring.performance_monitor -> ai_trading.monitoring.system_health
-from ai_trading.monitoring.performance_monitor import -> from ai_trading.monitoring.system_health import
-import ai_trading.monitoring.performance_monitor as -> import ai_trading.monitoring.system_health as
-# normalized utils re-exports (harmless if already correct)
-from ai_trading.utils.timing import -> from ai_trading.utils import
+# ---- position.core → position ----
+^(\s*)from\s+ai_trading\.position\.core(\s+import\b.*)$ -> \1from ai_trading.position\2
+^(\s*)import\s+ai_trading\.position\.core\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\b -> \1import ai_trading.position as \2
+^(\s*)import\s+ai_trading\.position\.core\b -> \1import ai_trading.position
+ai_trading\.position\.core -> ai_trading.position
 
+# ---- runtime.http_wrapped → utils.http ----
+^(\s*)from\s+ai_trading\.runtime\.http_wrapped\s+import\s+(.*)$ -> \1from ai_trading.utils.http import \2
+^(\s*)import\s+ai_trading\.runtime\.http_wrapped\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\b -> \1import ai_trading.utils.http as \2
+^(\s*)import\s+ai_trading\.runtime\.http_wrapped\b -> \1import ai_trading.utils.http
+ai_trading\.runtime\.http_wrapped -> ai_trading.utils.http
+
+# ---- monitoring.performance_monitor (purged) → system_health.snapshot_basic ----
+^(\s*)from\s+ai_trading\.monitoring\.performance_monitor\s+import\s+ResourceMonitor\b.*$ -> \1from ai_trading.monitoring.system_health import snapshot_basic
+ai_trading\.monitoring\.performance_monitor -> ai_trading.monitoring.system_health
+
+# ---- minor import cleanups (safe no-ops) ----
+^(\s*)from\s+ai_trading\.utils\.timing\s+import\s+(.*)$ -> \1from ai_trading.utils import \2
