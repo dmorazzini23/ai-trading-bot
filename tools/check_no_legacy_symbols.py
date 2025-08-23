@@ -4,10 +4,13 @@ import sys
 from pathlib import Path
 
 BLOCKLIST = [
-    r"\bai_trading\.monitoring\.performance_monitor\b",
-    r"\bResourceMonitor\b",  # class name from the old shim
+    r"\bResourceMonitor\b",
+    r"\bperformance_monitor\b",
+    r"\bposition\.core\b",
+    r"\bhttp_wrapped\b",
 ]
 PAT = re.compile("|".join(f"(?:{p})" for p in BLOCKLIST))
+
 
 def main() -> int:
     roots = [Path("ai_trading"), Path("tests")]
@@ -28,6 +31,7 @@ def main() -> int:
     for f, ln, line in bad:
         print(f"  {f}:{ln}: {line}")
     return 2
+
 
 if __name__ == "__main__":
     sys.exit(main())

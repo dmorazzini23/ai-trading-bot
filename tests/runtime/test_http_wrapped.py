@@ -1,7 +1,8 @@
 import requests
 from ai_trading.utils import http
+
 try:
-    from ai_trading.utils import HTTP_TIMEOUT, clamp_timeout  # preferred
+    from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout  # preferred
 except Exception:  # AI-AGENT-REF: provide test-local timing helpers
     HTTP_TIMEOUT = 10.0
 
