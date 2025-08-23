@@ -16,11 +16,9 @@ import numpy as np
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
-
-NUMPY_AVAILABLE = True
-
 from ai_trading.risk.adaptive_sizing import MarketRegime, VolatilityRegime
 
+NUMPY_AVAILABLE = True
 ENHANCED_REGIMES_AVAILABLE = True
 
 
@@ -210,8 +208,14 @@ class RegimeDetector:
 
             return regime, metrics
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error detecting market regime: {e}")
             return self._fallback_regime_detection()
 
@@ -272,8 +276,14 @@ class RegimeDetector:
 
             return adjusted_thresholds
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error calculating dynamic thresholds: {e}")
             # Return conservative defaults
             return TradingThresholds(0.03, 0.5, 1.5, 0.03, 3.0)
@@ -331,8 +341,14 @@ class RegimeDetector:
 
             return trend_strength, direction
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error calculating trend metrics: {e}")
             return 0.0, TrendDirection.SIDEWAYS
 
@@ -379,8 +395,14 @@ class RegimeDetector:
 
             return percentile, regime
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error calculating volatility regime: {e}")
             return 0.5, VolatilityRegime.NORMAL
 
@@ -406,8 +428,14 @@ class RegimeDetector:
 
             return momentum
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error calculating momentum: {e}")
             return 0.0
 
@@ -432,8 +460,14 @@ class RegimeDetector:
             avg_correlation = statistics.mean(correlations)
             return min(1.0, max(0.0, avg_correlation))
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error calculating correlation environment: {e}")
             return 0.3
 
@@ -449,8 +483,7 @@ class RegimeDetector:
 
             return None
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
+        except (ValueError, TypeError, KeyError):  # AI-AGENT-REF: narrow exception
             return None
 
     def _calculate_regime_confidence(
@@ -474,8 +507,14 @@ class RegimeDetector:
 
             return max(0.0, min(1.0, confidence))
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ):  # AI-AGENT-REF: narrow exception
             return 0.5
 
     def _classify_market_regime(self, metrics: RegimeMetrics) -> MarketRegime:
@@ -520,8 +559,14 @@ class RegimeDetector:
             # Default to normal
             return MarketRegime.NORMAL
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            ZeroDivisionError,
+            OverflowError,
+            statistics.StatisticsError,
+            np.linalg.LinAlgError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error classifying market regime: {e}")
             return MarketRegime.NORMAL
 
