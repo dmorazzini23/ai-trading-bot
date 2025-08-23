@@ -166,10 +166,10 @@ def main() -> None:
         help="Output report path",
     )  # AI-AGENT-REF: expose output path
     parser.add_argument(
-        "--top", type=int, default=5, help="Top N unique import errors to print"
+        "--top", type=int, default=int(os.environ.get("TOP_N", "5")), help="Top N unique import errors to print"
     )  # AI-AGENT-REF: top count flag
     parser.add_argument(
-        "--fail-on-errors", action="store_true", help="Exit non-zero if any import errors detected"
+        "--fail-on-errors", action="store_true", default=os.environ.get("FAIL_ON_IMPORT_ERRORS") == "1", help="Exit non-zero if any import errors detected"
     )  # AI-AGENT-REF: optional failure
     args = parser.parse_args()
 

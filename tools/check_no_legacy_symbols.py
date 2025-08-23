@@ -5,9 +5,9 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BLOCKED = (
-    "ai_trading.monitoring.performance_monitor",
-    "ResourceMonitor",
-    "performance_monitor",
+    r"ai_trading\.monitoring\.performance_monitor",
+    r"\bResourceMonitor\b",
+    r"\bperformance_monitor\b",
     r"ai_trading\.position\.core",
     r"ai_trading\.runtime\.http_wrapped",
 )

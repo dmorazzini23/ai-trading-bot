@@ -6,6 +6,7 @@ import argparse
 import ast
 import difflib
 import importlib
+import re
 from pathlib import Path
 import sys
 
@@ -34,20 +35,20 @@ STATIC_REWRITES.update(
         "ai_trading.position.core": "ai_trading.position",
         "ai_trading.performance_monitor": "ai_trading.monitoring.system_health",
         "ai_trading.monitoring.performance_monitor": "ai_trading.monitoring.system_health",
-        "ai_trading.runtime.http_wrapped": "ai_trading.runtime.http",
+        "ai_trading.runtime.http_wrapped": "ai_trading.utils.http",
         "ai_trading.utils.timing.utils.timing": "ai_trading.utils.timing",
     }
 )
 
 
-def load_rewrite_map(path: Path) -> dict[str, str]:
-    mapping: dict[str, str] = {}
+def load_rewrite_map(path: Path) -> list[tuple[re.Pattern[str], str]]:
+    mapping: list[tuple[re.Pattern[str], str]] = []
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        src, dst = line.split(":", 1)
-        mapping[src.strip()] = dst.strip()
+        src, dst = line.split("->", 1)
+        mapping.append((re.compile(src.strip()), dst.strip()))
     return mapping
 
 
@@ -109,7 +110,7 @@ def main() -> int:
     parser.add_argument("--sample-limit", type=int, default=5)
     args = parser.parse_args()
 
-    mapping = load_rewrite_map(Path(args.rewrite_map))
+    regex_map = load_rewrite_map(Path(args.rewrite_map))
     tests_path = Path(args.tests)
     applied: list[tuple[str, str, str]] = []
     unresolved: list[tuple[str, str]] = []
@@ -131,12 +132,19 @@ def main() -> int:
                 code = code.replace(old, new)
                 static_changes.append((old, new))
 
+        regex_changes: list[tuple[str, str]] = []
+        for pattern, repl in regex_map:
+            new_code = pattern.sub(repl, code)
+            if new_code != code:
+                regex_changes.append((pattern.pattern, repl))
+                code = new_code
+
         module = cst.parse_module(code)
-        transformer = ImportTransformer(mapping)
+        transformer = ImportTransformer({})
         new_module = module.visit(transformer)
         new_code = new_module.code
 
-        changes = static_changes + transformer.applied
+        changes = static_changes + regex_changes + transformer.applied
         if changes:
             if args.write:
                 try:
