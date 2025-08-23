@@ -1,3 +1,7 @@
+
+# Always load these explicitly because we run with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+PYTEST_PLUGINS := -p xdist -p pytest_timeout -p pytest_asyncio
+
 .PHONY: init test lint verify test-all test-core test-int contract audit-exceptions self-check deps-dev lint-fix lint-fix-phase2 lint-fix-phase3 lint-fix-phase4r lint-histo typecheck
 
 init:
@@ -28,13 +32,13 @@ dev-deps:
 
 test-core:
 	@mkdir -p artifacts
-	# AI-AGENT-REF: load xdist, asyncio, timeout when autoload disabled
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
-	        -p xdist -p pytest_asyncio -p pytest_timeout \
-	        -n auto \
-	        -m "not integration and not slow" \
-	        -q --disable-warnings \
-	        | tee artifacts/pytest-core.txt
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	pytest $(PYTEST_PLUGINS) \
+	  -n 2 -m "not integration and not slow" \
+	  --timeout=120 --timeout-method=thread \
+	  -q --disable-warnings \
+	  -o log_cli=true -o log_cli_level=INFO \
+	  | tee artifacts/pytest-core.txt
 
 .PHONY: test-core-1p
 test-core-1p:
@@ -49,12 +53,10 @@ test-core-1p:
 .PHONY: test-collect
 test-collect:
 	@mkdir -p artifacts
-	# AI-AGENT-REF: collect-only run
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
-	        -p pytest_asyncio -p pytest_timeout -p no:xdist \
-	        -m "not integration and not slow" \
-	        --collect-only -q \
-	        | tee artifacts/pytest-collect.txt
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	pytest $(PYTEST_PLUGINS) -q --collect-only \
+	  -o log_cli=true -o log_cli_level=INFO \
+	  | tee artifacts/pytest-collect.txt
 
 .PHONY: test-debug
 test-debug:
@@ -141,4 +143,7 @@ fix-import-time:
 refactor-config-hygiene: scan-import-time fix-import-time scan-import-time
 
 repair-test-imports:
-	@bash scripts/repair_test_imports.sh ai_trading tests artifacts/import-repair-report.md  # AI-AGENT-REF: repair stale imports
+	python tools/repair_test_imports.py \
+	  --pkg ai_trading --tests tests \
+	  --write \
+	  --report artifacts/import-repair-report.md

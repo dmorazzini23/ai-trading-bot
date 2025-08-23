@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scan tests for stale internal imports and rewrite them safely using libcst.
-Focus: known breakages like `ai_trading.position.core` → `.market_regime`.
+Focus: known breakages like `ai_trading.position.core` → `ai_trading.position`.
 Usage:
   python tools/repair_test_imports.py --pkg ai_trading --tests tests --dry-run
   python tools/repair_test_imports.py --pkg ai_trading --tests tests --write --report artifacts/import-repair-report.md
@@ -12,14 +12,18 @@ import argparse, pathlib, sys, importlib.util
 import libcst as cst
 import libcst.matchers as m
 import libcst.helpers as cst_helpers
+from typing import Dict
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))  # AI-AGENT-REF: ensure project importable
 
-# Minimal, explicit mapping (extendable but no heuristics/shims)
-STALE_TO_NEW = {
-    "ai_trading.position.core": "ai_trading.position.market_regime",
+# Static, hand-curated rewrites for known legacy paths that moved to a public API.
+# These are applied before any dynamic package scans.
+STATIC_REWRITES: Dict[str, str] = {
+    # Position package cleanup: import from the public surface
+    "ai_trading.position.core": "ai_trading.position",
+    "ai_trading.position.core.MarketRegime": "ai_trading.position.MarketRegime",
 }
 
 def _module_exists(mod: str) -> bool:
@@ -45,12 +49,24 @@ class Rewriter(cst.CSTTransformer):
     def leave_ImportFrom(self, node: cst.ImportFrom, updated: cst.ImportFrom) -> cst.ImportFrom:
         if updated.module is None:
             return updated
-        full = cst_helpers.get_full_name_for_node(updated.module)
-        new = self.changes.get(full)
-        if new:
-            self.log.append(f"ImportFrom: {full} -> {new}")
-            return updated.with_changes(module=cst.parse_expression(new))
-        return updated
+        full_mod = cst_helpers.get_full_name_for_node(updated.module)
+        module_new = self.changes.get(full_mod)
+        names = []
+        for alias in updated.names:
+            name_str = cst_helpers.get_full_name_for_node(alias.name)
+            fq = f"{full_mod}.{name_str}"
+            new_fq = self.changes.get(fq)
+            if new_fq:
+                new_mod, new_name = new_fq.rsplit(".", 1)
+                if module_new is None:
+                    module_new = new_mod
+                self.log.append(f"ImportFrom: {fq} -> {new_fq}")
+                names.append(alias.with_changes(name=cst.parse_expression(new_name)))
+            else:
+                names.append(alias)
+        if module_new:
+            return updated.with_changes(module=cst.parse_expression(module_new), names=tuple(names))
+        return updated.with_changes(names=tuple(names))
 
 def rewrite_file(path: pathlib.Path, mapping: dict[str, str]) -> tuple[bool, list[str], str]:
     src = path.read_text(encoding="utf-8")
@@ -70,7 +86,11 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     # Only keep mappings that point to real, resolvable modules
-    mapping = {k: v for k, v in STALE_TO_NEW.items() if _module_exists(v)}
+    def _target_exists(target: str) -> bool:
+        mod = target.rsplit(".", 1)[0]
+        return _module_exists(mod)
+
+    mapping = {k: v for k, v in STATIC_REWRITES.items() if _target_exists(v)}
     test_root = pathlib.Path(args.tests)
     report_lines = []
     changed_any = False
