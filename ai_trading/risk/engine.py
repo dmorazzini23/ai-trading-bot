@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC
@@ -28,7 +29,7 @@ def _optional_import(name: str):
 
 ta = _optional_import("pandas_ta")
 
-from ai_trading.config.management import SEED, TradingConfig
+from ai_trading.config.management import SEED, TradingConfig  # noqa: E402
 
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -42,7 +43,7 @@ except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
         pass
 
 
-from ai_trading.config.settings import get_settings
+from ai_trading.config.settings import get_settings  # noqa: E402
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
@@ -77,19 +78,20 @@ if not hasattr(np, "NaN"):
 
 MAX_DRAWDOWN = 0.05
 
-# Simple global risk state used by utility helpers
-HARD_STOP = False
-MAX_TRADES = 10
-CURRENT_TRADES = 0
-
 
 class RiskEngine:
     """Cross-strategy risk manager."""
+
+    _lock: threading.Lock | None = None
 
     def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""
         # Use explicit packaged config; no reliance on a global `config` symbol.
         self.config = cfg if cfg is not None else TradingConfig()
+        self._lock = threading.Lock()
+        self.hard_stop = False
+        self.max_trades = 10
+        self.current_trades = 0
 
         # AI-AGENT-REF: Add comprehensive validation for risk parameters
         try:
@@ -146,7 +148,6 @@ class RiskEngine:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning("Could not initialize AlpacaREST: %s", e)
-        self.hard_stop = False
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
         self._returns: list[float] = []
         self._drawdowns: list[float] = []
@@ -526,6 +527,29 @@ class RiskEngine:
                 self.hard_stop = False
                 self._hard_stop_until = None
                 logger.info("HARD_STOP_CLEARED")
+
+    # State moved to instance; references updated to self.hard_stop / self.max_trades / self.current_trades
+
+    def acquire_trade_slot(self) -> bool:
+        """Thread-safe check & increment of current_trades against max_trades."""  # AI-AGENT-REF: thread-safe trade slots
+        if self._lock is None:
+            self._lock = threading.Lock()
+        with self._lock:
+            if self.current_trades >= self.max_trades:
+                return False
+            self.current_trades += 1
+            return True
+
+    def release_trade_slot(self) -> None:
+        """Decrement current_trades (no-op if already zero)."""  # AI-AGENT-REF: thread-safe trade slots
+        if self._lock is None:
+            self._lock = threading.Lock()
+        with self._lock:
+            if self.current_trades > 0:
+                self.current_trades -= 1
+
+    def trigger_hard_stop(self) -> None:
+        self.hard_stop = True  # AI-AGENT-REF: manual hard stop
 
     def wait_for_exposure_update(self, timeout: float = 0.5) -> None:
         """Block until an exposure update occurs or ``timeout`` elapses."""
@@ -1295,43 +1319,15 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
     return current_dd > max_dd
 
 
-def can_trade() -> bool:
-    """
-    Determine if trading should be allowed based on market and system conditions.
-
-    This function performs a comprehensive check of trading conditions including
-    market hours, system health, risk limits, and operational flags to determine
-    if the bot should execute trades.
-
-    Returns
-    -------
-    bool
-        True if all conditions allow trading, False if trading should be halted.
-
-    Checks Performed
-    ---------------
-    - Market hours and trading sessions
-    - System health and API connectivity
-    - Risk management limits and drawdowns
-    - Account status and buying power
-    - Emergency halt flags
-    - Pattern Day Trader (PDT) restrictions
-
-    Notes
-    -----
-    - Called before each trading cycle
-    - Logs reason when trading is not allowed
-    - Respects emergency stop conditions
-    """
-    return not HARD_STOP and CURRENT_TRADES < MAX_TRADES
+def can_trade(engine: RiskEngine) -> bool:
+    """Return True if trading should proceed based on engine state."""  # AI-AGENT-REF: instance state
+    return not engine.hard_stop and engine.current_trades < engine.max_trades
 
 
-def register_trade(size: int) -> dict | None:
-    """Register a trade and increment the count if allowed."""
-    global CURRENT_TRADES
-    if not can_trade() or size <= 0:
+def register_trade(engine: RiskEngine, size: int) -> dict | None:
+    """Register a trade and increment the count if allowed."""  # AI-AGENT-REF: instance state
+    if size <= 0 or not engine.acquire_trade_slot():
         return None
-    CURRENT_TRADES += 1
     return {"size": size}
 
 

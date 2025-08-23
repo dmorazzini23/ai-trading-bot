@@ -80,7 +80,9 @@ COMMON_EXC = (
     ImportError,
 )
 
-SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
+# Environment keys (defined early to support import-time fallbacks)
+# Allow NEWS_API_KEY to serve as the default sentiment key if SENTIMENT_API_KEY is unset.  # AI-AGENT-REF: env alias
+SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY") or os.getenv("NEWS_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
