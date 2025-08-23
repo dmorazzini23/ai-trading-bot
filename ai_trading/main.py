@@ -122,6 +122,14 @@ def _get_int_env(var: str, default: int | None = None) -> int | None:
         return default
 
 
+def _as_float(val, default: float = 0.0) -> float:
+    """Best-effort float conversion that tolerates None/str."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _install_signal_handlers() -> None:
     """Install SIGINT/SIGTERM handlers."""  # AI-AGENT-REF
 
@@ -144,9 +152,9 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     if mode not in {"aggressive", "balanced", "conservative"}:
         errors.append(f"TRADING_MODE invalid: {mode}")
 
-    cap = float(getattr(tcfg, "capital_cap", 0.0))
-    risk = float(getattr(tcfg, "dollar_risk_limit", 0.0))
-    max_pos = float(getattr(tcfg, "max_position_size", 0.0))
+    cap = _as_float(getattr(tcfg, "capital_cap", 0.0), 0.0)
+    risk = _as_float(getattr(tcfg, "dollar_risk_limit", 0.0), 0.0)
+    max_pos = _as_float(getattr(tcfg, "max_position_size", None), 0.0)
     mp_mode = str(
         getattr(tcfg, "max_position_mode", getattr(cfg, "max_position_mode", "STATIC"))
     ).upper()  # AI-AGENT-REF: allow AUTO vs STATIC handling
@@ -407,10 +415,10 @@ def main(argv: list[str] | None = None) -> None:
         "mode": getattr(config, "trading_mode", "balanced"),
         "paper": getattr(config, "paper", True),
         "alpaca_base_url": getattr(config, "alpaca_base_url", ""),
-        "capital_cap": float(getattr(S, "capital_cap", 0.0)),
-        "dollar_risk_limit": float(getattr(S, "dollar_risk_limit", 0.0)),
+        "capital_cap": _as_float(getattr(S, "capital_cap", 0.0), 0.0),
+        "dollar_risk_limit": _as_float(getattr(S, "dollar_risk_limit", 0.0), 0.0),
         "max_position_mode": str(getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))).upper(),
-        "max_position_size": float(getattr(S, "max_position_size", 0.0)),
+        "max_position_size": _as_float(getattr(S, "max_position_size", None), 0.0),
     }
     logger.info("STARTUP_BANNER", extra=_redact(banner))
 
