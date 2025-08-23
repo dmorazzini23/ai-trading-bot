@@ -1464,7 +1464,13 @@ from bs4 import BeautifulSoup
 # AI-AGENT-REF: flask is a hard dependency in pyproject.toml
 from flask import Flask
 
-from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
+# AI-AGENT-REF: lazy import to avoid import-time races and optional deps
+def _alpaca_symbols():
+    from ai_trading.alpaca_api import (
+        alpaca_get as _alpaca_get,
+        start_trade_updates_stream as _start,
+    )
+    return _alpaca_get, _start
 from ai_trading.broker.alpaca import AlpacaBroker
 
 if ALPACA_AVAILABLE:
@@ -13498,6 +13504,7 @@ def main() -> None:
         # Start listening for trade updates in a background thread
         ctx.stream_event = asyncio.Event()
         ctx.stream_event.set()
+        _, start_trade_updates_stream = _alpaca_symbols()  # AI-AGENT-REF: lazy stream import
         threading.Thread(
             target=lambda: asyncio.run(
                 start_trade_updates_stream(
@@ -13805,6 +13812,7 @@ def _record_trade_in_frequency_tracker(
 
 def get_latest_price(symbol: str):
     try:
+        alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
         data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
         price = float(data.get("ap", 0)) if data else None
         if price is None:
