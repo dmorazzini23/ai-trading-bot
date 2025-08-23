@@ -103,11 +103,11 @@ def get_last_available_bar(symbol: str) -> pd.DataFrame:
     """Placeholder; tests monkeypatch this to return a last available daily bar."""
     raise NotImplementedError('Tests should monkeypatch get_last_available_bar')
 
-class DataFetchException(Exception):
-    """Error raised when market data retrieval fails."""
+class DataFetchError(Exception):
+    """Error raised when market data retrieval fails."""  # AI-AGENT-REF: stable public symbol
 
-class DataFetchError(DataFetchException):
-    """Alias error used in tests."""
+# Backwards compat alias
+DataFetchException = DataFetchError
 
 class FinnhubAPIException(Exception):
     """Minimal Finnhub API error for tests."""

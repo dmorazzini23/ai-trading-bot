@@ -115,7 +115,7 @@ _install_vendor_stubs()
 
 # Minimal timing helpers for tests only (no package shim).
 try:
-    from ai_trading.utils.timing import now, elapsed_ms  # preferred if it exists
+    from ai_trading.utils import now, elapsed_ms  # preferred if it exists
 except Exception:
     import time as _t
 

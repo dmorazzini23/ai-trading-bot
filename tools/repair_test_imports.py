@@ -32,6 +32,15 @@ STATIC_REWRITES: dict[str, str] = {
     ),
 }
 
+STATIC_REWRITES.update({
+    # AI-AGENT-REF: legacy module path rewrites
+    "ai_trading.position.core": "ai_trading.position",
+    "ai_trading.performance_monitor": "ai_trading.monitoring",
+    "ai_trading.monitoring.performance_monitor": "ai_trading.monitoring",
+    "ai_trading.runtime.http_wrapped": "ai_trading.runtime.http",
+    "ai_trading.utils.timing": "ai_trading.utils",
+})
+
 def load_rewrite_map(path: Path) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for line in path.read_text().splitlines():
