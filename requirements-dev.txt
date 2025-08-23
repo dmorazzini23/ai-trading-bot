@@ -66,3 +66,7 @@ fonttools==4.59.1
 kiwisolver==1.4.9
 pillow==11.3.0
 pyparsing==3.2.3
+
+# Broker/SDK for tests that import modern Alpaca SDK
+# Dev-only to satisfy test-time imports without altering runtime deps
+alpaca-py

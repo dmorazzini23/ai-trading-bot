@@ -1,25 +1,39 @@
-"""Tiny sanity check for dev ML dependencies used by tests.
-Run: python tools/check_dev_deps.py
-Exits 0 if all imports succeed; prints a minimal status line.
+"""Verify dev-time imports for packages used in tests.
+
+Run:
+    python tools/check_dev_deps.py
+
+Exits with status 0 if all imports succeed; otherwise prints missing deps.
 """
+
 from __future__ import annotations
 
-import sys
+REQUIRED = [
+    ("cachetools", "cachetools"),
+    ("torch", "torch"),
+    ("stable_baselines3", "stable_baselines3"),
+    ("gymnasium", "gymnasium"),
+    # Both SDK lines should import cleanly during collection
+    ("alpaca-py", "alpaca"),  # AI-AGENT-REF: modern SDK top-level name is `alpaca`
+    ("alpaca-trade-api", "alpaca_trade_api"),
+]
 
-def main() -> int:
-    missing: list[str] = []
-    for name in ("stable_baselines3", "gymnasium", "cloudpickle", "tqdm"):
+
+def main() -> None:
+    missing = []
+    for pkg_name, import_name in REQUIRED:
         try:
-            __import__(name)
-        except Exception as e:  # precise intent: import-only verification
-            missing.append(f"{name}: {e}")
+            __import__(import_name)
+        except Exception as e:  # import-time errors only
+            missing.append((pkg_name, import_name, str(e)))
     if missing:
-        print("MISSING:")
-        for m in missing:
-            print(" -", m)
-        return 1
-    print("dev-ml-deps: OK")
-    return 0
+        print("Missing dev deps (package -> import):")
+        for pkg_name, import_name, err in missing:
+            print(f" - {pkg_name} -> {import_name}: {err}")
+        raise SystemExit(1)
+    print("OK")
+
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
+
