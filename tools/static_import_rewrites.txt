@@ -1,20 +1,16 @@
-# ---- Position core → Position (module collapsed) ----
-\bfrom\s+ai_trading\.position\.core\s+import\s+  =>  from ai_trading.position import 
-\bimport\s+ai_trading\.position\.core\s+as\s+     =>  import ai_trading.position as 
-\bimport\s+ai_trading\.position\.core\b           =>  import ai_trading.position
-\bfrom\s+ai_trading\.position\s+import\s+core\s+as\s+(\w+)  =>  import ai_trading.position as \1
+# ai_trading.position.core → ai_trading.position
+from ai_trading.position.core import (.*) -> from ai_trading.position import \1
+from ai_trading.position.core import (.*) as (.*) -> from ai_trading.position import \1 as \2
+import ai_trading.position.core as (.*) -> import ai_trading.position as \1
+import ai_trading.position.core -> import ai_trading.position
 
-# ---- http_wrapped → utils.http ----
-\bfrom\s+ai_trading\.runtime\.http_wrapped\s+import\s+  =>  from ai_trading.utils.http import 
-\bimport\s+ai_trading\.runtime\.http_wrapped\s+as\s+     =>  import ai_trading.utils.http as 
-\bimport\s+ai_trading\.runtime\.http_wrapped\b           =>  import ai_trading.utils.http
+# ai_trading.runtime.http_wrapped → ai_trading.utils.http
+from ai_trading.runtime.http_wrapped import (.*) -> from ai_trading.utils.http import \1
+from ai_trading.runtime.http_wrapped import (.*) as (.*) -> from ai_trading.utils.http import \1 as \2
+import ai_trading.runtime.http_wrapped as (.*) -> import ai_trading.utils.http as \1
+import ai_trading.runtime.http_wrapped -> import ai_trading.utils.http
 
-# ---- Stray runtime.http → utils.http (seen in fixtures) ----
-\bfrom\s+ai_trading\.runtime\.http\s+import\s+  =>  from ai_trading.utils.http import 
-\bimport\s+ai_trading\.runtime\.http\s+as\s+     =>  import ai_trading.utils.http as 
-\bimport\s+ai_trading\.runtime\.http\b           =>  import ai_trading.utils.http
-
-# ---- performance_monitor → system_health (module only; no shims) ----
-\bfrom\s+ai_trading\.monitoring\.performance_monitor\s+import\s+  =>  from ai_trading.monitoring.system_health import 
-\bimport\s+ai_trading\.monitoring\.performance_monitor\s+as\s+     =>  import ai_trading.monitoring.system_health as 
-\bimport\s+ai_trading\.monitoring\.performance_monitor\b           =>  import ai_trading.monitoring.system_health
+# monitoring shim module to system_health (module path only; no aliasing back to shim)
+from ai_trading.monitoring.performance_monitor import (.*) -> from ai_trading.monitoring.system_health import \1
+import ai_trading.monitoring.performance_monitor as (.*) -> import ai_trading.monitoring.system_health as \1
+import ai_trading.monitoring.performance_monitor -> import ai_trading.monitoring.system_health

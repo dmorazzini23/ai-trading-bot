@@ -68,11 +68,8 @@ What the target actually does (simplified)
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 pytest -p xdist -p pytest_timeout -p pytest_asyncio --collect-only || true
 
-DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
-python tools/harvest_import_errors.py \
-  --top $(TOP_N) \
-  $(if $(filter 1,$(FAIL_ON_IMPORT_ERRORS)),--fail-on-errors,) \
-  --out $(IMPORT_REPAIR_REPORT)
+DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) TOP_N=$(TOP_N) FAIL_ON_IMPORT_ERRORS=$(FAIL_ON_IMPORT_ERRORS) \
+python tools/harvest_import_errors.py --report $(IMPORT_REPAIR_REPORT)
 ```
 
 - harvest_import_errors.py normalizes messages like:
