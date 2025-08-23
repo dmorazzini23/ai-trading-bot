@@ -100,8 +100,9 @@ class VWAPExecutor:
 
             return child_orders
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        # Only local math/input/runtime issues are tolerated here. Broker/API
+        # errors are handled inside OrderManager.
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError) as e:
             logger.error(f"Error in VWAP execution: {e}")
             return []
 
@@ -185,8 +186,8 @@ class TWAPExecutor:
             logger.info(f"TWAP execution completed: {len(child_orders)} orders")
             return child_orders
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        # Guard TWAP math edge cases; e.g., duration_minutes==0 can zero-divide.
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError) as e:
             logger.error(f"Error in TWAP execution: {e}")
             return []
 
@@ -274,8 +275,7 @@ class ImplementationShortfall:
             )
             return child_orders
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError) as e:
             logger.error(f"Error in Implementation Shortfall execution: {e}")
             return []
 
@@ -310,8 +310,7 @@ class ImplementationShortfall:
 
             return schedule
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError, RuntimeError) as e:
             logger.error(f"Error calculating execution schedule: {e}")
             return [(total_quantity, self.urgency_factor)]
 
