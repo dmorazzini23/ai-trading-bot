@@ -454,6 +454,31 @@ def _fetch_bars(
                 return _req(None)
             raise ValueError("unauthorized")
 
+        # AI-AGENT-REF: explicit rate-limit observability and controlled fallback
+        if status == 429:
+            logger.warning(
+                "DATA_SOURCE_RATE_LIMITED",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "status": "rate_limited",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                    }
+                ),
+            )
+            if fallback:
+                _interval, _feed, _start, _end = fallback
+                payload = _format_fallback_payload_df(
+                    _interval, _feed, _start, _end
+                )
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra={"provider": "alpaca", "fallback": payload},
+                )
+                return _req(None)
+            raise ValueError("rate_limited")
+
         df = pd.DataFrame(data)
         if df.empty:
             if _interval.lower() in {"1day", "day", "1d"}:
