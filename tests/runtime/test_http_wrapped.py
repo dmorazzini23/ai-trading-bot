@@ -1,6 +1,6 @@
 import requests
 from ai_trading.utils import http
-from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout
+from ai_trading.utils import HTTP_TIMEOUT, clamp_timeout
 
 
 class DummyResp:
