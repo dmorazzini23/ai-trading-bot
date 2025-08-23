@@ -70,3 +70,4 @@ pyparsing==3.2.3
 # Broker/SDK for tests that import modern Alpaca SDK
 # Dev-only to satisfy test-time imports without altering runtime deps
 alpaca-py
+# NOTE: do NOT place runtime libs here; dev is installed with --no-deps
