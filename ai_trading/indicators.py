@@ -480,16 +480,30 @@ def donchian_channel(
 
 
 def obv(closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:
-    """Return On-Balance Volume (OBV) series."""
-    obv_vals = [0]
-    for i in range(1, len(closes)):
-        if closes[i] > closes[i - 1]:
-            obv_vals.append(obv_vals[-1] + volumes[i])
-        elif closes[i] < closes[i - 1]:
-            obv_vals.append(obv_vals[-1] - volumes[i])
-        else:
-            obv_vals.append(obv_vals[-1])
-    return np.array(obv_vals)
+    """Return On-Balance Volume (OBV) series (vectorized).
+
+    Semantics are identical to the loop implementation:
+    - If close[t] > close[t-1] ⇒ add volume[t]
+    - If close[t] < close[t-1] ⇒ subtract volume[t]
+    - If equal ⇒ carry forward
+    The first OBV value is 0.
+    """
+    c = np.asarray(closes, dtype=float)
+    v = np.asarray(volumes, dtype=float)
+    if c.ndim != 1 or v.ndim != 1 or c.size != v.size:
+        raise ValueError("closes and volumes must be same-length 1D arrays")
+    n = c.size
+    if n == 0:
+        return np.array([], dtype=float)
+    if n == 1:
+        return np.array([0.0], dtype=float)
+
+    delta = np.diff(c)
+    # sign ∈ {-1, 0, 1}; zeros imply carry-forward of cumulative sum (no change)
+    sign = np.sign(delta)
+    adj = sign * v[1:]
+    obv_vals = np.concatenate([[0.0], np.cumsum(adj, dtype=float)])
+    return obv_vals
 
 
 def stochastic_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:

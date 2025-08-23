@@ -12,7 +12,11 @@ from pandas.errors import OutOfBoundsDatetime  # AI-AGENT-REF: datetime bounds
 
 try:  # pragma: no cover - optional configuration module
     from ai_trading.config import get_settings
-except Exception:  # AI-AGENT-REF: fallback when config dependencies missing
+except Exception:
+    # NOTE: This guard is intentionally broad because configuration modules may
+    # raise non-ImportError exceptions during import (e.g., validation errors)
+    # before the logger is available. We provide a minimal fallback to keep the
+    # data layer usable in constrained environments (tests, tooling, dry-runs).
     def get_settings():  # type: ignore
         return None
 from ai_trading.data.timeutils import (
