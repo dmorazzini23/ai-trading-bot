@@ -1,21 +1,15 @@
 from __future__ import annotations
-from enum import Enum
-from collections.abc import Iterable
+from enum import Enum, auto
 
 
-class MarketRegime(str, Enum):
-    BULL = "bull"
-    BEAR = "bear"
-    SIDEWAYS = "sideways"
-    VOLATILE = "volatile"
-    UNKNOWN = "unknown"
+class MarketRegime(Enum):
+    UNKNOWN = auto()
+    BULL = auto()
+    BEAR = auto()
+    SIDEWAYS = auto()
 
 
-def detect_market_regime(
-    prices: Iterable[float] | None = None,
-) -> MarketRegime:
-    """
-    Minimal placeholder for tests that import the symbol.
-    Does not implement strategy logic; returns UNKNOWN by default.
-    """
+def detect_market_regime(*_args, **_kwargs) -> MarketRegime:
+    """Placeholder to keep imports stable during tests."""
     return MarketRegime.UNKNOWN
+# AI-AGENT-REF: stable market regime enum for test imports
