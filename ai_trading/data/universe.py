@@ -14,8 +14,8 @@ def locate_tickers_csv() -> str | None:
         p = pkg_files("ai_trading.data").joinpath("tickers.csv")
         if p.is_file():
             return str(p)
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:  # pragma: no cover - defensive
+    # AI-AGENT-REF: narrow broad catch to missing package only
+    except ModuleNotFoundError:  # pragma: no cover - defensive
         pass
     return None
 
@@ -25,7 +25,14 @@ def load_universe() -> list[str]:
     if not path:
         logger.error("TICKERS_FILE_MISSING", extra={"path": "ai_trading/data/tickers.csv", "fallback": "none"})
         return []
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path)
+    except (OSError, pd.errors.EmptyDataError, ValueError) as e:  # AI-AGENT-REF: guard CSV read
+        logger.error(
+            "TICKERS_FILE_READ_FAILED",
+            extra={"path": path, "error": str(e)},
+        )
+        return []
     symbols = [str(s).strip().upper() for s in df.iloc[:, 0].tolist() if str(s).strip()]
     logger.info("TICKERS_SOURCE", extra={"path": path, "count": len(symbols)})
     return symbols
