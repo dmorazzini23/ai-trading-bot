@@ -1,26 +1,17 @@
 """Reinforcement learning trading utilities."""
-
 from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Any
-
 try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv
-# noqa: BLE001 TODO: narrow exception
-except Exception:  # pragma: no cover - optional dependency
-    PPO = None  # type: ignore
-    DummyVecEnv = None  # type: ignore
-
+except (KeyError, ValueError, TypeError):
+    PPO = None
+    DummyVecEnv = None
 from ai_trading.strategies.base import StrategySignal
-
-# Type alias for backward compatibility
 TradeSignal = StrategySignal
-
 logger = logging.getLogger(__name__)
-
 
 class RLAgent:
     """Wrapper around a PPO policy for trading inference."""
@@ -31,15 +22,13 @@ class RLAgent:
 
     def load(self) -> None:
         if PPO is None:
-            raise ImportError("stable-baselines3 required")
+            raise ImportError('stable-baselines3 required')
         if Path(self.model_path).exists():
             self.model = PPO.load(self.model_path)
-        else:  # pragma: no cover - model optional in tests
-            logger.error("RL model not found at %s", self.model_path)
+        else:
+            logger.error('RL model not found at %s', self.model_path)
 
-    def predict(
-        self, state, symbols: list[str] | None = None
-    ) -> TradeSignal | list[TradeSignal] | None:
+    def predict(self, state, symbols: list[str] | None=None) -> TradeSignal | list[TradeSignal] | None:
         """
         Predict one or more trade signals from the current model.
 
@@ -57,40 +46,27 @@ class RLAgent:
             A single trade signal or a list of signals (one per symbol).
         """
         if self.model is None:
-            logger.error("RL model not loaded")
+            logger.error('RL model not loaded')
             return None
         try:
-            # batch prediction when multiple symbols are provided
-            if (
-                symbols is not None
-                and hasattr(state, "__len__")
-                and len(state) == len(symbols)
-            ):
+            if symbols is not None and hasattr(state, '__len__') and (len(state) == len(symbols)):
                 actions, _ = self.model.predict(state, deterministic=True)
                 signals: list[TradeSignal] = []
                 for sym, act in zip(symbols, actions, strict=False):
-                    side = {0: "hold", 1: "buy", 2: "sell"}.get(int(act), "hold")
-                    signals.append(
-                        TradeSignal(
-                            symbol=sym, side=side, confidence=1.0, strategy="rl"
-                        )
-                    )
+                    side = {0: 'hold', 1: 'buy', 2: 'sell'}.get(int(act), 'hold')
+                    signals.append(TradeSignal(symbol=sym, side=side, confidence=1.0, strategy='rl'))
                 return signals
-            # single prediction fallback
             action, _ = self.model.predict(state, deterministic=True)
-            side = {0: "hold", 1: "buy", 2: "sell"}.get(int(action), "hold")
-            return TradeSignal(symbol="RL", side=side, confidence=1.0, strategy="rl")
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as exc:
-            logger.error("RL prediction failed: %s", exc)
+            side = {0: 'hold', 1: 'buy', 2: 'sell'}.get(int(action), 'hold')
+            return TradeSignal(symbol='RL', side=side, confidence=1.0, strategy='rl')
+        except (KeyError, ValueError, TypeError) as exc:
+            logger.error('RL prediction failed: %s', exc)
             return None
-
 
 class RLTrader(RLAgent):
     """Backward-compatible alias used by bot_engine."""
     pass
-
 try:
-    __all__.append("RLTrader")
+    __all__.append('RLTrader')
 except NameError:
-    __all__ = ["RLAgent", "RLTrader"]
+    __all__ = ['RLAgent', 'RLTrader']

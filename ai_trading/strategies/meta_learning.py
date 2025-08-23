@@ -1,3 +1,2 @@
-from .metalearning import MetaLearning  # AI-AGENT-REF: compatibility layer
-
-__all__ = ["MetaLearning"]
+from .metalearning import MetaLearning
+__all__ = ['MetaLearning']

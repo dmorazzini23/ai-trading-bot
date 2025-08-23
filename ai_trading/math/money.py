@@ -4,21 +4,14 @@ Exact money math using Decimal for profit-critical P&L calculations.
 Provides Money class for precise financial calculations, avoiding float
 arithmetic errors that can cause silent P&L drag.
 """
-
 import logging
 from decimal import ROUND_HALF_EVEN, Decimal, getcontext
 from typing import TYPE_CHECKING, Union
-
 if TYPE_CHECKING:
     pass
-
-# AI-AGENT-REF: Set high precision for financial calculations
 getcontext().prec = 28
-
 logger = logging.getLogger(__name__)
-
-Number = Union[int, float, str, Decimal, "Money"]
-
+Number = Union[int, float, str, Decimal, 'Money']
 
 class Money:
     """
@@ -28,7 +21,7 @@ class Money:
     provides quantization to tick/lot sizes for order execution.
     """
 
-    def __init__(self, amount: Number, tick: Decimal | None = None):
+    def __init__(self, amount: Number, tick: Decimal | None=None):
         """
         Initialize Money with precise decimal amount.
 
@@ -38,7 +31,6 @@ class Money:
         """
         self._amount = to_decimal(amount)
         self._tick = tick
-
         if self._tick is not None:
             self._amount = self._amount.quantize(self._tick, rounding=ROUND_HALF_EVEN)
 
@@ -47,7 +39,7 @@ class Money:
         """Get the underlying Decimal amount."""
         return self._amount
 
-    def quantize(self, tick: Decimal) -> "Money":
+    def quantize(self, tick: Decimal) -> 'Money':
         """
         Quantize to given tick size using banker's rounding.
 
@@ -60,81 +52,79 @@ class Money:
         quantized = self._amount.quantize(tick, rounding=ROUND_HALF_EVEN)
         return Money(quantized)
 
-    def __add__(self, other: Union["Money", Number]) -> "Money":
+    def __add__(self, other: Union['Money', Number]) -> 'Money':
         """Add Money or number, returning Money."""
         if isinstance(other, Money):
             return Money(self._amount + other._amount)
         return Money(self._amount + to_decimal(other))
 
-    def __radd__(self, other: Union["Money", Number]) -> "Money":
+    def __radd__(self, other: Union['Money', Number]) -> 'Money':
         """Right addition."""
         return self.__add__(other)
 
-    def __sub__(self, other: Union["Money", Number]) -> "Money":
+    def __sub__(self, other: Union['Money', Number]) -> 'Money':
         """Subtract Money or number, returning Money."""
         if isinstance(other, Money):
             return Money(self._amount - other._amount)
         return Money(self._amount - to_decimal(other))
 
-    def __rsub__(self, other: Union["Money", Number]) -> "Money":
+    def __rsub__(self, other: Union['Money', Number]) -> 'Money':
         """Right subtraction."""
         return Money(to_decimal(other) - self._amount)
 
-    def __mul__(self, other: Union["Money", Number]) -> Union["Money", Decimal]:
+    def __mul__(self, other: Union['Money', Number]) -> Union['Money', Decimal]:
         """Multiply Money by number, returning Money or Decimal."""
         if isinstance(other, Money):
-            # Money * Money = Decimal (e.g., price * quantity)
             return self._amount * other._amount
         return Money(self._amount * to_decimal(other))
 
-    def __rmul__(self, other: Union["Money", Number]) -> "Money":
+    def __rmul__(self, other: Union['Money', Number]) -> 'Money':
         """Right multiplication."""
         return Money(to_decimal(other) * self._amount)
 
-    def __truediv__(self, other: Union["Money", Number]) -> Union["Money", Decimal]:
+    def __truediv__(self, other: Union['Money', Number]) -> Union['Money', Decimal]:
         """Divide Money by number, returning Money or Decimal."""
         if isinstance(other, Money):
-            # Money / Money = Decimal (e.g., notional / price)
             return self._amount / other._amount
         return Money(self._amount / to_decimal(other))
 
-    def __rtruediv__(self, other: Union["Money", Number]) -> Decimal:
+    def __rtruediv__(self, other: Union['Money', Number]) -> Decimal:
         """Right division."""
         return to_decimal(other) / self._amount
 
-    def __neg__(self) -> "Money":
+    def __neg__(self) -> 'Money':
         """Negate Money."""
         return Money(-self._amount)
 
-    def __abs__(self) -> "Money":
+    def __abs__(self) -> 'Money':
         """Absolute value of Money."""
         return Money(abs(self._amount))
 
-    def __eq__(self, other: Union["Money", Number]) -> bool:
+    def __eq__(self, other: Union['Money', Number]) -> bool:
         """Check equality."""
         if isinstance(other, Money):
             return self._amount == other._amount
         return self._amount == to_decimal(other)
 
-    def __lt__(self, other: Union["Money", Number]) -> bool:
+    def __lt__(self, other: Union['Money', Number]) -> bool:
         """Less than comparison."""
         if isinstance(other, Money):
             return self._amount < other._amount
         return self._amount < to_decimal(other)
 
-    def __le__(self, other: Union["Money", Number]) -> bool:
+    def __le__(self, other: Union['Money', Number]) -> bool:
         """Less than or equal comparison."""
         if isinstance(other, Money):
             return self._amount <= other._amount
         return self._amount <= to_decimal(other)
 
-    def __gt__(self, other: Union["Money", Number]) -> bool:
+    def __gt__(self, other: Union['Money', Number]) -> bool:
         """Greater than comparison."""
         if isinstance(other, Money):
             return self._amount > other._amount
         return self._amount > to_decimal(other)
 
-    def __ge__(self, other: Union["Money", Number]) -> bool:
+    def __ge__(self, other: Union['Money', Number]) -> bool:
         """Greater than or equal comparison."""
         if isinstance(other, Money):
             return self._amount >= other._amount
@@ -156,7 +146,6 @@ class Money:
         """Convert to int (truncated)."""
         return int(self._amount)
 
-
 def to_decimal(value: Number) -> Decimal:
     """
     Convert number to Decimal with proper handling.
@@ -174,11 +163,9 @@ def to_decimal(value: Number) -> Decimal:
     elif isinstance(value, int | str):
         return Decimal(value)
     elif isinstance(value, float):
-        # Convert float to string to avoid precision issues
         return Decimal(str(value))
     else:
-        raise TypeError(f"Cannot convert {type(value)} to Decimal")
-
+        raise TypeError(f'Cannot convert {type(value)} to Decimal')
 
 def round_to_tick(price: Number, tick_size: Decimal) -> Money:
     """
@@ -193,7 +180,6 @@ def round_to_tick(price: Number, tick_size: Decimal) -> Money:
     """
     return Money(price).quantize(tick_size)
 
-
 def round_to_lot(quantity: Number, lot_size: int) -> int:
     """
     Round quantity to nearest lot size.
@@ -206,5 +192,5 @@ def round_to_lot(quantity: Number, lot_size: int) -> int:
         Integer quantity rounded to lot
     """
     decimal_qty = to_decimal(quantity)
-    lots = (decimal_qty / lot_size).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN)
+    lots = (decimal_qty / lot_size).quantize(Decimal('1'), rounding=ROUND_HALF_EVEN)
     return int(lots * lot_size)

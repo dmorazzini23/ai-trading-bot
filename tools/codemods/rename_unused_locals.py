@@ -3,16 +3,14 @@
 AI-AGENT-REF: conservative unused local renamer.
 """
 from __future__ import annotations
-
 import ast
 from pathlib import Path
-
-ROOTS = ["ai_trading", "trade_execution"]
-EXCLUDE_DIRS = {"tests", ".venv", "venv", "build", "dist", "__pycache__"}
-
+ROOTS = ['ai_trading', 'trade_execution']
+EXCLUDE_DIRS = {'tests', '.venv', 'venv', 'build', 'dist', '__pycache__'}
 
 class UnusedLocalRenamer(ast.NodeTransformer):
-    def visit_FunctionDef(self, node: ast.FunctionDef):  # type: ignore[override]
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
         assigned: set[str] = set()
         reads: set[str] = set()
         for inner in ast.walk(node):
@@ -22,12 +20,11 @@ class UnusedLocalRenamer(ast.NodeTransformer):
                         assigned.add(name)
             elif isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Load):
                 reads.add(inner.id)
-        unused = {n for n in assigned if n not in reads and not n.startswith("_")}
+        unused = {n for n in assigned if n not in reads and (not n.startswith('_'))}
         for inner in ast.walk(node):
-            if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Store) and inner.id in unused:
-                inner.id = f"_unused_{inner.id}"
+            if isinstance(inner, ast.Name) and isinstance(inner.ctx, ast.Store) and (inner.id in unused):
+                inner.id = f'_unused_{inner.id}'
         return node
-
 
 def _names_in_target(target: ast.AST) -> list[str]:
     if isinstance(target, ast.Name):
@@ -37,23 +34,17 @@ def _names_in_target(target: ast.AST) -> list[str]:
         names.extend(_names_in_target(child))
     return names
 
-
 def main() -> None:
     for root in ROOTS:
-        for path in Path(root).rglob("*.py"):
-            if any(part in EXCLUDE_DIRS for part in path.parts):
+        for path in Path(root).rglob('*.py'):
+            if any((part in EXCLUDE_DIRS for part in path.parts)):
                 continue
-            source = path.read_text(encoding="utf-8")
+            source = path.read_text(encoding='utf-8')
             try:
                 tree = ast.parse(source)
             except SyntaxError:
                 continue
             new_tree = UnusedLocalRenamer().visit(tree)
             ast.fix_missing_locations(new_tree)
-            # NOTE: This codemod is conservative; writing back requires emitting code.
-            # Left as a placeholder for advanced tooling.
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-

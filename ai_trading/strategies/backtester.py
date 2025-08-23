@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import glob
 import os
 import sys
@@ -7,33 +6,20 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-
 import pandas as pd
-
-# AI-AGENT-REF: removed legacy trade_execution import as part of cleanup
-# from ai_trading import trade_execution as execution_api  # type: ignore
 from ai_trading.core.bot_engine import get_risk_engine
-
-# Instantiate if needed:
 risk_engine_instance = get_risk_engine()
-
-from ai_trading import (
-    config,
-    signals,  # noqa: F401
-)
+from ai_trading import config, signals
 from ai_trading.core import bot_engine
 from ai_trading.logging import get_logger
-
 logger = get_logger(__name__)
-
 
 @dataclass
 class Order:
     symbol: str
     qty: int
-    side: str  # 'buy' or 'sell'
+    side: str
     price: float
-
 
 @dataclass
 class Fill:
@@ -41,7 +27,6 @@ class Fill:
     fill_price: float
     timestamp: datetime
     commission: float = 0.0
-
 
 class ExecutionModel(ABC):
     """Abstract execution model interface."""
@@ -54,21 +39,14 @@ class ExecutionModel(ABC):
         """Advance one bar and release pending fills."""
         return []
 
-
 class ImmediateExecutionModel(ExecutionModel):
     """Fill orders immediately at the order price."""
 
     def on_order(self, order: Order) -> list[Fill]:
-        return [
-            Fill(
-                order=order,
-                fill_price=order.price,
-                timestamp=datetime.now(UTC),
-            )
-        ]
-
+        return [Fill(order=order, fill_price=order.price, timestamp=datetime.now(UTC))]
 
 class CommissionModel(ExecutionModel):
+
     def __init__(self, per_share_fee: float, inner: ExecutionModel) -> None:
         self.per_share_fee = per_share_fee
         self.inner = inner
@@ -82,15 +60,15 @@ class CommissionModel(ExecutionModel):
     def on_bar(self) -> list[Fill]:
         return self.inner.on_bar()
 
-
 class SlippageModel(ExecutionModel):
+
     def __init__(self, pips: float, inner: ExecutionModel) -> None:
         self.pips = pips
         self.inner = inner
 
     def on_order(self, order: Order) -> list[Fill]:
         fills = self.inner.on_order(order)
-        adj = self.pips if order.side.lower() == "buy" else -self.pips
+        adj = self.pips if order.side.lower() == 'buy' else -self.pips
         for f in fills:
             f.fill_price += adj
         return fills
@@ -98,8 +76,8 @@ class SlippageModel(ExecutionModel):
     def on_bar(self) -> list[Fill]:
         return self.inner.on_bar()
 
-
 class LatencyModel(ExecutionModel):
+
     def __init__(self, bar_delay: int, inner: ExecutionModel) -> None:
         self.bar_delay = bar_delay
         self.inner = inner
@@ -122,13 +100,10 @@ class LatencyModel(ExecutionModel):
         self._queue = new_q
         return ready
 
-
 class DefaultExecutionModel(ExecutionModel):
     """Default composition: commission → slippage → latency."""
 
-    def __init__(
-        self, per_share_fee: float = 0.0, slippage_pips: float = 0.0, latency: int = 0
-    ) -> None:
+    def __init__(self, per_share_fee: float=0.0, slippage_pips: float=0.0, latency: int=0) -> None:
         base = ImmediateExecutionModel()
         base = CommissionModel(per_share_fee, base)
         base = SlippageModel(slippage_pips, base)
@@ -139,7 +114,6 @@ class DefaultExecutionModel(ExecutionModel):
 
     def on_bar(self) -> list[Fill]:
         return self.model.on_bar()
-
 
 @dataclass
 class BacktestResult:
@@ -152,16 +126,10 @@ class BacktestResult:
     calmar: float
     turnover: float
 
-
 class BacktestEngine:
     """Historical simulator executing the live trading cycle."""
 
-    def __init__(
-        self,
-        data: dict[str, pd.DataFrame],
-        execution_model: ExecutionModel,
-        initial_cash: float = 100000.0,
-    ) -> None:
+    def __init__(self, data: dict[str, pd.DataFrame], execution_model: ExecutionModel, initial_cash: float=100000.0) -> None:
         config.reload_env()
         self.data = data
         self.execution_model = execution_model
@@ -178,22 +146,20 @@ class BacktestEngine:
         self.trades = []
         self.equity_curve = []
 
-    def run_single_symbol(
-        self, df: pd.DataFrame, risk: Any
-    ) -> BacktestResult:
+    def run_single_symbol(self, df: pd.DataFrame, risk: Any) -> BacktestResult:
         """Run the backtest for ``df`` using the live bot cycle."""
-        self.data = {"symbol": df}
-        self.positions = {"symbol": 0}
+        self.data = {'symbol': df}
+        self.positions = {'symbol': 0}
         self.reset()
-        return self.run(["symbol"])
+        return self.run(['symbol'])
 
     def _apply_fill(self, fill: Fill, ts: pd.Timestamp) -> None:
-        if hasattr(bot_engine, "apply_fill"):
+        if hasattr(bot_engine, 'apply_fill'):
             try:
                 bot_engine.apply_fill(fill)
             except (ValueError, TypeError) as e:
-                logger.debug("Failed to apply fill in backtester: %s", e)
-        qty = fill.order.qty if fill.order.side.lower() == "buy" else -fill.order.qty
+                logger.debug('Failed to apply fill in backtester: %s', e)
+        qty = fill.order.qty if fill.order.side.lower() == 'buy' else -fill.order.qty
         cost = fill.fill_price * qty
         if qty > 0:
             self.cash -= cost + fill.commission
@@ -207,37 +173,26 @@ class BacktestEngine:
         for sym, qty in self.positions.items():
             df = self.data.get(sym)
             if df is not None and ts in df.index:
-                pos_val += qty * float(df.loc[ts, "close"])
+                pos_val += qty * float(df.loc[ts, 'close'])
         total = self.cash + pos_val
-        self.equity_curve.append(
-            {
-                "timestamp": ts,
-                "cash": self.cash,
-                "positions": pos_val,
-                "total_equity": total,
-            }
-        )
+        self.equity_curve.append({'timestamp': ts, 'cash': self.cash, 'positions': pos_val, 'total_equity': total})
 
     def run(self, symbols: list[str]) -> BacktestResult:
         combined = sorted(set().union(*(df.index for df in self.data.values())))
         for ts in combined:
             for sym in symbols:
                 df = self.data.get(sym)
-                if (
-                    df is not None
-                    and ts in df.index
-                    and hasattr(bot_engine, "update_market_data")
-                ):
+                if df is not None and ts in df.index and hasattr(bot_engine, 'update_market_data'):
                     try:
                         bot_engine.update_market_data(sym, df.loc[ts])
                     except (ValueError, TypeError) as e:
-                        logger.debug("Failed to update market data for %s: %s", sym, e)
+                        logger.debug('Failed to update market data for %s: %s', sym, e)
             orders = []
-            if hasattr(bot_engine, "next_cycle"):
+            if hasattr(bot_engine, 'next_cycle'):
                 try:
                     orders = bot_engine.next_cycle()
                 except (ValueError, TypeError) as e:
-                    logger.debug("Failed to execute next_cycle: %s", e)
+                    logger.debug('Failed to execute next_cycle: %s', e)
                     orders = []
             for order in orders:
                 for fill in self.execution_model.on_order(order):
@@ -245,156 +200,61 @@ class BacktestEngine:
             for fill in self.execution_model.on_bar():
                 self._apply_fill(fill, ts)
             self._snapshot(ts)
-        trades_df = pd.DataFrame(
-            [
-                {
-                    "symbol": f.order.symbol,
-                    "qty": f.order.qty,
-                    "side": f.order.side,
-                    "price": f.fill_price,
-                    "timestamp": f.timestamp,
-                    "commission": f.commission,
-                }
-                for f in self.trades
-            ]
-        )
-        eq_df = pd.DataFrame(self.equity_curve).set_index("timestamp")
+        trades_df = pd.DataFrame([{'symbol': f.order.symbol, 'qty': f.order.qty, 'side': f.order.side, 'price': f.fill_price, 'timestamp': f.timestamp, 'commission': f.commission} for f in self.trades])
+        eq_df = pd.DataFrame(self.equity_curve).set_index('timestamp')
         stats = self._stats(eq_df, trades_df)
         return BacktestResult(trades_df, eq_df, **stats)
 
     def _stats(self, equity: pd.DataFrame, trades: pd.DataFrame) -> dict[str, float]:
         if equity.empty:
-            return dict.fromkeys(
-                ["net_pnl", "cagr", "max_drawdown", "sharpe", "calmar", "turnover"], 0.0
-            )
-        net_pnl = float(
-            equity["total_equity"].iloc[-1] - equity["total_equity"].iloc[0]
-        )
-        returns = equity["total_equity"].pct_change().dropna()
-        sharpe = (
-            returns.mean() / returns.std() * (252**0.5)
-            if returns.std()
-            else float("nan")
-        )
+            return dict.fromkeys(['net_pnl', 'cagr', 'max_drawdown', 'sharpe', 'calmar', 'turnover'], 0.0)
+        net_pnl = float(equity['total_equity'].iloc[-1] - equity['total_equity'].iloc[0])
+        returns = equity['total_equity'].pct_change().dropna()
+        sharpe = returns.mean() / returns.std() * 252 ** 0.5 if returns.std() else float('nan')
         duration_years = len(equity) / 252 if len(equity) else 0
-        cagr = (equity["total_equity"].iloc[-1] / equity["total_equity"].iloc[0]) ** (
-            1 / max(duration_years, 1e-9)
-        ) - 1
-        drawdown = (equity["total_equity"] / equity["total_equity"].cummax() - 1).min()
-        turnover = (
-            trades["qty"].abs().mul(trades["price"]).sum()
-            / equity["total_equity"].iloc[0]
-        )
-        calmar = cagr / abs(drawdown) if drawdown else float("inf")
-        return {
-            "net_pnl": net_pnl,
-            "cagr": cagr,
-            "max_drawdown": abs(drawdown),
-            "sharpe": sharpe,
-            "calmar": calmar,
-            "turnover": turnover,
-        }
+        cagr = (equity['total_equity'].iloc[-1] / equity['total_equity'].iloc[0]) ** (1 / max(duration_years, 1e-09)) - 1
+        drawdown = (equity['total_equity'] / equity['total_equity'].cummax() - 1).min()
+        turnover = trades['qty'].abs().mul(trades['price']).sum() / equity['total_equity'].iloc[0]
+        calmar = cagr / abs(drawdown) if drawdown else float('inf')
+        return {'net_pnl': net_pnl, 'cagr': cagr, 'max_drawdown': abs(drawdown), 'sharpe': sharpe, 'calmar': calmar, 'turnover': turnover}
 
-
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None=None) -> None:
     """CLI entry point for running a backtest."""
     import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Full‑fidelity backtester (mirrors live bot)."
-    )
-    parser.add_argument(
-        "-s",
-        "--symbols",
-        nargs="+",
-        required=True,
-        help="Tickers to backtest (e.g. AAPL MSFT GOOG).",
-    )
-    parser.add_argument(
-        "-d",
-        "--data-dir",
-        dest="data_dir",
-        required=True,
-        help="Directory containing <SYMBOL>.csv time series.",
-    )
-    parser.add_argument(
-        "--start",
-        type=str,
-        required=True,
-        help="Backtest start date (YYYY-MM-DD).",
-    )
-    parser.add_argument(
-        "--end",
-        type=str,
-        required=True,
-        help="Backtest end date (YYYY-MM-DD).",
-    )
-    parser.add_argument(
-        "--commission",
-        type=float,
-        default=0.0,
-        help="Commission rate per trade (fraction).",
-    )
-    parser.add_argument(
-        "--slippage-pips",
-        type=float,
-        default=0.0,
-        help="Slippage in pips.",
-    )
-    parser.add_argument(
-        "--latency-bars",
-        type=int,
-        default=0,
-        help="Execution latency in bars.",
-    )
+    parser = argparse.ArgumentParser(description='Full‑fidelity backtester (mirrors live bot).')
+    parser.add_argument('-s', '--symbols', nargs='+', required=True, help='Tickers to backtest (e.g. AAPL MSFT GOOG).')
+    parser.add_argument('-d', '--data-dir', dest='data_dir', required=True, help='Directory containing <SYMBOL>.csv time series.')
+    parser.add_argument('--start', type=str, required=True, help='Backtest start date (YYYY-MM-DD).')
+    parser.add_argument('--end', type=str, required=True, help='Backtest end date (YYYY-MM-DD).')
+    parser.add_argument('--commission', type=float, default=0.0, help='Commission rate per trade (fraction).')
+    parser.add_argument('--slippage-pips', type=float, default=0.0, help='Slippage in pips.')
+    parser.add_argument('--latency-bars', type=int, default=0, help='Execution latency in bars.')
     args = parser.parse_args(argv)
-
-    engine = BacktestEngine(
-        {},
-        DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars),
-    )
+    engine = BacktestEngine({}, DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars))
     get_risk_engine()
     results: dict[str, BacktestResult] = {}
-
     for symbol in args.symbols:
-        # look for any CSV under data_dir matching SYMBOL*.csv (recursively)
-        pattern = os.path.join(args.data_dir, "**", f"{symbol}*.csv")
+        pattern = os.path.join(args.data_dir, '**', f'{symbol}*.csv')
         matches = glob.glob(pattern, recursive=True)
         if not matches:
-            logger.warning(f"No CSV found for {symbol} in {args.data_dir}, skipping")
+            logger.warning(f'No CSV found for {symbol} in {args.data_dir}, skipping')
             continue
         csv_path = matches[0]
-        logger.info(f"Loading backtest data from {csv_path}")
+        logger.info(f'Loading backtest data from {csv_path}')
         df = pd.read_csv(csv_path, parse_dates=True, index_col=0)
-        df = df.loc[str(args.start) : str(args.end)]
+        df = df.loc[str(args.start):str(args.end)]
         engine.data = {symbol: df}
         engine.reset()
         result = engine.run([symbol])
         results[symbol] = result
-
     if not results:
-        logger.error("No valid symbols to backtest – please check your --data-dir")
+        logger.error('No valid symbols to backtest – please check your --data-dir')
         sys.exit(1)
-
-    summary = [
-        {
-            "symbol": sym,
-            "pnl": res.net_pnl,
-            "sharpe": res.sharpe,
-            "drawdown": res.max_drawdown,
-        }
-        for sym, res in results.items()
-    ]
+    summary = [{'symbol': sym, 'pnl': res.net_pnl, 'sharpe': res.sharpe, 'drawdown': res.max_drawdown} for sym, res in results.items()]
     summary_df = pd.DataFrame(summary)
-    logger.info("\n%s", summary_df.to_string(index=False))
-    summary_df.to_csv("backtest_summary.csv", index=False)
-
-    trades_df = pd.concat(
-        [res.trades.assign(symbol=sym) for sym, res in results.items()],
-        ignore_index=True,
-    )
-    trades_df.to_csv("trades.csv", index=False)
-
-
-if __name__ == "__main__":
+    logger.info('\n%s', summary_df.to_string(index=False))
+    summary_df.to_csv('backtest_summary.csv', index=False)
+    trades_df = pd.concat([res.trades.assign(symbol=sym) for sym, res in results.items()], ignore_index=True)
+    trades_df.to_csv('trades.csv', index=False)
+if __name__ == '__main__':
     main()

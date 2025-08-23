@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 import time
 from contextlib import contextmanager
-
 
 @contextmanager
 def StageTimer(logger, stage_name: str, **extra):
@@ -12,13 +10,12 @@ def StageTimer(logger, stage_name: str, **extra):
     finally:
         dt_ms = int((time.perf_counter() - t0) * 1000)
         try:
-            logger.info("STAGE_TIMING", extra={"stage": stage_name, "elapsed_ms": dt_ms, **extra})
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
+            logger.info('STAGE_TIMING', extra={'stage': stage_name, 'elapsed_ms': dt_ms, **extra})
+        except (KeyError, ValueError, TypeError):
             pass
 
-
 class SoftBudget:
+
     def __init__(self, interval_sec: float, fraction: float):
         self._deadline = time.monotonic() + max(0.0, interval_sec) * max(0.1, min(1.0, fraction))
         self._start = time.monotonic()

@@ -1,61 +1,32 @@
 from __future__ import annotations
-
 import logging
-import os  # AI-AGENT-REF: environment diagnostics
-
+import os
 from flask import Flask, jsonify
-
 
 def create_app():
     app = Flask(__name__)
-    # AI-AGENT-REF: silence Flask development server noise
-    logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-    @app.route("/health")
+    @app.route('/health')
     def health():
-        """Lightweight liveness probe with Alpaca diagnostics."""  # AI-AGENT-REF
-        # Lazy imports to avoid heavy side effects at module import time
+        """Lightweight liveness probe with Alpaca diagnostics."""
         try:
-            from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok  # type: ignore
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
+            from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
+        except (KeyError, ValueError, TypeError):
             sdk_ok = False
         try:
-            from ai_trading.core.bot_engine import (
-                _resolve_alpaca_env,
-                trading_client,
-            )  # type: ignore
-
+            from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client
             key, secret, base_url = _resolve_alpaca_env()
-            paper = bool(base_url and ("paper" in base_url))
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
-            trading_client, key, secret, base_url, paper = None, None, None, "", False
-        shadow = bool(
-            getattr(__import__("ai_trading", fromlist=["config"]).config, "SHADOW_MODE", False)
-            or os.getenv("SHADOW_MODE", "").lower() in ("true", "1", "yes")
-        )
-        return jsonify(
-            alpaca=dict(
-                sdk_ok=bool(sdk_ok),
-                initialized=bool(trading_client),
-                client_attached=bool(trading_client),
-                has_key=bool(key),
-                has_secret=bool(secret),
-                base_url=base_url,
-                paper=paper,
-                shadow_mode=shadow,
-            )
-        )
-
+            paper = bool(base_url and 'paper' in base_url)
+        except (KeyError, ValueError, TypeError):
+            trading_client, key, secret, base_url, paper = (None, None, None, '', False)
+        shadow = bool(getattr(__import__('ai_trading', fromlist=['config']).config, 'SHADOW_MODE', False) or os.getenv('SHADOW_MODE', '').lower() in ('true', '1', 'yes'))
+        return jsonify(alpaca=dict(sdk_ok=bool(sdk_ok), initialized=bool(trading_client), client_attached=bool(trading_client), has_key=bool(key), has_secret=bool(secret), base_url=base_url, paper=paper, shadow_mode=shadow))
     return app
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     from ai_trading.config.settings import get_settings
-
     s = get_settings()
-    port = int(s.api_port or 9001)  # AI-AGENT-REF: default Flask port fallback
+    port = int(s.api_port or 9001)
     app = create_app()
-    app.logger.info("Starting Flask", extra={"port": port})
-    app.run(host="0.0.0.0", port=port)
+    app.logger.info('Starting Flask', extra={'port': port})
+    app.run(host='0.0.0.0', port=port)

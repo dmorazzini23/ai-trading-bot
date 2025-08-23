@@ -1,45 +1,22 @@
-# ruff: noqa
 from __future__ import annotations
-
 from json import JSONDecodeError
-
-# Optional requests import with safe fallbacks
-try:  # pragma: no cover
-    import requests  # type: ignore
-    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
-    try:  # pragma: no cover
-        from requests.exceptions import HTTPError  # type: ignore
-    except ImportError:  # pragma: no cover
+try:
+    import requests
+    RequestException = requests.exceptions.RequestException
+    try:
+        from requests.exceptions import HTTPError
+    except ImportError:
         HTTPError = Exception
-except ImportError:  # pragma: no cover
+except ImportError:
+
     class RequestException(Exception):
         pass
-    HTTPError = Exception  # minimal fallback
-
-# A common family for “expected” programming/data/HTTP parse errors
-COMMON_EXC = (
-    TypeError,
-    ValueError,
-    KeyError,
-    JSONDecodeError,
-    RequestException,
-    TimeoutError,
-    ImportError,
-)
-
-# Transient network/IO-ish errors appropriate for retry backoff
-TRANSIENT_HTTP_EXC = (
-    RequestException,
-    HTTPError,
-    TimeoutError,
-    OSError,          # DNS / socket hiccups
-    ConnectionError,  # builtin
-)
-
+    HTTPError = Exception
+COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
+TRANSIENT_HTTP_EXC = (RequestException, HTTPError, TimeoutError, OSError, ConnectionError)
 
 class DataFeedUnavailable(RuntimeError):
     """Raised when required market data is unavailable."""
-
 
 class InvalidBarsError(ValueError):
     """Raised when bar data is invalid or missing."""

@@ -6,20 +6,15 @@ Reconciles local trading state with broker truth by:
 2. Comparing with local state
 3. Fixing drifts (cancel stale locals, resync quantities)
 """
-
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-
 from ai_trading.core.interfaces import Order, OrderStatus, Position
-
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class PositionDrift:
     """Represents a drift between local and broker position."""
-
     symbol: str
     local_qty: float
     broker_qty: float
@@ -31,22 +26,18 @@ class PositionDrift:
         """Check if drift is significant enough to reconcile."""
         return abs(self.drift_pct) > 0.01 or abs(self.drift_qty) > 0.001
 
-
 @dataclass
 class OrderDrift:
     """Represents a drift between local and broker orders."""
-
     order_id: str
     symbol: str
     local_status: OrderStatus | None
     broker_status: OrderStatus | None
-    action_needed: str  # 'cancel_local', 'update_local', 'none'
-
+    action_needed: str
 
 @dataclass
 class ReconciliationResult:
     """Result of position/order reconciliation."""
-
     position_drifts: list[PositionDrift]
     order_drifts: list[OrderDrift]
     actions_taken: list[str]
@@ -56,7 +47,6 @@ class ReconciliationResult:
     def has_drifts(self) -> bool:
         """Check if any drifts were found."""
         return len(self.position_drifts) > 0 or len(self.order_drifts) > 0
-
 
 class PositionReconciler:
     """
@@ -68,7 +58,7 @@ class PositionReconciler:
     - Order status synchronization
     """
 
-    def __init__(self, tolerance_pct: float = 0.01, min_drift_qty: float = 0.001):
+    def __init__(self, tolerance_pct: float=0.01, min_drift_qty: float=0.001):
         """
         Initialize reconciler.
 
@@ -78,13 +68,9 @@ class PositionReconciler:
         """
         self.tolerance_pct = tolerance_pct
         self.min_drift_qty = min_drift_qty
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
 
-    def reconcile_positions(
-        self,
-        local_positions: dict[str, Position],
-        broker_positions: dict[str, Position],
-    ) -> list[PositionDrift]:
+    def reconcile_positions(self, local_positions: dict[str, Position], broker_positions: dict[str, Position]) -> list[PositionDrift]:
         """
         Compare local vs broker positions and identify drifts.
 
@@ -97,45 +83,21 @@ class PositionReconciler:
         """
         drifts = []
         all_symbols = set(local_positions.keys()) | set(broker_positions.keys())
-
         for symbol in all_symbols:
             local_pos = local_positions.get(symbol)
             broker_pos = broker_positions.get(symbol)
-
             local_qty = local_pos.quantity if local_pos else 0.0
             broker_qty = broker_pos.quantity if broker_pos else 0.0
-
             drift_qty = local_qty - broker_qty
-
-            # Calculate drift percentage
-            base_qty = max(abs(local_qty), abs(broker_qty), 1.0)  # Avoid div by zero
+            base_qty = max(abs(local_qty), abs(broker_qty), 1.0)
             drift_pct = drift_qty / base_qty
-
-            # Check if drift is significant
-            if (
-                abs(drift_pct) > self.tolerance_pct
-                or abs(drift_qty) > self.min_drift_qty
-            ):
-                drift = PositionDrift(
-                    symbol=symbol,
-                    local_qty=local_qty,
-                    broker_qty=broker_qty,
-                    drift_qty=drift_qty,
-                    drift_pct=drift_pct,
-                )
+            if abs(drift_pct) > self.tolerance_pct or abs(drift_qty) > self.min_drift_qty:
+                drift = PositionDrift(symbol=symbol, local_qty=local_qty, broker_qty=broker_qty, drift_qty=drift_qty, drift_pct=drift_pct)
                 drifts.append(drift)
-
-                self.logger.warning(
-                    f"Position drift detected for {symbol}: "
-                    f"local={local_qty}, broker={broker_qty}, "
-                    f"drift={drift_qty} ({drift_pct:.2%})"
-                )
-
+                self.logger.warning(f'Position drift detected for {symbol}: local={local_qty}, broker={broker_qty}, drift={drift_qty} ({drift_pct:.2%})')
         return drifts
 
-    def reconcile_orders(
-        self, local_orders: dict[str, Order], broker_orders: dict[str, Order]
-    ) -> list[OrderDrift]:
+    def reconcile_orders(self, local_orders: dict[str, Order], broker_orders: dict[str, Order]) -> list[OrderDrift]:
         """
         Compare local vs broker orders and identify drifts.
 
@@ -148,54 +110,26 @@ class PositionReconciler:
         """
         drifts = []
         all_order_ids = set(local_orders.keys()) | set(broker_orders.keys())
-
         for order_id in all_order_ids:
             local_order = local_orders.get(order_id)
             broker_order = broker_orders.get(order_id)
-
             local_status = local_order.status if local_order else None
             broker_status = broker_order.status if broker_order else None
-
-            # Determine action needed
-            action_needed = "none"
-
-            if local_order and not broker_order:
-                # Local order doesn't exist at broker - cancel local
-                action_needed = "cancel_local"
+            action_needed = 'none'
+            if local_order and (not broker_order):
+                action_needed = 'cancel_local'
             elif not local_order and broker_order:
-                # Broker order not tracked locally - add to local
-                action_needed = "add_local"
+                action_needed = 'add_local'
             elif local_status != broker_status:
-                # Status mismatch - update local to match broker
-                action_needed = "update_local"
-
-            if action_needed != "none":
-                symbol = (
-                    local_order.symbol
-                    if local_order
-                    else broker_order.symbol if broker_order else "UNKNOWN"
-                )
-
-                drift = OrderDrift(
-                    order_id=order_id,
-                    symbol=symbol,
-                    local_status=local_status,
-                    broker_status=broker_status,
-                    action_needed=action_needed,
-                )
+                action_needed = 'update_local'
+            if action_needed != 'none':
+                symbol = local_order.symbol if local_order else broker_order.symbol if broker_order else 'UNKNOWN'
+                drift = OrderDrift(order_id=order_id, symbol=symbol, local_status=local_status, broker_status=broker_status, action_needed=action_needed)
                 drifts.append(drift)
-
-                self.logger.warning(
-                    f"Order drift detected for {order_id} ({symbol}): "
-                    f"local_status={local_status}, broker_status={broker_status}, "
-                    f"action={action_needed}"
-                )
-
+                self.logger.warning(f'Order drift detected for {order_id} ({symbol}): local_status={local_status}, broker_status={broker_status}, action={action_needed}')
         return drifts
 
-    def apply_position_fixes(
-        self, drifts: list[PositionDrift], position_manager
-    ) -> list[str]:
+    def apply_position_fixes(self, drifts: list[PositionDrift], position_manager) -> list[str]:
         """
         Apply fixes for position drifts.
 
@@ -207,27 +141,18 @@ class PositionReconciler:
             List of actions taken
         """
         actions = []
-
         for drift in drifts:
             if not drift.is_significant:
                 continue
-
             try:
-                # Update local position to match broker
                 position_manager.sync_position(drift.symbol, drift.broker_qty)
-
-                action = (
-                    f"Synced position for {drift.symbol}: "
-                    f"{drift.local_qty} -> {drift.broker_qty}"
-                )
+                action = f'Synced position for {drift.symbol}: {drift.local_qty} -> {drift.broker_qty}'
                 actions.append(action)
                 self.logger.info(action)
-
             except (RuntimeError, ValueError) as e:
-                error_action = f"Failed to sync position for {drift.symbol}: {e}"
+                error_action = f'Failed to sync position for {drift.symbol}: {e}'
                 actions.append(error_action)
                 self.logger.error(error_action)
-
         return actions
 
     def apply_order_fixes(self, drifts: list[OrderDrift], order_manager) -> list[str]:
@@ -242,51 +167,27 @@ class PositionReconciler:
             List of actions taken
         """
         actions = []
-
         for drift in drifts:
             try:
-                if drift.action_needed == "cancel_local":
-                    # Remove stale local order
+                if drift.action_needed == 'cancel_local':
                     order_manager.remove_local_order(drift.order_id)
-                    action = f"Removed stale local order {drift.order_id}"
-
-                elif drift.action_needed == "update_local":
-                    # Update local order status to match broker
-                    order_manager.update_order_status(
-                        drift.order_id, drift.broker_status
-                    )
-                    action = f"Updated order {drift.order_id} status to {drift.broker_status}"
-
-                elif drift.action_needed == "add_local":
-                    # Add broker order to local tracking
-                    # Note: This would need broker order details
-                    action = (
-                        f"Need to add broker order {drift.order_id} to local tracking"
-                    )
-
+                    action = f'Removed stale local order {drift.order_id}'
+                elif drift.action_needed == 'update_local':
+                    order_manager.update_order_status(drift.order_id, drift.broker_status)
+                    action = f'Updated order {drift.order_id} status to {drift.broker_status}'
+                elif drift.action_needed == 'add_local':
+                    action = f'Need to add broker order {drift.order_id} to local tracking'
                 else:
                     continue
-
                 actions.append(action)
                 self.logger.info(action)
-
             except (RuntimeError, ValueError) as e:
-                error_action = f"Failed to fix order {drift.order_id}: {e}"
+                error_action = f'Failed to fix order {drift.order_id}: {e}'
                 actions.append(error_action)
                 self.logger.error(error_action)
-
         return actions
 
-    def full_reconciliation(
-        self,
-        local_positions: dict[str, Position],
-        broker_positions: dict[str, Position],
-        local_orders: dict[str, Order],
-        broker_orders: dict[str, Order],
-        position_manager=None,
-        order_manager=None,
-        apply_fixes: bool = True,
-    ) -> ReconciliationResult:
+    def full_reconciliation(self, local_positions: dict[str, Position], broker_positions: dict[str, Position], local_orders: dict[str, Order], broker_orders: dict[str, Order], position_manager=None, order_manager=None, apply_fixes: bool=True) -> ReconciliationResult:
         """
         Perform full position and order reconciliation.
 
@@ -302,42 +203,19 @@ class PositionReconciler:
         Returns:
             ReconciliationResult with drifts and actions taken
         """
-        self.logger.info("Starting full reconciliation")
-
-        # Find drifts
+        self.logger.info('Starting full reconciliation')
         position_drifts = self.reconcile_positions(local_positions, broker_positions)
         order_drifts = self.reconcile_orders(local_orders, broker_orders)
-
         actions = []
-
-        # Apply fixes if requested and managers provided
         if apply_fixes:
             if position_manager and position_drifts:
-                actions.extend(
-                    self.apply_position_fixes(position_drifts, position_manager)
-                )
-
+                actions.extend(self.apply_position_fixes(position_drifts, position_manager))
             if order_manager and order_drifts:
                 actions.extend(self.apply_order_fixes(order_drifts, order_manager))
-
-        result = ReconciliationResult(
-            position_drifts=position_drifts,
-            order_drifts=order_drifts,
-            actions_taken=actions,
-            reconciled_at=datetime.now(UTC),
-        )
-
-        self.logger.info(
-            f"Reconciliation complete: {len(position_drifts)} position drifts, "
-            f"{len(order_drifts)} order drifts, {len(actions)} actions taken"
-        )
-
+        result = ReconciliationResult(position_drifts=position_drifts, order_drifts=order_drifts, actions_taken=actions, reconciled_at=datetime.now(UTC))
+        self.logger.info(f'Reconciliation complete: {len(position_drifts)} position drifts, {len(order_drifts)} order drifts, {len(actions)} actions taken')
         return result
-
-
-# Global reconciler instance
 _global_reconciler: PositionReconciler | None = None
-
 
 def get_reconciler() -> PositionReconciler:
     """Get or create global reconciler instance."""
@@ -346,13 +224,7 @@ def get_reconciler() -> PositionReconciler:
         _global_reconciler = PositionReconciler()
     return _global_reconciler
 
-
-def reconcile_with_broker(
-    broker_client,
-    local_positions: dict[str, Position],
-    local_orders: dict[str, Order],
-    apply_fixes: bool = True,
-) -> ReconciliationResult:
+def reconcile_with_broker(broker_client, local_positions: dict[str, Position], local_orders: dict[str, Order], apply_fixes: bool=True) -> ReconciliationResult:
     """
     Convenience function to reconcile with broker using client.
 
@@ -365,22 +237,10 @@ def reconcile_with_broker(
     Returns:
         ReconciliationResult
     """
-    # This would need to be implemented based on specific broker client interface
-    # For now, return empty result
     reconciler = get_reconciler()
-
-    # Placeholder - would need actual broker client integration
-    broker_positions = {}  # broker_client.get_positions()
-    broker_orders = {}  # broker_client.get_open_orders()
-
-    return reconciler.full_reconciliation(
-        local_positions=local_positions,
-        broker_positions=broker_positions,
-        local_orders=local_orders,
-        broker_orders=broker_orders,
-        apply_fixes=apply_fixes,
-    )
-
+    broker_positions = {}
+    broker_orders = {}
+    return reconciler.full_reconciliation(local_positions=local_positions, broker_positions=broker_positions, local_orders=local_orders, broker_orders=broker_orders, apply_fixes=apply_fixes)
 
 def reconcile_positions_and_orders() -> ReconciliationResult:
     """
@@ -393,19 +253,8 @@ def reconcile_positions_and_orders() -> ReconciliationResult:
         ReconciliationResult with any detected drifts
     """
     try:
-        # In a real implementation, this would:
-        # 1. Get current local positions and orders from the execution engine
-        # 2. Fetch current broker positions and orders
-        # 3. Run reconciliation and apply fixes
-
-        # For now, return empty result to avoid errors
-        logger.debug("Position/order reconciliation called (mock implementation)")
-        return ReconciliationResult(
-            position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC)
-        )
-
+        logger.debug('Position/order reconciliation called (mock implementation)')
+        return ReconciliationResult(position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC))
     except (RuntimeError, ValueError) as e:
-        logger.error(f"Error in reconciliation: {e}")
-        return ReconciliationResult(
-            position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC)
-        )
+        logger.error(f'Error in reconciliation: {e}')
+        return ReconciliationResult(position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC))

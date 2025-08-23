@@ -10,7 +10,6 @@ This module provides comprehensive health monitoring capabilities:
 
 AI-AGENT-REF: Enhanced health monitoring with production-grade capabilities
 """
-
 import json
 import logging
 import os
@@ -21,33 +20,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
-
 import psutil
-
-# AI-AGENT-REF: Import production monitoring for advanced capabilities
 try:
-    from production_monitoring import (
-        CircuitBreaker,
-        ProductionMonitor,
-        get_production_monitor,
-    )
+    from production_monitoring import CircuitBreaker, ProductionMonitor, get_production_monitor
     from production_monitoring import HealthCheckResult as ProdHealthCheckResult
     from production_monitoring import HealthStatus as ProdHealthStatus
     PRODUCTION_MONITORING_AVAILABLE = True
 except ImportError:
     PRODUCTION_MONITORING_AVAILABLE = False
-
-
 logger = logging.getLogger(__name__)
-
 
 class HealthStatus(Enum):
     """Health check status levels."""
-    HEALTHY = "healthy"
-    WARNING = "warning"
-    CRITICAL = "critical"
-    UNKNOWN = "unknown"
-
+    HEALTHY = 'healthy'
+    WARNING = 'warning'
+    CRITICAL = 'critical'
+    UNKNOWN = 'unknown'
 
 @dataclass
 class HealthCheckResult:
@@ -58,7 +46,6 @@ class HealthCheckResult:
     details: dict[str, Any]
     timestamp: datetime
 
-
 class HealthMonitor:
     """Comprehensive health monitoring for the trading bot."""
 
@@ -66,24 +53,17 @@ class HealthMonitor:
         self.checks: dict[str, callable] = {}
         self.last_results: dict[str, HealthCheckResult] = {}
         self._lock = threading.RLock()
-
-        # AI-AGENT-REF: Enhanced monitoring with circuit breakers
         self.circuit_breakers: dict[str, CircuitBreaker] = {}
         self.alert_callback: Callable | None = None
         self.production_monitor: ProductionMonitor | None = None
-
-        # Performance tracking
         self.check_latencies: dict[str, list[float]] = {}
         self.failure_counts: dict[str, int] = {}
-
-        # Initialize production monitoring if available
         if PRODUCTION_MONITORING_AVAILABLE:
             try:
                 self.production_monitor = get_production_monitor()
-                logger.info("Production monitoring integration enabled")
+                logger.info('Production monitoring integration enabled')
             except (ValueError, TypeError) as e:
-                logger.warning(f"Could not initialize production monitoring: {e}")
-
+                logger.warning(f'Could not initialize production monitoring: {e}')
         self.register_default_checks()
         self.register_trading_checks()
         self.register_api_checks()
@@ -95,26 +75,17 @@ class HealthMonitor:
 
     def register_default_checks(self):
         """Register standard health checks."""
-        self.register_check("system_resources", self._check_system_resources)
-        self.register_check("disk_space", self._check_disk_space)
-        self.register_check("memory_usage", self._check_memory_usage)
-        self.register_check("log_files", self._check_log_files)
-        self.register_check("environment_variables", self._check_environment_variables)
+        self.register_check('system_resources', self._check_system_resources)
+        self.register_check('disk_space', self._check_disk_space)
+        self.register_check('memory_usage', self._check_memory_usage)
+        self.register_check('log_files', self._check_log_files)
+        self.register_check('environment_variables', self._check_environment_variables)
 
     def register_trading_checks(self):
         """Register trading-specific health checks."""
-        # Remove these for now as methods need to be implemented
-        # self.register_check("trading_system", self._check_trading_system)
-        # self.register_check("risk_limits", self._check_risk_limits)
-        # self.register_check("portfolio_health", self._check_portfolio_health)
-        # self.register_check("execution_latency", self._check_execution_latency)
 
     def register_api_checks(self):
         """Register API connectivity health checks."""
-        # Remove these for now as methods need to be implemented
-        # self.register_check("alpaca_api", self._check_alpaca_api)
-        # self.register_check("market_data", self._check_market_data)
-        # self.register_check("network_connectivity", self._check_network_connectivity)
 
     def set_alert_callback(self, callback: Callable):
         """Set callback function for health alerts."""
@@ -128,31 +99,15 @@ class HealthMonitor:
         """Run a specific health check."""
         try:
             if name not in self.checks:
-                return HealthCheckResult(
-                    name=name,
-                    status=HealthStatus.UNKNOWN,
-                    message=f"Health check '{name}' not found",
-                    details={},
-                    timestamp=datetime.now(UTC)
-                )
-
+                return HealthCheckResult(name=name, status=HealthStatus.UNKNOWN, message=f"Health check '{name}' not found", details={}, timestamp=datetime.now(UTC))
             check_func = self.checks[name]
             result = check_func()
-
             with self._lock:
                 self.last_results[name] = result
-
             return result
-
         except (ValueError, TypeError) as e:
             logger.exception("Error running health check '%s': %s", name, e)
-            return HealthCheckResult(
-                name=name,
-                status=HealthStatus.CRITICAL,
-                message=f"Health check failed: {e}",
-                details={"error": str(e)},
-                timestamp=datetime.now(UTC)
-            )
+            return HealthCheckResult(name=name, status=HealthStatus.CRITICAL, message=f'Health check failed: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 
     def run_all_checks(self) -> dict[str, HealthCheckResult]:
         """Run all registered health checks."""
@@ -165,14 +120,12 @@ class HealthMonitor:
         """Get overall system health status."""
         if not self.last_results:
             return HealthStatus.UNKNOWN
-
         statuses = [result.status for result in self.last_results.values()]
-
         if HealthStatus.CRITICAL in statuses:
             return HealthStatus.CRITICAL
         elif HealthStatus.WARNING in statuses:
             return HealthStatus.WARNING
-        elif all(status == HealthStatus.HEALTHY for status in statuses):
+        elif all((status == HealthStatus.HEALTHY for status in statuses)):
             return HealthStatus.HEALTHY
         else:
             return HealthStatus.UNKNOWN
@@ -182,82 +135,40 @@ class HealthMonitor:
         try:
             cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
-
-            details = {
-                "cpu_percent": cpu_percent,
-                "memory_percent": memory.percent,
-                "memory_available_gb": memory.available / (1024**3),
-                "memory_total_gb": memory.total / (1024**3)
-            }
-
-            # Determine status based on resource usage
+            details = {'cpu_percent': cpu_percent, 'memory_percent': memory.percent, 'memory_available_gb': memory.available / 1024 ** 3, 'memory_total_gb': memory.total / 1024 ** 3}
             if cpu_percent > 90 or memory.percent > 90:
                 status = HealthStatus.CRITICAL
-                message = f"High resource usage: CPU {cpu_percent}%, Memory {memory.percent}%"
+                message = f'High resource usage: CPU {cpu_percent}%, Memory {memory.percent}%'
             elif cpu_percent > 70 or memory.percent > 70:
                 status = HealthStatus.WARNING
-                message = f"Moderate resource usage: CPU {cpu_percent}%, Memory {memory.percent}%"
+                message = f'Moderate resource usage: CPU {cpu_percent}%, Memory {memory.percent}%'
             else:
                 status = HealthStatus.HEALTHY
-                message = f"Normal resource usage: CPU {cpu_percent}%, Memory {memory.percent}%"
-
-            return HealthCheckResult(
-                name="system_resources",
-                status=status,
-                message=message,
-                details=details,
-                timestamp=datetime.now(UTC)
-            )
-
+                message = f'Normal resource usage: CPU {cpu_percent}%, Memory {memory.percent}%'
+            return HealthCheckResult(name='system_resources', status=status, message=message, details=details, timestamp=datetime.now(UTC))
         except (ValueError, TypeError) as e:
-            return HealthCheckResult(
-                name="system_resources",
-                status=HealthStatus.CRITICAL,
-                message=f"Failed to check system resources: {e}",
-                details={"error": str(e)},
-                timestamp=datetime.now(UTC)
-            )
+            return HealthCheckResult(name='system_resources', status=HealthStatus.CRITICAL, message=f'Failed to check system resources: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 
     def _check_disk_space(self) -> HealthCheckResult:
         """Check available disk space."""
         try:
             disk_usage = psutil.disk_usage('/')
-            free_gb = disk_usage.free / (1024**3)
-            total_gb = disk_usage.total / (1024**3)
-            used_percent = (disk_usage.used / disk_usage.total) * 100
-
-            details = {
-                "free_gb": free_gb,
-                "total_gb": total_gb,
-                "used_percent": used_percent
-            }
-
+            free_gb = disk_usage.free / 1024 ** 3
+            total_gb = disk_usage.total / 1024 ** 3
+            used_percent = disk_usage.used / disk_usage.total * 100
+            details = {'free_gb': free_gb, 'total_gb': total_gb, 'used_percent': used_percent}
             if free_gb < 1.0 or used_percent > 95:
                 status = HealthStatus.CRITICAL
-                message = f"Low disk space: {free_gb:.1f}GB free ({used_percent:.1f}% used)"
+                message = f'Low disk space: {free_gb:.1f}GB free ({used_percent:.1f}% used)'
             elif free_gb < 5.0 or used_percent > 85:
                 status = HealthStatus.WARNING
-                message = f"Moderate disk usage: {free_gb:.1f}GB free ({used_percent:.1f}% used)"
+                message = f'Moderate disk usage: {free_gb:.1f}GB free ({used_percent:.1f}% used)'
             else:
                 status = HealthStatus.HEALTHY
-                message = f"Sufficient disk space: {free_gb:.1f}GB free ({used_percent:.1f}% used)"
-
-            return HealthCheckResult(
-                name="disk_space",
-                status=status,
-                message=message,
-                details=details,
-                timestamp=datetime.now(UTC)
-            )
-
+                message = f'Sufficient disk space: {free_gb:.1f}GB free ({used_percent:.1f}% used)'
+            return HealthCheckResult(name='disk_space', status=status, message=message, details=details, timestamp=datetime.now(UTC))
         except (ValueError, TypeError) as e:
-            return HealthCheckResult(
-                name="disk_space",
-                status=HealthStatus.CRITICAL,
-                message=f"Failed to check disk space: {e}",
-                details={"error": str(e)},
-                timestamp=datetime.now(UTC)
-            )
+            return HealthCheckResult(name='disk_space', status=HealthStatus.CRITICAL, message=f'Failed to check disk space: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 
     def _check_memory_usage(self) -> HealthCheckResult:
         """Check current process memory usage."""
@@ -265,271 +176,144 @@ class HealthMonitor:
             process = psutil.Process()
             memory_info = process.memory_info()
             memory_mb = memory_info.rss / (1024 * 1024)
-
-            details = {
-                "memory_mb": memory_mb,
-                "memory_percent": process.memory_percent()
-            }
-
-            # Check for potential memory leaks
-            if memory_mb > 2048:  # More than 2GB
+            details = {'memory_mb': memory_mb, 'memory_percent': process.memory_percent()}
+            if memory_mb > 2048:
                 status = HealthStatus.CRITICAL
-                message = f"High memory usage: {memory_mb:.1f}MB"
-            elif memory_mb > 1024:  # More than 1GB
+                message = f'High memory usage: {memory_mb:.1f}MB'
+            elif memory_mb > 1024:
                 status = HealthStatus.WARNING
-                message = f"Moderate memory usage: {memory_mb:.1f}MB"
+                message = f'Moderate memory usage: {memory_mb:.1f}MB'
             else:
                 status = HealthStatus.HEALTHY
-                message = f"Normal memory usage: {memory_mb:.1f}MB"
-
-            return HealthCheckResult(
-                name="memory_usage",
-                status=status,
-                message=message,
-                details=details,
-                timestamp=datetime.now(UTC)
-            )
-
+                message = f'Normal memory usage: {memory_mb:.1f}MB'
+            return HealthCheckResult(name='memory_usage', status=status, message=message, details=details, timestamp=datetime.now(UTC))
         except (ValueError, TypeError) as e:
-            return HealthCheckResult(
-                name="memory_usage",
-                status=HealthStatus.CRITICAL,
-                message=f"Failed to check memory usage: {e}",
-                details={"error": str(e)},
-                timestamp=datetime.now(UTC)
-            )
+            return HealthCheckResult(name='memory_usage', status=HealthStatus.CRITICAL, message=f'Failed to check memory usage: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 
     def _check_log_files(self) -> HealthCheckResult:
         """Check log file sizes and accessibility."""
         try:
-            log_dir = "logs"
+            log_dir = 'logs'
             details = {}
             issues = []
-
             if not os.path.exists(log_dir):
-                return HealthCheckResult(
-                    name="log_files",
-                    status=HealthStatus.WARNING,
-                    message="Log directory does not exist",
-                    details={"log_dir": log_dir},
-                    timestamp=datetime.now(UTC)
-                )
-
+                return HealthCheckResult(name='log_files', status=HealthStatus.WARNING, message='Log directory does not exist', details={'log_dir': log_dir}, timestamp=datetime.now(UTC))
             for log_file in os.listdir(log_dir):
                 if log_file.endswith('.log'):
                     file_path = os.path.join(log_dir, log_file)
                     try:
                         file_size = os.path.getsize(file_path)
                         size_mb = file_size / (1024 * 1024)
-                        details[log_file] = {
-                            "size_mb": size_mb,
-                            "path": file_path
-                        }
-
-                        # Check for oversized log files
-                        if size_mb > 500:  # 500MB limit
-                            issues.append(f"{log_file}: {size_mb:.1f}MB")
-
+                        details[log_file] = {'size_mb': size_mb, 'path': file_path}
+                        if size_mb > 500:
+                            issues.append(f'{log_file}: {size_mb:.1f}MB')
                     except OSError as e:
-                        issues.append(f"{log_file}: Cannot access ({e})")
-
+                        issues.append(f'{log_file}: Cannot access ({e})')
             if issues:
                 status = HealthStatus.WARNING
                 message = f"Log file issues: {', '.join(issues)}"
             else:
                 status = HealthStatus.HEALTHY
-                message = f"Log files OK ({len(details)} files checked)"
-
-            return HealthCheckResult(
-                name="log_files",
-                status=status,
-                message=message,
-                details=details,
-                timestamp=datetime.now(UTC)
-            )
-
+                message = f'Log files OK ({len(details)} files checked)'
+            return HealthCheckResult(name='log_files', status=status, message=message, details=details, timestamp=datetime.now(UTC))
         except (ValueError, TypeError) as e:
-            return HealthCheckResult(
-                name="log_files",
-                status=HealthStatus.CRITICAL,
-                message=f"Failed to check log files: {e}",
-                details={"error": str(e)},
-                timestamp=datetime.now(UTC)
-            )
+            return HealthCheckResult(name='log_files', status=HealthStatus.CRITICAL, message=f'Failed to check log files: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 
     def _check_environment_variables(self) -> HealthCheckResult:
         """Check critical environment variables."""
         try:
-            required_vars = [
-                "ALPACA_API_KEY",
-                "ALPACA_SECRET_KEY",
-                "ALPACA_BASE_URL"
-            ]
-
+            required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL']
             missing_vars = []
             details = {}
-
             for var in required_vars:
                 value = os.getenv(var)
                 if value:
-                    details[var] = "SET"  # Don't log actual values for security
+                    details[var] = 'SET'
                 else:
                     missing_vars.append(var)
-                    details[var] = "MISSING"
-
+                    details[var] = 'MISSING'
             if missing_vars:
                 status = HealthStatus.CRITICAL
                 message = f"Missing environment variables: {', '.join(missing_vars)}"
             else:
                 status = HealthStatus.HEALTHY
-                message = "All required environment variables are set"
-
-            return HealthCheckResult(
-                name="environment_variables",
-                status=status,
-                message=message,
-                details=details,
-                timestamp=datetime.now(UTC)
-            )
-
+                message = 'All required environment variables are set'
+            return HealthCheckResult(name='environment_variables', status=status, message=message, details=details, timestamp=datetime.now(UTC))
         except (ValueError, TypeError) as e:
-            return HealthCheckResult(
-                name="environment_variables",
-                status=HealthStatus.CRITICAL,
-                message=f"Failed to check environment variables: {e}",
-                details={"error": str(e)},
-                timestamp=datetime.now(UTC)
-            )
-
-
-# Global health monitor instance
+            return HealthCheckResult(name='environment_variables', status=HealthStatus.CRITICAL, message=f'Failed to check environment variables: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 health_monitor = HealthMonitor()
-
 
 def get_health_status() -> dict[str, Any]:
     """Get comprehensive health status."""
     results = health_monitor.run_all_checks()
     overall_status = health_monitor.get_overall_status()
-
-    return {
-        "overall_status": overall_status.value,
-        "timestamp": datetime.now(UTC).isoformat(),
-        "checks": {
-            name: {
-                "status": result.status.value,
-                "message": result.message,
-                "details": result.details,
-                "timestamp": result.timestamp.isoformat()
-            }
-            for name, result in results.items()
-        }
-    }
-
+    return {'overall_status': overall_status.value, 'timestamp': datetime.now(UTC).isoformat(), 'checks': {name: {'status': result.status.value, 'message': result.message, 'details': result.details, 'timestamp': result.timestamp.isoformat()} for name, result in results.items()}}
 
 def log_health_summary():
     """Log a summary of system health."""
     try:
         status = get_health_status()
-        overall = status["overall_status"]
-
-        if overall == "healthy":
-            logger.info("System health check: ALL SYSTEMS HEALTHY")
-        elif overall == "warning":
-            logger.warning("System health check: WARNINGS DETECTED")
-            for name, check in status["checks"].items():
-                if check["status"] == "warning":
-                    logger.warning("Health warning - %s: %s", name, check["message"])
+        overall = status['overall_status']
+        if overall == 'healthy':
+            logger.info('System health check: ALL SYSTEMS HEALTHY')
+        elif overall == 'warning':
+            logger.warning('System health check: WARNINGS DETECTED')
+            for name, check in status['checks'].items():
+                if check['status'] == 'warning':
+                    logger.warning('Health warning - %s: %s', name, check['message'])
         else:
-            logger.error("System health check: CRITICAL ISSUES DETECTED")
-            for name, check in status["checks"].items():
-                if check["status"] == "critical":
-                    logger.error("Health critical - %s: %s", name, check["message"])
-
+            logger.error('System health check: CRITICAL ISSUES DETECTED')
+            for name, check in status['checks'].items():
+                if check['status'] == 'critical':
+                    logger.error('Health critical - %s: %s', name, check['message'])
     except (ValueError, TypeError) as e:
-        logger.error("Failed to run health check: %s", e)
-
-
-if __name__ == "__main__":
-    # CLI health check
+        logger.error('Failed to run health check: %s', e)
+if __name__ == '__main__':
     import json
     status = get_health_status()
     logging.info(str(json.dumps(status, indent=2)))
 
-
-# AI-AGENT-REF: Additional trading-specific health check methods
 def _check_trading_system(self) -> HealthCheckResult:
     """Check trading system health and status."""
     try:
         start_time = time.perf_counter()
         details = {}
         issues = []
-
-        # Check if trading modules are importable
         try:
             from ai_trading.core import bot_engine
-            details["bot_engine"] = "OK"
+            details['bot_engine'] = 'OK'
         except ImportError as e:
-            issues.append(f"bot_engine import failed: {e}")
-            details["bot_engine"] = f"FAILED: {e}"
-
+            issues.append(f'bot_engine import failed: {e}')
+            details['bot_engine'] = f'FAILED: {e}'
         try:
             import trade_execution
-            details["trade_execution"] = "OK"
+            details['trade_execution'] = 'OK'
         except ImportError as e:
-            issues.append(f"trade_execution import failed: {e}")
-            details["trade_execution"] = f"FAILED: {e}"
-
+            issues.append(f'trade_execution import failed: {e}')
+            details['trade_execution'] = f'FAILED: {e}'
         try:
             from ai_trading.core.bot_engine import get_risk_engine
             get_risk_engine()
-            details["risk_engine"] = "OK"
+            details['risk_engine'] = 'OK'
         except ImportError as e:
-            issues.append(f"risk_engine import failed: {e}")
-            details["risk_engine"] = f"FAILED: {e}"
-
-        # Check critical files exist
-        critical_files = [
-            "config.py",
-            "hyperparams.json",
-            "best_hyperparams.json"
-        ]
-
+            issues.append(f'risk_engine import failed: {e}')
+            details['risk_engine'] = f'FAILED: {e}'
+        critical_files = ['config.py', 'hyperparams.json', 'best_hyperparams.json']
         for file_path in critical_files:
             if os.path.exists(file_path):
-                details[f"file_{file_path}"] = "EXISTS"
+                details[f'file_{file_path}'] = 'EXISTS'
             else:
-                issues.append(f"Missing critical file: {file_path}")
-                details[f"file_{file_path}"] = "MISSING"
-
-        # Determine status
+                issues.append(f'Missing critical file: {file_path}')
+                details[f'file_{file_path}'] = 'MISSING'
         if issues:
             status = HealthStatus.CRITICAL
             message = f"Trading system issues: {'; '.join(issues)}"
         else:
             status = HealthStatus.HEALTHY
-            message = "Trading system operational"
-
-        # Track latency
+            message = 'Trading system operational'
         latency_ms = (time.perf_counter() - start_time) * 1000
-        details["check_latency_ms"] = latency_ms
-
-        return HealthCheckResult(
-            name="trading_system",
-            status=status,
-            message=message,
-            details=details,
-            timestamp=datetime.now(UTC)
-        )
-
+        details['check_latency_ms'] = latency_ms
+        return HealthCheckResult(name='trading_system', status=status, message=message, details=details, timestamp=datetime.now(UTC))
     except (ValueError, TypeError) as e:
-        return HealthCheckResult(
-            name="trading_system",
-            status=HealthStatus.CRITICAL,
-            message=f"Failed to check trading system: {e}",
-            details={"error": str(e)},
-            timestamp=datetime.now(UTC)
-        )
-
-
-# Bind new methods to HealthMonitor class
+        return HealthCheckResult(name='trading_system', status=HealthStatus.CRITICAL, message=f'Failed to check trading system: {e}', details={'error': str(e)}, timestamp=datetime.now(UTC))
 HealthMonitor._check_trading_system = _check_trading_system
