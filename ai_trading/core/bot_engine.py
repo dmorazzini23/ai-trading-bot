@@ -58,7 +58,7 @@ from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty
 
 try:  # AI-AGENT-REF: optional Alpaca trading client
     from alpaca.trading.client import TradingClient  # type: ignore
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency
     TradingClient = None  # type: ignore
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
@@ -2463,7 +2463,7 @@ def _fetch_universe_bars_chunked(
     total_symbols = len(out)
     try:
         bars_loaded = sum(len(v) for v in out.values())
-    except Exception:
+    except (TypeError, AttributeError):  # AI-AGENT-REF: bars summary fallback
         bars_loaded = 0
     first_symbol = next(iter(out.keys()), None)
     _log.info(
@@ -2559,7 +2559,7 @@ def _fetch_intraday_bars_chunked(
     total_symbols = len(out)
     try:
         bars_loaded = sum(len(v) for v in out.values())
-    except Exception:
+    except (TypeError, AttributeError):  # AI-AGENT-REF: bars summary fallback
         bars_loaded = 0
     first_symbol = next(iter(out.keys()), None)
     _log.info(
