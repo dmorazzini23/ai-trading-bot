@@ -15,6 +15,9 @@ coverage==7.6.1
 execnet==2.1.1  # AI-AGENT-REF: enable pytest-xdist
 pytest-timeout==2.3.1
 pytest-asyncio==0.23.8
+# pytest core deps when installing with --no-deps
+pluggy==1.5.*
+iniconfig==2.0.*
 requests-mock==1.12.1
 freezegun==1.4.0
 
@@ -26,3 +29,17 @@ tenacity==8.5.0
 
 # Infra & helpers
 packaging==24.1
+
+# --- test/dev-time runtime deps required at import/collection ---
+# AI-AGENT-REF: add deps for test imports
+prometheus-client==0.20.*
+schedule==1.2.*
+ratelimit==2.2.*
+hypothesis==6.112.*
+sortedcontainers==2.4.*
+
+# Some ML-oriented tests/fixtures import sklearn at collection time.
+# Keeping this in dev requirements avoids bloating runtime images.
+scikit-learn==1.5.*
+scipy==1.13.*
+threadpoolctl==3.5.*
