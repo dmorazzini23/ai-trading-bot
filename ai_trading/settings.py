@@ -281,17 +281,32 @@ def get_settings() -> Settings:
 
 def get_news_api_key() -> str | None:
     """Lazy accessor for optional News API key."""  # AI-AGENT-REF: runtime News API key
-    return getattr(get_settings(), "news_api_key", None)
+    val = getattr(get_settings(), "news_api_key", None)
+    if val:
+        return val
+    import os
+    return os.getenv("NEWS_API_KEY") or os.getenv("AI_TRADER_NEWS_API_KEY")  # AI-AGENT-REF: env alias
 
 
 def get_rebalance_interval_min() -> int:
-    """Lazy accessor for rebalance interval."""
+    """Lazy accessor for rebalance interval.
+    Prefers Settings.rebalance_interval_min, else env AI_TRADER_REBALANCE_INTERVAL_MIN, else 60.
+    """  # AI-AGENT-REF: env alias fallback
     s = get_settings()
     val = getattr(s, "rebalance_interval_min", 60)
     try:
-        return int(val)
+        v = int(val)
     except (ValueError, TypeError):  # AI-AGENT-REF: tolerate FieldInfo during early imports
-        return 60
+        v = 60
+    if v == 60:
+        import os
+        alt = os.getenv("AI_TRADER_REBALANCE_INTERVAL_MIN")
+        if alt is not None:
+            try:
+                return int(alt)
+            except (ValueError, TypeError):
+                pass
+    return v
 
 
 # ---- Lazy getters (access only at runtime; never at module import) ----

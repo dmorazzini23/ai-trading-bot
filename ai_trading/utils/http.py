@@ -29,20 +29,25 @@ _log = get_logger(__name__)
 _session = None
 _session_lock = threading.Lock()
 _pool_stats = {
-    "workers": int(os.getenv("HTTP_POOL_WORKERS", "8")),
+    "workers": int(os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", "8"))),
     "per_host": int(os.getenv("HTTP_MAX_PER_HOST", "6")),
     "pool_maxsize": 32,
     "requests": 0,
     "responses": 0,
     "errors": 0,
-}
+}  # AI-AGENT-REF: env alias
 
 # AI-AGENT-REF: Stage 2.1 build session with pooling metadata
 
 
 def _build_session() -> requests.Session:
     _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
-    _pool_stats["workers"] = int(os.getenv("HTTP_POOL_WORKERS", str(_pool_stats["workers"])))
+    _pool_stats["workers"] = int(
+        os.getenv(
+            "HTTP_POOL_WORKERS",
+            os.getenv("HTTP_MAX_WORKERS", str(_pool_stats["workers"])),
+        )
+    )
     s = requests.Session()
     retries = Retry(
         total=3,

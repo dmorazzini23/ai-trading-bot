@@ -78,7 +78,9 @@ def test_calculate_position_size_invalid_args():
         risk_engine.calculate_position_size()
 
 
-def test_register_trade_blocked(monkeypatch):
+def test_register_trade_blocked():
     """register_trade returns None when trading not allowed."""
-    monkeypatch.setattr(risk_engine, 'CURRENT_TRADES', risk_engine.MAX_TRADES)
-    assert risk_engine.register_trade(1) is None
+    eng = risk_engine.RiskEngine()
+    eng.max_trades = 1
+    eng.current_trades = 1
+    assert risk_engine.register_trade(eng, 1) is None

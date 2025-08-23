@@ -21,21 +21,23 @@ def test_check_max_drawdown_ok():
     assert not risk_engine.check_max_drawdown(state)
 
 
-def test_hard_stop_blocks_trading(monkeypatch):
-    monkeypatch.setattr(risk_engine, "HARD_STOP", True)
-    assert not risk_engine.can_trade()
-    monkeypatch.setattr(risk_engine, "HARD_STOP", False)
+def test_hard_stop_blocks_trading():
+    eng = risk_engine.RiskEngine()
+    eng.hard_stop = True
+    assert not risk_engine.can_trade(eng)
 
 
-def test_can_trade_limits(monkeypatch):
-    monkeypatch.setattr(risk_engine, "MAX_TRADES", 2)
-    monkeypatch.setattr(risk_engine, "CURRENT_TRADES", 2)
-    assert not risk_engine.can_trade()
-    monkeypatch.setattr(risk_engine, "CURRENT_TRADES", 0)
+def test_can_trade_limits():
+    eng = risk_engine.RiskEngine()
+    eng.max_trades = 2
+    eng.current_trades = 2
+    assert not risk_engine.can_trade(eng)
+    eng.current_trades = 0
 
 
-def test_register_and_position_size(monkeypatch):
-    monkeypatch.setattr(risk_engine, "CURRENT_TRADES", 0)
-    monkeypatch.setattr(risk_engine, "MAX_TRADES", 10)
-    res = risk_engine.register_trade(100)
+def test_register_and_position_size():
+    eng = risk_engine.RiskEngine()
+    eng.current_trades = 0
+    eng.max_trades = 10
+    res = risk_engine.register_trade(eng, 100)
     assert res is not None

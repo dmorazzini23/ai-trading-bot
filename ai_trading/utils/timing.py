@@ -4,7 +4,9 @@ import os
 import time as _time
 
 # AI-AGENT-REF: centralized timeout constants
-HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT", "10"))
+HTTP_TIMEOUT = float(
+    os.getenv("HTTP_TIMEOUT", os.getenv("HTTP_TIMEOUT_S", "10"))
+)  # AI-AGENT-REF: env alias
 SUBPROCESS_TIMEOUT_S = 5.0
 
 
