@@ -10,8 +10,10 @@ import platform
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from packaging import tags as pkg_tags
+
 
 # -- Environment detection ----------------------------------------------------
 # AI-AGENT-REF: glibc detection with getconf fallback
@@ -25,12 +27,14 @@ def _detect_glibc_version() -> str:
     except Exception:  # pragma: no cover - best effort
         return "unknown"
 
+
 # AI-AGENT-REF: normalize first wheel tag
 def _top_wheel_tag_normalized() -> str:
     t = next(iter(pkg_tags.sys_tags()))
     interp = t.interpreter
     plat = t.platform
     return f"{interp}-{plat}"
+
 
 # AI-AGENT-REF: build human-readable env string
 def compute_env_summary_line() -> str:
@@ -39,6 +43,7 @@ def compute_env_summary_line() -> str:
     py = f"CPython {platform.python_version()}"
     tag = _top_wheel_tag_normalized()
     return f"{distro} | glibc {glibc} | {py} | tag {tag}"
+
 
 # AI-AGENT-REF: canonical env assertion with escape hatch
 def assert_expected_combo(line: str) -> None:
@@ -53,16 +58,38 @@ def assert_expected_combo(line: str) -> None:
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--out",
-        default=os.environ.get("IMPORT_REPAIR_REPORT", "artifacts/import-repair-report.md"),
-        help="Output report path",
-    )  # AI-AGENT-REF: expose output path
-    args = parser.parse_args()
+# AI-AGENT-REF: regexes to normalize common import errors
+_RX = [
+    re.compile(r"ModuleNotFoundError:\s+No module named '([^']+)'"),
+    re.compile(r"ImportError:\s+No module named '([^']+)'"),
+    re.compile(r"ImportError:\s+cannot import name '([^']+)' from ([\\w\\.\-_/]+)"),
+    re.compile(r"AttributeError:\s+module '([^']+)' has no attribute '([^']+)'"),
+]
 
-    # AI-AGENT-REF: prepend env header and assert canonical combo
+
+# AI-AGENT-REF: summarize import errors into a Counter
+def _summarize_errors(text: str) -> Counter:
+    """Return a Counter of normalized error keys from raw text."""
+    keys = []
+    for line in text.splitlines():
+        for rx in _RX:
+            m = rx.search(line)
+            if not m:
+                continue
+            if rx.pattern.startswith("AttributeError"):
+                mod, attr = m.group(1), m.group(2)
+                keys.append(f"{mod}:{attr}")
+            elif "cannot import name" in rx.pattern:
+                name, mod = m.group(1), m.group(2)
+                keys.append(f"{mod}:{name}")
+            else:
+                keys.append(m.group(1))
+            break
+    return Counter(keys)
+
+
+def build_report() -> tuple[str, str, str]:
+    """Run pytest collection and build a markdown report."""  # AI-AGENT-REF: factor report builder
     env_line = compute_env_summary_line()
     assert_expected_combo(env_line)
 
@@ -122,16 +149,48 @@ def main() -> None:
         "- Treat others as **external**; fix by adding pins to `requirements.txt` + `constraints.txt` (not to dev-only)."
     )
 
-    artifact = Path(args.out)
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-
     lines = [f"**Environment**: {env_line}", ""]
     lines.extend(body_lines)
-    artifact.write_text("\n".join(lines), encoding="utf-8")
+    report_markdown = "\n".join(lines)
+    return report_markdown, text, env_line
 
-    sys.exit(out.returncode if internal or external else 0)
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--out",
+        default=os.environ.get("IMPORT_REPAIR_REPORT", "artifacts/import-repair-report.md"),
+        help="Output report path",
+    )  # AI-AGENT-REF: expose output path
+    parser.add_argument(
+        "--top", type=int, default=8, help="Top N unique import errors to print"
+    )  # AI-AGENT-REF: top count flag
+    parser.add_argument(
+        "--fail-on-errors", action="store_true", help="Exit non-zero if any import errors detected"
+    )  # AI-AGENT-REF: optional failure
+    args = parser.parse_args()
+
+    report_markdown, raw_error_text, env_line = build_report()
+
+    artifact = Path(args.out)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(report_markdown, encoding="utf-8")
+
+    # AI-AGENT-REF: echo env and ranked summary for CI logs
+    print(f"[import-repair][env] {env_line}")
+    counts = _summarize_errors(raw_error_text)
+    total = sum(counts.values())
+    if not total:
+        print("[import-repair][summary] no import errors detected")
+    else:
+        uniq = len(counts)
+        print(f"[import-repair][summary] unique={uniq} total={total}")
+        for i, (key, n) in enumerate(counts.most_common(args.top), start=1):
+            print(f"[import-repair][top] {i}) {key} ({n})")
+
+    if args.fail_on_errors and total:
+        sys.exit(2)
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry
     main()
-
