@@ -22,3 +22,6 @@ pydantic-settings>=2.2,<3
 # Deterministic calendars & time zones
 tzdata>=2024.1  # AI-AGENT-REF: ensure timezone data
 pandas-market-calendars>=4.4,<6  # AI-AGENT-REF: exchange calendars
+
+# Caching used by runtime fetcher/caching hooks
+cachetools>=5,<6
