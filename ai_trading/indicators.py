@@ -9,7 +9,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 try:
     from numba import jit as _numba_jit
-except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+except (ImportError, ModuleNotFoundError):  # AI-AGENT-REF: numba optional; fall back to pure-Python
     _numba_jit = None
 
 def jit(*args, **kwargs):

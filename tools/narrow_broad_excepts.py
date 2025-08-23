@@ -44,7 +44,11 @@ class Narrower(ast.NodeTransformer):
 
         def name(id_: str) -> ast.expr:
             return ast.Name(id=id_, ctx=ast.Load())
+        # Heuristics based on imports & content
         src_block = ast.get_source_segment(self.src, try_node) or ''
+        # AI-AGENT-REF: include import errors for guarded imports
+        if 'import ' in src_block:
+            excs.extend([name('ImportError'), name('ModuleNotFoundError')])
         if any((x in imps for x in {'pandas', 'pd'})):
             excs.append(ast.Attribute(value=ast.Attribute(value=name('pd'), attr='errors', ctx=ast.Load()), attr='EmptyDataError', ctx=ast.Load()))
             excs.extend([name('KeyError'), name('ValueError'), name('TypeError')])
