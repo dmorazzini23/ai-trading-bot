@@ -6,6 +6,7 @@ PYTEST_FLAGS_BASE = -q -o log_cli=true -o log_cli_level=INFO
 PYTEST_MARK_EXPR  = -m "not integration and not slow"
 PYTEST_NODES      = -n auto
 TIMEOUT_FLAGS     = --timeout=120 --timeout-method=thread
+WITH_RL ?= 0
 
 .PHONY: test-collect extras-rl test-collect-report test-core test-all repair-test-imports
 
@@ -13,12 +14,16 @@ test-collect:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only
 
 extras-rl:
-	python -m pip install -r requirements-extras-rl.txt -c constraints.txt # AI-AGENT-REF: optional RL stack
+	@if [ "$(WITH_RL)" = "1" ]; then \
+	        python -m pip install -r requirements-extras-rl.txt -c constraints.txt ; \
+	        echo "RL extras installed" ; \
+	else \
+	        echo "RL extras disabled (set WITH_RL=1 to enable)" ; \
+	fi # AI-AGENT-REF: optional RL stack
 
-test-collect-report:
-	@[ -n "$$WITH_RL" ] && $(MAKE) extras-rl || true
+test-collect-report: extras-rl
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
-	python tools/harvest_import_errors.py > artifacts/import-repair-report.md || true
+	python tools/harvest_import_errors.py --write artifacts/import-repair-report.md || true
 
 test-core:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_MARK_EXPR) $(PYTEST_NODES) $(TIMEOUT_FLAGS)

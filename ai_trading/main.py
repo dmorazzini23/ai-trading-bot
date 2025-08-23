@@ -271,8 +271,8 @@ def main(argv: list[str] | None=None) -> None:
         raise RuntimeError('API failed to start') from e
     import os
     S = get_settings()
-    from ai_trading.utils.device import pick_torch_device
-    pick_torch_device()
+    from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
+    get_device()
     raw_tick = os.getenv('HEALTH_TICK_SECONDS') or getattr(S, 'health_tick_seconds', 300)
     try:
         health_tick_seconds = int(raw_tick)
