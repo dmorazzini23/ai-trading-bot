@@ -59,33 +59,34 @@ def assert_expected_combo(line: str) -> None:
 
 
 # AI-AGENT-REF: regexes to normalize common import errors
-_RX = [
-    re.compile(r"ModuleNotFoundError:\s+No module named '([^']+)'"),
-    re.compile(r"ImportError:\s+No module named '([^']+)'"),
-    re.compile(r"ImportError:\s+cannot import name '([^']+)' from ([\\w\\.\-_/]+)"),
-    re.compile(r"AttributeError:\s+module '([^']+)' has no attribute '([^']+)'"),
-]
+PATTERNS = (
+    re.compile(r"ModuleNotFoundError: No module named '([^']+)'"),
+    re.compile(r"ImportError: cannot import name '([^']+)' from '([^']+)'"),
+    re.compile(r"AttributeError: module '([^']+)' has no attribute '([^']+)'"),
+    re.compile(r"DistributionNotFound: (.+)"),
+)
 
 
-# AI-AGENT-REF: summarize import errors into a Counter
+# AI-AGENT-REF: summarize import errors into a Counter with trace pruning
 def _summarize_errors(text: str) -> Counter:
     """Return a Counter of normalized error keys from raw text."""
-    keys = []
+    counts: Counter[str] = Counter()
+    skip_tb = 0
     for line in text.splitlines():
-        for rx in _RX:
+        if "During handling of the above exception" in line:
+            skip_tb = 2
+            continue
+        if skip_tb:
+            skip_tb -= 1
+            continue
+        for rx in PATTERNS:
             m = rx.search(line)
             if not m:
                 continue
-            if rx.pattern.startswith("AttributeError"):
-                mod, attr = m.group(1), m.group(2)
-                keys.append(f"{mod}:{attr}")
-            elif "cannot import name" in rx.pattern:
-                name, mod = m.group(1), m.group(2)
-                keys.append(f"{mod}:{name}")
-            else:
-                keys.append(m.group(1))
+            key = " | ".join(g for g in m.groups() if g)
+            counts[key] += 1
             break
-    return Counter(keys)
+    return counts
 
 
 def build_report() -> tuple[str, str, str]:
@@ -163,7 +164,7 @@ def main() -> None:
         help="Output report path",
     )  # AI-AGENT-REF: expose output path
     parser.add_argument(
-        "--top", type=int, default=8, help="Top N unique import errors to print"
+        "--top", type=int, default=5, help="Top N unique import errors to print"
     )  # AI-AGENT-REF: top count flag
     parser.add_argument(
         "--fail-on-errors", action="store_true", help="Exit non-zero if any import errors detected"
@@ -179,17 +180,14 @@ def main() -> None:
     # AI-AGENT-REF: echo env and ranked summary for CI logs
     print(f"[import-repair][env] {env_line}")
     counts = _summarize_errors(raw_error_text)
-    total = sum(counts.values())
-    if not total:
-        print("[import-repair][summary] no import errors detected")
+    if not counts:
+        print("No import errors detected")
     else:
-        uniq = len(counts)
-        print(f"[import-repair][summary] unique={uniq} total={total}")
-        for i, (key, n) in enumerate(counts.most_common(args.top), start=1):
-            print(f"[import-repair][top] {i}) {key} ({n})")
-
-    if args.fail_on_errors and total:
-        sys.exit(2)
+        print("Top-N Import Errors:")
+        for i, (key, n) in enumerate(counts.most_common(args.top), 1):
+            print(f"[{i}] {key}  (hits: {n})")
+        if args.fail_on_errors:
+            sys.exit(101)
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry

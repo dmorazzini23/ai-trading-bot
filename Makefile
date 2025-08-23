@@ -11,9 +11,10 @@ WITH_RL ?= 0
 # Use the active shell's Python (typically your venv) everywhere.
 PYTHON ?= $(shell readlink -f $$(command -v python))
 PYTEST  = $(PYTHON) -m pytest
-REPORT ?= artifacts/import-repair-report.md
-TOP_N ?= 8
-FAIL_ON_IMPORT_ERRORS ?=
+IMPORT_REPAIR_REPORT ?= artifacts/import-repair-report.md
+TOP_N ?= 5
+FAIL_ON_IMPORT_ERRORS ?= 0
+DISABLE_ENV_ASSERT ?= 0
 
 .PHONY: test-collect extras-rl ensure-runtime test-collect-report test-core test-all repair-test-imports
 
@@ -45,9 +46,13 @@ PY
 ## Setting SKIP_INSTALL=1 bypasses the ensure-runtime step.
 test-collect-report:
 	@if [ -z "$$SKIP_INSTALL" ]; then $(MAKE) ensure-runtime; fi
+	@mkdir -p $(dir $(IMPORT_REPAIR_REPORT))
 	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
-	@$(PYTHON) tools/harvest_import_errors.py --out "$(REPORT)" --top $(TOP_N) $(if $(FAIL_ON_IMPORT_ERRORS),--fail-on-errors,)
-	@echo "Wrote $(REPORT)"
+	@DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
+	$(PYTHON) tools/harvest_import_errors.py --top $(TOP_N) \
+	$(if $(filter 1,$(FAIL_ON_IMPORT_ERRORS)),--fail-on-errors,) \
+	--out $(IMPORT_REPAIR_REPORT)
+	@echo "Wrote $(IMPORT_REPAIR_REPORT)"
 
 test-core:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_MARK_EXPR) $(PYTEST_NODES) $(TIMEOUT_FLAGS)
