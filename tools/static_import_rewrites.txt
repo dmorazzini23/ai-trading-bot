@@ -1,3 +1,20 @@
-ai_trading.position.core:ai_trading.position
-ai_trading.monitoring.performance_monitor:ai_trading.monitoring.system_health
-ai_trading.runtime.http_wrapped:ai_trading.utils.http
+# ---- Position core → Position (module collapsed) ----
+\bfrom\s+ai_trading\.position\.core\s+import\s+  =>  from ai_trading.position import 
+\bimport\s+ai_trading\.position\.core\s+as\s+     =>  import ai_trading.position as 
+\bimport\s+ai_trading\.position\.core\b           =>  import ai_trading.position
+\bfrom\s+ai_trading\.position\s+import\s+core\s+as\s+(\w+)  =>  import ai_trading.position as \1
+
+# ---- http_wrapped → utils.http ----
+\bfrom\s+ai_trading\.runtime\.http_wrapped\s+import\s+  =>  from ai_trading.utils.http import 
+\bimport\s+ai_trading\.runtime\.http_wrapped\s+as\s+     =>  import ai_trading.utils.http as 
+\bimport\s+ai_trading\.runtime\.http_wrapped\b           =>  import ai_trading.utils.http
+
+# ---- Stray runtime.http → utils.http (seen in fixtures) ----
+\bfrom\s+ai_trading\.runtime\.http\s+import\s+  =>  from ai_trading.utils.http import 
+\bimport\s+ai_trading\.runtime\.http\s+as\s+     =>  import ai_trading.utils.http as 
+\bimport\s+ai_trading\.runtime\.http\b           =>  import ai_trading.utils.http
+
+# ---- performance_monitor → system_health (module only; no shims) ----
+\bfrom\s+ai_trading\.monitoring\.performance_monitor\s+import\s+  =>  from ai_trading.monitoring.system_health import 
+\bimport\s+ai_trading\.monitoring\.performance_monitor\s+as\s+     =>  import ai_trading.monitoring.system_health as 
+\bimport\s+ai_trading\.monitoring\.performance_monitor\b           =>  import ai_trading.monitoring.system_health

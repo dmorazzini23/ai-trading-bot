@@ -1,32 +1,24 @@
-# --- knobs (centralized) ---
 TOP_N ?= 5
 FAIL_ON_IMPORT_ERRORS ?= 0
-DISABLE_ENV_ASSERT ?=
+DISABLE_ENV_ASSERT ?= 0
 IMPORT_REPAIR_REPORT ?= artifacts/import-repair-report.md
 
-# Use the active shell's Python/venv everywhere:
-PY := $(shell command -v python || echo python)
+$(shell mkdir -p artifacts >/dev/null 2>&1)
 
-# Ensure artifacts dir exists before any writes
-ARTIFACTS_DIR := artifacts
-$(ARTIFACTS_DIR):
-	@mkdir -p $(ARTIFACTS_DIR)
+test-collect-report:
+	@echo "[collect] running pytest --collect-only"
+	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	pytest -q --collect-only || true
+	@echo "[harvest] writing $(IMPORT_REPAIR_REPORT)"
+	@DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
+	TOP_N=$(TOP_N) \
+	FAIL_ON_IMPORT_ERRORS=$(FAIL_ON_IMPORT_ERRORS) \
+	python tools/harvest_import_errors.py --report $(IMPORT_REPAIR_REPORT) $(if $(FAIL_ON_IMPORT_ERRORS),--fail-on-errors,)
 
-# Install runtime/dev (skippable)
-ensure-runtime:
-ifndef SKIP_INSTALL
-	$(PY) -m pip install -r requirements.txt -c constraints.txt
-	$(PY) -m pip install -r requirements-dev.txt --no-deps -c constraints.txt
-endif
+ci-smoke:
+	@bash tools/ci_smoke.sh
 
-# Collect-only + harvest to artifact (always prints env header)
-test-collect-report: $(ARTIFACTS_DIR) ensure-runtime
-	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PY) -m pytest -p xdist -p pytest_timeout -p pytest_asyncio \
-	    --collect-only || true
-	@TOP_N=$(TOP_N) DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
-	  $(PY) tools/harvest_import_errors.py --report "$(IMPORT_REPAIR_REPORT)" \
-	  --top $(TOP_N) $(if $(FAIL_ON_IMPORT_ERRORS),--fail-on-errors,)
-
-# Quick legacy scan (optional)
-legacy-scan:
-	@$(PY) tools/check_no_legacy_symbols.py
+imports-rewrite:
+	python tools/repair_test_imports.py --pkg ai_trading --tests tests \
+	  --rewrite-map tools/static_import_rewrites.txt \
+	  --report artifacts/import-repair-report.md --write

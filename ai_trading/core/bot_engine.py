@@ -11680,7 +11680,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 resp = http.get(
                     f"http://localhost:{default_port}",
-                    timeout=clamp_timeout(2, default_non_test=HTTP_TIMEOUT),
+                    timeout=clamp_timeout(2),
                 )
                 if resp.ok:
                     _log.info("Metrics port %d already serving; reusing", default_port)

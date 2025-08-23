@@ -56,7 +56,7 @@ def _get_session() -> requests.Session:
 
 def _with_timeout(kwargs: dict) -> dict:
     """Ensure a clamped timeout is always provided."""
-    kwargs["timeout"] = clamp_timeout(kwargs.get("timeout"), default_non_test=HTTP_TIMEOUT)
+    kwargs["timeout"] = clamp_timeout(kwargs.get("timeout"))
     return kwargs
 
 
@@ -123,11 +123,11 @@ def request_json(
     status_forcelist = status_forcelist or {429, 500, 502, 503, 504}
     if isinstance(timeout, tuple):
         to = (
-            clamp_timeout(timeout[0], default_non_test=HTTP_TIMEOUT),
-            clamp_timeout(timeout[1], default_non_test=HTTP_TIMEOUT),
+            clamp_timeout(timeout[0]),
+            clamp_timeout(timeout[1]),
         )
     else:
-        t = clamp_timeout(timeout, default_non_test=HTTP_TIMEOUT)
+        t = clamp_timeout(timeout)
         to = (t, t)
 
     def _fetch() -> requests.Response:
