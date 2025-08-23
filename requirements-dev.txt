@@ -30,6 +30,16 @@ tenacity==8.5.0
 # Infra & helpers
 packaging==24.1
 
+# prior PR added scikit-learn/scipy stack and others
+# (left unchanged here)
+
+# Ensure test collection succeeds where torch is imported
+# CPU wheel from PyPI; no CUDA required for tests
+torch
+
+# Align dev env with runtime caching imports during tests
+cachetools>=5,<6
+
 # --- test/dev-time runtime deps required at import/collection ---
 # AI-AGENT-REF: add deps for test imports
 prometheus-client==0.20.*
