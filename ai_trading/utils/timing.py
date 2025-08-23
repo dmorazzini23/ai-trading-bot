@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import time
+from typing import Optional
 
-# Default HTTP timeout (seconds)
+# Default HTTP timeout used by runtime unless overridden
 HTTP_TIMEOUT: float = 10.0
 
 
-def clamp_timeout(value: float | None) -> float:
-    """Return a sane timeout (value if positive else default)."""
+def clamp_timeout(value: Optional[float]) -> float:
+    """Return a sane timeout, falling back to HTTP_TIMEOUT when None/invalid."""
     try:
-        if value is not None and float(value) > 0:
-            return float(value)
+        if value is None:
+            return HTTP_TIMEOUT
+        v = float(value)
+        return v if v > 0 else HTTP_TIMEOUT
     except Exception:
-        pass
-    return HTTP_TIMEOUT
+        return HTTP_TIMEOUT
 
 
 def sleep(seconds: float) -> None:
-    """Thin wrapper for testability / monkeypatching."""
-    time.sleep(max(0.0, float(seconds)))
+    """Small wrapper for testability and central control."""
+    time.sleep(float(seconds))

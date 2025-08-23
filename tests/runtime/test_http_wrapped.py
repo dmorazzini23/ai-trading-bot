@@ -1,14 +1,6 @@
 import requests
 from ai_trading.utils import http
-
-try:
-    from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout  # preferred
-except Exception:  # AI-AGENT-REF: provide test-local timing helpers
-    HTTP_TIMEOUT = 10.0
-
-    def clamp_timeout(value, *, default_non_test=0.75, min_s=0.05, max_s=15.0):
-        val = default_non_test if value is None else float(value)
-        return max(min_s, min(max_s, val))
+from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout
 
 
 class DummyResp:
@@ -24,7 +16,7 @@ def test_wrapped_get_retries_and_parses(monkeypatch):
 
     def fake_request(self, method, url, **kwargs):
         calls.append(kwargs)
-        assert kwargs["timeout"] == clamp_timeout(None, default_non_test=HTTP_TIMEOUT)
+        assert kwargs["timeout"] == clamp_timeout(None)
         if len(calls) == 1:
             raise requests.exceptions.RequestException("boom")
         return DummyResp({"ok": True})
