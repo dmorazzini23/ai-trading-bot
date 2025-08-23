@@ -16,9 +16,15 @@ def update_if_present(runtime, equity) -> float:
     cs = getattr(runtime, "capital_scaler", None)
     if cs is not None and hasattr(cs, "update"):
         try:
-            return float(cs.update(runtime, equity))
-        except Exception as e:
-            log.warning("CAPITAL_SCALE_UPDATE_FAILED", extra={"detail": str(e)})  # AI-AGENT-REF: warn on scaler failure
+            # Correct flow: update internal state, then read current scale.
+            cs.update(runtime, equity)
+            if hasattr(cs, "current_scale"):
+                return float(cs.current_scale())
+            return 1.0
+        except (TypeError, ValueError, AttributeError) as e:
+            # Narrowed exceptions reflect realistic failures: wrong types/values
+            # or missing attributes on a custom scaler.
+            log.warning("CAPITAL_SCALE_UPDATE_FAILED", extra={"detail": str(e)})
             return 1.0
     return 1.0
 
@@ -33,8 +39,8 @@ def capital_scale(runtime) -> float:
     if cs is not None and hasattr(cs, "current_scale"):
         try:
             return float(cs.current_scale())
-        except Exception as e:
-            log.warning("CAPITAL_SCALE_CURRENT_FAILED", extra={"detail": str(e)})  # AI-AGENT-REF: warn on scaler failure
+        except (TypeError, ValueError, AttributeError) as e:
+            log.warning("CAPITAL_SCALE_CURRENT_FAILED", extra={"detail": str(e)})
             return 1.0
     return 1.0
 
