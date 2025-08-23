@@ -24,7 +24,7 @@ dev-deps:
 	python -m pip install -r requirements.txt -c constraints.txt
 	@if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt --no-deps -c constraints.txt; fi
 	python -m pip install -e .
-.PHONY: test-core test-int test-all test-core-seq test-core-1p test-collect test-debug
+.PHONY: test-core test-int test-all test-core-seq test-core-1p test-collect test-debug repair-test-imports
 
 test-core:
 	@mkdir -p artifacts
@@ -139,3 +139,6 @@ fix-import-time:
 	python tools/fix_import_time.py
 
 refactor-config-hygiene: scan-import-time fix-import-time scan-import-time
+
+repair-test-imports:
+	@bash scripts/repair_test_imports.sh ai_trading tests artifacts/import-repair-report.md  # AI-AGENT-REF: repair stale imports

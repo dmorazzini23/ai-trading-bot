@@ -3,6 +3,12 @@ import types
 
 import pandas as pd
 import pytest
+pytest.importorskip("sklearn", reason="Optional heavy dependency; slow suite")  # AI-AGENT-REF: guard sklearn
+import sklearn.linear_model
+try:
+    pytest.importorskip("torch", reason="Optional heavy dependency; slow suite")  # AI-AGENT-REF: guard torch
+except Exception:
+    pytest.skip("torch import failed", allow_module_level=True)
 
 try:
     import pydantic_settings  # noqa: F401
@@ -10,7 +16,6 @@ try:
 # noqa: BLE001 TODO: narrow exception
 except Exception:
     pytest.skip("pydantic v2 required", allow_module_level=True)
-import sklearn.linear_model
 
 pytestmark = pytest.mark.slow
 
