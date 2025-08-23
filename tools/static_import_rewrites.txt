@@ -1,16 +1,12 @@
-# ai_trading.position.core → ai_trading.position
-from ai_trading.position.core import (.*) -> from ai_trading.position import \1
-from ai_trading.position.core import (.*) as (.*) -> from ai_trading.position import \1 as \2
-import ai_trading.position.core as (.*) -> import ai_trading.position as \1
-import ai_trading.position.core -> import ai_trading.position
+ai_trading.position.core -> ai_trading.position
+from ai_trading.position.core import -> from ai_trading.position import
+import ai_trading.position.core as -> import ai_trading.position as
+ai_trading.runtime.http_wrapped -> ai_trading.utils.http
+from ai_trading.runtime.http_wrapped import -> from ai_trading.utils.http import
+import ai_trading.runtime.http_wrapped as -> import ai_trading.utils.http as
+ai_trading.monitoring.performance_monitor -> ai_trading.monitoring.system_health
+from ai_trading.monitoring.performance_monitor import -> from ai_trading.monitoring.system_health import
+import ai_trading.monitoring.performance_monitor as -> import ai_trading.monitoring.system_health as
+# normalized utils re-exports (harmless if already correct)
+from ai_trading.utils.timing import -> from ai_trading.utils import
 
-# ai_trading.runtime.http_wrapped → ai_trading.utils.http
-from ai_trading.runtime.http_wrapped import (.*) -> from ai_trading.utils.http import \1
-from ai_trading.runtime.http_wrapped import (.*) as (.*) -> from ai_trading.utils.http import \1 as \2
-import ai_trading.runtime.http_wrapped as (.*) -> import ai_trading.utils.http as \1
-import ai_trading.runtime.http_wrapped -> import ai_trading.utils.http
-
-# monitoring shim module to system_health (module path only; no aliasing back to shim)
-from ai_trading.monitoring.performance_monitor import (.*) -> from ai_trading.monitoring.system_health import \1
-import ai_trading.monitoring.performance_monitor as (.*) -> import ai_trading.monitoring.system_health as \1
-import ai_trading.monitoring.performance_monitor -> import ai_trading.monitoring.system_health

@@ -3,9 +3,9 @@
 This repo prints the **Top-N unique import errors** straight into CI logs and
 also writes a Markdown artifact for deeper triage.
 
-- **Make target:** `make test-collect-report`
-- **Artifact (default):** `artifacts/import-repair-report.md`
-- **Script:** `tools/harvest_import_errors.py` (prepends an Environment header)
+- **Make target:** `make test-collect-report` → writes `artifacts/import-repair-report.md`
+- **Smoke script:** `tools/ci_smoke.sh` → prints head -40 of the report and exits 0 or 101
+- **Harvester:** `tools/harvest_import_errors.py` (prepends an Environment header)
 
 ---
 
@@ -129,10 +129,10 @@ Core test runs exclude them by default via `-m "not legacy ..."`. When you refac
 ### Quick smoke
 
 ```bash
-# Print env header + Top-N in logs; return 0
+# Print env header + head -40 of report; return 0
 tools/ci_smoke.sh
 
-# Fail pipeline when import errors are present
+# Fail pipeline when import errors are present (exit 101)
 FAIL_ON_IMPORT_ERRORS=1 tools/ci_smoke.sh
 
 Knobs:

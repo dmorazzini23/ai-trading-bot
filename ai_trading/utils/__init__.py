@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep  # re-export
+from .timing import HTTP_TIMEOUT, clamp_timeout, sleep  # re-export for public surface
 from .base import (
     EASTERN_TZ,
     ensure_utc,
