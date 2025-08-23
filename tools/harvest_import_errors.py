@@ -159,7 +159,9 @@ def build_report() -> tuple[str, str, str]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--report",
         "--out",
+        dest="out",
         default=os.environ.get("IMPORT_REPAIR_REPORT", "artifacts/import-repair-report.md"),
         help="Output report path",
     )  # AI-AGENT-REF: expose output path

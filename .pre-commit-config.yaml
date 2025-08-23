@@ -12,6 +12,11 @@ repos:
         language: system
         pass_filenames: false
         description: Prevents legacy trade_execution imports; use 'from ai_trading import ExecutionEngine' instead
+      - id: check-no-legacy-symbols
+        name: check-no-legacy-symbols
+        entry: python tools/check_no_legacy_symbols.py
+        language: system
+        pass_filenames: false
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
