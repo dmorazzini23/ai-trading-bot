@@ -84,8 +84,7 @@ class SlippageModel:
 
             return total_slippage
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError) as e:
             logger.error(f"Error calculating slippage: {e}")
             return 0.0
 
@@ -119,8 +118,7 @@ class SlippageModel:
                 f"liquidity={liquidity:.2f}"
             )
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError) as e:
             logger.error(f"Error updating market conditions: {e}")
 
 
@@ -214,8 +212,7 @@ class FillSimulator:
 
             return result
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError) as e:
             logger.error(f"Error simulating fill: {e}")
             return {
                 "filled": False,
@@ -311,6 +308,5 @@ class FillSimulator:
                 f"Fill simulator updated: vol={volatility:.2f}, vol={volume:.2f}"
             )
 
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ValueError, TypeError, ZeroDivisionError) as e:
             logger.error(f"Error updating fill simulator: {e}")

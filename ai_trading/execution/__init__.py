@@ -64,14 +64,16 @@ from .position_reconciler import (
 )
 from .transaction_costs import estimate_cost
 
-try:  # AI-AGENT-REF: optional production engine when Alpaca deps missing
+try:  # AI-AGENT-REF: optional production engine when components are missing
     from .production_engine import (
         ExecutionResult,
         OrderRequest,
         ProductionExecutionCoordinator,
     )
-# noqa: BLE001 TODO: narrow exception
-except Exception:  # pragma: no cover
+except (ImportError, AttributeError):  # pragma: no cover
+    # Only import/attribute resolution failures are tolerated here. Runtime
+    # exceptions should surface from the production engine itself, not be
+    # swallowed at package import time.
     ExecutionResult = OrderRequest = ProductionExecutionCoordinator = None  # type: ignore
 
 # Export all execution classes
