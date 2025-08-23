@@ -12,6 +12,8 @@ WITH_RL ?= 0
 PYTHON ?= $(shell readlink -f $$(command -v python))
 PYTEST  = $(PYTHON) -m pytest
 REPORT ?= artifacts/import-repair-report.md
+TOP_N ?= 8
+FAIL_ON_IMPORT_ERRORS ?=
 
 .PHONY: test-collect extras-rl ensure-runtime test-collect-report test-core test-all repair-test-imports
 
@@ -42,12 +44,10 @@ PY
 ## harvest import errors into artifacts/import-repair-report.md with env header.
 ## Setting SKIP_INSTALL=1 bypasses the ensure-runtime step.
 test-collect-report:
-@if [ "$(SKIP_INSTALL)" != "1" ]; then \
-	$(MAKE) ensure-runtime; \
-	fi
-	$(PYTEST) $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
-	$(PYTHON) tools/harvest_import_errors.py --out $(REPORT)
-@echo "Wrote $(REPORT)"
+	@if [ -z "$$SKIP_INSTALL" ]; then $(MAKE) ensure-runtime; fi
+	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(PYTHON) -m pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) --collect-only || true
+	@$(PYTHON) tools/harvest_import_errors.py --out "$(REPORT)" --top $(TOP_N) $(if $(FAIL_ON_IMPORT_ERRORS),--fail-on-errors,)
+	@echo "Wrote $(REPORT)"
 
 test-core:
 	pytest $(PYTEST_PLUGINS) $(PYTEST_FLAGS_BASE) $(PYTEST_MARK_EXPR) $(PYTEST_NODES) $(TIMEOUT_FLAGS)
