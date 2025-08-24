@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
@@ -16,17 +17,30 @@ def has_xdist() -> bool:
         return False
 
 
-def main() -> int:
-    args = sys.argv[1:] or []
+def main(argv: list[str] | None = None) -> int:
+    args = list(argv or sys.argv[1:])
+
+    # AI-AGENT-REF: map --disable-warnings to interpreter flag
+    if "--disable-warnings" in args:
+        args.remove("--disable-warnings")
+        args[:0] = ["-W", "ignore"]
+
     base = ["pytest", "-q"]
-    # Respect plugin autoload disabling if the caller set it
-    if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1":
-        pass
+
+    autoload_disabled = os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1"
+
     # Add -n auto only when xdist is available
     if has_xdist():
-        base.extend(["-n", "auto"])
+        # AI-AGENT-REF: ensure xdist plugin is loaded when autoload is disabled
+        if autoload_disabled:
+            base.extend(["-p", "xdist.plugin"])
+        base.extend(["-n", os.environ.get("PYTEST_XDIST_WORKERS", "auto")])
+
     cmd = base + args
-    print("[run_pytest]", " ".join(shlex.quote(c) for c in cmd))
+
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("run_pytest")
+    logger.info("[run_pytest] %s", " ".join(shlex.quote(c) for c in cmd))
     return subprocess.call(cmd)
 
 
