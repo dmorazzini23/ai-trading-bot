@@ -56,7 +56,8 @@ class KellyCriterion:
         if 'confidence_level' in kwargs:
             self.confidence_level = kwargs['confidence_level']
         elif min_sample_size is not None or max_fraction is not None:
-            self.confidence_level = 0.95
+            # AI-AGENT-REF: align legacy kwargs default to 0.90
+            self.confidence_level = 0.90
         else:
             self.confidence_level = self.config.confidence_level
         logger.info(f'KellyCriterion initialized with min_sample_size={self.min_sample_size}, max_fraction={self.max_fraction}, confidence_level={self.confidence_level}')

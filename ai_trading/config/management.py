@@ -780,6 +780,10 @@ class TradingConfig(BaseModel):
     max_trades_per_day: int = 100
     volume_threshold: int = 50000
     seed: int = 42
+    # AI-AGENT-REF: central Kelly sizing and sampling controls
+    kelly_fraction_max: float = 0.25
+    min_sample_size: int = 10
+    confidence_level: float = 0.90
     # AI-AGENT-REF: add optional script tunables for exploratory scripts
     max_position_size_pct: float | None = Field(
         default=None, description="Optional cap on position size as percent of equity"
@@ -857,6 +861,18 @@ class TradingConfig(BaseModel):
             mode_defaults = {'kelly_fraction': 0.6, 'daily_loss_limit': 0.05, 'capital_cap': 0.25, 'confirmation_count': 2, 'take_profit_factor': 1.8, 'max_position_size': 8000.0}
         base = cls().model_copy(update=mode_defaults)
         base.conf_threshold = conf_threshold
+        # AI-AGENT-REF: allow env overrides for new Kelly/sampling parameters
+        for attr, env_key, caster in [
+            ('kelly_fraction_max', 'AI_TRADER_KELLY_FRACTION_MAX', float),
+            ('min_sample_size', 'AI_TRADER_MIN_SAMPLE_SIZE', int),
+            ('confidence_level', 'AI_TRADER_CONFIDENCE_LEVEL', float),
+        ]:
+            raw = os.getenv(env_key)
+            if raw:
+                try:
+                    setattr(base, attr, caster(raw))
+                except Exception:
+                    logger.warning('CONFIG_ENV_CAST_FAIL', extra={'attr': attr, 'env': env_key, 'value': raw})
         if (env_val := os.getenv('KELLY_FRACTION')):
             base.kelly_fraction = float(env_val)
         from ai_trading.settings import get_buy_threshold, get_capital_cap, get_daily_loss_limit, get_dollar_risk_limit, get_max_drawdown_threshold, get_max_portfolio_positions, get_max_trades_per_day, get_max_trades_per_hour, get_portfolio_drift_threshold, get_position_size_min_usd, get_rebalance_interval_min, get_sector_exposure_cap, get_seed_int, get_trade_cooldown_min, get_volume_threshold
