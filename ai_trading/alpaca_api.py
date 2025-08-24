@@ -1,13 +1,18 @@
 from __future__ import annotations
 import datetime as dt
 from datetime import timezone as _tz
+import json
 import os
 import time
 import types
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass
+from typing import Any, Optional
+
 import pandas as pd
 import pytz
+import requests
 from ai_trading.logging import get_logger
 from ai_trading.utils.optdeps import module_ok
 try:
@@ -42,16 +47,6 @@ ALPACA_AVAILABLE = any([module_ok('alpaca'), module_ok('alpaca_trade_api'), modu
 def _make_client_order_id(prefix: str='ai') -> str:
     return f'{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}'
 generate_client_order_id = _make_client_order_id
-
-def _get(obj, key, default=None):
-    """Fetch ``key`` from ``obj`` by attribute or mapping lookup."""
-    if obj is None:
-        return default
-    if hasattr(obj, key):
-        return getattr(obj, key)
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return default
 
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
@@ -142,70 +137,274 @@ def get_bars_df(symbol: str, timeframe: str | TimeFrame, start: dt.datetime | No
         _log.error('ALPACA_FAIL', extra={'symbol': symbol, 'timeframe': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'status_code': getattr(e, 'status_code', None), 'endpoint': 'alpaca/bars', 'query_params': req, 'body': body})
         return pd.DataFrame()
 
-def submit_order(api, order_data=None, log=None, **kwargs):
-    """Submit an order and return a canonical ``SimpleNamespace``."""
-    data: dict[str, object] = {}
-    if order_data is not None:
-        if isinstance(order_data, dict):
-            data.update(order_data)
-        else:
-            for k in ('symbol', 'qty', 'side', 'time_in_force', 'client_order_id'):
-                v = _get(order_data, k)
-                if v is not None:
-                    data[k] = v
-    if kwargs:
-        data.update(kwargs)
-    symbol = _get(data, 'symbol')
-    qty = _get(data, 'qty')
-    side = _get(data, 'side')
-    tif = _get(data, 'time_in_force', 'day')
-    client_order_id = _get(data, 'client_order_id') or _make_client_order_id()
-    payload = {'symbol': symbol, 'qty': qty, 'side': side, 'time_in_force': tif, 'client_order_id': client_order_id}
 
-    def _shadow() -> types.SimpleNamespace:
-        broker_id = f'shadow-{client_order_id}'
-        return types.SimpleNamespace(status='shadow', success=True, symbol=symbol, qty=qty, side=side, time_in_force=tif, client_order_id=client_order_id, broker_order_id=broker_id, order_id=broker_id, message='shadow-mode OK')
-    if SHADOW_MODE:
-        if log:
-            with suppress(Exception):
-                log.info('submit_order shadow', payload=payload)
-        return _shadow()
-    submit_fn = getattr(api, 'submit_order', None)
-    if not callable(submit_fn):
-        if log:
-            log.info('submit_order fallback to shadow (no submit method)', symbol=symbol, qty=qty)
-        return types.SimpleNamespace(status='shadow', success=True, symbol=symbol, qty=qty, side=side, time_in_force=tif, client_order_id=client_order_id, broker_order_id=f'shadow-{client_order_id}')
-    if log:
-        with suppress(Exception):
-            log.info('submit_order live', payload=payload)
+class AlpacaOrderError(RuntimeError):
+    """Base exception for order submission issues."""
+
+
+class AlpacaOrderHTTPError(AlpacaOrderError):
+    def __init__(self, status_code: int, message: str, payload: Optional[dict[str, Any]] | None = None):
+        super().__init__(f"HTTP {status_code}: {message}")
+        self.status_code = status_code
+        self.payload = payload or {}
+
+
+class AlpacaOrderNetworkError(AlpacaOrderError):
+    pass
+
+
+@dataclass(frozen=True)
+class _AlpacaConfig:
+    base_url: str
+    key_id: str | None
+    secret_key: str | None
+    shadow: bool
+
+    @staticmethod
+    def from_env() -> "_AlpacaConfig":
+        base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
+        key = os.getenv("ALPACA_API_KEY_ID") or os.getenv("APCA_API_KEY_ID")
+        sec = os.getenv("ALPACA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+        shadow_env = os.getenv("ALPACA_SHADOW") or os.getenv("SHADOW_MODE") or ""
+        shadow = SHADOW_MODE or str(shadow_env).strip().lower() in {"1", "true", "yes", "on"}
+        return _AlpacaConfig(base, key, sec, shadow)
+
+
+def _ts() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _as_int(n: Any) -> int:
+    return int(round(float(n)))
+
+
+def _to_public_dict(resp_json: dict[str, Any]) -> dict[str, Any]:
+    fields = [
+        "id",
+        "client_order_id",
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "time_in_force",
+        "limit_price",
+        "stop_price",
+        "status",
+        "created_at",
+        "submitted_at",
+        "filled_qty",
+    ]
+    return {k: resp_json.get(k) for k in fields if k in resp_json}
+
+
+def _sdk_submit(
+    client: Any,
+    *,
+    symbol: str,
+    qty: int,
+    side: str,
+    type: str,
+    time_in_force: str,
+    limit_price: float | None,
+    stop_price: float | None,
+    idempotency_key: str | None,
+    timeout: float | int | None,
+) -> dict[str, Any]:
+    submit = getattr(client, "submit_order", None)
+    if submit is None:
+        raise AttributeError("client.submit_order is not available")
+
+    kwargs: dict[str, Any] = dict(
+        symbol=symbol,
+        qty=str(qty),
+        side=side,
+        type=type,
+        time_in_force=time_in_force,
+    )
+    if limit_price is not None:
+        kwargs["limit_price"] = str(limit_price)
+    if stop_price is not None:
+        kwargs["stop_price"] = str(stop_price)
+    if idempotency_key:
+        kwargs["client_order_id"] = idempotency_key
+
+    order = submit(**kwargs)
+    if hasattr(order, "_raw"):
+        data = dict(order._raw)  # type: ignore[attr-defined]
+    elif hasattr(order, "__dict__"):
+        data = dict(order.__dict__)
+    else:
+        try:
+            data = json.loads(json.dumps(order))
+        except Exception:
+            data = {
+                "id": getattr(order, "id", None),
+                "symbol": symbol,
+                "qty": str(qty),
+                "side": side,
+                "status": getattr(order, "status", None),
+            }
+    return _to_public_dict(data)
+
+
+def _http_submit(
+    cfg: _AlpacaConfig,
+    *,
+    symbol: str,
+    qty: int,
+    side: str,
+    type: str,
+    time_in_force: str,
+    limit_price: float | None,
+    stop_price: float | None,
+    idempotency_key: str | None,
+    timeout: float | int | None,
+) -> dict[str, Any]:
+    url = f"{cfg.base_url}/v2/orders"
+    headers = {
+        "APCA-API-KEY-ID": cfg.key_id or "",
+        "APCA-API-SECRET-KEY": cfg.secret_key or "",
+        "Content-Type": "application/json",
+    }
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+
+    payload: dict[str, Any] = {
+        "symbol": symbol,
+        "qty": str(qty),
+        "side": side,
+        "type": type,
+        "time_in_force": time_in_force,
+    }
+    if limit_price is not None:
+        payload["limit_price"] = str(limit_price)
+    if stop_price is not None:
+        payload["stop_price"] = str(stop_price)
+
     try:
-        resp = submit_fn(**payload)
-    except (ValueError, TypeError) as e:
-        status = int(getattr(e, 'status', getattr(e, 'status_code', getattr(e, 'code', 0))) or 0)
-        retryable = status in RETRY_HTTP_CODES
-        return types.SimpleNamespace(status=status, success=False, retryable=retryable, error=str(e), client_order_id=client_order_id)
-    if isinstance(resp, dict):
-        broker_id = resp.get('id')
-        resp.setdefault('client_order_id', client_order_id)
-        resp.setdefault('status', 'submitted')
-        resp.setdefault('success', True)
-        if 'broker_order_id' not in resp:
-            resp['broker_order_id'] = broker_id or resp.get('order_id')
-        return types.SimpleNamespace(**resp)
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout or 10)
+    except requests.RequestException as e:  # pragma: no cover - network error path
+        raise AlpacaOrderNetworkError(f"Network error calling {url}: {e}") from e
+
     try:
-        if getattr(resp, 'client_order_id', None) is None:
-            setattr(resp, 'client_order_id', client_order_id)
-        if getattr(resp, 'status', None) is None:
-            setattr(resp, 'status', 'submitted')
-        if getattr(resp, 'success', None) is None:
-            setattr(resp, 'success', True)
-    except (ValueError, TypeError):
+        content: dict[str, Any] | None = resp.json()
+    except Exception:
+        content = None
+
+    if resp.status_code >= 400:
+        msg = "rate limited" if resp.status_code == 429 else (content or {}).get("message") or resp.text
+        raise AlpacaOrderHTTPError(resp.status_code, msg, payload=content or {})
+
+    return _to_public_dict(content or {})
+
+
+def submit_order(
+    symbol: str,
+    qty: int | float | str,
+    side: str,
+    type: str = "market",
+    time_in_force: str = "day",
+    *,
+    limit_price: float | None = None,
+    stop_price: float | None = None,
+    shadow: bool | None = None,
+    timeout: float | int | None = None,
+    idempotency_key: str | None = None,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Submit an order via Alpaca SDK or HTTP.
+
+    - Supports shadow mode for offline testing.
+    - Raises :class:`AttributeError` if a provided client lacks ``submit_order``.
+    - Maps HTTP errors (incl. 429) to :class:`AlpacaOrderHTTPError`.
+    """
+    # AI-AGENT-REF: expose deterministic submit_order with shadow + HTTP fallback
+    cfg = _AlpacaConfig.from_env()
+    do_shadow = cfg.shadow if shadow is None else bool(shadow)
+    q_int = _as_int(qty)
+
+    if do_shadow:
+        oid = f"shadow-{uuid.uuid4().hex[:16]}"
+        return {
+            "id": oid,
+            "client_order_id": idempotency_key or oid,
+            "symbol": symbol,
+            "qty": str(q_int),
+            "side": side,
+            "type": type,
+            "time_in_force": time_in_force,
+            "status": "accepted",
+            "submitted_at": _ts(),
+            "filled_qty": "0",
+        }
+
+    if client is not None:
+        return _sdk_submit(
+            client,
+            symbol=symbol,
+            qty=q_int,
+            side=side,
+            type=type,
+            time_in_force=time_in_force,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            idempotency_key=idempotency_key,
+            timeout=timeout,
+        )
+
+    try:
+        import alpaca_trade_api as _alp  # type: ignore
+        rest = _alp.REST(
+            key_id=cfg.key_id,
+            secret_key=cfg.secret_key,
+            base_url=cfg.base_url,
+            api_version="v2",
+        )
+        return _sdk_submit(
+            rest,
+            symbol=symbol,
+            qty=q_int,
+            side=side,
+            type=type,
+            time_in_force=time_in_force,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            idempotency_key=idempotency_key,
+            timeout=timeout,
+        )
+    except ModuleNotFoundError:
         pass
-    return resp
+
+    return _http_submit(
+        cfg,
+        symbol=symbol,
+        qty=q_int,
+        side=side,
+        type=type,
+        time_in_force=time_in_force,
+        limit_price=limit_price,
+        stop_price=stop_price,
+        idempotency_key=idempotency_key,
+        timeout=timeout,
+    )
 
 def alpaca_get(*_a, **_k):
     return None
 
 def start_trade_updates_stream(*_a, **_k):
     return None
-__all__ = ['ALPACA_AVAILABLE', 'SHADOW_MODE', 'RETRY_HTTP_CODES', 'RETRYABLE_HTTP_STATUSES', 'submit_order', 'generate_client_order_id', '_bars_time_window', 'get_bars_df', 'alpaca_get', 'start_trade_updates_stream']
+__all__ = [
+    'ALPACA_AVAILABLE',
+    'SHADOW_MODE',
+    'RETRY_HTTP_CODES',
+    'RETRYABLE_HTTP_STATUSES',
+    'submit_order',
+    'AlpacaOrderError',
+    'AlpacaOrderHTTPError',
+    'AlpacaOrderNetworkError',
+    'generate_client_order_id',
+    '_bars_time_window',
+    'get_bars_df',
+    'alpaca_get',
+    'start_trade_updates_stream',
+]
