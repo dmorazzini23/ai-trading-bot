@@ -22,6 +22,7 @@ def test_runner_echo_contains_core_flags(tmp_path):
         sys.executable,
         "tools/run_pytest.py",
         "--disable-warnings",
+        "-q",
         "--collect-only",
         "tests/test_utils_timing.py",
     ]

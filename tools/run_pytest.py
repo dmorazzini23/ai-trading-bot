@@ -50,14 +50,13 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
     """Construct the pytest command based on parsed arguments."""
     cmd = [sys.executable, "-m", "pytest", "-q"]
     if args.disable_warnings:
-        # AI-AGENT-REF: map --disable-warnings to interpreter flag
+        # Map --disable-warnings to interpreter flag to suppress noise in smoke
         cmd += ["-W", "ignore"]
     if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1":
+        # Under autoload-off, inject xdist only if available and not already present via addopts
         addopts = os.environ.get("PYTEST_ADDOPTS", "")
-        xdist_requested = "-p xdist.plugin" in addopts or "xdist.plugin" in addopts
-        if iu.find_spec("xdist") is not None and not xdist_requested:
-            # AI-AGENT-REF: load xdist only when autoload is off and not already requested
-            cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_WORKERS", "auto")]
+        if ("-p xdist.plugin" not in addopts) and (iu.find_spec("xdist") is not None):
+            cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
     if args.collect_only:
         cmd += ["--collect-only"]
     if args.keyword:
