@@ -9,3 +9,6 @@ ruff>=0.5
 pytest-timeout>=2.3
 pytest-asyncio>=0.23
 joblib>=1.4
+# AI-AGENT-REF: ensure config models import in smoke
+pydantic>=2.7
+pydantic-settings>=2.3
