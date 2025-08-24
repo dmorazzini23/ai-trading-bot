@@ -3,6 +3,7 @@ import datetime as dt
 import logging
 import os
 import random
+import subprocess
 import socket
 import threading
 import time
@@ -31,6 +32,21 @@ DataFrame = pd.DataFrame
 Series = pd.Series
 Index = pd.Index
 SUBPROCESS_TIMEOUT_S = 5.0
+
+# Back-compat alias expected by ai_trading.core.bot_engine.get_git_hash()
+SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
+
+def safe_subprocess_run(cmd: list[str] | tuple[str, ...], timeout: float | int | None = None) -> str:
+    """Run a subprocess safely and return stdout text.
+
+    Returns an empty string on any failure so callers can degrade gracefully.
+    """
+    try:
+        t = float(timeout) if timeout is not None else SUBPROCESS_TIMEOUT_DEFAULT
+        res = subprocess.run(list(cmd), timeout=t, check=True, capture_output=True)
+        return (res.stdout or b"").decode(errors="ignore").strip()
+    except Exception:
+        return ""
 
 def get_ohlcv_columns(df) -> list[str]:
     cols = [str(c).lower() for c in getattr(df, 'columns', [])]

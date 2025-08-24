@@ -4,9 +4,11 @@ FAIL_ON_IMPORT_ERRORS ?= 0
 DISABLE_ENV_ASSERT ?= 0
 IMPORT_REPAIR_REPORT ?= artifacts/import-repair-report.md
 SKIP_INSTALL ?= 0
-
+	
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
+
+.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all lint
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
@@ -30,3 +32,19 @@ ci-smoke: test-collect-report
 	@echo "=== BEGIN import-repair-report (head -40) ==="
 	@head -n 40 $(IMPORT_REPAIR_REPORT) || true
 	@echo "=== END import-repair-report ==="
+
+# Deterministic smoke: explicit test files, plugin autoload off
+smoke:
+	./tools/ci_smoke.sh
+
+# Alias for developer convenience
+test: smoke
+
+# Run full test suite; disables common auto-loaded plugins for determinism
+test-all:
+	PYTEST_ADDOPTS="-p no:faulthandler -p no:randomly -p no:cov" \
+	python tools/run_pytest.py tests
+
+lint:
+	@command -v ruff >/dev/null 2>&1 && ruff check . || \
+	  echo "ruff not installed; skipping lint"

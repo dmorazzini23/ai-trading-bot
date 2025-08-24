@@ -10,6 +10,14 @@ from .base import (
     health_check,
     is_market_open,
     market_open_between,
+    # back-compat exports used by ai_trading.core.bot_engine
+    log_warning,
+    model_lock,
+    safe_to_datetime,
+    validate_ohlcv,
+    # subprocess helpers for git hash retrieval
+    SUBPROCESS_TIMEOUT_DEFAULT,
+    safe_subprocess_run,
 )
 
 # Keep submodules importable as ai_trading.utils.http, etc.
@@ -27,4 +35,12 @@ __all__ = [
     "is_market_open",
     "market_open_between",
     "http",
+    # back-compat (engine)
+    "log_warning",
+    "model_lock",
+    "safe_to_datetime",
+    "validate_ohlcv",
+    # subprocess helper
+    "SUBPROCESS_TIMEOUT_DEFAULT",
+    "safe_subprocess_run",
 ]
