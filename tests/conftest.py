@@ -7,6 +7,8 @@ local test vendor stubs so imports like
     from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 work during test collection. This is idempotent and does not affect runtime.
 """
+import os
+os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")  # AI-AGENT-REF: disable plugin autoload
 import sys as _sys
 import importlib as _importlib
 
@@ -36,7 +38,6 @@ if (
     _sys.modules["alpaca_trade_api.rest"] = _alpaca_rest_stub
 
 import asyncio
-import os
 import socket
 import sys
 from datetime import datetime, timezone
@@ -78,6 +79,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config._utc_stamp = datetime.now(timezone.utc).isoformat()  # noqa: SLF001
     config.addinivalue_line("markers", "integration: network/vendor tests")
     config.addinivalue_line("markers", "slow: long-running tests")
+    config.addinivalue_line("markers", "legacy: legacy test quarantined during refactor")  # AI-AGENT-REF: register legacy marker
     pathlib.Path("artifacts").mkdir(exist_ok=True)
     pathlib.Path("artifacts/utc.txt").write_text(config._utc_stamp)
 
