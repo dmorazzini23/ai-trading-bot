@@ -6,5 +6,4 @@ def test_utils_sleep_is_measurable():
     start = perf_counter()
     sleep(0.01)
     elapsed = perf_counter() - start
-    assert elapsed >= 0.009
-
+    assert elapsed >= 0.009  # AI-AGENT-REF: ensure busy-wait measurable
