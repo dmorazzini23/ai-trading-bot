@@ -8,7 +8,7 @@ SKIP_INSTALL ?= 0
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
 
-.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all lint
+.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy lint
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
@@ -42,7 +42,13 @@ test: smoke
 
 # Run full test suite; disables common auto-loaded plugins for determinism
 test-all:
-	PYTEST_ADDOPTS="-p no:faulthandler -p no:randomly -p no:cov" \
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+	PYTEST_ADDOPTS="-p no:faulthandler -p no:randomly -p no:cov -m 'not integration and not slow and not requires_credentials'" \
+	python tools/run_pytest.py tests
+
+# Run everything, including slow/integration/credentials-marked tests, still without plugin autoload.
+test-all-heavy:
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 	python tools/run_pytest.py tests
 
 lint:
