@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import importlib
+from time import perf_counter
 
+from ai_trading.utils.timing import sleep
 
-def test_sleep_uses_stdlib(monkeypatch):
-    utils = importlib.import_module("ai_trading.utils")
-
+def test_sleep_unaffected_by_monkeypatch(monkeypatch) -> None:
+    """sleep should block even if time.sleep is monkeypatched."""  # AI-AGENT-REF: ensure robustness
     slept = {"count": 0}
 
-    def fake_sleep(_):
+    def fake_sleep(_: float) -> None:
         slept["count"] += 1
 
-    real_time = importlib.import_module("time")
+    import time as real_time
+
     monkeypatch.setattr(real_time, "sleep", fake_sleep)
-
-    utils.psleep(0)
-    utils.sleep_s(0)
-    utils.sleep(0)
-
-    assert slept["count"] == 3
-
+    start = perf_counter()
+    sleep(0.01)
+    elapsed = perf_counter() - start
+    assert slept["count"] == 0
+    assert elapsed >= 0.009

@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger("run_pytest")
     _ensure_repo_on_path()
+    # AI-AGENT-REF: avoid third-party plugins influencing tests
+    os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     parser = build_parser()
     args = parser.parse_args(argv)
     cmd = build_pytest_cmd(args)
