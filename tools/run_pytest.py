@@ -7,7 +7,6 @@ import argparse
 import importlib.util as iu
 import logging
 import os
-import shlex
 import subprocess
 import sys
 
@@ -48,9 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
     """Construct the pytest command based on parsed arguments."""
-    cmd = [sys.executable, "-m", "pytest", "-q"]
+    cmd = [sys.executable, "-m", "pytest"]
+    if args.quiet:
+        cmd.append("-q")
     if args.disable_warnings:
-        # Map --disable-warnings to interpreter flag to suppress noise in smoke
+        # AI-AGENT-REF: suppress warnings for stable smoke output
         cmd += ["-W", "ignore"]
     if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1":
         # Under autoload-off, inject xdist only if available and not already present via addopts
@@ -59,11 +60,11 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
     if args.collect_only:
         cmd += ["--collect-only"]
-    if args.keyword:
-        cmd += ["-k", args.keyword]
     if args.targets:
         # AI-AGENT-REF: append explicit targets last so pytest limits collection
         cmd.extend(args.targets)
+    elif args.keyword:
+        cmd += ["-k", args.keyword]
     return cmd
 
 
@@ -73,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     cmd = build_pytest_cmd(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger("run_pytest")
-    logger.info("[run_pytest] %s", " ".join(shlex.quote(c) for c in cmd))
+    # AI-AGENT-REF: echo exact command for smoke test assertions
+    logger.info("[run_pytest] %s", " ".join(cmd))
     return subprocess.call(cmd)
 
 

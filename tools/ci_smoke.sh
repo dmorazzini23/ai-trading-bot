@@ -56,7 +56,9 @@ fi
 # Targeted smoke run
 # -----------------
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}
-# Run explicit smoke tests only (no global collection)
+# AI-AGENT-REF: keep warnings quiet and avoid plugin autoload
+export PYTHONWARNINGS=${PYTHONWARNINGS:-ignore}
+echo "[ci_smoke] Running minimal smoke suite (3 files)"
 python tools/run_pytest.py --disable-warnings -q \
   tests/test_runner_smoke.py \
   tests/test_utils_timing.py \

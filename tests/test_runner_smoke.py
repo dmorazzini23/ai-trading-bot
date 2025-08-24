@@ -15,7 +15,7 @@ def _first_echo_line(text: str) -> str:
     raise AssertionError("runner did not echo a '[run_pytest]' line; got:\n" + text)
 
 
-def test_runner_echo_contains_core_flags(tmp_path):
+def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runner echo
     env = os.environ.copy()
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     args = [
@@ -23,20 +23,27 @@ def test_runner_echo_contains_core_flags(tmp_path):
         "tools/run_pytest.py",
         "--disable-warnings",
         "-q",
-        "--collect-only",
         "tests/test_utils_timing.py",
+        "tests/test_trading_config_aliases.py",
     ]
     proc = subprocess.run(args, capture_output=True, text=True, env=env)
+    assert proc.returncode == 0
     echo = _first_echo_line(proc.stderr)
-
-    assert "pytest -q" in echo
-    assert " -W ignore" in echo
-
     xdist_present = iu.find_spec("xdist") is not None
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-W",
+        "ignore",
+    ]
     if xdist_present:
-        assert "xdist.plugin" in echo, echo
-        assert " -n " in echo or echo.endswith(" -n")
-    else:
-        assert "xdist.plugin" not in echo
-        assert " -n " not in echo
+        cmd += ["-p", "xdist.plugin", "-n", "auto"]
+    cmd += [
+        "tests/test_utils_timing.py",
+        "tests/test_trading_config_aliases.py",
+    ]
+    expected = "[run_pytest] " + " ".join(cmd)
+    assert echo.strip() == expected
 
