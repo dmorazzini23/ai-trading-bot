@@ -9,7 +9,7 @@ import pandas as pd
 from pandas.errors import OutOfBoundsDatetime
 try:
     from ai_trading.config import get_settings
-except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, requests.Timeout, requests.ConnectionError, requests.HTTPError, requests.RequestException, ZeroDivisionError, OverflowError):
+except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError, Exception):
 
     def get_settings():
         return None

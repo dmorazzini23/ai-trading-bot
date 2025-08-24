@@ -5,6 +5,13 @@ import os
 import socket
 import sys
 import time
+import contextlib
+import faulthandler
+import os
+try:
+    import requests  # type: ignore
+except Exception:  # pragma: no cover
+    requests = None
 
 import pytest
 
@@ -88,7 +95,7 @@ def _block_external_network():
         host = address[0] if isinstance(address, tuple) else address
         try:
             ip = socket.gethostbyname(host)
-        except (requests.RequestException, TimeoutError):
+        except (TimeoutError, Exception):
             ip = str(host)
         if ip.startswith("127.") or host in ("::1", "localhost"):
             return orig_connect(self, address)

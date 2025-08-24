@@ -1,5 +1,6 @@
 from importlib.util import find_spec
 from ai_trading.config import get_settings
+config = None
 try:
     import sklearn
     SKLEARN_AVAILABLE = True
@@ -478,7 +479,7 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     """
     if trade_log_path is None:
         settings = get_settings()
-        trade_log_path = settings.trade_log_file if config else 'trades.csv'
+        trade_log_path = getattr(settings, 'trade_log_file', 'trades.csv')
     logger.info('META_RETRAIN_START', extra={'trade_log': trade_log_path, 'model_path': model_path})
     quality_report = validate_trade_data_quality(trade_log_path)
     try:
@@ -801,9 +802,14 @@ def _append_bootstrap_trades_to_log(trade_log_path: str, bootstrap_trades: list)
     except COMMON_EXC as e:
         logger.error(f'Failed to append bootstrap trades: {e}')
         raise
-    '\n    Generate synthetic training data for meta learning when insufficient real data exists.\n\n    AI-AGENT-REF: Enhanced meta learning fallback mechanism to handle insufficient data gracefully.\n    Creates realistic synthetic trades based on market patterns to bootstrap the meta learning system.\n    '
+
+
+def _attempt_synthetic_data_generation(trade_log_path: str, min_samples: int) -> None:
+    """Generate synthetic training data when insufficient real data exists."""
     try:
-        logger.info(f'META_LEARNING_SYNTHETIC: Attempting to generate synthetic data for bootstrapping (need {min_samples} samples)')
+        logger.info(
+            f'META_LEARNING_SYNTHETIC: Attempting to generate synthetic data for bootstrapping (need {min_samples} samples)'
+        )
         existing_data = []
         if os.path.exists(trade_log_path):
             try:
@@ -811,14 +817,18 @@ def _append_bootstrap_trades_to_log(trade_log_path: str, bootstrap_trades: list)
                     existing_df = pd.read_csv(trade_log_path)
                     if not existing_df.empty:
                         existing_data = existing_df.to_dict('records')
-                        logger.info(f'META_LEARNING_SYNTHETIC: Found {len(existing_data)} existing trades to use as patterns')
+                        logger.info(
+                            f'META_LEARNING_SYNTHETIC: Found {len(existing_data)} existing trades to use as patterns'
+                        )
             except COMMON_EXC as e:
                 logger.debug(f'Could not read existing data for patterns: {e}')
         if len(existing_data) < min_samples // 2:
             synthetic_trades = _generate_synthetic_trades(min_samples // 4, existing_data)
             if synthetic_trades:
                 _append_synthetic_trades_to_log(trade_log_path, synthetic_trades)
-                logger.warning(f'META_LEARNING_SYNTHETIC: Generated {len(synthetic_trades)} synthetic trades for meta learning bootstrap')
+                logger.warning(
+                    f'META_LEARNING_SYNTHETIC: Generated {len(synthetic_trades)} synthetic trades for meta learning bootstrap'
+                )
             else:
                 logger.info('META_LEARNING_SYNTHETIC: No synthetic data generated - insufficient patterns')
         else:

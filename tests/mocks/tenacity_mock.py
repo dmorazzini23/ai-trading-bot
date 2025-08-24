@@ -11,6 +11,9 @@ class RetryError(Exception):
 def stop_after_attempt(*args):
     return None
 
+class MockWait:
+    pass
+
 def wait_exponential(*args, **kwargs):
     return MockWait()
 

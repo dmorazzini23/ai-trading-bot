@@ -5,6 +5,7 @@ import sys
 import unittest
 os.environ['TESTING'] = '1'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ai_trading.core import bot_engine
 
 class TestCriticalFixesValidation(unittest.TestCase):
     """Final validation for critical fixes addressing production issues."""

@@ -9,6 +9,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    class _PD:  # minimal placeholder
+        @staticmethod
+        def concat(objs):
+            return list(objs)
+    pd = _PD()  # type: ignore
 try:
     from ai_trading.config.management import TradingConfig
     from ai_trading.data_fetcher import DataFetcher
