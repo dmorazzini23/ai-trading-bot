@@ -18,6 +18,8 @@ _PUBLIC_MODULES = {
 
 _PUBLIC_SYMBOLS = {
     'ExecutionEngine': 'ai_trading.execution.engine:ExecutionEngine',
+    'DataFetchError': 'ai_trading.data_fetcher:DataFetchError',
+    'DataFetchException': 'ai_trading.data_fetcher:DataFetchException',
 }
 
 __all__ = sorted(set(_PUBLIC_MODULES) | set(_PUBLIC_SYMBOLS))
