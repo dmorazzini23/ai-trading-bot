@@ -5,7 +5,6 @@ import importlib.util as iu
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 
 def _first_echo_line(text: str) -> str:
@@ -16,24 +15,17 @@ def _first_echo_line(text: str) -> str:
     raise AssertionError("runner did not echo a '[run_pytest]' line; got:\n" + text)
 
 
-def test_runner_echo_contains_core_flags():
+def test_runner_echo_contains_core_flags(tmp_path):
     env = os.environ.copy()
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    root = Path(__file__).resolve().parents[1]
-    script = root / "tools" / "run_pytest.py"
     args = [
         sys.executable,
-        str(script),
+        "tools/run_pytest.py",
         "--disable-warnings",
         "--collect-only",
-        "-k",
-        "__never__",
+        "tests/test_utils_timing.py",
     ]
-
-    proc = subprocess.run(
-        args, capture_output=True, text=True, env=env, cwd=root
-    )
-
+    proc = subprocess.run(args, capture_output=True, text=True, env=env)
     echo = _first_echo_line(proc.stderr)
 
     assert "pytest -q" in echo
