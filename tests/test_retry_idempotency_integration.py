@@ -7,6 +7,8 @@ import pytest
 
 sys.path.insert(0, '/tmp')
 
+# Skip when tenacity isn't installed (CI smoke with SKIP_INSTALL=1)
+pytest.importorskip("tenacity")
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 pytestmark = pytest.mark.integration
