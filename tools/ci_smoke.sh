@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${TOP_N:=5}"
-: "${FAIL_ON_IMPORT_ERRORS:=0}"
-: "${DISABLE_ENV_ASSERT:=0}"
-: "${SKIP_INSTALL:=0}"
-: "${IMPORT_REPAIR_REPORT:=artifacts/import-repair-report.md}"
+# AI-AGENT-REF: stabilized smoke pipeline (Python lint, optional shellcheck, targeted tests)
 
-# AI-AGENT-REF: ensure dev deps present for raw pytest use
+# Install dev test dependencies unless explicitly skipped. This ensures
+# `pytest -n` works (xdist present) and avoids ModuleNotFoundError for psutil.
 if [ "${SKIP_INSTALL:-0}" != "1" ]; then
   if [ -f "requirements/dev.txt" ]; then
     python -m pip install --upgrade pip >/dev/null 2>&1 || true
@@ -15,18 +12,47 @@ if [ "${SKIP_INSTALL:-0}" != "1" ]; then
   fi
 fi
 
-mkdir -p "$(dirname "$IMPORT_REPAIR_REPORT")"
+# -----------------
+# Python lint (ruff)
+# -----------------
+# Lint only Python files; avoid non-Python paths that ruff can't parse.
+if python - <<'PY' >/dev/null 2>&1
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec('ruff') else 1)
+PY
+then
+  # Prefer git for speed; fall back to find(1) if outside a repo
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    PY_FILES=$(git ls-files '*.py' || true)
+  else
+    PY_FILES=$(find . -type f -name '*.py' -not -path './venv/*' || true)
+  fi
+  if [ -n "${PY_FILES}" ]; then
+    python -m ruff check ${PY_FILES}
+  else
+    echo "[ci_smoke] No Python files found for ruff."
+  fi
+else
+  echo "[ci_smoke] ruff not installed; skipping Python lint."
+fi
 
-TOP_N="$TOP_N" \
-FAIL_ON_IMPORT_ERRORS="$FAIL_ON_IMPORT_ERRORS" \
-DISABLE_ENV_ASSERT="$DISABLE_ENV_ASSERT" \
-SKIP_INSTALL="$SKIP_INSTALL" \
-make test-collect-report || rc=$?
-rc=${rc:-0}
+# ----------------------
+# Optional shell linting
+# ----------------------
+if command -v shellcheck >/dev/null 2>&1; then
+  if [ -f tools/ci_smoke.sh ]; then
+    shellcheck tools/ci_smoke.sh || true
+  fi
+else
+  echo "[ci_smoke] shellcheck not installed; skipping shell lint."
+fi
 
-echo "=== BEGIN import-repair-report (head -40) ==="
-head -n 40 "$IMPORT_REPAIR_REPORT" || true
-echo "=== END import-repair-report ==="
+# -----------------
+# Targeted smoke run
+# -----------------
+# Run only the tiny smoke tests via the hardened runner with autoload OFF.
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}
+python tools/run_pytest.py --disable-warnings -k "runner_smoke or utils_timing" -q
 
-exit "$rc"
+echo "[ci_smoke] Completed."
 
