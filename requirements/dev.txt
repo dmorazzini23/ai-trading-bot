@@ -1,0 +1,7 @@
+# AI-AGENT-REF: minimal dev/test dependencies for reliable raw pytest runs
+pytest>=7.4
+pytest-xdist>=3.6
+psutil>=5.9
+freezegun>=1.4
+tenacity>=8.2
+cachetools>=5.3
