@@ -5,9 +5,9 @@ set -euo pipefail
 
 # Install dev test dependencies unless explicitly skipped (xdist, psutil, ruff, etc.).
 if [ "${SKIP_INSTALL:-0}" != "1" ]; then
-  if [ -f "requirements/dev.txt" ]; then
+  if [ -f "requirements-dev.txt" ]; then
     python -m pip install --upgrade pip >/dev/null 2>&1 || true
-    python -m pip install -r requirements/dev.txt
+    python -m pip install -r requirements-dev.txt
   fi
 fi
 
