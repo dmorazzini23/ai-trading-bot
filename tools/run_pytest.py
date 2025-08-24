@@ -53,15 +53,11 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
         # AI-AGENT-REF: map --disable-warnings to interpreter flag
         cmd += ["-W", "ignore"]
     if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1":
-        if iu.find_spec("xdist") is not None:
-            # AI-AGENT-REF: ensure xdist still loads when autoload is disabled
+        addopts = os.environ.get("PYTEST_ADDOPTS", "")
+        xdist_requested = "-p xdist.plugin" in addopts or "xdist.plugin" in addopts
+        if iu.find_spec("xdist") is not None and not xdist_requested:
+            # AI-AGENT-REF: load xdist only when autoload is off and not already requested
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_WORKERS", "auto")]
-        else:
-            # AI-AGENT-REF: explicitly disable xdist plugin if absent
-            cmd += ["-p", "no:xdist"]
-    else:
-        if iu.find_spec("xdist") is not None:
-            cmd += ["-n", os.environ.get("PYTEST_XDIST_WORKERS", "auto")]
     if args.collect_only:
         cmd += ["--collect-only"]
     if args.keyword:
