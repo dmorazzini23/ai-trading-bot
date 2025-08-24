@@ -12,6 +12,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['PYTEST_RUNNING'] = '1'
 os.environ['TESTING'] = '1'
 
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    class _PDErrors:
+        class EmptyDataError(Exception):
+            pass
+
+    class _PD:
+        errors = _PDErrors()
+
+    pd = _PD()  # type: ignore
+
 def test_pandas_multiindex_usage():
     """Test that _RealMultiIndex has been replaced with pd.MultiIndex."""
     try:

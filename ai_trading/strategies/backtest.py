@@ -5,10 +5,36 @@ Provides comprehensive backtesting capabilities and
 performance analysis for institutional trading strategies.
 """
 import logging
+import math
+import random
 import statistics
 from datetime import UTC, datetime
 from ai_trading.logging import logger
 from .base import BaseStrategy, StrategySignal
+
+# Optional numpy dependency used for noise; provide lightweight fallback for linting
+try:  # pragma: no cover
+    import numpy as np  # type: ignore
+except Exception:  # pragma: no cover
+    class _NP:
+        @staticmethod
+        def sqrt(x):
+            return math.sqrt(x)
+
+        class random:  # noqa: N801
+            @staticmethod
+            def random():
+                return random.random()
+
+            @staticmethod
+            def uniform(a, b):
+                return random.uniform(a, b)
+
+            @staticmethod
+            def normal(mu, sigma):
+                return random.gauss(mu, sigma)
+
+    np = _NP()  # type: ignore
 
 class BacktestEngine:
     """

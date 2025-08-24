@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Optional, Union
 
-HTTP_TIMEOUT: float = 10.0  # AI-AGENT-REF: canonical timeout across runtime
+HTTP_TIMEOUT: Union[int, float] = 10.0  # AI-AGENT-REF: canonical timeout across runtime
 
 
 def clamp_timeout(value: Optional[float]) -> float:
@@ -18,5 +18,5 @@ def clamp_timeout(value: Optional[float]) -> float:
 
 
 def sleep(seconds: float) -> None:
-    """Small wrapper for testability and centralized control."""  # AI-AGENT-REF: sleep wrapper
-    time.sleep(float(seconds))
+    """Real sleep (non-negative). Thin wrapper to allow test monkeypatching."""
+    time.sleep(max(0.0, float(seconds)))

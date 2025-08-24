@@ -8,6 +8,18 @@ import tempfile
 import traceback
 from pathlib import Path
 
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    class _PDErrors:
+        class EmptyDataError(Exception):
+            pass
+
+    class _PD:
+        errors = _PDErrors()
+
+    pd = _PD()  # type: ignore
+
 def test_model_registry():
     """Test model registry functionality."""
     try:

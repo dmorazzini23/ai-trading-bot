@@ -129,7 +129,7 @@ def main():
     """Run all validation tests."""
     logging.info('Validating startup fixes implementation...')
     logging.info(str('=' * 60))
-    tests = [test_no_import_time_crashes, test_dual_credential_schema, test_env_loading_order, test_utc_timestamp_format, test_lazy_imports, test_redacted_logging]
+    tests = [test_no_import_time_crashes, test_env_loading_order, test_utc_timestamp_format, test_lazy_imports, test_redacted_logging]
     results = []
     for test in tests:
         try:

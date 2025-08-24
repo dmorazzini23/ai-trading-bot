@@ -1,5 +1,12 @@
 import logging
 from datetime import UTC
+
+# Minimal placeholders so this guide script lints without heavy imports
+def get_current_position(symbol: str) -> int:  # pragma: no cover
+    return 0
+
+def get_current_market_price(symbol: str) -> float:  # pragma: no cover
+    return 0.0
 'Integration guide for enhanced execution debugging in existing bot engine.\n\nThis shows how to integrate the new debugging features into the existing\ntrading bot without breaking current functionality.\n'
 
 def enable_enhanced_debugging():

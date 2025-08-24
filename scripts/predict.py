@@ -4,24 +4,29 @@ import argparse
 import json
 import logging
 import os
+from threading import Lock
+import time
 import joblib
 import pandas as pd
 from ai_trading.config.management import TradingConfig, reload_env
+from ai_trading.utils.http import http, HTTP_TIMEOUT
 from scripts.retrain import prepare_indicators
-CONFIG = TradingConfig()
-from ai_trading.utils import http
-from ai_trading.utils.timing import HTTP_TIMEOUT
+
+config = TradingConfig.from_env()
+_sentiment_lock = Lock()
+_last_request_time: dict[str, float] = {}
 logger = logging.getLogger(__name__)
 reload_env()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, 'inactive_features.json')
 MODELS_DIR = os.path.join(BASE_DIR, 'models')
-import threading
-import time
-from cachetools import TTLCache
-_sentiment_cache = TTLCache(maxsize=1000, ttl=300)
-_sentiment_lock = threading.Lock()
-_last_request_time = {}
+try:
+    from cachetools import TTLCache
+    _CACHETOOLS_AVAILABLE = True
+    _sentiment_cache = TTLCache(maxsize=1000, ttl=300)
+except Exception:
+    _CACHETOOLS_AVAILABLE = False
+    _sentiment_cache: dict[str, tuple[float, float]] | dict[str, float] = {}
 _min_request_interval = 1.0
 _cache_ttl = 300
 

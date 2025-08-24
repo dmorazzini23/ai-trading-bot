@@ -324,7 +324,6 @@ class AlgorithmOptimizer:
         except (ValueError, TypeError) as e:
             self.logger.error(f'Error calculating Kelly fraction: {e}')
             return 0.02
-            return max(1, int(account_value * 0.001 / price))
 
     def _get_regime_multiplier(self, regime: MarketRegime) -> float:
         """Get position size multiplier for market regime."""

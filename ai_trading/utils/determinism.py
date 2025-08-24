@@ -12,9 +12,15 @@ import random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
 logger = logging.getLogger(__name__)
-import numpy as np
-logger = logging.getLogger(__name__)
+
+try:
+    import numpy as np  # type: ignore
+    HAS_NUMPY = True
+except Exception:  # pragma: no cover
+    HAS_NUMPY = False
+    np = None  # type: ignore
 
 def set_random_seeds(seed: int=42) -> None:
     """

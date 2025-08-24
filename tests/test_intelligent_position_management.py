@@ -36,6 +36,14 @@ from ai_trading.position import (
 )
 
 
+class MockPosition:
+    def __init__(self, symbol, qty, avg_entry_price=None, market_value=None):
+        self.symbol = symbol
+        self.qty = qty
+        self.avg_entry_price = avg_entry_price
+        self.market_value = market_value
+
+
 
 
 @dataclass
@@ -83,6 +91,11 @@ class TestIntelligentPositionManager:
     def test_should_hold_position_integration(self):
         """Test the enhanced should_hold_position method."""
         # Create mock position
+        class MockPosition:
+            def __init__(self, symbol, qty, avg_entry_price=None, market_value=None):
+                self.symbol = symbol; self.qty = qty
+                self.avg_entry_price = avg_entry_price; self.market_value = market_value
+
         position = MockPosition(
             symbol='AAPL',
             qty=100,
@@ -104,6 +117,11 @@ class TestIntelligentPositionManager:
 
     def test_analyze_position_basic(self):
         """Test basic position analysis."""
+        class MockPosition:
+            def __init__(self, symbol, qty, avg_entry_price=None, market_value=None):
+                self.symbol = symbol; self.qty = qty
+                self.avg_entry_price = avg_entry_price; self.market_value = market_value
+
         position = MockPosition(
             symbol='AAPL',
             qty=100,
@@ -341,8 +359,12 @@ class TestPortfolioCorrelationAnalyzer:
 
     def test_position_data_extraction(self):
         """Test position data extraction."""
+        class MockPosition:
+            def __init__(self, symbol, qty, avg_entry_price=None, market_value=None):
+                self.symbol = symbol; self.qty = qty
+                self.avg_entry_price = avg_entry_price; self.market_value = market_value
+
         positions = [
-            MockPosition('AAPL', 100, 100.0, 11000.0),
             MockPosition('MSFT', 50, 200.0, 10500.0),
             MockPosition('GOOGL', 25, 150.0, 3750.0)
         ]

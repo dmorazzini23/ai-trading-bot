@@ -2,12 +2,12 @@ import csv
 import logging
 import os
 import uuid
+import json
 try:
     from ai_trading.validation.validate_env import Settings
     settings = Settings()
 except (json.JSONDecodeError, ValueError, OSError, KeyError, TypeError):
     settings = None
-import json
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 CONFIG = TradingConfig()

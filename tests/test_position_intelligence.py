@@ -34,6 +34,11 @@ def test_intelligent_position_components():
         # Test RSI calculation with mock data
         # Test with trending price data
         price_data = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115]
+
+        class MockSeries(list):
+            def pct_change(self, periods=1):
+                return [0.0] * len(self)
+
         mock_prices = MockSeries(price_data)
 
         analyzer._calculate_rsi(mock_prices, 14)

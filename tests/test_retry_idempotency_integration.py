@@ -4,6 +4,7 @@
 import sys
 import time
 import pytest
+import sys
 
 sys.path.insert(0, '/tmp')
 
@@ -80,6 +81,7 @@ def submit_order_with_retry(broker, idempotency_mgr, order_data):
 
 def test_retry_idempotency_integration():
     """Test that retry mechanism works with idempotency protection."""
+    from ai_trading.execution.mocks import MockTradingClient as MockBrokerAPI
     broker = MockBrokerAPI(fail_count=2)  # Fail 2 times, succeed on 3rd
     idempotency_mgr = OrderIdempotencyManager()
     PositionReconciler()
@@ -124,6 +126,7 @@ def test_retry_idempotency_integration():
 
 def test_reconciliation_heals_state():
     """Test that reconciliation heals local/broker state after submission."""
+    from ai_trading.execution.mocks import MockTradingClient as MockBrokerAPI
     broker = MockBrokerAPI(fail_count=0)  # No failures
     idempotency_mgr = OrderIdempotencyManager()
     reconciler = PositionReconciler()
@@ -153,6 +156,7 @@ def test_reconciliation_heals_state():
 
 def test_retry_exhaustion_with_idempotency():
     """Test behavior when all retries are exhausted."""
+    from ai_trading.execution.mocks import MockTradingClient as MockBrokerAPI
     broker = MockBrokerAPI(fail_count=5)  # Fail more times than retry limit
     idempotency_mgr = OrderIdempotencyManager()
 

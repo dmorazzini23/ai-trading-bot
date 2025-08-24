@@ -255,7 +255,13 @@ def test_dependency_injection():
 
     container = SimpleDependencyContainer()
 
-    # Mock implementation
+    class MockConfigManager:
+        def __init__(self):
+            self._store = {"test": "mock_test"}
+
+        def get(self, key: str):
+            return self._store.get(key)
+
     # Register implementation
     container.register(IConfigManager, MockConfigManager)
 

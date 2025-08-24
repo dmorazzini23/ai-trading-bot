@@ -50,6 +50,7 @@ class KellyCriterion:
             max_fraction: Maximum Kelly fraction allowed (for backward compatibility)
             **kwargs: Additional parameters for backward compatibility
         """
+        # Use provided config or the module default (built from env)
         self.config = config or _DEFAULT_CONFIG
         self.min_sample_size = min_sample_size if min_sample_size is not None else self.config.min_sample_size
         self.max_fraction = max_fraction if max_fraction is not None else self.config.kelly_fraction_max
@@ -291,3 +292,7 @@ class KellyCalculator:
         if symbol:
             return [r for r in self.calculation_history if r['symbol'] == symbol]
         return self.calculation_history.copy()
+
+
+# Module-level default config (after class definitions to avoid import-time cycles)
+_DEFAULT_CONFIG = TradingConfig.from_env()

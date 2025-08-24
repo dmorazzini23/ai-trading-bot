@@ -107,31 +107,7 @@ class TestCriticalFixes(unittest.TestCase):
                        "_validate_short_selling method should exist")
 
 
-if __name__ == '__main__':
-
-    # Create test suite
-    suite = unittest.TestSuite()
-    test_class = TestCriticalFixes
-
-    # Add specific tests for each critical fix
-    suite.addTest(test_class('test_sentiment_circuit_breaker_thresholds'))
-    suite.addTest(test_class('test_confidence_normalization_exists'))
-    suite.addTest(test_class('test_sector_classification_fallback'))
-    suite.addTest(test_class('test_trade_execution_quantity_fix_exists'))
-    suite.addTest(test_class('test_short_selling_validation_exists'))
-
-    # Run tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-
-    if result.wasSuccessful():
-        sys.exit(0)
-    else:
-        sys.exit(1)
-
-    # The fix should include 'Z' suffix for RFC3339 compliance
-    assert result.endswith('Z'), f"Timestamp {result} should end with 'Z' for RFC3339 compliance"
-    assert 'T' in result, f"Timestamp {result} should contain 'T' separator"
+# Do not self-invoke tests when executed as a script; pytest will discover them
 
 
 def test_position_sizing_minimum_viable():
@@ -272,10 +248,3 @@ def test_rfc3339_timestamp_api_format():
     assert '+00:00' not in start_param, "Should not contain +00:00 offset"
 
 
-if __name__ == "__main__":
-    test_timestamp_format_includes_timezone()
-    test_position_sizing_minimum_viable()
-    test_meta_learning_price_conversion()
-    test_liquidity_minimum_position()
-    test_stale_data_bypass_startup()
-    test_rfc3339_timestamp_api_format()

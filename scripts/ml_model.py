@@ -9,7 +9,17 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
+
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover
+    class _Series: ...
+    class _DataFrame: ...
+    class _PD:
+        Series = _Series
+        DataFrame = _DataFrame
+    pd = _PD()  # type: ignore
 import joblib
 logger = logging.getLogger(__name__)
 if importlib.util.find_spec('sklearn') is not None:
