@@ -56,7 +56,7 @@ fi
 # Targeted smoke run
 # -----------------
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}
-# AI-AGENT-REF: run explicit smoke tests to prevent global collection
+# Run explicit smoke tests only (no global collection)
 python tools/run_pytest.py --disable-warnings -q \
   tests/test_runner_smoke.py \
   tests/test_utils_timing.py \
