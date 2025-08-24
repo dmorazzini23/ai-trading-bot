@@ -780,6 +780,22 @@ class TradingConfig(BaseModel):
     max_trades_per_day: int = 100
     volume_threshold: int = 50000
     seed: int = 42
+    # AI-AGENT-REF: add optional script tunables for exploratory scripts
+    max_position_size_pct: float | None = Field(
+        default=None, description="Optional cap on position size as percent of equity"
+    )
+    max_var_95: float | None = Field(
+        default=None, description="Optional 95% VaR limit for risk scripts"
+    )
+    min_profit_factor: float | None = Field(
+        default=None, description="Minimum profit factor for optimizers"
+    )
+    min_sharpe_ratio: float | None = Field(
+        default=None, description="Minimum Sharpe ratio threshold"
+    )
+    min_win_rate: float | None = Field(
+        default=None, description="Minimum win rate requirement"
+    )
     entry_start_offset_min: int = 0
     entry_end_offset_min: int = 390
 
@@ -801,6 +817,27 @@ class TradingConfig(BaseModel):
         if self.take_profit_factor < 1.0:
             raise ValueError('take_profit_factor must be >= 1.0')
         return self
+
+    # AI-AGENT-REF: expose back-compat aliases for older scripts
+    @property
+    def max_correlation_exposure(self) -> float:
+        """Backward-compatible alias for sector_exposure_cap."""
+        return self.sector_exposure_cap
+
+    @property
+    def max_drawdown(self) -> float:
+        """Backward-compatible alias for max_drawdown_threshold."""
+        return self.max_drawdown_threshold
+
+    @property
+    def stop_loss_multiplier(self) -> float:
+        """Backward-compatible alias for trailing_factor."""
+        return self.trailing_factor
+
+    @property
+    def take_profit_multiplier(self) -> float:
+        """Backward-compatible alias for take_profit_factor."""
+        return self.take_profit_factor
 
     @classmethod
     def from_env(cls, mode: Literal['conservative', 'balanced', 'aggressive'] | None=None, **overrides) -> 'TradingConfig':
