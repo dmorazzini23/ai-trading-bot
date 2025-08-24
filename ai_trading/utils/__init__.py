@@ -5,17 +5,15 @@ ai_trading.utils (package)
 Ensures deterministic, measurable sleep for tests and workers.
 """
 
-import os as _os
-from time import perf_counter as _pc, sleep as _os_sleep
-from typing import Union as _Union
+import os
+import time
+from typing import Callable
 
-# Re-export existing timing utilities from the local timing module
+# Re-export timing helpers from the local module
 try:
     from .timing import (  # type: ignore
         HTTP_TIMEOUT as HTTP_TIMEOUT,
         clamp_timeout as clamp_timeout,
-        perf_counter as perf_counter,
-        sleep as _orig_sleep,
     )
 except Exception:  # pragma: no cover - very defensive
     HTTP_TIMEOUT = 10.0  # type: ignore[assignment]
@@ -23,37 +21,39 @@ except Exception:  # pragma: no cover - very defensive
     def clamp_timeout(x):  # type: ignore[no-redef]
         return float(HTTP_TIMEOUT) if (x is None or float(x) < 0) else float(x)
 
-    perf_counter = _pc  # type: ignore[assignment]
-    _orig_sleep = None  # type: ignore[assignment]
+
+# Re-export stdlib perf_counter EXACTLY (tests rely on this identity)
+perf_counter = time.perf_counter
+
+# Optional fast path to OS sleep for very large waits
+_os_sleep: Callable[[float], None] = time.sleep
 
 
-def _robust_sleep(seconds: _Union[int, float]) -> None:
-    """Block for ~seconds ensuring measurable delay."""  # AI-AGENT-REF: deterministic sleep
-    s = float(seconds)
-    if s <= 0.0:
+def _robust_sleep(seconds: float) -> None:
+    """Sleep for ~seconds with a deterministic, measurable delay."""  # AI-AGENT-REF: fix perf_counter export and robust sleep
+    if not seconds or seconds <= 0.0:
         return
-    start = _pc()
-    spin_cap = min(0.050, s)
+
+    deadline = perf_counter() + float(seconds)
     while True:
-        if (_pc() - start) >= spin_cap:
+        now = perf_counter()
+        remaining = deadline - now
+        if remaining <= 0.0:
             break
-    remaining = s - (_pc() - start)
-    if remaining > 0.0:
-        _os_sleep(remaining)
-    while (_pc() - start) < s:
-        pass
+        if remaining > 0.02:
+            # sleep in small chunks to avoid overshoot on coarse timers
+            _os_sleep(0.01 if remaining > 0.05 else 0.005)
+        else:
+            while perf_counter() < deadline:
+                pass
+            break
 
 
-_force_local = str(_os.getenv("AI_TRADING_FORCE_LOCAL_SLEEP", "1")).lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-if _force_local or _orig_sleep is None:
-    sleep = _robust_sleep  # type: ignore[assignment]
-else:
-    sleep = _orig_sleep  # type: ignore[assignment]
+# Allow opting out of robust sleep (use raw OS sleep only) via env
+_FORCE_OS_SLEEP = os.getenv("AI_TRADING_FORCE_LOCAL_SLEEP") in {"1", "true", "True", "yes"}
+
+# Exported public sleep: direct impl (no wrapper indirection)
+sleep: Callable[[float], None] = _os_sleep if _FORCE_OS_SLEEP else _robust_sleep
 
 
 from .base import (  # noqa: E402
