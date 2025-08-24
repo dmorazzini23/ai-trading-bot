@@ -3,11 +3,11 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-HTTP_TIMEOUT: float = 10.0  # default for HTTP operations  # AI-AGENT-REF: canonical timeout
+HTTP_TIMEOUT: float = 10.0  # AI-AGENT-REF: canonical timeout across runtime
 
 
 def clamp_timeout(value: Optional[float]) -> float:
-    """Return a sane timeout; fall back to HTTP_TIMEOUT if None/invalid."""  # AI-AGENT-REF: clarified doc
+    """Return a sane timeout, falling back to HTTP_TIMEOUT when None/invalid."""  # AI-AGENT-REF: clamp helper
     try:
         if value is None:
             return HTTP_TIMEOUT
@@ -18,5 +18,5 @@ def clamp_timeout(value: Optional[float]) -> float:
 
 
 def sleep(seconds: float) -> None:
-    """Small wrapper to keep sleeps centralized/testable."""  # AI-AGENT-REF: unified sleep helper
+    """Small wrapper for testability and centralized control."""  # AI-AGENT-REF: sleep wrapper
     time.sleep(float(seconds))

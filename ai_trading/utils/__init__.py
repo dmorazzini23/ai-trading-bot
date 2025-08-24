@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep  # re-export for public surface
+# timing helpers for public surface  # AI-AGENT-REF: re-export
+from .timing import HTTP_TIMEOUT, clamp_timeout, sleep
 from .base import (
     EASTERN_TZ,
     ensure_utc,

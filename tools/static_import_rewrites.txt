@@ -1,25 +1,8 @@
-# ---- position.core → position ----
-^(\s*)from\s+ai_trading\.position\.core(\s+import\b.*)$ -> \1from ai_trading.position\2
-^(\s*)import\s+ai_trading\.position\.core\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\b -> \1import ai_trading.position as \2
-^(\s*)import\s+ai_trading\.position\.core\b -> \1import ai_trading.position
-ai_trading\.position\.core -> ai_trading.position
+# Redirect removed/legacy module names to the current surfaces
+^ai_trading\.position\.core(\b|$) => ai_trading.position
+^ai_trading\.runtime\.http_wrapped(\b|$) => ai_trading.utils.http
+^ai_trading\.monitoring\.performance_monitor(\b|$) => ai_trading.monitoring.monitoring
 
-# ---- runtime.http_wrapped → utils.http ----
-^(\s*)from\s+ai_trading\.runtime\.http_wrapped\s+import\s+(.*)$ -> \1from ai_trading.utils.http import \2
-^(\s*)import\s+ai_trading\.runtime\.http_wrapped\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\b -> \1import ai_trading.utils.http as \2
-^(\s*)import\s+ai_trading\.runtime\.http_wrapped\b -> \1import ai_trading.utils.http
-ai_trading\.runtime\.http_wrapped -> ai_trading.utils.http
+# Intra-package renames that sometimes appear in older tests
+^ai_trading\.monitoring\.dashboard(\b|$) => ai_trading.monitoring.monitoring
 
-# ---- monitoring.performance_monitor (purged) → system_health.snapshot_basic ----
-^(\s*)from\s+ai_trading\.monitoring\.performance_monitor\s+import\s+ResourceMonitor\b.*$ -> \1from ai_trading.monitoring.system_health import snapshot_basic
-ai_trading\.monitoring\.performance_monitor -> ai_trading.monitoring.system_health
-
-# ---- minor import cleanups (safe no-ops) ----
-^(\s*)from\s+ai_trading\.utils\.timing\s+import\s+(.*)$ -> \1from ai_trading.utils import \2
-# catch any lingering direct references
-^ai_trading\.position\.core(\b|$) -> ai_trading.position  # AI-AGENT-REF: legacy position shim
-^ai_trading\.runtime\.http_wrapped(\b|$) -> ai_trading.utils.http  # AI-AGENT-REF: legacy http shim
-^ai_trading\.monitoring\.performance_monitor(\b|$) -> ai_trading.monitoring.system_health  # AI-AGENT-REF: legacy monitor shim
-\bResourceMonitor\b -> snapshot_basic  # AI-AGENT-REF: monitor API rename
-# guard old utils timing spellings (harmless if unused)
-^ai_trading\.utils\.timing\.utils\.timing(\b|$) -> ai_trading.utils.timing  # AI-AGENT-REF: typo guard
