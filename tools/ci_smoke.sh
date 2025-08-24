@@ -11,6 +11,9 @@ if [ "${SKIP_INSTALL:-0}" != "1" ]; then
   fi
 fi
 
+# Syntax check on tracked sources only
+python tools/pycompile_git.py  # AI-AGENT-REF: git-aware py_compile
+
 # -----------------
 # Python lint (ruff) — non-blocking in smoke
 # -----------------
