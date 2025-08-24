@@ -144,11 +144,17 @@ except Exception:
     def elapsed_ms(start: float) -> float:  # AI-AGENT-REF: fallback timer
         return (_t.perf_counter() - start) * 1000.0
 
-import pandas as pd
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover - optional for smoke
+    pd = None  # AI-AGENT-REF: allow pandas absence for smoke
 
 
 @pytest.fixture
 def dummy_data_fetcher():
+    if pd is None:
+        pytest.skip("pandas required")  # AI-AGENT-REF: optional dep
+
     class DF:
         def get_minute_bars(self, symbol, start=None, end=None, limit=None):
             idx = pd.date_range(end=datetime.now(timezone.utc), periods=30, freq="min")
@@ -156,6 +162,7 @@ def dummy_data_fetcher():
                 {"open": 100.0, "high": 101.0, "low": 99.5, "close": 100.5, "volume": 1000},
                 index=idx,
             )
+
     return DF()
 
 
