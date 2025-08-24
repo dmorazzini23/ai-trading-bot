@@ -10,6 +10,15 @@ work during test collection. This is idempotent and does not affect runtime.
 import os
 os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")  # AI-AGENT-REF: disable plugin autoload
 import sys as _sys
+
+# AI-AGENT-REF: explicitly load xdist plugin when available
+try:
+    import importlib.util as _util
+    _xdist_present = bool(_util.find_spec("xdist"))
+except Exception:  # pragma: no cover - absence or lookup issue
+    _xdist_present = False
+pytest_plugins = ["xdist.plugin"] if _xdist_present else []
+
 import importlib as _importlib
 
 try:
