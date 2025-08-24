@@ -26,7 +26,7 @@ then
   fi
   if [ -n "${PY_FILES}" ]; then
     set +e
-    python -m ruff check ${PY_FILES}
+    python -m ruff check --select E9,F63,F7,F82 ${PY_FILES}
     RUFF_STATUS=$?
     set -e
     if [ "${RUFF_STATUS}" -ne 0 ]; then

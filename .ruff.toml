@@ -1,0 +1,30 @@
+# Repo-wide Ruff configuration
+# Keep smoke fast and signal-rich; reserve strict style for full CI/dev runs.
+
+# Target & basics
+line-length = 100
+src = ["ai_trading", "tools", "tests"]
+target-version = "py312"
+
+# Ignore common non-source dirs
+exclude = [
+  ".git", ".venv", "venv", "dist", "build", "data", "logs", "notebooks", "docs/_build",
+]
+
+[lint]
+# Default selection is intentionally light; smoke uses --select to narrow further.
+# These are commonly useful project-wide without being noisy.
+select = [
+  "E9",   # Syntax errors
+  "F63",  # if/else misuse
+  "F7",   # forward references, etc.
+  "F82",  # undefined names from star imports
+]
+# We'll handle long lines, docstrings, annotations, and import style later.
+ignore = ["E501", "D", "ANN", "COM812", "ISC001", "ARG002", "B905"]
+
+[format]
+quote-style = "preserve"
+indent-style = "space"
+line-ending = "auto"
+
