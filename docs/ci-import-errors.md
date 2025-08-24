@@ -141,3 +141,5 @@ Knobs:
 • DISABLE_ENV_ASSERT (set to 1 when running on a non-canonical host)
 • IMPORT_REPAIR_REPORT (artifact path, default artifacts/import-repair-report.md)
 ```
+
+- `SKIP_INSTALL=1` can be set for ultra-fast smoke runs that **skip** `make ensure-runtime`; the smoke still writes/prints the report and returns 0/101 based on `FAIL_ON_IMPORT_ERRORS`.
