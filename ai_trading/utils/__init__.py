@@ -1,7 +1,16 @@
 from __future__ import annotations
 
 # timing helpers for public surface  # AI-AGENT-REF: re-export
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep
+from .timing import HTTP_TIMEOUT, clamp_timeout, sleep as _timing_sleep
+
+def sleep(seconds: float) -> None:
+    """Synchronous sleep (non-negative), guaranteed to call timing.sleep.
+
+    We intentionally wrap instead of aliasing so that any prior alias/stub in
+    this module cannot shadow the real implementation.
+    """
+    # AI-AGENT-REF: hard bind sleep to timing.sleep
+    _timing_sleep(seconds)
 from .base import (
     EASTERN_TZ,
     ensure_utc,
