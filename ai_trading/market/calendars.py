@@ -8,7 +8,6 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
-import pandas as pd
 logger = logging.getLogger(__name__)
 
 class AssetClass(Enum):

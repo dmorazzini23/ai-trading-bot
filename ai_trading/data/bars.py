@@ -2,7 +2,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
-import pandas as pd
+from dataclasses import dataclass
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import get_settings
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.data_fetcher import get_bars, get_minute_df
@@ -15,7 +16,10 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
-from dataclasses import dataclass
+
+# Lazy pandas proxy; only imported on first use
+pd = load_pandas()
+
 _log = get_logger(__name__)
 'AI-AGENT-REF: canonicalizers moved to ai_trading.logging.normalize'
 

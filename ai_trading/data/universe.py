@@ -1,7 +1,10 @@
 import os
 from importlib.resources import files as pkg_files
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
+
+# Lazy pandas proxy
+pd = load_pandas()
 
 def locate_tickers_csv() -> str | None:
     env = os.getenv('AI_TRADER_TICKERS_CSV')
