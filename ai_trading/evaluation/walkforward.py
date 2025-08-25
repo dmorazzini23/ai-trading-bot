@@ -7,10 +7,11 @@ time series validation and comprehensive performance reporting.
 import json
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from ai_trading.logging import logger
+if TYPE_CHECKING:  # pragma: no cover - only for type hints
+    import pandas as pd
 matplotlib_available = False
 plt = None
 mdates = None
@@ -64,13 +65,15 @@ class WalkForwardEvaluator:
             self.output_dir = os.path.join(base, 'walkforward')
         else:
             self.output_dir = output_dir
+        import pandas as pd
+
         self.fold_results = []
         self.aggregate_results = {}
         self.equity_curve = pd.Series(dtype=float)
         self.drawdown_series = pd.Series(dtype=float)
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def run_walkforward(self, data: pd.DataFrame, target_col: str, feature_cols: list[str] | None=None, model_type: str='lightgbm', feature_pipeline_params: dict[str, Any] | None=None, save_results: bool=True) -> dict[str, Any]:
+    def run_walkforward(self, data: 'pd.DataFrame', target_col: str, feature_cols: list[str] | None=None, model_type: str='lightgbm', feature_pipeline_params: dict[str, Any] | None=None, save_results: bool=True) -> dict[str, Any]:
         """
         Run walk-forward analysis.
 
@@ -86,6 +89,8 @@ class WalkForwardEvaluator:
             Comprehensive walk-forward results
         """
         try:
+            import pandas as pd
+
             logger.info(f'Starting {self.mode} walk-forward analysis')
             if feature_cols is None:
                 feature_cols = [col for col in data.columns if col != target_col]
@@ -121,7 +126,7 @@ class WalkForwardEvaluator:
             logger.error(f'Error in walk-forward analysis: {e}')
             raise
 
-    def _run_single_fold(self, X: pd.DataFrame, y: pd.Series, split_info: dict[str, Any], model_type: str, feature_pipeline_params: dict[str, Any] | None, fold_idx: int) -> dict[str, Any]:
+    def _run_single_fold(self, X: 'pd.DataFrame', y: 'pd.Series', split_info: dict[str, Any], model_type: str, feature_pipeline_params: dict[str, Any] | None, fold_idx: int) -> dict[str, Any]:
         """Run single fold of walk-forward analysis."""
         try:
             train_start = split_info['train_start']
@@ -156,7 +161,7 @@ class WalkForwardEvaluator:
             logger.error(f'Error in fold {fold_idx}: {e}')
             return {'fold': fold_idx, 'error': str(e)}
 
-    def _calculate_fold_metrics(self, y_true: pd.Series, y_pred: np.ndarray, test_start: datetime, test_end: datetime) -> dict[str, float]:
+    def _calculate_fold_metrics(self, y_true: 'pd.Series', y_pred: np.ndarray, test_start: datetime, test_end: datetime) -> dict[str, float]:
         """Calculate performance metrics for a single fold."""
         try:
             mse = np.mean((y_true - y_pred) ** 2)
@@ -208,9 +213,11 @@ class WalkForwardEvaluator:
             logger.error(f'Error calculating aggregate metrics: {e}')
             return {}
 
-    def _calculate_drawdown(self, equity_curve: pd.Series) -> pd.Series:
+    def _calculate_drawdown(self, equity_curve: 'pd.Series') -> 'pd.Series':
         """Calculate drawdown series from equity curve."""
         try:
+            import pandas as pd
+
             if len(equity_curve) == 0:
                 return pd.Series(dtype=float)
             running_max = equity_curve.expanding().max()
@@ -218,14 +225,29 @@ class WalkForwardEvaluator:
             return drawdown
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating drawdown: {e}')
+            import pandas as pd
+
             return pd.Series(dtype=float)
 
     def _save_results(self) -> None:
         """Save walk-forward results to disk."""
         try:
+            import pandas as pd
+
             timestamp = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
             if self.fold_results:
-                fold_df = pd.DataFrame([{'fold': result.get('fold', 0), 'train_start': result.get('train_start', ''), 'test_start': result.get('test_start', ''), 'train_samples': result.get('train_samples', 0), 'test_samples': result.get('test_samples', 0), **result.get('metrics', {})} for result in self.fold_results if 'metrics' in result])
+                fold_df = pd.DataFrame([
+                    {
+                        'fold': result.get('fold', 0),
+                        'train_start': result.get('train_start', ''),
+                        'test_start': result.get('test_start', ''),
+                        'train_samples': result.get('train_samples', 0),
+                        'test_samples': result.get('test_samples', 0),
+                        **result.get('metrics', {}),
+                    }
+                    for result in self.fold_results
+                    if 'metrics' in result
+                ])
                 fold_file = os.path.join(self.output_dir, f'walkforward_folds_{timestamp}.csv')
                 fold_df.to_csv(fold_file, index=False)
                 logger.info(f'Fold results saved to {fold_file}')
@@ -295,6 +317,8 @@ class WalkForwardEvaluator:
 def run_walkforward_smoke_test() -> None:
     """Run a quick smoke test of walk-forward analysis."""
     try:
+        import pandas as pd
+
         logger.info('Running walk-forward smoke test')
         np.random.seed(42)
         dates = pd.date_range('2020-01-01', '2023-12-31', freq='D')

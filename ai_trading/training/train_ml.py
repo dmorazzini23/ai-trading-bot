@@ -7,9 +7,8 @@ financial time series validation and hyperparameter optimization.
 import json
 import pickle
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from ai_trading.logging import logger
 try:
     import importlib
@@ -20,12 +19,14 @@ except (ValueError, TypeError):
     lgb_available = False
 import xgboost as xgb
 xgb_available = True
-from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_squared_error
-sklearn_available = True
 import optuna
 optuna_available = True
 from ..data.splits import PurgedGroupTimeSeriesSplit
+
+if TYPE_CHECKING:  # pragma: no cover - type hints only
+    import pandas as pd
+    from sklearn.linear_model import Ridge
+    from sklearn.metrics import mean_squared_error
 
 class MLTrainer:
     """
@@ -63,10 +64,13 @@ class MLTrainer:
             raise ImportError('LightGBM required for lightgbm model type')
         elif self.model_type == 'xgboost' and (not xgb_available):
             raise ImportError('XGBoost required for xgboost model type')
-        elif self.model_type == 'ridge' and (not sklearn_available):
-            raise ImportError('scikit-learn required for ridge model type')
+        elif self.model_type == 'ridge':
+            try:
+                import sklearn  # noqa: F401
+            except Exception as exc:
+                raise ImportError('scikit-learn required for ridge model type') from exc
 
-    def train(self, X: pd.DataFrame, y: pd.Series, optimize_hyperparams: bool=True, optimization_trials: int=100, feature_pipeline: Any | None=None, t1: pd.Series | None=None) -> dict[str, Any]:
+    def train(self, X: 'pd.DataFrame', y: 'pd.Series', optimize_hyperparams: bool=True, optimization_trials: int=100, feature_pipeline: Any | None=None, t1: 'pd.Series' | None=None) -> dict[str, Any]:
         """
         Train model with optional hyperparameter optimization.
 
@@ -82,6 +86,8 @@ class MLTrainer:
             Training results dictionary
         """
         try:
+            import pandas as pd
+
             logger.info(f'Starting {self.model_type} training with {len(X)} samples')
             if feature_pipeline is not None:
                 X_processed = feature_pipeline.fit_transform(X, y)
@@ -102,9 +108,11 @@ class MLTrainer:
             logger.error(f'Error in model training: {e}')
             raise
 
-    def _optimize_hyperparams(self, X: pd.DataFrame, y: pd.Series, cv_splitter: PurgedGroupTimeSeriesSplit, n_trials: int, t1: pd.Series | None=None) -> dict[str, Any]:
+    def _optimize_hyperparams(self, X: 'pd.DataFrame', y: 'pd.Series', cv_splitter: PurgedGroupTimeSeriesSplit, n_trials: int, t1: 'pd.Series' | None=None) -> dict[str, Any]:
         """Optimize hyperparameters using Optuna."""
         try:
+
+            import pandas as pd
 
             def objective(trial):
                 params = self._suggest_params(trial)
@@ -155,11 +163,13 @@ class MLTrainer:
         elif self.model_type == 'xgboost':
             return xgb.XGBRegressor(**params)
         elif self.model_type == 'ridge':
+            from sklearn.linear_model import Ridge
+
             return Ridge(**params)
         else:
             raise ValueError(f'Unknown model type: {self.model_type}')
 
-    def _calculate_score(self, y_true: pd.Series, y_pred: np.ndarray) -> float:
+    def _calculate_score(self, y_true: 'pd.Series', y_pred: np.ndarray) -> float:
         """
         Calculate model score (Sharpe-like metric for trading).
 
@@ -182,9 +192,12 @@ class MLTrainer:
             logger.error(f'Error calculating score: {e}')
             return 0.0
 
-    def _evaluate_cv(self, X: pd.DataFrame, y: pd.Series, cv_splitter: PurgedGroupTimeSeriesSplit, params: dict[str, Any], t1: pd.Series | None=None) -> dict[str, Any]:
+    def _evaluate_cv(self, X: 'pd.DataFrame', y: 'pd.Series', cv_splitter: PurgedGroupTimeSeriesSplit, params: dict[str, Any], t1: 'pd.Series' | None=None) -> dict[str, Any]:
         """Evaluate model using cross-validation."""
         try:
+            import pandas as pd
+            from sklearn.metrics import mean_squared_error
+
             scores = []
             fold_results = []
             for fold, (train_idx, test_idx) in enumerate(cv_splitter.split(X, y, t1=t1)):
@@ -204,7 +217,7 @@ class MLTrainer:
             logger.error(f'Error in CV evaluation: {e}')
             return {'mean_score': 0.0, 'std_score': 0.0, 'fold_scores': []}
 
-    def _fit_final_model(self, X: pd.DataFrame, y: pd.Series) -> None:
+    def _fit_final_model(self, X: 'pd.DataFrame', y: 'pd.Series') -> None:
         """Fit final model on full dataset."""
         try:
             self.model.fit(X, y)
@@ -282,6 +295,8 @@ def train_model_cli(symbol_list: list[str], model_type: str='lightgbm', dry_run:
         if wf_smoke:
             logger.info('Walk-forward smoke test - minimal training')
             trainer = MLTrainer(model_type=model_type, cv_splits=2)
+            import pandas as pd
+
             np.random.seed(42)
             X = pd.DataFrame(np.random.randn(100, 5), columns=[f'feature_{i}' for i in range(5)])
             y = pd.Series(np.random.randn(100))
