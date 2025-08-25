@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, TypeVar
 
 # Authoritative runtime settings come from ai_trading.config.settings (which
 # re-exports _base_get_settings from ai_trading.settings in this repo).
@@ -50,6 +50,54 @@ def get_env(
 # Canonical runtime seed used by risk/engine and anywhere else needing determinism.
 SEED: int = int(os.environ.get("SEED", "42"))  # AI-AGENT-REF: expose runtime seed
 
+# Required environment variables for a functional deployment
+_MANDATORY_ENV_VARS: tuple[str, ...] = (
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_BASE_URL",
+    "WEBHOOK_SECRET",
+)
+
+
+def _mask(val: str) -> str:
+    return "***" if val else ""
+
+
+def validate_required_env(
+    keys: Iterable[str] | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> Dict[str, str]:
+    """Validate presence of mandatory environment variables.
+
+    Parameters
+    ----------
+    keys:
+        Specific keys to validate. Defaults to the canonical mandatory set.
+    env:
+        Optional mapping to read from (defaults to ``os.environ``).
+
+    Returns
+    -------
+    dict
+        Mapping of the checked keys with their values masked for safe logging.
+
+    Raises
+    ------
+    RuntimeError
+        If any required key is missing or empty.
+    """
+
+    env = dict(env or os.environ)
+    required = list(keys or _MANDATORY_ENV_VARS)
+    missing = [k for k in required if not env.get(k, "").strip()]
+    snapshot = {k: _mask(env.get(k, "")) for k in required}
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
+    return snapshot
+
 
 __all__ = [
     "TradingConfig",
@@ -57,6 +105,7 @@ __all__ = [
     "derive_cap_from_settings",
     "get_env",
     "SEED",
+    "validate_required_env",
 ]
 
 # NOTE: Keep dotenv imports inside the function to avoid import-time costs.
