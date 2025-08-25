@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from ai_trading.broker.alpaca import APIError
 from tests.helpers.asserts import assert_df_like
 
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
@@ -102,7 +103,7 @@ def test_subscription_error_logged(monkeypatch, caplog):
         def get_stock_bars(self, req):
             if getattr(req, "feed", None) == "iex":
                 return FakeBars(df)
-            raise data_fetcher.APIError("subscription does not permit querying recent SIP data")
+            raise APIError("subscription does not permit querying recent SIP data")
 
     monkeypatch.setattr(data_fetcher, "client", DummyClient())
     monkeypatch.setattr(data_fetcher, "TimeFrame", types.SimpleNamespace(Minute="1Min"))

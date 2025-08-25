@@ -7,12 +7,10 @@ import statistics
 from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
+from ai_trading.broker.alpaca import ensure_api_error
 from ai_trading.utils import clamp_timeout as _clamp_timeout
-try:
-    from alpaca_trade_api.rest import APIError  # type: ignore
-except ImportError:
-    class APIError(Exception):
-        pass
+
+APIError = ensure_api_error()
 _log = logging.getLogger(__name__)
 logger = _log
 

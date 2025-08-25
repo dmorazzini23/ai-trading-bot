@@ -8,18 +8,16 @@ import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
-from ai_trading.logging import logger
-_log = logging.getLogger(__name__)
+from ai_trading.broker.alpaca import AlpacaBroker, ensure_api_error
 from ai_trading.config import AlpacaConfig, get_alpaca_config
-try:
-    from alpaca_trade_api.rest import APIError  # type: ignore
+from ai_trading.logging import logger
+
+_log = logging.getLogger(__name__)
+APIError = ensure_api_error()
+try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST  # type: ignore
 except (ValueError, TypeError, ModuleNotFoundError, ImportError):
     AlpacaREST = None
-
-    class APIError(Exception):
-        pass
-from ai_trading.broker.alpaca import AlpacaBroker
 
 def _req_str(name: str, v: str | None) -> str:
     if not v:

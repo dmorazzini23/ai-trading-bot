@@ -5,7 +5,6 @@ Provides order lifecycle management, execution algorithms,
 and real-time execution monitoring with institutional controls.
 """
 from __future__ import annotations
-import importlib
 import logging
 import math
 import threading
@@ -16,21 +15,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
-_log = logging.getLogger(__name__)
+from ai_trading.broker.alpaca import ensure_api_error
 from ai_trading.logging.emit_once import emit_once
 
-def _optional_import(name: str):
-    try:
-        return importlib.import_module(name)
-    except ImportError:
-        return None
-_alpaca_rest = _optional_import('alpaca_trade_api.rest')
-if _alpaca_rest is not None:
-    APIError = _alpaca_rest.APIError
-else:
-
-    class APIError(Exception):
-        pass
+_log = logging.getLogger(__name__)
+APIError = ensure_api_error()
 ORDER_STALE_AFTER_S = 8 * 60
 
 @dataclass(slots=True)

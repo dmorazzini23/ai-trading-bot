@@ -16,14 +16,12 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from ai_trading.broker.alpaca import ensure_api_error
+from ai_trading.logging import logger
+
 Hook = Callable[[], None]
 PositionsHandler = Callable[[], list[dict[str, Any]]]
-try:
-    from alpaca_trade_api.rest import APIError  # type: ignore
-except (ValueError, TypeError, ModuleNotFoundError):
-    class APIError(Exception):
-        pass
-from ai_trading.logging import logger
+APIError = ensure_api_error()
 
 class ShutdownReason(Enum):
     """Reasons for system shutdown."""

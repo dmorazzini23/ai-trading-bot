@@ -8,18 +8,35 @@ from ai_trading.utils.retry import retry_call
 from .alpaca_credentials import resolve_alpaca_credentials
 try:
     from requests.exceptions import HTTPError
-except ImportError:
+except ImportError:  # pragma: no cover - minimal fallback
 
     class HTTPError(Exception):
+        """Fallback when requests is unavailable."""
         pass
-try:
-    from alpaca_trade_api.rest import APIError  # type: ignore
+
+
+def ensure_api_error() -> type[Exception]:
+    """Return Alpaca SDK's ``APIError`` or a safe fallback."""
+    try:  # pragma: no cover - import-time guard
+        from alpaca_trade_api.rest import APIError as _APIError  # type: ignore
+        return _APIError
+    except Exception:  # pragma: no cover - SDK missing
+
+        class APIError(Exception):
+            """Fallback when ``alpaca-trade-api`` isn't installed."""
+
+        return APIError
+
+
+APIError = ensure_api_error()
+
+try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST  # type: ignore
 except (ModuleNotFoundError, ImportError):
-    APIError = Exception  # type: ignore[misc,assignment]
     AlpacaREST = None  # type: ignore[assignment]
     _tmp_logger = get_logger(__name__)
     _tmp_logger.warning('VENDOR_MISSING: alpaca SDK not installed; using offline path')
+
 from ai_trading.exc import TRANSIENT_HTTP_EXC
 _log = get_logger(__name__)
 SAFE_EXC = TRANSIENT_HTTP_EXC + (APIError,)
