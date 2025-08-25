@@ -18,7 +18,7 @@ This document summarizes the implementation of fixes for critical issues identif
 **Files Modified**: `audit.py` (lines 65-85)
 
 ### 2. Missing TA-Lib Dependency (HIGH) ✅ FIXED
-**Problem**: `TA-Lib not available - using fallback implementation. For enhanced technical analysis, install with 'pip install TA-Lib' (and system package 'libta-lib0-dev')`
+**Problem**: `TA-Lib not available - using fallback implementation. For enhanced technical analysis, install with 'pip install "ai-trading-bot[ta]"' (and system package 'libta-lib0-dev')`
 
 **Solution Implemented**:
 - Created automated setup script: `scripts/setup_dependencies.sh`

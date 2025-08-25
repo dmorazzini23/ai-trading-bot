@@ -173,7 +173,7 @@ The following packages are now hard dependencies:
 
 **Action Required**: Update your environment to install these packages:
 ```bash
-pip install pandas_market_calendars alpaca-py alpaca-trade-api hmmlearn psutil
+pip install "ai-trading-bot[broker]" alpaca-py alpaca-trade-api hmmlearn psutil pandas_market_calendars
 ```
 
 ### 3. StrategyAllocator Changes

@@ -13,8 +13,8 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     echo "Updating package list..."
     sudo apt-get update
     
-    # Install TA-Lib system dependencies
-    echo "Installing TA-Lib system dependencies..."
+    # Setup TA-Lib system dependencies
+    echo "Setting up TA-Lib system dependencies..."
     sudo apt-get install -y libta-lib0-dev ta-lib-common
     
     # Install other useful dependencies
@@ -37,15 +37,15 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
         exit 1
     fi
     
-    # Install TA-Lib via Homebrew
-    echo "Installing TA-Lib via Homebrew..."
-    brew install ta-lib
+    # Setup TA-Lib via Homebrew
+    echo "Setting up TA-Lib via Homebrew..."
+    brew install 'ta-lib'
     
 else
     echo "Warning: Unsupported operating system: $OSTYPE"
-    echo "Please manually install TA-Lib system dependencies:"
+    echo "Please ensure TA-Lib system dependencies are present:"
     echo "- On Ubuntu/Debian: sudo apt-get install libta-lib0-dev"
-    echo "- On macOS: brew install ta-lib"
+    echo "- On macOS: brew install 'ta-lib'"
     echo "- On other systems: see https://github.com/mrjbq7/ta-lib#dependencies"
 fi
 
@@ -60,8 +60,8 @@ python -c "import talib; print('TA-Lib successfully installed and working!')" ||
     echo "WARNING: TA-Lib Python package installation failed."
     echo "The system will use fallback implementations."
     echo "For enhanced technical analysis, ensure TA-Lib is properly installed:"
-    echo "- System library: libta-lib0-dev (Linux) or ta-lib (macOS)"
-    echo "- Python package: pip install TA-Lib"
+    echo "- System library: libta-lib0-dev (Linux) or 'ta-lib' (macOS)"
+    echo "- Python package: pip install \"ai-trading-bot[ta]\""
 }
 
 echo "Setup complete!"

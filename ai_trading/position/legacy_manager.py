@@ -4,15 +4,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 from ai_trading.exc import COMMON_EXC
+from ai_trading.utils import optional_import  # AI-AGENT-REF: extras-aware deps
 HAS_NUMPY = True
-HAS_PANDAS = True
+pd = optional_import("pandas")
 
 def requires_pandas_position(func):
     """Decorator to ensure pandas is available for position functions."""
 
     def wrapper(*args, **kwargs):
-        if not HAS_PANDAS:
-            raise ImportError(f'pandas required for {func.__name__}')
+        if pd is None:
+            optional_import("pandas", required=True, feature="DataFrames/I-O")
         return func(*args, **kwargs)
     return wrapper
 logger = logging.getLogger(__name__)

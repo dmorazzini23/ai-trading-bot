@@ -14,10 +14,10 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
-import pandas as pd
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
 from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
+pd = optional_import("pandas")  # AI-AGENT-REF: optional pandas import
 _mcal = optional_import(
     "pandas_market_calendars", purpose="market calendars", extra="cal"
 )  # AI-AGENT-REF: extras hint uses key
@@ -26,11 +26,14 @@ import numpy as np
 from ai_trading.monitoring.system_health import snapshot_basic
 from ai_trading.settings import get_verbose_logging
 REST = optional_import('alpaca_trade_api.rest', attr='REST') or object
-HAS_PANDAS = True
-Timestamp = pd.Timestamp
-DataFrame = pd.DataFrame
-Series = pd.Series
-Index = pd.Index
+HAS_PANDAS = module_ok(pd)
+if HAS_PANDAS:
+    Timestamp = pd.Timestamp
+    DataFrame = pd.DataFrame
+    Series = pd.Series
+    Index = pd.Index
+else:  # pragma: no cover - pandas missing
+    Timestamp = DataFrame = Series = Index = object
 SUBPROCESS_TIMEOUT_S = 5.0
 
 # Back-compat alias expected by ai_trading.core.bot_engine.get_git_hash()
@@ -69,7 +72,7 @@ def requires_pandas(func):
 
     def wrapper(*args, **kwargs):
         if not HAS_PANDAS:
-            raise ImportError(f'pandas required for {func.__name__}')
+            optional_import("pandas", required=True, feature="DataFrames/I-O")
         return func(*args, **kwargs)
     return wrapper
 logger = logging.getLogger(__name__)

@@ -1,6 +1,5 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY . .
-RUN pip install torch==2.2.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu \
-    && pip install -r requirements.txt
+RUN pip install -r requirements.txt && pip install .[ml]
 CMD ["python", "run.py"]
