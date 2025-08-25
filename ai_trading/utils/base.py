@@ -16,7 +16,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
-from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
+from .optdeps import optional_import, module_ok  # AI-AGENT-REF: resolve circular import
 pd = optional_import("pandas")  # AI-AGENT-REF: optional pandas import
 _mcal = optional_import(
     "pandas_market_calendars", purpose="market calendars", extra="cal"

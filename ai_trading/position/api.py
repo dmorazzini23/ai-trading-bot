@@ -11,5 +11,5 @@ class Allocation:
 
 
 class Allocator(Protocol):
-    def allocate(self, regime: MarketRegime) -> Allocation: ...
+    def allocate(self, regime: MarketRegime) -> Allocation: ...  # ok: ellipsis
 # AI-AGENT-REF: allocation protocol surface
