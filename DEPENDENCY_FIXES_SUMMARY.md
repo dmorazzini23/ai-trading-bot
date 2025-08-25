@@ -8,16 +8,16 @@ This document summarizes the fixes implemented to resolve the critical issues id
 
 **Problem**: `Failed to import Alpaca SDK: No module named 'alpaca_trade_api'`
 
-**Root Cause**: The codebase uses both `alpaca-py` (modern SDK) and `alpaca_trade_api` (legacy SDK), but only `alpaca-py` was listed in dependencies.
+**Root Cause**: Multiple Alpaca SDKs were mixed (`alpaca-py` and `alpaca_trade_api`).
 
 **Solution**:
-- Added `alpaca-trade-api>=3.1.0` to both `requirements.txt` and `pyproject.toml`
+- Standardized on `alpaca-trade-api>=3.1.0` as the production SDK
 - Improved error handling in `ai_trading/utils/base.py` with proper fallback to mock classes
 - Enhanced logging to distinguish between successful import and fallback usage
 
 **Files Modified**:
 - `requirements.txt`: Added alpaca-trade-api dependency
-- `pyproject.toml`: Added alpaca-trade-api dependency  
+- `pyproject.toml`: Added alpaca-trade-api dependency
 - `ai_trading/utils/base.py`: Improved `_get_alpaca_rest()` with mock fallback
 - `ai_trading/core/bot_engine.py`: Fixed empty try block for SDK imports
 
@@ -164,8 +164,7 @@ All changes maintain backward compatibility:
 To benefit from these fixes, ensure dependencies are installed:
 
 ```bash
-pip install -r requirements.txt
-# OR
+python -m pip install -U pip
 pip install -e .
 ```
 

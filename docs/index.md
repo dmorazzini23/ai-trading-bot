@@ -25,10 +25,11 @@ values in `hyperparams.json`.
 
 ## Development
 
-Install the dependencies listed in `requirements-dev.txt` which in turn
-includes `requirements.txt`:
+Install dependencies:
 
 ```bash
+python -m pip install -U pip
+pip install -e .
 pip install -r requirements-dev.txt
 ```
 
@@ -41,14 +42,18 @@ pytest
 
 ## Systemd Service
 
-A sample service file `ai-trading-scheduler.service` is provided. It calls `python -m ai_trading` inside the project virtual environment.
+A sample service file `ai-trading.service` is provided. It calls `python -m ai_trading` inside the project virtual environment.
 
 To use it:
 
 ```bash
-sudo cp ai-trading-scheduler.service /etc/systemd/system/
+sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now ai-trading-scheduler.service
+sudo systemctl enable --now ai-trading.service
+sudo systemctl restart ai-trading.service
+sudo systemctl status ai-trading.service
+journalctl -u ai-trading.service -n 200 --no-pager
+curl -s http://127.0.0.1:9001/health
 ```
 
 The service writes to `logs/scheduler.log` (or `$BOT_LOG_FILE`). View logs with

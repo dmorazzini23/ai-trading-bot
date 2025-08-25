@@ -166,15 +166,18 @@ All `try/except ImportError` blocks have been removed from:
 ### 2. Required Dependencies
 The following packages are now hard dependencies:
 - `pandas_market_calendars>=4.3`
-- `alpaca-py>=0.42.0`
 - `alpaca-trade-api>=3.1.0`
 - `hmmlearn>=0.3.0`
 - `psutil>=5.9.8`
 
 **Action Required**: Update your environment to install these packages:
 ```bash
-pip install "ai-trading-bot[broker]" alpaca-py alpaca-trade-api hmmlearn psutil pandas_market_calendars
+python -m pip install -U pip
+pip install -e .
+pip install alpaca-trade-api hmmlearn psutil pandas_market_calendars
 ```
+
+If opting for `alpaca-py`, update broker modules, tests, and docs accordingly.
 
 ### 3. StrategyAllocator Changes
 The `_Stub` fallback in `ai_trading/core/bot_engine.py` has been removed.

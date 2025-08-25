@@ -22,7 +22,7 @@ Files with import guards for core dependencies that should be hard requirements:
    - `scikit-learn` - Used in ML modules, should be hard dependency
 
 2. **Medium Priority - Domain Libraries**:
-   - `alpaca-py` / `alpaca-trade-api` - Core trading functionality
+   - `alpaca-trade-api` - Core trading functionality (use a single SDK)
    - `yfinance` - Market data (but could be optional with feature flags)
    - `flask` - Web interface (could be optional)
 
@@ -77,6 +77,10 @@ python tools/codemods/remove_import_guards.py
 - [ ] All Settings access uses get_settings() with lowercase fields
 - [ ] Package imports cleanly with hard dependencies
 - [ ] Core functionality tests pass
+
+## Production Guidance
+
+Runtime code must not use `optional_import(...)`. Reserve such helpers for research or development utilities and gate heavy imports inside function scope when rarely used.
 
 ## Risk Mitigation
 

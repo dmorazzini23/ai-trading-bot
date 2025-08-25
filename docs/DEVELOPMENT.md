@@ -17,6 +17,10 @@ make validate-env
 
 # Run tests
 make test-all
+
+# Lint and tests directly
+ruff check .
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ```
 
 ## Dependency Management
@@ -37,7 +41,8 @@ make install
 make install-dev
 
 # Manual installation
-pip install -r requirements.txt
+python -m pip install -U pip
+pip install -e .
 pip install -r requirements-dev.txt
 ```
 

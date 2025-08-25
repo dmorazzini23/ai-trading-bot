@@ -1,153 +1,85 @@
-# 📄 AGENTS.md
+# AGENTS: Operating Contract & Playbook
 
-## AI-Only Maintenance & Refactoring Policy
+**Last updated:** 2025-08-25  
+**Runtime targets:** Ubuntu 24.04 • Python 3.12 • zoneinfo-only • Flask on :9001
 
-> This repository is maintained by a single human engineer (Dom) using advanced AI agents (Codex, GPT-4o).
-> This document exists to **guide these AI agents** in how they operate on this codebase.
+This document defines what automated agents (including LLM coding agents) may do in this repository and how they must do it.
 
----
+## 1) Non-negotiable invariants
+- **Python:** 3.12 (`requires-python=">=3.12"`). Tooling targets **py312**.
+- **Timezones:** Use stdlib **zoneinfo**; never depend on `pytz`.
+- **Service:** `ai-trading.service` runs a Flask API on **0.0.0.0:9001**.
+- **Health:** `GET /health` must always return JSON and never 500.
+- **Config access:** via `ai_trading.config.management`:
+  - `get_env(key, default=None, cast=None, required=False)`
+  - `reload_env(path=None, override=True)` (use sparingly, not in hot paths)
+  - `SEED` (default **42**; may be overridden in `.env`)
+- **Single Alpaca SDK in production:** prefer `alpaca-trade-api`. Do **not** mix with `alpaca-py` in prod.
+- **No production shims:** Do **not** introduce or rely on `optional_import(...)` in runtime code paths.
 
-## 🔍 Prime Directives
+## 2) Performance & resource guardrails
+- Target machine: 2 GB RAM / 1 vCPU. Keep startup lean.
+- Gate heavy imports (`pandas`, `sklearn`, `torch`, `matplotlib`, `gymnasium`) inside functions unless needed at startup.
+- Never write large artifacts to disk by default. No diagnostics tarballs in CI or systemd units.
 
-### ✅ Maintain critical production logic
+## 3) Editing & PR policy for agents
+- Use small, reviewable PRs grouped by concern (docs vs code).
+- When changing behavior, update docs in the same PR.
+- Include:
+  - Motivation & before/after.
+  - Test plan (commands and expected output).
+  - Rollback plan.
 
-* **Never rewrite or remove the core execution logic** in:
+## 4) Installation & local run (docs reference)
+```bash
+python -m pip install -U pip
+pip install -e .
+ruff check .
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+curl -s http://127.0.0.1:9001/health
+```
 
-  * `bot_engine.py`
-  * `runner.py`
-  * `trade_execution.py`
-* Only evolve these files incrementally (via `update_functions` or `append_content`), not full replacements.
+## 5) Timezone examples (docs reference)
 
-### ✅ Keep the trading bot stable
+```py
+from datetime import datetime
+from zoneinfo import ZoneInfo
+now_ny = datetime.now(ZoneInfo("America/New_York"))
+```
 
-* Always preserve existing safety checks, such as:
+## 6) Config examples (docs reference)
 
-  * Position sizing via Kelly or volatility constraints.
-  * Health checks in `pre_trade_health_check` and related functions.
-* Any changes must **not risk unexpected trades** or skipping critical risk logic.
+```py
+from ai_trading.config import management as config
 
----
+api_port = config.get_env("API_PORT", "9001", cast=int)
+paper = config.get_env("ALPACA_PAPER", "true", cast=bool)
+seed = config.SEED  # defaults to 42
 
-## 🚀 Specific AI Agent Behavior
+# Reload if you must re-read .env after edits (avoid in hot paths):
+config.reload_env()
+```
 
-### Logging & Debugging
+## 7) Health endpoint (docs reference)
 
-* Always use the centralized `logger` module for all output.
-* Never introduce raw `print()` statements.
+* Route: `GET /health`
+* Response: `{"ok": true, "ts": "...", "service": "ai-trading"}`
+* Requirement: Never raise exceptions. Log, return `ok: false` if degraded.
 
-### Time & UTC
+## 8) Alpaca SDK stance
 
-* Globally replace any `datetime.utcnow()` with `datetime.now(datetime.UTC)`.
+* Production default: `alpaca-trade-api`.
+* If switching to `alpaca-py`, update all broker modules, tests, and docs in the same PR. Do not document both as active simultaneously.
 
-### Parallel & Data
+## 9) What agents must not do
 
-* When refactoring concurrency (like `concurrent.futures`), ensure:
+* Don’t introduce `pytz`.
+* Don’t re-add `requirements.txt` workflows.
+* Don’t bind new ports without updating docs & systemd.
+* Don’t add background file dumps or large archives by default.
 
-  * No data race or shared state corruption.
-  * That `to_parquet` still functions using `pyarrow` engine.
+## 10) Troubleshooting quick map (docs reference)
 
----
-
-## 🧪 Testing & Validation
-
-* After any AI modifications, always run:
-
-  ```
-  pytest -n auto --disable-warnings
-  ```
-* Ensure `0 failed`, no broken logs, and no trade logic skipping.
-
----
-
-## 📝 Minimalistic Commit Messages
-
-* Since only Dom reviews them, be concise, e.g.:
-
-  ```
-  fix: add signal_period to hyperparams.json
-  refactor: logger test ensure rotating path
-  ```
-
----
-
-## 🤖 Special Codex Directives
-
-When running a Codex prompt to refactor or fix:
-
-1. **Never use `replace_content` on:**
-
-   * `bot_engine.py`, `runner.py`, or `trade_execution.py`.
-2. Prefer:
-
-   * `update_functions`, `append_content`, or targeted `sed` replacements.
-3. Annotate new code with:
-
-   ```python
-   # AI-AGENT-REF: short note about the change
-   ```
-
----
-
-## 🛠 Safe File Areas
-
-| File / Module       | AI can freely modify                  |
-| ------------------- | ------------------------------------- |
-| `signals.py`        | Extend indicators carefully           |
-| `logger.py`         | Update handlers or test hooks         |
-| `tests/`            | Adapt tests for new behavior          |
-| `requirements*.txt` | Add packages like `pyarrow` if needed |
-| `ai_trading/*`      | Capital scaling & trade logic modules |
-
----
-
-## 📂 Minimal Human Audit
-
-Since this is **AI + Dom only**, be strict:
-
-* Any AI-proposed changes that violate these principles must be **explicitly confirmed** by Dom before being applied.
-
----
-
-## ✅ Reminder to Codex
-
-> “Respect these directives. If unsure, halt and wait for Dom’s explicit prompt.”
-
----
-
-## 🔒 Additional Safeguards
-
-* Never hardcode API keys, secrets, or credentials. Always load them via environment variables managed through `.env` files and `ai_trading.tools.env_validate`.
-* **NEVER remove, modify, or touch API keys in .env files without explicit permission from Dom.** The `.env` file contains production API credentials that must be preserved.
-* Do not replace or degrade parallel indicator processing (`concurrent.futures`) with purely serial logic unless explicitly instructed.
-* Never downgrade essential libraries such as `pandas`, `numpy`, or `scikit-learn` below the versions pinned in `requirements.txt` or `pyproject.toml`.
-
----
-
-## 🚀 Reminder on Project Scope
-
-This repository is strictly an advanced **AI-powered trading platform**, with extensive use of:
-
-* financial indicators,
-* backtesting engines,
-* multi-timeframe strategy orchestration,
-* and robust live trading safety checks.
-
-Unrelated general-purpose refactor patterns (e.g. CRUD templates, simplistic microservices restructuring) should **never override these domain priorities**.
-
----
-
-## 📜 Recent PR Prompts
-
-- **PR1**: initial package restructure into `ai_trading` modules
-- **PR2**: introduced async trade execution helpers
-- **PR3**: migrated configuration to `pydantic-settings`
-- **PR4**: tightened CI coverage checks
-
----
-
-## ✅ Final Instruction to AI Agents
-
-> **“When in doubt, defer to Dom for explicit clarification.
-> Always prioritize safety, precision, and trading domain expertise.”**
-
----
+* **ImportError/AttributeError** for `get_env` or `reload_env`: update to latest `ai_trading/config/management.py`.
+* **/health returns 500:** fix the route; health must swallow exceptions and return JSON.
+* **Alpaca errors about missing client:** install the single chosen SDK and align import paths.
