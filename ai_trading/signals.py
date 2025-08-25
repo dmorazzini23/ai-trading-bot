@@ -9,11 +9,8 @@ from functools import lru_cache
 from typing import Any
 from ai_trading.utils import clamp_timeout as _clamp_timeout
 try:
-    from alpaca.trading.client import TradingClient
-    from alpaca.common.exceptions import APIError
+    from alpaca_trade_api.rest import APIError  # type: ignore
 except ImportError:
-    TradingClient = None
-
     class APIError(Exception):
         pass
 _log = logging.getLogger(__name__)

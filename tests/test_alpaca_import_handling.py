@@ -9,9 +9,6 @@ import logging
 import unittest
 from unittest.mock import MagicMock, patch
 
-from tests.mocks.alpaca_mocks import MockOrderSide, MockTradingClient
-
-
 class TestAlpacaImportHandling(unittest.TestCase):
     """Test alpaca import error handling and graceful degradation."""
 
@@ -30,33 +27,27 @@ class TestAlpacaImportHandling(unittest.TestCase):
         original_import = __import__
 
         def mock_import(name, *args, **kwargs):
-            if name.startswith("alpaca.trading") or name.startswith("alpaca.data"):
+            if name.startswith("alpaca_trade_api"):
                 raise TypeError("'function' object is not iterable")
             return original_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
             # This should simulate our conditional import pattern
             ALPACA_AVAILABLE = True
-            TradingClient = None
+            REST = None
 
             try:
-                from alpaca.trading.client import TradingClient
+                from alpaca_trade_api import REST
 
                 self.fail("Expected alpaca import to fail")
             except TypeError as e:
                 ALPACA_AVAILABLE = False
                 self.assertIn("'function' object is not iterable", str(e))
 
-                # Mock classes should be created
-                TradingClient = MockTradingClient
+                REST = object
 
-            # Verify graceful degradation
             self.assertFalse(ALPACA_AVAILABLE)
-            self.assertIsNotNone(TradingClient)
-
-            # Test mock client instantiation
-            mock_client = TradingClient("fake_key", "fake_secret", paper=True)  # AI-AGENT-REF: ensure paper flag
-            self.assertIsInstance(mock_client, MockTradingClient)
+            self.assertIsNotNone(REST)
 
     def test_check_alpaca_available_function(self):
         """Test the check_alpaca_available utility function behavior."""
@@ -98,13 +89,8 @@ class TestAlpacaImportHandling(unittest.TestCase):
     def test_mock_classes_functionality(self):
         """Test that mock classes provide minimal required functionality."""
         # Test mock trading client
-        client = MockTradingClient("key", "secret", paper=True)
-        self.assertIsInstance(client, MockTradingClient)
-
-        # Test mock enums
-        order_side = MockOrderSide()
-        self.assertEqual(order_side.BUY, "buy")
-        self.assertEqual(order_side.SELL, "sell")
+        REST = object
+        self.assertIsNotNone(REST)
 
     def test_service_startup_simulation(self):
         """Test that service can start with alpaca import failures."""

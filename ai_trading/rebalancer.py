@@ -8,11 +8,8 @@ from typing import Any
 import numpy as np
 _log = logging.getLogger(__name__)
 try:
-    from alpaca.common.exceptions import APIError
-    from alpaca.trading.client import TradingClient
+    from alpaca_trade_api.rest import APIError  # type: ignore
 except ImportError:
-    TradingClient = None
-
     class APIError(Exception):
         pass
 from ai_trading.config import get_settings

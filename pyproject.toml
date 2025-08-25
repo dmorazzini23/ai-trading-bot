@@ -27,7 +27,6 @@ dependencies = [
   "schedule==1.2.2",
   "prometheus-client==0.20.0",
   "cachetools==5.3.3",
-  "alpaca-py==0.42.0",  # AI-AGENT-REF: modern SDK; tests import `alpaca`
   "ratelimit==2.2.1",
   "python-dotenv==1.1.1",
   "python-dateutil>=2.8.2,<3",

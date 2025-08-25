@@ -49,9 +49,10 @@ def _module_exists(name: str) -> bool:
         return False
 
 
-ALPACA_AVAILABLE = any(
-    _module_exists(m) for m in ('alpaca', 'alpaca_trade_api', 'alpaca.trading', 'alpaca.data')
-) and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
+ALPACA_AVAILABLE = (
+    _module_exists('alpaca_trade_api')
+    and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
+)
 
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 

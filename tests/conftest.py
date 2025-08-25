@@ -36,6 +36,10 @@ if (
         "tests.vendor_stubs.alpaca_trade_api.rest"
     )
     _sys.modules["alpaca_trade_api.rest"] = _alpaca_rest_stub
+    _alpaca_rest = _alpaca_rest_stub
+
+if not hasattr(_alpaca_rest, "APIError"):
+    _alpaca_rest.APIError = Exception
 
 import asyncio
 import socket

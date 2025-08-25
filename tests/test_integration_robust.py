@@ -64,19 +64,8 @@ mods = [
     "flask",
     "schedule",
     "portalocker",
-    "alpaca",
-    "alpaca.trading.client",
-    "alpaca.trading.enums",
-    "alpaca.trading.requests",
-    "alpaca.trading.models",
-    "alpaca_trade_api",
+        "alpaca_trade_api",
     "alpaca_trade_api.rest",
-    "alpaca.data",
-    "alpaca.data.historical",
-    "alpaca.data.models",
-    "alpaca.data.requests",
-    "alpaca.data.timeframe",
-    "alpaca.common.exceptions",
     "finnhub",
     "sklearn.ensemble",
     "sklearn.linear_model",
@@ -120,7 +109,6 @@ sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules["alpaca_trade_api"].REST = object
 sys.modules["alpaca_trade_api"].APIError = Exception
 sys.modules["alpaca_trade_api.rest"].APIError = Exception
-sys.modules["alpaca.common.exceptions"].APIError = Exception
 
 
 class _TClient:
@@ -128,7 +116,6 @@ class _TClient:
         pass
 
 
-sys.modules["alpaca.trading.client"].TradingClient = _TClient
 
 
 class _Req:
@@ -137,9 +124,6 @@ class _Req:
             setattr(self, k, v)
 
 
-sys.modules["alpaca.trading.requests"].LimitOrderRequest = _Req
-sys.modules["alpaca.trading.requests"].MarketOrderRequest = _Req
-sys.modules["alpaca.trading.requests"].GetOrdersRequest = _Req
 from enum import Enum
 
 
@@ -159,12 +143,6 @@ class _QueryOrderStatus(_Enum):
 class _OrderStatus(_Enum):
     pass
 
-sys.modules["alpaca.trading.enums"].OrderSide = _OrderSide
-sys.modules["alpaca.trading.enums"].TimeInForce = _TimeInForce
-sys.modules["alpaca.trading.enums"].QueryOrderStatus = _QueryOrderStatus
-sys.modules["alpaca.trading.enums"].OrderStatus = _OrderStatus
-sys.modules["alpaca.trading.models"].Order = object
-sys.modules["alpaca.trading.stream"] = types.ModuleType("alpaca.trading.stream")
 
 
 class _Stream:
@@ -175,8 +153,6 @@ class _Stream:
         pass
 
 
-sys.modules["alpaca.trading.stream"].TradingStream = _Stream
-sys.modules["alpaca.data.models"].Quote = object
 
 
 class _StockLatestQuoteRequest:
@@ -189,8 +165,6 @@ class _StockBarsRequest:
         pass
 
 
-sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _StockLatestQuoteRequest
-sys.modules["alpaca.data.requests"].StockBarsRequest = _StockBarsRequest
 
 
 class _Client:
@@ -213,7 +187,6 @@ class _Client:
         return types.SimpleNamespace(df=df)
 
 
-sys.modules["alpaca.data.historical"].StockHistoricalDataClient = _Client
 
 
 class _TF:
@@ -231,8 +204,6 @@ class _TFUnit:
     Day = "Day"
 
 
-sys.modules["alpaca.data.timeframe"].TimeFrame = _TF
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = _TFUnit
 
 
 class _FClient:

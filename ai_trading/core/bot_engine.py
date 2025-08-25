@@ -56,11 +56,6 @@ from ai_trading.alpaca_api import (
 from ai_trading.config.management import derive_cap_from_settings
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
-try:  # AI-AGENT-REF: optional Alpaca trading client
-    from alpaca.trading.client import TradingClient  # type: ignore
-except (ImportError, ModuleNotFoundError):  # pragma: no cover - optional dependency
-    TradingClient = None  # type: ignore
-
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
     warnings.filterwarnings("default", category=DeprecationWarning)
     warnings.warn(
@@ -308,14 +303,13 @@ class BotEngine:
 
     @cached_property
     def trading_client(self):
-        """alpaca-py TradingClient for order/trade ops."""
-        cls = TradingClient  # type: ignore[misc]
-        if cls is None:  # pragma: no cover - optional dependency
-            raise RuntimeError("alpaca-py not installed")
-        return cls(
-            api_key=os.environ["ALPACA_API_KEY"],
+        """alpaca-trade-api REST for order/trade ops."""
+        from alpaca_trade_api import REST  # type: ignore
+
+        return REST(
+            key_id=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
-            paper="paper" in os.environ.get("ALPACA_BASE_URL", "").lower(),
+            base_url=os.environ["ALPACA_BASE_URL"],
         )
 
     @cached_property
@@ -1427,9 +1421,7 @@ class APIErrorStub(Exception):
 
 
 # Assign lightweight stubs for Alpaca SDK types; keep TimeFrame separate for constants.
-Quote = StockBarsRequest = StockLatestQuoteRequest = (
-    TradingClient
-) = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
+Quote = StockBarsRequest = StockLatestQuoteRequest = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
 APIError = APIErrorStub
 
 # Minimal enum-like placeholder so code can reference TimeFrame.Day etc.
@@ -5405,12 +5397,10 @@ def _initialize_alpaca_clients():
         )
         _log.info("ALPACA_DIAG", extra=_redact(diag))
         return
-    # Lazy-import SDK only when needed
     try:
-        from alpaca.trading.client import TradingClient
         from alpaca_trade_api import REST as AlpacaREST
 
-        _log.debug("Successfully imported Alpaca SDK classes")
+        _log.debug("Successfully imported Alpaca SDK class")
     except (
         FileNotFoundError,
         PermissionError,
@@ -5420,28 +5410,23 @@ def _initialize_alpaca_clients():
         KeyError,
         TypeError,
         OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
+    ) as e:
         _log.error(
             "alpaca_trade_api import failed; cannot initialize clients", exc_info=e
         )
         if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
             _log.info(
-                "Test environment detected, skipping Alpaca client initialization"
+                "Test environment detected, skipping Alpaca client initialization",
             )
             return
         raise
-    is_paper = base_url.find("paper") != -1  # Determine if paper trading based on URL
-    raw_client = TradingClient(
-        api_key=key,
-        secret_key=secret,
-        paper=is_paper,
-    )  # AI-AGENT-REF: drop base_url parameter
-    trading_client = AlpacaBroker(raw_client)
-    data_client = AlpacaREST(
+    trading_client = AlpacaREST(
         key_id=key,
         secret_key=secret,
         base_url=base_url,
     )
+    trading_client = AlpacaBroker(trading_client)
+    data_client = trading_client._api
     _log.info("ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()}))
     stream = None  # initialize stream lazily elsewhere if/when required
 

@@ -12,10 +12,10 @@ from ai_trading.logging import logger
 _log = logging.getLogger(__name__)
 from ai_trading.config import AlpacaConfig, get_alpaca_config
 try:
-    from alpaca.common.exceptions import APIError
-    from alpaca.trading.client import TradingClient
-except (ValueError, TypeError):
-    TradingClient = None
+    from alpaca_trade_api.rest import APIError  # type: ignore
+    from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+except (ValueError, TypeError, ModuleNotFoundError, ImportError):
+    AlpacaREST = None
 
     class APIError(Exception):
         pass
@@ -84,8 +84,7 @@ class AlpacaExecutionEngine:
                     self.is_initialized = True
                     return True
             self.config = get_alpaca_config()
-            from alpaca.trading.client import TradingClient
-            raw_client = TradingClient(api_key=self.config.key_id, secret_key=self.config.secret_key, paper=self.config.use_paper)
+            raw_client = AlpacaREST(key_id=self.config.key_id, secret_key=self.config.secret_key, base_url=self.config.base_url)
             logger.info(f'Real Alpaca client initialized (paper={self.config.use_paper})')
             self.trading_client = AlpacaBroker(raw_client)
             if self._validate_connection():

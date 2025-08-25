@@ -5,16 +5,13 @@ import sys
 
 def test_ai_trading_import_without_alpaca():
     """Test that ai_trading can be imported even when alpaca packages are missing."""
-    # Remove alpaca modules from sys.modules to simulate missing packages
+    # Remove alpaca modules from sys.modules to simulate missing package
     alpaca_modules = [module for module in sys.modules.keys() if 'alpaca' in module.lower()]
     for module in alpaca_modules:
         sys.modules.pop(module, None)
 
-    # Simulate missing alpaca packages by setting them to None
+    # Simulate missing Alpaca package by setting it to None
     sys.modules['alpaca_trade_api'] = None
-    sys.modules['alpaca.trading'] = None
-    sys.modules['alpaca.data'] = None
-    sys.modules['alpaca'] = None
 
     # Set testing mode
     import os
