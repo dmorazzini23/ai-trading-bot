@@ -22,24 +22,29 @@ from typing import Any
 from ai_trading.exc import COMMON_EXC
 
 def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
-    """Ensure exactly one handler and attach default if none."""
-    if not log.handlers:
+    """Ensure no duplicate handler types and attach default if none exist."""
+
+    seen_types: set[type[logging.Handler]] = set()
+    unique: list[logging.Handler] = []
+
+    for h in log.handlers:
+        h_type = type(h)
+        if h_type in seen_types:
+            continue
+        seen_types.add(h_type)
+        if not any(isinstance(f, ExtraSanitizerFilter) for f in h.filters):
+            h.addFilter(ExtraSanitizerFilter())
+        unique.append(h)
+
+    if not unique:
         h = logging.StreamHandler()
         fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
         h.setFormatter(fmt)
         h.addFilter(ExtraSanitizerFilter())
-        log.addHandler(h)
-    seen = set()
-    unique = []
-    for h in log.handlers:
-        sig = (h.__class__, getattr(h, 'stream', None))
-        if sig in seen:
-            continue
-        seen.add(sig)
-        if not any(isinstance(f, ExtraSanitizerFilter) for f in h.filters):
-            h.addFilter(ExtraSanitizerFilter())
         unique.append(h)
+
     log.handlers = unique
+
     if level is not None:
         log.setLevel(level)
 _RESERVED_LOGRECORD_KEYS = {
