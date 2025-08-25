@@ -57,9 +57,18 @@ def test_auto_derives_extra(monkeypatch):
 
 def test_render_equity_curve_handles_missing_matplotlib(monkeypatch):
     sys.modules.pop("ai_trading.plotting.renderer", None)
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "matplotlib.pyplot":
+            raise ImportError("simulated missing")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
     from ai_trading.plotting import renderer
 
-    renderer.plt = None
     with pytest.raises(renderer.OptionalDependencyError):
         renderer.render_equity_curve([1, 2, 3])
 

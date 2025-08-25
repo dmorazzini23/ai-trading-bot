@@ -21,10 +21,13 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
-from ai_trading.utils.optdeps import optional_import
 from ai_trading.logging import logger
 from ai_trading.monitoring import metrics
-yf = optional_import('yfinance')
+try:  # optional yfinance import
+    import yfinance as yf  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    yf = None
+    logger.info('YFINANCE_MISSING', extra={'hint': 'pip install yfinance'})
 YF_AVAILABLE = yf is not None
 
 def _to_timeframe_str(tf: object) -> str:
