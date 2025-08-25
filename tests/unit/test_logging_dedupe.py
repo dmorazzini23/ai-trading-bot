@@ -1,6 +1,7 @@
 import pytest
+from tests.optdeps import require
 
-log_mod = pytest.importorskip("ai_trading.logging", reason="logging module not importable")
+log_mod = require("ai_trading.logging")
 
 @pytest.mark.unit
 def test_phase_logger_no_propagation():

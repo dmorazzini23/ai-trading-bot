@@ -7,6 +7,14 @@ HINT = {
     "torch":        'pip install "ai-trading-bot[ml]"',
     "ta":           'pip install "ai-trading-bot[ta]"',
     "talib":        'pip install "ai-trading-bot[ta]"',
+    "stable_baselines3": 'pip install "stable-baselines3 gymnasium torch"',
+    "gymnasium":    'pip install "stable-baselines3 gymnasium torch"',
+    "alpaca_trade_api": 'pip install "alpaca-trade-api"',
+    "alpaca_api":   'pip install "ai-trading-bot"',
+    "tenacity":     'pip install "tenacity"',
+    "pandas_market_calendars": 'pip install "pandas-market-calendars"',
+    "pydantic":     'pip install "pydantic"',
+    "requests":     'pip install "requests"',
 }
 
 def require(pkg: str):

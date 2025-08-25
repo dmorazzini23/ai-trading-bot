@@ -1,5 +1,7 @@
 from tests.optdeps import require
+
 require("numpy")
+
 import json
 import sys
 from pathlib import Path

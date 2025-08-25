@@ -3,10 +3,11 @@ import sys
 import time
 
 import pytest
+from tests.optdeps import require
 
-pytest.importorskip("stable_baselines3", reason="RL extras not installed")
-pytest.importorskip("gymnasium", reason="RL extras not installed")
-pytest.importorskip("torch", reason="RL extras not installed")
+require("stable_baselines3")
+require("gymnasium")
+require("torch")
 
 MODULES = [
     "ai_trading.rl_trading",

@@ -10,13 +10,15 @@ import datetime as dt
 import os
 
 import pytest
+from tests.optdeps import require
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: drop pytz for stdlib zoneinfo
 
 pytestmark = pytest.mark.alpaca
 
 # Set test environment
 os.environ['PYTEST_RUNNING'] = '1'
-pytest.importorskip('alpaca_trade_api', reason='alpaca not installed')
+require("requests")
+require("alpaca_trade_api")
 
 from ai_trading.execution.live_trading import AlpacaExecutionEngine
 

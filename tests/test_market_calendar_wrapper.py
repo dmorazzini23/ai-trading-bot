@@ -4,9 +4,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from tests.optdeps import require
 from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 
-pmc = pytest.importorskip("pandas_market_calendars")
+pmc = require("pandas_market_calendars")
 
 
 def test_rth_dst_summer_standard_times() -> None:

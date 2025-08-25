@@ -1,6 +1,9 @@
 import pytest
 
-pytest.importorskip("alpaca_trade_api", reason="vendor SDK not installed")
+from tests.optdeps import require
+
+require("requests")
+require("alpaca_trade_api")
 
 
 def test_clients_built_once(monkeypatch):

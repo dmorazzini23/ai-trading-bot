@@ -1,8 +1,9 @@
 """Test to ensure real tenacity package is imported from PyPI."""
 import pytest
+from tests.optdeps import require
 
 # Skip when tenacity isn't installed (CI smoke with SKIP_INSTALL=1)
-pytest.importorskip("tenacity")
+require("tenacity")
 
 import inspect
 

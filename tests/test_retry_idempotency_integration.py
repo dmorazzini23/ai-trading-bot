@@ -4,12 +4,13 @@
 import sys
 import time
 import pytest
-import sys
 
 sys.path.insert(0, '/tmp')
 
+from tests.optdeps import require
+
 # Skip when tenacity isn't installed (CI smoke with SKIP_INSTALL=1)
-pytest.importorskip("tenacity")
+require("tenacity")
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 pytestmark = pytest.mark.integration
