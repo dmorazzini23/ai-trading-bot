@@ -59,6 +59,37 @@ __all__ = [
     "SEED",
 ]
 
+# NOTE: Keep dotenv imports inside the function to avoid import-time costs.
+def reload_env(path: str | None = None, *, override: bool = True) -> str | None:
+    """Re-load environment variables from `.env` (or specified path).
+
+    Safe no-op if python-dotenv is unavailable or file is missing.
+    Returns the path that was loaded (if any).
+
+    AI-AGENT-REF: reload dotenv with override control
+    """
+    try:
+        from dotenv import load_dotenv, find_dotenv  # type: ignore
+    except Exception:
+        return None
+
+    # Explicit path first
+    if path:
+        p = os.fspath(path)
+        if os.path.exists(p):
+            load_dotenv(p, override=override)
+            return p
+        return None
+
+    # Otherwise, discover `.env` from CWD upward
+    p = find_dotenv(usecwd=True)
+    if p:
+        load_dotenv(p, override=override)
+        return p or None
+    return None
+
+__all__.append("reload_env")
+
 
 @dataclass(frozen=True)
 class TradingConfig:
