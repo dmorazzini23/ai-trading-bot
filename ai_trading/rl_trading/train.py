@@ -3,208 +3,211 @@ import json
 import os
 from datetime import UTC, datetime
 from typing import Any
+
 import numpy as np
+
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
+from . import _load_rl_stack
 
-try:
-    import stable_baselines3  # noqa: F401
-    import gymnasium  # noqa: F401
-    import torch  # noqa: F401
-    RL_AVAILABLE = True
-except Exception as e:
-    RL_AVAILABLE = False
-    logger.warning('RL stack unavailable; RL features disabled: %s', e)
-# AI-AGENT-REF: optional RL stack
 
-if RL_AVAILABLE:
-    from stable_baselines3 import A2C, DQN, PPO
-    from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
-    from stable_baselines3.common.env_util import make_vec_env
-    from stable_baselines3.common.evaluation import evaluate_policy
-    from stable_baselines3.common.vec_env import DummyVecEnv
-else:
-    class _SB3Shim:
-        def __init__(self, *a, **k):
-            pass
+class _SB3Shim:
+    """Minimal shim used when RL stack is unavailable."""
 
-        def learn(self, *a, **k):
-            return self
-
-        def save(self, *a, **k):
-            pass
-
-        @classmethod
-        def load(cls, *a, **k):
-            return cls()
-
-    PPO = A2C = DQN = _SB3Shim
-
-    class BaseCallback:
-        def __init__(self, *a, **k):
-            pass
-
-    class EvalCallback(BaseCallback):
-        def __init__(self, *a, **k):
-            super().__init__(*a, **k)
-
-    def make_vec_env(*a, **k):
-        import types
-        return types.SimpleNamespace()
-
-    class DummyVecEnv(list):
+    def __init__(self, *a, **k):
         pass
 
-    def evaluate_policy(*a, **k):
-        return (0.0, 0.0)
+    def learn(self, *a, **k):
+        return self
 
-from .env import TradingEnv
-if RL_AVAILABLE:
+    def save(self, *a, **k):
+        pass
 
-    class EarlyStoppingCallback(BaseCallback):
-        """
-        Early stopping callback for RL training.
+    @classmethod
+    def load(cls, *a, **k):
+        return cls()
 
-        Stops training when performance doesn't improve for a specified
-        number of evaluations.
-        """
 
-        def __init__(self, patience: int=10, min_improvement: float=0.01, verbose: int=0):
-            super().__init__(verbose)
-            self.patience = patience
-            self.min_improvement = min_improvement
-            self.best_mean_reward = -np.inf
-            self.patience_counter = 0
+PPO = A2C = DQN = _SB3Shim
 
-        def _on_step(self) -> bool:
-            return True
 
-        def _on_rollout_end(self) -> None:
-            """Called at the end of each rollout."""
-            if hasattr(self.training_env, 'get_attr'):
-                try:
-                    env_rewards = self.training_env.get_attr('episode_returns')
-                    if env_rewards and len(env_rewards[0]) > 0:
-                        current_mean_reward = np.mean(env_rewards[0][-10:])
-                        if current_mean_reward > self.best_mean_reward + self.min_improvement:
-                            self.best_mean_reward = current_mean_reward
-                            self.patience_counter = 0
-                            if self.verbose > 0:
-                                logger.info(f'New best reward: {self.best_mean_reward:.4f}')
-                        else:
-                            self.patience_counter += 1
-                        if self.patience_counter >= self.patience:
-                            if self.verbose > 0:
-                                logger.info(f'Early stopping after {self.patience} evaluations without improvement')
-                            return False
-                except COMMON_EXC as e:
-                    if self.verbose > 0:
-                        logger.warning(f'Error in early stopping callback: {e}')
-            return True
+class BaseCallback:
+    def __init__(self, *a, **k):
+        pass
 
-    class DetailedEvalCallback(BaseCallback):
-        """
-        Enhanced evaluation callback with detailed metrics tracking.
-        """
 
-        def __init__(self, eval_env, eval_freq: int=10000, n_eval_episodes: int=5, deterministic: bool=True, save_path: str | None=None, verbose: int=1):
-            super().__init__(verbose)
-            self.eval_env = eval_env
-            self.eval_freq = eval_freq
-            self.n_eval_episodes = n_eval_episodes
-            self.deterministic = deterministic
-            self.save_path = save_path
-            self.eval_results = []
-            self.best_mean_reward = -np.inf
+class EvalCallback(BaseCallback):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
 
-        def _on_step(self) -> bool:
-            if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
-                self._evaluate_model()
-            return True
 
-        def _evaluate_model(self) -> None:
-            """Run detailed evaluation."""
+def make_vec_env(*a, **k):
+    import types
+
+    return types.SimpleNamespace()
+
+
+class DummyVecEnv(list):
+    pass
+
+
+def evaluate_policy(*a, **k):
+    return (0.0, 0.0)
+
+
+def _ensure_rl() -> bool:
+    """Import the RL stack on demand, updating global shims."""
+    global PPO, A2C, DQN, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
+    if PPO is not _SB3Shim:
+        return True
+    stack = _load_rl_stack()
+    if stack is None:
+        return False
+    sb3 = stack["sb3"]
+    PPO = sb3.PPO
+    A2C = sb3.A2C
+    DQN = sb3.DQN
+    BaseCallback = sb3.common.callbacks.BaseCallback
+    EvalCallback = sb3.common.callbacks.EvalCallback
+    make_vec_env = sb3.common.env_util.make_vec_env
+    evaluate_policy = sb3.common.evaluation.evaluate_policy
+    DummyVecEnv = sb3.common.vec_env.DummyVecEnv
+    return True
+
+
+class EarlyStoppingCallback(BaseCallback):
+    """
+    Early stopping callback for RL training.
+
+    Stops training when performance doesn't improve for a specified
+    number of evaluations.
+    """
+
+    def __init__(self, patience: int=10, min_improvement: float=0.01, verbose: int=0):
+        super().__init__(verbose)
+        self.patience = patience
+        self.min_improvement = min_improvement
+        self.best_mean_reward = -np.inf
+        self.patience_counter = 0
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        """Called at the end of each rollout."""
+        if hasattr(self.training_env, 'get_attr'):
             try:
-                episode_rewards, episode_lengths = evaluate_policy(self.model, self.eval_env, n_eval_episodes=self.n_eval_episodes, deterministic=self.deterministic, return_episode_rewards=True)
-                mean_reward = np.mean(episode_rewards)
-                std_reward = np.std(episode_rewards)
-                mean_length = np.mean(episode_lengths)
-                detailed_metrics = self._collect_detailed_metrics()
-                eval_result = {'timestep': self.n_calls, 'mean_reward': float(mean_reward), 'std_reward': float(std_reward), 'mean_episode_length': float(mean_length), 'timestamp': datetime.now(UTC).isoformat(), **detailed_metrics}
-                self.eval_results.append(eval_result)
-                if mean_reward > self.best_mean_reward:
-                    self.best_mean_reward = mean_reward
-                    if self.save_path:
-                        best_model_path = os.path.join(self.save_path, 'best_model.zip')
-                        self.model.save(best_model_path)
-                        meta_path = os.path.join(self.save_path, 'best_model_meta.json')
-                        with open(meta_path, 'w') as f:
-                            json.dump(eval_result, f, indent=2)
+                env_rewards = self.training_env.get_attr('episode_returns')
+                if env_rewards and len(env_rewards[0]) > 0:
+                    current_mean_reward = np.mean(env_rewards[0][-10:])
+                    if current_mean_reward > self.best_mean_reward + self.min_improvement:
+                        self.best_mean_reward = current_mean_reward
+                        self.patience_counter = 0
+                        if self.verbose > 0:
+                            logger.info(f'New best reward: {self.best_mean_reward:.4f}')
+                    else:
+                        self.patience_counter += 1
+                    if self.patience_counter >= self.patience:
+                        if self.verbose > 0:
+                            logger.info(f'Early stopping after {self.patience} evaluations without improvement')
+                        return False
+            except COMMON_EXC as e:
                 if self.verbose > 0:
-                    logger.info(f'Eval at step {self.n_calls}: mean_reward={mean_reward:.4f} ± {std_reward:.4f}')
-            except COMMON_EXC as e:
-                logger.error(f'Error in evaluation: {e}')
+                    logger.warning(f'Error in early stopping callback: {e}')
+        return True
 
-        def _collect_detailed_metrics(self) -> dict[str, float]:
-            """Collect detailed performance metrics."""
-            try:
-                obs = self.eval_env.reset()
-                total_reward = 0
-                total_turnover = 0
-                total_drawdown = 0
-                total_variance = 0
-                episode_length = 0
-                done = False
-                while not done:
-                    action, _ = self.model.predict(obs, deterministic=self.deterministic)
-                    obs, reward, done, info = self.eval_env.step(action)
-                    total_reward += reward
-                    episode_length += 1
-                    if isinstance(info, dict):
-                        total_turnover += info.get('turnover_penalty', 0)
-                        total_drawdown += info.get('drawdown_penalty', 0)
-                        total_variance += info.get('variance_penalty', 0)
-                avg_turnover = total_turnover / episode_length if episode_length > 0 else 0
-                avg_drawdown = total_drawdown / episode_length if episode_length > 0 else 0
-                avg_variance = total_variance / episode_length if episode_length > 0 else 0
-                return {'avg_turnover_penalty': float(avg_turnover), 'avg_drawdown_penalty': float(avg_drawdown), 'avg_variance_penalty': float(avg_variance), 'sharpe_ratio': self._calculate_sharpe_ratio(), 'max_drawdown': float(total_drawdown) if total_drawdown > 0 else 0.0}
-            except COMMON_EXC as e:
-                logger.error(f'Error collecting detailed metrics: {e}')
-                return {}
+class DetailedEvalCallback(BaseCallback):
+    """
+    Enhanced evaluation callback with detailed metrics tracking.
+    """
 
-        def _calculate_sharpe_ratio(self) -> float:
-            """Calculate approximate Sharpe ratio from recent evaluations."""
-            try:
-                if len(self.eval_results) < 2:
-                    return 0.0
-                recent_rewards = [r['mean_reward'] for r in self.eval_results[-10:]]
-                if len(recent_rewards) > 1:
-                    mean_return = np.mean(recent_rewards)
-                    std_return = np.std(recent_rewards)
-                    return float(mean_return / std_return) if std_return > 0 else 0.0
+    def __init__(self, eval_env, eval_freq: int=10000, n_eval_episodes: int=5, deterministic: bool=True, save_path: str | None=None, verbose: int=1):
+        super().__init__(verbose)
+        self.eval_env = eval_env
+        self.eval_freq = eval_freq
+        self.n_eval_episodes = n_eval_episodes
+        self.deterministic = deterministic
+        self.save_path = save_path
+        self.eval_results = []
+        self.best_mean_reward = -np.inf
+
+    def _on_step(self) -> bool:
+        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            self._evaluate_model()
+        return True
+
+    def _evaluate_model(self) -> None:
+        """Run detailed evaluation."""
+        try:
+            episode_rewards, episode_lengths = evaluate_policy(self.model, self.eval_env, n_eval_episodes=self.n_eval_episodes, deterministic=self.deterministic, return_episode_rewards=True)
+            mean_reward = np.mean(episode_rewards)
+            std_reward = np.std(episode_rewards)
+            mean_length = np.mean(episode_lengths)
+            detailed_metrics = self._collect_detailed_metrics()
+            eval_result = {'timestep': self.n_calls, 'mean_reward': float(mean_reward), 'std_reward': float(std_reward), 'mean_episode_length': float(mean_length), 'timestamp': datetime.now(UTC).isoformat(), **detailed_metrics}
+            self.eval_results.append(eval_result)
+            if mean_reward > self.best_mean_reward:
+                self.best_mean_reward = mean_reward
+                if self.save_path:
+                    best_model_path = os.path.join(self.save_path, 'best_model.zip')
+                    self.model.save(best_model_path)
+                    meta_path = os.path.join(self.save_path, 'best_model_meta.json')
+                    with open(meta_path, 'w') as f:
+                        json.dump(eval_result, f, indent=2)
+            if self.verbose > 0:
+                logger.info(f'Eval at step {self.n_calls}: mean_reward={mean_reward:.4f} ± {std_reward:.4f}')
+        except COMMON_EXC as e:
+            logger.error(f'Error in evaluation: {e}')
+
+    def _collect_detailed_metrics(self) -> dict[str, float]:
+        """Collect detailed performance metrics."""
+        try:
+            obs = self.eval_env.reset()
+            total_reward = 0
+            total_turnover = 0
+            total_drawdown = 0
+            total_variance = 0
+            episode_length = 0
+            done = False
+            while not done:
+                action, _ = self.model.predict(obs, deterministic=self.deterministic)
+                obs, reward, done, info = self.eval_env.step(action)
+                total_reward += reward
+                episode_length += 1
+                if isinstance(info, dict):
+                    total_turnover += info.get('turnover_penalty', 0)
+                    total_drawdown += info.get('drawdown_penalty', 0)
+                    total_variance += info.get('variance_penalty', 0)
+            avg_turnover = total_turnover / episode_length if episode_length > 0 else 0
+            avg_drawdown = total_drawdown / episode_length if episode_length > 0 else 0
+            avg_variance = total_variance / episode_length if episode_length > 0 else 0
+            return {'avg_turnover_penalty': float(avg_turnover), 'avg_drawdown_penalty': float(avg_drawdown), 'avg_variance_penalty': float(avg_variance), 'sharpe_ratio': self._calculate_sharpe_ratio(), 'max_drawdown': float(total_drawdown) if total_drawdown > 0 else 0.0}
+        except COMMON_EXC as e:
+            logger.error(f'Error collecting detailed metrics: {e}')
+            return {}
+
+    def _calculate_sharpe_ratio(self) -> float:
+        """Calculate approximate Sharpe ratio from recent evaluations."""
+        try:
+            if len(self.eval_results) < 2:
                 return 0.0
-            except COMMON_EXC:
-                return 0.0
+            recent_rewards = [r['mean_reward'] for r in self.eval_results[-10:]]
+            if len(recent_rewards) > 1:
+                mean_return = np.mean(recent_rewards)
+                std_return = np.std(recent_rewards)
+                return float(mean_return / std_return) if std_return > 0 else 0.0
+            return 0.0
+        except COMMON_EXC:
+            return 0.0
 
-        def save_results(self, path: str) -> None:
-            """Save evaluation results."""
-            try:
-                with open(path, 'w') as f:
-                    json.dump(self.eval_results, f, indent=2)
-                logger.info(f'Evaluation results saved to {path}')
-            except COMMON_EXC as e:
-                logger.error(f'Error saving evaluation results: {e}')
-else:
-
-    class EarlyStoppingCallback:
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class DetailedEvalCallback:
-
-        def __init__(self, *args, **kwargs):
-            pass
+    def save_results(self, path: str) -> None:
+        """Save evaluation results."""
+        try:
+            with open(path, 'w') as f:
+                json.dump(self.eval_results, f, indent=2)
+            logger.info(f'Evaluation results saved to {path}')
+        except COMMON_EXC as e:
+            logger.error(f'Error saving evaluation results: {e}')
 
 class RLTrainer:
     """
@@ -232,8 +235,6 @@ class RLTrainer:
         self.eval_env = None
         self.training_results = {}
         self.eval_callback = None
-        if not RL_AVAILABLE:
-            logger.warning('stable-baselines3 not available - RL training will use fallback mode')
         logger.info(f'RLTrainer initialized with {algorithm} algorithm')
 
     def train(self, data: np.ndarray, env_params: dict[str, Any] | None=None, model_params: dict[str, Any] | None=None, save_path: str | None=None) -> dict[str, Any]:
@@ -249,7 +250,7 @@ class RLTrainer:
         Returns:
             Training results
         """
-        if not RL_AVAILABLE:
+        if not _ensure_rl():
             logger.warning('Stable-baselines3 not available - returning dummy results')
             return {'training_time': 0.0, 'final_evaluation': {'mean_reward': 0.0, 'std_reward': 0.0}, 'total_timesteps': 0, 'algorithm': self.algorithm}
         try:
@@ -272,6 +273,8 @@ class RLTrainer:
     def _create_environments(self, data: np.ndarray, env_params: dict[str, Any] | None) -> None:
         """Create training and evaluation environments."""
         try:
+            from .env import TradingEnv  # noqa: E402 - local import
+
             env_params = env_params or {}
             split_idx = int(len(data) * 0.8)
             train_data = data[:split_idx]
@@ -380,7 +383,7 @@ class RLTrainer:
 
 def train_rl_model_cli() -> None:
     """CLI interface for RL training."""
-    if not RL_AVAILABLE:
+    if not _ensure_rl():
         logger.warning('Stable-baselines3 not available - RL training CLI disabled')
         return
     try:

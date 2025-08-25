@@ -5,23 +5,17 @@ from dataclasses import dataclass
 import numpy as np
 
 try:
-    import stable_baselines3  # noqa: F401
-    import gymnasium as gym  # noqa: F401
-    import torch  # noqa: F401
-    RL_AVAILABLE = True
-except Exception:
-    RL_AVAILABLE = False
+    import gymnasium as gym
+except Exception:  # noqa: BLE001 - optional dependency
     gym = None
-# AI-AGENT-REF: optional RL stack
 
-if RL_AVAILABLE:
+if gym is not None:
     EnvBase = gym.Env
 else:
-    class _EnvFallback:
+    class EnvBase:  # type: ignore[empty-body]
         """Fallback base class when gymnasium is not installed."""
-        pass
 
-    EnvBase = _EnvFallback
+        pass
 
 @dataclass
 class ActionSpaceConfig:
@@ -82,7 +76,7 @@ class TradingEnv(EnvBase):
     """
 
     def __init__(self, data: np.ndarray, window: int=10, *, transaction_cost: float=0.001, slippage: float=0.0005, half_spread: float=0.0002, action_config: ActionSpaceConfig | None=None, reward_config: RewardConfig | None=None) -> None:
-        if not RL_AVAILABLE or gym is None:
+        if gym is None:
             raise ImportError('gymnasium required; install gymnasium to use TradingEnv')
         self.data = data.astype(np.float32)
         self.window = window
