@@ -133,7 +133,7 @@ def test_load_weights_default_zero(tmp_path):
 def test_update_weights_failure(monkeypatch, tmp_path):
     p = tmp_path / "w.csv"
     monkeypatch.setattr(
-        meta_learning.np,
+        np,
         "savetxt",
         lambda *a, **k: (_ for _ in ()).throw(OSError("bad")),
     )

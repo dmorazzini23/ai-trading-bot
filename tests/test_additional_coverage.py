@@ -1,5 +1,6 @@
 from tests.optdeps import require
 require("pandas")
+require("numpy")
 import builtins
 import importlib
 import runpy
@@ -177,7 +178,7 @@ def test_meta_update_weights_error(monkeypatch, tmp_path):
     hist = tmp_path / "h.json"
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: False)
     monkeypatch.setattr(
-        meta_learning.np,
+        np,
         "savetxt",
         lambda *a, **k: (_ for _ in ()).throw(OSError("fail")),
     )
