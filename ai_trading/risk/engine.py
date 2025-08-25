@@ -17,13 +17,13 @@ from ai_trading.config.settings import get_settings
 if not hasattr(np, 'NaN'):
     np.NaN = np.nan
 
-def _optional_import(name: str):
-    try:
-        return importlib.import_module(name)
-    except ImportError:
-        return None
-
-ta = _optional_import('pandas_ta')
+try:  # optional pandas_ta import for ta accessor registration
+    import pandas_ta as ta  # type: ignore  # noqa: F401
+except ImportError:  # pragma: no cover - optional dependency
+    ta = None
+    logging.getLogger(__name__).info(
+        'PANDAS_TA_MISSING', extra={'hint': 'pip install pandas-ta'}
+    )
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST
 except ImportError:

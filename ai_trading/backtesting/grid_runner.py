@@ -5,17 +5,14 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import product
 from typing import Any
-from ai_trading.utils.optdeps import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
+import logging
 
-_joblib = optional_import(
-    "joblib", purpose="parallel grid search", extra="backtest"
-)  # AI-AGENT-REF: extras hint uses key
-if module_ok(_joblib):  # joblib available
-    Parallel = _joblib.Parallel
-    delayed = _joblib.delayed
-else:
+logger = logging.getLogger(__name__)
+try:  # optional joblib import
+    from joblib import Parallel, delayed
+except ImportError:  # pragma: no cover - optional dependency
+    logger.info('JOBLIB_MISSING', extra={'hint': 'pip install joblib'})
     Parallel = None
-
     def delayed(f):
         return f
 

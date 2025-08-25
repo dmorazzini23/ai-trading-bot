@@ -6,13 +6,14 @@ from functools import lru_cache
 from typing import Any
 import numpy as np
 import pandas as pd
-from ai_trading.utils.optdeps import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
 logger = logging.getLogger(__name__)
 
-_numba = optional_import(
-    "numba", purpose="speeding up indicators", extra="fast"
-)  # AI-AGENT-REF: extras hint uses key
-_numba_jit = getattr(_numba, "jit", None) if module_ok(_numba) else None
+try:  # optional numba import
+    import numba as _numba  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _numba = None
+    logger.info('NUMBA_MISSING', extra={'hint': 'pip install numba'})
+_numba_jit = getattr(_numba, "jit", None) if _numba is not None else None
 
 def jit(*args, **kwargs):
     """Lazily apply numba JIT based on configuration."""
