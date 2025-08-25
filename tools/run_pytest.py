@@ -80,16 +80,20 @@ def _ensure_repo_on_path() -> None:
     os.environ["PYTHONPATH"] = repo_str if not existing else f"{repo_str}{os.pathsep}{existing}"
     try:
         import ai_trading  # type: ignore
-        print(f"[run_pytest] ai_trading path -> {Path(ai_trading.__file__).resolve()}")
+
+        logger = logging.getLogger("run_pytest")
+        # AI-AGENT-REF: route import diagnostics through logger without polluting smoke output
+        logger.debug("[run_pytest] ai_trading path -> %s", Path(ai_trading.__file__).resolve())
     except Exception as e:  # pragma: no cover - diagnostic only
-        print(f"[run_pytest] ai_trading not importable yet ({e}); pytest will handle it", file=sys.stderr)
+        logger = logging.getLogger("run_pytest")
+        logger.warning("[run_pytest] ai_trading not importable yet (%s); pytest will handle it", e)
 
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger("run_pytest")
     _ensure_repo_on_path()
-    # AI-AGENT-REF: avoid third-party plugins influencing tests
+    # AI-AGENT-REF: disable implicit plugin autoload for deterministic xdist startup
     os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -101,4 +105,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
