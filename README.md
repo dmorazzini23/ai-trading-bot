@@ -210,12 +210,19 @@ If you prefer manual setup or encounter issues with the automated process:
 python3.12 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Upgrade pip and install project in editable mode
+# Upgrade pip
 python -m pip install -U pip
+
+# Core runtime and dev/test dependencies
+pip install -r requirements.txt -c constraints.txt
+pip install -r requirements/dev.txt -c constraints-dev.txt
+pip install -r requirements-test.txt -c constraints-dev.txt
+
+# Install project in editable mode
 pip install -e .
 
-# Install development tools (optional)
-pip install -r requirements-dev.txt
+# Optional RL extras
+# pip install -r requirements-extras-rl.txt
 
 # Verify installation
 pip list | grep -E "(pandas|numpy|alpaca|scikit-learn)"

@@ -4,6 +4,10 @@ import time
 
 import pytest
 
+pytest.importorskip("stable_baselines3", reason="RL extras not installed")
+pytest.importorskip("gymnasium", reason="RL extras not installed")
+pytest.importorskip("torch", reason="RL extras not installed")
+
 MODULES = [
     "ai_trading.rl_trading",
     "ai_trading.rl_trading.train",
