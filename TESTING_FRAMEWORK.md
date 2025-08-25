@@ -111,7 +111,7 @@ from datetime import datetime, timezone
 from unittest.mock import Mock, patch, MagicMock
 
 from bot_engine import BotState, pre_trade_health_check, run_all_trades_worker
-from risk_engine import calculate_position_size
+from ai_trading.risk.engine import calculate_position_size
 
 
 class TestBotState:
@@ -286,7 +286,7 @@ class TestRiskManagement:
     
     def test_position_size_calculation_basic(self):
         """Test basic position size calculation."""
-        from risk_engine import calculate_position_size
+        from ai_trading.risk.engine import calculate_position_size
         
         # Test simple position sizing
         position_size = calculate_position_size(10000, 150.0)  # $10k cash, $150/share
@@ -297,14 +297,14 @@ class TestRiskManagement:
     
     def test_position_size_with_zero_cash(self):
         """Test position sizing with zero available cash."""
-        from risk_engine import calculate_position_size
+        from ai_trading.risk.engine import calculate_position_size
         
         position_size = calculate_position_size(0, 150.0)
         assert position_size == 0
     
     def test_position_size_with_negative_inputs(self):
         """Test position sizing with invalid inputs."""
-        from risk_engine import calculate_position_size
+        from ai_trading.risk.engine import calculate_position_size
         
         # Negative cash should return 0
         position_size = calculate_position_size(-1000, 150.0)
@@ -316,7 +316,7 @@ class TestRiskManagement:
     
     def test_drawdown_limit_checking(self):
         """Test maximum drawdown limit checking."""
-        from risk_engine import check_max_drawdown
+        from ai_trading.risk.engine import check_max_drawdown
         
         # Normal case - within limits
         state = {'current_drawdown': 0.03, 'max_drawdown': 0.05}

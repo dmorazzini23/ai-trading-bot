@@ -454,7 +454,7 @@ test_all_providers(['SPY'])
 "
 
 # Risk limits check
-python risk_engine.py --check-limits
+python -m ai_trading.risk.engine --check-limits
 ```
 
 ### 🔄 Advanced Usage

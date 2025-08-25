@@ -81,7 +81,10 @@ logger.info('Portfolio optimization modules loaded successfully')
 _portfolio_optimizer = None
 _transaction_cost_calculator = None
 _regime_detector = None
-from ai_trading.position.legacy_manager import PositionManager
+from ai_trading.position.intelligent_manager import (
+    IntelligentPositionManager,
+    PositionAction,
+)
 
 def load_module(name):
     if not isinstance(name, str):
@@ -517,16 +520,48 @@ def generate_ensemble_signal(df) -> int:
 def generate_position_hold_signals(ctx, current_positions: list) -> dict:
     """Generate hold signals for existing positions to reduce churn."""
     try:
-        if PositionManager is None:
-            logger.warning('PositionManager not available - no hold signals generated')
+        if IntelligentPositionManager is None:
+            logger.warning(
+                'IntelligentPositionManager not available - no hold signals generated'
+            )
             return {}
         if not hasattr(ctx, 'position_manager'):
-            ctx.position_manager = PositionManager(ctx)
-        hold_signals = ctx.position_manager.get_hold_signals(current_positions)
-        logger.info('POSITION_HOLD_SIGNALS_GENERATED', extra={'signals_count': len(hold_signals), 'hold_count': sum((1 for s in hold_signals.values() if s == 'hold')), 'sell_count': sum((1 for s in hold_signals.values() if s == 'sell')), 'neutral_count': sum((1 for s in hold_signals.values() if s == 'neutral'))})
+            ctx.position_manager = IntelligentPositionManager(ctx)
+        hold_signals: dict[str, str] = {}
+        for position in current_positions:
+            symbol = getattr(position, 'symbol', '')
+            if not symbol:
+                continue
+            rec = ctx.position_manager.analyze_position(
+                symbol, position, current_positions
+            )
+            if rec.action == PositionAction.HOLD:
+                hold_signals[symbol] = 'hold'
+            elif rec.action in (
+                PositionAction.FULL_SELL,
+                PositionAction.PARTIAL_SELL,
+                PositionAction.REDUCE_SIZE,
+            ):
+                hold_signals[symbol] = 'sell'
+            else:
+                hold_signals[symbol] = 'neutral'
+        logger.info(
+            'POSITION_HOLD_SIGNALS_GENERATED',
+            extra={
+                'signals_count': len(hold_signals),
+                'hold_count': sum(1 for s in hold_signals.values() if s == 'hold'),
+                'sell_count': sum(1 for s in hold_signals.values() if s == 'sell'),
+                'neutral_count': sum(
+                    1 for s in hold_signals.values() if s == 'neutral'
+                ),
+            },
+        )
         return hold_signals
     except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
-        logger.error('SIGNAL_PROCESSING_FAILED', extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
+        logger.error(
+            'SIGNAL_PROCESSING_FAILED',
+            extra={'cause': exc.__class__.__name__, 'detail': str(exc)},
+        )
         return {}
 
 def should_generate_new_signal(symbol: str, hold_signals: dict, existing_positions: dict) -> bool:
