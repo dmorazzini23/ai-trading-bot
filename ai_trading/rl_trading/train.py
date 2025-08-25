@@ -1,14 +1,19 @@
 """Enhanced RL training with reward shaping and evaluation callbacks."""
+from __future__ import annotations
+
 import json
 import os
 from datetime import UTC, datetime
 from typing import Any
 
-import numpy as np
+try:  # optional dependency
+    import numpy as np
+except Exception:  # noqa: BLE001 - numpy not required unless training
+    np = None
 
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
-from . import _load_rl_stack
+from . import _load_rl_stack, is_rl_available
 
 
 class _SB3Stub:
@@ -60,9 +65,9 @@ def _ensure_rl() -> bool:
     global PPO, A2C, DQN, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
     if PPO is not _SB3Stub:
         return True
-    stack = _load_rl_stack()
-    if stack is None:
+    if not is_rl_available():
         return False
+    stack = _load_rl_stack()
     sb3 = stack["sb3"]
     PPO = sb3.PPO
     A2C = sb3.A2C
@@ -250,6 +255,8 @@ class RLTrainer:
         Returns:
             Training results
         """
+        if np is None:
+            raise ImportError("numpy required for RL training")
         if not _ensure_rl():
             logger.warning('Stable-baselines3 not available - returning dummy results')
             return {'training_time': 0.0, 'final_evaluation': {'mean_reward': 0.0, 'std_reward': 0.0}, 'total_timesteps': 0, 'algorithm': self.algorithm}
