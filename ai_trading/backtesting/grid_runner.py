@@ -8,8 +8,8 @@ from typing import Any
 from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
 
 _joblib = optional_import(
-    "joblib", purpose="parallel grid search", extra='pip install "ai-trading-bot[backtest]"'
-)
+    "joblib", purpose="parallel grid search", extra="backtest"
+)  # AI-AGENT-REF: extras hint uses key
 if module_ok(_joblib):  # joblib available
     Parallel = _joblib.Parallel
     delayed = _joblib.delayed
