@@ -1,4 +1,9 @@
 import pytest
+from tests.optdeps import require
+
+require("requests")
+require("alpaca_trade_api")
+
 from ai_trading.broker.alpaca import AlpacaBroker
 
 pytestmark = pytest.mark.alpaca
@@ -56,7 +61,6 @@ class FakeOld:
 
 
 def test_adapter_orders_new(monkeypatch):
-    pytest.importorskip("alpaca_trade_api")
     fake = FakeNew()
     broker = AlpacaBroker(fake)
     broker._is_new = True

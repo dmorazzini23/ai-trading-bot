@@ -1,6 +1,7 @@
 import pytest
+from tests.optdeps import require
 
-alpaca_api = pytest.importorskip("alpaca_api", reason="alpaca_api module not found")
+alpaca_api = require("alpaca_api")
 
 @pytest.mark.unit
 def test_pending_orders_lock_exists_and_is_lock():

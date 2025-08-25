@@ -1,8 +1,10 @@
 import pytest
+from tests.optdeps import require
 
 pytestmark = pytest.mark.alpaca
 
-pytest.importorskip("alpaca_trade_api")
+require("requests")
+require("alpaca_trade_api")
 
 from ai_trading.broker.alpaca import AlpacaBroker, APIError
 
