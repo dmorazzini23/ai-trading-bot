@@ -1,18 +1,22 @@
-import pytest
+import sys
 import importlib.util
 from pathlib import Path
+import pytest
+import sys
 
-# AI-AGENT-REF: load helper directly to avoid optional deps
+# AI-AGENT-REF: load helper directly to avoid heavy optional deps
 spec = importlib.util.spec_from_file_location(
     "_optdeps",
     Path(__file__).resolve().parent.parent / "ai_trading" / "utils" / "optdeps.py",
 )
 _optdeps = importlib.util.module_from_spec(spec)
+sys.modules["_optdeps"] = _optdeps
 assert spec.loader is not None
 spec.loader.exec_module(_optdeps)
 
 optional_import = _optdeps.optional_import
 module_ok = _optdeps.module_ok
+OptionalDependencyError = _optdeps.OptionalDependencyError
 
 
 def test_optional_import_present_module():
@@ -27,15 +31,30 @@ def test_optional_import_absent_module_returns_none():
     assert mod is None
 
 
-def test_optional_import_required_raises():
-    with pytest.raises(ImportError):
+def test_required_raises_clear_message(monkeypatch):
+    monkeypatch.setitem(sys.modules, "totally_missing_pkg", None)
+    with pytest.raises(OptionalDependencyError) as ei:
         optional_import(
-            "totally_nonexistent_pkg_xyz",
+            "totally_missing_pkg",
             required=True,
-            install_hint="pip install totally-nonexistent",
+            purpose="demo",
+            extra='pip install "ai-trading-bot[demo]"',
         )
+    msg = str(ei.value)
+    assert "Missing optional dependency: totally_missing_pkg." in msg
+    assert "Needed for: demo." in msg
+    assert 'Install with: pip install "ai-trading-bot[demo]"' in msg
+
+
+def test_render_equity_curve_handles_missing_matplotlib(monkeypatch):
+    sys.modules.pop("ai_trading.plotting.renderer", None)
+    from ai_trading.plotting import renderer
+
+    renderer.plt = None
+    with pytest.raises(renderer.OptionalDependencyError):
+        renderer.render_equity_curve([1, 2, 3])
 
 
 def test_module_ok_boolean():
     assert module_ok("math") is True
-    assert module_ok("totally_nonexistent_pkg_xyz") is False
+    assert module_ok(None) is False

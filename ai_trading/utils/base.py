@@ -17,15 +17,15 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
-from ai_trading.utils.optional_import import optional_import
-try:
-    import pandas_market_calendars as mcal
-except ImportError:
-    mcal = None
+from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
+_mcal = optional_import(
+    "pandas_market_calendars", purpose="market calendars", extra='pip install "ai-trading-bot[cal]"'
+)
+mcal = _mcal if module_ok(_mcal) else None
 import numpy as np
 from ai_trading.monitoring.system_health import snapshot_basic
 from ai_trading.settings import get_verbose_logging
-REST = optional_import('alpaca_trade_api.rest', 'REST') or object
+REST = optional_import('alpaca_trade_api.rest', attr='REST') or object
 HAS_PANDAS = True
 Timestamp = pd.Timestamp
 DataFrame = pd.DataFrame
