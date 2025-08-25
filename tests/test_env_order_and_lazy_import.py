@@ -165,10 +165,11 @@ class TestEnvironmentOrderAndLazyImport:
         # Mock ensure_dotenv_loaded to track when it's called
         with patch('ai_trading.env.ensure_dotenv_loaded') as mock_ensure:
             with patch('ai_trading.runner.run_cycle') as mock_run_cycle:
+                mock_run_cycle.return_value = 0
                 import importlib
                 main = importlib.reload(importlib.import_module('ai_trading.main'))
-
-                result = main.run_bot()
+                with patch.object(main, 'validate_environment', lambda: None):
+                    result = main.run_bot()
 
                 mock_ensure.assert_called()
                 mock_run_cycle.assert_called_once()
@@ -257,6 +258,16 @@ class TestEnvironmentOrderAndLazyImport:
             for key, value in env_backup.items():
                 os.environ[key] = value
 
+
+    def test_import_main_has_no_env_side_effect(self):
+        """Importing ai_trading.main should not load .env automatically."""
+        import importlib
+        import sys
+
+        sys.modules.pop("ai_trading.main", None)
+        with patch("ai_trading.env.ensure_dotenv_loaded") as mock_ensure:
+            importlib.import_module("ai_trading.main")
+            mock_ensure.assert_not_called()
 
 if __name__ == "__main__":
     pytest.main([__file__])
