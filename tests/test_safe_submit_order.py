@@ -4,9 +4,9 @@ import types
 class DummyAPI:
     def __init__(self):
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
-        self.get_all_positions = lambda: []
+        self.list_positions = lambda: []
         self.submit_order = lambda order_data=None: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
-        self.get_order_by_id = lambda oid: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
+        self.get_order = lambda oid: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
 
 
 def test_safe_submit_order_pending_new(monkeypatch):

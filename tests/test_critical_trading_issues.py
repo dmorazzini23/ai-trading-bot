@@ -110,7 +110,7 @@ class TestOrderExecutionTracking(unittest.TestCase):
         partial_order.filled_qty = "50"
         partial_order.qty = "100"
 
-        with patch.object(self.mock_ctx.api, 'get_order_by_id', return_value=partial_order):
+        with patch.object(self.mock_ctx.api, 'get_order', return_value=partial_order):
             if hasattr(bot_engine, 'poll_order_fill_status'):
                 # This should track the actual fill but doesn't integrate with slice logic
                 bot_engine.poll_order_fill_status(self.mock_ctx, order_id, timeout=1)
@@ -133,7 +133,7 @@ class TestOrderExecutionTracking(unittest.TestCase):
         partial_order.qty = "100"
 
         with patch.object(self.mock_ctx.api, 'submit_order', return_value=partial_order), \
-             patch.object(self.mock_ctx.api, 'get_order_by_id', return_value=partial_order):
+             patch.object(self.mock_ctx.api, 'get_order', return_value=partial_order):
 
             if hasattr(bot_engine, 'safe_submit_order'):
                 result = bot_engine.safe_submit_order(self.mock_ctx.api, mock_req)

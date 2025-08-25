@@ -22,7 +22,7 @@ def test_run_strategy_no_signals(monkeypatch):
     ctx = SimpleNamespace(
         strategies=[DummyStrategy()],
         allocator=FailAllocator(),
-        api=SimpleNamespace(list_open_positions=lambda: []),
+        api=SimpleNamespace(list_positions=lambda: []),
         data_fetcher=SimpleNamespace(
             get_daily_df=lambda ctx, sym: pd.DataFrame(),
             get_minute_df=lambda ctx, sym: pd.DataFrame(),

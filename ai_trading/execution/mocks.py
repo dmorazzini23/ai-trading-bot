@@ -26,6 +26,7 @@ class MockTradingClient:
     def list_positions(self):
         return []
 
-    def get_order_by_id(self, order_id):
+    def get_order(self, order_id):
         return SimpleNamespace(id=str(order_id), status='filled')
+
 __all__ = ['MockContext', 'MockTradingClient']

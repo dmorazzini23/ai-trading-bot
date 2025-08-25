@@ -53,7 +53,13 @@ from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
 )
-from ai_trading.broker.alpaca import ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.config.management import derive_cap_from_settings
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
@@ -1418,7 +1424,6 @@ class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
 
 # Assign lightweight stubs for Alpaca SDK types; keep TimeFrame separate for constants.
 Quote = StockBarsRequest = StockLatestQuoteRequest = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
-APIError = ensure_api_error()
 
 # Minimal enum-like placeholder so code can reference TimeFrame.Day etc.
 class _TimeFrame:  # AI-AGENT-REF: safe constants when Alpaca SDK not installed
@@ -1457,7 +1462,6 @@ def _alpaca_symbols():
         start_trade_updates_stream as _start,
     )
     return _alpaca_get, _start
-from ai_trading.broker.alpaca import AlpacaBroker
 
 if ALPACA_AVAILABLE:
     from ai_trading.rebalancer import (
@@ -1921,7 +1925,7 @@ def load_portfolio_snapshot() -> dict[str, int]:
 
 def compute_current_positions(ctx: BotContext) -> dict[str, int]:
     try:
-        positions = ctx.api.list_open_positions()
+        positions = ctx.api.list_positions()
         _log.debug("Raw Alpaca positions: %s", positions)
         return {p.symbol: int(p.qty) for p in positions}
     except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
@@ -2130,7 +2134,7 @@ def reconcile_positions(ctx: BotContext) -> None:
     """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
     try:
         live_positions = {
-            pos.symbol: int(pos.qty) for pos in ctx.api.list_open_positions()
+            pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()
         }
         with targets_lock:
             symbols_with_targets = list(ctx.stop_targets.keys()) + list(
@@ -3210,7 +3214,7 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
     """Log detailed diagnostics used for halt decisions."""
     try:
         cash = float(runtime.api.get_account().cash)
-        positions = len(runtime.api.list_open_positions())
+        positions = len(runtime.api.list_positions())
     except (AttributeError, APIError) as e:
         cash = -1.0
         positions = -1
@@ -4569,7 +4573,7 @@ def audit_positions(ctx) -> None:
 
     # 2) Fetch remote (broker) positions
     try:
-        remote = {p.symbol: int(p.qty) for p in ctx.api.list_open_positions()}
+        remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
     except APIError as e:
         logger = logging.getLogger(__name__)
         _log.exception(
@@ -5100,7 +5104,7 @@ class SignalManager:
 @dataclass
 class BotContext:
     # Trading client using the new Alpaca SDK
-    api: AlpacaBroker
+    api: Any
     # Separate market data client
     data_client: Any
     data_fetcher: DataFetcher
@@ -5421,8 +5425,7 @@ def _initialize_alpaca_clients():
         secret_key=secret,
         base_url=base_url,
     )
-    trading_client = AlpacaBroker(trading_client)
-    data_client = trading_client._api
+    data_client = trading_client
     _log.info("ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()}))
     stream = None  # initialize stream lazily elsewhere if/when required
 
@@ -5720,7 +5723,7 @@ def _emit_periodic_metrics():
         account = getattr(runtime, "api", None)
         if account:
             account_obj = account.get_account()
-            positions = account.list_open_positions()
+            positions = account.list_positions()
             _metrics.emit_account_health(account_obj, positions)
     except (
         FileNotFoundError,
@@ -6695,7 +6698,7 @@ def check_halt_flag(runtime) -> bool:
 def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
     """Check if there are too many positions, with allowance for rebalancing."""
     try:
-        current_positions = ctx.api.list_open_positions()
+        current_positions = ctx.api.list_positions()
         position_count = len(current_positions)
 
         # If we're not at the limit, allow new positions
@@ -6966,7 +6969,7 @@ def get_sector(symbol: str) -> str:
 def sector_exposure(ctx: BotContext) -> dict[str, float]:
     """Return current portfolio exposure by sector as fraction of equity."""
     try:
-        positions = ctx.api.list_open_positions()
+        positions = ctx.api.list_positions()
     except (
         FileNotFoundError,
         PermissionError,
@@ -7621,7 +7624,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
         raise
 
 
-def safe_submit_order(api: AlpacaBroker, req) -> Order | None:
+def safe_submit_order(api: Any, req) -> Order | None:
     if not market_is_open():
         _log.warning(
             "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
@@ -7675,7 +7678,7 @@ def safe_submit_order(api: AlpacaBroker, req) -> Order | None:
                     return None
             if order_args.get("side") == "sell":
                 try:
-                    positions = api.list_open_positions()
+                    positions = api.list_positions()
                 except (APIError, TimeoutError, ConnectionError):
                     positions = []
                 avail = next(
@@ -7721,7 +7724,7 @@ def safe_submit_order(api: AlpacaBroker, req) -> Order | None:
                     )
                     break
                 time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
-                order = api.get_order_by_id(order.id)
+                order = api.get_order(order.id)
             _log.info(
                 f"Order status for {order_args.get('symbol')}: {getattr(order, 'status', '')}"
             )
@@ -7792,7 +7795,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
     start = pytime.time()
     while pytime.time() - start < timeout:
         try:
-            od = ctx.api.get_order_by_id(order_id)
+            od = ctx.api.get_order(order_id)
             status = getattr(od, "status", "")
             filled = getattr(od, "filled_qty", "0")
             if status not in {"new", "accepted", "partially_filled"}:
@@ -7837,7 +7840,7 @@ def send_exit_order(
         _log.info("SKIP_NO_POSITION", extra={"symbol": symbol})
         return
     try:
-        pos = ctx.api.get_open_position(symbol)
+        pos = ctx.api.get_position(symbol)
         held_qty = int(pos.qty)
     except (
         FileNotFoundError,
@@ -7935,7 +7938,7 @@ def send_exit_order(
             _log.debug("register_fill exit failed", exc_info=True)
     pytime.sleep(5)
     try:
-        o2 = ctx.api.get_order_by_id(limit_order.id)
+        o2 = ctx.api.get_order(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order(limit_order.id)
             safe_submit_order(
@@ -8351,7 +8354,7 @@ def maybe_pyramid(
     profit = (current_price - entry_price) if entry_price else 0
     if profit > 2 * atr and prob >= 0.75:
         try:
-            pos = ctx.api.get_open_position(symbol)
+            pos = ctx.api.get_position(symbol)
             qty = int(abs(int(pos.qty)) * 0.5)
             if qty > 0:
                 submit_order(ctx, symbol, qty, "buy")
@@ -8541,7 +8544,7 @@ def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> Non
 
 
 def exit_all_positions(ctx: BotContext) -> None:
-    raw_positions = ctx.api.list_open_positions()
+    raw_positions = ctx.api.list_positions()
     for pos in raw_positions:
         qty = abs(int(pos.qty))
         if qty:
@@ -8680,7 +8683,7 @@ def _safe_trade(
         if side is not None:
             try:
                 live_positions = {
-                    p.symbol: int(p.qty) for p in ctx.api.list_open_positions()
+                    p.symbol: int(p.qty) for p in ctx.api.list_positions()
                 }
                 if side == OrderSide.BUY and symbol in live_positions:
                     _log.info(f"REALTIME_SKIP | {symbol} already held. Skipping BUY.")
@@ -8965,7 +8968,7 @@ def _enter_long(
 
         # Get current total exposure to avoid exceeding cap
         try:
-            positions = ctx.api.list_open_positions()
+            positions = ctx.api.list_positions()
             current_exposure = sum(
                 abs(float(p.market_value)) for p in positions
             ) / float(ctx.api.get_account().equity)
@@ -9221,7 +9224,7 @@ def _manage_existing_position(
             _record_trade_in_frequency_tracker(state, symbol, datetime.now(UTC))
         ctx.trade_logger.log_exit(state, symbol, price)
         try:
-            pos_after = ctx.api.get_open_position(symbol)
+            pos_after = ctx.api.get_position(symbol)
             if int(pos_after.qty) == 0:
                 with targets_lock:
                     ctx.stop_targets.pop(symbol, None)
@@ -9240,7 +9243,7 @@ def _manage_existing_position(
             raise
     else:
         try:
-            pos = ctx.api.get_open_position(symbol)
+            pos = ctx.api.get_position(symbol)
             entry_price = float(pos.avg_entry_price)
             maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
         except (
@@ -9424,7 +9427,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     from ai_trading.utils import portfolio_lock
 
     try:
-        positions = ctx.api.list_open_positions()
+        positions = ctx.api.list_positions()
         symbols = [p.symbol for p in positions]
     except (
         FileNotFoundError,
@@ -11829,7 +11832,7 @@ def run_multi_strategy(ctx) -> None:
     # AI-AGENT-REF: Add position holding logic to reduce churn
     try:
         # Get current positions
-        current_positions = ctx.api.list_open_positions()
+        current_positions = ctx.api.list_positions()
 
         # Generate hold signals for existing positions
         # ai_trading/core/bot_engine.py:8588 - Convert import guard to hard import (internal module)
@@ -12637,7 +12640,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         )
                         # Manage existing positions but skip new trades
                         try:
-                            portfolio = runtime.api.list_open_positions()
+                            portfolio = runtime.api.list_positions()
                             for pos in portfolio:
                                 manage_position_risk(runtime, pos)
                         except (
@@ -12676,7 +12679,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 _log_health_diagnostics(runtime, "halt_flag_loop")
                 _log.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
                 try:
-                    portfolio = runtime.api.list_open_positions()
+                    portfolio = runtime.api.list_positions()
                     for pos in portfolio:
                         manage_position_risk(runtime, pos)
                 except (
@@ -12695,7 +12698,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     acct = runtime.api.get_account()
                     cash = float(acct.cash)
                     equity = float(acct.equity)
-                    positions = runtime.api.list_open_positions()
+                    positions = runtime.api.list_positions()
                     _log.debug("Raw Alpaca positions: %s", positions)
                     exposure = (
                         sum(abs(float(p.market_value)) for p in positions)
@@ -12814,7 +12817,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             run_multi_strategy(runtime)
             try:
                 runtime.risk_engine.refresh_positions(runtime.api)
-                pos_list = runtime.api.list_open_positions()
+                pos_list = runtime.api.list_positions()
                 state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
                 state.long_positions = {
                     s for s, q in state.position_cache.items() if q > 0
@@ -12840,7 +12843,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 acct = runtime.api.get_account()
                 cash = float(acct.cash)
                 equity = float(acct.equity)
-                positions = runtime.api.list_open_positions()
+                positions = runtime.api.list_positions()
                 _log.debug("Raw Alpaca positions: %s", positions)
                 # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
                 from ai_trading import portfolio
@@ -13078,7 +13081,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
             total_capital = cash
             weight_per = 1.0 / len(valid_symbols)
 
-            positions = {p.symbol: int(p.qty) for p in ctx.api.list_open_positions()}
+            positions = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
 
             for sym in valid_symbols:
                 price = valid_prices[sym]
@@ -13141,7 +13144,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
     ctx.initial_rebalance_done = True
     try:
-        pos_list = ctx.api.list_open_positions()
+        pos_list = ctx.api.list_positions()
         state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
         state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
         state.short_positions = {s for s, q in state.position_cache.items() if q < 0}

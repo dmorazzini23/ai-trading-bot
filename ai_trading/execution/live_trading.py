@@ -8,12 +8,17 @@ import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
-from ai_trading.broker.alpaca import AlpacaBroker, ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.config import AlpacaConfig, get_alpaca_config
 from ai_trading.logging import logger
 
 _log = logging.getLogger(__name__)
-APIError = ensure_api_error()
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST  # type: ignore
 except (ValueError, TypeError, ModuleNotFoundError, ImportError):
@@ -82,9 +87,15 @@ class AlpacaExecutionEngine:
                     self.is_initialized = True
                     return True
             self.config = get_alpaca_config()
-            raw_client = AlpacaREST(key_id=self.config.key_id, secret_key=self.config.secret_key, base_url=self.config.base_url)
-            logger.info(f'Real Alpaca client initialized (paper={self.config.use_paper})')
-            self.trading_client = AlpacaBroker(raw_client)
+            raw_client = AlpacaREST(
+                key_id=self.config.key_id,
+                secret_key=self.config.secret_key,
+                base_url=self.config.base_url,
+            )
+            logger.info(
+                f'Real Alpaca client initialized (paper={self.config.use_paper})'
+            )
+            self.trading_client = raw_client
             if self._validate_connection():
                 self.is_initialized = True
                 logger.info('Alpaca execution engine ready for trading')
@@ -393,7 +404,7 @@ class AlpacaExecutionEngine:
         if os.environ.get('PYTEST_RUNNING'):
             return {'id': order_id, 'status': 'filled', 'filled_qty': '100'}
         else:
-            order = self.trading_client.get_order_by_id(order_id)
+            order = self.trading_client.get_order(order_id)
             return {'id': order.id, 'status': order.status, 'symbol': order.symbol, 'side': order.side, 'quantity': order.qty, 'filled_qty': order.filled_qty, 'filled_avg_price': order.filled_avg_price}
 
     def _get_account_alpaca(self) -> dict:
@@ -411,5 +422,14 @@ class AlpacaExecutionEngine:
         if os.environ.get('PYTEST_RUNNING'):
             return []
         else:
-            positions = self.trading_client.list_open_positions()
-            return [{'symbol': pos.symbol, 'qty': pos.qty, 'side': pos.side, 'market_value': pos.market_value, 'unrealized_pl': pos.unrealized_pl} for pos in positions]
+            positions = self.trading_client.list_positions()
+            return [
+                {
+                    'symbol': pos.symbol,
+                    'qty': pos.qty,
+                    'side': pos.side,
+                    'market_value': pos.market_value,
+                    'unrealized_pl': pos.unrealized_pl,
+                }
+                for pos in positions
+            ]

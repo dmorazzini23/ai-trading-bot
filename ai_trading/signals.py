@@ -14,11 +14,15 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
     import numpy as np  # type: ignore
     import pandas as pd  # type: ignore
 
-from ai_trading.broker.alpaca import ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout
-
-APIError = ensure_api_error()
 logger = get_logger(__name__)
 _log = logger
 

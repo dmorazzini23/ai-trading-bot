@@ -16,12 +16,17 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from ai_trading.broker.alpaca import ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.logging import logger
 
 Hook = Callable[[], None]
 PositionsHandler = Callable[[], list[dict[str, Any]]]
-APIError = ensure_api_error()
 
 class ShutdownReason(Enum):
     """Reasons for system shutdown."""
