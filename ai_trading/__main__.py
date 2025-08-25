@@ -56,7 +56,8 @@ def run_trade() -> None:
     args = parser.parse_args()
     if args.dry_run:
         logger.info("AI Trade: Dry run - exiting")
-        return
+        logger.info("INDICATOR_IMPORT_OK")
+        sys.exit(0)
 
     import os
 
@@ -76,7 +77,8 @@ def run_backtest() -> None:
     args = parser.parse_args()
     if args.dry_run:
         logger.info("AI Backtest: Dry run - exiting")
-        return
+        logger.info("INDICATOR_IMPORT_OK")
+        sys.exit(0)
 
     import os
 
@@ -96,7 +98,8 @@ def run_healthcheck() -> None:
     args = parser.parse_args()
     if args.dry_run:
         logger.info("AI Health: Dry run - exiting")
-        return
+        logger.info("INDICATOR_IMPORT_OK")
+        sys.exit(0)
 
     import os
 
@@ -116,7 +119,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.dry_run:
         logger.info("AI Main: Dry run - exiting")
-        return
+        logger.info("INDICATOR_IMPORT_OK")
+        sys.exit(0)
 
     import os
 
