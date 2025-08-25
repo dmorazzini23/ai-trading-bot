@@ -3,6 +3,9 @@
 This repository contains a simple trading bot together with a backtesting
 harness for optimizing its tunable hyperparameters.
 
+For details on how entry and exit signals are generated, see
+[Entry and Exit Signal Methodology](ENTRY_EXIT_SIGNALS.md).
+
 ## Running the Backtester
 
 ```
