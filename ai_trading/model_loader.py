@@ -1,8 +1,11 @@
 from __future__ import annotations
 import logging
 import pickle
+from pickle import UnpicklingError
 from datetime import UTC
 from pathlib import Path
+import os
+import sys
 from ai_trading.config import management as config
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -44,21 +47,17 @@ def train_and_save_model(symbol: str):
 
 def load_model(symbol: str):
     """Load or train an ML model for ``symbol``."""
-    path = MODELS_DIR / f'{symbol}.pkl'
-    model = None
+    path = MODELS_DIR / f"{symbol}.pkl"
     if path.exists():
         try:
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 model = pickle.load(f)
-        except (ValueError, TypeError) as exc:
-            logger.warning('Model load failed for %s: %s', symbol, exc)
-            model = None
-    if model is None:
+        except (ValueError, TypeError, UnpicklingError) as exc:
+            raise RuntimeError(f"Failed to load model from {path}: {exc}") from exc
+    else:
         model = train_and_save_model(symbol)
     ML_MODELS[symbol] = model
     return model
-import os
-import sys
 _is_testing = os.getenv('TESTING') or os.getenv('PYTEST_RUNNING') or getattr(config, 'TESTING', False) or ('pytest' in sys.modules) or ('test_' in os.path.basename(sys.argv[0] if sys.argv else ''))
 if not _is_testing:
     for sym in getattr(config, 'SYMBOLS', []):
