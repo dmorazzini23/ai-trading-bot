@@ -55,7 +55,7 @@ Unit Tests (70%)
 
 ## Deterministic Testing
 
-To keep results reproducible, all tests run with a fixed random seed. A session-scoped pytest fixture sets `PYTHONHASHSEED=0`, seeds Python's `random` module and NumPy, and calls `torch.manual_seed(0)` when PyTorch is available. Tests should avoid introducing additional sources of nondeterminism.
+To keep results reproducible, all tests start with a fixed random seed. An autouse fixture in `tests/conftest.py` sets `PYTHONHASHSEED=0` (if not already configured), seeds Python's `random` module and NumPy, and calls `torch.manual_seed(0)` when PyTorch is available. Tests should avoid introducing additional sources of nondeterminism.
 
 ## Test Structure
 

@@ -42,11 +42,13 @@ if not hasattr(_alpaca_rest, "APIError"):
     _alpaca_rest.APIError = Exception
 
 import asyncio
+import random
 import socket
 import sys
 from datetime import datetime, timezone
 import pathlib
 
+import numpy as np
 import pytest
 try:
     # Optional dev dependency. Provide a benign fallback for smoke/collect.
@@ -84,6 +86,19 @@ def _env_defaults(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("TZ", "UTC")
+
+
+@pytest.fixture(autouse=True)
+def _seed_prng() -> None:
+    os.environ.setdefault("PYTHONHASHSEED", "0")
+    random.seed(0)
+    np.random.seed(0)
+    try:
+        import torch  # type: ignore
+    except Exception:
+        pass
+    else:
+        torch.manual_seed(0)
 
 
 def pytest_configure(config: pytest.Config) -> None:
