@@ -13,7 +13,7 @@ from typing import Any, Optional
 import requests
 import importlib.util
 from ai_trading.logging import get_logger
-from ai_trading.utils import optional_import  # AI-AGENT-REF: unify optional deps
+from ai_trading.utils.optdeps import optional_import  # AI-AGENT-REF: unify optional deps
 
 # Optional deps via helper keep imports lightweight
 pd = optional_import("pandas")  # -> module or None

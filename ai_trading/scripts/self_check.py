@@ -1,7 +1,7 @@
 import os
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df
-from ai_trading.utils.optional_import import optional_import
-TimeFrame = optional_import('alpaca_trade_api.rest', 'TimeFrame')
+from ai_trading.utils.optdeps import optional_import
+TimeFrame = optional_import('alpaca_trade_api.rest', attr='TimeFrame')
 
 def main() -> None:
     feed = os.getenv('ALPACA_DATA_FEED', 'iex')

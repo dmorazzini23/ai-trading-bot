@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 from ai_trading.exc import COMMON_EXC
-from ai_trading.utils import optional_import  # AI-AGENT-REF: extras-aware deps
+from ai_trading.utils.optdeps import optional_import  # AI-AGENT-REF: extras-aware deps
 HAS_NUMPY = True
 pd = optional_import("pandas")
 

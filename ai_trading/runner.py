@@ -5,6 +5,8 @@ import os
 import time as _time
 from threading import RLock
 import warnings
+import argparse  # AI-AGENT-REF: CLI parser
+from typing import Optional
 
 from ai_trading.logging import get_logger
 
@@ -194,11 +196,29 @@ def run_cycle() -> None:
         _run_lock.release()
 
 
-def main() -> None:
-    """Entry point for command-line invocation."""
-    run_cycle()
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ai_trading.runner",
+        description="Lightweight CLI wrapper around run_cycle() for manual pokes and smoke-tests.",
+        add_help=True,
+    )
+    parser.add_argument("-n", "--iterations", type=int, default=1, help="How many trade cycles to run (default: 1)")
+    parser.add_argument("-i", "--interval", type=float, default=0.0, help="Seconds to sleep between iterations (default: 0)")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (optional)")
+    return parser
+
+
+def main() -> int:  # AI-AGENT-REF: argparse-based entrypoint
+    """CLI entrypoint used by ``python -m ai_trading.runner``."""
+    parser = _build_parser()
+    args = parser.parse_args()
+    for i in range(args.iterations):
+        run_cycle()
+        if args.interval and i < args.iterations - 1:
+            _time.sleep(args.interval)
+    return 0
 
 
 if __name__ == "__main__":
     _preflight_import_health()
-    main()
+    raise SystemExit(main())

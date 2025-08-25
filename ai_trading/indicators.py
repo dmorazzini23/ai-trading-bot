@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 import numpy as np
 import pandas as pd
-from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
+from ai_trading.utils.optdeps import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
 logger = logging.getLogger(__name__)
 
 _numba = optional_import(

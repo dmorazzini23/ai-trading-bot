@@ -1338,7 +1338,22 @@ Environment variables controlling startup import checks:
 
 ### Developer tools
 - `make smoke` — fast, non-blocking checks (lint, tiny test suite).
-- `make scan-extras` — strict scan for raw “install X” hints.  
+- `make scan-extras` — strict scan for raw “install X” hints.
   Non-blocking variant also runs in smoke. To suppress a false positive on a single line, add `# extras:ignore` (or `<!-- extras:ignore -->` in docs).
+
+
+## Development quick start
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+bash scripts/bootstrap.sh
+python -m compileall ai_trading
+pytest -q
+python -m ai_trading.runner --help
+```
+
+If imports fail for missing scientific packages, ensure you've run
+`bash scripts/bootstrap.sh` or manually installed
+`requirements-dev.txt`.
 
 

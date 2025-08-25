@@ -1,0 +1,22 @@
+name: bootstrap
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Bootstrap deps
+        run: bash scripts/bootstrap.sh
+      - name: Compile
+        run: python -m compileall ai_trading
+      - name: Test
+        run: pytest -q
+      - name: Runner import
+        run: python -m ai_trading.runner --help
