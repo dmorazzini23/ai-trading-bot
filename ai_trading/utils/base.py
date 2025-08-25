@@ -48,7 +48,8 @@ def safe_subprocess_run(cmd: list[str] | tuple[str, ...], timeout: float | int |
         t = float(timeout) if timeout is not None else SUBPROCESS_TIMEOUT_DEFAULT
         res = subprocess.run(list(cmd), timeout=t, check=True, capture_output=True)
         return (res.stdout or b"").decode(errors="ignore").strip()
-    except Exception:
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
         return ""
 
 def get_ohlcv_columns(df) -> list[str]:
