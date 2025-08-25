@@ -23,7 +23,6 @@ dependencies = [
   "pydantic==2.8.2",
   "pydantic-settings>=2.2,<3",
   "tzdata>=2024.1",  # AI-AGENT-REF: ensure timezone data
-  "pytz==2024.1",
   "pandas-market-calendars>=4.4,<6",  # AI-AGENT-REF: exchange calendars
   "schedule==1.2.2",
   "prometheus-client==0.20.0",
