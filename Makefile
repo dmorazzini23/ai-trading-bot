@@ -37,6 +37,11 @@ ci-smoke: test-collect-report
 smoke:
 	./tools/ci_smoke.sh
 
+.PHONY: scan-extras
+scan-extras:
+	@echo "[make] strict scan for raw install hints"
+	@python tools/scan_extras_hints.py --strict
+
 # Alias for developer convenience
 test: smoke
 
