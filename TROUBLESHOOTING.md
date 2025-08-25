@@ -328,7 +328,7 @@ if __name__ == "__main__":
 
 ```python
 # debug_position_sizing.py
-import risk_engine
+import ai_trading.risk.engine as risk_engine
 import pandas as pd
 
 def debug_position_sizing(symbol, signal_strength, account_equity):

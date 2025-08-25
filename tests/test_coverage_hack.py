@@ -1,3 +1,4 @@
+import importlib
 import logging
 import pathlib
 
@@ -25,12 +26,18 @@ def test_force_full_coverage():
 
 def test_critical_imports():
     """Test that all critical modules can be imported without errors."""
-    critical_modules = ["bot_engine", "data_fetcher", "signals", "risk_engine", "trade_execution"]
+    critical_modules = [
+        "ai_trading.core.bot_engine",
+        "ai_trading.data_fetcher",
+        "ai_trading.signals",
+        "ai_trading.risk.engine",
+        "ai_trading.trade_execution",
+    ]
     failed_imports = []
 
     for module_name in critical_modules:
         try:
-            __import__(module_name)
+            importlib.import_module(module_name)
         except ImportError as e:
             failed_imports.append((module_name, str(e)))
 

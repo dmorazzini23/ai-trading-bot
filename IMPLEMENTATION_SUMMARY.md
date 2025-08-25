@@ -147,10 +147,6 @@ Result: Lower churn, maximize gains from winners
 
 ## Testing Files Created
 
-1. **test_position_holding.py** - Comprehensive test suite
-2. **test_position_holding_simple.py** - Simplified tests
-3. **demo_position_holding.py** - Working demonstration
-
 ## Success Criteria Met ✅
 
 1. ✅ **Profitable positions held for multiple cycles**

@@ -10,7 +10,6 @@ PATHS = [
     "ai_trading/execution/liquidity.py",
     "ai_trading/portfolio/optimizer.py",
     "ai_trading/strategies/regime_detection.py",
-    "ai_trading/position/legacy_manager.py",
     "ai_trading/strategies/signals.py",
     "ai_trading/strategies/multi_timeframe.py",
     "ai_trading/position/correlation_analyzer.py",

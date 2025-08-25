@@ -210,10 +210,14 @@ class SignalStrength(Enum):
 
 ### Risk Management API
 
-#### `risk_engine.py` - Risk Controls
+#### `ai_trading.risk.engine` - Risk Controls
 
 ```python
-from risk_engine import calculate_position_size, check_risk_limits, RiskMetrics
+from ai_trading.risk.engine import (
+    RiskMetrics,
+    calculate_position_size,
+    check_risk_limits,
+)
 
 def calculate_position_size(
     symbol: str,
