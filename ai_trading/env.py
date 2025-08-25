@@ -1,23 +1,6 @@
 from __future__ import annotations
 import os
-import importlib.util
-from pathlib import Path
-import sys
 
-# AI-AGENT-REF: optional dotenv via optdeps without heavy package import
-_spec = importlib.util.spec_from_file_location(
-    "_optdeps", Path(__file__).resolve().parent / "utils" / "optdeps.py"
-)
-_optdeps = importlib.util.module_from_spec(_spec)
-sys.modules["_optdeps"] = _optdeps
-assert _spec.loader is not None
-_spec.loader.exec_module(_optdeps)
-optional_import = _optdeps.optional_import
-module_ok = _optdeps.module_ok
-
-load_dotenv = optional_import(
-    "dotenv", attr="load_dotenv", purpose=".env loading", extra="pip install python-dotenv"
-)
 _ENV_LOADED = False
 
 def ensure_dotenv_loaded() -> None:
@@ -29,7 +12,9 @@ def ensure_dotenv_loaded() -> None:
     here = os.path.abspath(os.path.dirname(__file__))
     repo_root = os.path.abspath(os.path.join(here, os.pardir, os.pardir))
     explicit = os.path.join(repo_root, '.env')
-    if not module_ok(load_dotenv):
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except ModuleNotFoundError:
         return
     if os.path.exists(explicit):
         load_dotenv(dotenv_path=explicit, override=True)
