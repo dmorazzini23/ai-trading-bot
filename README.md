@@ -5,8 +5,12 @@
 [![deploy](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml)
 [![Python 3.12.3](https://img.shields.io/badge/python-3.12.3-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Extras](https://img.shields.io/badge/extras-optional-6f42c1)](#install-extras)
 
 A sophisticated **AI-powered algorithmic trading system** that combines machine learning, technical analysis, and risk management for automated trading through Alpaca Markets.
+
+- [Installation](#installation)
+- [Install extras](#install-extras)
 
 ## 📦 Import paths
 
@@ -134,7 +138,7 @@ make validate-env
 python --version  # Should output: Python 3.12.3
 python health_check.py
 ```
-
+<a id="install-extras"></a>
 ### Install extras (feature sets)
 Some functionality depends on optional libraries. Install only what you need:
 

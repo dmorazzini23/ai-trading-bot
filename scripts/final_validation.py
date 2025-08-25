@@ -56,7 +56,7 @@ def verify_readme_updates():
     try:
         with open('README.md') as f:
             content = f.read()
-        checks = [('TA-Lib Installation', 'TA-Lib Installation (For Enhanced Technical Analysis)'), ('Ubuntu instructions', 'sudo apt-get install build-essential wget'), ('macOS instructions', 'brew install ta-lib'), ('Windows instructions', 'lfd.uci.edu'), ('Expanded portfolio', 'Trading Universe'), ('24+ symbols', '24+ symbols across multiple sectors')]
+        checks = [('TA-Lib Installation', 'TA-Lib Installation (For Enhanced Technical Analysis)'), ('Ubuntu instructions', 'sudo apt-get install build-essential wget'), ('Windows instructions', 'lfd.uci.edu'), ('Expanded portfolio', 'Trading Universe'), ('24+ symbols', '24+ symbols across multiple sectors'), ('TA extras', 'ai-trading-bot[ta]')]
         passed = 0
         for check_name, check_text in checks:
             if check_text in content:

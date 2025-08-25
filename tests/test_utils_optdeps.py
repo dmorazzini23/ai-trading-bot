@@ -1,4 +1,3 @@
-import sys
 import importlib.util
 from pathlib import Path
 import pytest
@@ -68,3 +67,23 @@ def test_render_equity_curve_handles_missing_matplotlib(monkeypatch):
 def test_module_ok_boolean():
     assert module_ok("math") is True
     assert module_ok(None) is False
+
+
+@pytest.mark.parametrize(
+    "pkg,expected_extra",
+    [("pandas", "pandas"), ("matplotlib", "plot"), ("ta", "ta")],
+)
+def test_optional_import_extras_hint(monkeypatch, pkg, expected_extra):
+    """Ensure OptionalDependencyError carries the proper extras hint."""
+    def fake_import(name, *a, **k):
+        if name == pkg:
+            raise ImportError("simulated missing")
+        return __import__(name, *a, **k)
+
+    import builtins
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(OptionalDependencyError) as ei:
+        optional_import(pkg, required=True)
+    msg = str(ei.value)
+    assert f'pip install "ai-trading-bot[{expected_extra}]"' in msg
