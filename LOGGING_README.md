@@ -31,6 +31,11 @@ The periodic `MARKET_FETCH` heartbeat logs can be controlled:
 #### Risk Engine Quieting
 Risk exposure update failures are demoted to DEBUG level when the trading context is not ready, reducing startup noise.
 
+#### Automatic Secret Redaction
+Any `extra` fields such as API keys, secrets, or URLs are sanitized before
+being emitted to handlers, ensuring sensitive values are replaced with
+`***REDACTED***`.
+
 ### Example Usage
 
 ```bash

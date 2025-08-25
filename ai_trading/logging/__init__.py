@@ -27,6 +27,7 @@ def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
         h = logging.StreamHandler()
         fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
         h.setFormatter(fmt)
+        h.addFilter(ExtraSanitizerFilter())
         log.addHandler(h)
     seen = set()
     unique = []
@@ -35,17 +36,79 @@ def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
         if sig in seen:
             continue
         seen.add(sig)
+        if not any(isinstance(f, ExtraSanitizerFilter) for f in h.filters):
+            h.addFilter(ExtraSanitizerFilter())
         unique.append(h)
     log.handlers = unique
     if level is not None:
         log.setLevel(level)
-_RESERVED_LOGRECORD_KEYS = {'name', 'msg', 'message', 'args', 'levelname', 'levelno', 'pathname', 'filename', 'module', 'exc_info', 'exc_text', 'stack_info', 'lineno', 'funcName', 'created', 'msecs', 'relativeCreated', 'thread', 'threadName', 'processName', 'process', 'asctime'}
+_RESERVED_LOGRECORD_KEYS = {
+    'name',
+    'msg',
+    'message',
+    'args',
+    'levelname',
+    'levelno',
+    'pathname',
+    'filename',
+    'module',
+    'exc_info',
+    'exc_text',
+    'stack_info',
+    'lineno',
+    'funcName',
+    'created',
+    'msecs',
+    'relativeCreated',
+    'thread',
+    'threadName',
+    'processName',
+    'process',
+    'asctime',
+}
 
 def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
-    """Rename reserved LogRecord keys with ``x_`` prefix."""
+    """Rename reserved ``LogRecord`` keys with ``x_`` prefix."""
     if not extra:
         return {}
-    return {k if k not in _RESERVED_LOGRECORD_KEYS else f'x_{k}': v for k, v in extra.items()}
+    return {
+        k if k not in _RESERVED_LOGRECORD_KEYS else f'x_{k}': v
+        for k, v in extra.items()
+    }
+
+_SENSITIVE_EXTRA_KEYS = ('api_key', 'secret', 'url')
+
+def sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
+    """Sanitize ``extra`` mapping.
+
+    Reserved ``LogRecord`` keys are prefixed with ``x_`` and values of keys
+    containing sensitive tokens (``api_key``, ``secret`` or ``url``) are
+    redacted.
+    """
+    cleaned = _sanitize_extra(extra)
+    out: dict[str, Any] = {}
+    for k, v in cleaned.items():
+        if any(tok in k.lower() for tok in _SENSITIVE_EXTRA_KEYS):
+            out[k] = '***REDACTED***'
+        else:
+            out[k] = v
+    return out
+
+class ExtraSanitizerFilter(logging.Filter):
+    """Filter that sanitizes arbitrary ``LogRecord`` extras."""
+
+    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - lightweight
+        extras = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in _RESERVED_LOGRECORD_KEYS
+        }
+        if extras:
+            sanitized = sanitize_extra(extras)
+            for k in extras:
+                record.__dict__.pop(k, None)
+            record.__dict__.update(sanitized)
+        return True
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
     """Adapter that sanitizes ``extra`` keys to avoid LogRecord collisions."""
@@ -53,7 +116,7 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
         extra = kwargs.get('extra')
         if extra is not None:
-            kwargs['extra'] = _sanitize_extra(extra)
+            kwargs['extra'] = sanitize_extra(extra)
         return (msg, kwargs)
 _ROOT_LOGGER_NAME = 'ai_trading'
 
@@ -266,7 +329,9 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         stream_handler.addFilter(_PhaseFilter())
         from ai_trading.logging_filters import SecretFilter
         secret_filter = SecretFilter()
+        extra_filter = ExtraSanitizerFilter()
         stream_handler.addFilter(secret_filter)
+        stream_handler.addFilter(extra_filter)
         handlers.append(stream_handler)
         if log_file:
             rotating_handler = get_rotating_handler(log_file)
@@ -274,12 +339,14 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             rotating_handler.setLevel(logging.INFO)
             rotating_handler.addFilter(_PhaseFilter())
             rotating_handler.addFilter(secret_filter)
+            rotating_handler.addFilter(extra_filter)
             handlers.append(rotating_handler)
         _log_queue = queue.Queue(-1)
         queue_handler = QueueHandler(_log_queue)
         queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
         queue_handler.addFilter(_PhaseFilter())
         queue_handler.addFilter(secret_filter)
+        queue_handler.addFilter(extra_filter)
         logger.handlers = [queue_handler]
         _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
         _listener.start()
@@ -638,4 +705,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         logging.getLogger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter']
+__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
