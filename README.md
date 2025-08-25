@@ -1336,4 +1336,9 @@ Environment variables controlling startup import checks:
 - `IMPORT_PREFLIGHT_DISABLED=1` — skip import preflight at startup.
 - `FAIL_FAST_IMPORTS=1` — exit immediately on preflight import failures.
 
+### Developer tools
+- `make smoke` — fast, non-blocking checks (lint, tiny test suite).
+- `make scan-extras` — strict scan for raw “install X” hints.  
+  Non-blocking variant also runs in smoke. To suppress a false positive on a single line, add `# extras:ignore` (or `<!-- extras:ignore -->` in docs).
+
 

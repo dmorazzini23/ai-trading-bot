@@ -27,6 +27,12 @@ else
 fi
 
 # -----------------
+# Scan for raw install hints
+# -----------------
+echo "[ci_smoke] Scan for raw install hints (non-blocking)"
+python tools/scan_extras_hints.py || true
+
+# -----------------
 # Targeted smoke run
 # -----------------
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}
