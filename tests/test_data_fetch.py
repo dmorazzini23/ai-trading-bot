@@ -3,10 +3,10 @@ from datetime import UTC, datetime
 
 import pytest
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df  # AI-AGENT-REF
-from ai_trading.utils.optional_import import optional_import
+from ai_trading.utils.optdeps import optional_import
 
 alpaca = optional_import("alpaca_trade_api")
-TimeFrame = optional_import("alpaca_trade_api.rest", "TimeFrame")
+TimeFrame = optional_import("alpaca_trade_api.rest", attr="TimeFrame")
 
 pytestmark = pytest.mark.skipif(
     alpaca is None or TimeFrame is None, reason="vendor modules not installed"

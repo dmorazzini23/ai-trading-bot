@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import product
 from typing import Any
-from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
+from ai_trading.utils.optdeps import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
 
 _joblib = optional_import(
     "joblib", purpose="parallel grid search", extra="backtest"

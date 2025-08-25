@@ -10,13 +10,12 @@ sys.modules.setdefault("ai_trading.config", cfg_stub)
 
 utils_stub = types.ModuleType("ai_trading.utils")
 utils_stub.__path__ = []  # mark as package
-opt_stub = types.ModuleType("ai_trading.utils.optional_import")
+opt_stub = types.ModuleType("ai_trading.utils.optdeps")
 
 def _optional_import(name):
     return None
 
 opt_stub.optional_import = _optional_import
-utils_stub.optional_import = _optional_import
 utils_stub.health_check = lambda *a, **k: True
 http_stub = types.ModuleType("ai_trading.utils.http")
 time_stub = types.ModuleType("ai_trading.utils.time")
@@ -25,7 +24,7 @@ time_stub.now_utc = lambda *a, **k: None
 dt_stub = types.ModuleType("ai_trading.utils.datetime")
 dt_stub.ensure_datetime = lambda *a, **k: None
 sys.modules.setdefault("ai_trading.utils", utils_stub)
-sys.modules.setdefault("ai_trading.utils.optional_import", opt_stub)
+sys.modules.setdefault("ai_trading.utils.optdeps", opt_stub)
 sys.modules.setdefault("ai_trading.utils.http", http_stub)
 sys.modules.setdefault("ai_trading.utils.time", time_stub)
 sys.modules.setdefault("ai_trading.utils.datetime", dt_stub)

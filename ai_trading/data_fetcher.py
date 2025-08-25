@@ -21,7 +21,7 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
-from ai_trading.utils.optional_import import optional_import
+from ai_trading.utils.optdeps import optional_import
 from ai_trading.logging import logger
 from ai_trading.monitoring import metrics
 yf = optional_import('yfinance')
@@ -39,7 +39,12 @@ try:
 except OSError:
     pass
 try:
-    from ai_trading.utils import http as _http
+    # Avoid relying on package-level __getattr__ for submodule resolution.
+    # Import explicitly via importlib to prevent recursive attribute lookups
+    # if utils/__init__ lazy loader misbehaves in the future.
+    from importlib import import_module
+
+    _http = import_module("ai_trading.utils.http")
     logger.debug('HTTP_INIT_PRIMARY', extra={'transport': 'ai_trading.utils.http'})
 except ImportError:
     logger.debug('HTTP_INIT_FALLBACK', extra={'transport': 'requests'})

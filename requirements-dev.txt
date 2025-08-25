@@ -1,5 +1,7 @@
 # keep dev purely for tools/pytest/etc.; vendor/RL handled elsewhere
 
+-r requirements.txt
+
 # Lint & format
 ruff==0.5.6
 black==24.8.0
