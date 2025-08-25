@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Dict, Any, Tuple
 
 # Authoritative runtime settings come from ai_trading.config.settings (which
 # re-exports _base_get_settings from ai_trading.settings in this repo).
@@ -15,7 +15,6 @@ __all__ = [
     "TradingConfig",
     "get_settings",
     "derive_cap_from_settings",
-    "build_legacy_params_from_config",
 ]
 
 
@@ -43,6 +42,26 @@ class TradingConfig:
             max_position_size=(getattr(s, "max_position_size", None)),
         )
 
+    def get_legacy_params(self) -> Dict[str, Any]:
+        """Return minimal legacy params for runner compatibility.
+
+        AI-AGENT-REF: expose legacy params without external helpers
+        """
+        from ai_trading import settings as S  # lazy import to avoid cycles
+
+        params: Dict[str, Any] = {
+            "CAPITAL_CAP": float(getattr(S, "get_capital_cap")()),
+            "DOLLAR_RISK_LIMIT": float(getattr(S, "get_dollar_risk_limit")()),
+        }
+        try:
+            from ai_trading.position_sizing import resolve_max_position_size
+            mps = resolve_max_position_size(capital_cap=params["CAPITAL_CAP"])
+            if mps is not None:
+                params["MAX_POSITION_SIZE"] = float(mps)
+        except Exception:
+            pass
+        return params
+
 
 def derive_cap_from_settings(settings_obj, equity: Optional[float], fallback: float, capital_cap: float) -> float:
     """
@@ -50,37 +69,3 @@ def derive_cap_from_settings(settings_obj, equity: Optional[float], fallback: fl
     `settings_obj` is accepted for API compatibility but unused.
     """
     return float(_derive_cap_from_settings(equity, capital_cap, fallback))
-
-
-def build_legacy_params_from_config(cfg: "TradingConfig") -> Tuple[float, float, float]:
-    """
-    Produces the tuple expected by BotMode in core/bot_engine.py:
-        (capital_cap, dollar_risk_limit, max_position_size)
-
-    - capital_cap / dollar_risk_limit: prefer cfg.* if present, otherwise read from central settings.
-    - max_position_size: computed by the canonical derive_cap_from_settings() using the
-      central settings object. If an explicit 'given' cap is supplied (cfg.max_position_size),
-      it is honored; otherwise we pass None to derive a cap from equity * capital_cap.
-    """
-    s = get_settings()
-
-    # Capital cap
-    capital_cap = cfg.capital_cap if cfg.capital_cap is not None else float(getattr(s, "capital_cap", 0.0))
-    # Dollar risk limit
-    dollar_risk_limit = (
-        cfg.dollar_risk_limit if cfg.dollar_risk_limit is not None else float(getattr(s, "dollar_risk_limit", 0.0))
-    )
-
-    # Explicit cap (if any) takes precedence; otherwise compute from settings.
-    explicit_cap = cfg.max_position_size
-    if explicit_cap is not None and explicit_cap != 0:
-        max_position_size = float(explicit_cap)
-    else:
-        max_position_size = derive_cap_from_settings(
-            s,
-            equity=None,  # the bot_engine call-sites pass None; keep behavior consistent
-            fallback=8000.0,
-            capital_cap=float(capital_cap),
-        )
-
-    return float(capital_cap), float(dollar_risk_limit), float(max_position_size)

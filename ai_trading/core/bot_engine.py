@@ -2701,16 +2701,24 @@ META_MODEL_PATH = abspath_safe("meta_model.pkl")
 class BotMode:
     def __init__(self, mode: str = "balanced") -> None:
         self.mode = mode.lower()
-        # Use centralized configuration instead of hardcoded parameters
-        self.config = config.TradingConfig.from_env(mode=self.mode)
-        # Build legacy parameter map with attribute guard
-        get_lp = getattr(self.config, "get_legacy_params", None)
-        if callable(get_lp):
-            self.params = get_lp()  # AI-AGENT-REF: direct method path
-        else:  # AI-AGENT-REF: fallback for stale Pydantic instances
-            from ai_trading.config.management import build_legacy_params_from_config
-
-            self.params = build_legacy_params_from_config(self.config)
+        # AI-AGENT-REF: canonical TradingConfig build
+        self.config = config.TradingConfig.from_env()
+        params: dict[str, float] = {}
+        if hasattr(self.config, "get_legacy_params"):
+            params.update(self.config.get_legacy_params())
+        from ai_trading import settings as S
+        try:
+            params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
+        except Exception:
+            pass
+        kf = getattr(S, "get_kelly_fraction", None)
+        if callable(kf):
+            try:
+                params["KELLY_FRACTION"] = float(kf())
+            except Exception:
+                pass
+        self.params = params
+        _log.info("Config settings loaded, validation deferred to runtime")
 
     def set_parameters(self) -> dict[str, float]:
         """Return trading parameters for the current mode.
@@ -2721,14 +2729,19 @@ class BotMode:
         return self.params
 
     def get_config(self) -> dict[str, float]:
-        cfg = config.TradingConfig.from_env(self.mode)
+        cfg = config.TradingConfig.from_env()
         params = dict(self.params)
-        params.update(
-            {
-                "CONF_THRESHOLD": cfg.conf_threshold,
-                "KELLY_FRACTION": cfg.kelly_fraction,
-            }
-        )
+        from ai_trading import settings as S  # AI-AGENT-REF: authoritative getters
+        try:
+            params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
+        except Exception:
+            pass
+        kf = getattr(S, "get_kelly_fraction", None)
+        if callable(kf):
+            try:
+                params["KELLY_FRACTION"] = float(kf())
+            except Exception:
+                pass
         return params
 
 
