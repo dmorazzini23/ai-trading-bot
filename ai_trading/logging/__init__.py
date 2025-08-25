@@ -21,20 +21,28 @@ from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
 from ai_trading.exc import COMMON_EXC
 
-def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
-    """Ensure exactly one handler and attach default if none."""
-    if not log.handlers:
+
+def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> None:
+    """Ensure each handler type is added at most once.
+
+    If no ``StreamHandler`` is present on ``log``, a basic one targeting
+    ``sys.stderr`` is installed. Existing handlers are de-duplicated by
+    *type* so repeated setup calls do not accumulate duplicates.
+    """
+
+    if not any(isinstance(h, logging.StreamHandler) for h in log.handlers):
         h = logging.StreamHandler()
         fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
         h.setFormatter(fmt)
         log.addHandler(h)
-    seen = set()
-    unique = []
+
+    seen: set[type] = set()
+    unique: list[logging.Handler] = []
     for h in log.handlers:
-        sig = (h.__class__, getattr(h, 'stream', None))
-        if sig in seen:
+        h_type = type(h)
+        if h_type in seen:
             continue
-        seen.add(sig)
+        seen.add(h_type)
         unique.append(h)
     log.handlers = unique
     if level is not None:
