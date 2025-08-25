@@ -103,10 +103,7 @@ def rolling_mean(arr, window: int):
         return np.array([], dtype=float)
     cumsum = np.cumsum(np.insert(arr, 0, 0.0))
     return (cumsum[window:] - cumsum[:-window]) / float(window)
-from ai_trading.execution.transaction_costs import TradeType, create_transaction_cost_calculator
-from ai_trading.portfolio import PortfolioDecision, create_portfolio_optimizer
-from ai_trading.strategies.regime_detector import create_regime_detector
-logger.info('Portfolio optimization modules loaded successfully')
+
 _portfolio_optimizer = None
 _transaction_cost_calculator = None
 _regime_detector = None
@@ -716,6 +713,21 @@ def filter_signals_with_portfolio_optimization(signals: list, ctx, current_posit
         Filtered list of signals that pass portfolio-level validation
     """
     try:
+        try:
+            from ai_trading.portfolio import PortfolioDecision, create_portfolio_optimizer
+        except ImportError as e:
+            logger.warning('Portfolio module unavailable: %s', e)
+            return signals
+        try:
+            from ai_trading.execution.transaction_costs import TradeType, create_transaction_cost_calculator
+        except ImportError as e:
+            logger.warning('Transaction cost module unavailable: %s', e)
+            return signals
+        try:
+            from ai_trading.strategies.regime_detector import create_regime_detector
+        except ImportError as e:
+            logger.warning('Regime detector module unavailable: %s', e)
+            return signals
         settings = get_settings()
         if not settings.ENABLE_PORTFOLIO_FEATURES:
             logger.debug('Portfolio optimization not available, skipping filtering')
