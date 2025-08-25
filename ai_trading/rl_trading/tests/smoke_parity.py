@@ -143,7 +143,7 @@ def test_action_space_parity():
         logger.info("All RL parity tests passed!")
         return True
 
-    except ModuleNotFoundError as e:  # AI-AGENT-REF: narrow missing dependency handling
+    except ImportError as e:  # AI-AGENT-REF: narrow missing dependency handling
         logger.info(f"Skipping RL tests due to missing dependencies: {e}")
         return True
     # noqa: BLE001 TODO: narrow exception

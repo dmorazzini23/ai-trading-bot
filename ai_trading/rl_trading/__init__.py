@@ -2,27 +2,44 @@
 from __future__ import annotations
 import logging
 from pathlib import Path
-from typing import Any
-
-try:
-    import stable_baselines3  # noqa: F401
-    import gymnasium  # noqa: F401
-    import torch  # noqa: F401
-    RL_AVAILABLE = True
-except Exception:
-    RL_AVAILABLE = False
-# AI-AGENT-REF: optional RL stack guard
-
-if RL_AVAILABLE:
-    from stable_baselines3 import PPO
-    from stable_baselines3.common.vec_env import DummyVecEnv
-else:
-    PPO = None
-    DummyVecEnv = None
+from typing import Any, Dict
 
 from ai_trading.strategies.base import StrategySignal
 TradeSignal = StrategySignal
 logger = logging.getLogger(__name__)
+
+_RL_STACK: Dict[str, Any] | None = None
+
+
+def ensure_rl_stack() -> Dict[str, Any]:
+    """Import and cache the reinforcement learning stack."""
+    global _RL_STACK
+    if _RL_STACK is not None:
+        return _RL_STACK
+    try:
+        import gymnasium as gym
+        import torch  # noqa: F401
+        from stable_baselines3 import A2C, DQN, PPO
+        from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+        from stable_baselines3.common.env_util import make_vec_env
+        from stable_baselines3.common.evaluation import evaluate_policy
+        from stable_baselines3.common.vec_env import DummyVecEnv
+    except ImportError as exc:  # noqa: B904 - provide context
+        raise ImportError(
+            "stable-baselines3, gymnasium and torch are required for RL features"
+        ) from exc
+    _RL_STACK = {
+        "gym": gym,
+        "PPO": PPO,
+        "A2C": A2C,
+        "DQN": DQN,
+        "BaseCallback": BaseCallback,
+        "EvalCallback": EvalCallback,
+        "make_vec_env": make_vec_env,
+        "evaluate_policy": evaluate_policy,
+        "DummyVecEnv": DummyVecEnv,
+    }
+    return _RL_STACK
 
 class RLAgent:
     """Wrapper around a PPO policy for trading inference."""
@@ -32,10 +49,9 @@ class RLAgent:
         self.model: Any | None = None
 
     def load(self) -> None:
-        if PPO is None:
-            raise ImportError('stable-baselines3 required')
+        stack = ensure_rl_stack()
         if Path(self.model_path).exists():
-            self.model = PPO.load(self.model_path)
+            self.model = stack["PPO"].load(self.model_path)
         else:
             logger.error('RL model not found at %s', self.model_path)
 
@@ -79,6 +95,6 @@ class RLTrader(RLAgent):
     pass
 
 try:
-    __all__.append('RLTrader')
+    __all__.extend(['RLTrader', 'ensure_rl_stack'])
 except NameError:
-    __all__ = ['RLAgent', 'RLTrader']
+    __all__ = ['RLAgent', 'RLTrader', 'ensure_rl_stack']

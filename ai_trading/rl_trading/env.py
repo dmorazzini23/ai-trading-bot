@@ -4,24 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 import numpy as np
 
-try:
-    import stable_baselines3  # noqa: F401
-    import gymnasium as gym  # noqa: F401
-    import torch  # noqa: F401
-    RL_AVAILABLE = True
-except Exception:
-    RL_AVAILABLE = False
-    gym = None
-# AI-AGENT-REF: optional RL stack
-
-if RL_AVAILABLE:
-    EnvBase = gym.Env
-else:
-    class _EnvFallback:
-        """Fallback base class when gymnasium is not installed."""
-        pass
-
-    EnvBase = _EnvFallback
+from . import ensure_rl_stack
 
 @dataclass
 class ActionSpaceConfig:
@@ -70,7 +53,7 @@ class RunningStats:
     def std(self) -> float:
         return self._std
 
-class TradingEnv(EnvBase):
+class TradingEnv:
     """
     Enhanced trading environment for RL with unified action space and reward normalization.
 
@@ -81,9 +64,18 @@ class TradingEnv(EnvBase):
     - Consistent interface for training and inference
     """
 
-    def __init__(self, data: np.ndarray, window: int=10, *, transaction_cost: float=0.001, slippage: float=0.0005, half_spread: float=0.0002, action_config: ActionSpaceConfig | None=None, reward_config: RewardConfig | None=None) -> None:
-        if not RL_AVAILABLE or gym is None:
-            raise ImportError('gymnasium required; install gymnasium to use TradingEnv')
+    def __init__(
+        self,
+        data: np.ndarray,
+        window: int = 10,
+        *,
+        transaction_cost: float = 0.001,
+        slippage: float = 0.0005,
+        half_spread: float = 0.0002,
+        action_config: ActionSpaceConfig | None = None,
+        reward_config: RewardConfig | None = None,
+    ) -> None:
+        gym = ensure_rl_stack()["gym"]
         self.data = data.astype(np.float32)
         self.window = window
         self.current = window
@@ -108,8 +100,7 @@ class TradingEnv(EnvBase):
         self._action_entropy_history = deque(maxlen=100)
         self._episode_stats = {'total_return': 0.0, 'max_drawdown': 0.0, 'sharpe_ratio': 0.0, 'turnover': 0.0, 'actions_taken': 0}
 
-    def reset(self, *, seed: int | None=None, options: dict | None=None):
-        super().reset(seed=seed)
+    def reset(self, *, _seed: int | None = None, _options: dict | None = None):
         self.current = self.window
         self.position = 0.0
         self.cash = 1.0
