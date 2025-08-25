@@ -704,10 +704,6 @@ def _get_memory_optimization():
 ) = _get_memory_optimization()
 
 
-# AI-AGENT-REF: replace utcnow with timezone-aware now
-old_generate = datetime.now(UTC)  # replaced utcnow for tz-aware
-new_generate = datetime.now(UTC)
-
 # AI-AGENT-REF: suppress noisy external library warnings
 warnings.filterwarnings(
     "ignore", category=SyntaxWarning, message="invalid escape sequence"
@@ -7626,7 +7622,6 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
 
 
 def safe_submit_order(api: AlpacaBroker, req) -> Order | None:
-    config.reload_env()
     if not market_is_open():
         _log.warning(
             "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
