@@ -2,14 +2,15 @@ import logging
 import os
 import threading
 from typing import Any
+
 from .alpaca import AlpacaConfig, get_alpaca_config
 from .locks import LockWithTimeout
-from .settings import Settings, broker_keys, get_settings
 # AI-AGENT-REF: re-export config management helpers
 from .management import (
     TradingConfig,
     derive_cap_from_settings,
 )
+from .settings import Settings, broker_keys, get_settings
 logger = logging.getLogger(__name__)
 _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
