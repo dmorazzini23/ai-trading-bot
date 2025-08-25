@@ -1,12 +1,9 @@
 from importlib.util import find_spec
 from ai_trading.config import get_settings
+
 config = None
-try:
-    import sklearn
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-'Utility helpers for meta-learning weight management.'
+SKLEARN_AVAILABLE = bool(find_spec("sklearn"))
+"Utility helpers for meta-learning weight management."
 import csv
 import json
 import logging
@@ -17,44 +14,88 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-import numpy as np
-import pandas as pd
 from json import JSONDecodeError
-try:
-    import requests
-    RequestException = requests.exceptions.RequestException
-except ImportError:
 
-    class RequestException(Exception):
-        pass
+# Optional heavy dependencies
+np = None  # type: ignore[var-annotated]
+pd = None  # type: ignore[var-annotated]
+torch = None
+nn = None
+DataLoader = TensorDataset = None
+
+
+class RequestException(Exception):
+    """Fallback when :mod:`requests` is unavailable."""
+
+
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
-sys.modules.setdefault('meta_learning', sys.modules[__name__])
-try:
-    import torch
-    from torch import nn
-    from torch.utils.data import DataLoader, TensorDataset
-    TORCH_AVAILABLE = True
-except (ImportError, OSError):
-    torch = None
-    nn = None
-    DataLoader = TensorDataset = None
-    TORCH_AVAILABLE = False
-if TYPE_CHECKING:
-    import numpy as np
-    import pandas as pd
+sys.modules.setdefault("meta_learning", sys.modules[__name__])
+TORCH_AVAILABLE = False
+
+if TYPE_CHECKING:  # pragma: no cover - typing helpers
+    import numpy as _np  # noqa: F401
+    import pandas as _pd  # noqa: F401
+
 open = open
 logger = logging.getLogger(__name__)
+
+
+def _import_numpy(optional: bool = False):
+    """Import :mod:`numpy` lazily."""
+    global np
+    if np is None:
+        try:
+            import numpy as np_mod
+            np = np_mod
+        except ImportError:
+            if optional:
+                return None
+            raise ImportError("numpy is required for this operation")
+    return np
+
+
+def _import_pandas(optional: bool = False):
+    """Import :mod:`pandas` lazily."""
+    global pd
+    if pd is None:
+        try:
+            import pandas as pd_mod
+            pd = pd_mod
+        except ImportError:
+            if optional:
+                return None
+            raise ImportError("pandas is required for this operation")
+    return pd
+
+
+def _import_torch():
+    """Import :mod:`torch` lazily."""
+    global torch, nn, DataLoader, TensorDataset, TORCH_AVAILABLE
+    if torch is None:
+        try:
+            import torch as t
+            from torch import nn as _nn
+            from torch.utils.data import DataLoader as _DL, TensorDataset as _TD
+        except (ImportError, OSError) as exc:  # pragma: no cover - import guard
+            raise ImportError("PyTorch is required for this operation") from exc
+        torch, nn, DataLoader, TensorDataset = t, _nn, _DL, _TD
+        TORCH_AVAILABLE = True
+    return torch
 
 def get_device() -> str:
     """
     Honor CPU_ONLY and handle environments without torch.
     """
-    if os.getenv('CPU_ONLY') == '1' or not TORCH_AVAILABLE:
-        return 'cpu'
+    if os.getenv("CPU_ONLY") == "1":
+        return "cpu"
     try:
-        return 'cuda' if torch and torch.cuda.is_available() else 'cpu'
+        t = _import_torch()
+    except ImportError:
+        return "cpu"
+    try:
+        return "cuda" if t.cuda.is_available() else "cpu"
     except COMMON_EXC:
-        return 'cpu'
+        return "cpu"
 
 class SimpleMetaLearner:
     """
@@ -63,18 +104,20 @@ class SimpleMetaLearner:
     but mere import of the module succeeds.
     """
 
-    def __init__(self, input_dim: int, hidden: int=32):
-        if not TORCH_AVAILABLE:
-            raise RuntimeError('Meta-learner requires PyTorch; TORCH_AVAILABLE=False')
+    def __init__(self, input_dim: int, hidden: int = 32):
+        try:
+            _import_torch()
+        except ImportError as exc:  # pragma: no cover - environment guard
+            raise RuntimeError("Meta-learner requires PyTorch") from exc
 
         class _Net(nn.Module):
-
             def __init__(self, d: int, h: int):
                 super().__init__()
                 self.net = nn.Sequential(nn.Linear(d, h), nn.ReLU(), nn.Linear(h, 1), nn.Sigmoid())
 
             def forward(self, x):
                 return self.net(x)
+
         self.impl = _Net(input_dim, hidden)
 
     def forward(self, x):
@@ -85,13 +128,15 @@ def train_meta_learner(X, y, *, epochs: int=20, lr: float=0.001):
     Train only if TORCH_AVAILABLE; otherwise raise a clear error on call.
     Importing the module remains safe.
     """
-    if not TORCH_AVAILABLE:
-        raise RuntimeError('train_meta_learner requires PyTorch; not installed')
+    try:
+        t = _import_torch()
+    except ImportError as exc:
+        raise RuntimeError("train_meta_learner requires PyTorch") from exc
     device = get_device()
     model = SimpleMetaLearner(X.shape[1]).impl.to(device)
-    dataset = TensorDataset(torch.from_numpy(X).float(), torch.from_numpy(y).float())
+    dataset = TensorDataset(t.from_numpy(X).float(), t.from_numpy(y).float())
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
-    optim = torch.optim.Adam(model.parameters(), lr=lr)
+    optim = t.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.BCELoss()
     model.train()
     for _ in range(epochs):
@@ -137,41 +182,6 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             quality_report['issues'].append(f'Cannot access file stats: {e}')
             return quality_report
         quality_report['file_readable'] = True
-        if pd is None:
-            quality_report['issues'].append('pandas not available for data validation')
-            try:
-                with open(trade_log_path, 'r') as f:
-                    lines = f.readlines()
-                if not lines:
-                    quality_report['issues'].append('Trade log file is empty')
-                    return quality_report
-                header_line = lines[0].strip()
-                if 'price' in header_line.lower():
-                    quality_report['has_valid_format'] = True
-                    quality_report['meta_format_rows'] = len(lines) - 1
-                    for line in lines[1:]:
-                        try:
-                            import csv
-                            import io
-                            csv_reader = csv.reader(io.StringIO(line))
-                            row = next(csv_reader)
-                            for col in row:
-                                try:
-                                    val = float(col)
-                                    if val > 0:
-                                        quality_report['valid_price_rows'] += 1
-                                        break
-                                except (ValueError, TypeError):
-                                    continue
-                        except COMMON_EXC:
-                            continue
-                    quality_report['row_count'] = len(lines) - 1
-                    if quality_report['row_count'] > 0:
-                        quality_report['data_quality_score'] = quality_report['valid_price_rows'] / quality_report['row_count']
-                    return quality_report
-            except COMMON_EXC as e:
-                quality_report['issues'].append(f'Failed basic CSV validation: {e}')
-            return quality_report
         try:
             with open(trade_log_path, 'r') as f:
                 lines = f.readlines()
@@ -321,33 +331,30 @@ def volatility_regime_filter(atr: float, sma100: float) -> str:
     metrics_logger.log_regime_toggle('generic', regime)
     return regime
 
-def load_weights(path: str, default: 'np.ndarray | None'=None) -> 'np.ndarray':
+def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray":
     """Load signal weights array from ``path`` or return ``default``."""
-    if np is None:
-        logger.warning('numpy not available, using basic weight loading')
-        if default is None:
-            return []
-        return default
+    np_mod = _import_numpy()
     p = Path(path)
     if default is None:
-        default = np.zeros(0)
+        default = np_mod.zeros(0)
     try:
         if p.exists():
             try:
-                if path.endswith('.csv'):
+                if path.endswith(".csv"):
                     try:
-                        import pandas as pd
-                        df = pd.read_csv(p, usecols=['signal_name', 'weight'])
-                        if not df.empty:
-                            weights = df['weight'].values
-                            if isinstance(weights, np.ndarray):
-                                logger.info('Successfully loaded weights from CSV: %s', path)
-                                return weights
-                    except (ImportError, ValueError) as e:
-                        logger.debug('Pandas CSV read failed, trying numpy: %s', e)
-                weights = np.loadtxt(p, delimiter=',')
-                if isinstance(weights, np.ndarray):
-                    logger.debug('Loaded weights using numpy from: %s', path)
+                        pd_mod = _import_pandas(optional=True)
+                        if pd_mod is not None:
+                            df = pd_mod.read_csv(p, usecols=["signal_name", "weight"])
+                            if not df.empty:
+                                weights = df["weight"].values
+                                if isinstance(weights, np_mod.ndarray):
+                                    logger.info("Successfully loaded weights from CSV: %s", path)
+                                    return weights
+                    except ValueError as e:
+                        logger.debug("Pandas CSV read failed, trying numpy: %s", e)
+                weights = np_mod.loadtxt(p, delimiter=",")
+                if isinstance(weights, np_mod.ndarray):
+                    logger.debug("Loaded weights using numpy from: %s", path)
                     return weights
             except (ValueError, OSError) as e:
                 logger.debug('CSV/numpy loading failed, trying pickle: %s', e)
@@ -366,34 +373,32 @@ def load_weights(path: str, default: 'np.ndarray | None'=None) -> 'np.ndarray':
             if default.size > 0:
                 try:
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    np.savetxt(p, default, delimiter=',')
-                    logger.info('Created default weights file: %s', path)
+                    np_mod.savetxt(p, default, delimiter=",")
+                    logger.info("Created default weights file: %s", path)
                 except COMMON_EXC as e:
                     logger.error('Failed initializing weights file %s: %s', path, e)
     except COMMON_EXC as e:
         logger.warning('Failed to load weights from %s: %s', path, e)
     return default
 
-def update_weights(weight_path: str, new_weights: 'np.ndarray', metrics: dict, history_file: str='metrics.json', n_history: int=5) -> bool:
+def update_weights(weight_path: str, new_weights: "np.ndarray", metrics: dict, history_file: str = "metrics.json", n_history: int = 5) -> bool:
     """Update signal weights and append metric history."""
-    if np is None:
-        logger.error('numpy not available for updating weights')
-        return False
+    np_mod = _import_numpy()
     if new_weights.size == 0:
-        logger.error('update_weights called with empty weight array')
+        logger.error("update_weights called with empty weight array")
         return False
     p = Path(weight_path)
     prev = None
     try:
         if p.exists():
-            prev = np.loadtxt(p, delimiter=',')
-            if np.allclose(prev, new_weights):
-                logger.info('META_WEIGHTS_UNCHANGED')
+            prev = np_mod.loadtxt(p, delimiter=",")
+            if np_mod.allclose(prev, new_weights):
+                logger.info("META_WEIGHTS_UNCHANGED")
                 return False
-        np.savetxt(p, new_weights, delimiter=',')
-        logger.info('META_WEIGHTS_UPDATED', extra={'previous': prev, 'current': new_weights.tolist()})
+        np_mod.savetxt(p, new_weights, delimiter=",")
+        logger.info("META_WEIGHTS_UPDATED", extra={"previous": prev, "current": new_weights.tolist()})
     except (OSError, ValueError) as exc:
-        logger.exception('META_WEIGHT_UPDATE_FAILED: %s', exc)
+        logger.exception("META_WEIGHT_UPDATE_FAILED: %s", exc)
         return False
     try:
         if Path(history_file).exists():
@@ -481,11 +486,14 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         settings = get_settings()
         trade_log_path = getattr(settings, 'trade_log_file', 'trades.csv')
     logger.info('META_RETRAIN_START', extra={'trade_log': trade_log_path, 'model_path': model_path})
+    try:
+        _import_pandas()
+        _import_numpy()
+    except ImportError as exc:
+        logger.error(str(exc))
+        return False
     quality_report = validate_trade_data_quality(trade_log_path)
     try:
-        if pd is None:
-            logger.error('pandas not available for meta learning')
-            return False
         df = pd.read_csv(trade_log_path)
     except (OSError, AttributeError) as exc:
         logger.error('Failed reading trade log: %s', exc, exc_info=True)
@@ -616,8 +624,7 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     y = df['outcome'].values
     sample_w = df['pnl'].abs() + 0.001
     if not SKLEARN_AVAILABLE:
-        logger.info('sklearn disabled, meta-learning disabled')
-        return False
+        raise ImportError('scikit-learn is required for retrain_meta_learner')
     from sklearn.linear_model import Ridge
     model = Ridge(alpha=1.0, fit_intercept=True)
     import inspect
@@ -1038,16 +1045,16 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None=None, *, vola
         if preds is None:
             logger.warning('Model predict returned None')
             return signal_data if signal_data is not None else []
-        if np is not None:
-            preds = np.clip(preds, -1.2, 1.2)
+        np_mod = _import_numpy(optional=True)
+        if np_mod is not None:
+            preds = np_mod.clip(preds, -1.2, 1.2)
             factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 0.001)
             preds = preds * factor
             return list(preds)
-        else:
-            preds = [max(-1.2, min(1.2, p)) for p in preds]
-            factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 0.001)
-            preds = [p * factor for p in preds]
-            return preds
+        preds = [max(-1.2, min(1.2, p)) for p in preds]
+        factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 0.001)
+        preds = [p * factor for p in preds]
+        return preds
     except (ValueError, RuntimeError, TypeError) as exc:
         logger.exception('optimize_signals prediction processing failed: %s', exc)
         return signal_data if signal_data is not None else []

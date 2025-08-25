@@ -1,10 +1,12 @@
 from tests.optdeps import require
 require("numpy")
+require("pandas")
 require("sklearn")
 import types
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn.linear_model
 from ai_trading import meta_learning
@@ -16,7 +18,7 @@ def test_load_weights_save_fail(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: False)
     def fail(*a, **k):
         raise OSError("fail")
-    monkeypatch.setattr(meta_learning.np, "savetxt", fail)
+    monkeypatch.setattr(np, "savetxt", fail)
     caplog.set_level("ERROR")
     arr = meta_learning.load_weights(str(p), default=np.array([1.0]))
     assert arr.tolist() == [1.0]
@@ -42,7 +44,7 @@ def test_save_and_load_checkpoint(tmp_path):
 def test_retrain_meta_learner(monkeypatch, tmp_path):
     """Meta learner retrains with small dataset."""
     data = Path(tmp_path / "trades.csv")
-    df = meta_learning.pd.DataFrame({
+    df = pd.DataFrame({
         "entry_price": [1, 2],
         "exit_price": [2, 3],
         "signal_tags": ["a", "b"],
