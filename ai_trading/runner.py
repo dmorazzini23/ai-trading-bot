@@ -47,12 +47,14 @@ def _preflight_import_health() -> None:
     for mod in core_modules:
         try:
             importlib.import_module(mod)
-        # noqa: BLE001 TODO: narrow exception
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as exc:  # pragma: no cover - surface import issues
+        except (ImportError, RuntimeError) as exc:  # pragma: no cover - surface import issues
             log.error(
                 "IMPORT_PREFLIGHT_FAILED",
-                extra={"module_name": mod, "error": repr(exc)},  # AI-AGENT-REF: avoid reserved key
+                extra={
+                    "module_name": mod,
+                    "error": repr(exc),
+                    "exc_type": exc.__class__.__name__,
+                },  # AI-AGENT-REF: avoid reserved key
             )
             if os.environ.get("FAIL_FAST_IMPORTS", "").lower() in {"1", "true"}:
                 raise SystemExit(1)
@@ -80,12 +82,15 @@ def _load_engine():
                 # Use emit-once for startup banners
                 from ai_trading.core.bot_engine import _emit_once
                 import logging
-                _emit_once(log, "engine_components_loaded", logging.INFO, "Bot engine components loaded successfully")
-        # noqa: BLE001 TODO: narrow exception
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
-            log.error("Failed to load bot engine components: %s", e)
-            raise RuntimeError(f"Cannot load bot engine: {e}")
+                _emit_once(
+                    log,
+                    "engine_components_loaded",
+                    logging.INFO,
+                    "Bot engine components loaded successfully",
+                )
+        except (ImportError, AttributeError, RuntimeError) as e:
+            log.error("Failed to load bot engine components", exc_info=e)
+            raise RuntimeError("Cannot load bot engine") from e
 
     return _bot_engine, _bot_state_class
 
@@ -100,9 +105,7 @@ def lazy_load_workers():
         return _LAZY_CACHE["workers"]
     try:
         from ai_trading.workers import run_all_trades_worker  # patched in tests
-    # noqa: BLE001 TODO: narrow exception
-    # noqa: BLE001 TODO: narrow exception
-    except Exception as e:  # ImportError or anything raised during import
+    except (ImportError, RuntimeError) as e:  # ImportError or anything raised during import
         raise RuntimeError(f"Failed to lazy import workers: {e}") from e
     _LAZY_CACHE["workers"] = run_all_trades_worker
     return run_all_trades_worker
@@ -143,11 +146,12 @@ def run_cycle() -> None:
                 _maybe_warm_cache(
                     state.ctx
                 )  # best-effort; ignores if disabled or already warmed
-        # noqa: BLE001 TODO: narrow exception
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (ImportError, RuntimeError, OSError, ValueError) as e:
             # Cache warming failed - log warning but continue execution
-            log.warning("Failed to warm cache during state setup: %s", e)  # AI-AGENT-REF: use module logger
+            log.warning(
+                "Failed to warm cache during state setup",
+                exc_info=e,
+            )  # AI-AGENT-REF: use module logger
 
         # Get runtime context and ensure it has proper parameter hydration
         from ai_trading.core.bot_engine import get_ctx
@@ -188,10 +192,8 @@ def run_cycle() -> None:
         
         # Execute the trading cycle
         run_all_trades_worker(state, runtime)
-    # noqa: BLE001 TODO: narrow exception
-    # noqa: BLE001 TODO: narrow exception
-    except Exception as e:
-        log.exception("Trading cycle failed: %s", e)
+    except (RuntimeError, ValueError, OSError, ImportError) as e:
+        log.exception("Trading cycle failed", exc_info=e)
     finally:
         _run_lock.release()
 
