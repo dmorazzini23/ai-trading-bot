@@ -12,6 +12,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ## Table of Contents
 
 - [Testing Philosophy](#testing-philosophy)
+- [Deterministic Testing](#deterministic-testing)
 - [Test Structure](#test-structure)
 - [Unit Testing](#unit-testing)
 - [Integration Testing](#integration-testing)
@@ -51,6 +52,10 @@ Unit Tests (70%)
 3. **Maintainable**: Clear test structure and naming
 4. **Comprehensive**: High test coverage (>80%)
 5. **Realistic**: Use realistic test data and scenarios
+
+## Deterministic Testing
+
+To keep results reproducible, all tests run with a fixed random seed. A session-scoped pytest fixture sets `PYTHONHASHSEED=0`, seeds Python's `random` module and NumPy, and calls `torch.manual_seed(0)` when PyTorch is available. Tests should avoid introducing additional sources of nondeterminism.
 
 ## Test Structure
 
