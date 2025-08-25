@@ -25,7 +25,7 @@ Run this checklist before diving into detailed troubleshooting:
 
 ```bash
 # 1. Check service status
-sudo systemctl status ai-trading-scheduler
+sudo systemctl status ai-trading.service
 
 # 2. Verify configuration
 python validate_env.py
@@ -87,7 +87,8 @@ which python
 # Should point to venv/bin/python
 
 # Reinstall dependencies
-pip install -r requirements.txt
+python -m pip install -U pip
+pip install -e .
 
 # Check for missing environment variables
 python -c "
@@ -118,6 +119,18 @@ except Exception as e:
     print(f'Configuration error: {e}')
 "
 ```
+
+### Module attribute errors
+
+**Error:** `module 'ai_trading.config.management' has no attribute 'get_env'` (or `reload_env`).
+
+**Fix:** Update to the latest code and ensure `ai_trading/config/management.py` exports both helpers.
+
+### Health endpoint returns 500
+
+**Symptoms:** `curl -s http://127.0.0.1:9001/health` shows 500 or non-JSON.
+
+**Fix:** The `/health` route must catch exceptions and return `{"ok": false}` on degradation. Verify no unhandled errors in the handler.
 
 ### 2. API Connection Failures
 

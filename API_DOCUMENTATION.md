@@ -266,8 +266,10 @@ class RiskMetrics:
 #### Health Check Endpoint
 
 ```http
-GET /health
+GET http://127.0.0.1:9001/health
 ```
+
+Always returns JSON and must never 500.
 
 **Response:**
 ```json

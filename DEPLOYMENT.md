@@ -28,7 +28,7 @@ This guide covers deployment strategies, environment setup, CI/CD configuration,
 - **Network**: Stable internet connection with low latency
 
 #### Recommended Production Specs
-- **OS**: Ubuntu 22.04 LTS
+- **OS**: Ubuntu 24.04 LTS
 - **Python**: 3.12.3
 - **RAM**: 16GB+
 - **CPU**: 8 cores+
@@ -114,23 +114,28 @@ cd /opt/ai-trading-bot
 git clone https://github.com/dmorazzini23/ai-trading-bot.git .
 python3.12 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -U pip
+pip install -e .
 
 # Configure environment
 cp .env.example .env
 # Edit .env with production configuration
 
 # Install systemd service
-sudo cp ai-trading-scheduler.service /etc/systemd/system/
+sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable ai-trading-scheduler
-sudo systemctl start ai-trading-scheduler
+sudo systemctl enable --now ai-trading.service
+sudo systemctl restart ai-trading.service
+
+# Verify service
+curl -s http://127.0.0.1:9001/health  # must return JSON and never 500
+journalctl -u ai-trading.service -n 200 --no-pager
 ```
 
 #### Systemd Service Configuration
 
 ```ini
-# /etc/systemd/system/ai-trading-scheduler.service
+# /etc/systemd/system/ai-trading.service
 [Unit]
 Description=AI Trading Bot Scheduler
 After=network.target
@@ -177,9 +182,9 @@ RUN groupadd -r ai-trading && useradd -r -g ai-trading ai-trading
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY requirements.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy project metadata first for better caching
+COPY pyproject.toml ./
+RUN python -m pip install -U pip && pip install -e .
 
 # Copy application code
 COPY . .
@@ -397,8 +402,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        python -m pip install -U pip
+        pip install -e .
         pip install -r requirements-dev.txt
     
     - name: Run tests
@@ -780,7 +785,7 @@ if [ -z "$BACKUP_FILE" ]; then
 fi
 
 # Stop application
-sudo systemctl stop ai-trading-scheduler
+sudo systemctl stop ai-trading.service
 
 # Backup current state
 mv /opt/ai-trading-bot /opt/ai-trading-bot.old
@@ -792,7 +797,7 @@ tar -xzf $BACKUP_FILE -C /
 sudo chown -R ai-trading:ai-trading /opt/ai-trading-bot
 
 # Start application
-sudo systemctl start ai-trading-scheduler
+sudo systemctl start ai-trading.service
 
 echo "Recovery completed from $BACKUP_FILE"
 ```

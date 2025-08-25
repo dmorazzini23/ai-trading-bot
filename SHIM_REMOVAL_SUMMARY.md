@@ -26,7 +26,6 @@ Confirmed these are properly declared in `pyproject.toml` as hard dependencies:
 - `beautifulsoup4>=4.11.1`
 - `tenacity==8.2.2`
 - `transformers==4.35.2`
-- `alpaca-py>=0.42.0`
 - `requests>=2.31,<3`
 
 ### ✅ Optional Feature Flags Added
@@ -80,6 +79,11 @@ The implementation carefully followed AGENTS.md guidance:
 - **Did not rewrite `bot_engine.py`** wholesale due to explicit warnings
 - **Used targeted, surgical changes** rather than bulk replacements
 - **Preserved critical production logic** in core execution paths
+
+### Production guidance
+
+- Use a single Alpaca SDK (`alpaca-trade-api`) in production. Switching to `alpaca-py` requires updating brokers, tests, and docs.
+- Avoid `optional_import(...)` in runtime code. Gate heavy, optional dependencies inside function scope instead of shimming imports.
 
 ### Feature Flag Approach
 Rather than removing all optional imports, converted them to explicit feature flags:

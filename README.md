@@ -12,6 +12,47 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 - [Installation](#installation)
 - [Install extras](#install-extras)
 
+## Quickstart
+
+> Python **3.12** required. Tooling targets **py312**.
+
+```bash
+python -m pip install -U pip
+pip install -e .
+ruff check .
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+curl -s http://127.0.0.1:9001/health
+```
+
+Use **one** Alpaca SDK in production (recommended: `alpaca-trade-api`). If choosing `alpaca-py`, update broker modules accordingly.
+
+## Config
+
+```py
+from ai_trading.config import management as config
+
+debug = config.get_env("DEBUG", "false", cast=bool)
+api_port = config.get_env("API_PORT", 9001, cast=int)
+seed = config.SEED  # defaults to 42
+
+# Reload if .env changes (avoid in hot paths)
+config.reload_env()
+```
+
+`.env` at the repo root is loaded at startup with `override=True`.
+Production code paths must **not** use `optional_import(...)`; reserve such patterns for research or development utilities. Gate heavy imports inside function scope when possible.
+
+## Timezones
+
+Uses Python stdlib **zoneinfo**.
+
+```py
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+now_ny = datetime.now(ZoneInfo("America/New_York"))
+```
+
 ## 📦 Import paths
 
 Use package imports:
@@ -117,27 +158,6 @@ All Python packages are specified in `requirements.txt`, including:
 
 **Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
 
-### Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/dmorazzini23/ai-trading-bot.git
-cd ai-trading-bot
-
-# Install Python dependencies (ta library included)
-pip install -r requirements.txt
-
-# Optional extras for broker/calendar features
-# pip install .[markets,broker]
-
-# Alternative automated setup
-make install-dev
-make validate-env
-
-# Verify installation
-python --version  # Should output: Python 3.12.3
-python health_check.py
-```
 <a id="install-extras"></a>
 ### Install extras (feature sets)
 Some functionality depends on optional libraries. Install only what you need:
@@ -183,9 +203,9 @@ If you prefer manual setup or encounter issues with the automated process:
 python3.12 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Upgrade pip and install core dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
+# Upgrade pip and install project in editable mode
+python -m pip install -U pip
+pip install -e .
 
 # Install development tools (optional)
 pip install -r requirements-dev.txt
@@ -228,7 +248,8 @@ sma_direct = ta.trend.sma_indicator(close_series, window=20)
 #### Installation
 The ta library is automatically installed with the bot dependencies:
 ```bash
-pip install -r requirements.txt
+python -m pip install -U pip
+pip install -e .
 ```
 
 **Note**: No additional system dependencies or C libraries required. The ta library provides reliable cross-platform technical analysis out of the box.
@@ -267,7 +288,8 @@ docker logs ai-trading-bot
    rm -rf venv
    python3.12 -m venv venv
    source venv/bin/activate
-   pip install -r requirements.txt
+   python -m pip install -U pip
+   pip install -e .
    ```
 
 3. **Missing System Dependencies** (Linux/macOS):
@@ -886,22 +908,20 @@ Deploy as a persistent system service:
 
 ```bash
 # Install service file
-sudo cp ai-trading-scheduler.service /etc/systemd/system/
+sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/
 
-# Enable and start service
+# Manage service
 sudo systemctl daemon-reload
-sudo systemctl enable ai-trading-scheduler
-sudo systemctl start ai-trading-scheduler
-
-# Monitor service
-sudo systemctl status ai-trading-scheduler
-journalctl -u ai-trading-scheduler -f
+sudo systemctl enable --now ai-trading.service
+sudo systemctl restart ai-trading.service  # apply updates
+sudo systemctl status ai-trading.service
+journalctl -u ai-trading.service -n 200 --no-pager
 ```
 
 ### Service Configuration
 
 ```ini
-# ai-trading-scheduler.service
+# ai-trading.service
 [Unit]
 Description=AI Trading Bot Scheduler
 After=network.target

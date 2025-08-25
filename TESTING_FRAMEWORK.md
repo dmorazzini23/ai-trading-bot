@@ -4,6 +4,11 @@
 
 This comprehensive testing guide covers the complete testing framework for the AI Trading Bot, including unit tests, integration tests, performance tests, and testing best practices.
 
+```bash
+ruff check .
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+```
+
 ## Table of Contents
 
 - [Testing Philosophy](#testing-philosophy)
@@ -1052,7 +1057,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        python -m pip install -U pip
+        pip install -e .
         pip install -r requirements-dev.txt
     
     - name: Run unit tests
@@ -1081,7 +1087,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        python -m pip install -U pip
+        pip install -e .
         pip install -r requirements-dev.txt
     
     - name: Run integration tests
@@ -1106,7 +1113,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        python -m pip install -U pip
+        pip install -e .
         pip install -r requirements-dev.txt
         pip install memory-profiler
     
