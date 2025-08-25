@@ -46,7 +46,7 @@ def test_build_fetcher_fallback_requests(monkeypatch):
 
     dummy_core = types.SimpleNamespace(DataFetcher=DummyFetcher, DataFetchError=Exception)
     monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", dummy_core)
-    monkeypatch.setattr(df_module, "yf", None, raising=False)
+    monkeypatch.setitem(sys.modules, "yfinance", None)
     monkeypatch.setattr(df_module, "requests", object(), raising=False)
     fetcher = df_module.build_fetcher(object())
     assert fetcher is not None
@@ -64,7 +64,7 @@ def test_build_fetcher_offline_returns_empty_df(monkeypatch):
 
     dummy_core = types.SimpleNamespace(DataFetcher=DummyFetcher, DataFetchError=Exception)
     monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", dummy_core)
-    monkeypatch.setattr(df_module, "yf", None, raising=False)
+    monkeypatch.setitem(sys.modules, "yfinance", None)
     monkeypatch.setattr(df_module, "requests", None, raising=False)
     fetcher = df_module.build_fetcher(object())
     df = fetcher.get_daily_df(object(), "SPY")

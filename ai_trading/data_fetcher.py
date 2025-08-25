@@ -26,30 +26,21 @@ from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
 
+
 def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
     try:
         from ai_trading.monitoring import metrics as _metrics
         _metrics.incr(metric, value=value, tags=tags)
     except Exception:  # pragma: no cover - metrics optional
         pass
-try:  # optional yfinance import
-    import yfinance as yf  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    yf = None
-    logger.info('YFINANCE_MISSING', extra={'hint': 'pip install yfinance'})
-YF_AVAILABLE = yf is not None
+
 
 def _to_timeframe_str(tf: object) -> str:
     return _canon_tf(tf)
 
+
 def _to_feed_str(feed: object) -> str:
     return _canon_feed(feed)
-try:
-    if yf is not None and hasattr(yf, 'set_tz_cache_location'):
-        os.makedirs('/tmp/py-yfinance', exist_ok=True)
-        yf.set_tz_cache_location('/tmp/py-yfinance')
-except OSError:
-    pass
 try:
     # Avoid relying on package-level __getattr__ for submodule resolution.
     # Import explicitly via importlib to prevent recursive attribute lookups
@@ -139,18 +130,36 @@ def build_fetcher(config: Any):
     from ai_trading.alpaca_api import ALPACA_AVAILABLE
     bot_mod = importlib.import_module('ai_trading.core.bot_engine')
     DataFetcher = bot_mod.DataFetcher
-    DataFetchError = bot_mod.DataFetchError
+
+    try:  # optional yfinance import
+        import yfinance as yf  # type: ignore
+        try:
+            if hasattr(yf, 'set_tz_cache_location'):
+                os.makedirs('/tmp/py-yfinance', exist_ok=True)
+                yf.set_tz_cache_location('/tmp/py-yfinance')
+        except OSError:
+            pass
+    except ImportError:  # pragma: no cover - optional dependency
+        yf = None  # type: ignore
+        logger.info('YFINANCE_MISSING', extra={'hint': 'pip install yfinance'})
+
     alpaca_ok = bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'))
     has_keys = alpaca_ok
     if ALPACA_AVAILABLE and has_keys:
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'alpaca'})
-        return DataFetcher()
-    if YF_AVAILABLE and requests is not None:
+        fetcher = DataFetcher()
+        setattr(fetcher, 'source', 'alpaca')
+        return fetcher
+    if yf is not None and requests is not None:
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'yfinance'})
-        return DataFetcher()
+        fetcher = DataFetcher()
+        setattr(fetcher, 'source', 'yfinance')
+        return fetcher
     if requests is not None:
         logger.warning('DATA_FETCHER_BUILD_FALLBACK', extra={'source': 'yahoo-requests'})
-        return DataFetcher()
+        fetcher = DataFetcher()
+        setattr(fetcher, 'source', 'fallback')
+        return fetcher
     logger.error('DATA_FETCHER_UNAVAILABLE', extra={'reason': 'no deps'})
     raise DataFetchError('No market data source available')
 
@@ -221,13 +230,32 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     """Return a DataFrame with a tz-aware 'timestamp' column between start and end."""
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    try:  # local import to avoid hard dependency
+        import yfinance as yf  # type: ignore
+        try:
+            if hasattr(yf, 'set_tz_cache_location'):
+                os.makedirs('/tmp/py-yfinance', exist_ok=True)
+                yf.set_tz_cache_location('/tmp/py-yfinance')
+        except OSError:
+            pass
+    except ImportError:  # pragma: no cover - optional dependency
+        yf = None  # type: ignore
     if yf is None:
         idx = pd.DatetimeIndex([], tz='UTC', name='timestamp')
         cols = ['open', 'high', 'low', 'close', 'volume']
         return pd.DataFrame(columns=cols, index=idx).reset_index()
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', message='.*auto_adjust.*', module='yfinance')
-        df = yf.download(symbol, start=start_dt, end=end_dt, interval=interval, auto_adjust=False, threads=False, progress=False, group_by='column')
+        df = yf.download(
+            symbol,
+            start=start_dt,
+            end=end_dt,
+            interval=interval,
+            auto_adjust=False,
+            threads=False,
+            progress=False,
+            group_by='column',
+        )
     if df is None or df.empty:
         idx = pd.DatetimeIndex([], tz='UTC', name='timestamp')
         cols = ['open', 'high', 'low', 'close', 'volume']
