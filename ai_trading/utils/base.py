@@ -11,29 +11,20 @@ import warnings
 from datetime import date, datetime
 from datetime import time as dt_time
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import UUID
 from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
-from .optdeps import optional_import, module_ok  # AI-AGENT-REF: resolve circular import
-pd = optional_import("pandas")  # AI-AGENT-REF: optional pandas import
-_mcal = optional_import(
-    "pandas_market_calendars", purpose="market calendars", extra="cal"
-)  # AI-AGENT-REF: extras hint uses key
-mcal = _mcal if module_ok(_mcal) else None
 import numpy as np
 from ai_trading.monitoring.system_health import snapshot_basic
 from ai_trading.settings import get_verbose_logging
-REST = optional_import('alpaca_trade_api.rest', attr='REST') or object
-HAS_PANDAS = module_ok(pd)
-if HAS_PANDAS:
-    Timestamp = pd.Timestamp
-    DataFrame = pd.DataFrame
-    Series = pd.Series
-    Index = pd.Index
-else:  # pragma: no cover - pandas missing
-    Timestamp = DataFrame = Series = Index = object
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd  # pylint: disable=unused-import
+    from pandas import DataFrame, Series, Index, Timestamp
+else:  # pragma: no cover - runtime when pandas missing
+    DataFrame = Series = Index = Timestamp = object
 SUBPROCESS_TIMEOUT_S = 5.0
 
 # Back-compat alias expected by ai_trading.core.bot_engine.get_git_hash()
@@ -51,31 +42,22 @@ def safe_subprocess_run(cmd: list[str] | tuple[str, ...], timeout: float | int |
     except (subprocess.SubprocessError, subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
         return ""
-
-def get_ohlcv_columns(df) -> list[str]:
-    cols = [str(c).lower() for c in getattr(df, 'columns', [])]
-    wanted = ('open', 'high', 'low', 'close', 'volume', 'vwap')
-    return [w for w in wanted if w in cols]
-
 def ensure_utc_index(df: DataFrame) -> DataFrame:
-    """Return DataFrame with UTC tz-aware DatetimeIndex if applicable."""
+    """Return DataFrame with UTC tz-aware ``DatetimeIndex`` if applicable."""
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for ensure_utc_index. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     if not isinstance(df.index, pd.DatetimeIndex):
         return df
     if df.index.tz is None:
         df = df.copy()
-        df.index = df.index.tz_localize('UTC')
+        df.index = df.index.tz_localize("UTC")
     else:
-        df.index = df.index.tz_convert('UTC')
+        df.index = df.index.tz_convert("UTC")
     return df
-
-def requires_pandas(func):
-    """Decorator to ensure pandas is available for a function."""
-
-    def wrapper(*args, **kwargs):
-        if not HAS_PANDAS:
-            optional_import("pandas", required=True, feature="DataFrames/I-O")
-        return func(*args, **kwargs)
-    return wrapper
 logger = logging.getLogger(__name__)
 _LAST_MARKET_HOURS_LOG = 0.0
 _LAST_MARKET_STATE = ''
@@ -142,20 +124,16 @@ def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int=300) -> bool:
         _STALE_CACHE[symbol] = (last_ts, current_time)
         return True
 
-def get_trading_calendar(name: str='XNYS'):
-    """Return a trading calendar, with fallback when mcal is missing."""
-    if mcal is not None:
-        return mcal.get_calendar(name)
-    import pandas as pd
-
-    class _NaiveCal:
-
-        def schedule(self, start_date, end_date):
-            idx = pd.date_range(start=start_date, end=end_date, freq='B', tz='UTC')
-            opens = idx + pd.Timedelta(hours=9, minutes=30)
-            closes = idx + pd.Timedelta(hours=16)
-            return pd.DataFrame({'market_open': opens, 'market_close': closes})
-    return _NaiveCal()
+def get_trading_calendar(name: str = "XNYS"):
+    """Return a trading calendar for the given exchange."""
+    try:
+        import pandas_market_calendars as mcal  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - dependency missing
+        raise ImportError(
+            "pandas-market-calendars is required for trading calendar utilities. "
+            "Install with `pip install ai-trading-bot[pandas-market-calendars]`."
+        ) from exc
+    return mcal.get_calendar(name)
 
 def backoff_delay(attempt: int, base: float=1.0, cap: float=30.0, jitter: float=0.1) -> float:
     """Return exponential backoff delay with jitter."""
@@ -221,9 +199,15 @@ def get_latest_close(df: DataFrame) -> float:
     if df is None:
         return 0.0
     try:
-        for col in ('close', 'Close', 'c'):
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for get_latest_close. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
+    try:
+        for col in ("close", "Close", "c"):
             if col in df.columns:
-                s = pd.to_numeric(df[col], errors='coerce').dropna()
+                s = pd.to_numeric(df[col], errors="coerce").dropna()
                 if not s.empty:
                     v = float(s.iloc[-1])
                     return v if np.isfinite(v) else 0.0
@@ -298,7 +282,12 @@ def is_market_open(now: dt.datetime | None=None) -> bool:
         logger.info('FORCE_MARKET_OPEN is enabled; overriding market hours checks.')
         return True
     try:
-        import pandas_market_calendars as mcal
+        import pandas_market_calendars as mcal  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - dependency missing
+        raise ImportError(
+            "pandas-market-calendars is required for is_market_open. Install with `pip install ai-trading-bot[pandas-market-calendars]`."
+        ) from exc
+    try:
         check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, 'get_calendar', None)
         if cal is None:
@@ -359,6 +348,12 @@ def is_weekend(timestamp: dt.datetime | Timestamp | None=None) -> bool:
 
 def is_market_holiday(date_to_check: date | dt.datetime | None=None) -> bool:
     """Check if the given date is a US market holiday."""
+    try:
+        import pandas_market_calendars as mcal  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - dependency missing
+        raise ImportError(
+            "pandas-market-calendars is required for is_market_holiday. Install with `pip install ai-trading-bot[pandas-market-calendars]`."
+        ) from exc
     if date_to_check is None:
         date_to_check = dt.datetime.now(dt.UTC).date()
     elif isinstance(date_to_check, dt.datetime):
@@ -433,6 +428,12 @@ def get_rolling_atr(symbol: str, window: int=14) -> float:
     df = fetch_minute_df_safe(symbol)
     if df is None or df.empty:
         return 0.0
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for get_rolling_atr. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     high = df['high'].rolling(window).max()
     low = df['low'].rolling(window).min()
     close = df['close']
@@ -479,12 +480,18 @@ def get_ml_confidence(symbol: str) -> float:
     except COMMON_EXC as e:
         logger.error('load_model failed', exc_info=e)
         return 0.5
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for get_ml_confidence. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     S = get_settings()
     model_path = S.model_path
     model = load_model(model_path)
     if model is None:
         return 0.5
-    feats = DataFrame({'price': [0.0]})
+    feats = pd.DataFrame({'price': [0.0]})
     try:
         conf = float(model.predict_proba(feats)[0][1])
     except COMMON_EXC as e:
@@ -516,28 +523,29 @@ def _warn_limited(key: str, msg: str, *args, limit: int=3, **kwargs) -> None:
 
 def safe_to_datetime(arr, format='%Y-%m-%d %H:%M:%S', utc=True, *, context: str=''):
     """Safely convert an iterable of date strings to ``DatetimeIndex``."""
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for safe_to_datetime. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     if arr is None:
-        if HAS_PANDAS:
-            return pd.DatetimeIndex([], tz='UTC')
-        else:
-            return []
-    if HAS_PANDAS and isinstance(arr, tuple) and (len(arr) == 2) and isinstance(arr[1], pd.Timestamp):
+        return pd.DatetimeIndex([], tz="UTC")
+    if isinstance(arr, tuple) and (len(arr) == 2) and isinstance(arr[1], pd.Timestamp):
         arr = arr[1]
-    elif HAS_PANDAS and (isinstance(arr, list | Index | Series) and len(arr) > 0 and isinstance(arr[0], tuple)):
+    elif isinstance(arr, list | pd.Index | pd.Series) and len(arr) > 0 and isinstance(arr[0], tuple):
         arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
-    if not HAS_PANDAS:
-        return arr
     try:
         return pd.to_datetime(arr, format=format, utc=utc)
     except (TypeError, ValueError) as exc:
-        ctx = f' ({context})' if context else ''
-        logger.warning('safe_to_datetime coercing invalid values%s – %s', ctx, exc)
+        ctx = f" ({context})" if context else ""
+        logger.warning("safe_to_datetime coercing invalid values%s – %s", ctx, exc)
         try:
-            return pd.to_datetime(arr, errors='coerce', utc=utc)
+            return pd.to_datetime(arr, errors="coerce", utc=utc)
         except COMMON_EXC as exc2:
-            logger.error('safe_to_datetime failed%s: %s', ctx, exc2)
-            length = len(arr) if hasattr(arr, '__len__') else 1
-            return pd.DatetimeIndex([pd.NaT] * length, tz='UTC')
+            logger.error("safe_to_datetime failed%s: %s", ctx, exc2)
+            length = len(arr) if hasattr(arr, "__len__") else 1
+            return pd.DatetimeIndex([pd.NaT] * length, tz="UTC")
 
 def validate_ohlcv(df: DataFrame, required: list[str] | None=None, require_monotonic: bool=True) -> None:
     """
@@ -545,14 +553,18 @@ def validate_ohlcv(df: DataFrame, required: list[str] | None=None, require_monot
     Required columns default to ['timestamp','open','high','low','close','volume'].
     Ensures timestamp is parseable and, if requested, monotonic increasing.
     """
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for validate_ohlcv. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     required = required or ['timestamp', 'open', 'high', 'low', 'close', 'volume']
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f'missing columns: {missing}')
     ts = df['timestamp']
-    timestamp_types = (datetime,)
-    if HAS_PANDAS:
-        timestamp_types = (pd.Timestamp, datetime)
+    timestamp_types = (pd.Timestamp, datetime)
     if not isinstance(ts.iloc[0], timestamp_types):
         ts = safe_to_datetime(ts, context='ohlcv validation')
     if ts.isna().any():
@@ -573,6 +585,12 @@ def health_check(df: DataFrame, resolution: str | None=None) -> bool:
         return False
 
 def get_column(df, options, label, dtype=None, must_be_monotonic=False, must_be_non_null=False, must_be_unique=False, must_be_timezone_aware=False):
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for get_column. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     for col in options:
         if col in df.columns:
             if dtype is not None:
@@ -607,7 +625,13 @@ def get_volume_column(df):
     return _safe_get_column(df, ['Volume', 'volume', 'v'], 'volume', dtype=None)
 
 def _safe_get_column(df, options, label, **kwargs):
-    if not isinstance(df, DataFrame) or df.empty:
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for column helpers. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
+    if not isinstance(df, pd.DataFrame) or df.empty:
         return None
     try:
         return get_column(df, options, label, **kwargs)
@@ -632,7 +656,13 @@ def get_order_column(df, name):
 
 def get_ohlcv_columns(df):
     """Return the names of the OHLCV columns if present."""
-    if not isinstance(df, DataFrame):
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for get_ohlcv_columns. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
+    if not isinstance(df, pd.DataFrame):
         return []
     cols = [get_open_column(df), get_high_column(df), get_low_column(df), get_close_column(df), get_volume_column(df)]
     if any((c is None for c in cols)):
@@ -642,7 +672,13 @@ REQUIRED_OHLCV_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
 
 def validate_ohlcv_basic(df: DataFrame) -> bool:
     """Return True if ``df`` contains the required OHLCV columns."""
-    if not isinstance(df, DataFrame) or df.empty:
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for validate_ohlcv_basic. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
+    if not isinstance(df, pd.DataFrame) or df.empty:
         logger.error('validate_ohlcv_basic received invalid DataFrame')
         return False
     missing = [c for c in REQUIRED_OHLCV_COLS if c not in df.columns]
@@ -653,10 +689,22 @@ def validate_ohlcv_basic(df: DataFrame) -> bool:
 
 def _get_alpaca_rest():
     """Get Alpaca REST API class."""
+    try:
+        from alpaca_trade_api.rest import REST  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - alpaca SDK missing
+        raise ImportError(
+            "alpaca-trade-api is required for Alpaca REST access. Install with `pip install alpaca-trade-api`."
+        ) from exc
     return REST
 
 def check_symbol(symbol: str, api: Any) -> bool:
     """Return ``True`` if ``symbol`` has sufficient data via ``api``."""
+    try:
+        import pandas as pd  # pylint: disable=import-error
+    except ImportError as exc:  # pragma: no cover - pandas missing
+        raise ImportError(
+            "pandas is required for check_symbol. Install with `pip install ai-trading-bot[pandas]`."
+        ) from exc
     try:
         path = os.path.join('data', f'{symbol}.csv')
         df = pd.read_csv(path)

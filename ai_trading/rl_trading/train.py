@@ -11,8 +11,8 @@ from ai_trading.logging import logger
 from . import _load_rl_stack
 
 
-class _SB3Shim:
-    """Minimal shim used when RL stack is unavailable."""
+class _SB3Stub:
+    """Minimal placeholder used when RL stack is unavailable."""
 
     def __init__(self, *a, **k):
         pass
@@ -28,7 +28,7 @@ class _SB3Shim:
         return cls()
 
 
-PPO = A2C = DQN = _SB3Shim
+PPO = A2C = DQN = _SB3Stub
 
 
 class BaseCallback:
@@ -56,9 +56,9 @@ def evaluate_policy(*a, **k):
 
 
 def _ensure_rl() -> bool:
-    """Import the RL stack on demand, updating global shims."""
+    """Import the RL stack on demand, replacing global placeholders."""
     global PPO, A2C, DQN, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
-    if PPO is not _SB3Shim:
+    if PPO is not _SB3Stub:
         return True
     stack = _load_rl_stack()
     if stack is None:
