@@ -213,12 +213,14 @@ def get_buy_threshold() -> float:
     return _to_float(getattr(get_settings(), 'buy_threshold', 0.4), 0.4)
 
 def get_conf_threshold() -> float:
-    from ai_trading.config.management import TradingConfig
-    mode = getattr(get_settings(), 'trading_mode', 'balanced')
-    if not isinstance(mode, str):
-        mode = str(getattr(mode, 'default', mode))
-    cfg = TradingConfig.from_env(mode=mode)
-    return _to_float(getattr(cfg, 'conf_threshold', 0.75), 0.75)
+    """Return confidence threshold based on trading mode or explicit setting."""
+    s = get_settings()
+    val = getattr(s, 'conf_threshold', None)
+    if val is not None:
+        return _to_float(val, 0.75)
+    mode = str(getattr(s, 'trading_mode', 'balanced')).lower()
+    defaults = {'conservative': 0.85, 'balanced': 0.75, 'aggressive': 0.65}
+    return float(defaults.get(mode, 0.75))
 
 def get_trade_cooldown_min() -> int:
     return _to_int(getattr(get_settings(), 'trade_cooldown_min', 15), 15)
@@ -256,17 +258,6 @@ def get_alpaca_secret_key_plain() -> str | None:
     return _secret_to_str(getattr(s, 'alpaca_secret_key', None))
 
 def get_seed_int(default: int=42) -> int:
-    """Fetch deterministic seed as int."""
+    """Fetch deterministic seed as int."""  # AI-AGENT-REF: stable default accessor
     s = get_settings()
     return _to_int(getattr(s, 'ai_trading_seed', default), default)
-DEFAULT_CONFIG = None
-_DEFAULT_CONFIG = DEFAULT_CONFIG
-
-def ensure_default_config():
-    """Lazily initialize TradingConfig for backward compatibility."""
-    global DEFAULT_CONFIG, _DEFAULT_CONFIG
-    if DEFAULT_CONFIG is None:
-        from ai_trading.config.management import TradingConfig
-        DEFAULT_CONFIG = TradingConfig.from_env()
-        _DEFAULT_CONFIG = DEFAULT_CONFIG
-    return DEFAULT_CONFIG

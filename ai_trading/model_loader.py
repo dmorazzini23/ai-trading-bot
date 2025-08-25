@@ -58,7 +58,9 @@ def load_model(symbol: str):
         model = train_and_save_model(symbol)
     ML_MODELS[symbol] = model
     return model
-_is_testing = os.getenv('TESTING') or os.getenv('PYTEST_RUNNING') or getattr(config, 'TESTING', False) or ('pytest' in sys.modules) or ('test_' in os.path.basename(sys.argv[0] if sys.argv else ''))
-if not _is_testing:
-    for sym in getattr(config, 'SYMBOLS', []):
+
+# AI-AGENT-REF: avoid import-time model loading; expose explicit preload
+def preload_models(symbols: list[str] | None=None) -> None:
+    """Eagerly load models for ``symbols``."""
+    for sym in symbols or getattr(config, 'SYMBOLS', []):
         ML_MODELS[sym] = load_model(sym)

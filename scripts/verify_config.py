@@ -1,11 +1,8 @@
 import logging
-'\nAPI Key Configuration Verification Script\n\nThis script helps verify that your API key configuration is set up correctly\nand provides guidance on any issues found.\n'
 import os
 import sys
 from pathlib import Path
-from ai_trading.config import management as config
-from ai_trading.config.management import TradingConfig
-CONFIG = TradingConfig()
+from ai_trading.settings import _secret_to_str, get_settings
 
 def check_env_file():
     """Check if .env file exists and has proper format."""
@@ -72,17 +69,18 @@ def check_api_keys():
         return (False, f'❌ Error checking API keys: {e}')
 
 def check_config_import():
-    """Check if the config module can be imported successfully."""
+    """Check if settings can be loaded and contain API keys."""
     try:
         os.environ['TESTING'] = '1'
-        has_api_key = bool(config.ALPACA_API_KEY and config.ALPACA_API_KEY != 'YOUR_ALPACA_API_KEY_HERE')
-        has_secret = bool(config.ALPACA_SECRET_KEY and config.ALPACA_SECRET_KEY != 'YOUR_ALPACA_SECRET_KEY_HERE')
+        s = get_settings()
+        has_api_key = bool(s.alpaca_api_key and s.alpaca_api_key != 'YOUR_ALPACA_API_KEY_HERE')
+        secret = _secret_to_str(getattr(s, 'alpaca_secret_key', None))
+        has_secret = bool(secret and secret != 'YOUR_ALPACA_SECRET_KEY_HERE')
         if has_api_key and has_secret:
-            return (True, '✅ Configuration module imports successfully with API keys')
-        else:
-            return (False, '⚠️  Configuration imports but API keys not properly set')
+            return (True, '✅ Settings load successfully with API keys')
+        return (False, '⚠️ Settings loaded but API keys not properly set')
     except (KeyError, ValueError, TypeError) as e:
-        return (False, f'❌ Error importing config: {e}')
+        return (False, f'❌ Error loading settings: {e}')
 
 def print_setup_instructions():
     """Print setup instructions."""

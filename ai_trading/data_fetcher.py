@@ -5,6 +5,7 @@ import warnings
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
+import importlib
 import pandas as pd
 from pandas.errors import OutOfBoundsDatetime
 try:
@@ -119,20 +120,22 @@ class FinnhubAPIException(Exception):
 def build_fetcher(config: Any):
     """Return a market data fetcher with safe fallbacks."""
     from ai_trading.alpaca_api import ALPACA_AVAILABLE
-    from ai_trading.core.bot_engine import DataFetcher, DataFetchError
+    bot_mod = importlib.import_module('ai_trading.core.bot_engine')
+    DataFetcher = bot_mod.DataFetcher
+    DataFetchError = bot_mod.DataFetchError
     alpaca_ok = bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'))
     has_keys = alpaca_ok
     if ALPACA_AVAILABLE and has_keys:
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'alpaca'})
         return DataFetcher()
-    elif YF_AVAILABLE and requests is not None:
+    if YF_AVAILABLE and requests is not None:
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'yfinance'})
         return DataFetcher()
-    elif requests is not None:
+    if requests is not None:
         logger.warning('DATA_FETCHER_BUILD_FALLBACK', extra={'source': 'yahoo-requests'})
         return DataFetcher()
     logger.error('DATA_FETCHER_UNAVAILABLE', extra={'reason': 'no deps'})
-    return DataFetcher()
+    raise DataFetchError('No market data source available')
 
 def ensure_datetime(value: Any) -> _dt.datetime:
     """Coerce various datetime inputs into timezone-aware UTC datetime.
