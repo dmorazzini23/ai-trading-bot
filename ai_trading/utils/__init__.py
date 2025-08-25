@@ -76,6 +76,8 @@ from .base import (  # noqa: E402
 
 # Keep submodules importable as ai_trading.utils.http, etc.
 from . import http  # noqa: F401
+# AI-AGENT-REF: expose optional dependency helpers
+from .optdeps import optional_import, module_ok  # noqa: F401
 
 __all__ = [
     "HTTP_TIMEOUT",
@@ -98,5 +100,7 @@ __all__ = [
     # subprocess helper
     "SUBPROCESS_TIMEOUT_DEFAULT",
     "safe_subprocess_run",
+    "optional_import",
+    "module_ok",
 ]
 
