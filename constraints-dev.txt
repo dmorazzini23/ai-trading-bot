@@ -69,8 +69,6 @@ python-dateutil==2.9.0.post0
     #   pandas-market-calendars
 python-dotenv==1.1.1
     # via pydantic-settings
-pytz==2025.2
-    # via pandas
 ruff==0.12.10
     # via -r requirements/dev.txt
 six==1.17.0

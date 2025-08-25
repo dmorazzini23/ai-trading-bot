@@ -119,10 +119,6 @@ python-dotenv==1.1.1
     # via
     #   -r requirements.txt
     #   pydantic-settings
-pytz==2025.2
-    # via pandas
-pytz-deprecation-shim==0.1.0.post0
-    # via tzlocal
 pyyaml==6.0.1
     # via alpaca-trade-api
 ratelimit==2.2.1
@@ -166,7 +162,6 @@ tzdata==2025.2
     #   exchange-calendars
     #   pandas
     #   pandas-market-calendars
-    #   pytz-deprecation-shim
 tzlocal==4.3
     # via -r requirements.txt
 urllib3==1.26.20
