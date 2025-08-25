@@ -110,8 +110,7 @@ def test_centralized_logging_thread_safety():
             }):
                 setup_logging(debug=True)
                 results.append(len(logging.getLogger().handlers))
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             exceptions.append(e)
 
     try:

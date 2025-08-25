@@ -8,6 +8,8 @@ import os
 import sys
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 import pytest
 
 
@@ -82,14 +84,10 @@ def test_validate_env_import():
 
     except ImportError as e:
         pytest.skip(f"Cannot import validate_env module: {e}")
-    # noqa: BLE001 TODO: narrow exception
-    except Exception as e:
+    except (ValidationError, ValueError) as e:
         # Don't fail if there are other validation issues, just check syntax works
         if "field_validator" in str(e) or "validator" in str(e):
             pytest.fail(f"Pydantic V2 migration issue: {e}")
-        else:
-            # Other validation errors are expected without proper env setup
-            pass
 
 
 def test_field_validator_functionality():
@@ -113,8 +111,7 @@ def test_field_validator_functionality():
                 validate_env.Settings()
                 # If we get here, check that the problematic values were caught
                 # by validators or set to defaults
-            # noqa: BLE001 TODO: narrow exception
-            except Exception as e:
+            except ValidationError as e:
                 # Validation errors are expected with invalid inputs
                 assert "ALPACA_SECRET_KEY appears too short" in str(e) or \
                        "ALPACA_BASE_URL must use HTTPS" in str(e) or \

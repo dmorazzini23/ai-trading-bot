@@ -5,8 +5,7 @@ import pandas as pd
 
 try:
     import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
-# noqa: BLE001 TODO: narrow exception
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     import pytest
     pytest.skip("risk_engine not available", allow_module_level=True)
 from ai_trading import signals

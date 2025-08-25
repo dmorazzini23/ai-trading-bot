@@ -160,8 +160,7 @@ class TestPortfolioRebalancingIntegration:
             portfolio_first_rebalance(self.ctx)
             # If it doesn't crash, that's a success in this test environment
             assert True
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (RuntimeError, ImportError) as e:
             # Some failures are expected due to limited test environment
             # Just ensure it's handling errors gracefully
             assert "Error" in str(e) or "not available" in str(e).lower()

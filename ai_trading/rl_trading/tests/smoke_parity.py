@@ -127,8 +127,7 @@ def test_action_space_parity():
                     f"    Postprocessed action: {action_details['action']} (confidence: {action_details['confidence']:.2f})"
                 )
 
-            # noqa: BLE001 TODO: narrow exception
-            except Exception as e:
+            except (RuntimeError, FileNotFoundError) as e:
                 # Expected to fail due to missing model, but preprocessing should work
                 if (
                     "model not loaded" in str(e).lower()
@@ -146,8 +145,7 @@ def test_action_space_parity():
     except ModuleNotFoundError as e:  # AI-AGENT-REF: narrow missing dependency handling
         logger.info(f"Skipping RL tests due to missing dependencies: {e}")
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception as e:
+    except (RuntimeError, ValueError) as e:
         logger.info(f"RL parity test failed: {e}")
         return False
 
@@ -200,8 +198,7 @@ def test_reward_normalization():
         logger.info("Reward normalization test passed!")
         return True
 
-    # noqa: BLE001 TODO: narrow exception
-    except Exception as e:
+    except (RuntimeError, ValueError) as e:
         logger.info(f"Reward normalization test failed: {e}")
         return False
 

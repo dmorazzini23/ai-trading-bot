@@ -60,14 +60,6 @@ class TestConfigEnvParsing:
         """Test that we can import the config module and the flag is accessible."""
         # Set a known value
         with patch.dict(os.environ, {"DISABLE_DAILY_RETRAIN": "true"}):
-            # Import should work without throwing errors
-            try:
-                # Since config.py requires environment variables, we'll test the logic directly
-                # rather than importing the full module
-                result = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")
-                assert result is True
-            # noqa: BLE001 TODO: narrow exception
-            except Exception as e:
-                # If import fails due to missing env vars, that's expected in test environment
-                # Just ensure our logic works
-                pytest.skip(f"Config import failed as expected in test env: {e}")
+            # Since config.py requires environment variables, we'll test the logic directly
+            result = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")
+            assert result is True

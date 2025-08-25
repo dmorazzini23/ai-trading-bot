@@ -211,12 +211,7 @@ class TestEnvironmentOrderAndLazyImport:
             mock_load_dotenv.side_effect = FileNotFoundError("No .env file")
 
             # Should not raise exception
-            try:
-                # If we get here, import succeeded despite missing .env
-                assert True
-            # noqa: BLE001 TODO: narrow exception
-            except Exception as e:
-                pytest.fail(f"Import failed with missing .env file: {e}")
+            assert True
 
     def test_lazy_import_error_handling(self):
         """Test that lazy import handles import errors gracefully."""

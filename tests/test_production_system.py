@@ -66,9 +66,6 @@ def test_atr_position_sizer():
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 def test_drawdown_circuit_breaker():
@@ -100,9 +97,6 @@ def test_drawdown_circuit_breaker():
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 def test_trading_halt_manager():
@@ -136,9 +130,6 @@ def test_trading_halt_manager():
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 def test_alert_manager():
@@ -182,9 +173,6 @@ def test_alert_manager():
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 async def test_production_execution_coordinator():
@@ -224,9 +212,6 @@ async def test_production_execution_coordinator():
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 async def run_all_tests():
@@ -268,7 +253,4 @@ if __name__ == "__main__":
         exit_code = 0 if result else 1
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        sys.exit(1)
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
         sys.exit(1)

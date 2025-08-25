@@ -112,8 +112,7 @@ def test_latency_tracking():
     # Test latency calculation (this will fail on API calls, but that's expected in test)
     try:
         engine._handle_order_result("AAPL", "buy", mock_order, 150.00, 100, start_time)
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    except (AttributeError, ConnectionError):
         # Expected to fail on API calls in test environment
         pass
 
@@ -121,23 +120,15 @@ def test_latency_tracking():
 def test_comprehensive_fixes():
     """Run comprehensive test of all performance fixes."""
 
-    try:
-        test_meta_learning_mixed_format()
+    test_meta_learning_mixed_format()
 
-        test_cache_performance_metrics()
+    test_cache_performance_metrics()
 
-        test_position_size_reporting()
+    test_position_size_reporting()
 
-        test_latency_tracking()
+    test_latency_tracking()
 
-        return True
-
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        import traceback
-
-        traceback.print_exc()
-        return False
+    return True
 
 
 if __name__ == "__main__":

@@ -96,13 +96,12 @@ class TestShortSellingImplementation(unittest.TestCase):
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=self.mock_api):
                 with patch.object(engine, '_validate_short_selling', return_value=True):
-                    with patch.object(engine, '_assess_liquidity', side_effect=Exception("Stop execution here")):
+                    with patch.object(engine, '_assess_liquidity', side_effect=RuntimeError("Stop execution here")):
 
                         # Test that sell_short orders reach the validation step (don't get blocked by SKIP_NO_POSITION)
                         try:
                             result = engine.execute_order("AAPL", 10, "sell_short")
-                        # noqa: BLE001 TODO: narrow exception
-                        except Exception:
+                        except RuntimeError:
                             # Expected to reach this point, meaning it passed the initial validation
                             pass
 
