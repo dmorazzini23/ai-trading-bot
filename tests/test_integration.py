@@ -55,21 +55,11 @@ def test_rate_limit_integration():
         # Check that orders route is configured
         limiter.get_status("orders")
 
-
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    except ImportError:
         pass
 
 
 if __name__ == "__main__":
 
-    try:
-        test_money_execution_integration()
-        test_rate_limit_integration()
-
-
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    test_money_execution_integration()
+    test_rate_limit_integration()

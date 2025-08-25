@@ -10,8 +10,7 @@ from ai_trading.core import bot_engine
 
 try:
     from ai_trading.strategies.base import TradeSignal
-# noqa: BLE001 TODO: narrow exception
-except Exception:  # pragma: no cover - optional strategies package
+except ImportError:  # pragma: no cover - optional strategies package
     pytest.skip("TradeSignal unavailable", allow_module_level=True)
 
 

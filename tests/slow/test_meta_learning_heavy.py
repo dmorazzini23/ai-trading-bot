@@ -13,8 +13,7 @@ import torch
 try:
     import pydantic_settings  # noqa: F401
     from ai_trading import meta_learning
-# noqa: BLE001 TODO: narrow exception
-except Exception:
+except ImportError:
     pytest.skip("pydantic v2 required", allow_module_level=True)
 
 pytestmark = pytest.mark.slow

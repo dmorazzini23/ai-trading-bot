@@ -84,14 +84,10 @@ def test_multi_timeframe_analyzer():
         assert "action" in recommendation, "Recommendation should have action"
         assert "confidence" in recommendation, "Recommendation should have confidence"
 
-
         return True
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 def test_regime_detector():
@@ -130,14 +126,10 @@ def test_regime_detector():
         assert "strategy_type" in recommendations, "Should provide strategy recommendations"
         assert "position_size_multiplier" in recommendations, "Should provide position sizing advice"
 
-
         return True
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 def test_integrated_strategy_system():
@@ -181,14 +173,10 @@ def test_integrated_strategy_system():
             "reasoning": f"MTF analysis: {mtf_recommendation['action']}, Market regime: {regime.value}"
         }
 
-
         return True
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 def test_strategy_performance_scenarios():
@@ -223,7 +211,6 @@ def test_strategy_performance_scenarios():
 
         volatile_result = detector.detect_regime(volatile_data)
 
-
         # Test that different scenarios produce different regimes
         regimes = [
             str(bull_result.get('primary_regime', 'Unknown')),
@@ -237,9 +224,6 @@ def test_strategy_performance_scenarios():
 
     except ImportError:
         return True
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 
 async def run_strategy_tests():
@@ -278,7 +262,4 @@ if __name__ == "__main__":
         exit_code = 0 if result else 1
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        sys.exit(1)
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
         sys.exit(1)

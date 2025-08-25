@@ -73,8 +73,7 @@ def submit_order_with_retry(broker, idempotency_mgr, order_data):
         # Attempt broker submission
         result = broker.submit_order(order_data)
         return result
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    except (ConnectionError, ValueError):
         # If submission fails, we keep the idempotency mark
         # This prevents retry storms from causing duplicate orders
         raise

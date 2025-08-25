@@ -19,8 +19,7 @@ def test_force_full_coverage():
             compile(dummy, path.as_posix(), "exec")  # Just compile, don't execute
         except SyntaxError as e:
             logger.error("Syntax error in %s: %s", fname, e)
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.error("Coverage test failed for %s: %s", fname, e)
             # Don't fail the test, just log the error
 

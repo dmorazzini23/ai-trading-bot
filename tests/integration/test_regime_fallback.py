@@ -4,8 +4,7 @@ import pytest
 
 try:
     from ai_trading.core import bot_engine
-# noqa: BLE001 TODO: narrow exception
-except Exception:
+except ImportError:
     pytest.skip("bot engine not importable", allow_module_level=True)
 
 @pytest.mark.integration

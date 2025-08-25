@@ -76,8 +76,7 @@ def test_algorithm_optimizer_thread_safety():
             for i in range(100):
                 result = optimizer._calculate_kelly_fraction("TEST")
                 results.append(result)
-        # noqa: BLE001 TODO: narrow exception
-        except Exception as e:
+        except RuntimeError as e:
             errors.append(e)
 
     # Run multiple threads

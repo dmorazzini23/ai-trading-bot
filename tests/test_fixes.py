@@ -80,46 +80,37 @@ def test_talib_imports():
                 pass
             else:
                 pass
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
+        except (AttributeError, ValueError):
             pass
 
         return True
 
     except ImportError:
         return False
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
-        return False
 
 def test_screen_universe_logging():
     """Test that screen_universe function has enhanced logging."""
 
-    try:
-        with open('bot_engine.py') as f:
-            content = f.read()
+    with open('bot_engine.py') as f:
+        content = f.read()
 
-        # Check for enhanced logging statements
-        if 'logger.info(f"[SCREEN_UNIVERSE] Starting screening of' in content:
-            pass
-        else:
-            return False
-
-        if 'filtered_out[sym] = "no_data"' in content:
-            pass
-        else:
-            return False
-
-        if 'f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates' in content:
-            pass
-        else:
-            return False
-
-        return True
-
-    # noqa: BLE001 TODO: narrow exception
-    except Exception:
+    # Check for enhanced logging statements
+    if 'logger.info(f"[SCREEN_UNIVERSE] Starting screening of' in content:
+        pass
+    else:
         return False
+
+    if 'filtered_out[sym] = "no_data"' in content:
+        pass
+    else:
+        return False
+
+    if 'f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates' in content:
+        pass
+    else:
+        return False
+
+    return True
 
 def main():
     """Run all tests."""
@@ -134,8 +125,7 @@ def main():
     for test in tests:
         try:
             results.append(test())
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
+        except (RuntimeError, OSError, ValueError):
             results.append(False)
 
 

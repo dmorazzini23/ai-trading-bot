@@ -14,8 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:
     pass  # type: ignore
-# noqa: BLE001 TODO: narrow exception
-except Exception:
+except ImportError:
     sys.modules["pandas"] = types.ModuleType("pandas")
     sys.modules["pandas"].DataFrame = MagicMock()
     sys.modules["pandas"].Series = MagicMock()
@@ -25,8 +24,7 @@ pytestmark = pytest.mark.integration
 
 try:
     import numpy  # type: ignore  # noqa: F401
-# noqa: BLE001 TODO: narrow exception
-except Exception:
+except ImportError:
     sys.modules["numpy"] = types.ModuleType("numpy")
     sys.modules["numpy"].array = MagicMock()
     sys.modules["numpy"].nan = float("nan")
@@ -36,8 +34,7 @@ except Exception:
 
 try:
     import pandas_ta  # type: ignore  # noqa: F401
-# noqa: BLE001 TODO: narrow exception
-except Exception:
+except ImportError:
     sys.modules["pandas_ta"] = types.ModuleType("pandas_ta")
 if "pandas_ta" in sys.modules:
     mod = sys.modules["pandas_ta"]
@@ -50,8 +47,7 @@ if "pandas_ta" in sys.modules:
 
 try:
     import pandas_market_calendars  # type: ignore  # noqa: F401
-# noqa: BLE001 TODO: narrow exception
-except Exception:
+except ImportError:
     sys.modules["pandas_market_calendars"] = types.ModuleType("pandas_market_calendars")
 if not hasattr(sys.modules["pandas_market_calendars"], "get_calendar"):
     sys.modules["pandas_market_calendars"].get_calendar = MagicMock()
@@ -396,11 +392,7 @@ def test_bot_main_signal_nan(monkeypatch):
         from ai_trading.core import bot_engine as bot
 
         monkeypatch.setattr(bot, "main", lambda: None)
-        try:
-            bot.main()
-        # noqa: BLE001 TODO: narrow exception
-        except Exception:
-            pytest.fail("Bot should handle NaN signal gracefully")
+        bot.main()
 
 
 def test_trade_execution_api_timeout(monkeypatch):
