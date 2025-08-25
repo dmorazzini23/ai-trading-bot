@@ -15,11 +15,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
-from ai_trading.broker.alpaca import ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.logging.emit_once import emit_once
 
 _log = logging.getLogger(__name__)
-APIError = ensure_api_error()
 ORDER_STALE_AFTER_S = 8 * 60
 
 @dataclass(slots=True)
@@ -415,9 +420,9 @@ class ExecutionEngine:
                 if now_s - info.submitted_time >= max_age:
                     if self.broker_interface is not None:
                         try:
-                            ord_obj = self.broker_interface.get_order_by_id(oid)
+                            ord_obj = self.broker_interface.get_order(oid)
                             if getattr(ord_obj, 'status', '').lower() == 'new':
-                                self.broker_interface.cancel_order_by_id(oid)
+                                self.broker_interface.cancel_order(oid)
                         except (ValueError, TypeError):
                             pass
                     _active_orders.pop(oid, None)

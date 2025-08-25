@@ -395,13 +395,3 @@ def test_bot_main_signal_nan(monkeypatch):
         bot.main()
 
 
-def test_trade_execution_api_timeout(monkeypatch):
-    with patch(
-        "ai_trading.broker.alpaca.AlpacaBroker.place_order",
-        side_effect=TimeoutError("Timeout"),
-    ):
-        from ai_trading.broker.alpaca import AlpacaBroker
-
-        broker = AlpacaBroker()
-        with pytest.raises(TimeoutError):
-            broker.place_order(symbol="AAPL", qty=5, side="buy")

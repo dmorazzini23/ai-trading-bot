@@ -5,7 +5,6 @@ import sys
 PATHS = [
     "ai_trading/logging.py",
     "ai_trading/risk/engine.py",
-    "ai_trading/broker/alpaca.py",
     "ai_trading/strategies/mean_reversion.py",
     "ai_trading/execution/liquidity.py",
     "ai_trading/portfolio/optimizer.py",

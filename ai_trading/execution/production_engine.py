@@ -8,15 +8,19 @@ import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from ai_trading.broker.alpaca import ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.logging import logger
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderType, RiskLevel
 from ..monitoring import AlertManager, AlertSeverity
 from ..risk import DynamicPositionSizer, RiskManager, TradingHaltManager
 from .engine import ExecutionAlgorithm, Order, OrderStatus
-
-APIError = ensure_api_error()
 
 class ExecutionResult:
     """

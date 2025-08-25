@@ -76,7 +76,7 @@ def log_portfolio_summary(ctx) -> None:
         signal.alarm(10)
         try:
             acct = ctx.api.get_account()
-            positions = ctx.api.list_open_positions()
+            positions = ctx.api.list_positions()
         finally:
             signal.alarm(0)
         cash = float(acct.cash)

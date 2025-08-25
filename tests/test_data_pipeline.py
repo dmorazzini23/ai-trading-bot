@@ -23,7 +23,7 @@ def test_macd_pipeline_produces_macds():
 
 def test_position_none_safe(monkeypatch):
     class Dummy:
-        def get_open_position(self, symbol):
+        def get_position(self, symbol):
             return None
 
     class Ctx:

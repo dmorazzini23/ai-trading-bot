@@ -10,7 +10,13 @@ from typing import Any
 import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.broker.alpaca import ensure_api_error
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except Exception:  # pragma: no cover - fallback when SDK missing
+    class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is unavailable."""
+
+        pass
 from ai_trading.config.management import SEED, TradingConfig
 from ai_trading.config.settings import get_settings
 
@@ -32,7 +38,6 @@ try:  # pragma: no cover - optional dependency
 except ImportError:
     AlpacaREST = None
 
-APIError = ensure_api_error()
 
 def _safe_call(fn, *a, **k):
     try:
@@ -195,7 +200,7 @@ class RiskEngine:
     def refresh_positions(self, api) -> None:
         """Synchronize exposure with live positions."""
         try:
-            positions = api.list_open_positions()
+            positions = api.list_positions()
             logger.debug('Raw Alpaca positions: %s', positions)
             acct = api.get_account()
             equity = float(getattr(acct, 'equity', 0) or 0)
@@ -213,7 +218,7 @@ class RiskEngine:
     def position_exists(self, api, symbol: str) -> bool:
         """Return True if ``symbol`` exists in current Alpaca positions."""
         try:
-            for p in api.list_open_positions():
+            for p in api.list_positions():
                 if getattr(p, 'symbol', '') == symbol:
                     return True
         except (AttributeError, APIError) as exc:

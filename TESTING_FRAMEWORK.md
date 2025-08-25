@@ -115,7 +115,7 @@ skipped.
 | Indicators | `pandas`, `ta`, `talib` | `tests/test_indicators.py` |
 | Meta learning | `numpy`, `torch`, `sklearn` | `tests/test_meta_learning.py`, `tests/slow/test_meta_learning_heavy.py` |
 | Reinforcement learning | `stable_baselines3`, `gymnasium`, `torch` | `tests/test_rl_import_performance.py` |
-| Alpaca SDK | `alpaca_trade_api`, `alpaca_api` | `tests/test_broker_alpaca_adapter.py`, `tests/unit/test_alpaca_api.py` |
+| Alpaca SDK | `alpaca_trade_api`, `alpaca_api` | `tests/unit/test_alpaca_api.py` |
 | Retry utilities | `tenacity` | `tests/test_tenacity_import.py` |
 | Calendars | `pandas_market_calendars` | `tests/test_market_calendar_wrapper.py` |
 

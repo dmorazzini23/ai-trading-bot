@@ -30,31 +30,12 @@ try:
 except (ValueError, TypeError):  # pragma: no cover - optional torch dependency
     pytest.skip("sentiment module unavailable", allow_module_level=True)
 from ai_trading import config, meta_learning
-from ai_trading.broker.alpaca import AlpacaBroker
 from ai_trading.execution.engine import ExecutionEngine
 from ai_trading.monitoring.order_health_monitor import (
     OrderInfo,
     _active_orders,
     _order_tracking_lock,
 )
-
-
-@pytest.fixture
-def broker(monkeypatch):
-    """Provide a mocked AlpacaBroker for tests."""
-    broker = AlpacaBroker()
-    monkeypatch.setattr(broker, "get_orders", lambda *a, **k: [])
-    monkeypatch.setattr(
-        broker,
-        "place_order",
-        lambda **k: {
-            "id": "TEST123",
-            "symbol": k["symbol"],
-            "qty": k["qty"],
-            "side": k.get("side", "buy"),
-        },
-    )
-    return broker
 
 
 class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
@@ -339,8 +320,8 @@ class TestOrderManagementFixes(unittest.TestCase):
             )
 
         # Mock API calls for order cancellation
-        self.mock_api.get_order_by_id.return_value = Mock(status='new')
-        self.mock_api.cancel_order_by_id.return_value = True
+        self.mock_api.get_order.return_value = Mock(status='new')
+        self.mock_api.cancel_order.return_value = True
 
         # Test cleanup
         canceled_count = self.execution_engine.cleanup_stale_orders(max_age_seconds=300)

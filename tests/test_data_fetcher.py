@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ai_trading.broker.alpaca import APIError
+from alpaca_trade_api.rest import APIError  # type: ignore
 from tests.helpers.asserts import assert_df_like
 
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
