@@ -152,11 +152,10 @@ def _interruptible_sleep(total_seconds: float) -> None:
 
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
-    cfg = get_settings()
-    if not cfg.webhook_secret:
-        raise RuntimeError("WEBHOOK_SECRET is required")
-    if not cfg.alpaca_api_key or not cfg.alpaca_secret_key_plain:
-        raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
+    from ai_trading.config.management import validate_required_env
+
+    validate_required_env()
+    _ = get_settings()
     import os
 
     data_dir = "data"

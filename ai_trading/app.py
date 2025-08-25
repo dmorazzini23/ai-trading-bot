@@ -45,7 +45,10 @@ def create_app():
 
 if __name__ == '__main__':
     if os.getenv('RUN_HEALTHCHECK') == '1':
+        from ai_trading.config.management import validate_required_env
         from ai_trading.config.settings import get_settings
+
+        validate_required_env()
         s = get_settings()
         port = int(s.api_port or 9001)
         app = create_app()

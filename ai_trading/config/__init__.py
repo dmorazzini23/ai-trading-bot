@@ -70,13 +70,9 @@ def _require_env_vars(*names: str) -> None:
         raise RuntimeError(msg)
 
 def _perform_env_validation() -> None:
-    required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL', 'WEBHOOK_SECRET']
-    missing: list[str] = []
-    for env_key in required:
-        if not os.getenv(env_key, '').strip():
-            missing.append(env_key)
-    if missing:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+    from .management import validate_required_env
+
+    validate_required_env()
 
 def validate_environment() -> None:
     """Validate required environment variables with deadlock-safe locking."""
@@ -95,11 +91,9 @@ def validate_environment() -> None:
             _set_lock_held_by_current_thread(False)
 
 def validate_alpaca_credentials() -> None:
-    api = str(globals().get('ALPACA_API_KEY', os.getenv('ALPACA_API_KEY', ''))).strip()
-    sec = str(globals().get('ALPACA_SECRET_KEY', os.getenv('ALPACA_SECRET_KEY', ''))).strip()
-    url = str(globals().get('ALPACA_BASE_URL', os.getenv('ALPACA_BASE_URL', ''))).strip()
-    if not (api and sec and url):
-        raise RuntimeError('Alpaca credentials are missing or empty')
+    from .management import validate_required_env
+
+    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"))
 
 def validate_env_vars() -> None:
     return validate_environment()
