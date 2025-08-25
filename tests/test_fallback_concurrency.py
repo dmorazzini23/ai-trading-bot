@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import threading
 import time
 import types

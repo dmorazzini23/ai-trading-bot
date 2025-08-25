@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import types
 
 import ai_trading.data.bars as data_bars

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 from types import SimpleNamespace
 
 import pandas as pd
@@ -27,4 +29,3 @@ def test_price_snapshot_minute_fallback(monkeypatch):
 
     price = portfolio_core.get_latest_price(ctx, "SPY")
     assert price == 123.0
-

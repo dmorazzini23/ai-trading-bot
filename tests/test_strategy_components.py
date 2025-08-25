@@ -4,6 +4,8 @@ Test for advanced strategy components - multi-timeframe analysis and regime dete
 Tests the functionality of the new strategy modules without requiring
 full market data or external dependencies.
 """
+from tests.optdeps import require
+require("pandas")
 
 import asyncio
 import os

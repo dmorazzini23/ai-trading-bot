@@ -3,6 +3,8 @@
 Critical fixes validation test for the AI trading bot.
 Tests the 5 major issues identified in the problem statement.
 """
+from tests.optdeps import require
+require("pandas")
 
 import os
 import sys

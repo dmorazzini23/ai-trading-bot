@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import datetime as dt
 from unittest.mock import MagicMock, patch
 

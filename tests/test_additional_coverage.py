@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import builtins
 import importlib
 import runpy

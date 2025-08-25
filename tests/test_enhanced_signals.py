@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import numpy as np
 import pandas as pd
 

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import numpy as np
 import pandas as pd
 from ai_trading import signals
@@ -16,4 +18,3 @@ def test_score_candidates_predict_proba():
     out = signals.score_candidates(X, _DummyProba())
     assert "score" in out.columns
     assert out["score"].between(0, 1).all()
-

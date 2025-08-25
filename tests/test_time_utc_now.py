@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import pandas as pd
 
 
@@ -6,4 +8,3 @@ def test_now_is_aware_utc():
     now_utc = pd.Timestamp.now(tz="UTC")
     assert now_utc.tz is not None
     assert str(now_utc.tz) in {"UTC", "+00:00"}
-

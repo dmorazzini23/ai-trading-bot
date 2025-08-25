@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import sys
 from datetime import UTC, datetime
 from pathlib import Path

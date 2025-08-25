@@ -1,6 +1,8 @@
 """
 Tests for data staleness guard functionality.
 """
+from tests.optdeps import require
+require("pandas")
 import datetime
 from unittest.mock import Mock
 

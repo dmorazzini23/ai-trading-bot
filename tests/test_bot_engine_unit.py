@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import types
 
 import joblib
@@ -117,5 +119,4 @@ def test_run_trading_cycle_empty_df_returns_no_orders():
     ctx = types.SimpleNamespace(api=None)
     df = pd.DataFrame({"price": []})
     assert run_trading_cycle(ctx, df) == []
-
 

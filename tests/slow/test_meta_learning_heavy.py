@@ -1,14 +1,14 @@
+from tests.optdeps import require
+require("pandas")
+require("sklearn")
+require("torch")
 import io
 import types
 
 import pandas as pd
 import pytest
-pytest.importorskip("sklearn", reason="Optional heavy dependency; slow suite")  # AI-AGENT-REF: guard sklearn
 import sklearn.linear_model
-try:
-    pytest.importorskip("torch", reason="Optional heavy dependency; slow suite")  # AI-AGENT-REF: guard torch
-except Exception:
-    pytest.skip("torch import failed", allow_module_level=True)
+import torch
 
 try:
     import pydantic_settings  # noqa: F401

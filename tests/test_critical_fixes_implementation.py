@@ -3,6 +3,8 @@
 Tests the thread safety, memory leak prevention, division by zero protection,
 and other critical fixes for production readiness.
 """
+from tests.optdeps import require
+require("pandas")
 
 import os
 import sys
@@ -327,4 +329,3 @@ if __name__ == "__main__":
     test_dependency_injection()
 
     test_performance_optimizations()
-

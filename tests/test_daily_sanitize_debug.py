@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from tests.optdeps import require
+require("pandas")
+
 import types
 
 import pandas as pd
@@ -38,4 +41,3 @@ def test_callable_triggers_single_debug(monkeypatch, caplog):
 
     records = [r for r in caplog.records if r.message == "DAILY_BARS_INPUT_SANITIZED"]
     assert len(records) == 1
-

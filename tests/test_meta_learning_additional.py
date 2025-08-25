@@ -1,9 +1,11 @@
+from tests.optdeps import require
+require("numpy")
+require("sklearn")
 import types
 from pathlib import Path
 
 import numpy as np
 import pytest
-pytest.importorskip("sklearn", reason="Optional heavy dependency; guard at import time")  # AI-AGENT-REF: guard sklearn
 import sklearn.linear_model
 from ai_trading import meta_learning
 

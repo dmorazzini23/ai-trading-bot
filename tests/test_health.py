@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import sys
 import types
 from pathlib import Path
@@ -265,4 +267,3 @@ def test_health_check_succeeds(monkeypatch):
     })
     ctx = DummyCtx(df)
     pre_trade_health_check(ctx, ["AAA"])
-

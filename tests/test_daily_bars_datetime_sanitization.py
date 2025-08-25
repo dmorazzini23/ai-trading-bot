@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from tests.optdeps import require
+require("pandas")
+
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -52,4 +55,3 @@ def test_daily_request_sanitizes_inputs(monkeypatch):
 
     assert calls["n"] == 2
     assert result is None
-

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("numpy")
 import sys
 import types
 from pathlib import Path

@@ -1,4 +1,6 @@
 """Test minute-to-daily resampling fallback."""
+from tests.optdeps import require
+require("pandas")
 
 from datetime import UTC, datetime
 
@@ -43,4 +45,3 @@ def test_get_daily_bars_resamples_minutes(monkeypatch):
     assert not out.empty
     assert len(out) == 1
     assert float(out.iloc[0]["open"]) == 1
-

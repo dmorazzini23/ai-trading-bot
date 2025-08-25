@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import pandas as pd
 from ai_trading.data.bars import _resample_minutes_to_daily
 

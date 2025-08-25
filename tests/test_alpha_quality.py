@@ -4,6 +4,8 @@ Basic tests for the new alpha quality features.
 Tests cover data leakage prevention, walk-forward analysis,
 slippage calculations, and RL reward penalties.
 """
+from tests.optdeps import require
+require("pandas")
 
 from datetime import timedelta
 from unittest.mock import Mock

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("numpy")
 import numpy as np
 import pytest
 from ai_trading.strategies.performance_allocator import _compute_conf_multiplier
@@ -19,4 +21,3 @@ def test_monotonic_and_bounds(th, max_boost, gamma):
     assert all(b + 1e-12 >= a for a, b in zip(ys, ys[1:]))
     assert abs(ys[0] - 1.0) < 1e-6
     assert abs(ys[-1] - max_boost) < 1e-6
-

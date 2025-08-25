@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import os
 import sys
 import types
@@ -49,4 +51,3 @@ def test_get_bars_never_none(monkeypatch):
         "volume",
     ]
     assert str(result["timestamp"].dt.tz) == "UTC"
-
