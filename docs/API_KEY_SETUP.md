@@ -119,6 +119,19 @@ print('Using paper trading:', 'paper' in config.ALPACA_BASE_URL.lower())
 "
 ```
 
+### Programmatic access
+
+You can retrieve these credentials via a typed helper:
+
+```py
+from ai_trading.broker.alpaca_credentials import resolve_alpaca_credentials
+
+creds = resolve_alpaca_credentials()
+print(creds.api_key)
+```
+
+`resolve_alpaca_credentials` returns an `AlpacaCredentials` dataclass with `api_key`, `secret_key`, and `base_url` fields.
+
 ## ❌ Common Issues
 
 ### Issue: "Missing required environment variables"
