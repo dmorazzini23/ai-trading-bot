@@ -1,4 +1,6 @@
 """Simple signal generation module for tests."""
+from __future__ import annotations
+
 import importlib
 import logging
 import os
@@ -6,13 +8,19 @@ import math
 import statistics
 from collections.abc import Iterable
 from functools import lru_cache
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - used for type hints
+    import numpy as np  # type: ignore
+    import pandas as pd  # type: ignore
+
 from ai_trading.broker.alpaca import ensure_api_error
+from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout
 
 APIError = ensure_api_error()
-_log = logging.getLogger(__name__)
-logger = _log
+logger = get_logger(__name__)
+_log = logger
 
 def psleep(_=None) -> None:
     """Benchmark-friendly noop that accepts/ignores one arg."""
@@ -29,19 +37,43 @@ def clamp_timeout(df):
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-import numpy as np
-from numpy.linalg import LinAlgError
-import pandas as pd
-import requests
+
 from ai_trading.utils import http
-try:
-    from hmmlearn.hmm import GaussianHMM
-    SKLEARN_HMM_AVAILABLE = True
-except ImportError:
-    GaussianHMM = None
-    SKLEARN_HMM_AVAILABLE = False
 from ai_trading.config import get_settings
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
+
+# Heavy imports are loaded lazily within functions
+
+def _get_numpy():
+    try:  # pragma: no cover - import is tested indirectly
+        import numpy as np  # type: ignore
+        return np
+    except Exception:  # ImportError or others
+        return None
+
+
+def _get_pandas():
+    try:  # pragma: no cover - import is tested indirectly
+        import pandas as pd  # type: ignore
+        return pd
+    except Exception:
+        return None
+
+
+def _get_requests():
+    try:  # pragma: no cover - import is tested indirectly
+        import requests  # type: ignore
+        return requests
+    except Exception:
+        return None
+
+
+def _get_gaussian_hmm():
+    try:  # pragma: no cover - import is tested indirectly
+        from hmmlearn.hmm import GaussianHMM  # type: ignore
+        return GaussianHMM
+    except Exception:
+        return None
 _LAST_SIGNAL_BAR = None
 _LAST_SIGNAL_MATRIX = None
 
@@ -50,6 +82,7 @@ def get_utcnow():
 
 def robust_signal_price(df) -> float:
     """Get closing price from dataframe with fallback."""
+    pd = _get_pandas()
     if pd is None:
         return 0.001
     try:
@@ -60,6 +93,7 @@ def robust_signal_price(df) -> float:
 
 def rolling_mean(arr, window: int):
     """Simple rolling mean using cumulative sum for speed."""
+    np = _get_numpy()
     if np is None:
         return []
     if window <= 0:
@@ -89,12 +123,14 @@ def load_module(name):
 
 def _fetch_api(url: str, retries: int=3, delay: float=1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
+    requests = _get_requests()
+    req_exc = requests.exceptions.RequestException if requests else Exception
     for attempt in range(1, retries + 1):
         try:
             resp = http.get(url, timeout=_clamp_timeout(5))
             resp.raise_for_status()
             return resp.json()
-        except requests.exceptions.RequestException as exc:
+        except req_exc as exc:
             logger.warning('API request failed (%s/%s): %s', attempt, retries, exc)
             psleep(delay * attempt)
     return {}
@@ -103,8 +139,12 @@ def generate() -> int:
     """Placeholder generate function used in tests."""
     return 0
 
-def fetch_history(symbols: Iterable[str], start, end, source: str='alpaca') -> pd.DataFrame:
+def fetch_history(symbols: Iterable[str], start, end, source: str='alpaca') -> Any:
     """Fetch historical data for symbols between start and end."""
+    pd = _get_pandas()
+    if pd is None:
+        logger.warning('Pandas not available, returning None from fetch_history')
+        return None
     try:
         df = pd.DataFrame()
         return df
@@ -112,7 +152,10 @@ def fetch_history(symbols: Iterable[str], start, end, source: str='alpaca') -> p
         _log.error('FETCH_HISTORY_FAILED', extra={'symbol_count': len(symbols), 'cause': e.__class__.__name__, 'detail': str(e)})
         raise
 
-def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def compute_indicators(df: pd.DataFrame) -> Any:
+    pd = _get_pandas()
+    if pd is None:
+        return df
     try:
         out = df.copy()
         return out
@@ -120,7 +163,10 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         _log.error('INDICATORS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         raise
 
-def build_feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
+def build_feature_matrix(df: pd.DataFrame) -> Any:
+    pd = _get_pandas()
+    if pd is None:
+        return df
     try:
         X = df.copy()
         return X
@@ -128,8 +174,12 @@ def build_feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
         _log.error('FEATURE_MATRIX_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         raise
 
-def score_candidates(X: pd.DataFrame, model) -> pd.DataFrame:
+def score_candidates(X: pd.DataFrame, model) -> Any:
     """Attach model-derived score column in [0, 1] to ``X``."""
+    pd = _get_pandas()
+    if pd is None:
+        logger.warning('Pandas not available, skipping score_candidates')
+        return X
     try:
         if hasattr(model, 'predict_proba'):
             proba = model.predict_proba(X)
@@ -148,7 +198,10 @@ def score_candidates(X: pd.DataFrame, model) -> pd.DataFrame:
         _log.error('MODEL_SCORE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         raise
 
-def generate_signals(scored: pd.DataFrame, buy_threshold: float) -> pd.DataFrame:
+def generate_signals(scored: pd.DataFrame, buy_threshold: float) -> Any:
+    pd = _get_pandas()
+    if pd is None:
+        return scored
     try:
         signals = scored.copy()
         return signals
@@ -157,12 +210,16 @@ def generate_signals(scored: pd.DataFrame, buy_threshold: float) -> pd.DataFrame
         raise
 
 def _validate_macd_input(close_prices, min_len):
+    np = _get_numpy()
+    if np is None:
+        return False
     if close_prices.isna().any() or np.isinf(close_prices).any():
         return False
     return not len(close_prices) < min_len
 
 def _compute_macd_df(close_prices, fast_period: int, slow_period: int, signal_period: int):
     """Compute MACD dataframe with graceful fallback."""
+    pd = _get_pandas()
     if pd is None:
         return None
     fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
@@ -174,6 +231,9 @@ def _compute_macd_df(close_prices, fast_period: int, slow_period: int, signal_pe
 
 @lru_cache(maxsize=128)
 def _cached_macd(prices_tuple: tuple, fast_period: int, slow_period: int, signal_period: int) -> Any | None:
+    pd = _get_pandas()
+    if pd is None:
+        return None
     series = pd.Series(prices_tuple)
     return _compute_macd_df(series, fast_period, slow_period, signal_period)
 
@@ -197,13 +257,17 @@ def calculate_macd(close_prices, fast_period: int=12, slow_period: int=26, signa
         DataFrame containing ``macd``, ``signal`` and ``histogram`` columns or
         ``None`` if the calculation fails.
     """
+    pd = _get_pandas()
+    if pd is None:
+        logger.warning('Pandas not available, cannot calculate MACD')
+        return None
     try:
         min_len = slow_period + signal_period
         if not _validate_macd_input(close_prices, min_len):
             return None
         tup = tuple(map(float, close_prices.dropna().tolist()))
         macd_df = _cached_macd(tup, fast_period, slow_period, signal_period)
-        if macd_df.isnull().values.any():
+        if macd_df is None or macd_df.isnull().values.any():
             logger.warning('MACD calculation returned NaNs in the result')
             return None
         return macd_df
@@ -212,6 +276,7 @@ def calculate_macd(close_prices, fast_period: int=12, slow_period: int=26, signa
         return None
 
 def _validate_input_df(data) -> None:
+    pd = _get_pandas()
     if data is None:
         raise ValueError('Input must be a DataFrame')
     if pd is not None and (not isinstance(data, pd.DataFrame)):
@@ -220,6 +285,10 @@ def _validate_input_df(data) -> None:
         raise ValueError("Input data missing 'close' column")
 
 def _apply_macd(data) -> Any | None:
+    pd = _get_pandas()
+    if pd is None:
+        logger.warning('Pandas not available for MACD application')
+        return None
     macd_df = calculate_macd(data['close'])
     if macd_df is None or macd_df.empty:
         logger.warning('MACD indicator calculation failed, returning None')
@@ -249,15 +318,17 @@ def prepare_indicators(data, ticker: str | None=None) -> Any | None:
     ValueError
         If the MACD indicator fails to calculate or ``close`` column is missing.
     """
+    pd = _get_pandas()
     _validate_input_df(data)
     cache_path = Path(f'cache_{ticker}.parquet') if ticker else None
     if os.getenv('DISABLE_PARQUET'):
         cache_path = None
-    if cache_path and cache_path.exists():
+    if pd is not None and cache_path and cache_path.exists():
         return pd.read_parquet(cache_path)
     data = _apply_macd(data.copy())
-    logger.debug(f"After prepare_macd {ticker or ''}, tail close:\n{data[['close']].tail(5)}")
-    if cache_path:
+    if pd is not None:
+        logger.debug(f"After prepare_macd {ticker or ''}, tail close:\n{data[['close']].tail(5)}")
+    if pd is not None and cache_path:
         try:
             data.to_parquet(cache_path, engine='pyarrow')
         except (OSError, ValueError) as e:
@@ -353,6 +424,11 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     ensemble_vote_signals : Combine multiple signal sources
     generate_ensemble_signal : Advanced signal aggregation
     """
+    pd = _get_pandas()
+    np = _get_numpy()
+    if pd is None or np is None:
+        logger.warning('numpy or pandas not available for generate_signal')
+        return pd.Series(dtype=int, name='signal') if pd is not None else []
     if df is None:
         logger.error('Dataframe is None in generate_signal')
         return pd.Series(dtype=int, name='signal')
@@ -381,10 +457,13 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         logger.error('SIGNAL_GEN_FAILED', exc_info=True, extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
         return pd.Series(dtype=int, name='signal', index=df.index if hasattr(df, 'index') else None)
 
-def detect_market_regime_hmm(df, n_components: int=3, window_size: int=1000, max_iter: int=10) -> np.ndarray:
+def detect_market_regime_hmm(df, n_components: int=3, window_size: int=1000, max_iter: int=10) -> Any:
     """Return HMM-based market regime labels for ``df``."""
-    if not SKLEARN_HMM_AVAILABLE:
-        return np.zeros(len(df), dtype=int)
+    np = _get_numpy()
+    pd = _get_pandas()
+    GaussianHMM = _get_gaussian_hmm()
+    if np is None or pd is None or GaussianHMM is None:
+        return np.zeros(len(df), dtype=int) if np is not None else [0] * len(df)
     col = 'close' if 'close' in df.columns else 'Close'
     if col not in df:
         return np.zeros(len(df), dtype=int)
@@ -395,6 +474,11 @@ def detect_market_regime_hmm(df, n_components: int=3, window_size: int=1000, max
     arr = returns.values.reshape(-1, 1)
     train = arr[-window_size:] if arr.shape[0] > window_size else arr
     try:
+        try:
+            from numpy.linalg import LinAlgError
+        except Exception:  # pragma: no cover - fallback definition
+            class LinAlgError(Exception):
+                pass
         model = GaussianHMM(n_components=n_components, covariance_type='diag', n_iter=max_iter, random_state=42)
         model.fit(train)
         hidden_full = model.predict(arr)
@@ -406,6 +490,11 @@ def detect_market_regime_hmm(df, n_components: int=3, window_size: int=1000, max
 
 def compute_signal_matrix(df) -> Any | None:
     """Return a matrix of z-scored indicator signals."""
+    pd = _get_pandas()
+    np = _get_numpy()
+    if pd is None or np is None:
+        logger.warning('numpy or pandas not available for compute_signal_matrix')
+        return pd.DataFrame() if pd is not None else None
     if df is None or df.empty:
         logger.warning('compute_signal_matrix received empty dataframe')
         return pd.DataFrame()
@@ -473,8 +562,10 @@ def compute_signal_matrix(df) -> Any | None:
 
 def ensemble_vote_signals(signal_matrix) -> Any:
     """Return voting-based entry signals from ``signal_matrix``."""
-    if signal_matrix is None or signal_matrix.empty:
-        return pd.Series(dtype=int)
+    pd = _get_pandas()
+    np = _get_numpy()
+    if pd is None or np is None or signal_matrix is None or signal_matrix.empty:
+        return pd.Series(dtype=int) if pd is not None else []
     pos = (signal_matrix > 0.5).sum(axis=1)
     neg = (signal_matrix < -0.5).sum(axis=1)
     votes = np.where(pos >= 2, 1, np.where(neg >= 2, -1, 0))
@@ -482,8 +573,10 @@ def ensemble_vote_signals(signal_matrix) -> Any:
 
 def classify_regime(df, window: int=20) -> Any:
     """Classify each row as 'trend' or 'mean_revert' based on volatility."""
-    if df is None or df.empty or 'close' not in df:
-        return pd.Series(dtype=object)
+    pd = _get_pandas()
+    np = _get_numpy()
+    if pd is None or np is None or df is None or df.empty or 'close' not in df:
+        return pd.Series(dtype=object) if pd is not None else []
     returns = df['close'].pct_change()
     vol = returns.rolling(window).std()
     med = vol.rolling(window).median()
@@ -492,10 +585,15 @@ def classify_regime(df, window: int=20) -> Any:
     return pd.Series(regime, index=df.index)
 
 def generate_ensemble_signal(df) -> int:
+    pd = _get_pandas()
+    np = _get_numpy()
+    if pd is None or np is None:
+        return 0
 
     def last(col: str) -> float:
         s = df.get(col, pd.Series(dtype=float))
         return s.iloc[-1] if not s.empty else np.nan
+
     signals = []
     if last('EMA_5') > last('EMA_20'):
         signals.append(1)
@@ -904,6 +1002,9 @@ class SignalDecisionPipeline:
 
     def _calculate_current_atr(self, df: pd.DataFrame, period: int=14) -> float:
         """Calculate current ATR value."""
+        pd = _get_pandas()
+        if pd is None:
+            return 0.0
         try:
             if len(df) < period:
                 return df['close'].iloc[-1] * 0.02
@@ -915,6 +1016,10 @@ class SignalDecisionPipeline:
 
     def _analyze_market_regime(self, df: pd.DataFrame) -> dict:
         """Analyze current market regime characteristics."""
+        pd = _get_pandas()
+        np = _get_numpy()
+        if pd is None or np is None:
+            return {'recent_volatility': 0.0, 'is_high_volatility': False, 'trend_strength': 0.0, 'regime_type': 'unknown'}
         try:
             returns = df['close'].pct_change().dropna()
             recent_vol = returns.tail(20).std() * np.sqrt(252)
@@ -922,13 +1027,26 @@ class SignalDecisionPipeline:
             short_ma = df['close'].rolling(5).mean().iloc[-1]
             long_ma = df['close'].rolling(20).mean().iloc[-1]
             trend_strength = abs(short_ma - long_ma) / long_ma if long_ma > 0 else 0
-            return {'recent_volatility': recent_vol, 'is_high_volatility': is_high_vol, 'trend_strength': trend_strength, 'regime_type': 'trending' if trend_strength > 0.02 else 'ranging'}
+            return {
+                'recent_volatility': recent_vol,
+                'is_high_volatility': is_high_vol,
+                'trend_strength': trend_strength,
+                'regime_type': 'trending' if trend_strength > 0.02 else 'ranging',
+            }
         except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
             logger.debug('REGIME_ANALYSIS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
-            return {'recent_volatility': 0.02, 'is_high_volatility': False, 'trend_strength': 0.0, 'regime_type': 'unknown'}
+            return {
+                'recent_volatility': 0.02,
+                'is_high_volatility': False,
+                'trend_strength': 0.0,
+                'regime_type': 'unknown',
+            }
 
     def _passes_ensemble_gating(self, df: pd.DataFrame) -> bool:
         """Check if signal passes ensemble gating requirements."""
+        pd = _get_pandas()
+        if pd is None:
+            return False
         try:
             signals = []
             if 'EMA_5' in df.columns and 'EMA_20' in df.columns:
