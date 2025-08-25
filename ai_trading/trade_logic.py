@@ -151,9 +151,66 @@ def evaluate_exits(ctx, open_positions):
     return exits
 
 def _compute_entry_signal(ctx, symbol, df):
-    """Placeholder for entry signal computation."""
-    return {'buy': True}
+    """Return BUY signal when short SMA crosses above long SMA.
+
+    Uses a simple moving-average crossover. Window lengths may be overridden
+    via ``ctx.entry_short_window`` and ``ctx.entry_long_window``.
+
+    Args:
+        ctx: Runtime context providing optional window overrides.
+        symbol: Ticker symbol for logging (unused).
+        df: Price history DataFrame containing a ``close`` column.
+
+    Returns:
+        ``{"buy": True, "price": last_close}`` when a bullish crossover
+        occurs, otherwise ``None``.
+    """
+    import pandas as pd  # heavy import; keep local
+
+    if 'close' not in df.columns:
+        raise ValueError('df missing close column')
+
+    short_window = max(1, int(getattr(ctx, 'entry_short_window', 5)))
+    long_window = max(short_window + 1, int(getattr(ctx, 'entry_long_window', 20)))
+
+    close = df['close']
+    if len(close) < long_window + 1:
+        return None
+
+    short = close.rolling(window=short_window).mean()
+    long = close.rolling(window=long_window).mean()
+    s_prev, s_now = short.iloc[-2], short.iloc[-1]
+    l_prev, l_now = long.iloc[-2], long.iloc[-1]
+    if pd.isna(s_prev) or pd.isna(l_prev) or pd.isna(s_now) or pd.isna(l_now):
+        return None
+    if s_prev <= l_prev and s_now > l_now:
+        return {'buy': True, 'price': float(close.iloc[-1])}
+    return None
 
 def _compute_exit_signal(ctx, symbol, df):
-    """Placeholder for exit signal computation."""
-    return {'sell': True}
+    """Return SELL signal when short SMA crosses below long SMA.
+
+    Window lengths may be overridden via ``ctx.exit_short_window`` and
+    ``ctx.exit_long_window``.
+    """
+    import pandas as pd
+
+    if 'close' not in df.columns:
+        raise ValueError('df missing close column')
+
+    short_window = max(1, int(getattr(ctx, 'exit_short_window', 5)))
+    long_window = max(short_window + 1, int(getattr(ctx, 'exit_long_window', 20)))
+
+    close = df['close']
+    if len(close) < long_window + 1:
+        return None
+
+    short = close.rolling(window=short_window).mean()
+    long = close.rolling(window=long_window).mean()
+    s_prev, s_now = short.iloc[-2], short.iloc[-1]
+    l_prev, l_now = long.iloc[-2], long.iloc[-1]
+    if pd.isna(s_prev) or pd.isna(l_prev) or pd.isna(s_now) or pd.isna(l_now):
+        return None
+    if s_prev >= l_prev and s_now < l_now:
+        return {'sell': True, 'price': float(close.iloc[-1])}
+    return None
