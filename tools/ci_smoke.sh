@@ -31,11 +31,12 @@ fi
 # -----------------
 export PYTEST_DISABLE_PLUGIN_AUTOLOAD=${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}
 export PYTHONWARNINGS=${PYTHONWARNINGS:-ignore}
-echo "[ci_smoke] Running minimal smoke suite (3 files)"
+echo "[ci_smoke] Running minimal smoke suite (4 files)"  # AI-AGENT-REF: add optdeps test
 python tools/run_pytest.py --disable-warnings -q \
   tests/test_runner_smoke.py \
   tests/test_utils_timing.py \
-  tests/test_trading_config_aliases.py
+  tests/test_trading_config_aliases.py \
+  tests/test_utils_optdeps.py
 
 echo "[ci_smoke] Completed."
 

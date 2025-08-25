@@ -13,25 +13,12 @@ from typing import Any, Optional
 import requests
 import importlib.util
 from ai_trading.logging import get_logger
+from ai_trading.utils.optdeps import optional_import  # AI-AGENT-REF: unify optional deps
 
-# Optional deps are imported lazily so the module can be imported without pandas/numpy.
-# AI-AGENT-REF: defer heavy pandas import until needed
-try:
-    import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover - missing optional dep
-    pd = None  # type: ignore[assignment]
-
-# Prefer stdlib zoneinfo for timezones; fall back to pytz if installed.
-# AI-AGENT-REF: use zoneinfo when available
-try:
-    from zoneinfo import ZoneInfo  # type: ignore
-except Exception:  # pragma: no cover
-    ZoneInfo = None  # type: ignore
-
-try:
-    import pytz as _pytz  # type: ignore
-except Exception:  # pragma: no cover
-    _pytz = None
+# Optional deps via helper keep imports lightweight
+pd = optional_import("pandas")  # -> module or None
+ZoneInfo = optional_import("zoneinfo", attr="ZoneInfo")
+_pytz = optional_import("pytz")
 try:
     from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 except (ValueError, TypeError, ImportError):
@@ -68,7 +55,7 @@ def _eastern_tz():
 
 
 EASTERN_TZ = _eastern_tz()
-HAS_PANDAS: bool = bool(pd is not None)
+HAS_PANDAS: bool = bool(pd is not None)  # AI-AGENT-REF: expose pandas availability
 
 def _is_intraday_unit(unit_tok: str) -> bool:
     """Return True for minute or hour-based timeframes."""
@@ -154,9 +141,12 @@ def _bars_time_window(timeframe: TimeFrame) -> tuple[str, str]:
 def _require_pandas(consumer: str = "this function"):
     """Return imported pandas module or raise a helpful ImportError."""
     if pd is None:
-        raise ImportError(
-            f"pandas is required to use {consumer}. Install with `pip install pandas` (or project extra)."
+        optional_import(
+            "pandas",
+            required=True,
+            install_hint="pip install pandas",
         )
+        return pd  # type: ignore[return-value]
     return pd
 
 
