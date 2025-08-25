@@ -19,11 +19,8 @@ from typing import Any
 Hook = Callable[[], None]
 PositionsHandler = Callable[[], list[dict[str, Any]]]
 try:
-    from alpaca.trading.client import TradingClient
-    from alpaca.common.exceptions import APIError
-except (ValueError, TypeError):
-    TradingClient = None
-
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except (ValueError, TypeError, ModuleNotFoundError):
     class APIError(Exception):
         pass
 from ai_trading.logging import logger

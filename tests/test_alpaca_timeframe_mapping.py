@@ -10,10 +10,9 @@ from ai_trading.alpaca_api import get_bars_df
 from tests.helpers.asserts import assert_df_like
 
 try:
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-# noqa: BLE001 TODO: narrow exception
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 except Exception:  # pragma: no cover - inject stub
-    mod = types.ModuleType("alpaca.data.timeframe")
+    mod = types.ModuleType("alpaca_trade_api.rest")
 
     class TimeFrameUnit:
         Day = type("Day", (), {"name": "Day"})()
@@ -25,8 +24,8 @@ except Exception:  # pragma: no cover - inject stub
 
     mod.TimeFrame = TimeFrame
     mod.TimeFrameUnit = TimeFrameUnit
-    sys.modules["alpaca.data.timeframe"] = mod
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    sys.modules.setdefault("alpaca_trade_api.rest", mod)
+    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 
 
 class _Resp:
@@ -34,7 +33,7 @@ class _Resp:
         self.df = df
 
 
-@patch("ai_trading.alpaca_api.TradeApiREST")
+@patch("ai_trading.alpaca_api._get_rest")
 def test_day_timeframe_normalized(mock_rest_cls):
     mock_rest = MagicMock()
     mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
@@ -46,7 +45,7 @@ def test_day_timeframe_normalized(mock_rest_cls):
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
-@patch("ai_trading.alpaca_api.TradeApiREST")
+@patch("ai_trading.alpaca_api._get_rest")
 def test_tf_object_normalized(mock_rest_cls):
     mock_rest = MagicMock()
     mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
@@ -58,7 +57,7 @@ def test_tf_object_normalized(mock_rest_cls):
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
-@patch("ai_trading.alpaca_api.TradeApiREST")
+@patch("ai_trading.alpaca_api._get_rest")
 def test_minute_normalized(mock_rest_cls):
     mock_rest = MagicMock()
     mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))

@@ -10,11 +10,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from ai_trading.logging import logger
 try:
-    from alpaca.common.exceptions import APIError
-    from alpaca.trading.client import TradingClient
-except (ValueError, TypeError):
-    TradingClient = None
-
+    from alpaca_trade_api.rest import APIError  # type: ignore
+except (ValueError, TypeError, ModuleNotFoundError, ImportError):
     class APIError(Exception):
         pass
 from ..core.constants import EXECUTION_PARAMETERS

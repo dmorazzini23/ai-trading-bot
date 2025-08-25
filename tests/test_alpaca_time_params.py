@@ -14,7 +14,7 @@ class _Resp:
         self.df = df
 
 
-@patch("ai_trading.alpaca_api.TradeApiREST")
+@patch("ai_trading.alpaca_api._get_rest")
 def test_daily_uses_date_only(mock_rest_cls):
     mock_rest = MagicMock()
     mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
@@ -36,7 +36,7 @@ def test_daily_uses_date_only(mock_rest_cls):
     assert kwargs["timeframe"] in ("1Day", "1D")
 
 
-@patch("ai_trading.alpaca_api.TradeApiREST")
+@patch("ai_trading.alpaca_api._get_rest")
 def test_intraday_uses_rfc3339z(mock_rest_cls):
     mock_rest = MagicMock()
     mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))

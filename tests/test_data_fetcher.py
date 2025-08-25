@@ -16,12 +16,7 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 mods = [
-    "alpaca",
-    "alpaca.data.historical",
-    "alpaca.data.requests",
-    "alpaca.data.timeframe",
-    "alpaca_trade_api.rest",
-    "alpaca.common.exceptions",
+        "alpaca_trade_api.rest",
     "finnhub",
 ]
 for m in mods:
@@ -42,7 +37,6 @@ sys.modules["alpaca_trade_api"].APIError = Exception
 sys.modules["alpaca_trade_api.rest"].REST = _FakeREST
 sys.modules["alpaca_trade_api.rest"].APIError = Exception
 sys.modules["alpaca_trade_api.rest"].TimeFrame = object
-sys.modules["alpaca.common.exceptions"].APIError = Exception
 
 
 class _DummyHist:
@@ -55,7 +49,6 @@ class _DummyHist:
         return types.SimpleNamespace(df=pd.DataFrame())
 
 
-sys.modules["alpaca.data.historical"].StockHistoricalDataClient = _DummyHist
 
 
 class _DummyRequest:
@@ -64,10 +57,6 @@ class _DummyRequest:
             setattr(self, key, val)
 
 
-sys.modules["alpaca.data.requests"].StockBarsRequest = _DummyRequest
-sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _DummyRequest
-sys.modules["alpaca.data.timeframe"].TimeFrame = object
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
 
 
 class _DummyFinnhub:

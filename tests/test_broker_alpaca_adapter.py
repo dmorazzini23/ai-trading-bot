@@ -56,7 +56,7 @@ class FakeOld:
 
 
 def test_adapter_orders_new(monkeypatch):
-    pytest.importorskip("alpaca.trading.client")
+    pytest.importorskip("alpaca_trade_api")
     fake = FakeNew()
     broker = AlpacaBroker(fake)
     broker._is_new = True
