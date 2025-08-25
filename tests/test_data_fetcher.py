@@ -22,15 +22,11 @@ mods = [
     "alpaca.data.timeframe",
     "alpaca_trade_api.rest",
     "alpaca.common.exceptions",
-    "dotenv",
     "finnhub",
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
 sys.modules.setdefault("alpaca_trade_api", types.ModuleType("alpaca_trade_api"))
-sys.modules["dotenv"] = types.ModuleType("dotenv")
-sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
-sys.modules["dotenv"].dotenv_values = lambda *a, **k: {}
 
 
 class _FakeREST:

@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 from ai_trading.settings import _secret_to_str, get_settings
+from ai_trading.env import ensure_dotenv_loaded
+from ai_trading.config.management import get_env, reload_env
 
 def check_env_file():
     """Check if .env file exists and has proper format."""
@@ -15,32 +17,32 @@ def check_env_file():
         required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL']
         missing_vars = []
         placeholder_vars = []
-        from dotenv import load_dotenv
-        load_dotenv('.env', override=True)
+        loaded = reload_env(str(env_path), override=True)
+        if loaded is None:
+            return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
         for var in required_vars:
-            env_value = os.getenv(var)
+            env_value = get_env(var)
             if var not in content:
                 missing_vars.append(var)
-            elif env_value and env_value.startswith('YOUR_'):
+            elif env_value and str(env_value).startswith('YOUR_'):
                 placeholder_vars.append(var)
         if missing_vars:
             return (False, f"❌ Missing variables in .env: {', '.join(missing_vars)}")
         if placeholder_vars:
             return (False, f"⚠️  Placeholder values detected in .env: {', '.join(placeholder_vars)}\n   Please replace YOUR_* placeholders with your real API keys")
         return (True, '✅ .env file format looks good')
-    except ImportError:
-        return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
     except (OSError, PermissionError, KeyError, ValueError, TypeError) as e:
         return (False, f'❌ Error reading .env file: {e}')
 
 def check_api_keys():
     """Check if API keys are properly configured."""
     try:
-        from dotenv import load_dotenv
-        load_dotenv('.env', override=True)
-        api_key = os.getenv('ALPACA_API_KEY')
-        secret_key = os.getenv('ALPACA_SECRET_KEY')
-        base_url = os.getenv('ALPACA_BASE_URL')
+        loaded = reload_env('.env', override=True)
+        if loaded is None:
+            return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
+        api_key = get_env('ALPACA_API_KEY')
+        secret_key = get_env('ALPACA_SECRET_KEY')
+        base_url = get_env('ALPACA_BASE_URL')
         issues = []
         if not api_key:
             issues.append('ALPACA_API_KEY not set')
@@ -63,8 +65,6 @@ def check_api_keys():
         is_paper = 'paper' in base_url.lower()
         env_type = 'Paper Trading (Safe)' if is_paper else 'Live Trading (Real Money!)'
         return (True, f'✅ API keys configured correctly\n   Environment: {env_type}')
-    except ImportError:
-        return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
     except (KeyError, ValueError, TypeError) as e:
         return (False, f'❌ Error checking API keys: {e}')
 
@@ -89,6 +89,7 @@ def print_setup_instructions():
 def main():
     """Main verification function."""
     logging.info('🔍 AI Trading Bot - API Key Configuration Verification\n')
+    ensure_dotenv_loaded()
     all_good = True
     env_ok, env_msg = check_env_file()
     logging.info(str(env_msg))

@@ -13,11 +13,6 @@ pytestmark = pytest.mark.usefixtures("default_env")
 req_mod = types.ModuleType("requests")
 req_mod.post = lambda *a, **k: None
 sys.modules.setdefault("requests", req_mod)
-for _m in ["dotenv"]:
-    mod = types.ModuleType(_m)
-    if _m == "dotenv":
-        mod.load_dotenv = lambda *a, **k: None
-    sys.modules.setdefault(_m, mod)
 
 try:
     from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import

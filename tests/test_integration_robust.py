@@ -77,7 +77,6 @@ mods = [
     "alpaca.data.requests",
     "alpaca.data.timeframe",
     "alpaca.common.exceptions",
-    "dotenv",
     "finnhub",
     "sklearn.ensemble",
     "sklearn.linear_model",
@@ -106,7 +105,6 @@ if "torch" in sys.modules:
     torch_nn.Softmax = lambda *a, **k: None
     sys.modules["torch.nn"] = torch_nn
 
-sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
 req_mod = types.ModuleType("requests")
 sys.modules["requests"] = req_mod
 exc_mod = types.ModuleType("requests.exceptions")

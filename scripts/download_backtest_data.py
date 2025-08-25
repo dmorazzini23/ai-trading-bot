@@ -4,19 +4,19 @@ This script fetches daily OHLCV bars for a predefined list of tickers and
 stores them as CSV files under ``data/``. Existing files are left untouched.
 """
 from __future__ import annotations
-import os
 from pathlib import Path
 import pandas as pd
 from ai_trading.utils.base import _get_alpaca_rest
 from alpaca_trade_api import TimeFrame
-from dotenv import load_dotenv
+from ai_trading.env import ensure_dotenv_loaded
+from ai_trading.config.management import get_env
 
 def main() -> None:
     """Fetch bars for each symbol and save to ``data`` directory."""
-    load_dotenv(dotenv_path='.env', override=True)
-    api_key = os.getenv('ALPACA_API_KEY')
-    secret_key = os.getenv('ALPACA_SECRET_KEY')
-    base_url = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+    ensure_dotenv_loaded()
+    api_key = get_env('ALPACA_API_KEY')
+    secret_key = get_env('ALPACA_SECRET_KEY')
+    base_url = get_env('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
     api = _get_alpaca_rest()(api_key, secret_key, base_url)
     symbols = ['AAPL', 'MSFT', 'GOOG', 'AMZN', 'NVDA', 'TSLA', 'META']
     start = '2023-01-01'
