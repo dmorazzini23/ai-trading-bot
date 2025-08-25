@@ -153,6 +153,7 @@ This trading bot requires both **Python packages** and **system libraries** for 
 All Python packages are specified in `requirements.txt`, including:
 - **ta==0.11.0**: Professional technical analysis library with 150+ indicators
 - **pandas**, **numpy**: Data processing and numerical computations
+- **pandas-market-calendars**: Exchange session calendars
 - **scikit-learn**: Machine learning algorithms
 - **alpaca-trade-api**: Broker integration
 
@@ -165,6 +166,9 @@ Some functionality depends on optional libraries. Install only what you need:
 ```bash
 # Data wrangling & CSV/Parquet I/O
 pip install "ai-trading-bot[pandas]"
+
+# Trading calendar utilities
+pip install "ai-trading-bot[pandas-market-calendars]"
 
 # Plotting
 pip install "ai-trading-bot[plot]"
@@ -182,6 +186,7 @@ pip install "ai-trading-bot[all]"
 | Feature / Area       | Extra    | Packages (summary)           |
 |----------------------|----------|------------------------------|
 | DataFrames & I/O     | `pandas` | `pandas`                     |
+| Trading Calendars    | `pandas-market-calendars` | `pandas-market-calendars` |
 | Plotting             | `plot`   | `matplotlib`                 |
 | Machine Learning     | `ml`     | `scikit-learn`, `torch`      |
 | Technical Indicators | `ta`     | `ta`, `TA-Lib`               |
@@ -193,6 +198,8 @@ pip install "ai-trading-bot[all]"
 When a feature is used without its optional dependency, the code raises a helpful error like:
 
 > Missing optional dependency 'pandas'. Install with: `pip install "ai-trading-bot[pandas]"`
+> 
+> Missing optional dependency 'pandas-market-calendars'. Install with: `pip install "ai-trading-bot[pandas-market-calendars]"`
 
 ### Manual Installation
 
