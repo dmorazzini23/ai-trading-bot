@@ -5,13 +5,38 @@ description = "AI trading bot (lightweight testable build)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "numpy==1.26.4",
-  "pandas==2.2.2",
-  "pydantic==2.8.2",
-  "pytz==2024.1",
+  "numpy==1.26.4",  # AI-AGENT-REF: pin NumPy to 1.x for pandas-ta compatibility
+  "tzlocal==4.3",
   "requests>=2.31,<3",
-  "Flask>=2.3,<3",
+  "urllib3==1.26.20",  # AI-AGENT-REF: align with Alpaca SDK
+  "certifi>=2023.7.22",
+  "charset-normalizer>=3.2,<4",
+  "idna>=3.4,<4",
+  "psutil>=5.9,<6",
+  "portalocker==2.7.0",
+  "alpaca-trade-api>=3.0,<4",  # AI-AGENT-REF: include Alpaca SDK
+  "joblib>=1.3,<2",
+  "Flask>=3,<4",
+  "beautifulsoup4>=4.12,<5",
+  "lxml>=5,<6",
+  "aiohttp>=3.9,<4",
+  "pydantic==2.8.2",
+  "pydantic-settings>=2.2,<3",
+  "tzdata>=2024.1",  # AI-AGENT-REF: ensure timezone data
+  "pytz==2024.1",
+  "pandas-market-calendars>=4.4,<6",  # AI-AGENT-REF: exchange calendars
+  "schedule==1.2.2",
+  "prometheus-client==0.20.0",
+  "cachetools==5.3.3",
+  "alpaca-py==0.42.0",  # AI-AGENT-REF: modern SDK; tests import `alpaca`
+  "ratelimit==2.2.1",
+  "python-dotenv==1.1.1",
   "python-dateutil>=2.8.2,<3",
+  "tenacity==8.5.0",
+  "scikit-learn==1.5.1",
+  "scipy==1.13.1",
+  "threadpoolctl==3.5.0",
+  "pandas==2.2.2",
 ]
 
 [project.optional-dependencies]
