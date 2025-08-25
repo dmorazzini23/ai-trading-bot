@@ -56,8 +56,11 @@ sudo systemctl enable --now ai-trading.service
 sudo systemctl restart ai-trading.service
 sudo systemctl status ai-trading.service
 journalctl -u ai-trading.service -n 200 --no-pager
-curl -s http://127.0.0.1:9001/health
+curl -s http://127.0.0.1:9001/healthz
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics
 ```
+
+Ensure `RUN_HEALTHCHECK=1` is set in the environment to expose these endpoints.
 
 The service writes to `logs/scheduler.log` (or `$BOT_LOG_FILE`). View logs with
 `tail -F logs/scheduler.log` or via the systemd journal.

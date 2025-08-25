@@ -21,8 +21,15 @@ python -m pip install -U pip
 pip install -e .
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
-curl -s http://127.0.0.1:9001/health
+RUN_HEALTHCHECK=1 python -m ai_trading.app &
+curl -s http://127.0.0.1:9001/healthz
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics
 ```
+
+Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
+
+* `GET /healthz` &mdash; minimal JSON liveness probe
+* `GET /metrics` &mdash; Prometheus metrics (returns **501** if metrics are disabled)
 
 Use **one** Alpaca SDK in production (recommended: `alpaca-trade-api`). If choosing `alpaca-py`, update broker modules accordingly.
 
@@ -977,7 +984,8 @@ docker logs -f ai-trading-prod
 
 ```bash
 # Built-in health endpoint
-curl http://localhost:5000/health
+curl http://localhost:9001/healthz
+curl -s -o /dev/null -w "%{http_code}" http://localhost:9001/metrics
 
 # System resource monitoring
 python monitoring_dashboard.py &
