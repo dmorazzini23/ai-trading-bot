@@ -863,8 +863,8 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float, *, context: An
                     if hasattr(context, 'risk_engine') and (not context.risk_engine.position_exists(context.api, symbol)):
                         logger.info('No position to sell for %s, skipping.', symbol)
                         return
-                    from ai_trading.core.bot_engine import send_exit_order
-                    send_exit_order(context, symbol, abs(int(qty)), price, 'atr_stop')
+                    bot_mod = importlib.import_module('ai_trading.core.bot_engine')
+                    bot_mod.send_exit_order(context, symbol, abs(int(qty)), price, 'atr_stop')
                 except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
                     logger.error('ATR stop exit failed: %s', exc)
             else:
