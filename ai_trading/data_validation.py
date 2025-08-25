@@ -5,8 +5,11 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.data_fetcher import get_bars
+
+# Lazy pandas proxy for on-demand import
+pd = load_pandas()
 __all__ = ['check_data_freshness', 'get_stale_symbols', 'validate_trading_data', 'emergency_data_check', 'is_valid_ohlcv', 'validate_trade_log_integrity', 'monitor_real_time_data_quality', 'MarketDataValidator', 'ValidationSeverity']
 REQUIRED_PRICE_COLS = ('open', 'high', 'low', 'close', 'volume')
 

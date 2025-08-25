@@ -6,11 +6,14 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 import importlib
-import pandas as pd
-from pandas.errors import OutOfBoundsDatetime
+from ai_trading.utils.lazy_imports import load_pandas
+
+# Lazy pandas proxy
+pd = load_pandas()
+
 try:
     from ai_trading.config import get_settings
-except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError, Exception):
+except Exception:
 
     def get_settings():
         return None
@@ -22,7 +25,13 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
-from ai_trading.monitoring import metrics
+
+def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
+    try:
+        from ai_trading.monitoring import metrics as _metrics
+        _metrics.incr(metric, value=value, tags=tags)
+    except Exception:  # pragma: no cover - metrics optional
+        pass
 try:  # optional yfinance import
     import yfinance as yf  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
@@ -157,13 +166,13 @@ def ensure_datetime(value: Any) -> _dt.datetime:
     if callable(value):
         try:
             value = value()
-        except (TypeError, ValueError, AttributeError, OutOfBoundsDatetime) as e:
+        except (TypeError, ValueError, AttributeError, pd.errors.OutOfBoundsDatetime) as e:
             raise TypeError(f'Invalid datetime input: {e}') from e
     if isinstance(value, _dt.datetime) and value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo('America/New_York'))
     try:
         return ensure_utc_datetime(value, allow_callables=False)
-    except (TypeError, ValueError, AttributeError, OutOfBoundsDatetime) as e:
+    except (TypeError, ValueError, AttributeError, pd.errors.OutOfBoundsDatetime) as e:
         raise TypeError(f'Invalid datetime input: {e}') from e
 
 def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
@@ -262,30 +271,30 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
             ctype = (resp.headers.get('Content-Type') or '').lower()
         except Timeout as e:
             logger.warning('DATA_SOURCE_HTTP_ERROR', extra=_norm_extra({'provider': 'alpaca', 'feed': _feed, 'timeframe': _interval, 'error': str(e)}))
-            metrics.incr('data.fetch.timeout', value=1.0, tags=_tags())
+            _incr('data.fetch.timeout', value=1.0, tags=_tags())
             if fallback:
                 _interval, _feed, _start, _end = fallback
-                metrics.incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
+                _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info('DATA_SOURCE_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
                 return _req(None)
             raise
         except ConnectionError as e:
             logger.warning('DATA_SOURCE_HTTP_ERROR', extra=_norm_extra({'provider': 'alpaca', 'feed': _feed, 'timeframe': _interval, 'error': str(e)}))
-            metrics.incr('data.fetch.connection_error', value=1.0, tags=_tags())
+            _incr('data.fetch.connection_error', value=1.0, tags=_tags())
             if fallback:
                 _interval, _feed, _start, _end = fallback
-                metrics.incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
+                _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info('DATA_SOURCE_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
                 return _req(None)
             raise
         except (HTTPError, RequestException, ValueError, KeyError) as e:
             logger.warning('DATA_SOURCE_HTTP_ERROR', extra=_norm_extra({'provider': 'alpaca', 'feed': _feed, 'timeframe': _interval, 'error': str(e)}))
-            metrics.incr('data.fetch.error', value=1.0, tags=_tags())
+            _incr('data.fetch.error', value=1.0, tags=_tags())
             if fallback:
                 _interval, _feed, _start, _end = fallback
-                metrics.incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
+                _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info('DATA_SOURCE_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
                 return _req(None)
@@ -308,21 +317,21 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
         if status == 400:
             raise ValueError('Invalid feed or bad request')
         if status in (401, 403):
-            metrics.incr('data.fetch.unauthorized', value=1.0, tags=_tags())
+            _incr('data.fetch.unauthorized', value=1.0, tags=_tags())
             logger.warning('UNAUTHORIZED_SIP' if _feed == 'sip' else 'DATA_SOURCE_UNAUTHORIZED', extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}))
             if _feed == 'sip' and fallback:
                 _interval, _feed, _start, _end = fallback
-                metrics.incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
+                _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info('DATA_SOURCE_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
                 return _req(None)
             raise ValueError('unauthorized')
         if status == 429:
-            metrics.incr('data.fetch.rate_limited', value=1.0, tags=_tags())
+            _incr('data.fetch.rate_limited', value=1.0, tags=_tags())
             logger.warning('DATA_SOURCE_RATE_LIMITED', extra=_norm_extra({'provider': 'alpaca', 'status': 'rate_limited', 'feed': _feed, 'timeframe': _interval}))
             if fallback:
                 _interval, _feed, _start, _end = fallback
-                metrics.incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
+                _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info('DATA_SOURCE_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
                 return _req(None)
@@ -330,7 +339,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
         df = pd.DataFrame(data)
         if df.empty:
             if fallback:
-                metrics.incr('data.fetch.empty', value=1.0, tags=_tags())
+                _incr('data.fetch.empty', value=1.0, tags=_tags())
             if _interval.lower() in {'1day', 'day', '1d'}:
                 try:
                     mdf = _fetch_bars(symbol, _start, _end, '1Min', feed=_feed, adjustment=adjustment)
@@ -356,7 +365,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
                 logger.log(lvl, 'EMPTY_DATA', extra=_norm_extra({'provider': 'alpaca', 'status': 'empty', 'feed': _feed, 'timeframe': _interval, 'occurrences': cnt}))
             if fallback:
                 _interval, _feed, _start, _end = fallback
-                metrics.incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
+                _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info('DATA_SOURCE_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
                 return _req(None)
@@ -377,7 +386,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(subset=['open', 'high', 'low', 'close'])
         df.set_index('timestamp', inplace=True, drop=False)
-        metrics.incr('data.fetch.success', value=1.0, tags=_tags())
+        _incr('data.fetch.success', value=1.0, tags=_tags())
         return df
     alt_feed = 'iex' if _feed != 'iex' else 'sip'
     fallback = (_interval, alt_feed, _start, _end)
@@ -486,3 +495,4 @@ def warmup_cache(*_args, **_kwargs) -> None:
         _CACHE_STATS["warmup_calls"] += 1
     except Exception:
         pass
+

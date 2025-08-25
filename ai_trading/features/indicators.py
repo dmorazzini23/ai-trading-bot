@@ -6,10 +6,14 @@ technical indicators used in trading strategies.
 
 Moved from root features.py for package-safe imports.
 """
+from __future__ import annotations
 import logging
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.indicators import atr, ema
 logger = logging.getLogger(__name__)
+
+# Lazy pandas proxy
+pd = load_pandas()
 
 def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
     """Compute MACD indicator."""

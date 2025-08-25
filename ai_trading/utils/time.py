@@ -1,12 +1,16 @@
 from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.market.calendars import get_calendar_registry
+
+# Lazy pandas proxy
+pd = load_pandas()
 
 def utcnow() -> datetime:
     """Repository-standard UTC now (timezone-aware)."""
     return datetime.now(UTC)
+
 now_utc = utcnow
 
 @dataclass
@@ -24,4 +28,5 @@ def last_market_session(now: pd.Timestamp) -> SessionWindow | None:
             return SessionWindow(pd.Timestamp(start).tz_convert('UTC'), pd.Timestamp(end).tz_convert('UTC'))
         current -= timedelta(days=1)
     return None
+
 __all__ = ['utcnow', 'now_utc', 'SessionWindow', 'last_market_session']

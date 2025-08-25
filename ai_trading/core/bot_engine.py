@@ -334,8 +334,11 @@ def _log_finbert_disabled() -> None:
         _finbert_logged = True
 
 # AI-AGENT-REF: normalize arbitrary inputs into DataFrames
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 import logging
+
+# Lazy pandas proxy
+pd = load_pandas()
 logger = logging.getLogger(__name__)
 
 def _alpaca_diag_info() -> dict[str, object]:

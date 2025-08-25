@@ -9,13 +9,16 @@ from datetime import UTC
 from typing import Any
 import numpy as np
 import importlib
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.broker.alpaca import ensure_api_error
 from ai_trading.config.management import SEED, TradingConfig
 from ai_trading.config.settings import get_settings
 
 if not hasattr(np, 'NaN'):
     np.NaN = np.nan
+
+# Lazy pandas proxy
+pd = load_pandas()
 
 try:  # optional pandas_ta import for ta accessor registration
     import pandas_ta as ta  # type: ignore  # noqa: F401

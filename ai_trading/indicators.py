@@ -5,8 +5,11 @@ from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
 import numpy as np
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 logger = logging.getLogger(__name__)
+
+# Lazy pandas proxy
+pd = load_pandas()
 
 try:  # optional numba import
     import numba as _numba  # type: ignore
