@@ -346,6 +346,12 @@ python -m ai_trading
 
 # Or use the convenience script
 ./start.sh
+
+# Run a single paper-trading cycle
+python -m ai_trading --once --paper
+
+# Continuous live trading with a 10s loop interval
+python -m ai_trading --live --interval 10
 ```
 
 ### 📈 Backtesting & Optimization
