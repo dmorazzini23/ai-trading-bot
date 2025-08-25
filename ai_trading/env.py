@@ -1,15 +1,27 @@
 from __future__ import annotations
 import os
-from dotenv import load_dotenv
+import importlib.util
+from pathlib import Path
+import sys
+
+# AI-AGENT-REF: optional dotenv via optdeps without heavy package import
+_spec = importlib.util.spec_from_file_location(
+    "_optdeps", Path(__file__).resolve().parent / "utils" / "optdeps.py"
+)
+_optdeps = importlib.util.module_from_spec(_spec)
+sys.modules["_optdeps"] = _optdeps
+assert _spec.loader is not None
+_spec.loader.exec_module(_optdeps)
+optional_import = _optdeps.optional_import
+module_ok = _optdeps.module_ok
+
+load_dotenv = optional_import(
+    "dotenv", attr="load_dotenv", purpose=".env loading", extra="pip install python-dotenv"
+)
 _ENV_LOADED = False
 
 def ensure_dotenv_loaded() -> None:
-    """Idempotently load `.env` with ``override=True`` so file values win.
-
-    If a project-root ``.env`` exists it is loaded explicitly; otherwise
-    python-dotenv's default search is used. Logs once per process indicating
-    the source and that ``override=True`` is active.
-    """
+    """Idempotently load `.env` with override=True so file values win."""
     global _ENV_LOADED
     os.environ.setdefault('MULTI_LOAD_TEST', 'safe_value')
     if _ENV_LOADED:
@@ -17,6 +29,8 @@ def ensure_dotenv_loaded() -> None:
     here = os.path.abspath(os.path.dirname(__file__))
     repo_root = os.path.abspath(os.path.join(here, os.pardir, os.pardir))
     explicit = os.path.join(repo_root, '.env')
+    if not module_ok(load_dotenv):
+        return
     if os.path.exists(explicit):
         load_dotenv(dotenv_path=explicit, override=True)
         loaded_from = explicit

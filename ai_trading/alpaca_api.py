@@ -13,23 +13,19 @@ from typing import Any, Optional
 import requests
 import importlib.util
 from ai_trading.logging import get_logger
-from ai_trading.utils.optdeps import optional_import  # AI-AGENT-REF: unify optional deps
+from ai_trading.utils import optional_import  # AI-AGENT-REF: unify optional deps
 
 # Optional deps via helper keep imports lightweight
 pd = optional_import("pandas")  # -> module or None
 ZoneInfo = optional_import("zoneinfo", attr="ZoneInfo")
 _pytz = optional_import("pytz")
-try:
-    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
-except (ValueError, TypeError, ImportError):
-    TimeFrame = None
-    TimeFrameUnit = types.SimpleNamespace(Minute='Minute', Hour='Hour', Day='Day', Week='Week', Month='Month')
-try:
-    from alpaca_trade_api import REST as TradeApiREST
-    from alpaca_trade_api.rest import APIError as TradeApiError
-except (ValueError, TypeError, ImportError):
-    TradeApiREST = None
-    TradeApiError = Exception
+TimeFrame = optional_import("alpaca_trade_api.rest", attr="TimeFrame")
+TimeFrameUnit = (
+    optional_import("alpaca_trade_api.rest", attr="TimeFrameUnit")
+    or types.SimpleNamespace(Minute='Minute', Hour='Hour', Day='Day', Week='Week', Month='Month')
+)
+TradeApiREST = optional_import("alpaca_trade_api", attr="REST")
+TradeApiError = optional_import("alpaca_trade_api.rest", attr="APIError") or Exception
 _log = get_logger(__name__)
 SHADOW_MODE = os.getenv('SHADOW_MODE', '').lower() in {'1', 'true', 'yes'}
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
@@ -144,7 +140,8 @@ def _require_pandas(consumer: str = "this function"):
         optional_import(
             "pandas",
             required=True,
-            install_hint="pip install pandas",
+            purpose=consumer,
+            extra="pip install pandas",
         )
         return pd  # type: ignore[return-value]
     return pd

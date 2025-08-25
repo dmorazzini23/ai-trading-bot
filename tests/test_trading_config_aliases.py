@@ -5,6 +5,9 @@ script-only knobs get dropped from the model surface.
 """
 from __future__ import annotations
 
+import pytest
+
+pydantic = pytest.importorskip("pydantic")
 from ai_trading.config.management import TradingConfig
 
 
