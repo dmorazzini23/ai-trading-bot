@@ -8,27 +8,28 @@ from dataclasses import dataclass
 from datetime import UTC
 from typing import Any
 import numpy as np
-if not hasattr(np, 'NaN'):
-    np.NaN = np.nan
 import importlib
 import pandas as pd
+from ai_trading.broker.alpaca import ensure_api_error
+from ai_trading.config.management import SEED, TradingConfig
+from ai_trading.config.settings import get_settings
+
+if not hasattr(np, 'NaN'):
+    np.NaN = np.nan
 
 def _optional_import(name: str):
     try:
         return importlib.import_module(name)
     except ImportError:
         return None
+
 ta = _optional_import('pandas_ta')
-from ai_trading.config.management import SEED, TradingConfig
-try:
+try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST
-    from alpaca_trade_api.rest import APIError
 except ImportError:
     AlpacaREST = None
 
-    class APIError(Exception):
-        pass
-from ai_trading.config.settings import get_settings
+APIError = ensure_api_error()
 
 def _safe_call(fn, *a, **k):
     try:

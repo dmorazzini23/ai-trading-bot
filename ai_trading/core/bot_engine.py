@@ -53,6 +53,7 @@ from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
 )
+from ai_trading.broker.alpaca import ensure_api_error
 from ai_trading.config.management import derive_cap_from_settings
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
@@ -1416,13 +1417,9 @@ class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
         return _noop
 
 
-class APIErrorStub(Exception):
-    pass
-
-
 # Assign lightweight stubs for Alpaca SDK types; keep TimeFrame separate for constants.
 Quote = StockBarsRequest = StockLatestQuoteRequest = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
-APIError = APIErrorStub
+APIError = ensure_api_error()
 
 # Minimal enum-like placeholder so code can reference TimeFrame.Day etc.
 class _TimeFrame:  # AI-AGENT-REF: safe constants when Alpaca SDK not installed

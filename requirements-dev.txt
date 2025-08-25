@@ -2,6 +2,9 @@
 
 -r requirements.txt
 
+# Ensure Alpaca SDK available for tests
+alpaca-trade-api==3.2.0
+
 # Lint & format
 ruff==0.5.6
 black==24.8.0

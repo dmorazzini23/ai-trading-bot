@@ -2,7 +2,7 @@ import pytest
 
 pytestmark = pytest.mark.alpaca
 
-pytest.importorskip("alpaca")
+pytest.importorskip("alpaca_trade_api")
 
 from ai_trading.broker.alpaca import AlpacaBroker, APIError
 
