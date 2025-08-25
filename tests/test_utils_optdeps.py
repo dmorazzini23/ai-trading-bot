@@ -32,18 +32,28 @@ def test_optional_import_absent_module_returns_none():
 
 
 def test_required_raises_clear_message(monkeypatch):
+    # AI-AGENT-REF: ensure extras hint surfaces
     monkeypatch.setitem(sys.modules, "totally_missing_pkg", None)
     with pytest.raises(OptionalDependencyError) as ei:
         optional_import(
             "totally_missing_pkg",
             required=True,
             purpose="demo",
-            extra='pip install "ai-trading-bot[demo]"',
+            extra="demo",
         )
     msg = str(ei.value)
-    assert "Missing optional dependency: totally_missing_pkg." in msg
-    assert "Needed for: demo." in msg
+    assert "Missing optional dependency 'totally_missing_pkg'" in msg
+    assert "for demo" in msg
     assert 'Install with: pip install "ai-trading-bot[demo]"' in msg
+
+
+def test_auto_derives_extra(monkeypatch):
+    # AI-AGENT-REF: derive extras without explicit hint
+    monkeypatch.setitem(sys.modules, "pandas", None)
+    with pytest.raises(OptionalDependencyError) as ei:
+        optional_import("pandas", required=True)
+    msg = str(ei.value)
+    assert 'pip install "ai-trading-bot[pandas]"' in msg
 
 
 def test_render_equity_curve_handles_missing_matplotlib(monkeypatch):

@@ -10,8 +10,8 @@ from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify o
 logger = logging.getLogger(__name__)
 
 _numba = optional_import(
-    "numba", purpose="speeding up indicators", extra='pip install "ai-trading-bot[fast]"'
-)
+    "numba", purpose="speeding up indicators", extra="fast"
+)  # AI-AGENT-REF: extras hint uses key
 _numba_jit = getattr(_numba, "jit", None) if module_ok(_numba) else None
 
 def jit(*args, **kwargs):

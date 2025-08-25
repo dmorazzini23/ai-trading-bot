@@ -20,18 +20,18 @@ OptionalDependencyError = _optdeps.OptionalDependencyError
 plt = optional_import(
     "matplotlib.pyplot",
     purpose="plotting results",
-    extra='pip install "ai-trading-bot[plot]"',
-)
+    extra="plot",
+)  # AI-AGENT-REF: extras hint uses key
 
 
 def render_equity_curve(series, *, title: str = "Equity") -> None:
     """Render a simple equity curve using matplotlib if available."""
     if not module_ok(plt):
         raise OptionalDependencyError(
-            name="matplotlib",
-            purpose="plotting",
-            extra='pip install "ai-trading-bot[plot]"',
-        )
+            "matplotlib",
+            feature="plotting",
+            extra="plot",
+        )  # AI-AGENT-REF: extras hint uses key
     plt.figure()
     plt.plot(series)
     plt.title(title)

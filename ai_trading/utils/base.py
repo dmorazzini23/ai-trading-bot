@@ -19,8 +19,8 @@ from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
 from ai_trading.utils import optional_import, module_ok  # AI-AGENT-REF: unify optional deps
 _mcal = optional_import(
-    "pandas_market_calendars", purpose="market calendars", extra='pip install "ai-trading-bot[cal]"'
-)
+    "pandas_market_calendars", purpose="market calendars", extra="cal"
+)  # AI-AGENT-REF: extras hint uses key
 mcal = _mcal if module_ok(_mcal) else None
 import numpy as np
 from ai_trading.monitoring.system_health import snapshot_basic

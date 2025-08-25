@@ -135,6 +135,41 @@ python --version  # Should output: Python 3.12.3
 python health_check.py
 ```
 
+### Install extras (feature sets)
+Some functionality depends on optional libraries. Install only what you need:
+
+```bash
+# Data wrangling & CSV/Parquet I/O
+pip install "ai-trading-bot[pandas]"
+
+# Plotting
+pip install "ai-trading-bot[plot]"
+
+# Machine learning (scikit-learn + PyTorch)
+pip install "ai-trading-bot[ml]"
+
+# Technical indicators (ta + TA-Lib)
+pip install "ai-trading-bot[ta]"
+
+# Everything
+pip install "ai-trading-bot[all]"
+```
+
+| Feature / Area       | Extra    | Packages (summary)           |
+|----------------------|----------|------------------------------|
+| DataFrames & I/O     | `pandas` | `pandas`                     |
+| Plotting             | `plot`   | `matplotlib`                 |
+| Machine Learning     | `ml`     | `scikit-learn`, `torch`      |
+| Technical Indicators | `ta`     | `ta`, `TA-Lib`               |
+
+> **Notes**
+> - **TA-Lib** may require system libraries/headers. See the TA-Lib docs for platform-specific instructions before installing `ai-trading-bot[ta]`.
+> - **PyTorch** wheels vary by CUDA/CPU and OS. If the default marker doesn’t suit your platform, follow the official instructions at [pytorch.org](https://pytorch.org) and/or install `torch` first, then `ai-trading-bot[ml]`.
+
+When a feature is used without its optional dependency, the code raises a helpful error like:
+
+> Missing optional dependency 'pandas'. Install with: `pip install "ai-trading-bot[pandas]"`
+
 ### Manual Installation
 
 If you prefer manual setup or encounter issues with the automated process:

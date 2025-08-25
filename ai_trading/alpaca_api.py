@@ -141,8 +141,7 @@ def _require_pandas(consumer: str = "this function"):
             "pandas",
             required=True,
             purpose=consumer,
-            extra="pip install pandas",
-        )
+        )  # AI-AGENT-REF: extras hint derived automatically
         return pd  # type: ignore[return-value]
     return pd
 
