@@ -10,7 +10,7 @@ import datetime as dt
 import os
 
 import pytest
-import pytz
+from zoneinfo import ZoneInfo  # AI-AGENT-REF: drop pytz for stdlib zoneinfo
 
 pytestmark = pytest.mark.alpaca
 
@@ -271,7 +271,7 @@ class TestTradingBotIntegration:
         """Test full system integration with all components."""
         if not (os.getenv('ALPACA_API_KEY_ID') and os.getenv('ALPACA_API_SECRET_KEY')):
             pytest.skip('ALPACA credentials required for integration test')
-        now = dt.datetime.now(pytz.timezone('US/Eastern'))
+        now = dt.datetime.now(ZoneInfo("America/New_York"))  # AI-AGENT-REF: use stdlib zoneinfo
         if now.weekday() >= 5 or not (dt.time(9, 30) <= now.time() <= dt.time(16, 0)):
             pytest.skip('Market closed')
         # This would test the integration of:

@@ -17,8 +17,6 @@ from ai_trading.utils.optdeps import optional_import  # AI-AGENT-REF: unify opti
 
 # Optional deps via helper keep imports lightweight
 pd = optional_import("pandas")  # -> module or None
-ZoneInfo = optional_import("zoneinfo", attr="ZoneInfo")
-_pytz = optional_import("pytz")
 TimeFrame = optional_import("alpaca_trade_api.rest", attr="TimeFrame")
 TimeFrameUnit = (
     optional_import("alpaca_trade_api.rest", attr="TimeFrameUnit")
@@ -33,24 +31,15 @@ RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
 
 
-# AI-AGENT-REF: timezone fallback chain
-def _eastern_tz():
-    """Return America/New_York tzinfo with zoneinfo or pytz."""
-    if _pytz is not None:
-        try:
-            return _pytz.timezone("America/New_York")
-        except Exception:
-            pass
-    if ZoneInfo is not None:
-        try:
-            return ZoneInfo("America/New_York")
-        except Exception:
-            pass
-    _log.debug("Falling back to UTC tzinfo for EASTERN_TZ (pytz/zoneinfo unavailable)")
-    return timezone.utc
+from zoneinfo import ZoneInfo
 
 
-EASTERN_TZ = _eastern_tz()
+def eastern_tz() -> ZoneInfo:
+    """Return America/New_York tzinfo using stdlib zoneinfo (Py3.12)."""
+    return ZoneInfo("America/New_York")  # AI-AGENT-REF: rely solely on stdlib
+
+
+EASTERN_TZ = eastern_tz()
 HAS_PANDAS: bool = bool(pd is not None)  # AI-AGENT-REF: expose pandas availability
 
 def _is_intraday_unit(unit_tok: str) -> bool:

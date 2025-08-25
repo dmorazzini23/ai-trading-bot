@@ -12,8 +12,8 @@ _CORE = [
     "numpy",
     "pandas",
     "pydantic",
-    "pytz",
 ]
+# AI-AGENT-REF: removed pytz; stdlib zoneinfo covers timezone needs
 
 
 def assert_core_dependencies() -> None:

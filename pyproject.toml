@@ -3,7 +3,7 @@ name = "ai-trading-bot"
 version = "0.0.0"
 description = "AI trading bot (lightweight testable build)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
   "numpy==1.26.4",
   "pandas==2.2.2",
@@ -44,11 +44,11 @@ exclude = ["tests*", "scripts*", "artifacts*"]
 
 [tool.black]
 line-length = 120
-target-version = ["py311"]
+target-version = ["py312"]
 
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 src = ["ai_trading", "trade_execution", "tests", "tools"]
 extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts", "tools/static_import_rewrites.txt"]

@@ -57,8 +57,7 @@ if not hasattr(sys.modules["pandas_market_calendars"], "get_calendar"):
     sys.modules["pandas_market_calendars"].get_calendar = MagicMock()
 
 mods = [
-    "pytz",
-    "tzlocal",
+    "tzlocal",  # AI-AGENT-REF: pytz no longer required
     "requests",
     "urllib3",
     "bs4",
