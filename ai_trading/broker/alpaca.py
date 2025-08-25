@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import Any
 from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from ai_trading.logging import get_logger
-from ai_trading.utils.optdeps import optional_import
 from ai_trading.utils.retry import retry_call
 from .alpaca_credentials import resolve_alpaca_credentials
 try:
@@ -13,9 +12,14 @@ except ImportError:
 
     class HTTPError(Exception):
         pass
-APIError = optional_import('alpaca.common.exceptions', attr='APIError') or Exception
-TradingClient = optional_import('alpaca.trading.client', attr='TradingClient')
-if TradingClient is None:
+try:
+    from alpaca.common.exceptions import APIError  # type: ignore
+except ModuleNotFoundError:
+    APIError = Exception  # type: ignore[misc,assignment]
+try:
+    from alpaca.trading.client import TradingClient  # type: ignore
+except ModuleNotFoundError:
+    TradingClient = None  # type: ignore[assignment]
     _tmp_logger = get_logger(__name__)
     _tmp_logger.warning('VENDOR_MISSING: alpaca SDK not installed; using REST fallback/offline path')
 from ai_trading.exc import TRANSIENT_HTTP_EXC

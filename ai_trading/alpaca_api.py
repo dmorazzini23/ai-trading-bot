@@ -4,26 +4,17 @@ from datetime import timezone
 import json
 import os
 import time
-import types
 import uuid
-from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import requests
 import importlib.util
 from ai_trading.logging import get_logger
-from ai_trading.utils.optdeps import optional_import  # AI-AGENT-REF: unify optional deps
 
-# Optional deps via helper keep imports lightweight
-pd = optional_import("pandas")  # -> module or None
-TimeFrame = optional_import("alpaca_trade_api.rest", attr="TimeFrame")
-TimeFrameUnit = (
-    optional_import("alpaca_trade_api.rest", attr="TimeFrameUnit")
-    or types.SimpleNamespace(Minute='Minute', Hour='Hour', Day='Day', Week='Week', Month='Month')
-)
-TradeApiREST = optional_import("alpaca_trade_api", attr="REST")
-TradeApiError = optional_import("alpaca_trade_api.rest", attr="APIError") or Exception
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
+
 _log = get_logger(__name__)
 SHADOW_MODE = os.getenv('SHADOW_MODE', '').lower() in {'1', 'true', 'yes'}
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
@@ -40,7 +31,6 @@ def eastern_tz() -> ZoneInfo:
 
 
 EASTERN_TZ = eastern_tz()
-HAS_PANDAS: bool = bool(pd is not None)  # AI-AGENT-REF: expose pandas availability
 
 def _is_intraday_unit(unit_tok: str) -> bool:
     """Return True for minute or hour-based timeframes."""
@@ -62,6 +52,8 @@ def _module_exists(name: str) -> bool:
 ALPACA_AVAILABLE = any(
     _module_exists(m) for m in ('alpaca', 'alpaca_trade_api', 'alpaca.trading', 'alpaca.data')
 ) and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
+
+HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
 def _make_client_order_id(prefix: str='ai') -> str:
     return f'{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}'
@@ -101,16 +93,16 @@ def _format_start_end_for_tradeapi(timeframe: str, start, end):
     params = compose_daily_params(sd, ed) if is_daily else compose_intraday_params(sd, ed)
     return (params['start'], params['end'])
 
-def _get_rest() -> TradeApiREST:
+def _get_rest() -> Any:
     """Return a new `alpaca_trade_api.REST` instance."""
-    if TradeApiREST is None:
-        raise RuntimeError('alpaca-trade-api not installed')
+    from alpaca_trade_api import REST  # type: ignore
+
     key = os.getenv('ALPACA_API_KEY')
     secret = os.getenv('ALPACA_SECRET_KEY')
     base = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-    return TradeApiREST(key, secret, base)
+    return REST(key, secret, base)
 
-def _bars_time_window(timeframe: TimeFrame) -> tuple[str, str]:
+def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
     end = now - dt.timedelta(minutes=1)
     unit = getattr(getattr(timeframe, 'unit', None), 'name', None)
@@ -125,25 +117,26 @@ def _bars_time_window(timeframe: TimeFrame) -> tuple[str, str]:
 # AI-AGENT-REF: ensure clear error when pandas missing
 def _require_pandas(consumer: str = "this function"):
     """Return imported pandas module or raise a helpful ImportError."""
-    if pd is None:
-        optional_import(
-            "pandas",
-            required=True,
-            purpose=consumer,
-        )  # AI-AGENT-REF: extras hint derived automatically
-        return pd  # type: ignore[return-value]
+    try:
+        import pandas as pd  # type: ignore
+    except ModuleNotFoundError as e:  # pragma: no cover - import time failure
+        raise ImportError(
+            f"Missing required dependency 'pandas' for {consumer}. Install with: pip install pandas"
+        ) from e
     return pd
 
 
 def get_bars_df(
     symbol: str,
-    timeframe: str | TimeFrame = "1Min",
+    timeframe: str | Any = "1Min",
     start: dt.datetime | None = None,
     end: dt.datetime | None = None,
     adjustment: str | None = None,
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
+    from alpaca_trade_api.rest import APIError, TimeFrame, TimeFrameUnit  # type: ignore
+
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest()
     feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
@@ -151,24 +144,18 @@ def get_bars_df(
     tf_raw = timeframe
     tf = _normalize_timeframe_for_tradeapi(tf_raw)
     if start is None or end is None:
-        base_tf = None
-        if TimeFrame is not None:
-            try:
-                base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
-            except (ValueError, TypeError):
-                base_tf = TimeFrame(1, TimeFrameUnit.Day)
-        if base_tf is not None:
-            start, end = _bars_time_window(base_tf)
-        else:
-            end = dt.datetime.now(tz=_UTC) - dt.timedelta(minutes=1)
-            start = end - dt.timedelta(days=200)
+        try:
+            base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
+        except (ValueError, TypeError):
+            base_tf = TimeFrame(1, TimeFrameUnit.Day)
+        start, end = _bars_time_window(base_tf)
     start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
     try:
         df = rest.get_bars(symbol, timeframe=tf, start=start_s, end=end_s, adjustment=adjustment, feed=feed, limit=None).df
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
         return _pd.DataFrame()
-    except TradeApiError as e:
+    except APIError as e:
         req = {'timeframe_raw': str(tf_raw), 'timeframe_norm': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'adjustment': adjustment}
         body = ''
         try:
