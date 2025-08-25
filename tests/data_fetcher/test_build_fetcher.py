@@ -35,6 +35,13 @@ req_stub.get = lambda *a, **k: None
 sys.modules.setdefault("requests", req_stub)
 sys.modules.setdefault("requests.exceptions", exc)
 
+core_stub = types.ModuleType("ai_trading.core.bot_engine")
+class DummyFetcher:
+    pass
+core_stub.DataFetcher = DummyFetcher
+core_stub.DataFetchError = Exception
+sys.modules.setdefault("ai_trading.core.bot_engine", core_stub)
+
 import ai_trading.data_fetcher as df
 
 
@@ -42,6 +49,7 @@ def test_build_fetcher_alpaca(monkeypatch):
     monkeypatch.setenv("APCA_API_KEY_ID", "k")
     monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     alpaca_stub.ALPACA_AVAILABLE = True
+    monkeypatch.setitem(sys.modules, "yfinance", None)
     fetcher = df.build_fetcher({})
     assert getattr(fetcher, "source") == "alpaca"
 
@@ -50,6 +58,7 @@ def test_build_fetcher_fallback(monkeypatch):
     monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
     monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
     alpaca_stub.ALPACA_AVAILABLE = False
+    monkeypatch.setitem(sys.modules, "yfinance", None)
     fetcher = df.build_fetcher({})
     assert getattr(fetcher, "source") == "fallback"
 
@@ -59,7 +68,7 @@ def test_build_fetcher_raises_and_engine_skips(monkeypatch, caplog):
     monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
     monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
     monkeypatch.setattr(df, "requests", None)
-    monkeypatch.setattr(df, "yf", None)
+    monkeypatch.setitem(sys.modules, "yfinance", None)
     with pytest.raises(df.DataFetchError):
         df.build_fetcher({})
 
