@@ -1,10 +1,12 @@
+from tests.optdeps import require
+require("numpy")
+require("sklearn")
 import pickle
 import sys
 import types
 
 import numpy as np
 import pytest
-pytest.importorskip("sklearn", reason="Optional heavy dependency; guard at import time")  # AI-AGENT-REF: guard sklearn
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct imports from core module
 from ai_trading.core.bot_engine import _load_ml_model

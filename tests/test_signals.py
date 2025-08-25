@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import importlib
 import sys
 import types
@@ -88,4 +90,3 @@ def test_composite_signal_confidence(monkeypatch):
     assert final == 1
     assert conf == pytest.approx(2.6)
     assert 'ml' in label
-

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from tests.optdeps import require
+require("pandas")
+
 import ai_trading.core.bot_engine as be_mod
 import pandas as pd
 from ai_trading.core.bot_engine import DataFetcher
@@ -37,4 +40,3 @@ def test_daily_retry_handles_callable(monkeypatch):
     df = DataFetcher().get_daily_df(None, "SPY")
     assert calls["n"] == 2
     assert df is not None
-

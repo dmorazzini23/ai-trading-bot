@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from tests.optdeps import require
+require("pandas")
+
 import pandas as pd
 from ai_trading.data import bars as bars_mod
 

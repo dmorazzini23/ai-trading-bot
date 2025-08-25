@@ -1,12 +1,12 @@
+from tests.optdeps import require
+require("numpy")
+require("torch")
 import types
 
 import numpy as np
 import pytest
-try:
-    pytest.importorskip("torch", reason="Optional heavy dependency; guard at import time")
-    from torch import nn
-except Exception:
-    pytest.skip("torch import failed", allow_module_level=True)
+import torch
+from torch import nn
 
 np.random.seed(0)
 
@@ -159,7 +159,6 @@ def test_update_signal_weights_norm_zero(caplog):
 
 
 def test_portfolio_rl_trigger(monkeypatch):
-    torch = pytest.importorskip("torch")
     # AI-AGENT-REF: ensure real torch is loaded during tests
     # if not hasattr(torch, "nn") or not hasattr(torch.nn, "Parameter"):
     #     pytest.skip("torch stubs active")

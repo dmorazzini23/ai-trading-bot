@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from tests.optdeps import require
+require("pandas")
+
 import pandas as pd
 
 from ai_trading.data.sanitize import DataSanitizer, SanitizationConfig
@@ -33,4 +36,3 @@ def test_sanitize_flags_negative_prices_and_low_volume():
     assert report["original_count"] == 5
     assert 0 <= report["cleaned_count"] <= 5
     assert report["rejected_count"] >= 1
-

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("numpy")
 import json
 import logging
 

@@ -1,6 +1,8 @@
 """Tests for data_fetcher.build_fetcher initialization paths."""  # AI-AGENT-REF
-
 from __future__ import annotations
+
+from tests.optdeps import require
+require("pandas")
 
 import pandas as pd
 
@@ -68,4 +70,3 @@ def test_build_fetcher_offline_returns_empty_df(monkeypatch):
     df = fetcher.get_daily_df(object(), "SPY")
     assert isinstance(df, pd.DataFrame)
     assert df.empty
-

@@ -2,6 +2,8 @@
 """
 Focused test suite for the critical trading bot fixes per problem statement.
 """
+from tests.optdeps import require
+require("pandas")
 
 import csv
 import os
@@ -246,5 +248,4 @@ def test_rfc3339_timestamp_api_format():
     assert end_param.endswith('Z'), "End timestamp should end with 'Z'"
     assert 'T' in start_param, "Should contain ISO datetime separator 'T'"
     assert '+00:00' not in start_param, "Should not contain +00:00 offset"
-
 

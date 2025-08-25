@@ -3,6 +3,8 @@
 Focused test for short selling implementation.
 Tests the specific changes needed to enable short selling capability.
 """
+from tests.optdeps import require
+require("pandas")
 
 import os
 import sys

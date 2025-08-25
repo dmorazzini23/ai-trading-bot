@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("numpy")
 import numpy as np
 from ai_trading.indicators import obv as obv_vec
 
@@ -24,4 +26,3 @@ def test_obv_vectorized_matches_reference_loop():
         assert got.shape == ref.shape
         # exact equality holds for OBV semantics
         assert np.allclose(got, ref, atol=0.0)
-

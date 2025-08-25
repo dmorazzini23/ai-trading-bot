@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("numpy")
 import ai_trading.rl_trading.inference as inf
 import ai_trading.rl_trading.train as train_mod
 import numpy as np

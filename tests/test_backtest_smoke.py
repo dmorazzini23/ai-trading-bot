@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 from pathlib import Path
 
 import pandas as pd

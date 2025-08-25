@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 from types import SimpleNamespace
 
 import pandas as pd

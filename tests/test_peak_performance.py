@@ -2,6 +2,8 @@
 """
 Tests for peak performance hardening modules.
 """
+from tests.optdeps import require
+require("pandas")
 
 from datetime import UTC, datetime
 

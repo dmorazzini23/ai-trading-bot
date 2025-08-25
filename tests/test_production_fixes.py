@@ -8,6 +8,8 @@ This test suite validates the four main fixes:
 3. Market-aware data staleness thresholds
 4. Enhanced environment debugging capabilities
 """
+from tests.optdeps import require
+require("pandas")
 
 import os
 import sys

@@ -1,6 +1,8 @@
 """Tests for narrowed exceptions in feature pipeline."""
-
 from __future__ import annotations
+
+from tests.optdeps import require
+require("pandas")
 
 import pandas as pd
 import pytest

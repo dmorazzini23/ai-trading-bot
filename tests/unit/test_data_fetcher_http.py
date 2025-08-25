@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from tests.optdeps import require
+require("pandas")
+
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -118,4 +121,3 @@ def test_empty_bars_fallback(monkeypatch: pytest.MonkeyPatch):
     out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="iex", adjustment="raw")
     assert isinstance(out, pd.DataFrame) and not out.empty
     assert calls["count"] >= 2
-

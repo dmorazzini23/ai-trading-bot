@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import datetime as dt
 import sys
 import types

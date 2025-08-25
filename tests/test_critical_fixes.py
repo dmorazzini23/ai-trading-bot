@@ -7,6 +7,8 @@ Tests for the fixes addressing the critical issues:
 3. Process management enhancements
 4. Data validation functionality
 """
+from tests.optdeps import require
+require("pandas")
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch

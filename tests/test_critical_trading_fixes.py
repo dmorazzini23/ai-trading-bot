@@ -9,6 +9,8 @@ Tests the five main areas of improvement:
 4. Partial Order Management
 5. Order Status Monitoring
 """
+from tests.optdeps import require
+require("pandas")
 
 import csv
 import os

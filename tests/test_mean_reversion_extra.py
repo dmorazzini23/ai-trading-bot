@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import pandas as pd
 from ai_trading.strategies.mean_reversion import MeanReversionStrategy
 
@@ -33,5 +35,4 @@ def test_generate_invalid_stats(caplog):
     ctx.data_fetcher.df.loc[ctx.data_fetcher.df.index[-1], "close"] = float('nan')
     assert strat.generate(ctx) == []
     assert "invalid rolling" in caplog.text
-
 

@@ -2,6 +2,8 @@
 """
 Test suite for MetaLearning strategy.
 """
+from tests.optdeps import require
+require("pandas")
 
 import os
 from datetime import UTC, datetime, timedelta
@@ -302,4 +304,3 @@ if __name__ == '__main__':
 
     if success:
         prediction = strategy.predict_price_movement(mock_data)
-

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 
 import pandas as pd
 
@@ -42,4 +44,3 @@ def test_vwap_calculation():
     volume = pd.Series([1000, 1100, 1200])
     vwap = calculate_vwap(high, low, close, volume)
     assert vwap.iloc[-1] > 0
-

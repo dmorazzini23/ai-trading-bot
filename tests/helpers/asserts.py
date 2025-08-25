@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import pandas as pd
 
 
@@ -6,4 +8,3 @@ def assert_df_like(df: pd.DataFrame) -> None:
     assert isinstance(df, pd.DataFrame)
     # When offline, allow empty but with valid columns/index type
     assert hasattr(df, "columns")
-

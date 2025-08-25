@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import pandas as pd
 from ai_trading.trade_logic import (
     compute_order_price,

@@ -1,4 +1,6 @@
 """Ensure yfinance fallback sets auto_adjust and TzCache."""
+from tests.optdeps import require
+require("pandas")
 
 import sys
 import types
@@ -32,4 +34,3 @@ def test_yfinance_auto_adjust_and_cache(monkeypatch):
 
     assert calls["auto_adjust"] is True
     assert calls["cache_called"] is True
-

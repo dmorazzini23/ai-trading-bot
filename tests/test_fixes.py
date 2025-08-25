@@ -3,6 +3,8 @@
 Test script to validate the trading bot fixes.
 This script tests the expanded ticker portfolio and TA-Lib fallback handling.
 """
+from tests.optdeps import require
+require("pandas")
 
 import csv
 import os

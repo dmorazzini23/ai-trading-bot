@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import sys
 import types
 from datetime import UTC, datetime
@@ -57,4 +59,3 @@ def test_yahoo_get_bars_accepts_various_datetime_types(monkeypatch):
         "1Day",
     )
     assert not df4.empty and df4["timestamp"].dt.tz is not None
-

@@ -1,3 +1,5 @@
+from tests.optdeps import require
+require("pandas")
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -66,4 +68,3 @@ def test_minute_normalized(mock_rest_cls):
     args, kwargs = mock_rest.get_bars.call_args
     assert kwargs["timeframe"] in ("1Min", "1Minute")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
-
