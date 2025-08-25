@@ -30,8 +30,8 @@ class TestEnvironmentOrderAndLazyImport:
             if 'ALPACA_API_KEY' in os.environ:
                 del os.environ['ALPACA_API_KEY']
 
-            # Mock dotenv.load_dotenv to load our temp file
-            with patch('dotenv.load_dotenv') as mock_load_dotenv:
+            # Mock ai_trading.env.load_dotenv to load our temp file
+            with patch('ai_trading.env.load_dotenv') as mock_load_dotenv:
                 def side_effect(*args, **kwargs):
                     # Simulate loading the .env file
                     with open(temp_env_path) as env_file:
@@ -42,9 +42,9 @@ class TestEnvironmentOrderAndLazyImport:
 
                 mock_load_dotenv.side_effect = side_effect
 
-                # Import main module (this should load .env before Settings)
+                from ai_trading.env import ensure_dotenv_loaded
+                ensure_dotenv_loaded()
 
-                # Verify .env was loaded before Settings construction
                 mock_load_dotenv.assert_called()
                 assert os.environ.get('TEST_DOTENV_ORDER') == 'loaded_early'
                 assert os.environ.get('ALPACA_API_KEY') == 'test_from_dotenv'
@@ -162,22 +162,16 @@ class TestEnvironmentOrderAndLazyImport:
 
     def test_main_loads_dotenv_before_runner_import(self):
         """Test that main.py loads .env before importing runner."""
-        # Mock load_dotenv to track when it's called
-        with patch('dotenv.load_dotenv') as mock_load_dotenv:
+        # Mock ensure_dotenv_loaded to track when it's called
+        with patch('ai_trading.env.ensure_dotenv_loaded') as mock_ensure:
             with patch('ai_trading.runner.run_cycle') as mock_run_cycle:
-                # Import and call run_bot from main
-                from ai_trading.main import run_bot
+                import importlib
+                main = importlib.reload(importlib.import_module('ai_trading.main'))
 
-                # Call run_bot
-                result = run_bot()
+                result = main.run_bot()
 
-                # Verify .env was loaded
-                mock_load_dotenv.assert_called()
-
-                # Verify run_cycle was called
+                mock_ensure.assert_called()
                 mock_run_cycle.assert_called_once()
-
-                # Verify return value
                 assert result == 0
 
     def test_env_loaded_multiple_times_safely(self):
@@ -199,15 +193,13 @@ class TestEnvironmentOrderAndLazyImport:
                             key, value = line.strip().split('=', 1)
                             os.environ[key] = value
 
-            with patch('dotenv.load_dotenv', side_effect=mock_load_side_effect):
-                # Load multiple times (simulating multiple imports)
-                from ai_trading.main import load_dotenv
-                load_dotenv(override=True)  # First load
-                load_dotenv(override=True)  # Second load
-                load_dotenv(override=True)  # Third load
+            with patch('ai_trading.env.load_dotenv', side_effect=mock_load_side_effect):
+                from ai_trading.env import ensure_dotenv_loaded
+                ensure_dotenv_loaded()
+                ensure_dotenv_loaded()
+                ensure_dotenv_loaded()
 
-                # Should still have the correct value
-                assert os.environ.get('MULTI_LOAD_TEST') == 'safe_value'
+            assert os.environ.get('MULTI_LOAD_TEST') == 'safe_value'
 
         finally:
             os.unlink(temp_env_path)
@@ -215,8 +207,7 @@ class TestEnvironmentOrderAndLazyImport:
 
     def test_missing_env_file_handled_gracefully(self):
         """Test that missing .env file doesn't crash the import."""
-        with patch('dotenv.load_dotenv') as mock_load_dotenv:
-            # Simulate .env file not found
+        with patch('ai_trading.env.load_dotenv') as mock_load_dotenv:
             mock_load_dotenv.side_effect = FileNotFoundError("No .env file")
 
             # Should not raise exception

@@ -7,9 +7,6 @@ import pandas as pd
 import pytest
 from ai_trading.features import build_features_pipeline
 
-dotenv_stub = types.ModuleType("dotenv")
-dotenv_stub.load_dotenv = lambda *a, **k: None
-sys.modules.setdefault("dotenv", dotenv_stub)
 ps_stub = types.ModuleType("pydantic_settings")
 ps_stub.BaseSettings = object
 ps_stub.SettingsConfigDict = dict

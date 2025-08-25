@@ -6,17 +6,12 @@ import time
 from threading import Thread
 import signal
 from datetime import datetime, UTC
-from dotenv import load_dotenv, find_dotenv
+from ai_trading.env import ensure_dotenv_loaded
 
-_DOTENV_PATH = find_dotenv(usecwd=True)
-load_dotenv(_DOTENV_PATH or None, override=True)
+ensure_dotenv_loaded()
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
-if _DOTENV_PATH:
-    logger.info("ENV_LOADED_FROM override=True", extra={"dotenv_path": _DOTENV_PATH})
-else:
-    logger.info("ENV_LOADED_DEFAULT override=True")
 from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
@@ -24,6 +19,7 @@ from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact
 from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.position_sizing import resolve_max_position_size, _resolve_max_position_size
+from ai_trading.config.management import get_env
 
 
 def _default_run_cycle():
@@ -72,12 +68,12 @@ _SHUTDOWN = threading.Event()
 
 def _get_int_env(var: str, default: int | None = None) -> int | None:
     """Parse integer from environment. Return default on missing/invalid."""
-    val = os.getenv(var)
+    val = get_env(var)
     if val is None or val == "":
         return default
     try:
         return int(val)
-    except ValueError:
+    except (ValueError, TypeError):
         logger.warning("Invalid integer for %s=%r; using default %r", var, val, default)
         return default
 
@@ -332,10 +328,10 @@ def main(argv: list[str] | None = None) -> None:
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
 
     get_device()
-    raw_tick = os.getenv("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
+    raw_tick = get_env("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
     try:
         health_tick_seconds = int(raw_tick)
-    except ValueError:
+    except (ValueError, TypeError):
         health_tick_seconds = 300
     last_health = time.monotonic()
     env_iter = _get_int_env("SCHEDULER_ITERATIONS")
@@ -363,7 +359,12 @@ def main(argv: list[str] | None = None) -> None:
     memory_check_interval = 10
     try:
         while iterations <= 0 or count < iterations:
-            budget = SoftBudget(interval_sec=float(interval), fraction=float(os.getenv("CYCLE_BUDGET_FRACTION", 0.8)))
+            raw_fraction = get_env("CYCLE_BUDGET_FRACTION", 0.8)
+            try:
+                fraction = float(raw_fraction)
+            except (TypeError, ValueError):
+                fraction = 0.8
+            budget = SoftBudget(interval_sec=float(interval), fraction=fraction)
             try:
                 if count % memory_check_interval == 0:
                     gc_result = optimize_memory()

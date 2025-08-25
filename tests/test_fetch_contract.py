@@ -8,11 +8,6 @@ import pandas as pd
 
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
-dotenv_stub = types.ModuleType("dotenv")
-dotenv_stub.load_dotenv = lambda *a, **k: None
-dotenv_stub.dotenv_values = lambda *a, **k: {}
-dotenv_stub.find_dotenv = lambda *a, **k: ""
-sys.modules["dotenv"] = dotenv_stub
 
 from ai_trading import data_fetcher
 
