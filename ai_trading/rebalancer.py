@@ -8,12 +8,10 @@ from typing import Any
 import numpy as np
 _log = logging.getLogger(__name__)
 try:
-    from alpaca.common.exceptions import APIError
-    from alpaca.trading.client import TradingClient
+    from alpaca_trade_api.rest import APIError
 except ImportError:
-    TradingClient = None
-
     class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is missing."""
         pass
 from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights

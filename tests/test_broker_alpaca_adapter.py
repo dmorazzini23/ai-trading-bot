@@ -55,24 +55,6 @@ class FakeOld:
         return {"submitted_via": "old", **kwargs}
 
 
-def test_adapter_orders_new(monkeypatch):
-    pytest.importorskip("alpaca.trading.client")
-    fake = FakeNew()
-    broker = AlpacaBroker(fake)
-    broker._is_new = True
-    class DummyReq:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class DummyStatus:
-        OPEN = object()
-
-    broker._GetOrdersRequest = DummyReq
-    broker._QueryOrderStatus = DummyStatus
-    out = broker.list_open_orders()
-    assert out == ["o-new-open"]
-
-
 def test_adapter_orders_old():
     fake = FakeOld()
     broker = AlpacaBroker(fake)

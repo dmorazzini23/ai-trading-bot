@@ -21,14 +21,13 @@ def _optional_import(name: str):
 ta = _optional_import('pandas_ta')
 from ai_trading.config.management import SEED, TradingConfig
 try:
-    from alpaca.common.exceptions import APIError
-    from alpaca.trading.client import TradingClient
     from alpaca_trade_api import REST as AlpacaREST
+    from alpaca_trade_api.rest import APIError
 except ImportError:
-    TradingClient = None
     AlpacaREST = None
 
     class APIError(Exception):
+        """Fallback APIError when alpaca-trade-api is missing."""
         pass
 from ai_trading.config.settings import get_settings
 
