@@ -35,10 +35,10 @@ def clamp_timeout(df):
     _ = _clamp_timeout(1.0)
     return df
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ai_trading.utils import http
+from ai_trading.utils.time import utcnow
 from ai_trading.config import get_settings
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
 
@@ -76,9 +76,6 @@ def _get_gaussian_hmm():
         return None
 _LAST_SIGNAL_BAR = None
 _LAST_SIGNAL_MATRIX = None
-
-def get_utcnow():
-    return datetime.now(UTC)
 
 def robust_signal_price(df) -> float:
     """Get closing price from dataframe with fallback."""
@@ -959,7 +956,7 @@ class SignalDecisionPipeline:
             regime_info = self._analyze_market_regime(df)
             total_cost = estimated_costs['total_cost_pct'] + self.transaction_cost_buffer
             signal_score = predicted_edge - total_cost
-            decision = {'symbol': symbol, 'timestamp': get_utcnow(), 'predicted_edge': predicted_edge, 'estimated_costs': estimated_costs, 'signal_score': signal_score, 'regime': regime_info, 'atr': current_atr, 'current_price': current_price, 'decision': 'REJECT', 'reason': 'UNKNOWN'}
+            decision = {'symbol': symbol, 'timestamp': utcnow(), 'predicted_edge': predicted_edge, 'estimated_costs': estimated_costs, 'signal_score': signal_score, 'regime': regime_info, 'atr': current_atr, 'current_price': current_price, 'decision': 'REJECT', 'reason': 'UNKNOWN'}
             if signal_score <= 0:
                 decision['decision'] = 'REJECT'
                 decision['reason'] = 'REJECT_COST_UNPROFITABLE'
