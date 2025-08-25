@@ -32,6 +32,10 @@ fi
 echo "[ci_smoke] Scan for raw install hints (non-blocking)"
 python tools/scan_extras_hints.py || true
 
+# Advisory repo scan
+echo "[ci_smoke] Repo scan (non-blocking)"
+python tools/repo_scan.py || true
+
 # -----------------
 # Targeted smoke run
 # -----------------

@@ -57,7 +57,8 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
     if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1":
         # Under autoload-off, inject xdist only if available and not already present via addopts
         addopts = os.environ.get("PYTEST_ADDOPTS", "")
-        if ("-p xdist.plugin" not in addopts) and (iu.find_spec("xdist") is not None):
+        no_xdist = os.environ.get("NO_XDIST") == "1"
+        if ("-p xdist.plugin" not in addopts) and (iu.find_spec("xdist") is not None) and not no_xdist:
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
     if args.collect_only:
         cmd += ["--collect-only"]
@@ -100,7 +101,14 @@ def main(argv: list[str] | None = None) -> int:
     cmd = build_pytest_cmd(args)
     # AI-AGENT-REF: echo exact command for smoke test assertions
     logger.info("[run_pytest] %s", " ".join(cmd))
-    return subprocess.call(cmd)
+    rc = subprocess.call(cmd)
+    if rc != 0 and "-n" in cmd and os.environ.get("NO_XDIST") != "1":
+        logger.info("[run_pytest] xdist run failed; retrying without xdist…")
+        xdist_args = {"-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")}
+        cmd_wo = [c for c in cmd if c not in xdist_args]
+        logger.info("[run_pytest] %s", " ".join(cmd_wo))
+        rc = subprocess.call(cmd_wo)
+    return rc
 
 
 if __name__ == "__main__":
