@@ -7,8 +7,6 @@ from threading import Thread
 import signal
 from datetime import datetime, UTC
 from ai_trading.env import ensure_dotenv_loaded
-
-ensure_dotenv_loaded()
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -177,6 +175,7 @@ def run_bot(*_a, **_k) -> int:
 
     Sets up logging, validates configuration, and starts the bot.
     """
+    ensure_dotenv_loaded()
     global config
     from ai_trading.logging import setup_logging, validate_logging_setup
 
@@ -225,6 +224,7 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 
 def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
+    ensure_dotenv_loaded()
     settings = get_settings()
     port = int(settings.api_port or 9001)
     run_flask_app(port, ready_signal)
@@ -250,6 +250,7 @@ def parse_cli(argv: list[str] | None = None):
 
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
+    ensure_dotenv_loaded()
     args = parse_cli(argv)
     global config
     config = get_settings()
