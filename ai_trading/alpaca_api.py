@@ -1,6 +1,6 @@
 from __future__ import annotations
 import datetime as dt
-from datetime import timezone as _tz
+from datetime import timezone
 import json
 import os
 import time
@@ -10,11 +10,28 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import pandas as pd
-import pytz
 import requests
+import importlib.util
 from ai_trading.logging import get_logger
-from ai_trading.utils.optdeps import module_ok
+
+# Optional deps are imported lazily so the module can be imported without pandas/numpy.
+# AI-AGENT-REF: defer heavy pandas import until needed
+try:
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - missing optional dep
+    pd = None  # type: ignore[assignment]
+
+# Prefer stdlib zoneinfo for timezones; fall back to pytz if installed.
+# AI-AGENT-REF: use zoneinfo when available
+try:
+    from zoneinfo import ZoneInfo  # type: ignore
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+
+try:
+    import pytz as _pytz  # type: ignore
+except Exception:  # pragma: no cover
+    _pytz = None
 try:
     from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 except (ValueError, TypeError, ImportError):
@@ -23,14 +40,35 @@ except (ValueError, TypeError, ImportError):
 try:
     from alpaca_trade_api import REST as TradeApiREST
     from alpaca_trade_api.rest import APIError as TradeApiError
-except (ValueError, TypeError):
+except (ValueError, TypeError, ImportError):
     TradeApiREST = None
     TradeApiError = Exception
 _log = get_logger(__name__)
 SHADOW_MODE = os.getenv('SHADOW_MODE', '').lower() in {'1', 'true', 'yes'}
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
-_UTC = pytz.UTC
+_UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
+
+
+# AI-AGENT-REF: timezone fallback chain
+def _eastern_tz():
+    """Return America/New_York tzinfo with zoneinfo or pytz."""
+    if _pytz is not None:
+        try:
+            return _pytz.timezone("America/New_York")
+        except Exception:
+            pass
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo("America/New_York")
+        except Exception:
+            pass
+    _log.debug("Falling back to UTC tzinfo for EASTERN_TZ (pytz/zoneinfo unavailable)")
+    return timezone.utc
+
+
+EASTERN_TZ = _eastern_tz()
+HAS_PANDAS: bool = bool(pd is not None)
 
 def _is_intraday_unit(unit_tok: str) -> bool:
     """Return True for minute or hour-based timeframes."""
@@ -42,7 +80,16 @@ def _unit_from_norm(tf_norm: str) -> str:
         if tf_norm.endswith(u):
             return u
     return 'Day'
-ALPACA_AVAILABLE = any([module_ok('alpaca'), module_ok('alpaca_trade_api'), module_ok('alpaca.trading'), module_ok('alpaca.data')]) and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
+def _module_exists(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+ALPACA_AVAILABLE = any(
+    _module_exists(m) for m in ('alpaca', 'alpaca_trade_api', 'alpaca.trading', 'alpaca.data')
+) and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
 
 def _make_client_order_id(prefix: str='ai') -> str:
     return f'{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}'
@@ -102,8 +149,27 @@ def _bars_time_window(timeframe: TimeFrame) -> tuple[str, str]:
     start = end - dt.timedelta(days=days)
     return (_fmt_rfc3339_z(start), _fmt_rfc3339_z(end))
 
-def get_bars_df(symbol: str, timeframe: str | TimeFrame, start: dt.datetime | None=None, end: dt.datetime | None=None, adjustment: str | None=None, feed: str | None=None) -> pd.DataFrame:
+
+# AI-AGENT-REF: ensure clear error when pandas missing
+def _require_pandas(consumer: str = "this function"):
+    """Return imported pandas module or raise a helpful ImportError."""
+    if pd is None:
+        raise ImportError(
+            f"pandas is required to use {consumer}. Install with `pip install pandas` (or project extra)."
+        )
+    return pd
+
+
+def get_bars_df(
+    symbol: str,
+    timeframe: str | TimeFrame = "1Min",
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+    adjustment: str | None = None,
+    feed: str | None = None,
+) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
+    _pd = _require_pandas("get_bars_df")
     rest = _get_rest()
     feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
     adjustment = adjustment or os.getenv('ALPACA_ADJUSTMENT', 'all')
@@ -124,9 +190,9 @@ def get_bars_df(symbol: str, timeframe: str | TimeFrame, start: dt.datetime | No
     start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
     try:
         df = rest.get_bars(symbol, timeframe=tf, start=start_s, end=end_s, adjustment=adjustment, feed=feed, limit=None).df
-        if isinstance(df, pd.DataFrame) and (not df.empty):
+        if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
-        return pd.DataFrame()
+        return _pd.DataFrame()
     except TradeApiError as e:
         req = {'timeframe_raw': str(tf_raw), 'timeframe_norm': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'adjustment': adjustment}
         body = ''
@@ -135,7 +201,7 @@ def get_bars_df(symbol: str, timeframe: str | TimeFrame, start: dt.datetime | No
         except (ValueError, TypeError):
             pass
         _log.error('ALPACA_FAIL', extra={'symbol': symbol, 'timeframe': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'status_code': getattr(e, 'status_code', None), 'endpoint': 'alpaca/bars', 'query_params': req, 'body': body})
-        return pd.DataFrame()
+        return _pd.DataFrame()
 
 
 class AlpacaOrderError(RuntimeError):
