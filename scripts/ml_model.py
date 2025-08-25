@@ -14,8 +14,8 @@ from typing import Any, Sequence
 try:
     import pandas as pd  # type: ignore
 except Exception:  # pragma: no cover
-    class _Series: ...
-    class _DataFrame: ...
+    class _Series: ...  # ok: ellipsis
+    class _DataFrame: ...  # ok: ellipsis
     class _PD:
         Series = _Series
         DataFrame = _DataFrame
