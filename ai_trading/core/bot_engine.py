@@ -3101,8 +3101,22 @@ def _env_float(default: float, *keys: str) -> float:
 
 CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
 _cfg = TradingConfig.from_env()
-DOLLAR_RISK_LIMIT = (
-    _cfg.dollar_risk_limit if _cfg.dollar_risk_limit is not None else 0.05
+_settings_drl = get_dollar_risk_limit()
+DOLLAR_RISK_LIMIT = _settings_drl
+if _cfg.dollar_risk_limit is not None and _cfg.dollar_risk_limit != _settings_drl:
+    logger.debug(
+        "DOLLAR_RISK_LIMIT_OVERRIDE",
+        extra={
+            "settings": _settings_drl,
+            "trading_config": _cfg.dollar_risk_limit,
+        },
+    )
+    DOLLAR_RISK_LIMIT = _cfg.dollar_risk_limit
+_emit_once(
+    logger,
+    "dollar_risk_limit_resolved",
+    logging.DEBUG,
+    f"DOLLAR_RISK_LIMIT resolved to {DOLLAR_RISK_LIMIT:.3f}",
 )
 BUY_THRESHOLD = params.get(
     "get_buy_threshold()",

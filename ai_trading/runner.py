@@ -166,12 +166,19 @@ def run_cycle() -> None:
         runtime = build_runtime(cfg)
 
         # Use TradingConfig as single source of truth for risk limit
-        risk_limit = (
-            cfg.dollar_risk_limit
-            if cfg.dollar_risk_limit is not None
-            else runtime.params.get("DOLLAR_RISK_LIMIT")
-        )
+        existing = runtime.params.get("DOLLAR_RISK_LIMIT")
+        if (
+            existing is not None
+            and cfg.dollar_risk_limit is not None
+            and existing != cfg.dollar_risk_limit
+        ):
+            log.debug(
+                "DOLLAR_RISK_LIMIT_OVERRIDE",
+                extra={"runtime": existing, "env": cfg.dollar_risk_limit},
+            )
+        risk_limit = cfg.dollar_risk_limit if cfg.dollar_risk_limit is not None else existing
         runtime.params["DOLLAR_RISK_LIMIT"] = risk_limit
+        log.debug("DOLLAR_RISK_LIMIT_RESOLVED", extra={"value": risk_limit})
 
         # One-time validation & log as specified in problem statement
         missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]

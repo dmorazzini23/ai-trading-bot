@@ -238,7 +238,7 @@ class TradingConfig:
         return cls(
             capital_cap=_get("CAPITAL_CAP", float),
             dollar_risk_limit=_get(
-                "DAILY_LOSS_LIMIT", float, aliases=("DOLLAR_RISK_LIMIT",)
+                "DOLLAR_RISK_LIMIT", float, aliases=("DAILY_LOSS_LIMIT",)
             ),
             max_position_size=_get("MAX_POSITION_SIZE", float),
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
