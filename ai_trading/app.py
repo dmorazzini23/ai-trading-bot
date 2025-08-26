@@ -11,17 +11,39 @@ def create_app():
     def health():
         """Lightweight liveness probe with Alpaca diagnostics."""
         try:
-            from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
-        except (KeyError, ValueError, TypeError):
-            sdk_ok = False
-        try:
-            from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client
-            key, secret, base_url = _resolve_alpaca_env()
-            paper = bool(base_url and 'paper' in base_url)
-        except (KeyError, ValueError, TypeError):
-            trading_client, key, secret, base_url, paper = (None, None, None, '', False)
-        shadow = bool(getattr(__import__('ai_trading', fromlist=['config']).config, 'SHADOW_MODE', False) or os.getenv('SHADOW_MODE', '').lower() in ('true', '1', 'yes'))
-        return jsonify(alpaca=dict(sdk_ok=bool(sdk_ok), initialized=bool(trading_client), client_attached=bool(trading_client), has_key=bool(key), has_secret=bool(secret), base_url=base_url, paper=paper, shadow_mode=shadow))
+            try:
+                from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
+            except (KeyError, ValueError, TypeError):
+                sdk_ok = False
+
+            try:
+                from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client
+                key, secret, base_url = _resolve_alpaca_env()
+                paper = bool(base_url and 'paper' in base_url)
+            except (KeyError, ValueError, TypeError):
+                trading_client, key, secret, base_url, paper = (None, None, None, '', False)
+
+            from ai_trading.config import management as config
+
+            shadow = bool(
+                getattr(config, 'SHADOW_MODE', False)
+                or os.getenv('SHADOW_MODE', '').lower() in ('true', '1', 'yes')
+            )
+
+            return jsonify(
+                alpaca=dict(
+                    sdk_ok=bool(sdk_ok),
+                    initialized=bool(trading_client),
+                    client_attached=bool(trading_client),
+                    has_key=bool(key),
+                    has_secret=bool(secret),
+                    base_url=base_url,
+                    paper=paper,
+                    shadow_mode=shadow,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            return jsonify(ok=False, error=str(e))
 
     @app.route('/healthz')
     def healthz():
