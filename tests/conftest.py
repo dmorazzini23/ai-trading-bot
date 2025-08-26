@@ -114,7 +114,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config._utc_stamp = datetime.now(timezone.utc).isoformat()  # noqa: SLF001
     config.addinivalue_line("markers", "integration: network/vendor tests")
     config.addinivalue_line("markers", "slow: long-running tests")
-    config.addinivalue_line("markers", "legacy: legacy test quarantined during refactor")  # AI-AGENT-REF: register legacy marker
     pathlib.Path("artifacts").mkdir(exist_ok=True)
     pathlib.Path("artifacts/utc.txt").write_text(config._utc_stamp)
 

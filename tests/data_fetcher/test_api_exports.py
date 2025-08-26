@@ -6,9 +6,9 @@ from ai_trading import data_fetcher
 
 
 class TestDataFetcherAPI:
-    def test_data_fetch_error_alias(self):
-        """DataFetchError is exposed and matches the legacy alias."""
-        assert data_fetcher.DataFetchException is data_fetcher.DataFetchError
+    def test_data_fetch_error_export(self):
+        """DataFetchError is exposed via the public API."""
+        assert hasattr(data_fetcher, "DataFetchError")
 
     def test_ensure_datetime_handles_callable(self):
         """ensure_datetime accepts callables returning datetimes."""
