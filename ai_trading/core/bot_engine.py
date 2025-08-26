@@ -13269,10 +13269,7 @@ def main() -> None:
         )  # AI-AGENT-REF: normalized import
 
         pm = ProcessManager()
-        if not pm.ensure_single_instance():
-            msg = "Another trading bot instance is already running (single-instance lock busy)"
-            logger.error(msg)
-            raise RuntimeError(msg)
+        pm.ensure_single_instance()
         logger.info("Single instance lock acquired successfully")
     except (
         FileNotFoundError,
@@ -13283,6 +13280,7 @@ def main() -> None:
         KeyError,
         TypeError,
         OSError,
+        RuntimeError,
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.error("Failed to acquire single instance lock", exc_info=e)
         raise RuntimeError("Single-instance lock acquisition failed") from e
