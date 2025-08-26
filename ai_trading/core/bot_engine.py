@@ -1428,14 +1428,13 @@ YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availabilit
 # Attempt to import Alpaca SDK classes; raise if unavailable to avoid silent
 # fallbacks that mask missing dependencies.
 try:  # pragma: no cover - import resolution
-    from alpaca_trade_api import rest as _alpaca_rest
-    Quote = _alpaca_rest.Quote
-    OrderSide = _alpaca_rest.OrderSide
-    OrderStatus = _alpaca_rest.OrderStatus
-    TimeInForce = _alpaca_rest.TimeInForce
-    Order = _alpaca_rest.Order
-    MarketOrderRequest = _alpaca_rest.MarketOrderRequest
-    StockLatestQuoteRequest = getattr(_alpaca_rest, "StockLatestQuoteRequest", None)
+    from alpaca_trade_api.entity import Quote, Order
+    from alpaca_trade_api.common.enums import OrderSide, OrderStatus, TimeInForce
+    from alpaca_trade_api.common.types import MarketOrderRequest
+    try:  # pragma: no cover - StockLatestQuoteRequest may not exist
+        from alpaca_trade_api.rest import StockLatestQuoteRequest  # type: ignore
+    except Exception:
+        StockLatestQuoteRequest = None
     if StockLatestQuoteRequest is None:
         @dataclass
         class StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
@@ -1444,7 +1443,7 @@ except Exception as e:  # pragma: no cover - executed only when dep missing
     import logging
 
     get_logger(__name__).critical(
-        "alpaca_trade_api.rest import failed; ensure alpaca-trade-api is installed",
+        "required Alpaca trade API classes missing; ensure alpaca-trade-api is installed",
         exc_info=e,
     )
     raise
