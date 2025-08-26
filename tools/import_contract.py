@@ -4,7 +4,7 @@ Runs import(s) in a short-lived subprocess with a wall-clock timeout so CI
 can never hang. Designed to be called from `make test-all` before pytest.
 
 Usage:
-  python tools/import_contract.py --ci --timeout 20 --modules ai_trading,trade_execution
+  python tools/import_contract.py --ci --timeout 20 --modules ai_trading
 """
 from __future__ import annotations
 import argparse
@@ -21,7 +21,7 @@ def _run_import_in_subprocess(module: str, timeout: float) -> subprocess.Complet
 
 def main(argv: list[str] | None=None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument('--modules', default='ai_trading,trade_execution', help='Comma-separated module list to import')
+    p.add_argument('--modules', default='ai_trading', help='Comma-separated module list to import')
     p.add_argument('--timeout', type=float, default=20.0, help='Per-module timeout in seconds')
     p.add_argument('--ci', action='store_true', help='CI mode: concise logs, non-zero exit on failures')
     args = p.parse_args(argv)

@@ -62,7 +62,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["ai_trading*", "trade_execution*"]
+include = ["ai_trading*"]
 exclude = ["tests*", "scripts*", "artifacts*"]
 
 [tool.black]
@@ -73,7 +73,7 @@ target-version = ["py312"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["ai_trading", "trade_execution", "tests", "tools"]
+src = ["ai_trading", "tests", "tools"]
 extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts", "tools/static_import_rewrites.txt"]
 
 # Focus on safe mechanical families only.

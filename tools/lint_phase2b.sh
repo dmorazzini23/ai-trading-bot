@@ -16,7 +16,7 @@ ruff check . --select I,F,E,UP,PL,BLE --fix || true
 
 # Final report
 ruff check . > artifacts/ruff.txt || true
-mypy ai_trading trade_execution > artifacts/mypy.txt || true
+mypy ai_trading > artifacts/mypy.txt || true
 pytest -n auto --disable-warnings -q > artifacts/pytest.txt || true
 
 # Top rules summary

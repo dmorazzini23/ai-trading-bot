@@ -77,7 +77,7 @@ def validate_execution_optimizations():
     logging.info('\nFix 4: Order Execution Optimizations')
     logging.info(str('=' * 50))
     try:
-        with open('trade_execution.py') as f:
+        with open('ai_trading/execution/live_trading.py') as f:
             content = f.read()
         optimizations = {'Pre-validation function': '_pre_validate_order' in content, 'Market hours optimization': '_is_market_open' in content, 'Validation caching': '_VALIDATION_CACHE' in content, 'Market status caching': '_MARKET_STATUS_CACHE' in content, 'Order validation integration': 'ORDER_VALIDATION_FAILED' in content, 'Async validation integration': 'Pre-validate order to reduce execution latency (async version)' in content}
         all_implemented = True
@@ -95,7 +95,7 @@ def validate_quantity_tracking():
     logging.info('\nFix 1: Order Quantity Tracking')
     logging.info(str('=' * 50))
     try:
-        with open('trade_execution.py') as f:
+        with open('ai_trading/execution/live_trading.py') as f:
             content = f.read()
         tracking_features = {'FULL_FILL_SUCCESS includes requested_qty': '"requested_qty": requested_qty' in content, 'FULL_FILL_SUCCESS includes filled_qty': '"filled_qty": filled_qty' in content, 'ORDER_FILL_CONSOLIDATED uses total_filled_qty': '"total_filled_qty": buf["qty"]' in content, 'Clear field name documentation': 'AI-AGENT-REF: Clarify this is the total filled quantity' in content}
         all_implemented = True

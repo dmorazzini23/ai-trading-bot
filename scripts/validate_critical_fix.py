@@ -4,7 +4,7 @@ import os
 import sys
 os.environ.update({'ALPACA_API_KEY': 'test_key', 'ALPACA_SECRET_KEY': 'test_secret', 'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets', 'WEBHOOK_SECRET': 'test_webhook', 'FLASK_PORT': '5000'})
 sys.path.append('.')
-from ai_trading.trade_execution import ExecutionEngine
+from ai_trading.execution import ExecutionEngine
 from tests.support.mocks import MockContext, MockOrder
 
 def test_production_scenarios():
