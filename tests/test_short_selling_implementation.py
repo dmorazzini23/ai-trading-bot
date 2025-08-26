@@ -135,9 +135,12 @@ class TestShortSellingImplementation(unittest.TestCase):
         mock_order = Mock()
         mock_order.id = "test_order_123"
         mock_order.status = "new"
+        mock_order.symbol = "AAPL"
+        mock_order.side = "buy"
+        mock_order.quantity = 10
 
-        # Test _track_order method
-        engine._track_order(mock_order, "AAPL", "buy", 10)
+        # Test track_order method
+        engine.track_order(mock_order)
 
         # Verify order is tracked
         pending_orders = engine.get_pending_orders()
@@ -158,7 +161,10 @@ class TestShortSellingImplementation(unittest.TestCase):
         old_order = Mock()
         old_order.id = "old_order_456"
         old_order.status = "new"
-        engine._track_order(old_order, "MSFT", "sell", 5)
+        old_order.symbol = "MSFT"
+        old_order.side = "sell"
+        old_order.quantity = 5
+        engine.track_order(old_order)
 
         # Mock the order as old by manipulating the tracking directly
         import time
