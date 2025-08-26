@@ -10,6 +10,7 @@ MODULES = [
     "ai_trading/execution/order_router.py",
     "ai_trading/position/calculators.py",
     "ai_trading/risk/engine.py",
+    "ai_trading/rl_trading/train.py",
     "ai_trading/monitoring/aggregator.py",
     "ai_trading/monitoring/processor.py",
     "ai_trading/signals/factors.py",

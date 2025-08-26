@@ -77,7 +77,7 @@ class RiskEngine:
                 logger.warning('Invalid exposure_cap_aggressive %s, using default 0.8', exposure_cap)
                 exposure_cap = 0.8
             self.global_limit = exposure_cap
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
+        except (TypeError, ValueError) as e:  # config may contain non-numeric values
             logger.error('Error validating exposure_cap_aggressive: %s, using default', e)
             self.global_limit = 0.8
         self.asset_limits: dict[str, float] = {}

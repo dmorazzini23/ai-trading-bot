@@ -10,8 +10,6 @@ try:  # optional dependency
     import numpy as np
 except ImportError:
     np = None
-
-from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
 from . import _load_rl_stack, is_rl_available
 
@@ -116,7 +114,7 @@ class EarlyStoppingCallback(BaseCallback):
                         if self.verbose > 0:
                             logger.info(f'Early stopping after {self.patience} evaluations without improvement')
                         return False
-            except COMMON_EXC as e:
+            except (AttributeError, TypeError, ValueError) as e:  # env may lack returns or contain bad data
                 if self.verbose > 0:
                     logger.warning(f'Error in early stopping callback: {e}')
         return True
@@ -161,7 +159,7 @@ class DetailedEvalCallback(BaseCallback):
                         json.dump(eval_result, f, indent=2)
             if self.verbose > 0:
                 logger.info(f'Eval at step {self.n_calls}: mean_reward={mean_reward:.4f} ± {std_reward:.4f}')
-        except COMMON_EXC as e:
+        except (OSError, AttributeError, TypeError, ValueError) as e:  # file I/O or numeric issues during evaluation
             logger.error(f'Error in evaluation: {e}')
 
     def _collect_detailed_metrics(self) -> dict[str, float]:
@@ -187,7 +185,7 @@ class DetailedEvalCallback(BaseCallback):
             avg_drawdown = total_drawdown / episode_length if episode_length > 0 else 0
             avg_variance = total_variance / episode_length if episode_length > 0 else 0
             return {'avg_turnover_penalty': float(avg_turnover), 'avg_drawdown_penalty': float(avg_drawdown), 'avg_variance_penalty': float(avg_variance), 'sharpe_ratio': self._calculate_sharpe_ratio(), 'max_drawdown': float(total_drawdown) if total_drawdown > 0 else 0.0}
-        except COMMON_EXC as e:
+        except (AttributeError, TypeError, ValueError) as e:  # model or env returned unexpected values
             logger.error(f'Error collecting detailed metrics: {e}')
             return {}
 
@@ -202,7 +200,7 @@ class DetailedEvalCallback(BaseCallback):
                 std_return = np.std(recent_rewards)
                 return float(mean_return / std_return) if std_return > 0 else 0.0
             return 0.0
-        except COMMON_EXC:
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):  # reward history missing or invalid
             return 0.0
 
     def save_results(self, path: str) -> None:
@@ -211,7 +209,7 @@ class DetailedEvalCallback(BaseCallback):
             with open(path, 'w') as f:
                 json.dump(self.eval_results, f, indent=2)
             logger.info(f'Evaluation results saved to {path}')
-        except COMMON_EXC as e:
+        except (OSError, TypeError, ValueError) as e:  # disk or serialization issues
             logger.error(f'Error saving evaluation results: {e}')
 
 class RLTrainer:
@@ -273,7 +271,7 @@ class RLTrainer:
                 self._save_model_and_results(save_path)
             logger.info('RL training completed successfully')
             return self.training_results
-        except COMMON_EXC as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:  # failures during env/model setup or learning
             logger.error(f'Error in RL training: {e}')
             raise
 
@@ -296,7 +294,7 @@ class RLTrainer:
             self.train_env = DummyVecEnv([make_train_env])
             self.eval_env = make_eval_env()
             logger.debug(f'Environments created: train_data={len(train_data)}, eval_data={len(eval_data)}')
-        except COMMON_EXC as e:
+        except (ImportError, AttributeError, TypeError, ValueError) as e:  # TradingEnv missing or params invalid
             logger.error(f'Error creating environments: {e}')
             raise
 
@@ -320,7 +318,7 @@ class RLTrainer:
             else:
                 raise ValueError(f'Unknown algorithm: {self.algorithm}')
             logger.debug(f'Model created: {self.algorithm} with {len(final_params)} parameters')
-        except COMMON_EXC as e:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:  # invalid algorithm or params
             logger.error(f'Error creating model: {e}')
             raise
 
@@ -333,7 +331,7 @@ class RLTrainer:
             self.eval_callback = DetailedEvalCallback(eval_env=self.eval_env, eval_freq=self.eval_freq, n_eval_episodes=5, deterministic=True, save_path=save_path, verbose=1)
             callbacks.append(self.eval_callback)
             return callbacks
-        except COMMON_EXC as e:
+        except (AttributeError, TypeError, ValueError) as e:  # callback or env misconfiguration
             logger.error(f'Error setting up callbacks: {e}')
             return []
 
@@ -364,7 +362,7 @@ class RLTrainer:
                 detailed_results.append({'total_reward': episode_reward, **episode_metrics})
             final_metrics = {'mean_reward': float(mean_reward), 'std_reward': float(std_reward), 'avg_turnover_penalty': float(np.mean([r['turnover'] for r in detailed_results])), 'avg_drawdown_penalty': float(np.mean([r['drawdown'] for r in detailed_results])), 'avg_variance_penalty': float(np.mean([r['variance'] for r in detailed_results])), 'reward_stability': float(1.0 / (1.0 + std_reward))}
             return final_metrics
-        except COMMON_EXC as e:
+        except (AttributeError, TypeError, ValueError) as e:  # evaluation failed due to bad env or metrics
             logger.error(f'Error in final evaluation: {e}')
             return {}
 
@@ -385,7 +383,7 @@ class RLTrainer:
             with open(meta_path, 'w') as f:
                 json.dump(metadata, f, indent=2)
             logger.info(f'Model and results saved to {save_path}')
-        except COMMON_EXC as e:
+        except (OSError, AttributeError, TypeError, ValueError) as e:  # file or serialization problems
             logger.error(f'Error saving model and results: {e}')
 
 def train_rl_model_cli() -> None:
@@ -406,7 +404,7 @@ def train_rl_model_cli() -> None:
         trainer = RLTrainer(algorithm='PPO', total_timesteps=50000, eval_freq=5000, early_stopping_patience=5)
         results = trainer.train(data=data, env_params={'transaction_cost': 0.001, 'slippage': 0.0005}, save_path='models/rl_demo')
         logger.info(f"Training completed with final reward: {results['final_evaluation'].get('mean_reward', 'N/A')}")
-    except COMMON_EXC as e:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:  # training or file errors
         logger.error(f'Error in RL CLI training: {e}')
         raise
 if __name__ == '__main__':
