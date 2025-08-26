@@ -1887,6 +1887,7 @@ try:
         ExecutionEngine,  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
     )
 except ImportError:  # pragma: no cover - allow tests with stubbed module
+    from ai_trading.core.enums import OrderSide
 
     class ExecutionEngine:
         """
@@ -1910,9 +1911,9 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
                 kwargs,
             )
 
-        def execute_order(self, symbol: str, qty: int, side: str):
+        def execute_order(self, symbol: str, side: OrderSide, qty: int):
             """Simulate an order execution and return a dummy order object."""
-            self.logger("execute_order", symbol, qty, side)
+            self.logger("execute_order", symbol, side, qty)
             # Return a simple namespace with an id attribute to mimic a real order
             return types.SimpleNamespace(id=None)
 
@@ -7856,7 +7857,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
             logger.warning("Liquidity checks failed open-loop: %s", e)
 
     try:
-        return _exec_engine.execute_order(symbol, qty, side)
+        return _exec_engine.execute_order(symbol, OrderSide(side.lower()), qty)
     except (APIError, TimeoutError, ConnectionError) as e:
         logger.error(
             "BROKER_OP_FAILED",
@@ -12266,7 +12267,7 @@ def run_multi_strategy(ctx) -> None:
         )
 
         ctx.execution_engine.execute_order(
-            sig.symbol, qty, sig.side, asset_class=sig.asset_class
+            sig.symbol, sig.side, qty, asset_class=sig.asset_class
         )
         ctx.risk_engine.register_fill(sig)
 

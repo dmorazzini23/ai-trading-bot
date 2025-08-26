@@ -19,11 +19,11 @@ def enhance_existing_execution_engine():
     """Example of how to add debugging to existing ExecutionEngine calls."""
     from ai_trading.execution import ExecutionPhase, log_execution_phase, log_signal_to_execution
 
-    def execute_order_with_debugging(engine, symbol, qty, side, signal_data=None):
+    def execute_order_with_debugging(engine, symbol, side, qty, signal_data=None):
         correlation_id = log_signal_to_execution(symbol, side, qty, signal_data)
         log_execution_phase(correlation_id, ExecutionPhase.RISK_CHECK, {'requested_qty': qty, 'available_cash': engine.ctx.get_account().cash if hasattr(engine.ctx, 'get_account') else 'unknown'})
         try:
-            result = engine.execute_order(symbol, qty, side)
+            result = engine.execute_order(symbol, side, qty)
             if result:
                 log_execution_phase(correlation_id, ExecutionPhase.ORDER_FILLED, {'order_id': getattr(result, 'id', 'unknown'), 'status': getattr(result, 'status', 'unknown')})
                 from ai_trading.execution import update_bot_position
@@ -153,7 +153,7 @@ def complete_integration_example():
             from ai_trading.execution import ExecutionPhase, log_execution_phase
             correlation_id = signal.correlation_id
             log_execution_phase(correlation_id, ExecutionPhase.RISK_CHECK)
-            result = self.execution_engine.execute_order(signal.symbol, signal.quantity, signal.side)
+            result = self.execution_engine.execute_order(signal.symbol, signal.side, signal.quantity)
             if result:
                 log_execution_phase(correlation_id, ExecutionPhase.ORDER_FILLED)
             else:

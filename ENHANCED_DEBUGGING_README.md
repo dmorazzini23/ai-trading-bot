@@ -194,14 +194,15 @@ The system is designed to integrate with minimal changes to existing code:
 
 ```python
 # BEFORE: Basic order execution
-result = execution_engine.execute_order("AAPL", 100, "buy")
+from ai_trading.core.enums import OrderSide
+result = execution_engine.execute_order("AAPL", OrderSide.BUY, 100)
 
 # AFTER: With debugging
 from ai_trading.execution import log_signal_to_execution, log_execution_phase
 
 correlation_id = log_signal_to_execution("AAPL", "buy", 100)
 log_execution_phase(correlation_id, ExecutionPhase.RISK_CHECK)
-result = execution_engine.execute_order("AAPL", 100, "buy")
+result = execution_engine.execute_order("AAPL", OrderSide.BUY, 100)
 if result:
     log_execution_phase(correlation_id, ExecutionPhase.ORDER_FILLED)
 ```

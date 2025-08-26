@@ -31,14 +31,14 @@ def demonstrate_short_selling():
         logging.info('✓ ExecutionEngine created successfully')
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=mock_api):
-                result = engine.execute_order('AAPL', 10, 'sell')
+                result = engine.execute_order('AAPL', 'sell', 10)
                 logging.info(f'✓ Regular sell order with no position: {result} (correctly blocked)')
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=mock_api):
                 with patch.object(engine, '_validate_short_selling', return_value=True):
                     with patch.object(engine, '_assess_liquidity', side_effect=Exception('Stopped at liquidity check')):
                         try:
-                            result = engine.execute_order('AAPL', 10, 'sell_short')
+                            result = engine.execute_order('AAPL', 'sell_short', 10)
                         except (KeyError, ValueError, TypeError):
                             pass
                         logging.info('✓ sell_short order bypassed position checks and reached validation')
