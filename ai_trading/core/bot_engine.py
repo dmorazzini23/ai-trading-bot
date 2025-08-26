@@ -12176,13 +12176,37 @@ def _param(runtime, key, default):
     return default
 
 
+def ensure_data_fetcher(runtime) -> DataFetcher:
+    """Ensure a market data fetcher is attached to ``runtime``.
+
+    Attempts to lazily rebuild the fetcher if it is missing. Raises
+    ``DataFetchError`` if a fetcher cannot be constructed so callers fail
+    fast during startup.
+    """
+
+    global data_fetcher
+    fetcher = getattr(runtime, "data_fetcher", None)
+    if fetcher is not None:
+        return fetcher
+    logger_once.error("DATA_FETCHER_MISSING", key="data_fetcher_missing")
+    try:
+        fetcher = data_fetcher_module.build_fetcher(getattr(runtime, "params", {}))
+    except COMMON_EXC as exc:  # pragma: no cover - best effort during startup
+        logger_once.error(
+            "DATA_FETCHER_INIT_FAILED - %s", exc, key="data_fetcher_init_failed"
+        )
+        raise DataFetchError("data_fetcher not available") from exc
+    runtime.data_fetcher = fetcher
+    data_fetcher = fetcher
+    return fetcher
+
+
 def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     from ai_trading import portfolio
     from ai_trading.utils import portfolio_lock
 
     """Prepare trading run by syncing positions and generating symbols."""
-    if getattr(runtime, "data_fetcher", None) is None:
-        raise DataFetchError("data_fetcher not available")
+    ensure_data_fetcher(runtime)
     cancel_all_open_orders(runtime)
     audit_positions(runtime)
     try:
