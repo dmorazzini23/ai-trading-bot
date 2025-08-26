@@ -11,7 +11,6 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -27,15 +26,11 @@ from ai_trading.logging.emit_once import emit_once
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
 
-@dataclass(slots=True)
-class OrderInfo:
-    order_id: str
-    symbol: str
-    side: str
-    qty: int | float
-    submitted_time: float
-    last_status: str = 'new'
-from ai_trading.monitoring.order_health_monitor import _active_orders as _mon_active, _order_tracking_lock as _mon_lock
+from ai_trading.monitoring.order_health_monitor import (
+    OrderInfo,
+    _active_orders as _mon_active,
+    _order_tracking_lock as _mon_lock,
+)
 _active_orders = _mon_active
 _order_tracking_lock = _mon_lock
 
@@ -398,6 +393,51 @@ class ExecutionEngine:
         self.execution_stats = {'total_orders': 0, 'filled_orders': 0, 'cancelled_orders': 0, 'rejected_orders': 0, 'total_volume': 0.0, 'average_fill_time': 0.0}
         emit_once(logger, 'EXECUTION_ENGINE_INIT', 'info', 'ExecutionEngine initialized')
 
+    def _track_order(self, order: Order) -> None:
+        """Track an order in the shared monitoring structure."""
+        _cleanup_stale_orders()
+        info = OrderInfo(
+            order_id=order.id,
+            symbol=order.symbol,
+            side=getattr(order.side, 'value', order.side),
+            qty=getattr(order, 'quantity', getattr(order, 'qty', 0)),
+            submitted_time=time.time(),
+            last_status=getattr(order.status, 'value', getattr(order, 'status', 'new')),
+        )
+        with _order_tracking_lock:
+            _active_orders[order.id] = info
+
+    def track_order(self, order: Order) -> None:
+        """Public wrapper for :meth:`_track_order`."""
+        self._track_order(order)
+
+    def _update_order_status(self, order_id: str, status: str) -> None:
+        """Update tracked order status and remove if terminal."""
+        terminal = {'filled', 'canceled', 'cancelled', 'rejected'}
+        with _order_tracking_lock:
+            info = _active_orders.get(order_id)
+            if info:
+                info.last_status = status
+                if status.lower() in terminal:
+                    _active_orders.pop(order_id, None)
+
+    def get_pending_orders(self) -> list[OrderInfo]:
+        """Return list of currently tracked orders."""
+        with _order_tracking_lock:
+            return list(_active_orders.values())
+
+    def _cancel_stale_order(self, order_id: str) -> bool:
+        """Attempt to cancel a stale order via broker interface."""
+        if self.broker_interface is None:
+            return False
+        try:
+            ord_obj = self.broker_interface.get_order(order_id)
+            if getattr(ord_obj, 'status', '').lower() == 'new':
+                self.broker_interface.cancel_order(order_id)
+            return True
+        except Exception:
+            return False
+
     def _assess_liquidity(self, symbol: str, quantity: int) -> tuple[int, bool]:
         """Assess liquidity and optionally adjust quantity."""
         bid, ask = (0.0, 0.0)
@@ -414,20 +454,11 @@ class ExecutionEngine:
         """Remove stale orders and attempt cancelation via broker."""
         now_s = now if now is not None else time.time()
         max_age = max_age_seconds if max_age_seconds is not None else ORDER_STALE_AFTER_S
-        removed = 0
         with _order_tracking_lock:
-            for oid, info in list(_active_orders.items()):
-                if now_s - info.submitted_time >= max_age:
-                    if self.broker_interface is not None:
-                        try:
-                            ord_obj = self.broker_interface.get_order(oid)
-                            if getattr(ord_obj, 'status', '').lower() == 'new':
-                                self.broker_interface.cancel_order(oid)
-                        except (ValueError, TypeError):
-                            pass
-                    _active_orders.pop(oid, None)
-                    removed += 1
-        return removed
+            stale_ids = [oid for oid, info in _active_orders.items() if now_s - info.submitted_time >= max_age]
+        for oid in stale_ids:
+            self._cancel_stale_order(oid)
+        return _cleanup_stale_orders(now_s, max_age)
 
     def check_stops(self) -> None:
         """
