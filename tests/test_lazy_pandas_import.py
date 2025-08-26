@@ -10,6 +10,7 @@ import pytest
         "ai_trading.features.pipeline",
         "ai_trading.portfolio.sizing",
         "ai_trading.monitoring.metrics",
+        "ai_trading.metrics",
     ],
 )
 def test_module_import_without_pandas(monkeypatch, module):
