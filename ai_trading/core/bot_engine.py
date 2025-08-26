@@ -211,7 +211,6 @@ from ai_trading.settings import (
     get_daily_loss_limit,
     get_disaster_dd_limit,
     get_dollar_risk_limit,
-    get_finnhub_rpm,
     get_max_portfolio_positions,
     get_max_trades_per_day,
     get_max_trades_per_hour,
@@ -222,8 +221,6 @@ from ai_trading.settings import (
     get_volume_threshold,
 )
 
-# Rate limit for Finnhub (calls/min); resolved at import time via settings
-FINNHUB_RPM = get_finnhub_rpm()
 __all__ = [
     "pre_trade_health_check",
     "run_all_trades_worker",
@@ -1093,7 +1090,6 @@ import sys
 import threading
 import time as pytime
 from argparse import ArgumentParser
-from collections import deque
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -3415,10 +3411,6 @@ class DataFetchError(Exception):
     """Raised when expected market data is missing or unusable."""
 
 
-class DataFetchErrorLegacy(Exception):
-    pass
-
-
 class OrderExecutionError(Exception):
     """Raised when an Alpaca order fails after submission."""
 
@@ -3693,76 +3685,6 @@ def is_high_vol_regime() -> bool:
     Returns True if SPY is in a high-volatility regime (ATR > mean + 2*std).
     """
     return is_high_vol_thr_spy()
-
-
-# ─── D. DATA FETCHERS ─────────────────────────────────────────────────────────
-class FinnhubFetcherLegacy:
-    def __init__(self, calls_per_minute: int = FINNHUB_RPM):
-        self.max_calls = calls_per_minute
-        self._timestamps = deque()
-        self.client = finnhub_client
-
-    def _throttle(self):
-        while True:
-            now_ts = pytime.time()
-            # drop timestamps older than 60 seconds
-            while self._timestamps and now_ts - self._timestamps[0] > 60:
-                self._timestamps.popleft()
-            if len(self._timestamps) < self.max_calls:
-                self._timestamps.append(now_ts)
-                return
-            wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
-            logger.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
-            pytime.sleep(wait_secs)
-
-    def _parse_period(self, period: str) -> int:
-        if period.endswith("mo"):
-            num = int(period[:-2])
-            return num * 30 * 86400
-        num = int(period[:-1])
-        unit = period[-1]
-        if unit == "d":
-            return num * 86400
-        raise ValueError(f"Unsupported period: {period}")
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
-        retry=retry_if_exception_type(Exception),
-    )
-    def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
-        syms = symbols if isinstance(symbols, list | tuple) else [symbols]
-        now_ts = int(pytime.time())
-        span = self._parse_period(period)
-        start_ts = now_ts - span
-
-        resolution = "D" if interval == "1d" else "1"
-        frames = []
-        for sym in syms:
-            self._throttle()
-            resp = self.client.stock_candles(sym, resolution, _from=start_ts, to=now_ts)
-            if resp.get("s") != "ok":
-                logger.warning(f"[FH] no data for {sym}: status={resp.get('s')}")
-                frames.append(pd.DataFrame())
-                continue
-            idx = safe_to_datetime(resp["t"], context=f"Finnhub {sym}")
-            df = pd.DataFrame(
-                {
-                    "open": resp["o"],
-                    "high": resp["h"],
-                    "low": resp["l"],
-                    "close": resp["c"],
-                    "volume": resp["v"],
-                },
-                index=idx,
-            )
-            frames.append(df)
-
-        if not frames:
-            return pd.DataFrame()
-        if len(frames) == 1:
-            return frames[0]
-        return pd.concat(frames, axis=1, keys=syms, names=["Symbol", "Field"])
 
 
 _last_fh_prefetch_date: date | None = None
