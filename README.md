@@ -69,7 +69,7 @@ Use package imports:
 ```python
 from ai_trading.signals import generate_position_hold_signals
 from ai_trading.data_fetcher import get_minute_df
-from ai_trading.trade_execution import recent_buys
+from ai_trading.execution.engine import ExecutionEngine
 ```
 Root imports (e.g., `from signals import ...`) have been removed.
 
@@ -538,20 +538,23 @@ python -m ai_trading --strategy custom_momentum
 ```python
 # example_bot_usage.py
 import asyncio
-from bot_engine import run_all_trades_worker
-from trade_execution import execute_order_async
+from ai_trading.core.bot_engine import run_all_trades_worker
+from ai_trading.execution.engine import ExecutionEngine
+
+engine = ExecutionEngine()
 
 async def custom_trading_logic():
     """Example of programmatic trading."""
-    
+
     # Run analysis on specific symbols
     symbols = ['SPY', 'QQQ', 'IWM']
     results = run_all_trades_worker(symbols, dry_run=True)
-    
+
     # Execute trades based on results
     for symbol, analysis in results.items():
         if analysis['signal_strength'] > 0.8:
-            await execute_order_async(
+            await asyncio.to_thread(
+                engine.execute_order,
                 symbol=symbol,
                 quantity=analysis['recommended_shares'],
                 side='buy'
