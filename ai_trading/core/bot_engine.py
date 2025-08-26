@@ -2223,7 +2223,7 @@ def cancel_all_open_orders(runtime) -> None:
         return
 
     try:
-        open_orders = runtime.api.list_open_orders()
+        open_orders = runtime.api.list_orders(status="open")
         if not open_orders:
             return
         for od in open_orders:
@@ -4785,7 +4785,7 @@ def validate_open_orders(ctx: BotContext) -> None:
         )
         return
     try:
-        open_orders = ctx.api.list_open_orders()
+        open_orders = ctx.api.list_orders(status="open")
     except (
         FileNotFoundError,
         PermissionError,
@@ -12697,23 +12697,29 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             api = getattr(runtime, "api", None)
-            if not api or not hasattr(api, "list_open_orders"):
-                # Rate-limit the message to once (stable key)
+            if api is None:
                 logger_once.warning(
                     "ctx.api is None - Alpaca trading client unavailable",
                     key="alpaca_unavailable",
-                )  # AI-AGENT-REF: unify key to suppress duplicate banner
+                )
+                return
+            if not hasattr(api, "list_orders"):
+                logger_once.warning(
+                    "api missing list_orders method - Alpaca client incompatible",
+                    key="alpaca_list_orders_missing",
+                )
                 return
             try:
-                open_orders = api.list_open_orders()
+                open_orders = api.list_orders(status="open")
             except (
                 APIError,
                 TimeoutError,
                 ConnectionError,
                 AttributeError,
             ) as e:  # AI-AGENT-REF: tighten order check errors
-                logger.debug(
-                    "ORDER_CHECK_FAILED",
+                logger_once.warning(
+                    "api.list_orders failed during order check",
+                    key="alpaca_list_orders_failed",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
                 open_orders = []
