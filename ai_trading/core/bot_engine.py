@@ -3591,18 +3591,56 @@ def compute_spy_vol_stats(runtime) -> None:
             return
 
     symbol = REGIME_SYMBOLS[0]
+    required_rows = 252 + ATR_LENGTH
+    lookback_days = int((required_rows * 7) / 5) + 10
     max_attempts = 3
     backoff = 1
     df = None
     for attempt in range(1, max_attempts + 1):
         try:
-            df = runtime.data_fetcher.get_daily_df(runtime, symbol)
+            df = runtime.data_fetcher.get_daily_df(
+                runtime, symbol, lookback_days=lookback_days
+            )
+            rows = 0 if df is None else len(df)
+            logger.info(
+                "SPY_VOL_ROW_COUNTS",
+                extra={"required": required_rows, "received": rows},
+            )
+            if df is None or rows < required_rows:
+                logger.error(
+                    "SPY_VOL_INSUFFICIENT_DATA",
+                    extra={"required": required_rows, "received": rows},
+                )
+                df = None
+                break
             break
         except DataFetchError as e:
             logger.warning(
                 "SPY_VOL_FETCH_RETRY",
                 extra={"attempt": attempt, "symbol": symbol, "cause": str(e)},
             )
+            msg = str(e).lower()
+            if "no daily data" in msg or "failed to fetch daily data" in msg:
+                logger.error(
+                    "SPY_VOL_DATA_UNAVAILABLE",
+                    extra={"symbol": symbol, "attempts": attempt},
+                )
+                halt_mgr = getattr(runtime, "halt_manager", None)
+                if halt_mgr is not None:
+                    try:
+                        halt_mgr.manual_halt_trading("volatility data unavailable")
+                    except Exception as hm_exc:  # noqa: BLE001
+                        logger.error(
+                            "HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)}
+                        )
+                with vol_lock:
+                    if _VOL_STATS["mean"] is None:
+                        _VOL_STATS["mean"] = 0.0
+                    if _VOL_STATS["std"] is None:
+                        _VOL_STATS["std"] = 0.0
+                    if _VOL_STATS["last"] is None:
+                        _VOL_STATS["last"] = 0.0
+                return
             if attempt == max_attempts:
                 logger.error(
                     "SPY_VOL_DATA_UNAVAILABLE",
@@ -3626,7 +3664,7 @@ def compute_spy_vol_stats(runtime) -> None:
                 return
             time.sleep(backoff)
             backoff *= 2
-    if df is None or len(df) < 252 + ATR_LENGTH:
+    if df is None or len(df) < required_rows:
         raise DataFetchError("insufficient data for SPY volatility stats")
 
     # Compute ATR series for last 252 trading days
@@ -3791,7 +3829,12 @@ class DataFetcher:
             pass
         logger.warning(msg)
 
-    def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
+    def get_daily_df(
+        self,
+        ctx: BotContext,
+        symbol: str,
+        lookback_days: int | None = None,
+    ) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
 
@@ -3817,7 +3860,8 @@ class DataFetcher:
                             break
 
         end_ts = datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC) + timedelta(days=1)
-        start_ts = end_ts - timedelta(days=150)
+        lb_days = 150 if lookback_days is None else max(1, lookback_days)
+        start_ts = end_ts - timedelta(days=lb_days)
 
         logger.info(
             "DAILY_FETCH_REQUEST",
@@ -3847,18 +3891,23 @@ class DataFetcher:
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
                 cached = self._daily_cache[symbol]
-                logger.info(
-                    "DAILY_FETCH_RESULT",
-                    extra={
-                        "symbol": symbol,
-                        "timeframe": "1Day",
-                        "start": start_ts.isoformat(),
-                        "end": end_ts.isoformat(),
-                        "rows": 0 if cached is None else len(cached),
-                        "cache": True,
-                    },
-                )
-                return cached
+                if (
+                    lookback_days is None
+                    or cached is None
+                    or len(cached) >= lookback_days
+                ):
+                    logger.info(
+                        "DAILY_FETCH_RESULT",
+                        extra={
+                            "symbol": symbol,
+                            "timeframe": "1Day",
+                            "start": start_ts.isoformat(),
+                            "end": end_ts.isoformat(),
+                            "rows": 0 if cached is None else len(cached),
+                            "cache": True,
+                        },
+                    )
+                    return cached
 
         api_key = get_settings().alpaca_api_key
         api_secret = get_alpaca_secret_key_plain()
