@@ -1,5 +1,10 @@
 # ruff: noqa
 # fmt: off
+"""Trading bot core engine.
+
+This module uses ``pickle`` for regime model persistence; model paths are
+validated before deserialization.
+"""
 from __future__ import annotations
 
 import importlib
@@ -53,6 +58,7 @@ from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
 )
+from ai_trading.utils.pickle_safe import safe_pickle_load
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api.rest import APIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
@@ -10571,19 +10577,10 @@ def _initialize_regime_model(ctx=None):
         return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     elif os.path.exists(REGIME_MODEL_PATH):
         try:
-            with open(REGIME_MODEL_PATH, "rb") as f:
-                return pickle.load(f)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning(f"Failed to load regime model: {e}")
+            model_path = Path(REGIME_MODEL_PATH)
+            return safe_pickle_load(model_path, [model_path.parent])
+        except RuntimeError as e:  # AI-AGENT-REF: path-validated load
+            logger.warning("Failed to load regime model: %s", e)
             return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     else:
         if ctx is None:

@@ -1,9 +1,15 @@
+"""Meta-learning utilities and weight management helpers.
+
+This module uses ``pickle`` for model checkpoints and weights; paths are
+resolved and constrained before deserialization. Prefer :mod:`joblib` or
+``json`` for simple structures when possible.
+"""
+
 from importlib.util import find_spec
 from ai_trading.config import get_settings
 
 config = None
 SKLEARN_AVAILABLE = bool(find_spec("sklearn"))
-"Utility helpers for meta-learning weight management."
 import csv
 import json
 from ai_trading.logging import get_logger
@@ -15,6 +21,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from json import JSONDecodeError
+from tempfile import gettempdir
+
+from ai_trading.utils.pickle_safe import safe_pickle_load
+
+# Base directory for path validation
+BASE_DIR = Path(__file__).resolve().parents[1]
+ALLOWED_DIRS = [BASE_DIR, Path(gettempdir()).resolve()]
 
 # Optional heavy dependencies
 np = None  # type: ignore[var-annotated]
@@ -334,7 +347,9 @@ def volatility_regime_filter(atr: float, sma100: float) -> str:
 def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray":
     """Load signal weights array from ``path`` or return ``default``."""
     np_mod = _import_numpy()
-    p = Path(path)
+    p = Path(path).resolve()
+    if not any(p.is_relative_to(d) for d in ALLOWED_DIRS):
+        raise RuntimeError(f"weights path not allowed: {p}")
     if default is None:
         default = np_mod.zeros(0)
     try:
@@ -359,14 +374,12 @@ def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray"
             except (ValueError, OSError) as e:
                 logger.debug('CSV/numpy loading failed, trying pickle: %s', e)
                 try:
-                    with open(p, 'rb') as f:
-                        weights = pickle.load(f)
-                        if isinstance(weights, np.ndarray):
-                            logger.debug('Loaded weights from pickle: %s', path)
-                            return weights
-                        else:
-                            logger.warning('Invalid weights format in %s, using default', path)
-                except (pickle.PickleError, EOFError) as pickle_e:
+                    weights = safe_pickle_load(p, ALLOWED_DIRS)
+                    if isinstance(weights, np.ndarray):
+                        logger.debug('Loaded weights from pickle: %s', path)
+                        return weights
+                    logger.warning('Invalid weights format in %s, using default', path)
+                except RuntimeError as pickle_e:
                     logger.warning('Pickle loading also failed for %s: %s', path, pickle_e)
         else:
             logger.debug('Weights file %s not found, creating with default', path)
@@ -451,15 +464,18 @@ def save_model_checkpoint(model: Any, filepath: str) -> None:
 
 def load_model_checkpoint(filepath: str) -> Any | None:
     """Load a model from ``filepath`` previously saved with ``save_model_checkpoint``."""
-    p = Path(filepath)
+    p = Path(filepath).resolve()
+    if not any(p.is_relative_to(d) for d in ALLOWED_DIRS):
+        logger.error('Checkpoint path not allowed: %s', p)
+        return None
     if not p.exists():
-        logger.warning('Checkpoint file missing: %s', filepath)
+        logger.warning('Checkpoint file missing: %s', p)
+        return None
     try:
-        with open(filepath, 'rb') as f:
-            model = pickle.load(f)
-        logger.info('MODEL_CHECKPOINT_LOADED', extra={'path': filepath})
+        model = safe_pickle_load(p, ALLOWED_DIRS)
+        logger.info('MODEL_CHECKPOINT_LOADED', extra={'path': str(p)})
         return model
-    except (OSError, pickle.PickleError) as exc:
+    except RuntimeError as exc:
         logger.error('Failed to load model checkpoint: %s', exc, exc_info=True)
         return None
 

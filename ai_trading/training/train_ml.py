@@ -1,15 +1,22 @@
-"""
-Machine learning model training with purged cross-validation and Optuna optimization.
+"""Machine learning model training utilities.
 
-Provides training for LightGBM, XGBoost, and Ridge models with proper
-financial time series validation and hyperparameter optimization.
+Pickle is used for model checkpoints; paths are resolved and validated before
+deserialization. Consider safer formats like :mod:`joblib` or JSON for simpler
+objects.
 """
 import json
 import pickle
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
+from pathlib import Path
+from tempfile import gettempdir
+
 import numpy as np
 from ai_trading.logging import logger
+from ai_trading.utils.pickle_safe import safe_pickle_load
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+ALLOWED_DIRS = [BASE_DIR, Path(gettempdir()).resolve()]
 try:
     import importlib
     lgb = importlib.import_module('lightgbm')
@@ -239,17 +246,26 @@ class MLTrainer:
             metadata: Additional metadata to save
         """
         try:
-            model_file = f'{model_path}.pkl'
-            with open(model_file, 'wb') as f:
+            model_file = Path(f"{model_path}.pkl").resolve()
+            if not any(model_file.is_relative_to(d) for d in ALLOWED_DIRS):
+                raise RuntimeError(f"Model path not allowed: {model_file}")
+            with model_file.open('wb') as f:
                 pickle.dump(self.model, f)
-            meta_data = {'model_type': self.model_type, 'best_params': self.best_params, 'cv_results': self.cv_results, 'feature_importance': self.feature_importance, 'training_timestamp': datetime.now(UTC).isoformat(), 'random_state': self.random_state}
+            meta_data = {
+                'model_type': self.model_type,
+                'best_params': self.best_params,
+                'cv_results': self.cv_results,
+                'feature_importance': self.feature_importance,
+                'training_timestamp': datetime.now(UTC).isoformat(),
+                'random_state': self.random_state,
+            }
             if metadata:
                 meta_data.update(metadata)
-            meta_file = f'{model_path}_meta.json'
-            with open(meta_file, 'w') as f:
+            meta_file = model_file.with_name(model_file.stem + '_meta.json')
+            with meta_file.open('w') as f:
                 json.dump(meta_data, f, indent=2, default=str)
             logger.info(f'Model saved to {model_file}')
-        except (ValueError, TypeError) as e:
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.error(f'Error saving model: {e}')
             raise
 
@@ -265,15 +281,15 @@ class MLTrainer:
             Tuple of (model, metadata)
         """
         try:
-            model_file = f'{model_path}.pkl'
-            with open(model_file, 'rb') as f:
-                model = pickle.load(f)
-            meta_file = f'{model_path}_meta.json'
-            with open(meta_file) as f:
-                metadata = json.load(f)
+            model_file = Path(f"{model_path}.pkl").resolve()
+            if not any(model_file.is_relative_to(d) for d in ALLOWED_DIRS):
+                raise RuntimeError(f"Model path not allowed: {model_file}")
+            model = safe_pickle_load(model_file, ALLOWED_DIRS)
+            meta_file = model_file.with_name(model_file.stem + '_meta.json')
+            metadata = json.loads(meta_file.read_text())
             logger.info(f'Model loaded from {model_file}')
             return (model, metadata)
-        except (ValueError, TypeError) as e:
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.error(f'Error loading model: {e}')
             raise
 

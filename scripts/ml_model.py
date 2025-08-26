@@ -1,4 +1,8 @@
-"""Machine learning utilities for model training and inference."""
+"""Machine learning utilities for model training and inference.
+
+Models are serialized with :mod:`joblib` and paths are validated to reside
+within the local ``models`` directory.
+"""
 from __future__ import annotations
 import hashlib
 import importlib.util
@@ -98,27 +102,34 @@ class MLModel:
 
     def save(self, path: str | None=None) -> str:
         ts = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
-        model_dir = Path(__file__).parent / 'models'
+        model_dir = (Path(__file__).parent / 'models').resolve()
         path = Path(path) if path else model_dir / f'model_{ts}.pkl'
-        path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path = path.resolve()
+        if not abs_path.is_relative_to(model_dir):
+            raise RuntimeError(f'Model path outside allowed directory: {abs_path}')
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            joblib.dump(self.pipeline, str(path))
-            self.logger.info('MODEL_SAVED', extra={'path': str(path)})
+            joblib.dump(self.pipeline, abs_path)
+            self.logger.info('MODEL_SAVED', extra={'path': str(abs_path)})
         except (OSError, ValueError) as exc:
             self.logger.exception('MODEL_SAVE_FAILED: %s', exc)
             raise
-        return str(path)
+        return str(abs_path)
 
     @classmethod
     def load(cls, path: str) -> MLModel:
         """Deserialize a saved model from ``path`` and return an ``MLModel``."""
         import joblib
+        model_dir = (Path(__file__).parent / 'models').resolve()
+        abs_path = Path(path).resolve()
+        if not abs_path.is_relative_to(model_dir):
+            raise RuntimeError(f'Model path outside allowed directory: {abs_path}')
         try:
-            with open(path, 'rb') as f:
+            with abs_path.open('rb') as f:
                 data = f.read()
             digest = hashlib.sha256(data).hexdigest()
             pipeline = joblib.load(io.BytesIO(data))
-            logger.info('MODEL_LOADED', extra={'path': path, 'sha256': digest, 'version': getattr(pipeline, 'version', 'n/a')})
+            logger.info('MODEL_LOADED', extra={'path': str(abs_path), 'sha256': digest, 'version': getattr(pipeline, 'version', 'n/a')})
         except (OSError, ValueError, pickle.UnpicklingError) as exc:
             logger.exception('MODEL_LOAD_FAILED: %s', exc)
             raise
@@ -162,14 +173,21 @@ def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
 def save_model(model: Any, path: str) -> None:
     import joblib
     'Persist ``model`` to ``path``.\n\n    Parameters\n    ----------\n    model : Any\n        Trained model object supporting ``joblib`` serialization.\n    path : str\n        Filesystem location to write the model to.\n    '
-    p = Path(path)
+    model_dir = (Path(__file__).parent / 'models').resolve()
+    p = Path(path).resolve()
+    if not p.is_relative_to(model_dir):
+        raise RuntimeError(f'Model path outside allowed directory: {p}')
     p.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, str(p))
+    joblib.dump(model, p)
 
 def load_model(path: str) -> Any:
     import joblib
     'Load a model previously saved with ``save_model``.\n\n    Parameters\n    ----------\n    path : str\n        Filesystem path to the serialized model.\n\n    Returns\n    -------\n    Any\n        Deserialized model object.\n    '
-    return joblib.load(str(Path(path)))
+    model_dir = (Path(__file__).parent / 'models').resolve()
+    p = Path(path).resolve()
+    if not p.is_relative_to(model_dir):
+        raise RuntimeError(f'Model path outside allowed directory: {p}')
+    return joblib.load(p)
 
 def train_xgboost_with_optuna(X_train: Any, y_train: Any, X_val: Any, y_val: Any) -> Any:
     """Hyperparameter search for an XGBoost model using Optuna."""

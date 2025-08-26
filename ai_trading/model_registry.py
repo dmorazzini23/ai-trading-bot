@@ -1,6 +1,8 @@
 from ai_trading.logging import get_logger
-"""
-Clean model registry for storage, versioning, and retrieval with metadata.
+"""Clean model registry for storage, versioning, and retrieval.
+
+This module persists arbitrary model objects using ``pickle``. Paths are
+validated before loading to guard against unsafe deserialization.
 """
 from __future__ import annotations
 import hashlib
@@ -10,6 +12,8 @@ import pickle
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from ai_trading.utils.pickle_safe import safe_pickle_load
 try:
     from ai_trading.logging import logger
 except (ValueError, TypeError):
@@ -19,11 +23,11 @@ except (ValueError, TypeError):
 class ModelRegistry:
     """Centralized registry for trained models."""
 
-    def __init__(self, base_path: str | None=None):
-        base = base_path or os.getenv('MODEL_REGISTRY_DIR') or Path.cwd() / 'models'
-        self.base_path = Path(base)
+    def __init__(self, base_path: str | None = None):
+        base = base_path or os.getenv("MODEL_REGISTRY_DIR") or Path.cwd() / "models"
+        self.base_path = Path(base).resolve()
         self.base_path.mkdir(parents=True, exist_ok=True)
-        self.index_file = self.base_path / 'registry_index.json'
+        self.index_file = self.base_path / "registry_index.json"
         self.model_index: dict[str, dict[str, Any]] = self._load_index()
         logger.info('ModelRegistry initialized at %s', self.base_path)
 
@@ -54,9 +58,11 @@ class ModelRegistry:
         if dataset_fingerprint:
             id_components.append(dataset_fingerprint[:16])
         model_id = '-'.join(id_components)
-        model_dir = self.base_path / model_id
+        model_dir = (self.base_path / model_id).resolve()
+        if not model_dir.is_relative_to(self.base_path):
+            raise RuntimeError(f"Model path escapes base directory: {model_dir}")
         model_dir.mkdir(parents=True, exist_ok=True)
-        (model_dir / 'model.pkl').write_bytes(blob)
+        (model_dir / "model.pkl").write_bytes(blob)
         meta = {'strategy': strategy, 'model_type': model_type, 'registration_time': datetime.now(UTC).isoformat(), 'dataset_fingerprint': dataset_fingerprint, 'tags': tags or []}
         if metadata:
             meta.update(metadata)
@@ -68,13 +74,15 @@ class ModelRegistry:
 
     def load_model(self, model_id: str, verify_dataset_hash: bool=False, expected_dataset_fingerprint: str | None=None) -> tuple[Any, dict[str, Any]]:
         """Return (model, metadata); optionally verify dataset fingerprint."""
-        model_dir = self.base_path / model_id
-        model_path = model_dir / 'model.pkl'
-        meta_path = model_dir / 'meta.json'
+        model_dir = (self.base_path / model_id).resolve()
+        if not model_dir.is_relative_to(self.base_path):
+            raise RuntimeError(f"Model path escapes base directory: {model_dir}")
+        model_path = model_dir / "model.pkl"
+        meta_path = model_dir / "meta.json"
         if not model_path.exists() or not meta_path.exists():
-            raise FileNotFoundError(f'Model {model_id} not found in registry')
-        model = pickle.loads(model_path.read_bytes())
-        meta = json.loads(meta_path.read_text(encoding='utf-8'))
+            raise FileNotFoundError(f"Model {model_id} not found in registry")
+        model = safe_pickle_load(model_path, [self.base_path])
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         if verify_dataset_hash and expected_dataset_fingerprint:
             got = meta.get('dataset_fingerprint')
             if got != expected_dataset_fingerprint:
