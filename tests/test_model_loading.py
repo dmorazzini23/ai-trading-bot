@@ -65,5 +65,14 @@ def test_missing_model_file_fallback(monkeypatch, tmp_path, caplog):
     caplog.set_level("WARNING")
     be = reload_bot_engine()
     assert be.USE_ML is False
-    assert "ML_MODEL_MISSING" in caplog.text
+    assert any(r.levelname == "WARNING" and "ML_" in r.msg for r in caplog.records)
+
+
+def test_default_model_missing_no_warning(monkeypatch, caplog):
+    monkeypatch.delenv("AI_TRADER_MODEL_PATH", raising=False)
+    monkeypatch.delenv("AI_TRADER_MODEL_MODULE", raising=False)
+    caplog.set_level("WARNING")
+    be = reload_bot_engine()
+    assert be.USE_ML is False
+    assert "ML_MODEL_MISSING" not in caplog.text
 
