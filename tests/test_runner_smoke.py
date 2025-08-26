@@ -23,6 +23,7 @@ def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runne
         "tools/run_pytest.py",
         "--disable-warnings",
         "-q",
+        "--files",
         "tests/test_utils_timing.py",
         "tests/test_trading_config_aliases.py",
     ]
