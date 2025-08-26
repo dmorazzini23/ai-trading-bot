@@ -4,6 +4,7 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from dataclasses import dataclass
 from ai_trading.env import ensure_dotenv_loaded
 from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -261,3 +262,13 @@ def get_seed_int(default: int=42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: stable default accessor
     s = get_settings()
     return _to_int(getattr(s, 'ai_trading_seed', default), default)
+
+
+@dataclass
+class TradingConfig:
+    """Minimal trading config exposing max_position_size for runtime helpers."""
+
+    capital_cap: float = 0.04
+    dollar_risk_limit: float = 0.05
+    max_position_size: float | None = None
+
