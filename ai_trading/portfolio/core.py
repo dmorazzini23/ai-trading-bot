@@ -1,7 +1,20 @@
+from __future__ import annotations
+
 import logging
 import threading
-import pandas as pd
-from ai_trading.data.bars import StockBarsRequest, TimeFrame, TimeFrameUnit, _ensure_df, empty_bars_dataframe, safe_get_stock_bars
+from typing import TYPE_CHECKING
+
+from ai_trading.data.bars import (
+    StockBarsRequest,
+    TimeFrame,
+    TimeFrameUnit,
+    _ensure_df,
+    empty_bars_dataframe,
+    safe_get_stock_bars,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - import only for typing
+    import pandas as pd
 logger = logging.getLogger(__name__)
 _portfolio_lock = threading.RLock()
 
@@ -19,19 +32,38 @@ def _last_close_from(df: pd.DataFrame) -> float | None:
 
 def get_latest_price(ctx, symbol: str) -> float | None:
     """Return latest price using daily bars with minute fallback."""
+    import pandas as pd
+
     df_day = _ensure_df(ctx.data_fetcher.get_daily_df(ctx, symbol))
     price = _last_close_from(df_day)
     if price is not None:
         return price
-    now_utc = pd.Timestamp.now(tz='UTC')
+    now_utc = pd.Timestamp.now(tz="UTC")
     start_iso = (now_utc.normalize() - pd.Timedelta(days=1)).isoformat()
     end_iso = (now_utc + pd.Timedelta(minutes=1)).isoformat()
     try:
-        req = StockBarsRequest(symbol_or_symbols=[symbol], timeframe=TimeFrame(1, TimeFrameUnit.Minute), start=start_iso, end=end_iso, feed='iex')
-        df_min = _ensure_df(safe_get_stock_bars(getattr(ctx, 'data_client', None), req, symbol, 'PRICE_SNAPSHOT'))
+        req = StockBarsRequest(
+            symbol_or_symbols=[symbol],
+            timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+            start=start_iso,
+            end=end_iso,
+            feed="iex",
+        )
+        df_min = _ensure_df(
+            safe_get_stock_bars(
+                getattr(ctx, "data_client", None), req, symbol, "PRICE_SNAPSHOT"
+            )
+        )
         if df_min.empty:
-            req.feed = 'sip'
-            df_min = _ensure_df(safe_get_stock_bars(getattr(ctx, 'data_client', None), req, symbol, 'PRICE_SNAPSHOT_SIP'))
+            req.feed = "sip"
+            df_min = _ensure_df(
+                safe_get_stock_bars(
+                    getattr(ctx, "data_client", None),
+                    req,
+                    symbol,
+                    "PRICE_SNAPSHOT_SIP",
+                )
+            )
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError):
         df_min = pd.DataFrame()
     return _last_close_from(df_min)
@@ -69,9 +101,10 @@ def log_portfolio_summary(ctx) -> None:
     """Log cash, equity, exposure and position summary."""
     try:
         import signal
+        import pandas as pd
 
         def timeout_handler(signum, frame):
-            raise TimeoutError('API call timed out')
+            raise TimeoutError("API call timed out")
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(10)
         try:
