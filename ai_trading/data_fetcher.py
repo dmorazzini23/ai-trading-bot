@@ -358,8 +358,13 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
             raise ValueError('Invalid feed or bad request')
         if status in (401, 403):
             _incr('data.fetch.unauthorized', value=1.0, tags=_tags())
-            logger.warning('UNAUTHORIZED_SIP' if _feed == 'sip' else 'DATA_SOURCE_UNAUTHORIZED', extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}))
-            if _feed == 'sip' and fallback:
+            logger.warning(
+                'UNAUTHORIZED_SIP' if _feed == 'sip' else 'DATA_SOURCE_UNAUTHORIZED',
+                extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}),
+            )
+            if _feed == 'sip':
+                return pd.DataFrame()
+            if fallback:
                 _interval, _feed, _start, _end = fallback
                 _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)

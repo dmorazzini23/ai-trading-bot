@@ -291,6 +291,27 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
             extra={"endpoint": "alpaca/bars", "feed": feed, "symbols": symbols, "errors": errors},
         )
         raise DataFetchError("data health check failed")
+
+
+def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, pd.DataFrame]:
+    """Fetch daily bars for ``symbols`` and return mapping of symbol to DataFrame.
+
+    Symbols returning empty data or raising :class:`ValueError` are skipped so
+    callers can continue operating with the remaining symbols.  This gracefully
+    degrades when certain feeds (e.g., SIP without authorization) provide no
+    data.
+    """
+
+    results: dict[str, pd.DataFrame] = {}
+    for sym in symbols:
+        try:
+            df = get_bars_df(sym, TimeFrame.Day, feed=feed)
+        except ValueError:
+            continue
+        if df is None or df.empty:
+            continue
+        results[sym] = df
+    return results
 import asyncio
 import atexit
 import hashlib  # AI-AGENT-REF: model hash helper
