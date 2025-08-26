@@ -61,11 +61,48 @@ except (KeyError, ValueError, TypeError):
             pass
     Gauge = Counter = Histogram = Summary = _NoopMetric
     start_http_server = _noop_start_http_server
-from ai_trading.monitoring.metrics import calculate_atr, safe_divide
+
+
+_calculate_atr = None
+_safe_divide = None
+
+
+def calculate_atr(*args, **kwargs):
+    """Lazy import wrapper for ``monitoring.metrics.calculate_atr``."""
+    global _calculate_atr
+    if _calculate_atr is None:  # pragma: no cover - simple cache
+        from ai_trading.monitoring.metrics import (
+            calculate_atr as _calculate_atr_fn,
+        )
+        _calculate_atr = _calculate_atr_fn
+    return _calculate_atr(*args, **kwargs)
+
+
+def safe_divide(*args, **kwargs):
+    """Lazy import wrapper for ``monitoring.metrics.safe_divide``."""
+    global _safe_divide
+    if _safe_divide is None:  # pragma: no cover - simple cache
+        from ai_trading.monitoring.metrics import (
+            safe_divide as _safe_divide_fn,
+        )
+        _safe_divide = _safe_divide_fn
+    return _safe_divide(*args, **kwargs)
 
 def compute_basic_metrics(data):
     """Return minimal metrics dict."""
     if hasattr(data, 'empty') and data.empty:
         return {'sharpe': 0.0, 'max_drawdown': 0.0}
     return {'sharpe': 0.0, 'max_drawdown': 0.0}
-__all__ = ['PROMETHEUS_AVAILABLE', 'REGISTRY', 'CollectorRegistry', 'Gauge', 'Counter', 'Histogram', 'Summary', 'start_http_server', 'safe_divide', 'calculate_atr', 'compute_basic_metrics']
+__all__ = [
+    'PROMETHEUS_AVAILABLE',
+    'REGISTRY',
+    'CollectorRegistry',
+    'Gauge',
+    'Counter',
+    'Histogram',
+    'Summary',
+    'start_http_server',
+    'safe_divide',
+    'calculate_atr',
+    'compute_basic_metrics',
+]
