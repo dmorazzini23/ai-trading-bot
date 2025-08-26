@@ -6,7 +6,7 @@ import importlib
 import importlib.util
 import os
 import sys
-from typing import Any, Dict, Iterable, TYPE_CHECKING
+from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property
 
@@ -60,7 +60,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         """Fallback APIError when alpaca-trade-api is unavailable."""
 
         pass
-from ai_trading.config.management import derive_cap_from_settings
+from ai_trading.config.management import derive_cap_from_settings, get_env
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
@@ -302,6 +302,19 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
 
+def _mask_env_name(name: str) -> str:
+    return f"{name[:8]}***"
+
+
+def _get_env_str(key: str) -> str:
+    try:
+        return cast(str, get_env(key, required=True))
+    except RuntimeError as e:  # noqa: BLE001
+        masked = _mask_env_name(key)
+        _log.error("Missing required environment variable: %s", masked)
+        raise RuntimeError(f"Missing required environment variable: {masked}") from e
+
+
 class BotEngine:
     """Minimal engine exposing memoized Alpaca clients."""
 
@@ -314,9 +327,9 @@ class BotEngine:
         from alpaca_trade_api import REST  # type: ignore
 
         return REST(
-            key_id=os.environ["ALPACA_API_KEY"],
-            secret_key=os.environ["ALPACA_SECRET_KEY"],
-            base_url=os.environ["ALPACA_BASE_URL"],
+            key_id=_get_env_str("ALPACA_API_KEY"),
+            secret_key=_get_env_str("ALPACA_SECRET_KEY"),
+            base_url=_get_env_str("ALPACA_BASE_URL"),
         )
 
     @cached_property
@@ -325,9 +338,9 @@ class BotEngine:
         from alpaca_trade_api import REST  # type: ignore
 
         return REST(
-            key_id=os.environ["ALPACA_API_KEY"],
-            secret_key=os.environ["ALPACA_SECRET_KEY"],
-            base_url=os.environ["ALPACA_BASE_URL"],
+            key_id=_get_env_str("ALPACA_API_KEY"),
+            secret_key=_get_env_str("ALPACA_SECRET_KEY"),
+            base_url=_get_env_str("ALPACA_BASE_URL"),
         )
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
