@@ -348,6 +348,9 @@ For comprehensive development environment setup, see [**docs/DEVELOPMENT.md**](d
 ### Quick Start Trading
 
 ```bash
+# Verify environment and imports only
+python -m ai_trading --dry-run
+
 # Start the bot with default settings
 python -m ai_trading
 

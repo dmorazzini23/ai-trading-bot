@@ -276,6 +276,13 @@ class RiskMetrics:
 | `--paper` / `--live` | Select paper (default) or live trading |
 
 
+Example dry run:
+
+```bash
+python -m ai_trading --dry-run
+```
+
+
 The Alpaca SDK is imported lazily; runtime preflight checks will terminate the process if `alpaca-trade-api` is unavailable.
 The trading engine honors `AI_TRADER_CONF_THRESHOLD` (default **0.75**) to require a minimum model confidence before executing a trade.
 
@@ -290,6 +297,13 @@ GET http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 ```
 
 Available when `RUN_HEALTHCHECK=1` on `$HEALTHCHECK_PORT` (default **9001**); always returns JSON and must never 500.
+
+Example:
+
+```bash
+RUN_HEALTHCHECK=1 python -m ai_trading.app &
+curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
+```
 
 **Response:**
 ```json
