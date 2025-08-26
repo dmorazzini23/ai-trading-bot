@@ -22,7 +22,6 @@ sys.modules["tzlocal"] = tzlocal_mod
 # Stub internal modules pulled in by bot_engine imports we don't exercise
 df_stub = types.ModuleType("ai_trading.data_fetcher")
 df_stub.get_bars = df_stub.get_bars_batch = lambda *a, **k: []
-df_stub.get_minute_bars = df_stub.get_minute_bars_batch = lambda *a, **k: []
 df_stub.warmup_cache = lambda *a, **k: None
 df_stub.get_minute_df = lambda *a, **k: None
 sys.modules["ai_trading.data_fetcher"] = df_stub
