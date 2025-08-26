@@ -1,9 +1,14 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ai_trading.utils.lazy_imports import load_pandas
 
-def _safe_series(x: 'pd.Series | None', size: int, fill: float = 0.0) -> 'pd.Series':
+if TYPE_CHECKING:
+    import numpy as np
+    import pandas as pd
+
+def _safe_series(x: pd.Series | None, size: int, fill: float = 0.0) -> pd.Series:
     pd = load_pandas()
     if x is None:
         return pd.Series([fill] * size)
@@ -12,7 +17,7 @@ def _safe_series(x: 'pd.Series | None', size: int, fill: float = 0.0) -> 'pd.Ser
         return x.tail(size)
     return pd.concat([pd.Series([fill] * (size - len(x))), x], ignore_index=True)
 
-def rsi(close: 'pd.Series', length: int = 14) -> 'pd.Series':
+def rsi(close: pd.Series, length: int = 14) -> pd.Series:
     pd = load_pandas()
     import numpy as np
 
@@ -25,7 +30,7 @@ def rsi(close: 'pd.Series', length: int = 14) -> 'pd.Series':
     rs = au / (ad + 1e-12)
     return 100.0 - 100.0 / (1.0 + rs)
 
-def atr(high: 'pd.Series', low: 'pd.Series', close: 'pd.Series', length: int = 14) -> 'pd.Series':
+def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
     pd = load_pandas()
 
     high = pd.to_numeric(high, errors='coerce')
@@ -35,7 +40,7 @@ def atr(high: 'pd.Series', low: 'pd.Series', close: 'pd.Series', length: int = 1
     tr = pd.concat([(high - low).abs(), (high - pc).abs(), (low - pc).abs()], axis=1).max(axis=1)
     return tr.ewm(alpha=1 / length, adjust=False).mean()
 
-def vwap_bias(close, high, low, volume, length: int = 20) -> 'pd.Series':
+def vwap_bias(close, high, low, volume, length: int = 20) -> pd.Series:
     pd = load_pandas()
     import numpy as np
 
@@ -50,7 +55,7 @@ def vwap_bias(close, high, low, volume, length: int = 20) -> 'pd.Series':
     diff = (close - vwap) / (np.abs(vwap) + 1e-12)
     return np.tanh(diff)
 
-def bollinger_position(close: 'pd.Series', length: int = 20, nstd: float = 2.0) -> 'pd.Series':
+def bollinger_position(close: pd.Series, length: int = 20, nstd: float = 2.0) -> pd.Series:
     pd = load_pandas()
     import numpy as np
 
@@ -63,7 +68,7 @@ def bollinger_position(close: 'pd.Series', length: int = 20, nstd: float = 2.0) 
     pos = (close - ma) / (rng + 1e-12)
     return pos.clip(-1.0, 1.0).fillna(0.0)
 
-def obv(close: 'pd.Series', volume: 'pd.Series') -> 'pd.Series':
+def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     pd = load_pandas()
     import numpy as np
 
@@ -76,7 +81,7 @@ def obv(close: 'pd.Series', volume: 'pd.Series') -> 'pd.Series':
 class FeatureConfig:
     window: int = 64
 
-def compute_features(df: 'pd.DataFrame', cfg: FeatureConfig | None = None) -> 'np.ndarray':
+def compute_features(df: pd.DataFrame, cfg: FeatureConfig | None = None) -> np.ndarray:
     pd = load_pandas()
     import numpy as np
 

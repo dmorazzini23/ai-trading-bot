@@ -277,6 +277,7 @@ class RiskMetrics:
 
 
 The Alpaca SDK is imported lazily; runtime preflight checks will terminate the process if `alpaca-trade-api` is unavailable.
+The trading engine honors `AI_TRADER_CONF_THRESHOLD` (default **0.75**) to require a minimum model confidence before executing a trade.
 
 ## Web Interface APIs
 

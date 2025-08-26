@@ -9,10 +9,14 @@ from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import numpy as np
+    import pandas as pd
 
 logger = get_logger(__name__)
 
@@ -163,7 +167,7 @@ class ParallelProcessor:
                     results[chunk_index] = None
         return results
 
-    def parallel_indicators(self, price_data: 'pd.DataFrame', indicator_configs: list[dict[str, Any]]) -> 'pd.DataFrame':
+    def parallel_indicators(self, price_data: pd.DataFrame, indicator_configs: list[dict[str, Any]]) -> pd.DataFrame:
         """
         Calculate technical indicators in parallel.
 
@@ -180,7 +184,7 @@ class ParallelProcessor:
         chunk_size = max(1, len(indicator_configs) // self.max_workers)
         indicator_chunks = [indicator_configs[i:i + chunk_size] for i in range(0, len(indicator_configs), chunk_size)]
 
-        def calculate_indicator_chunk(configs: list[dict[str, Any]]) -> 'pd.DataFrame':
+        def calculate_indicator_chunk(configs: list[dict[str, Any]]) -> pd.DataFrame:
             """Calculate indicators for a chunk of configs."""
             chunk_results = pd.DataFrame()
             for config in configs:
@@ -210,7 +214,7 @@ class VectorizedOperations:
     """
 
     @staticmethod
-    def rolling_zscore(series: 'pd.Series', window: int) -> 'pd.Series':
+    def rolling_zscore(series: pd.Series, window: int) -> pd.Series:
         """
         Fast rolling z-score calculation.
 
@@ -228,7 +232,7 @@ class VectorizedOperations:
         return zscore
 
     @staticmethod
-    def rolling_correlation(x: 'pd.Series', y: 'pd.Series', window: int) -> 'pd.Series':
+    def rolling_correlation(x: pd.Series, y: pd.Series, window: int) -> pd.Series:
         """
         Fast rolling correlation calculation.
 
@@ -247,7 +251,7 @@ class VectorizedOperations:
         return aligned_data['x'].rolling(window).corr(aligned_data['y'])
 
     @staticmethod
-    def fast_returns(prices: 'pd.Series', periods: int=1) -> 'pd.Series':
+    def fast_returns(prices: pd.Series, periods: int=1) -> pd.Series:
         """
         Fast return calculation using vectorized operations.
 
@@ -268,7 +272,7 @@ class VectorizedOperations:
         return pd.Series(returns, index=prices.index)
 
     @staticmethod
-    def batch_technical_indicators(price_data: 'pd.DataFrame', window_sizes: list[int]) -> 'pd.DataFrame':
+    def batch_technical_indicators(price_data: pd.DataFrame, window_sizes: list[int]) -> pd.DataFrame:
         """
         Batch calculation of common technical indicators.
 
