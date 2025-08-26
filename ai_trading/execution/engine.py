@@ -5,7 +5,6 @@ Provides order lifecycle management, execution algorithms,
 and real-time execution monitoring with institutional controls.
 """
 from __future__ import annotations
-import logging
 from ai_trading.logging import get_logger
 import math
 import threading

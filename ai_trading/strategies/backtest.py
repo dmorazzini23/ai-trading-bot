@@ -4,7 +4,6 @@ Backtesting engine and performance analysis for strategies.
 Provides comprehensive backtesting capabilities and
 performance analysis for institutional trading strategies.
 """
-import logging
 import math
 import random
 import statistics
@@ -291,19 +290,19 @@ def run_smoke_test():
     This validates that the cost model properly reduces net P&L
     compared to gross P&L when all costs are included.
     """
-    logging.info('=== Backtest Smoke Test ===')
-    logging.info('Testing that net < gross due to all costs')
+    logger.info('=== Backtest Smoke Test ===')
+    logger.info('Testing that net < gross due to all costs')
     try:
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).parent.parent / 'math'))
         from money import Money
-        logging.info('Simulating backtest with costs')
+        logger.info('Simulating backtest with costs')
         entry_price = Money('100.00')
         exit_price = Money('102.00')
         quantity = 100
         gross_pnl = (exit_price - entry_price) * quantity
-        logging.info(f'Gross P&L: ${gross_pnl}')
+        logger.info(f'Gross P&L: ${gross_pnl}')
         position_value = entry_price * quantity
         execution_cost_bps = 5.0
         execution_cost = position_value * (execution_cost_bps / 10000)
@@ -312,23 +311,23 @@ def run_smoke_test():
         commission = Money('2.00')
         total_costs = execution_cost + overnight_cost + commission
         net_pnl = gross_pnl - total_costs
-        logging.info(f'Execution cost (5 bps): ${execution_cost}')
-        logging.info(f'Overnight cost (2 bps): ${overnight_cost}')
-        logging.info(f'Commission: ${commission}')
-        logging.info(f'Total costs: ${total_costs}')
-        logging.info(f'Net P&L: ${net_pnl}')
+        logger.info(f'Execution cost (5 bps): ${execution_cost}')
+        logger.info(f'Overnight cost (2 bps): ${overnight_cost}')
+        logger.info(f'Commission: ${commission}')
+        logger.info(f'Total costs: ${total_costs}')
+        logger.info(f'Net P&L: ${net_pnl}')
         if net_pnl >= gross_pnl:
             raise AssertionError(f'Net P&L ({net_pnl}) should be less than gross P&L ({gross_pnl})')
         cost_drag_bps = total_costs / position_value * 10000
-        logging.info(f'Total cost drag: {cost_drag_bps:.1f} bps')
+        logger.info(f'Total cost drag: {cost_drag_bps:.1f} bps')
         if cost_drag_bps < 5.0:
             raise AssertionError(f'Cost drag ({cost_drag_bps:.1f} bps) seems too low')
-        logging.info('✓ Net P&L is correctly less than gross P&L due to costs')
-        logging.info(f'✓ Cost drag of {cost_drag_bps:.1f} bps is realistic')
-        logging.info('✓ Backtest smoke test passed!')
+        logger.info('✓ Net P&L is correctly less than gross P&L due to costs')
+        logger.info(f'✓ Cost drag of {cost_drag_bps:.1f} bps is realistic')
+        logger.info('✓ Backtest smoke test passed!')
         return True
     except (ValueError, TypeError) as e:
-        logging.error(f'✗ Backtest smoke test failed: {e}')
+        logger.error(f'✗ Backtest smoke test failed: {e}')
         return False
 if __name__ == '__main__':
     import argparse
@@ -340,4 +339,4 @@ if __name__ == '__main__':
         success = run_smoke_test()
         sys.exit(0 if success else 1)
     else:
-        logging.info('Backtest module. Use --smoke to run smoke test.')
+        logger.info('Backtest module. Use --smoke to run smoke test.')

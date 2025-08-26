@@ -822,7 +822,7 @@ def check_symbol(symbol: str, api: Any) -> bool:
         path = os.path.join("data", f"{symbol}.csv")
         df = pd.read_csv(path)
     except COMMON_EXC as exc:
-        logging.warning("Health check fetch failed for %s: %s", symbol, exc)
+        logger.warning("Health check fetch failed for %s: %s", symbol, exc)
         return False
     return health_check(df, "daily")
 
@@ -845,7 +845,7 @@ def pre_trade_health_check(symbols: list[str], api: Any) -> dict[str, bool]:
         ok = check_symbol(sym, api)
         symbol_health[sym] = ok
         if not ok:
-            logging.warning(f"Health check skipped for {sym}: insufficient data")
+            logger.warning(f"Health check skipped for {sym}: insufficient data")
     return symbol_health
 
 
