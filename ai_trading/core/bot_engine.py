@@ -159,12 +159,16 @@ def ensure_alpaca_attached(ctx) -> None:
             e,
             key="alpaca_client_init_failed",
         )
+        if not is_shadow_mode():
+            raise RuntimeError("Alpaca client initialization failed") from e
         return
     global trading_client
     if trading_client is None:
         logger_once.error(
             "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
         )
+        if not is_shadow_mode():
+            raise RuntimeError("Alpaca client missing after initialization")
         return
     if hasattr(ctx, "_ensure_initialized"):
         try:
@@ -184,6 +188,8 @@ def ensure_alpaca_attached(ctx) -> None:
         logger_once.error(
             "FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed"
         )
+        if not is_shadow_mode():
+            raise RuntimeError("Failed to attach Alpaca client to context")
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25

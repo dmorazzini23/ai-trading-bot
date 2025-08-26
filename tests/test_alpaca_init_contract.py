@@ -87,6 +87,23 @@ def test_ctx_api_attached_after_initialization(monkeypatch):
     assert getattr(ctx, "api", None) is not None
 
 
+def test_ensure_alpaca_attached_raises_without_creds(monkeypatch):
+    """ensure_alpaca_attached raises when clients cannot be initialized."""
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
+    monkeypatch.setenv("PYTEST_RUNNING", "true")
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+
+    import ai_trading.core.bot_engine as eng
+    eng.trading_client = None
+
+    ctx = types.SimpleNamespace()
+    with pytest.raises(RuntimeError):
+        eng.ensure_alpaca_attached(ctx)
+
+
 def test_safe_get_account_attaches_client(monkeypatch):
     """safe_alpaca_get_account attaches a client and returns an account."""
     pytest.importorskip("alpaca_trade_api")
