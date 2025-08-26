@@ -154,16 +154,9 @@ except Exception:
     def elapsed_ms(start: float) -> float:  # AI-AGENT-REF: fallback timer
         return (_t.perf_counter() - start) * 1000.0
 
-try:
-    import pandas as pd
-except Exception:  # pragma: no cover - optional for smoke
-    pd = None  # AI-AGENT-REF: allow pandas absence for smoke
-
-
 @pytest.fixture
 def dummy_data_fetcher():
-    if pd is None:
-        pytest.skip("pandas required")  # AI-AGENT-REF: optional dep
+    pd = pytest.importorskip("pandas")
 
     class DF:
         def get_minute_bars(self, symbol, start=None, end=None, limit=None):
@@ -178,8 +171,11 @@ def dummy_data_fetcher():
 
 @pytest.fixture
 def dummy_data_fetcher_empty():
+    pd = pytest.importorskip("pandas")
+
     class DF:
         def get_minute_bars(self, symbol, start=None, end=None, limit=None):
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
     return DF()
 

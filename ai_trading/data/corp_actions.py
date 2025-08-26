@@ -4,12 +4,17 @@ Corporate actions adjustment pipeline for unified price/volume adjustments.
 Provides single source of truth for corporate action adjustments used by
 features, labels, and execution sizing to ensure consistency.
 """
+from __future__ import annotations
+
 import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
-import pandas as pd
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import only for typing
+    import pandas as pd
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -194,7 +199,9 @@ def get_corp_action_registry() -> CorporateActionRegistry:
         _global_registry = CorporateActionRegistry()
     return _global_registry
 
-def adjust_bars(bars: pd.DataFrame, symbol: str, reference_date: date | None=None) -> pd.DataFrame:
+def adjust_bars(
+    bars: pd.DataFrame, symbol: str, reference_date: date | None = None
+) -> pd.DataFrame:
     """
     Adjust OHLCV bars for corporate actions.
     
@@ -206,6 +213,8 @@ def adjust_bars(bars: pd.DataFrame, symbol: str, reference_date: date | None=Non
     Returns:
         DataFrame with adjusted OHLCV data
     """
+    import pandas as pd
+
     if bars.empty:
         return bars
     registry = get_corp_action_registry()

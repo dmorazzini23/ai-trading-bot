@@ -9,6 +9,8 @@ Make precise, minimal edits with first-pass correctness. Do not change strategy 
 - **No `except Exception:`** catch-alls; use specific exceptions.
 - **No global `ctx`**; use `runtime` everywhere (may alias `ctx = runtime` locally inside a single function if needed).
 - Preserve **structured JSON logging**.
+- Gate heavy libraries (e.g. `pandas`) inside functions; tests importing them must call
+  `pytest.importorskip("pandas")`.
 
 ## Edit Playbook
 1. **Search first**: locate function by name, not line numbers.
