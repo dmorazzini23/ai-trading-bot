@@ -7,7 +7,30 @@ import pytest
 pytest.importorskip("alpaca_trade_api")
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from shim module
-from ai_trading.core.bot_engine import prepare_indicators
+import os
+
+os.environ.setdefault("ALPACA_API_KEY", "x")
+os.environ.setdefault("ALPACA_SECRET_KEY", "x")
+os.environ.setdefault("ALPACA_BASE_URL", "https://example.com")
+os.environ.setdefault("WEBHOOK_SECRET", "x")
+
+import alpaca_trade_api.rest as _alpaca_rest
+
+_MISSING = [
+    "StockLatestQuoteRequest",
+    "Quote",
+    "OrderSide",
+    "OrderStatus",
+    "TimeInForce",
+    "Order",
+    "MarketOrderRequest",
+]
+
+for _name in _MISSING:
+    if not hasattr(_alpaca_rest, _name):
+        setattr(_alpaca_rest, _name, type(_name, (), {"__init__": lambda self, *a, **k: None}))  # pragma: no cover - stubs
+
+from ai_trading.core.bot_engine import BotEngine, prepare_indicators
 
 np.random.seed(0)
 
@@ -46,6 +69,29 @@ def test_prepare_indicators_insufficient_data():
     result = prepare_indicators(df.copy())
 
     assert result.empty or result.shape[0] == 0
+
+
+@pytest.mark.parametrize("attr", ["trading_client", "data_client"])
+@pytest.mark.parametrize(
+    "missing_key",
+    ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"],
+)
+def test_bot_engine_missing_env(monkeypatch, caplog, attr, missing_key):
+    """BotEngine properties should raise informative errors when env vars are missing."""
+
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
+    monkeypatch.delenv(missing_key, raising=False)
+    engine = BotEngine()
+    caplog.set_level("ERROR")
+
+    with pytest.raises(RuntimeError) as exc:
+        getattr(engine, attr)
+
+    masked = f"{missing_key[:8]}***"
+    assert masked in str(exc.value)
+    assert any(masked in rec.getMessage() for rec in caplog.records)
 
 
 def test_prepare_indicators_all_nan_columns():

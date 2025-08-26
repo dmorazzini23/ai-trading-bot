@@ -18,8 +18,8 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
-from ai_trading.monitoring.system_health import snapshot_basic
 from ai_trading.settings import get_verbose_logging
+from ai_trading.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd  # pylint: disable=unused-import
@@ -93,6 +93,10 @@ def get_phase_logger(name: str, phase: str) -> logging.Logger:
 
 def log_cpu_usage(lg: logging.Logger, note: str | None = None) -> None:
     """Log current CPU usage using optional psutil snapshot."""
+    try:
+        from ai_trading.monitoring.system_health import snapshot_basic
+    except ImportError:  # pragma: no cover - psutil missing or monitoring unavailable
+        return
     pct = snapshot_basic().get("cpu_percent")
     if pct is None:
         return
@@ -476,9 +480,8 @@ def get_pid_on_port(port: int) -> int | None:
                 if int(local.split(":")[1], 16) == port:
                     return _pid_from_inode(inode)
     except COMMON_EXC as e:
-        get_logger(__name__).error("get_pid_on_port failed", exc_info=e)
+        logger.error("get_pid_on_port failed", exc_info=e)
         return None
-    return None
 
 
 def get_rolling_atr(symbol: str, window: int = 14) -> float:

@@ -4,14 +4,19 @@ Leak-proof feature engineering pipeline.
 Provides feature transformers and pipelines that ensure no future
 information leaks into training data during cross-validation.
 """
-from typing import Any
+from __future__ import annotations
+
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler, StandardScaler
+from ai_trading.utils.lazy_imports import load_pandas
 sklearn_available = True
 from ai_trading.logging import logger
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 class BuildFeatures(BaseEstimator, TransformerMixin):
     """
@@ -55,6 +60,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
         Returns:
             Self for method chaining
         """
+        pd = load_pandas()
         try:
             if not isinstance(X, pd.DataFrame):
                 raise ValueError('BuildFeatures requires DataFrame input')
@@ -87,6 +93,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
         Returns:
             DataFrame with engineered features
         """
+        pd = load_pandas()
         try:
             if not self.is_fitted_:
                 raise ValueError('BuildFeatures must be fitted before transform')
@@ -117,6 +124,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
     def _add_return_features(self, features: pd.DataFrame, prices: pd.Series) -> pd.DataFrame:
         """Add return-based features."""
+        pd = load_pandas()
         try:
             for period in [1, 2, 5, 10]:
                 features[f'ret_{period}d'] = prices.pct_change(periods=period)
@@ -131,6 +139,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
     def _add_volatility_features(self, features: pd.DataFrame, prices: pd.Series) -> pd.DataFrame:
         """Add volatility-based features."""
+        pd = load_pandas()
         try:
             returns = prices.pct_change()
             for window in [5, 10, 20, 50]:
@@ -149,6 +158,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
     def _add_volume_features(self, features: pd.DataFrame, volume: pd.Series) -> pd.DataFrame:
         """Add volume-based features."""
+        pd = load_pandas()
         try:
             features['vol_ma_10'] = volume.rolling(10).mean()
             features['vol_ma_20'] = volume.rolling(20).mean()
@@ -169,6 +179,7 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
 
     def _add_regime_features(self, features: pd.DataFrame, prices: pd.Series) -> pd.DataFrame:
         """Add regime detection features."""
+        pd = load_pandas()
         try:
             returns = prices.pct_change()
             rolling_vol = returns.rolling(self.regime_span).std()
@@ -205,6 +216,7 @@ def create_feature_pipeline(scaler_type: str='standard', build_features_params: 
     Returns:
         sklearn Pipeline with feature engineering and scaling
     """
+    pd = load_pandas()
     try:
         if not sklearn_available:
             logger.warning('sklearn not available, returning simple pipeline')
@@ -243,6 +255,7 @@ def validate_pipeline_no_leakage(pipeline: Pipeline, X_train: pd.DataFrame, X_te
     Returns:
         True if no leakage detected, False otherwise
     """
+    pd = load_pandas()
     try:
         pipeline.fit(X_train, y_train)
         X_train_transformed = pipeline.transform(X_train)
