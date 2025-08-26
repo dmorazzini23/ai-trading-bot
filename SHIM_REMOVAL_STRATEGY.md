@@ -80,7 +80,7 @@ python tools/codemods/remove_import_guards.py
 
 ## Production Guidance
 
-Runtime code must not use `optional_import(...)`. Reserve such helpers for research or development utilities and gate heavy imports inside function scope when rarely used.
+Runtime code must not use `optional_import(...)`. Instead, rely on `try`/`except ImportError` or `importlib.util.find_spec` and gate heavy imports inside function scope when rarely used.
 
 ## Risk Mitigation
 

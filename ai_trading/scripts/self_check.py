@@ -1,9 +1,11 @@
 from ai_trading.alpaca_api import _bars_time_window, get_bars_df
-from ai_trading.utils.optdeps import optional_import
 from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.logging import logger
 
-TimeFrame = optional_import('alpaca_trade_api.rest', attr='TimeFrame')
+try:  # pragma: no cover - optional dependency
+    from alpaca_trade_api.rest import TimeFrame
+except ImportError:  # pragma: no cover - optional dependency
+    TimeFrame = None
 
 
 def main() -> None:
