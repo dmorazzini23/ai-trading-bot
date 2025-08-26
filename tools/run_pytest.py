@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     parser = build_parser()
     args = parser.parse_args(argv)
+    os.environ.setdefault("PYTHONHASHSEED", "0")
     cmd = build_pytest_cmd(args)
     # AI-AGENT-REF: echo exact command for smoke test assertions
     logger.info("[run_pytest] %s", " ".join(cmd))
