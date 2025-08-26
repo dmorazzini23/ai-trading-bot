@@ -1,57 +1,53 @@
 from __future__ import annotations
 
-
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
 pd = pytest.importorskip("pandas")
-from ai_trading.core import bot_engine as be
+
+from ai_trading.data.bars import StockBarsRequest, safe_get_stock_bars
 
 
-def test_daily_request_sanitizes_inputs(monkeypatch):
-    fetcher = be.DataFetcher()
-    symbol = "SPY"
+def test_request_timestamps_sanitized_and_passed_to_get_bars():
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = datetime(2024, 1, 2, tzinfo=UTC)
+    req = StockBarsRequest("SPY", "1Day", start=start, end=end, feed="sip")
 
-    # Skip market-open logic
-    monkeypatch.setattr(be, "is_market_open", lambda: True)
-
-    class DummySettings:
-        alpaca_api_key = "k"
-        alpaca_secret_key_plain = "s"
-
-    monkeypatch.setattr(be, "get_settings", lambda: DummySettings)
+    captured: dict[str, str] = {}
 
     class DummyClient:
-        def __init__(self, *args, **kwargs):
-            pass
+        def get_bars(self, symbol_or_symbols, timeframe, **params):
+            captured.update({"start": params.get("start"), "end": params.get("end")})
+            return pd.DataFrame()
 
-    monkeypatch.setattr(be, "StockHistoricalDataClient", DummyClient)
+    safe_get_stock_bars(DummyClient(), req, symbol="SPY", context="TEST")
 
-    class DummyRequest:
-        def __init__(self, symbol_or_symbols, timeframe, start, end, feed):
-            self.symbol_or_symbols = symbol_or_symbols
-            self.timeframe = timeframe
-            # Store as mixed types to test sanitization
-            self.start = start.strftime("%Y-%m-%d")  # str
-            self.end = (end - timedelta(days=1)).date()  # date
-            self.feed = feed
+    expected_end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+    assert req.start == start.isoformat()
+    assert req.end == expected_end.isoformat()
+    assert captured["start"] == start.isoformat()
+    assert captured["end"] == expected_end.isoformat()
 
-    monkeypatch.setattr(be, "StockBarsRequest", DummyRequest)
 
-    calls = {"n": 0}
+def test_request_timestamps_sanitized_for_get_stock_bars():
+    start = datetime(2024, 1, 3, tzinfo=UTC)
+    end = datetime(2024, 1, 4, tzinfo=UTC)
+    req = StockBarsRequest("SPY", "1Day", start=start, end=end, feed="sip")
 
-    def fake_safe_get_stock_bars(client, req, sym, ctx):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise TypeError("datetime argument was callable")
-        assert isinstance(req.start, datetime) and req.start.tzinfo is UTC
-        assert isinstance(req.end, datetime) and req.end.tzinfo is UTC
-        return pd.DataFrame()  # empty => function returns None
+    captured: dict[str, str] = {}
 
-    monkeypatch.setattr(be, "safe_get_stock_bars", fake_safe_get_stock_bars)
+    class DummyClient:
+        class Resp:
+            df = pd.DataFrame()
 
-    result = fetcher.get_daily_df(object(), symbol)
+        def get_stock_bars(self, request):  # pragma: no cover - simple stub
+            captured["start"] = request.start
+            captured["end"] = request.end
+            return self.Resp()
 
-    assert calls["n"] == 2
-    assert result is None
+    safe_get_stock_bars(DummyClient(), req, symbol="SPY", context="TEST")
+
+    expected_end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+    assert captured["start"] == start.isoformat()
+    assert captured["end"] == expected_end.isoformat()

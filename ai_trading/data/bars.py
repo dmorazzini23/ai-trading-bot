@@ -95,9 +95,9 @@ def _client_fetch_stock_bars(client: Any, request: StockBarsRequest):
         raise AttributeError("Alpaca client missing get_stock_bars/get_bars")
     params = {}
     if getattr(request, "start", None) is not None:
-        params["start"] = request.start
+        params["start"] = ensure_utc_datetime(request.start).isoformat()
     if getattr(request, "end", None) is not None:
-        params["end"] = request.end
+        params["end"] = ensure_utc_datetime(request.end).isoformat()
     if getattr(request, "limit", None) is not None:
         params["limit"] = request.limit
     if getattr(request, "feed", None) is not None:
@@ -114,6 +114,8 @@ def safe_get_stock_bars(client: Any, request: StockBarsRequest, symbol: str, con
     prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
     end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)
     start_dt = ensure_utc_datetime(getattr(request, 'start', None) or prev_open, default=prev_open, clamp_to='bod', allow_callables=False)
+    request.start = start_dt.isoformat()
+    request.end = end_dt.isoformat()
     try:
         try:
             response = _client_fetch_stock_bars(client, request)
