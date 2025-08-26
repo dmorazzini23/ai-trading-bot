@@ -182,6 +182,41 @@ class TradingConfig:
     data_feed: Optional[str] = None
     data_provider: Optional[str] = None
 
+    # --- Ergonomics: safe update & dict view ---
+    def update(self, **kwargs) -> None:
+        """Update known fields only; raise on unknown key."""
+        for k, v in kwargs.items():
+            if not hasattr(self, k):
+                raise AttributeError(f"TradingConfig has no field '{k}'")
+            object.__setattr__(self, k, v)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a dict of current tunables (no secrets)."""
+        keys = [
+            "seed",
+            "enable_finbert",
+            "capital_cap",
+            "dollar_risk_limit",
+            "max_position_size",
+            "sector_exposure_cap",
+            "max_drawdown_threshold",
+            "trailing_factor",
+            "take_profit_factor",
+            "max_position_size_pct",
+            "max_var_95",
+            "min_profit_factor",
+            "min_sharpe_ratio",
+            "min_win_rate",
+            "kelly_fraction_max",
+            "min_sample_size",
+            "confidence_level",
+            "max_position_mode",
+            "paper",
+            "data_feed",
+            "data_provider",
+        ]
+        return {k: getattr(self, k) for k in keys}
+
     @classmethod
     def from_env(
         cls, env: Mapping[str, str] | None = None

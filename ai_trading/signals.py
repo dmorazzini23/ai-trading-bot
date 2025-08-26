@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         pass
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout
+from ai_trading.utils.lazy_imports import optional_import
 logger = get_logger(__name__)
 _log = logger
 
@@ -57,11 +58,7 @@ def _get_numpy():
 
 
 def _get_pandas():
-    try:  # pragma: no cover - import is tested indirectly
-        import pandas as pd  # type: ignore
-        return pd
-    except Exception:
-        return None
+    return optional_import("pandas")
 
 
 def _get_requests():

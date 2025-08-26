@@ -59,6 +59,12 @@ To keep results reproducible, all tests start with a fixed random seed. The `too
 
 When a `-k` expression is provided without explicit targets, `tools/run_pytest.py` automatically limits collection to test files whose names contain the specified keywords. This prevents unrelated tests from being imported and keeps smoke runs deterministic even in environments missing optional dependencies.
 
+Explicit test paths can be supplied either positionally or via `--files`:
+
+```bash
+python tools/run_pytest.py --files tests/test_utils_timing.py tests/test_trading_config_aliases.py
+```
+
 ## Test Structure
 
 ### Directory Organization

@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Quiet mode (pytest -q)",
     )
+    p.add_argument(
+        "--files",
+        nargs="+",
+        default=None,
+        help="Explicit test file/dir/node-id targets (alias)",
+    )
     # AI-AGENT-REF: allow explicit test targets to avoid global collection
     p.add_argument(
         "targets",
@@ -64,9 +70,14 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
     if args.collect_only:
         cmd += ["--collect-only"]
 
+    targets: list[str] = []
+    if args.files:
+        targets.extend(args.files)
     if args.targets:
+        targets.extend(args.targets)
+    if targets:
         # AI-AGENT-REF: append explicit targets last so pytest limits collection
-        cmd.extend(args.targets)
+        cmd.extend(targets)
         if args.keyword:
             cmd += ["-k", args.keyword]
         return cmd

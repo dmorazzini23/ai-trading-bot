@@ -423,7 +423,8 @@ BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     """Return a timezone-aware UTC datetime for ``dt``."""
-    assert isinstance(value, dt.datetime | date), "dt must be date or datetime"
+    if not isinstance(value, (dt.datetime, date)):
+        raise TypeError("dt must be date or datetime")
     if isinstance(value, dt.datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=dt.UTC)
