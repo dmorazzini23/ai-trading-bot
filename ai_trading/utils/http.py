@@ -24,28 +24,41 @@ _pool_stats = {
 }
 
 
-def _build_session() -> requests.Session:
-    _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
-    _pool_stats["workers"] = int(
-        os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", str(_pool_stats["workers"])))
-    )
-    s = requests.Session()
-    retries = Retry(
-        total=3,
-        backoff_factor=0.3,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"),
-        raise_on_status=False,
-    )
-    adapter = HTTPAdapter(
-        pool_connections=_pool_stats["per_host"], pool_maxsize=_pool_stats["pool_maxsize"], max_retries=retries
-    )
-    s.mount("http://", adapter)
-    s.mount("https://", adapter)
-    return s
+class HTTPSession(requests.Session):
+    """Session with sane connection pooling and timeout defaults."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
+        _pool_stats["workers"] = int(
+            os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", str(_pool_stats["workers"])))
+        )
+        retries = Retry(
+            total=3,
+            backoff_factor=0.3,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"),
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(
+            pool_connections=_pool_stats["per_host"],
+            pool_maxsize=_pool_stats["pool_maxsize"],
+            max_retries=retries,
+        )
+        self.mount("http://", adapter)
+        self.mount("https://", adapter)
+
+    def request(self, method: str, url: str, **kwargs) -> requests.Response:  # type: ignore[override]
+        timeout = kwargs.get("timeout")
+        kwargs["timeout"] = clamp_timeout(timeout)
+        return super().request(method, url, **kwargs)
 
 
-def _get_session() -> requests.Session:
+def _build_session() -> HTTPSession:
+    return HTTPSession()
+
+
+def _get_session() -> HTTPSession:
     global _session
     if _session is None:
         with _session_lock:
@@ -130,8 +143,10 @@ def request_json(
         t = clamp_timeout(timeout)
         to = (t, t)
 
+    sess = _get_session()
+
     def _fetch() -> requests.Response:
-        return requests.request(method, url, headers=headers, params=params, timeout=to)
+        return sess.request(method, url, headers=headers, params=params, timeout=to)
 
     for attempt in range(1, retries + 1):
         try:
@@ -192,3 +207,15 @@ def map_get(
             except SAFE_EXC as e:
                 results[i] = (None, e)
     return results
+
+
+__all__ = [
+    "HTTPSession",
+    "request",
+    "request_json",
+    "get",
+    "post",
+    "put",
+    "pool_stats",
+    "map_get",
+]
