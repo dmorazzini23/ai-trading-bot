@@ -71,53 +71,21 @@ class BotState:
         """Update risk management parameters."""
 ```
 
-#### `trade_execution.py` - Order Execution
+#### `execution/engine.py` - Order Execution
 
 ```python
-from trade_execution import execute_order_async, validate_order, get_position_info
+from ai_trading.execution.engine import ExecutionEngine
 
-async def execute_order_async(
-    symbol: str,
-    quantity: float,
-    side: str,
-    order_type: str = 'market',
-    time_in_force: str = 'day',
-    limit_price: Optional[float] = None
-) -> Dict[str, Any]:
-    """
-    Execute trading order asynchronously.
+engine = ExecutionEngine()
 
-    Args:
-        symbol: Trading symbol (e.g., 'AAPL')
-        quantity: Number of shares to trade
-        side: 'buy' or 'sell'
-        order_type: 'market', 'limit', 'stop'
-        time_in_force: 'day', 'gtc', 'ioc', 'fok'
-        limit_price: Price for limit orders
-
-    Returns:
-        Dict containing order status and execution details
-
-    Example:
-        >>> result = await execute_order_async('AAPL', 10, 'buy')
-        >>> print(result['order_id'])
-    """
-
-def validate_order(
-    symbol: str,
-    quantity: float,
-    side: str,
-    current_portfolio: Dict[str, float]
-) -> Tuple[bool, str]:
-    """
-    Validate order before execution.
-
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-
-def get_position_info(symbol: str) -> Dict[str, Any]:
-    """Get current position information for symbol."""
+result = engine.execute_order(
+    symbol="AAPL",
+    quantity=10,
+    side="buy",
+    order_type="market",
+    time_in_force="day",
+    limit_price=None,
+)
 ```
 
 ### Data Management API

@@ -422,7 +422,7 @@ from unittest.mock import patch
 import alpaca_trade_api as tradeapi
 
 from alpaca_api import AlpacaAPI
-from trade_execution import OrderExecutor
+from ai_trading.execution.engine import ExecutionEngine
 
 
 class TestAlpacaIntegration:
@@ -480,7 +480,7 @@ class TestAlpacaIntegration:
         if not os.getenv('ALPACA_API_KEY'):
             pytest.skip("ALPACA_API_KEY not set")
         
-        executor = OrderExecutor()
+        executor = ExecutionEngine()
         
         # Use a very small quantity for testing
         with patch.dict(os.environ, {'DRY_RUN': 'true'}):

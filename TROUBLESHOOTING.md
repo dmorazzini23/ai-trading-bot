@@ -277,7 +277,7 @@ if __name__ == "__main__":
 
 ```python
 # debug_order_validation.py
-import trade_execution
+from ai_trading.execution.engine import ExecutionEngine
 import alpaca_trade_api as tradeapi
 import os
 
@@ -308,16 +308,19 @@ def debug_order_issue(symbol, quantity, side):
     else:
         print("No current position")
     
+    engine = ExecutionEngine()
+
     # Validate order
     try:
-        is_valid, error_msg = trade_execution.validate_order(
-            symbol, quantity, side, {}
+        engine.execute_order(
+            symbol=symbol,
+            quantity=quantity,
+            side=side,
         )
-        print(f"Order validation: {'PASS' if is_valid else 'FAIL'}")
-        if not is_valid:
-            print(f"Error: {error_msg}")
-    except Exception as e:
-        print(f"Validation error: {e}")
+        print("Order validation: PASS")
+    except ValueError as e:
+        print("Order validation: FAIL")
+        print(f"Error: {e}")
 
 # Example usage
 if __name__ == "__main__":
