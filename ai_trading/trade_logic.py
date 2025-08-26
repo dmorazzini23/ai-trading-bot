@@ -3,10 +3,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from ai_trading.logging import get_logger
-try:
-    from ai_trading.capital_scaling import drawdown_adjusted_kelly_alt as drawdown_adjusted_kelly
-except (ValueError, TypeError):
-    from ai_trading.capital_scaling import drawdown_adjusted_kelly
+from ai_trading.capital_scaling import drawdown_adjusted_kelly
 from ai_trading.config.settings import get_settings
 from ai_trading.core.bot_engine import _fetch_intraday_bars_chunked
 logger = get_logger(__name__)

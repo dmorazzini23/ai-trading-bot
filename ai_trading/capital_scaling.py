@@ -240,11 +240,18 @@ def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
     cvar = np.mean(sorted_returns[sorted_returns <= var])
     return abs(cvar) if cvar < 0 else 1.0
 
-def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_kelly: float) -> float:
-    """Legacy wrapper for drawdown_adjusted_kelly."""
-    return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
-
-def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
-    """Legacy wrapper for volatility_parity_position."""
-    return volatility_parity_position(base_risk, atr_value)
-__all__ = ['update_if_present', 'capital_scaler_update', 'capital_scale', 'CapitalScalingEngine', 'volatility_parity_position', 'dynamic_fractional_kelly', 'drawdown_adjusted_kelly', 'pyramiding_add', 'decay_position', 'fractional_kelly', 'kelly_fraction', 'volatility_parity', 'cvar_scaling', 'drawdown_adjusted_kelly_alt', 'volatility_parity_position_alt']
+__all__ = [
+    'update_if_present',
+    'capital_scaler_update',
+    'capital_scale',
+    'CapitalScalingEngine',
+    'volatility_parity_position',
+    'dynamic_fractional_kelly',
+    'drawdown_adjusted_kelly',
+    'pyramiding_add',
+    'decay_position',
+    'fractional_kelly',
+    'kelly_fraction',
+    'volatility_parity',
+    'cvar_scaling',
+]
