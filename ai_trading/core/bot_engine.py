@@ -13216,8 +13216,9 @@ def main() -> None:
 
         pm = ProcessManager()
         if not pm.ensure_single_instance():
-            logger.error("Another trading bot instance is already running. Exiting.")
-            sys.exit(1)
+            msg = "Another trading bot instance is already running (single-instance lock busy)"
+            logger.error(msg)
+            raise RuntimeError(msg)
         logger.info("Single instance lock acquired successfully")
     except (
         FileNotFoundError,
@@ -13229,8 +13230,8 @@ def main() -> None:
         TypeError,
         OSError,
     ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error("Failed to acquire single instance lock: %s", e)
-        sys.exit(1)
+        logger.error("Failed to acquire single instance lock", exc_info=e)
+        raise RuntimeError("Single-instance lock acquisition failed") from e
 
     # AI-AGENT-REF: Add comprehensive health check on startup
     try:
