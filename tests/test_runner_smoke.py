@@ -25,7 +25,7 @@ def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runne
         "-q",
         "--files",
         "tests/test_utils_timing.py",
-        "tests/test_trading_config_aliases.py",
+        "tests/test_utils_sleep_shadowing.py",
     ]
     proc = subprocess.run(args, capture_output=True, text=True, env=env)
     assert proc.returncode == 0
@@ -43,7 +43,7 @@ def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runne
         cmd += ["-p", "xdist.plugin", "-n", "auto"]
     cmd += [
         "tests/test_utils_timing.py",
-        "tests/test_trading_config_aliases.py",
+        "tests/test_utils_sleep_shadowing.py",
     ]
     expected = "[run_pytest] " + " ".join(cmd)
     assert echo.strip() == expected

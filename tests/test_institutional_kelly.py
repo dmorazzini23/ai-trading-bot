@@ -23,7 +23,7 @@ class TestKellyCriterion:
         """Test Kelly Criterion initialization."""
         assert self.kelly.min_sample_size == 10
         assert self.kelly.max_fraction == 0.25
-        # AI-AGENT-REF: default confidence now 0.90 when legacy kwargs used
+        # AI-AGENT-REF: default confidence now 0.90
         assert self.kelly.confidence_level == 0.90
 
     def test_basic_kelly_calculation(self):

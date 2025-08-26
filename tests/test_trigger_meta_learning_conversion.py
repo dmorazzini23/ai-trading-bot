@@ -40,17 +40,6 @@ class TradingConfig:
     def from_env(cls, mode="balanced"):
         return cls()
 
-    def get_legacy_params(self):
-        """Return legacy parameters for backward compatibility."""
-        return {
-            'conf_threshold': self.conf_threshold,
-            'buy_threshold': self.buy_threshold,
-            'min_confidence': self.min_confidence,
-            'confirmation_count': self.confirmation_count,
-            'take_profit_factor': self.take_profit_factor,
-            'trailing_factor': self.trailing_factor,
-            'scaling_factor': self.scaling_factor,
-        }
 
 # Replace the config module with our mock
 MockConfig = TradingConfig

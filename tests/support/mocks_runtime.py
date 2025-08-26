@@ -1,5 +1,5 @@
 # tests/support/mocks_runtime.py
-# Placeholders for any legacy Mock* classes moved out of runtime.
+# Placeholder for any Mock* classes moved out of runtime.
 # Import and use within tests only.
 
 """
