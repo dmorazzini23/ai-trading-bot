@@ -57,6 +57,8 @@ Unit Tests (70%)
 
 To keep results reproducible, all tests start with a fixed random seed. The `tools/run_pytest.py` helper sets `PYTHONHASHSEED=0` before invoking pytest to ensure consistent hash randomization. An autouse fixture in `tests/conftest.py` then seeds Python's `random` module and NumPy and calls `torch.manual_seed(0)` when PyTorch is available. Tests should avoid introducing additional sources of nondeterminism.
 
+When a `-k` expression is provided without explicit targets, `tools/run_pytest.py` automatically limits collection to test files whose names contain the specified keywords. This prevents unrelated tests from being imported and keeps smoke runs deterministic even in environments missing optional dependencies.
+
 ## Test Structure
 
 ### Directory Organization
