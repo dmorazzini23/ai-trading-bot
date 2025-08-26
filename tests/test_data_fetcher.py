@@ -112,6 +112,7 @@ def test_subscription_error_logged(monkeypatch, caplog):
         )
 
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: fake_yf("AAPL"))
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "is_stub", False)
 
     start = pd.Timestamp("2023-01-01", tz="UTC")
     end = pd.Timestamp("2023-01-02", tz="UTC")
@@ -170,6 +171,7 @@ def test_finnhub_403_yfinance(monkeypatch):
 
     monkeypatch.setattr(data_fetcher, "_fetch_bars", raise_fetch)
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", raise_finnhub)
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "is_stub", False)
     monkeypatch.setattr(data_fetcher.yf, "download", fake_yf)
     monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
 
@@ -190,6 +192,7 @@ def test_empty_bars_handled(monkeypatch):
         index=[start],
     )
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: fallback)
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "is_stub", False)
     monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
 
     df = data_fetcher.get_minute_df("AAPL", start, end)

@@ -103,6 +103,7 @@ _VALID_FEEDS = ('iex', 'sip')
 
 class _FinnhubFetcherStub:
     """Minimal stub with a fetch() method; tests monkeypatch this."""
+    is_stub = True
 
     def fetch(self, *args, **kwargs):
         raise NotImplementedError
@@ -436,14 +437,20 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None=None) -> p
     Also updates in-memory minute cache for freshness checks."""
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    if os.getenv('FINNHUB_API_KEY'):
+    use_finnhub = (
+        os.getenv('ENABLE_FINNHUB', '1').lower() not in ('0', 'false')
+        and os.getenv('FINNHUB_API_KEY')
+        and fh_fetcher is not None
+        and not getattr(fh_fetcher, 'is_stub', False)
+    )
+    if use_finnhub:
         try:
-            df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution='1') if fh_fetcher is not None else None
-        except (FinnhubAPIException, ValueError) as e:
+            df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution='1')
+        except (FinnhubAPIException, ValueError, NotImplementedError) as e:
             logger.debug('FINNHUB_FETCH_FAILED', extra={'symbol': symbol, 'err': str(e)})
             df = None
     else:
-        logger.debug('Skipping Finnhub fetch; FINNHUB_API_KEY not set')
+        logger.debug('FINNHUB_DISABLED', extra={'symbol': symbol})
         df = None
     if df is None or getattr(df, 'empty', True):
         try:

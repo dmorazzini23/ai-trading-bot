@@ -820,6 +820,8 @@ FALLBACK_DATA_PROVIDER=yahoo
 
 # Finnhub API (optional, for enhanced data)
 FINNHUB_API_KEY=your_finnhub_api_key
+# Disable Finnhub integration if credentials missing
+ENABLE_FINNHUB=false
 
 # Data quality settings
 ENABLE_DATA_VALIDATION=true
