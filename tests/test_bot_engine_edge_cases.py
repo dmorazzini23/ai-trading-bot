@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("alpaca_trade_api")
+
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from shim module
 from ai_trading.core.bot_engine import prepare_indicators
 
