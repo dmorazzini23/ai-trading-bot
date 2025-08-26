@@ -57,3 +57,13 @@ def test_model_loaded_once(monkeypatch):
     assert mdl1 is mdl2
     assert calls["count"] == 1
 
+
+def test_missing_model_file_fallback(monkeypatch, tmp_path, caplog):
+    missing = tmp_path / "no_model.pkl"
+    monkeypatch.setenv("AI_TRADER_MODEL_PATH", str(missing))
+    monkeypatch.delenv("AI_TRADER_MODEL_MODULE", raising=False)
+    caplog.set_level("WARNING")
+    be = reload_bot_engine()
+    assert be.USE_ML is False
+    assert "ML_MODEL_MISSING" in caplog.text
+
