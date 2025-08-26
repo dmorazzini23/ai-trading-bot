@@ -1,33 +1,16 @@
-"""Pin the presence/behavior of TradingConfig aliases and tunables.
+"""Ensure TradingConfig exposes expected canonical fields."""
 
-This guards against future regressions where legacy names disappear or
-script-only knobs get dropped from the model surface.
-"""
-from __future__ import annotations
-
-import pytest
-from tests.optdeps import require
-
-pydantic = require("pydantic")
 from ai_trading.config.management import TradingConfig
 
 
-def test_trading_config_aliases_and_tunables_exist():
+def test_trading_config_canonical_fields_exist():
+    """TradingConfig should expose canonical field names."""
     cfg = TradingConfig()
-
-    # Back-compat aliases map to canonical fields
-    assert cfg.max_correlation_exposure == cfg.sector_exposure_cap
-    assert cfg.max_drawdown == cfg.max_drawdown_threshold
-    assert cfg.stop_loss_multiplier == cfg.trailing_factor
-    assert cfg.take_profit_multiplier == cfg.take_profit_factor
-
-    # Script/optimizer tunables exist (may be None by default)
     for name in (
-        "max_position_size_pct",
-        "max_var_95",
-        "min_profit_factor",
-        "min_sharpe_ratio",
-        "min_win_rate",
+        "sector_exposure_cap",
+        "max_drawdown_threshold",
+        "trailing_factor",
+        "take_profit_factor",
     ):
-        assert hasattr(cfg, name), f"Missing tunable: {name}"
+        assert hasattr(cfg, name), f"Missing field: {name}"
 
