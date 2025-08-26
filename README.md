@@ -363,6 +363,9 @@ python -m ai_trading --live --interval 10
 
 ### 📈 Backtesting & Optimization
 
+> The backtester now initializes the risk engine lazily at runtime,
+> removing side effects from module import.
+
 #### Basic Backtesting
 
 ```bash

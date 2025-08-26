@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
 from ai_trading.core.bot_engine import get_risk_engine
-risk_engine_instance = get_risk_engine()
 from ai_trading import config, signals
 from ai_trading.core import bot_engine
 from ai_trading.logging import get_logger
@@ -129,7 +128,10 @@ class BacktestResult:
     turnover: float
 
 class BacktestEngine:
-    """Historical simulator executing the live trading cycle."""
+    """Historical simulator executing the live trading cycle.
+
+    The risk engine is initialized lazily to avoid import-time side effects.
+    """
 
     def __init__(self, data: dict[str, 'pd.DataFrame'], execution_model: ExecutionModel, initial_cash: float=100000.0) -> None:
         config.reload_env()
@@ -140,6 +142,14 @@ class BacktestEngine:
         self.positions: dict[str, int] = dict.fromkeys(data, 0)
         self.trades: list[Fill] = []
         self.equity_curve: list[dict[str, float]] = []
+        # Risk engine is fetched on first use to avoid import-time side effects
+        self._risk_engine: Any | None = None
+
+    def _get_risk_engine(self) -> Any:
+        """Fetch and cache the global risk engine on first use."""
+        if self._risk_engine is None:
+            self._risk_engine = get_risk_engine()
+        return self._risk_engine
 
     def reset(self) -> None:
         """Reset internal state for a new symbol run."""
@@ -181,6 +191,7 @@ class BacktestEngine:
 
     def run(self, symbols: list[str]) -> BacktestResult:
         import pandas as pd  # heavy import; keep local
+        self._get_risk_engine()
         combined = sorted(set().union(*(df.index for df in self.data.values())))
         for ts in combined:
             for sym in symbols:
@@ -235,7 +246,6 @@ def main(argv: list[str] | None=None) -> None:
     args = parser.parse_args(argv)
     import pandas as pd  # heavy import; keep local
     engine = BacktestEngine({}, DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars))
-    get_risk_engine()
     results: dict[str, BacktestResult] = {}
     for symbol in args.symbols:
         pattern = os.path.join(args.data_dir, '**', f'{symbol}*.csv')
