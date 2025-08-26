@@ -11,7 +11,7 @@ import importlib
 import importlib.util
 import os
 import sys
-from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
+from typing import Any, Dict, Iterable, cast
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property
 
@@ -474,8 +474,6 @@ from ai_trading.logging import (
 from ai_trading.utils.safe_cast import as_float, as_int
 from ai_trading.utils.universe import load_universe as load_universe_from_path
 
-if TYPE_CHECKING:
-    from ai_trading.risk.engine import RiskEngine
 from ai_trading.config.settings import (
     MODEL_PATH,
     TICKERS_FILE,
@@ -12554,6 +12552,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     if _ALPACA_IMPORT_ERROR is not None:
         raise RuntimeError("Alpaca SDK is required") from _ALPACA_IMPORT_ERROR
     if getattr(runtime, "risk_engine", None) is None:
+        from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: gate heavy import
         runtime.risk_engine = RiskEngine()
     _init_metrics()
     import uuid
