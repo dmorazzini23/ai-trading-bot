@@ -69,9 +69,47 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     Returns:
         BotRuntime with fully populated params dict
     """
-    params = {}
+    params: dict[str, float] = {}
     for k, dflt in REQUIRED_PARAM_DEFAULTS.items():
+        # MAX_POSITION_SIZE is resolved after capital cap so the value can be
+        # derived from it if not explicitly provided.
+        if k == "MAX_POSITION_SIZE":
+            continue
         params[k] = float(_cfg_coalesce(cfg, k, dflt))
+
+    # Resolve max_position_size with precedence:
+    #   1. explicit cfg attribute
+    #   2. environment variable MAX_POSITION_SIZE
+    #   3. derived from capital_cap via position_sizing helper
+    #   4. fallback to default
+    val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)
+    if val is None:
+        try:
+            from ai_trading.config.management import get_env
+
+            env_val = get_env("MAX_POSITION_SIZE", cast=float)
+        except Exception:
+            env_val = None
+        if env_val is not None:
+            val = env_val
+
+    if val is None:
+        try:
+            from ai_trading.config.management import get_env
+
+            env_override = get_env("AI_TRADING_MAX_POSITION_SIZE", cast=float)
+        except Exception:
+            env_override = None
+        if env_override is not None:
+            val = env_override
+
+    if val is None:
+        cap = params.get("CAPITAL_CAP", REQUIRED_PARAM_DEFAULTS["CAPITAL_CAP"])
+        equity = getattr(cfg, "equity", None)
+        basis = equity if equity and equity > 0 else 200000.0
+        val = float(round(cap * basis, 2))
+
+    params["MAX_POSITION_SIZE"] = float(val)
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     runtime.model = NullAlphaModel()
     return runtime
