@@ -18,5 +18,5 @@ class AllocatorProtocol(Protocol):
         Implementations should examine each signal and may consult the runtime
         for context to produce a mapping of symbols to allocation metadata.
         """
-        ...
+        raise NotImplementedError("Allocator implementations must override allocate")
 
