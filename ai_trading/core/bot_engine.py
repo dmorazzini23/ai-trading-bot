@@ -5489,7 +5489,18 @@ def _initialize_alpaca_clients():
     if trading_client is not None:
         return  # Already initialized
     # Validate at runtime, now that .env should be present
-    key, secret, base_url = _ensure_alpaca_env_or_raise()
+    try:
+        key, secret, base_url = _ensure_alpaca_env_or_raise()
+    except Exception as e:  # AI-AGENT-REF: surface env resolution failures
+        logger.error(
+            "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
+        )
+        logger_once.error(
+            "ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed"
+        )
+        trading_client = None
+        data_client = None
+        raise
     if not (key and secret):
         # In SHADOW_MODE we may not have creds; skip client init
         diag = _alpaca_diag_info()
@@ -5517,13 +5528,26 @@ def _initialize_alpaca_clients():
         trading_client = None
         data_client = None
         return
-    trading_client = AlpacaREST(
-        key_id=key,
-        secret_key=secret,
-        base_url=base_url,
-    )
+    try:
+        trading_client = AlpacaREST(
+            key_id=key,
+            secret_key=secret,
+            base_url=base_url,
+        )
+    except Exception as e:  # AI-AGENT-REF: expose network or auth issues
+        logger.error(
+            "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
+        )
+        logger_once.error(
+            "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
+        )
+        trading_client = None
+        data_client = None
+        return
     data_client = trading_client
-    logger.info("ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()}))
+    logger.info(
+        "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
+    )
     stream = None  # initialize stream lazily elsewhere if/when required
 
 

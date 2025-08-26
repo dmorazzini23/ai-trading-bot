@@ -1,4 +1,6 @@
 from unittest import mock
+import types
+import pytest
 
 
 def test_no_import_time_initialization(monkeypatch):
@@ -60,3 +62,24 @@ def test_initialize_raises_when_missing_creds_and_not_shadow(monkeypatch):
         assert False, "Should have raised RuntimeError"
     except RuntimeError as e:
         assert "Missing Alpaca API credentials" in str(e)
+
+
+def test_ctx_api_attached_after_initialization(monkeypatch):
+    """ensure_alpaca_attached attaches a trading client when creds are present."""
+    pytest.importorskip("alpaca_trade_api")
+    eng = pytest.importorskip("ai_trading.core.bot_engine")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
+    monkeypatch.setenv("PYTEST_RUNNING", "true")
+
+    class DummyREST:
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr("alpaca_trade_api.REST", DummyREST)
+    eng.trading_client = None
+
+    ctx = types.SimpleNamespace()
+    eng.ensure_alpaca_attached(ctx)
+    assert getattr(ctx, "api", None) is not None
