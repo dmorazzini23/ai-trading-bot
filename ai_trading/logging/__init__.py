@@ -270,7 +270,11 @@ _loggers: dict[str, SanitizingLoggerAdapter] = {}
 _log_queue: queue.Queue | None = None
 _listener: QueueListener | None = None
 _LOGGING_LISTENER: QueueListener | None = None
-_LOGGING_LOCK = threading.Lock()
+# Use a re-entrant lock so setup_logging can be safely invoked if it is
+# indirectly re-entered during module import (e.g. config -> logging).
+# A standard Lock would deadlock when setup_logging imports modules that in
+# turn call get_logger(), which also attempts to acquire this lock.
+_LOGGING_LOCK = threading.RLock()
 _LOGGING_CONFIGURED = False
 
 def ensure_logging_configured(level: int | None=None) -> None:

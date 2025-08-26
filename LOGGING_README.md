@@ -1,6 +1,6 @@
 ## Logging Configuration
 
- The AI trading bot supports several logging configuration flags to control output verbosity and format. Logger initialization is idempotent—calling the setup multiple times will not create duplicate handlers. The setup routine now inspects existing handler *types* and ensures only one of each type is active, preventing accidental handler growth across repeated calls.
+ The AI trading bot supports several logging configuration flags to control output verbosity and format. Logger initialization is idempotent—calling the setup multiple times will not create duplicate handlers. The setup routine now inspects existing handler *types* and ensures only one of each type is active, preventing accidental handler growth across repeated calls. A re-entrant lock guards the setup sequence so imports that indirectly invoke logging cannot deadlock during application startup.
 
 ### Environment Variables
 
