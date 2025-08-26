@@ -19,9 +19,13 @@ def _cfg_coalesce(cfg, key, default):
     """
     lower = key.lower()
     if hasattr(cfg, lower):
-        return getattr(cfg, lower)
+        val = getattr(cfg, lower)
+        if val is not None:
+            return val
     if hasattr(cfg, key):
-        return getattr(cfg, key)
+        val = getattr(cfg, key)
+        if val is not None:
+            return val
     return default
 
 class NullAlphaModel:

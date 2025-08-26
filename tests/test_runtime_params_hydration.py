@@ -162,5 +162,23 @@ def test_parameter_values_are_floats():
         assert isinstance(value, float), f"Parameter {key} is not a float: {type(value)}"
 
 
+def test_build_runtime_ignores_none_values():
+    """build_runtime should fall back to defaults when config values are None."""
+    from ai_trading.config.management import TradingConfig
+    from ai_trading.core.runtime import REQUIRED_PARAM_DEFAULTS, build_runtime
+
+    cfg = TradingConfig(
+        capital_cap=None,
+        dollar_risk_limit=None,
+        max_position_size=None,
+        kelly_fraction_max=None,  # unrelated field to ensure None doesn't break
+    )
+
+    runtime = build_runtime(cfg)
+
+    for key, default in REQUIRED_PARAM_DEFAULTS.items():
+        assert runtime.params[key] == default
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
