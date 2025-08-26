@@ -1,5 +1,4 @@
 from __future__ import annotations
-import logging
 from ai_trading.logging import get_logger
 import random
 import threading
@@ -773,23 +772,23 @@ def calculate_position_size(*args, **kwargs) -> int:
     if len(args) == 2 and (not kwargs):
         cash, price = args
         if not isinstance(cash, int | float) or cash <= 0:
-            logging.warning(f'Invalid cash amount: {cash}')
+            logger.warning(f'Invalid cash amount: {cash}')
             return 0
         if not isinstance(price, int | float) or price <= 0:
-            logging.warning(f'Invalid price: {price}')
+            logger.warning(f'Invalid price: {price}')
             return 0
         dummy = TradeSignal(symbol='DUMMY', side='buy', confidence=1.0, strategy='default')
         return engine.position_size(dummy, cash, price)
     if len(args) >= 3:
         signal, cash, price = args[:3]
         if not isinstance(cash, int | float) or cash <= 0:
-            logging.warning(f'Invalid cash amount: {cash}')
+            logger.warning(f'Invalid cash amount: {cash}')
             return 0
         if not isinstance(price, int | float) or price <= 0:
-            logging.warning(f'Invalid price: {price}')
+            logger.warning(f'Invalid price: {price}')
             return 0
         if not hasattr(signal, 'confidence') or not hasattr(signal, 'symbol'):
-            logging.error(f'Invalid signal object: {type(signal)}')
+            logger.error(f'Invalid signal object: {type(signal)}')
             return 0
         api = args[3] if len(args) > 3 else kwargs.get('api')
         return engine.position_size(signal, cash, price, api)
@@ -825,15 +824,15 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
     - Used for automated risk management decisions
     """
     if not isinstance(state, dict):
-        logging.warning(f'Invalid state type: {type(state)}')
+        logger.warning(f'Invalid state type: {type(state)}')
         return False
     current_dd = state.get('current_drawdown', 0)
     max_dd = state.get('max_drawdown', 0)
     if not isinstance(current_dd, int | float) or current_dd < 0:
-        logging.warning(f'Invalid current_drawdown: {current_dd}')
+        logger.warning(f'Invalid current_drawdown: {current_dd}')
         return False
     if not isinstance(max_dd, int | float) or max_dd <= 0:
-        logging.warning(f'Invalid max_drawdown: {max_dd}')
+        logger.warning(f'Invalid max_drawdown: {max_dd}')
         return False
     return current_dd > max_dd
 

@@ -882,7 +882,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
     "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-    logging.critical(
+    logger.critical(
         "Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
     # AI-AGENT-REF: flush and close log handlers to preserve logs on crash

@@ -5,7 +5,6 @@ Provides pydantic model for hyperparams.json validation and ensures
 schema compatibility across different versions of the trading system.
 """
 import json
-import logging
 from ai_trading.logging import get_logger
 import os
 from datetime import UTC, datetime
@@ -176,11 +175,11 @@ def validate_hyperparams_file(file_path: str='hyperparams.json') -> dict[str, An
         report['warnings'].append(f'File not found: {file_path}')
     return report
 if __name__ == '__main__':
-    logging.info('Testing Hyperparameters Schema')
+    logger.info('Testing Hyperparameters Schema')
     default_params = get_default_hyperparams()
-    logging.info(f'Default schema version: {default_params.schema_version}')
+    logger.info(f'Default schema version: {default_params.schema_version}')
     loaded_params = load_hyperparams()
-    logging.info(f'Loaded params - buy_threshold: {loaded_params.buy_threshold}')
+    logger.info(f'Loaded params - buy_threshold: {loaded_params.buy_threshold}')
     validation_report = validate_hyperparams_file()
-    logging.info(f'Validation report: {validation_report}')
-    logging.info('Hyperparams schema tests completed!')
+    logger.info(f'Validation report: {validation_report}')
+    logger.info('Hyperparams schema tests completed!')

@@ -4,7 +4,6 @@ Real-time performance monitoring dashboard for production trading.
 Provides comprehensive performance tracking, real-time P&L monitoring,
 risk metrics calculation, and anomaly detection for institutional trading.
 """
-import logging
 import statistics
 import threading
 from collections import deque

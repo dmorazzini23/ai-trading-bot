@@ -1,7 +1,6 @@
 from __future__ import annotations
 'Circuit breakers and safety mechanisms for production trading.'
 import functools
-import logging
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
