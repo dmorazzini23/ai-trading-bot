@@ -8,6 +8,16 @@ def create_app():
     app = Flask(__name__)
     get_logger('werkzeug').setLevel(logging.ERROR)
 
+    # Cache required env validation once during app startup.
+    try:
+        from ai_trading.config.management import validate_required_env
+        validate_required_env()
+        app.config["_ENV_VALID"] = True
+        app.config["_ENV_ERR"] = None
+    except Exception as e:  # noqa: BLE001
+        app.config["_ENV_VALID"] = False
+        app.config["_ENV_ERR"] = str(e)
+
     @app.route('/health')
     def health():
         """Lightweight liveness probe with Alpaca diagnostics."""
@@ -47,22 +57,15 @@ def create_app():
     def healthz():
         """Minimal liveness probe."""
         from datetime import UTC, datetime
-        from ai_trading.config.management import validate_required_env
 
-        try:
-            validate_required_env()
-            ok = True
-            err = None
-        except Exception as e:  # noqa: BLE001
-            ok = False
-            err = str(e)
-
+        ok = bool(app.config.get("_ENV_VALID"))
         payload = {
             "ok": ok,
             "ts": datetime.now(UTC).isoformat(),
             "service": "ai-trading",
         }
-        if err:
+        err = app.config.get("_ENV_ERR")
+        if not ok and err:
             payload["error"] = err
         return jsonify(payload)
 
@@ -83,12 +86,10 @@ def create_app():
 
 if __name__ == '__main__':
     if os.getenv('RUN_HEALTHCHECK') == '1':
-        from ai_trading.config.management import validate_required_env
         from ai_trading.config.settings import get_settings
 
-        validate_required_env()
+        app = create_app()
         s = get_settings()
         port = int(s.healthcheck_port or 9001)
-        app = create_app()
         app.logger.info('Starting Flask', extra={'port': port})
         app.run(host='0.0.0.0', port=port)
