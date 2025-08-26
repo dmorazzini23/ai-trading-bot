@@ -2379,15 +2379,16 @@ def abspath(fname: str) -> str:
 
 
 # AI-AGENT-REF: safe ML model path resolution
-MODEL_PATH = abspath_safe(getattr(S, "model_path", None))
-if not MODEL_PATH or not os.path.exists(MODEL_PATH):
-    logger.warning(
-        "ML_MODEL_MISSING",
-        extra={"path": MODEL_PATH or os.path.join(BASE_DIR, "trained_model.pkl")},
-    )
-    USE_ML = False
-else:
+DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
+env_model = os.getenv("AI_TRADING_MODEL_PATH") or os.getenv("AI_TRADER_MODEL_PATH")
+MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
+if MODEL_PATH and os.path.exists(MODEL_PATH):
     USE_ML = True
+elif MODEL_PATH and os.path.abspath(MODEL_PATH) != DEFAULT_MODEL_PATH:
+    logger.warning("ML_MODEL_MISSING", extra={"path": MODEL_PATH})
+    USE_ML = False
+else:  # default path missing - no model required
+    USE_ML = False
 
 info_kv(
     logger,

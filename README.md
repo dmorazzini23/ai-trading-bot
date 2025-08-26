@@ -1360,21 +1360,22 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Required ML model
 Set exactly one of:
-- AI_TRADER_MODEL_PATH=/abs/path/to/model.joblib
+- AI_TRADING_MODEL_PATH=/abs/path/to/model.joblib
 - AI_TRADER_MODEL_MODULE=your.module.with.get_model
 
 Service example:
-Environment="AI_TRADER_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
+Environment="AI_TRADING_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
 
 `trained_model.pkl` is expected at the project root when using
-`AI_TRADER_MODEL_PATH`. Generate it via the training workflow, for example:
+`AI_TRADING_MODEL_PATH` (legacy `AI_TRADER_MODEL_PATH`). Generate it via the training workflow, for example:
 
 ```bash
 python -m ai_trading.training.train_ml
 ```
 
-If the file is absent, the bot logs `ML_MODEL_MISSING` and falls back to the
-baseline model (`USE_ML=False`).
+If `AI_TRADING_MODEL_PATH` is unset and the default file is missing, the bot
+quietly falls back to the baseline model (`USE_ML=False`). A warning is only
+emitted when `AI_TRADING_MODEL_PATH` points to a missing file.
 
 ### Universe CSV
 - Optional: `AI_TRADER_TICKERS_CSV=/abs/path/to/tickers.csv`
@@ -1397,7 +1398,7 @@ Conventions (must follow)
 • Use runtime (instance of BotRuntime) across core paths; do not introduce ctx.
 • No shims; no try/except ImportError; no broad except Exception.
 • Structured JSON logging only; no print().
-• Models: configure via AI_TRADER_MODEL_PATH or AI_TRADER_MODEL_MODULE; cached at runtime.model.
+• Models: configure via AI_TRADING_MODEL_PATH (or legacy AI_TRADER_MODEL_PATH) or AI_TRADER_MODEL_MODULE; cached at runtime.model.
 
 Common Pitfalls
 • tickers.csv missing → a single warning per process (defaults are used).
