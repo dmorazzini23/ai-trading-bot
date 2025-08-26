@@ -58,19 +58,22 @@ class TestCriticalIssueFixes(unittest.TestCase):
 
     def test_issue_3_quantity_tracking_logging(self):
         """Test Issue 3: Order execution quantity tracking improved."""
-        # Test by reading the source code directly
-        trade_execution_path = "trade_execution.py"
-        if os.path.exists(trade_execution_path):
-            with open(trade_execution_path) as f:
-                content = f.read()
-                # Check that FULL_FILL_SUCCESS now includes requested_qty
-                self.assertIn('"requested_qty": requested_qty', content,
-                            "FULL_FILL_SUCCESS should include requested_qty for tracking")
-                # Check that ORDER_FILL_CONSOLIDATED uses total_filled_qty
-                self.assertIn('"total_filled_qty": buf["qty"]', content,
-                            "ORDER_FILL_CONSOLIDATED should use clear quantity field name")
-        else:
-            self.assertTrue(True)
+        from tests.support.mocks import MockContext
+        from ai_trading.execution.engine import ExecutionEngine
+
+        ctx = MockContext()
+        engine = ExecutionEngine(ctx)
+        with self.assertLogs('ai_trading.execution.engine', level='INFO') as log:
+            engine._reconcile_partial_fills(
+                requested_qty=12,
+                remaining_qty=4,
+                symbol='AAPL',
+                side='buy',
+            )
+        output = ' '.join(log.output)
+        self.assertIn('PARTIAL_FILL_DETECTED', output)
+        self.assertIn('requested', output)
+        self.assertIn('filled', output)
 
     def test_issue_1_meta_learning_trigger_exists(self):
         """Test Issue 1: Meta-learning conversion trigger exists."""

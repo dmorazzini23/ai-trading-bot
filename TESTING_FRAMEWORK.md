@@ -422,7 +422,7 @@ from unittest.mock import patch
 import alpaca_trade_api as tradeapi
 
 from alpaca_api import AlpacaAPI
-from trade_execution import OrderExecutor
+from ai_trading.execution.engine import ExecutionEngine
 
 
 class TestAlpacaIntegration:

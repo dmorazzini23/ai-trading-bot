@@ -10,7 +10,15 @@ def test_ai_trading_module_imports():
     import importlib
 
     # Test each moved module can be imported from ai_trading
-    modules = ["signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer"]
+    modules = [
+        "signals",
+        "data_fetcher",
+        "execution",
+        "indicators",
+        "pipeline",
+        "portfolio",
+        "rebalancer",
+    ]
     for module_name in modules:
         pkg_module = importlib.import_module(f"ai_trading.{module_name}")
         assert hasattr(pkg_module, "__dict__")
@@ -19,6 +27,14 @@ def test_ai_trading_init_exports():
     # Test that ai_trading.__init__ properly exports the modules
     import ai_trading
 
-    modules = ["signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer"]
+    modules = [
+        "signals",
+        "data_fetcher",
+        "execution",
+        "indicators",
+        "pipeline",
+        "portfolio",
+        "rebalancer",
+    ]
     for module_name in modules:
         assert hasattr(ai_trading, module_name)
