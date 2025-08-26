@@ -7,6 +7,8 @@ from functools import lru_cache
 from importlib.util import find_spec
 from types import ModuleType
 
+from ai_trading.logging import get_logger
+
 class _LazyModule(ModuleType):
     """Proxy module that loads the real module upon first attribute access."""
 
@@ -34,3 +36,15 @@ def load_pandas_market_calendars() -> ModuleType | None:
     if find_spec("pandas_market_calendars") is None:
         return None
     return _LazyModule("pandas_market_calendars")
+
+
+@lru_cache(maxsize=None)
+def load_pandas_ta() -> ModuleType | None:
+    """Return :mod:`pandas_ta` if available, logging once when missing."""
+    try:
+        return importlib.import_module("pandas_ta")
+    except Exception:  # pragma: no cover - optional dependency
+        get_logger(__name__).info(
+            "PANDAS_TA_MISSING", extra={"hint": "pip install pandas-ta"}
+        )
+        return None

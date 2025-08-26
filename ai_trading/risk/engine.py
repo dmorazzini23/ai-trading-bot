@@ -8,7 +8,7 @@ from datetime import UTC
 from typing import Any
 import numpy as np
 import importlib
-from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api.rest import APIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
@@ -29,14 +29,6 @@ if not hasattr(np, 'NaN'):
 
 # Lazy pandas proxy
 pd = load_pandas()
-
-try:  # optional pandas_ta import for ta accessor registration
-    import pandas_ta as ta  # type: ignore  # noqa: F401
-except ImportError:  # pragma: no cover - optional dependency
-    ta = None
-    get_logger(__name__).info(
-        'PANDAS_TA_MISSING', extra={'hint': 'pip install pandas-ta'}
-    )
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST
 except ImportError:
@@ -858,7 +850,12 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float, *, context: An
         if entry_price <= 0:
             logger.warning('apply_trailing_atr_stop invalid entry price: %.2f', entry_price)
             return
-        atr = df.ta.atr()
+        ta_mod = load_pandas_ta()
+        if ta_mod is not None and hasattr(df, 'ta'):
+            atr = df.ta.atr()
+        else:
+            from ai_trading.indicators import atr as _atr
+            atr = _atr(df['High'], df['Low'], df['Close'])
         trailing_stop = entry_price - 2 * atr
         last_valid_close = df['Close'].dropna()
         if not last_valid_close.empty:
