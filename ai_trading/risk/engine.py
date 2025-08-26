@@ -51,9 +51,6 @@ class TradeSignal:
     asset_class: str
     strength: float = 1.0
 logger = get_logger(__name__)
-if not get_env("PYTEST_RUNNING", "0", cast=bool):
-    _ENV_SNAPSHOT = validate_required_env()
-    logger.debug("ENV_VARS_MASKED", extra=_ENV_SNAPSHOT)
 
 random.seed(SEED)
 np.random.seed(SEED)
@@ -67,6 +64,7 @@ class RiskEngine:
 
     def __init__(self, cfg: TradingConfig | None=None) -> None:
         """Initialize the engine with an optional trading config."""
+        self._validate_env()
         self.config = cfg if cfg is not None else TradingConfig()
         self._lock = threading.Lock()
         self.hard_stop = False
@@ -121,6 +119,13 @@ class RiskEngine:
             logger.error('Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10', e)
             self.hard_stop_cooldown = 10.0
         self._hard_stop_until: float | None = None
+
+    def _validate_env(self) -> None:
+        """Validate required environment variables unless running tests."""
+        if get_env("PYTEST_RUNNING", "0", cast=bool):
+            return
+        snapshot = validate_required_env()
+        logger.debug("ENV_VARS_MASKED", extra=snapshot)
 
     def _dynamic_cap(self, asset_class: str, volatility: float | None=None, cash_ratio: float | None=None) -> float:
         """Return exposure cap for ``asset_class`` using adaptive rules."""
