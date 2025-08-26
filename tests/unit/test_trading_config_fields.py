@@ -13,9 +13,9 @@ def test_defaults_present():
 
 
 def test_env_overrides_and_defaults(monkeypatch):
-    monkeypatch.setenv('AI_TRADER_KELLY_FRACTION_MAX', '0.20')
-    monkeypatch.setenv('AI_TRADER_MIN_SAMPLE_SIZE', '12')
-    monkeypatch.setenv('AI_TRADER_CONFIDENCE_LEVEL', '0.85')
+    monkeypatch.setenv('AI_TRADING_KELLY_FRACTION_MAX', '0.20')
+    monkeypatch.setenv('AI_TRADING_MIN_SAMPLE_SIZE', '12')
+    monkeypatch.setenv('AI_TRADING_CONFIDENCE_LEVEL', '0.85')
     cfg = TradingConfig.from_env()
     assert cfg.kelly_fraction_max == 0.20
     assert cfg.min_sample_size == 12

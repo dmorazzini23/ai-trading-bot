@@ -9,7 +9,7 @@
 
 ## Object Model
  - **TradingConfig**: static config (API keys, paths, thresholds).
-   - Confidence gate: `AI_TRADER_CONF_THRESHOLD` sets minimum model confidence (default **0.75**).
+   - Confidence gate: `AI_TRADING_CONF_THRESHOLD` sets minimum model confidence (default **0.75**).
  - **BotRuntime**: process runtime (cfg, params, tickers, model, broker clients, etc.).
    - Required fields: `cfg`, `params: dict`, `tickers: list[str]`, `model: Any (optional)`.
 

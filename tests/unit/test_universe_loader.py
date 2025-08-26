@@ -13,14 +13,14 @@ def test_env_override_path_preferred(tmp_path: Path, monkeypatch: pytest.MonkeyP
     csv_path = tmp_path / "tickers.csv"
     csv_path.write_text("symbol\nAAPL\nMSFT\n", encoding="utf-8")
 
-    monkeypatch.setenv("AI_TRADER_TICKERS_CSV", str(csv_path))
+    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(csv_path))
     try:
         path = universe.locate_tickers_csv()
         assert path == str(csv_path.resolve())
         symbols = universe.load_universe()
         assert symbols == ["AAPL", "MSFT"]
     finally:
-        monkeypatch.delenv("AI_TRADER_TICKERS_CSV", raising=False)
+        monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
 
 
 def test_package_fallback_loads_packaged_csv():
@@ -38,7 +38,7 @@ def test_missing_package_returns_empty_and_logs(monkeypatch: pytest.MonkeyPatch)
         raise ModuleNotFoundError("ai_trading.data not importable")
 
     monkeypatch.setattr(universe, "pkg_files", boom, raising=True)
-    monkeypatch.delenv("AI_TRADER_TICKERS_CSV", raising=False)
+    monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
 
     called: list[tuple[str, dict]] = []
 
@@ -56,7 +56,7 @@ def test_malformed_empty_csv_logs_and_returns_empty(tmp_path: Path, monkeypatch:
 
     empty_csv = tmp_path / "empty.csv"
     empty_csv.write_text("", encoding="utf-8")
-    monkeypatch.setenv("AI_TRADER_TICKERS_CSV", str(empty_csv))
+    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(empty_csv))
 
     called: list[tuple[str, dict]] = []
 

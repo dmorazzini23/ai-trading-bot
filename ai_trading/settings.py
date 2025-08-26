@@ -78,29 +78,29 @@ class Settings(BaseSettings):
     min_health_rows: int = Field(120, alias='MIN_HEALTH_ROWS')
     api_host: str = Field('0.0.0.0', alias='API_HOST')
     api_port: int = Field(9001, alias='API_PORT')
-    finnhub_rpm: int = Field(default=55, env='AI_TRADER_FINNHUB_RPM')
-    max_trades_per_day: int = Field(default=200, env='AI_TRADER_MAX_TRADES_PER_DAY')
-    max_trades_per_hour: int = Field(default=30, env='AI_TRADER_MAX_TRADES_PER_HOUR')
-    conf_threshold: float = Field(default=0.75, env='AI_TRADER_CONF_THRESHOLD')
+    finnhub_rpm: int = Field(default=55, env='AI_TRADING_FINNHUB_RPM')
+    max_trades_per_day: int = Field(default=200, env='AI_TRADING_MAX_TRADES_PER_DAY')
+    max_trades_per_hour: int = Field(default=30, env='AI_TRADING_MAX_TRADES_PER_HOUR')
+    conf_threshold: float = Field(default=0.75, env='AI_TRADING_CONF_THRESHOLD')
     score_confidence_min: float | None = Field(default=None, alias='SCORE_CONFIDENCE_MIN')
     score_size_max_boost: float = Field(1.0, alias='SCORE_SIZE_MAX_BOOST', description='Upper bound of raw size multiplier at confidence=1.0')
     score_size_gamma: float = Field(1.0, alias='SCORE_SIZE_GAMMA', description='Shape parameter: 1.0 linear, <1 concave, >1 convex')
-    buy_threshold: float = Field(default=0.4, env='AI_TRADER_BUY_THRESHOLD')
-    daily_loss_limit: float = Field(default=0.03, env='AI_TRADER_DAILY_LOSS_LIMIT')
-    max_drawdown_threshold: float = Field(default=0.08, env='AI_TRADER_MAX_DRAWDOWN_THRESHOLD')
-    portfolio_drift_threshold: float = Field(default=0.15, env='AI_TRADER_PORTFOLIO_DRIFT_THRESHOLD')
-    sector_exposure_cap: float = Field(default=0.33, env='AI_TRADER_SECTOR_EXPOSURE_CAP')
-    max_portfolio_positions: int = Field(default=10, env='AI_TRADER_MAX_PORTFOLIO_POSITIONS')
-    disaster_dd_limit: float = Field(default=0.25, env='AI_TRADER_DISASTER_DD_LIMIT')
-    data_cache_enable: bool = Field(default=True, env='AI_TRADER_DATA_CACHE_ENABLE')
-    data_cache_ttl_seconds: int = Field(default=300, env='AI_TRADER_DATA_CACHE_TTL_SECONDS')
-    data_cache_dir: str = Field(default=str(Path.home() / '.cache' / 'ai_trader'), env='AI_TRADER_DATA_CACHE_DIR')
-    data_cache_disk_enable: bool = Field(True, env='AI_TRADER_DATA_CACHE_DISK_ENABLE')
+    buy_threshold: float = Field(default=0.4, env='AI_TRADING_BUY_THRESHOLD')
+    daily_loss_limit: float = Field(default=0.03, env='AI_TRADING_DAILY_LOSS_LIMIT')
+    max_drawdown_threshold: float = Field(default=0.08, env='AI_TRADING_MAX_DRAWDOWN_THRESHOLD')
+    portfolio_drift_threshold: float = Field(default=0.15, env='AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD')
+    sector_exposure_cap: float = Field(default=0.33, env='AI_TRADING_SECTOR_EXPOSURE_CAP')
+    max_portfolio_positions: int = Field(default=10, env='AI_TRADING_MAX_PORTFOLIO_POSITIONS')
+    disaster_dd_limit: float = Field(default=0.25, env='AI_TRADING_DISASTER_DD_LIMIT')
+    data_cache_enable: bool = Field(default=True, env='AI_TRADING_DATA_CACHE_ENABLE')
+    data_cache_ttl_seconds: int = Field(default=300, env='AI_TRADING_DATA_CACHE_TTL_SECONDS')
+    data_cache_dir: str = Field(default=str(Path.home() / '.cache' / 'ai_trading'), env='AI_TRADING_DATA_CACHE_DIR')
+    data_cache_disk_enable: bool = Field(True, env='AI_TRADING_DATA_CACHE_DISK_ENABLE')
     pretrade_lookback_days: int = Field(120, alias='PRETRADE_LOOKBACK_DAYS')
-    verbose_logging: bool = Field(default=False, env='AI_TRADER_VERBOSE_LOGGING')
-    enable_plotting: bool = Field(default=False, env='AI_TRADER_ENABLE_PLOTTING')
-    position_size_min_usd: float = Field(default=0.0, env='AI_TRADER_POSITION_SIZE_MIN_USD')
-    volume_threshold: float = Field(default=0.0, env='AI_TRADER_VOLUME_THRESHOLD')
+    verbose_logging: bool = Field(default=False, env='AI_TRADING_VERBOSE_LOGGING')
+    enable_plotting: bool = Field(default=False, env='AI_TRADING_ENABLE_PLOTTING')
+    position_size_min_usd: float = Field(default=0.0, env='AI_TRADING_POSITION_SIZE_MIN_USD')
+    volume_threshold: float = Field(default=0.0, env='AI_TRADING_VOLUME_THRESHOLD')
     alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
     capital_cap: float = Field(0.04, env='CAPITAL_CAP')
@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     rl_model_path: str = Field('rl_agent.zip', alias='AI_TRADING_RL_MODEL_PATH')
     use_rl_agent: bool = Field(False, alias='USE_RL_AGENT')
     trade_cooldown_min: int = Field(15, alias='TRADE_COOLDOWN_MIN')
-    health_tick_seconds: int = Field(default=300, env='AI_TRADER_HEALTH_TICK_SECONDS')
+    health_tick_seconds: int = Field(default=300, env='AI_TRADING_HEALTH_TICK_SECONDS')
     cpu_only: bool = Field(default=False, validation_alias='CPU_ONLY')
     news_api_key: str | None = None
     rebalance_interval_min: int = Field(60, ge=1, description='Minutes between portfolio rebalances', alias='REBALANCE_INTERVAL_MIN')
@@ -167,7 +167,7 @@ class Settings(BaseSettings):
     @property
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=_to_int(getattr(self, 'trade_cooldown_min', 15), 15))
-    model_config = SettingsConfigDict(env_prefix='AI_TRADER_', extra='ignore', case_sensitive=False)
+    model_config = SettingsConfigDict(env_prefix='AI_TRADING_', extra='ignore', case_sensitive=False)
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -180,11 +180,15 @@ def get_news_api_key() -> str | None:
     if val:
         return val
     import os
-    return os.getenv('NEWS_API_KEY') or os.getenv('AI_TRADER_NEWS_API_KEY')
+    return (
+        os.getenv('NEWS_API_KEY')
+        or os.getenv('AI_TRADING_NEWS_API_KEY')
+        or os.getenv('AI_TRADER_NEWS_API_KEY')
+    )
 
 def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval.
-    Prefers Settings.rebalance_interval_min, else env AI_TRADER_REBALANCE_INTERVAL_MIN, else 60.
+    Prefers Settings.rebalance_interval_min, else env AI_TRADING_REBALANCE_INTERVAL_MIN, else 60.
     """
     s = get_settings()
     val = getattr(s, 'rebalance_interval_min', 60)
@@ -194,7 +198,7 @@ def get_rebalance_interval_min() -> int:
         v = 60
     if v == 60:
         import os
-        alt = os.getenv('AI_TRADER_REBALANCE_INTERVAL_MIN')
+        alt = os.getenv('AI_TRADING_REBALANCE_INTERVAL_MIN') or os.getenv('AI_TRADER_REBALANCE_INTERVAL_MIN')
         if alt is not None:
             try:
                 return int(alt)
