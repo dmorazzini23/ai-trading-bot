@@ -235,12 +235,16 @@ class TradingConfig:
                     return cast(val) if cast is not str else val
             return default
 
+        mps = _get("MAX_POSITION_SIZE", float)
+        if mps is not None and mps <= 0:
+            raise ValueError("MAX_POSITION_SIZE must be positive")
+
         return cls(
             capital_cap=_get("CAPITAL_CAP", float),
             dollar_risk_limit=_get(
                 "DOLLAR_RISK_LIMIT", float, aliases=("DAILY_LOSS_LIMIT",)
             ),
-            max_position_size=_get("MAX_POSITION_SIZE", float),
+            max_position_size=mps,
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
             max_drawdown_threshold=_get("MAX_DRAWDOWN_THRESHOLD", float),
             trailing_factor=_get("TRAILING_FACTOR", float),
