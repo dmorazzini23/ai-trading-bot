@@ -48,7 +48,6 @@ import sys
 from datetime import datetime, timezone
 import pathlib
 
-import numpy as np
 import pytest
 import types
 try:
@@ -96,7 +95,12 @@ def _env_defaults(monkeypatch):
 def _seed_prng() -> None:
     os.environ.setdefault("PYTHONHASHSEED", "0")
     random.seed(0)
-    np.random.seed(0)
+    try:
+        import numpy as np
+
+        np.random.seed(0)
+    except Exception:
+        pass
     try:
         import torch  # type: ignore
     except Exception:

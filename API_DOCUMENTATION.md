@@ -270,10 +270,13 @@ class RiskMetrics:
 
 | Flag | Description |
 | ---- | ----------- |
-| `--dry-run` | Exit after imports without running logic |
+| `--dry-run` | Exit after imports without running logic and log `INDICATOR_IMPORT_OK` |
 | `--once` | Run a single iteration then exit |
 | `--interval SECONDS` | Sleep between iterations |
 | `--paper` / `--live` | Select paper (default) or live trading |
+
+
+The Alpaca SDK is imported lazily; runtime preflight checks will terminate the process if `alpaca-trade-api` is unavailable.
 
 ## Web Interface APIs
 

@@ -17,6 +17,8 @@ HINT = {
     "requests":     'pip install "requests"',
 }
 
+OPTDEPS = HINT  # AI-AGENT-REF: compatibility alias
+
 def require(pkg: str):
     """Skip current test module unless `pkg` is importable, with a clear install hint."""
     return pytest.importorskip(pkg, reason=f"Install with: {HINT.get(pkg, 'pip install ' + pkg)}")

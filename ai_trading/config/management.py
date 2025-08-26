@@ -5,8 +5,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, TypeVar
 
 # Authoritative runtime settings come from ai_trading.config.settings (which
-# re-exports _base_get_settings from ai_trading.settings in this repo).
-from ai_trading.config.settings import get_settings
+# Lazy accessors avoid optional dependency imports at module import time.
+# re-exports _base_get_settings from ai_trading.settings in this repo.
+def get_settings():  # type: ignore[override]
+    from ai_trading.config.settings import get_settings as _gs
+
+    return _gs()
 
 # Single source of truth for capital sizing math.
 from ai_trading.utils.capital_scaling import derive_cap_from_settings as _derive_cap_from_settings
@@ -154,26 +158,85 @@ __all__.append("reload_env")
 class TradingConfig:
     """
     Minimal, concrete config object expected by call-sites in core/bot_engine.py.
-    We do not guess new fields. Only fields observed in code/logs are exposed.
-    Values are sourced from central settings via `from_env()`.
+    Values are sourced from environment variables via ``from_env``.
     """
     seed: int = SEED  # AI-AGENT-REF: propagate runtime seed
     enable_finbert: bool = False
-    # Legacy sizing knobs are optional; if absent, we read them from central settings.
     capital_cap: Optional[float] = None
     dollar_risk_limit: Optional[float] = None
-    max_position_size: Optional[float] = None  # explicit cap if provided
+    max_position_size: Optional[float] = None
+    sector_exposure_cap: Optional[float] = None
+    max_drawdown_threshold: Optional[float] = None
+    trailing_factor: Optional[float] = None
+    take_profit_factor: Optional[float] = None
+    max_position_size_pct: Optional[float] = None
+    max_var_95: Optional[float] = None
+    min_profit_factor: Optional[float] = None
+    min_sharpe_ratio: Optional[float] = None
+    min_win_rate: Optional[float] = None
+    kelly_fraction_max: float = 0.25
+    min_sample_size: int = 10
+    confidence_level: float = 0.90
+    max_position_mode: str = "STATIC"
+    paper: bool = True
+    data_feed: Optional[str] = None
+    data_provider: Optional[str] = None
 
     @classmethod
-    def from_env(cls) -> "TradingConfig":
-        s = get_settings()
-        # We only materialize what's referenced in code/logs; everything else stays in `s`.
+    def from_env(
+        cls, env: Mapping[str, str] | None = None
+    ) -> "TradingConfig":
+        env_map = {k.upper(): v for k, v in (env or os.environ).items()}
+
+        def _get(
+            key: str,
+            cast: Callable[[str], Any] | type = str,
+            default: Any = None,
+            aliases: Iterable[str] = (),
+        ):
+            for k in (key, *aliases):
+                if k in env_map and env_map[k] != "":
+                    val = env_map[k]
+                    return cast(val) if cast is not str else val
+            return default
+
         return cls(
-            seed=SEED,
-            enable_finbert=bool(getattr(s, "enable_finbert", False)),
-            capital_cap=(getattr(s, "capital_cap", None)),
-            dollar_risk_limit=(getattr(s, "dollar_risk_limit", None)),
-            max_position_size=(getattr(s, "max_position_size", None)),
+            capital_cap=_get("CAPITAL_CAP", float),
+            dollar_risk_limit=_get(
+                "DAILY_LOSS_LIMIT", float, aliases=("DOLLAR_RISK_LIMIT",)
+            ),
+            max_position_size=_get("MAX_POSITION_SIZE", float),
+            sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
+            max_drawdown_threshold=_get("MAX_DRAWDOWN_THRESHOLD", float),
+            trailing_factor=_get("TRAILING_FACTOR", float),
+            take_profit_factor=_get("TAKE_PROFIT_FACTOR", float),
+            max_position_size_pct=_get("MAX_POSITION_SIZE_PCT", float),
+            max_var_95=_get("MAX_VAR_95", float),
+            min_profit_factor=_get("MIN_PROFIT_FACTOR", float),
+            min_sharpe_ratio=_get("MIN_SHARPE_RATIO", float),
+            min_win_rate=_get("MIN_WIN_RATE", float),
+            kelly_fraction_max=_get(
+                "KELLY_FRACTION_MAX",
+                float,
+                default=0.25,
+                aliases=("AI_TRADER_KELLY_FRACTION_MAX",),
+            ),
+            min_sample_size=_get(
+                "MIN_SAMPLE_SIZE",
+                int,
+                default=10,
+                aliases=("AI_TRADER_MIN_SAMPLE_SIZE",),
+            ),
+            confidence_level=_get(
+                "CONFIDENCE_LEVEL",
+                float,
+                default=0.90,
+                aliases=("AI_TRADER_CONFIDENCE_LEVEL",),
+            ),
+            max_position_mode=_get("MAX_POSITION_MODE", str, default="STATIC"),
+            paper=_get("PAPER", _to_bool, default=True),
+            data_feed=_get("DATA_FEED", str),
+            data_provider=_get("DATA_PROVIDER", str),
         )
 
     def get_legacy_params(self) -> Dict[str, Any]:
@@ -195,6 +258,38 @@ class TradingConfig:
         except Exception:
             pass
         return params
+
+    def snapshot_sanitized(self) -> Dict[str, Any]:
+        """Return a sanitized dict suitable for logging."""
+        return {
+            "capital_cap": self.capital_cap,
+            "dollar_risk_limit": self.dollar_risk_limit,
+            "max_position_mode": self.max_position_mode,
+            "data": {
+                "feed": self.data_feed,
+                "provider": self.data_provider,
+            },
+        }
+
+    @property
+    def max_correlation_exposure(self) -> Optional[float]:
+        """Back-compat alias for ``sector_exposure_cap``."""
+        return self.sector_exposure_cap
+
+    @property
+    def max_drawdown(self) -> Optional[float]:
+        """Back-compat alias for ``max_drawdown_threshold``."""
+        return self.max_drawdown_threshold
+
+    @property
+    def stop_loss_multiplier(self) -> Optional[float]:
+        """Back-compat alias for ``trailing_factor``."""
+        return self.trailing_factor
+
+    @property
+    def take_profit_multiplier(self) -> Optional[float]:
+        """Back-compat alias for ``take_profit_factor``."""
+        return self.take_profit_factor
 
 
 def derive_cap_from_settings(settings_obj, equity: Optional[float], fallback: float, capital_cap: float) -> float:

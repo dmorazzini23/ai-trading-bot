@@ -1,10 +1,11 @@
-from ai_trading.logging import get_logger
 """Clean model registry for storage, versioning, and retrieval.
 
 This module persists arbitrary model objects using ``pickle``. Paths are
 validated before loading to guard against unsafe deserialization.
 """
 from __future__ import annotations
+
+from ai_trading.logging import get_logger
 import hashlib
 import json
 import os
