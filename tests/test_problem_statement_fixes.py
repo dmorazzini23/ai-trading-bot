@@ -83,23 +83,23 @@ class TestProblemStatementFixes(unittest.TestCase):
         """Test that order quantity tracking provides clear distinction between
         requested, submitted, and filled quantities."""
         # Check that the trade execution logs have clear field names
-        trade_execution_path = "trade_execution.py"
-        if os.path.exists(trade_execution_path):
-            with open(trade_execution_path) as f:
-                content = f.read()
+        from tests.support.mocks import MockContext
+        from ai_trading.execution.engine import ExecutionEngine
 
-                # Check for clear quantity field names in FULL_FILL_SUCCESS
-                self.assertIn('"requested_qty":', content,
-                            "FULL_FILL_SUCCESS should include clear requested_qty field")
-                self.assertIn('"filled_qty":', content,
-                            "FULL_FILL_SUCCESS should include clear filled_qty field")
+        ctx = MockContext()
+        engine = ExecutionEngine(ctx)
 
-                # Check for clear quantity field names in ORDER_FILL_CONSOLIDATED
-                self.assertIn('"total_filled_qty":', content,
-                            "ORDER_FILL_CONSOLIDATED should use clear total_filled_qty field name")
-
-        else:
-            self.fail("trade_execution.py not found")
+        with self.assertLogs('ai_trading.execution.engine', level='INFO') as log:
+            engine._reconcile_partial_fills(
+                requested_qty=10,
+                remaining_qty=3,
+                symbol='AAPL',
+                side='buy',
+            )
+        output = ' '.join(log.output)
+        self.assertIn('PARTIAL_FILL_DETECTED', output)
+        self.assertIn('requested', output)
+        self.assertIn('filled', output)
 
 
 def run_problem_statement_tests():

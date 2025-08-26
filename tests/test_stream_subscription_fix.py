@@ -81,7 +81,7 @@ class TestStreamSubscriptionFix(unittest.TestCase):
             'alpaca_api': MagicMock(),
             'data_fetcher': MagicMock(),
             'signals': MagicMock(),
-            'trade_execution': MagicMock(),
+            'ai_trading.execution': MagicMock(),
             'metrics_logger': MagicMock(),
             'pydantic_settings': MagicMock(),
             'pandas': MagicMock(),

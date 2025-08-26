@@ -76,19 +76,24 @@ class TestMyFixes(unittest.TestCase):
         self.assertIn('LIQUIDITY_VOL_THRESHOLD", "0.08"', content)
 
 
-    def test_data_quality_handling_improved(self):
-        """Test that data quality validation is improved."""
-        with open("trade_execution.py") as f:
-            content = f.read()
+    def test_execution_partial_fill_logging(self):
+        """Test that execution engine logs partial fills with clear fields."""
+        from tests.support.mocks import MockContext
+        from ai_trading.execution.engine import ExecutionEngine
 
-        # Should require minimum 3 rows instead of 5
-        self.assertIn('len(df) < 3:', content)
-
-        # Should handle limited data gracefully
-        self.assertIn('Limited minute data', content)
-
-        # Should use adaptive calculations
-        self.assertIn('min(5, len(df))', content)
+        ctx = MockContext()
+        engine = ExecutionEngine(ctx)
+        with self.assertLogs('ai_trading.execution.engine', level='INFO') as log:
+            engine._reconcile_partial_fills(
+                requested_qty=5,
+                remaining_qty=2,
+                symbol='AAPL',
+                side='buy',
+            )
+        output = ' '.join(log.output)
+        self.assertIn('PARTIAL_FILL_DETECTED', output)
+        self.assertIn('requested', output)
+        self.assertIn('filled', output)
 
 
     def test_confidence_algorithm_correctness(self):
