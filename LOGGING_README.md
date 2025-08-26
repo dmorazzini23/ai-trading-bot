@@ -36,6 +36,13 @@ Any `extra` fields such as API keys, secrets, or URLs are sanitized before
 being emitted to handlers, ensuring sensitive values are replaced with
 `***REDACTED***`.
 
+#### Data Fetch Diagnostics
+Daily price requests now log their parameters and outcome:
+
+- `DAILY_FETCH_REQUEST` records the symbol, timeframe, and date range
+- `DAILY_FETCH_RESULT` reports the number of rows returned and whether the
+  response came from cache
+
 ### Example Usage
 
 ```bash
