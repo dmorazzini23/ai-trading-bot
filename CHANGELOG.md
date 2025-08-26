@@ -22,6 +22,8 @@ All notable changes to this project will be documented in this file.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
 - **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,
   lazy client init, config parity, and added utility/environment helpers.
+- **Alpaca client**: log initialization failures, skip account logic when client
+  unavailable, and abort trading loop if API remains unset.
 - **ExecutionEngine**: Removed unsupported slippage metrics kwargs from initialization to prevent runtime `TypeError`.
 - **Import Blocker**: Replaced corrupted `ai_trading/model_registry.py` with clean, minimal, typed model registry implementation
 - Removed hard `data_client` dependency in risk engine with optional Alpaca client.
