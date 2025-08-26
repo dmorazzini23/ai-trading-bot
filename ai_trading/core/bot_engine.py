@@ -3677,6 +3677,22 @@ class DataFetcher:
         # AI-AGENT-REF: rate-limit repeated warnings per (symbol, timeframe)
         self._warn_seen: dict[str, int] = {}
 
+        # Verify required Alpaca configuration
+        has_key = bool(getattr(CFG, "alpaca_api_key", ""))
+        has_secret = bool(getattr(CFG, "alpaca_secret_key_plain", ""))
+        if not (has_key and has_secret):
+            logger.error(
+                "ALPACA_CREDENTIALS_MISSING",
+                extra={"has_key": has_key, "has_secret": has_secret},
+            )
+        logger.debug(
+            "ALPACA_DATA_CONFIG",
+            extra={
+                "feed": getattr(CFG, "alpaca_data_feed", None),
+                "adjustment": getattr(CFG, "alpaca_adjustment", None),
+            },
+        )
+
     def _warn_once(self, key: str, msg: str) -> None:
         """Log a warning at most once per minute for a given key."""
         try:
@@ -3834,18 +3850,36 @@ class DataFetcher:
                     bars = safe_get_stock_bars(client, req, symbol, "DAILY")
                 else:
                     raise
-            if bars is None:
-                return None
+            if bars is None or bars.empty:
+                logger.warning(
+                    "DAILY_BARS_EMPTY",
+                    extra={
+                        "symbols": req.symbol_or_symbols,
+                        "feed": req.feed,
+                        "response": None if bars is None else bars.to_dict(),
+                    },
+                )
+                bars = safe_get_stock_bars(client, req, symbol, "DAILY_RETRY")
+                if bars is None or bars.empty:
+                    bars = _minute_resample()
+                    if bars is None or bars.empty:
+                        return None
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if bars.empty:
-                logger.info(
-                    "No daily bars returned for %s. Possible market holiday or API outage",
-                    symbol,
+                logger.warning(
+                    "DAILY_BARS_EMPTY",
+                    extra={
+                        "symbols": req.symbol_or_symbols,
+                        "feed": req.feed,
+                        "response": bars.to_dict(),
+                    },
                 )
-                return None
+                bars = _minute_resample()
+                if bars is None or bars.empty:
+                    return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
                 idx_vals = [t[1] for t in bars.index]
             else:
