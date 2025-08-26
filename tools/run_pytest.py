@@ -7,6 +7,7 @@ import argparse
 import importlib.util as iu
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,10 +63,27 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
     if args.collect_only:
         cmd += ["--collect-only"]
+
     if args.targets:
         # AI-AGENT-REF: append explicit targets last so pytest limits collection
         cmd.extend(args.targets)
-    elif args.keyword:
+        if args.keyword:
+            cmd += ["-k", args.keyword]
+        return cmd
+
+    if args.keyword:
+        # AI-AGENT-REF: limit collection to matching test files when only -k is given
+        keywords = {
+            tok.strip()
+            for tok in re.split(r"\bor\b|\band\b|\bnot\b|[()]", args.keyword)
+            if tok.strip()
+        }
+        tests_dir = Path("tests")
+        matches: list[str] = []
+        for word in keywords:
+            matches.extend(str(p) for p in tests_dir.glob(f"test*{word}*.py"))
+        if matches:
+            cmd.extend(sorted(set(matches)))
         cmd += ["-k", args.keyword]
     return cmd
 

@@ -44,7 +44,10 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
     except KeyboardInterrupt:
         logger.info("%s interrupted", label)
         sys.exit(0)
-    except (KeyError, ValueError, TypeError) as e:
+    except SystemExit as e:  # AI-AGENT-REF: surface exit codes in logs
+        logger.error("%s exited: %s", label, e, exc_info=True)
+        raise
+    except Exception as e:
         logger.error("%s failed: %s", label, e, exc_info=True)
         sys.exit(1)
 
