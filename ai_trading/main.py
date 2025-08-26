@@ -104,23 +104,23 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     cap = _as_float(getattr(tcfg, "capital_cap", 0.0), 0.0)
     risk = _as_float(getattr(tcfg, "dollar_risk_limit", 0.0), 0.0)
     max_pos = _as_float(getattr(tcfg, "max_position_size", None), 0.0)
+    env_pos = _as_float(get_env("AI_TRADING_MAX_POSITION_SIZE"), 0.0)
+    user_pos = env_pos if env_pos > 0.0 else max_pos
     mp_mode = str(getattr(tcfg, "max_position_mode", getattr(cfg, "max_position_mode", "STATIC"))).upper()
     if not 0.0 < cap <= 1.0:
         errors.append(f"CAPITAL_CAP out of range: {cap}")
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
-    if not max_pos > 0.0:
+    if not user_pos > 0.0:
         if mp_mode == "AUTO":
             pass
         else:
             eq = getattr(tcfg, "equity", getattr(cfg, "equity", None))
-            fallback, _src = _resolve_max_position_size(max_pos, cap, eq)
+            fallback, _src = _resolve_max_position_size(0.0, cap, eq)
             try:
                 if hasattr(tcfg, "max_position_size"):
                     tcfg.max_position_size = float(fallback)
                 else:
-                    import os
-
                     os.environ["AI_TRADING_MAX_POSITION_SIZE"] = str(float(fallback))
                     logger.warning(
                         "CONFIG_AUTOFIX_FALLBACK_APPLIED_VIA_ENV",
@@ -131,6 +131,11 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                     "CONFIG_AUTOFIX_FALLBACK_APPLIED_VIA_ENV",
                     extra={"field": "max_position_size", "fallback": float(fallback), "error": repr(e)},
                 )
+    else:
+        if hasattr(tcfg, "max_position_size"):
+            tcfg.max_position_size = float(user_pos)
+        else:
+            os.environ["AI_TRADING_MAX_POSITION_SIZE"] = str(float(user_pos))
     base_url = str(getattr(cfg, "alpaca_base_url", ""))
     paper = bool(getattr(cfg, "paper", True))
     if paper and "paper" not in base_url:
