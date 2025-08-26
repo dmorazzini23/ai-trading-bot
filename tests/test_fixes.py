@@ -3,8 +3,6 @@
 Test script to validate the trading bot fixes.
 This script tests the expanded ticker portfolio and TA-Lib fallback handling.
 """
-from tests.optdeps import require
-require("pandas")
 
 import csv
 import os
@@ -73,7 +71,8 @@ def test_talib_imports():
         # Test basic functionality with small dataset
         test_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 3  # 30 data points
         try:
-            import pandas as pd
+            import pytest
+            pd = pytest.importorskip("pandas")
             test_series = pd.Series(test_data)
             sma_result = ta.trend.sma_indicator(test_series, window=10)
             if sma_result is not None and len(sma_result) == len(test_data):

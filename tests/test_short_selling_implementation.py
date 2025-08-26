@@ -3,8 +3,6 @@
 Focused test for short selling implementation.
 Tests the specific changes needed to enable short selling capability.
 """
-from tests.optdeps import require
-require("pandas")
 
 import os
 import sys
@@ -192,7 +190,8 @@ class TestShortSellingImplementation(unittest.TestCase):
         with patch('os.path.exists', return_value=True):
             with patch('pandas.read_csv') as mock_read_csv:
                 # Mock empty dataframe
-                import pandas as pd
+                import pytest
+                pd = pytest.importorskip("pandas")
                 mock_read_csv.return_value = pd.DataFrame()
 
                 result = load_global_signal_performance(min_trades=1)  # Lower threshold

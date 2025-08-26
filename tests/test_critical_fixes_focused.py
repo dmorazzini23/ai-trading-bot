@@ -2,8 +2,6 @@
 """
 Focused test suite for the critical trading bot fixes per problem statement.
 """
-from tests.optdeps import require
-require("pandas")
 
 import csv
 import os
@@ -157,7 +155,8 @@ def test_meta_learning_price_conversion():
         }
 
         # Simulate the fixed price conversion logic
-        import pandas as pd
+        import pytest
+        pd = pytest.importorskip("pandas")
         df = pd.DataFrame(mock_df_data)
 
         # Test the fixed conversion logic

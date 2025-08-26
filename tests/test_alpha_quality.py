@@ -4,16 +4,13 @@ Basic tests for the new alpha quality features.
 Tests cover data leakage prevention, walk-forward analysis,
 slippage calculations, and RL reward penalties.
 """
-from tests.optdeps import require
-require("pandas")
 
 from datetime import timedelta
 from unittest.mock import Mock
 
 import numpy as np
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 # Test data labeling and splits
 def test_fixed_horizon_return():
     """Test fixed horizon return calculation."""

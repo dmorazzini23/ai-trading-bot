@@ -1,15 +1,12 @@
-from tests.optdeps import require
-require("pandas")
-require("sklearn")
-require("torch")
 import io
 import types
 
-import pandas as pd
 import pytest
-import sklearn.linear_model
-import torch
 
+pd = pytest.importorskip("pandas")
+sklearn = pytest.importorskip("sklearn")
+import sklearn.linear_model
+torch = pytest.importorskip("torch")
 try:
     import pydantic_settings  # noqa: F401
     from ai_trading import meta_learning

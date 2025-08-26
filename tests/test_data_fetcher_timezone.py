@@ -1,11 +1,10 @@
-from tests.optdeps import require
-require("pandas")
 import sys
 import types
 from datetime import UTC, datetime
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 # AI-AGENT-REF: regression test for Yahoo timezone normalization
 
 

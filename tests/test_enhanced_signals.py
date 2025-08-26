@@ -1,12 +1,9 @@
-from tests.optdeps import require
-require("pandas")
 import numpy as np
-import pandas as pd
-
+import pytest
+pd = pytest.importorskip("pandas")
 try:
     import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 except ImportError:  # pragma: no cover - optional dependency
-    import pytest
     pytest.skip("risk_engine not available", allow_module_level=True)
 from ai_trading import signals
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from tests.optdeps import require
-require("pandas")
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.data import bars as bars_mod
 
 # AI-AGENT-REF: test central helpers

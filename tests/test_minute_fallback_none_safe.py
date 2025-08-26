@@ -1,9 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 import types
 
 import ai_trading.data.bars as data_bars
-import pandas as pd
+import pytest
+pd = pytest.importorskip("pandas")
 from ai_trading.data.bars import safe_get_stock_bars
 
 

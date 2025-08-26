@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from tests.optdeps import require
-require("pandas")
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 from ai_trading.data.sanitize import DataSanitizer, SanitizationConfig
 
 

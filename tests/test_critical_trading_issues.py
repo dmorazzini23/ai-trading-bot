@@ -3,8 +3,6 @@
 Critical trading bot issues test suite.
 Tests for order execution tracking, meta-learning log formats, liquidity management.
 """
-from tests.optdeps import require
-require("pandas")
 
 import csv
 import os
@@ -12,8 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 # Set up minimal environment for imports
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'test_secret')

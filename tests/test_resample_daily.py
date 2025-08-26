@@ -1,10 +1,10 @@
 """Test minute-to-daily resampling fallback."""
-from tests.optdeps import require
-require("pandas")
 
 from datetime import UTC, datetime
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.data import bars
 from tests.support.assert_df_like import assert_df_like
 

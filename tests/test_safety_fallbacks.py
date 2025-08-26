@@ -1,9 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 import os
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 # Set test environment before importing heavy modules
 os.environ['PYTEST_RUNNING'] = 'true'
 

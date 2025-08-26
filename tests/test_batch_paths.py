@@ -1,12 +1,9 @@
-from tests.optdeps import require
-require("pandas")
 import types
 
 import ai_trading.core.bot_engine as be
 import ai_trading.trade_logic as tl
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def _mk_df():
     return pd.DataFrame(
         {

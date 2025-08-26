@@ -1,10 +1,10 @@
-from tests.optdeps import require
-require("pandas")
 import datetime as dt
 import sys
 import types
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading import data_fetcher
 from ai_trading.utils.base import health_check
 

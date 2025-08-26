@@ -1,8 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 import datetime as dt
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading import data_fetcher as dfetch
 
 from tests.helpers.asserts import assert_df_like

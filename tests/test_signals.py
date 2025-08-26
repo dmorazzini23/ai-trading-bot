@@ -1,12 +1,10 @@
-from tests.optdeps import require
-require("pandas")
 import importlib
 import sys
 import types
 
 import numpy as np
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 
 np.random.seed(0)
 

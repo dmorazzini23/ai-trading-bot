@@ -1,12 +1,11 @@
-from tests.optdeps import require
-require("pandas")
 import sys
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 # Ensure project root is importable and stub heavy optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -168,8 +167,7 @@ class _Client:
         pass
 
     def get_stock_bars(self, *a, **k):
-        import pandas as pd
-
+        pd = pytest.importorskip("pandas")
         df = pd.DataFrame(
             {
                 "open": [1.0],

@@ -1,11 +1,10 @@
-from tests.optdeps import require
-require("pandas")
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_trading import data_fetcher

@@ -1,6 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-from pandas import DataFrame
+import pytest
+DataFrame = pytest.importorskip("pandas").DataFrame
 
 
 def assert_df_like(df: DataFrame, *, columns: list[str] | None = None) -> None:

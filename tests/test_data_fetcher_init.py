@@ -1,11 +1,10 @@
 """Tests for data_fetcher.build_fetcher initialization paths."""  # AI-AGENT-REF
 from __future__ import annotations
 
-from tests.optdeps import require
-require("pandas")
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 import sys
 import types
 

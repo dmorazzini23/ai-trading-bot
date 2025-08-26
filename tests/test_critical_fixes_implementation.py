@@ -3,16 +3,15 @@
 Tests the thread safety, memory leak prevention, division by zero protection,
 and other critical fixes for production readiness.
 """
-from tests.optdeps import require
-require("pandas")
 
 import os
 import sys
 import threading
 from unittest.mock import Mock, patch
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 # Set up test environment variables first
 os.environ.update({
     'ALPACA_API_KEY': 'test_key_123456789012345',

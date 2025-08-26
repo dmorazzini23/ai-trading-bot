@@ -1,8 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def test_timeframe_has_basic_members():
     from ai_trading.core.bot_engine import TimeFrame
 

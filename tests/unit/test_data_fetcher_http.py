@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from tests.optdeps import require
-require("pandas")
 
 import json
 from datetime import UTC, datetime, timedelta
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 import ai_trading.data_fetcher as df
 
