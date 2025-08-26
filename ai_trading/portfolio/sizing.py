@@ -4,11 +4,14 @@ Advanced position sizing and portfolio allocation strategies.
 Provides volatility targeting, risk parity, correlation-based sizing,
 and other institutional-grade position sizing methodologies.
 """
+from __future__ import annotations
+
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from json import JSONDecodeError
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
 try:
     import requests
@@ -18,6 +21,9 @@ except ImportError:
     class RequestException(Exception):
         pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 def _import_clustering():
     from ai_trading.config import get_settings
@@ -115,6 +121,7 @@ class VolatilityTargetingSizer:
 
     def _estimate_correlations(self, symbols: list[str]) -> np.ndarray:
         """Estimate correlation matrix from price history."""
+        pd = load_pandas()
         try:
             if len(symbols) < 2:
                 return np.array([[1.0]])
@@ -267,6 +274,7 @@ class RiskParitySizer:
 
     def _calculate_covariance_matrix(self, symbols: list[str], price_history: dict[str, pd.Series]) -> np.ndarray | None:
         """Calculate covariance matrix from price history."""
+        pd = load_pandas()
         try:
             return_series = {}
             for symbol in symbols:
@@ -362,6 +370,7 @@ class CorrelationClusterSizer:
 
     def _calculate_correlation_matrix(self, symbols: list[str], price_history: dict[str, pd.Series]) -> np.ndarray | None:
         """Calculate correlation matrix."""
+        pd = load_pandas()
         try:
             return_series = {}
             for symbol in symbols:
