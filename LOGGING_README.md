@@ -13,8 +13,8 @@
 #### Emit-Once Logging
 Startup banners and environment setup messages use emit-once logging to prevent duplicate messages during multiple initialization attempts:
 
-- "Alpaca SDK is available"
-- "FinBERT loaded successfully" 
+- "Alpaca SDK is available" (or a warning if the SDK is missing)
+- "FinBERT loaded successfully"
 - Configuration verification messages
 
 #### Compact JSON Format

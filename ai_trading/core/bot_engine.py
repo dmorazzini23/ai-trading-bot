@@ -68,6 +68,12 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         pass
 
 from ai_trading.config.management import derive_cap_from_settings, is_shadow_mode
+
+
+def _alpaca_available() -> bool:
+    """Return ``True`` if the alpaca_trade_api SDK is importable."""
+
+    return ALPACA_AVAILABLE
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
@@ -205,6 +211,7 @@ __all__ = [
     "_SENTIMENT_CACHE",
     "fetch_sentiment",
     "ALPACA_AVAILABLE",
+    "_alpaca_available",
     "FINNHUB_AVAILABLE",
     "DataFetchError",
     "MockSignal",
@@ -838,7 +845,15 @@ def ensure_portfolio_weights(ctx, symbols):
 
 
 # Log Alpaca availability on startup (only once per process)
-_emit_once(logger, "alpaca_available", logging.INFO, "Alpaca SDK is available")
+if _alpaca_available():
+    _emit_once(logger, "alpaca_available", logging.INFO, "Alpaca SDK is available")
+else:  # pragma: no cover - executed only when SDK missing
+    _emit_once(
+        logger,
+        "alpaca_missing",
+        logging.WARNING,
+        "Alpaca SDK not installed",
+    )
 # Mirror config to maintain historical constant name
 # REMOVED: MIN_CYCLE = CFG.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
@@ -1439,7 +1454,7 @@ _ALPACA_IMPORT_ERROR: Exception | None = None
 def _ensure_alpaca_classes() -> None:
     """Import Alpaca SDK types on demand."""
     global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
-    if Quote is not None:
+    if Quote is not None or _ALPACA_IMPORT_ERROR is not None:
         return
     try:  # pragma: no cover - import resolution
         from alpaca_trade_api.entity import Quote as _Quote, Order as _Order
