@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from ai_trading.utils import http
 
 pytest_plugins = ("tests.watchdog_ext",)
@@ -23,16 +24,26 @@ def _get_session_type():
 
 def test_httpsession_sets_default_timeout(monkeypatch):
     s = http.HTTPSession(timeout=7)
+    if http.REQUESTS_AVAILABLE:
+        calls = {}
 
-    calls = {}
+        def fake_get(url, **kw):
+            calls["timeout"] = kw.get("timeout")
+            return MagicMock(status_code=200, text="ok")
 
-    def fake_get(url, **kw):
-        calls["timeout"] = kw.get("timeout")
-        return MagicMock(status_code=200, text="ok")
+        monkeypatch.setattr(s, "get", fake_get)
+        s.get("http://localhost/test")
+        assert calls["timeout"] == 7, "HTTPSession.get must propagate default timeout"
+    else:
+        with pytest.raises(RuntimeError):
+            s.get("http://localhost/test")
 
-    monkeypatch.setattr(s.session, "get", fake_get)
-    s.get("http://localhost/test")
-    assert calls["timeout"] == 7, "HTTPSession.get must propagate default timeout"
+
+def test_request_function_errors_without_requests():
+    if http.REQUESTS_AVAILABLE:
+        pytest.skip("requires requests missing")
+    with pytest.raises(RuntimeError):
+        http.request("GET", "http://example.com")
 
 
 def test_bot_engine_uses_http_abstraction():
@@ -42,6 +53,7 @@ def test_bot_engine_uses_http_abstraction():
     ), "bot_engine should use ai_trading.utils.http (centralized timeouts/retries)."
 
 
+@pytest.mark.skipif(not http.REQUESTS_AVAILABLE, reason="requests not installed")
 def test_requests_can_still_be_patched_via_session():
     """
     Validate that our test plugin injects a default timeout into raw requests.Session calls
