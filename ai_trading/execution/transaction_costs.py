@@ -5,12 +5,12 @@ This module provides comprehensive transaction cost modeling including
 spread costs, market impact, commissions, and opportunity costs.
 Validates that trades exceed total costs with required safety margins.
 """
-import logging
+from ai_trading.logging import get_logger
 import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-_log = logging.getLogger(__name__)
+logger = get_logger(__name__)
 from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS
 
 def estimate_cost(quantity: float, price: float, bps: float=1.0) -> float:
@@ -106,7 +106,7 @@ class TransactionCostCalculator:
         self.max_market_impact = EXECUTION_PARAMETERS.get('MAX_MARKET_IMPACT', 0.01)
         self.safety_margin_multiplier = RISK_PARAMETERS.get('SAFETY_MARGIN_MULTIPLIER', 2.0)
         self.impact_model_params = {'linear_coefficient': 0.0001, 'sqrt_coefficient': 0.001, 'permanent_ratio': 0.3, 'recovery_halflife': 300}
-        _log.info(f'TransactionCostCalculator initialized with commission_rate={commission_rate:.4f}, safety_margin={safety_margin_multiplier}x')
+        logger.info(f'TransactionCostCalculator initialized with commission_rate={commission_rate:.4f}, safety_margin={safety_margin_multiplier}x')
 
     def calculate_spread_cost(self, symbol: str, trade_size: float, market_data: dict[str, Any]) -> float:
         """
@@ -136,10 +136,10 @@ class TransactionCostCalculator:
             spread = ask - bid
             (bid + ask) / 2
             spread_cost = abs(trade_size) * spread / 2
-            _log.debug(f'Spread cost for {symbol}: ${spread_cost:.4f} (spread=${spread:.4f}, size={trade_size})')
+            logger.debug(f'Spread cost for {symbol}: ${spread_cost:.4f} (spread=${spread:.4f}, size={trade_size})')
             return spread_cost
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('SPREAD_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('SPREAD_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             price = market_data.get('prices', {}).get(symbol, 100.0)
             return abs(trade_size) * price * 0.001
 
@@ -158,10 +158,10 @@ class TransactionCostCalculator:
         try:
             commission = trade_value * self.commission_rate
             commission = max(self.min_commission, min(self.max_commission, commission))
-            _log.debug(f'Commission for {symbol}: ${commission:.4f} (value=${trade_value:.2f}, rate={self.commission_rate:.4f})')
+            logger.debug(f'Commission for {symbol}: ${commission:.4f} (value=${trade_value:.2f}, rate={self.commission_rate:.4f})')
             return commission
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('COMMISSION_CALC_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('COMMISSION_CALC_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return max(self.min_commission, trade_value * 0.0001)
 
     def calculate_market_impact(self, symbol: str, trade_size: float, market_data: dict[str, Any]) -> tuple[float, float]:
@@ -192,10 +192,10 @@ class TransactionCostCalculator:
             trade_value = abs(trade_size) * price
             temporary_impact = trade_value * temp_impact_pct
             permanent_impact = trade_value * perm_impact_pct
-            _log.debug(f'Market impact for {symbol}: temp=${temporary_impact:.4f}, perm=${permanent_impact:.4f} (participation={participation_rate:.4f})')
+            logger.debug(f'Market impact for {symbol}: temp=${temporary_impact:.4f}, perm=${permanent_impact:.4f} (participation={participation_rate:.4f})')
             return (temporary_impact, permanent_impact)
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('MARKET_IMPACT_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('MARKET_IMPACT_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             trade_value = abs(trade_size) * market_data.get('prices', {}).get(symbol, 100.0)
             impact = trade_value * 0.005
             return (impact * 0.7, impact * 0.3)
@@ -218,10 +218,10 @@ class TransactionCostCalculator:
                 return 0.0
             delay_fraction = expected_delay / 390.0
             opportunity_cost = delay_fraction * abs(expected_return) * trade_value
-            _log.debug(f'Opportunity cost for {symbol}: ${opportunity_cost:.4f} (delay={expected_delay}min, return={expected_return:.4f})')
+            logger.debug(f'Opportunity cost for {symbol}: ${opportunity_cost:.4f} (delay={expected_delay}min, return={expected_return:.4f})')
             return opportunity_cost
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('OPPORTUNITY_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('OPPORTUNITY_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return 0.0
 
     def calculate_borrowing_cost(self, symbol: str, trade_size: float, trade_value: float, holding_period_days: float=1.0) -> float:
@@ -243,10 +243,10 @@ class TransactionCostCalculator:
             annual_borrow_rate = 0.01
             daily_rate = annual_borrow_rate / 365.0
             borrowing_cost = trade_value * daily_rate * holding_period_days
-            _log.debug(f'Borrowing cost for {symbol}: ${borrowing_cost:.4f} (rate={annual_borrow_rate:.1%}, days={holding_period_days})')
+            logger.debug(f'Borrowing cost for {symbol}: ${borrowing_cost:.4f} (rate={annual_borrow_rate:.1%}, days={holding_period_days})')
             return borrowing_cost
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('BORROWING_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('BORROWING_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return 0.0
 
     def calculate_total_transaction_cost(self, symbol: str, trade_size: float, trade_type: TradeType, market_data: dict[str, Any], expected_delay: float=1.0, expected_return: float=0.0, holding_period_days: float=1.0) -> TransactionCostBreakdown:
@@ -284,11 +284,11 @@ class TransactionCostCalculator:
             cost_per_share = total_cost / trade_size_abs
             cost_percentage = total_cost / max(trade_value, 1)
             result = TransactionCostBreakdown(spread_cost=spread_cost, commission=commission, market_impact=market_impact, opportunity_cost=opportunity_cost, borrowing_cost=borrowing_cost, total_cost=total_cost, cost_per_share=cost_per_share, cost_percentage=cost_percentage)
-            _log.info(f'Transaction cost for {symbol}: ${total_cost:.4f} ({cost_percentage:.4f}% of trade value)')
-            _log.debug('TX_COSTS_COMPUTED', extra={'symbol': symbol, 'qty': trade_size_abs, 'price': price, 'fee_rate': None, 'slippage_bps': None, 'atr_used': None, 'result_keys': list(result.__dict__.keys())})
+            logger.info(f'Transaction cost for {symbol}: ${total_cost:.4f} ({cost_percentage:.4f}% of trade value)')
+            logger.debug('TX_COSTS_COMPUTED', extra={'symbol': symbol, 'qty': trade_size_abs, 'price': price, 'fee_rate': None, 'slippage_bps': None, 'atr_used': None, 'result_keys': list(result.__dict__.keys())})
             return result
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('TX_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('TX_COST_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             raise
 
     def validate_trade_profitability(self, symbol: str, trade_size: float, expected_profit: float, market_data: dict[str, Any], trade_type: TradeType=TradeType.LIMIT_ORDER, confidence_level: float=0.8) -> ProfitabilityAnalysis:
@@ -315,16 +315,16 @@ class TransactionCostCalculator:
             required_profit = transaction_cost * self.safety_margin_multiplier
             safety_margin = (expected_profit - required_profit) / max(required_profit, 0.01)
             is_profitable = expected_profit > required_profit and net_expected_profit > 0 and (cost_ratio < 0.5) and (confidence_level >= 0.6)
-            _log.info(f'Profitability analysis for {symbol}: profit=${expected_profit:.4f}, cost=${transaction_cost:.4f}, net=${net_expected_profit:.4f}, profitable={is_profitable}')
+            logger.info(f'Profitability analysis for {symbol}: profit=${expected_profit:.4f}, cost=${transaction_cost:.4f}, net=${net_expected_profit:.4f}, profitable={is_profitable}')
             return ProfitabilityAnalysis(expected_profit=expected_profit, transaction_cost=transaction_cost, net_expected_profit=net_expected_profit, profit_margin=profit_margin, cost_ratio=cost_ratio, safety_margin=safety_margin, is_profitable=is_profitable, confidence_level=confidence_level)
         except ValueError as e:
-            _log.warning('PROFITABILITY_VALIDATION_VALUE_ERROR', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.warning('PROFITABILITY_VALIDATION_VALUE_ERROR', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             raise ValueError(f'Invalid trade parameters: {str(e)}')
         except KeyError as e:
-            _log.warning('PROFITABILITY_VALIDATION_KEY_ERROR', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.warning('PROFITABILITY_VALIDATION_KEY_ERROR', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             raise KeyError(f'Required market data missing: {str(e)}')
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.error('PROFITABILITY_VALIDATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.error('PROFITABILITY_VALIDATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return ProfitabilityAnalysis(expected_profit=expected_profit, transaction_cost=abs(expected_profit) * 0.5, net_expected_profit=expected_profit * 0.5, profit_margin=-0.5, cost_ratio=2.0, safety_margin=-1.0, is_profitable=False, confidence_level=confidence_level)
 
     def _estimate_spread_percentage(self, symbol: str, market_data: dict[str, Any]) -> float:
@@ -334,7 +334,7 @@ class TransactionCostCalculator:
             spread_estimates = {LiquidityTier.HIGH_LIQUIDITY: 0.0005, LiquidityTier.MEDIUM_LIQUIDITY: 0.002, LiquidityTier.LOW_LIQUIDITY: 0.005, LiquidityTier.ILLIQUID: 0.01}
             return spread_estimates.get(liquidity_tier, 0.005)
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.warning('SPREAD_PERCENT_ESTIMATE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.warning('SPREAD_PERCENT_ESTIMATE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return 0.005
 
     def _classify_liquidity(self, symbol: str, market_data: dict[str, Any]) -> LiquidityTier:
@@ -351,7 +351,7 @@ class TransactionCostCalculator:
             else:
                 return LiquidityTier.ILLIQUID
         except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:
-            _log.warning('LIQUIDITY_CLASSIFICATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+            logger.warning('LIQUIDITY_CLASSIFICATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
             return LiquidityTier.MEDIUM_LIQUIDITY
 
 def create_transaction_cost_calculator(config: dict[str, Any] | None=None) -> TransactionCostCalculator:

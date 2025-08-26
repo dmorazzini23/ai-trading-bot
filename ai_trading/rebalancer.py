@@ -1,5 +1,5 @@
 """Portfolio rebalancing utilities with tax awareness and advanced features."""
-import logging
+from ai_trading.logging import get_logger
 import math
 import threading
 import time
@@ -17,7 +17,7 @@ from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 from ai_trading.settings import get_rebalance_interval_min
 
-_log = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def apply_no_trade_bands(current: dict[str, float], target: dict[str, float], band_bps: float=25.0) -> dict[str, float]:
     """
@@ -37,7 +37,7 @@ from ai_trading.core.constants import RISK_PARAMETERS
 from ai_trading.portfolio import create_portfolio_optimizer
 from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
 from ai_trading.strategies.regime_detector import create_regime_detector
-_log.info('Portfolio-first trading capabilities loaded')
+logger.info('Portfolio-first trading capabilities loaded')
 
 def rebalance_interval_min() -> int:
     return get_rebalance_interval_min()
@@ -63,7 +63,7 @@ class TaxAwareRebalancer:
             self.adaptive_sizer = AdaptivePositionSizer()
             self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.holding_period_long = 365
-        _log.info(f'TaxAwareRebalancer initialized with tax rates: short={tax_rate_short:.1%}, long={tax_rate_long:.1%}')
+        logger.info(f'TaxAwareRebalancer initialized with tax rates: short={tax_rate_short:.1%}, long={tax_rate_long:.1%}')
 
     def calculate_tax_impact(self, position: dict[str, Any], current_price: float) -> dict[str, float]:
         """
@@ -93,7 +93,7 @@ class TaxAwareRebalancer:
             after_tax_proceeds = proceeds_before_tax - tax_liability
             return {'total_gain_loss': total_gain_loss, 'gain_loss_pct': gain_loss_pct, 'holding_days': holding_days, 'is_long_term': is_long_term, 'applicable_tax_rate': applicable_tax_rate, 'tax_liability': tax_liability, 'proceeds_before_tax': proceeds_before_tax, 'after_tax_proceeds': after_tax_proceeds, 'tax_efficiency_score': self._calculate_tax_efficiency(total_gain_loss, is_long_term)}
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('CALCULATE_TAX_IMPACT_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('CALCULATE_TAX_IMPACT_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return {'error': str(e)}
 
     def identify_loss_harvesting_opportunities(self, portfolio_positions: dict[str, dict], current_prices: dict[str, float]) -> list[dict]:
@@ -132,7 +132,7 @@ class TaxAwareRebalancer:
             opportunities.sort(key=lambda x: x['priority_score'], reverse=True)
             return opportunities
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('LOSS_HARVEST_OPS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('LOSS_HARVEST_OPS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return []
 
     def calculate_optimal_rebalance(self, current_positions: dict[str, dict], target_weights: dict[str, float], current_prices: dict[str, float], account_equity: float) -> dict[str, Any]:
@@ -154,7 +154,7 @@ class TaxAwareRebalancer:
             for symbol, position in current_positions.items():
                 current_price = float(current_prices.get(symbol, np.nan))
                 if not (math.isfinite(current_price) and current_price > 0.0):
-                    _log.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
+                    logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                     continue
                 position_value = position.get('quantity', 0) * current_price
                 total_portfolio_value += position_value
@@ -162,7 +162,7 @@ class TaxAwareRebalancer:
                 for symbol, position in current_positions.items():
                     current_price = float(current_prices.get(symbol, np.nan))
                     if not (math.isfinite(current_price) and current_price > 0.0):
-                        _log.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
+                        logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                         continue
                     position_value = position.get('quantity', 0) * current_price
                     current_weights[symbol] = position_value / total_portfolio_value
@@ -175,7 +175,7 @@ class TaxAwareRebalancer:
                 if abs(weight_diff) > 0.01:
                     current_price = float(current_prices.get(symbol, np.nan))
                     if not (math.isfinite(current_price) and current_price > 0.0):
-                        _log.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
+                        logger.warning('SIZING_SKIPPED', extra={'reason': 'invalid_price', 'symbol': symbol})
                         continue
                     target_value = target_weight * account_equity
                     current_value = current_weight * account_equity
@@ -200,7 +200,7 @@ class TaxAwareRebalancer:
             rebalance_trades.sort(key=lambda x: x['priority'], reverse=True)
             return {'rebalance_trades': rebalance_trades, 'total_tax_impact': total_tax_impact, 'current_weights': current_weights, 'target_weights': target_weights, 'portfolio_drift': self._calculate_portfolio_drift(current_weights, target_weights), 'tax_efficiency_score': self._calculate_overall_tax_efficiency(rebalance_trades), 'recommendations': self._generate_rebalance_recommendations(rebalance_trades)}
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('CALC_OPTIMAL_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('CALC_OPTIMAL_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return {'error': str(e), 'rebalance_trades': []}
 
     def _calculate_tax_efficiency(self, gain_loss: float, is_long_term: bool) -> float:
@@ -212,7 +212,7 @@ class TaxAwareRebalancer:
             gain_magnitude_penalty = min(0.3, gain_loss / 10000)
             return max(0, base_score - gain_magnitude_penalty)
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('TAX_EFFICIENCY_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('TAX_EFFICIENCY_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0.5
 
     def _calculate_harvest_priority(self, total_loss: float, tax_benefit: float, position: dict) -> float:
@@ -228,7 +228,7 @@ class TaxAwareRebalancer:
                 recency_penalty = 0
             return base_score + loss_bonus - recency_penalty
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('HARVEST_PRIORITY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('HARVEST_PRIORITY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0
 
     def _calculate_rebalance_priority(self, weight_diff: float, tax_impact: dict) -> float:
@@ -241,7 +241,7 @@ class TaxAwareRebalancer:
             timing_bonus = 20 if is_optimal_timing else -50
             return deviation_score - tax_penalty + timing_bonus
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('REBALANCE_PRIORITY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('REBALANCE_PRIORITY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0
 
     def _calculate_portfolio_drift(self, current_weights: dict[str, float], target_weights: dict[str, float]) -> float:
@@ -255,7 +255,7 @@ class TaxAwareRebalancer:
                 total_drift += abs(current - target)
             return total_drift / 2
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('PORTFOLIO_DRIFT_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('PORTFOLIO_DRIFT_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0
 
     def _calculate_overall_tax_efficiency(self, rebalance_trades: list[dict]) -> float:
@@ -278,7 +278,7 @@ class TaxAwareRebalancer:
                 efficiency_scores.append(trade_efficiency)
             return sum(efficiency_scores) / len(efficiency_scores)
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('TAX_EFFICIENCY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('TAX_EFFICIENCY_FAILED', exc_info=True, extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return 0.5
 
     def _generate_rebalance_recommendations(self, rebalance_trades: list[dict]) -> list[str]:
@@ -303,12 +303,12 @@ class TaxAwareRebalancer:
                 recommendations.append('Rebalancing plan appears tax-efficient')
             return recommendations
         except (KeyError, ValueError, TypeError) as e:
-            _log.error('REBALANCE_RECOMMENDATIONS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('REBALANCE_RECOMMENDATIONS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return ['Manual review recommended due to analysis error']
 
 def rebalance_portfolio(ctx) -> None:
     """Enhanced portfolio rebalancing with tax awareness."""
-    _log.info('Starting enhanced portfolio rebalancing')
+    logger.info('Starting enhanced portfolio rebalancing')
     try:
         settings = get_settings()
         if settings.ENABLE_PORTFOLIO_FEATURES and hasattr(ctx, 'account_equity'):
@@ -319,12 +319,12 @@ def rebalance_portfolio(ctx) -> None:
             account_equity = getattr(ctx, 'account_equity', 0)
             if all([current_positions, target_weights, current_prices, account_equity]):
                 rebalance_plan = tax_rebalancer.calculate_optimal_rebalance(current_positions, target_weights, current_prices, account_equity)
-                _log.info(f"Tax-aware rebalancing complete: drift={rebalance_plan.get('portfolio_drift', 0):.3f}, tax_impact=${rebalance_plan.get('total_tax_impact', 0):,.0f}")
+                logger.info(f"Tax-aware rebalancing complete: drift={rebalance_plan.get('portfolio_drift', 0):.3f}, tax_impact=${rebalance_plan.get('total_tax_impact', 0):,.0f}")
                 ctx.rebalance_plan = rebalance_plan
                 return
     except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
-        _log.warning('ENHANCED_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
-    _log.info('Using basic portfolio rebalancing')
+        logger.warning('ENHANCED_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+    logger.info('Using basic portfolio rebalancing')
 
 def enhanced_maybe_rebalance(ctx) -> None:
     """Enhanced rebalance check with tax optimization and market conditions."""
@@ -346,17 +346,17 @@ def enhanced_maybe_rebalance(ctx) -> None:
                 if should_rebalance:
                     portfolio_first_rebalance(ctx)
                     _last_rebalance = now
-                    _log.info(f'PORTFOLIO_FIRST_REBALANCING_EXECUTED | {reason}')
+                    logger.info(f'PORTFOLIO_FIRST_REBALANCING_EXECUTED | {reason}')
             elif drift > drift_threshold:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
         except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
-            _log.error('ENHANCED_REBALANCE_LOOP_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('ENHANCED_REBALANCE_LOOP_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             try:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
             except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as fallback_error:
-                _log.error('FALLBACK_REBALANCE_FAILED', extra={'cause': fallback_error.__class__.__name__, 'detail': str(fallback_error)})
+                logger.error('FALLBACK_REBALANCE_FAILED', extra={'cause': fallback_error.__class__.__name__, 'detail': str(fallback_error)})
 
 def portfolio_first_rebalance(ctx) -> None:
     """
@@ -369,18 +369,18 @@ def portfolio_first_rebalance(ctx) -> None:
     try:
         settings = get_settings()
         if not settings.ENABLE_PORTFOLIO_FEATURES:
-            _log.info('Portfolio-first not enabled, using standard rebalancing')
+            logger.info('Portfolio-first not enabled, using standard rebalancing')
             rebalance_portfolio(ctx)
             return
         if _portfolio_optimizer is None:
             _portfolio_optimizer = create_portfolio_optimizer()
             _regime_detector = create_regime_detector()
-            _log.info('Portfolio-first rebalancing components initialized')
+            logger.info('Portfolio-first rebalancing components initialized')
         current_positions = _get_current_positions_for_rebalancing(ctx)
         target_weights = _get_target_weights_for_rebalancing(ctx)
         market_data = _prepare_rebalancing_market_data(ctx)
         if not current_positions or not target_weights or (not market_data):
-            _log.warning('Insufficient data for portfolio-first rebalancing, using fallback')
+            logger.warning('Insufficient data for portfolio-first rebalancing, using fallback')
             rebalance_portfolio(ctx)
             return
         regime, regime_metrics = _regime_detector.detect_current_regime(market_data)
@@ -398,20 +398,20 @@ def portfolio_first_rebalance(ctx) -> None:
                     if quantity != 0:
                         formatted_positions[symbol] = {'quantity': abs(quantity), 'purchase_price': current_prices.get(symbol, 100.0), 'purchase_date': datetime.now(UTC) - timedelta(days=100)}
                 rebalance_plan = tax_rebalancer.calculate_optimal_rebalance(formatted_positions, target_weights, current_prices, account_equity)
-                _log.info('PORTFOLIO_FIRST_REBALANCING_COMPLETE', extra={'reason': rebalance_reason, 'market_regime': regime.value, 'portfolio_drift': rebalance_plan.get('portfolio_drift', 0), 'total_tax_impact': rebalance_plan.get('total_tax_impact', 0), 'rebalance_trades': len(rebalance_plan.get('rebalance_trades', [])), 'tax_efficiency': rebalance_plan.get('tax_efficiency', 0)})
+                logger.info('PORTFOLIO_FIRST_REBALANCING_COMPLETE', extra={'reason': rebalance_reason, 'market_regime': regime.value, 'portfolio_drift': rebalance_plan.get('portfolio_drift', 0), 'total_tax_impact': rebalance_plan.get('total_tax_impact', 0), 'rebalance_trades': len(rebalance_plan.get('rebalance_trades', [])), 'tax_efficiency': rebalance_plan.get('tax_efficiency', 0)})
                 ctx.rebalance_plan = rebalance_plan
                 ctx.last_portfolio_rebalance = datetime.now(UTC)
             else:
-                _log.info('Using basic rebalancing due to limited features')
+                logger.info('Using basic rebalancing due to limited features')
                 rebalance_portfolio(ctx)
         else:
-            _log.info(f'PORTFOLIO_FIRST_REBALANCING_SKIPPED | {rebalance_reason}')
+            logger.info(f'PORTFOLIO_FIRST_REBALANCING_SKIPPED | {rebalance_reason}')
     except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
-        _log.error('PORTFOLIO_FIRST_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+        logger.error('PORTFOLIO_FIRST_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         try:
             rebalance_portfolio(ctx)
         except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as fallback_error:
-            _log.error('PORTFOLIO_FIRST_FALLBACK_FAILED', extra={'cause': fallback_error.__class__.__name__, 'detail': str(fallback_error)})
+            logger.error('PORTFOLIO_FIRST_FALLBACK_FAILED', extra={'cause': fallback_error.__class__.__name__, 'detail': str(fallback_error)})
 
 def _check_portfolio_first_rebalancing(ctx, current_drift: float, drift_threshold: float) -> tuple:
     """Check if portfolio-first rebalancing should be triggered."""
@@ -434,10 +434,10 @@ def _check_portfolio_first_rebalancing(ctx, current_drift: float, drift_threshol
                     if metrics.volatility_regime.value in ['extremely_high', 'extremely_low'] and metrics.regime_confidence > 0.8:
                         return (True, f'Extreme volatility regime: {metrics.volatility_regime.value}')
             except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
-                _log.debug('REGIME_REBALANCE_CHECK_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+                logger.debug('REGIME_REBALANCE_CHECK_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         return (False, f'No rebalancing needed (drift={current_drift:.3f}, days={days_since_rebalance})')
     except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
-        _log.error('CHECK_PORTFOLIO_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+        logger.error('CHECK_PORTFOLIO_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         return (current_drift > drift_threshold, 'Error in analysis, using basic drift check')
 
 def _get_current_positions_for_rebalancing(ctx) -> dict:
@@ -460,7 +460,7 @@ def _get_current_positions_for_rebalancing(ctx) -> dict:
                 continue
         return filtered_positions
     except (APIError, TimeoutError, ConnectionError, OSError, ValueError) as e:
-        _log.error('GET_CURRENT_POSITIONS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+        logger.error('GET_CURRENT_POSITIONS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         return {}
 
 def _get_target_weights_for_rebalancing(ctx) -> dict:
@@ -475,7 +475,7 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
             return dict.fromkeys(current_positions.keys(), equal_weight)
         return {}
     except (KeyError, ValueError, TypeError) as e:
-        _log.error('GET_TARGET_WEIGHTS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+        logger.error('GET_TARGET_WEIGHTS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         return {}
 
 def _prepare_rebalancing_market_data(ctx) -> dict:
@@ -501,10 +501,10 @@ def _prepare_rebalancing_market_data(ctx) -> dict:
                         if 'volume' in df.columns:
                             market_data['volumes'][symbol] = df['volume'].tail(20).mean()
             except (APIError, TimeoutError, ConnectionError, OSError, ValueError) as e:
-                _log.debug('REBALANCE_DATA_FETCH_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
+                logger.debug('REBALANCE_DATA_FETCH_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'symbol': symbol})
         return market_data
     except (APIError, TimeoutError, ConnectionError, OSError, ValueError) as e:
-        _log.error('PREPARE_MARKET_DATA_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+        logger.error('PREPARE_MARKET_DATA_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
         return {}
 
 def maybe_rebalance(ctx) -> None:
@@ -532,10 +532,10 @@ def start_rebalancer(ctx) -> threading.Thread:
             try:
                 maybe_rebalance(ctx)
             except StopIteration:
-                _log.debug('Rebalancer loop stopped by test')
+                logger.debug('Rebalancer loop stopped by test')
                 break
             except (ValueError, KeyError, TypeError, OSError, APIError, TimeoutError, ConnectionError) as exc:
-                _log.error('REBALANCER_LOOP_ERROR', extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
+                logger.error('REBALANCER_LOOP_ERROR', extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
             settings = get_settings()
             sleep_interval = settings.rebalance_sleep_seconds
             import os

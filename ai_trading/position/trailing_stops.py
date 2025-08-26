@@ -9,13 +9,13 @@ Implements sophisticated trailing stop strategies:
 
 AI-AGENT-REF: Advanced trailing stop management with multiple algorithms
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TrailingStopType(Enum):
     """Types of trailing stop algorithms."""
@@ -56,7 +56,7 @@ class TrailingStopManager:
 
     def __init__(self, ctx=None):
         self.ctx = ctx
-        self.logger = logging.getLogger(__name__ + '.TrailingStopManager')
+        self.logger = get_logger(__name__ + '.TrailingStopManager')
         self.base_trail_percent = 3.0
         self.atr_multiplier = 2.0
         self.atr_period = 14

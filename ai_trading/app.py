@@ -1,11 +1,12 @@
 from __future__ import annotations
 import logging
+from ai_trading.logging import get_logger
 import os
 from flask import Flask, jsonify
 
 def create_app():
     app = Flask(__name__)
-    logging.getLogger('werkzeug').setLevel(logging.ERROR)
+    get_logger('werkzeug').setLevel(logging.ERROR)
 
     @app.route('/health')
     def health():

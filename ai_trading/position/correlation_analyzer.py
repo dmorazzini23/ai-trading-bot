@@ -9,7 +9,7 @@ Monitors position correlations and portfolio concentrations:
 
 AI-AGENT-REF: Portfolio correlation analysis for risk-aware position management
 """
-import logging
+from ai_trading.logging import get_logger
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from ai_trading.exc import COMMON_EXC
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class ConcentrationLevel(Enum):
     """Portfolio concentration risk levels."""
@@ -85,7 +85,7 @@ class PortfolioCorrelationAnalyzer:
 
     def __init__(self, ctx=None):
         self.ctx = ctx
-        self.logger = logging.getLogger(__name__ + '.PortfolioCorrelationAnalyzer')
+        self.logger = get_logger(__name__ + '.PortfolioCorrelationAnalyzer')
         self.correlation_lookback_days = 30
         self.min_data_points = 20
         self.position_concentration_thresholds = {ConcentrationLevel.LOW: 20.0, ConcentrationLevel.MODERATE: 35.0, ConcentrationLevel.HIGH: 50.0}

@@ -1,6 +1,6 @@
-import logging
+from ai_trading.logging import get_logger
 import numpy as np
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import SGDRegressor
 from sklearn.pipeline import Pipeline

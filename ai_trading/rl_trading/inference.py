@@ -1,6 +1,6 @@
 """Load a trained RL policy and produce trade signals with unified action space."""
 from __future__ import annotations
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,7 @@ from ai_trading.strategies.base import StrategySignal
 from . import RLAgent
 from .env import ActionSpaceConfig, RewardConfig
 TradeSignal = StrategySignal
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class InferenceConfig:
@@ -37,7 +37,7 @@ class UnifiedRLInference:
             config: Inference configuration
         """
         self.config = config
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.agent = RLAgent(config.model_path)
         self.agent.load()
         self._validate_action_space()

@@ -5,11 +5,12 @@ Provides data cleaning pipeline with winsorization, volume filtering,
 and stale data detection to guard against poor quality market data.
 """
 import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from typing import Any
 import numpy as np
 import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class SanitizationConfig:
@@ -45,7 +46,7 @@ class DataSanitizer:
             config: Sanitization configuration
         """
         self.config = config or SanitizationConfig()
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._rejection_stats = {'outliers': 0, 'low_volume': 0, 'stale_gaps': 0, 'stale_prices': 0, 'invalid_prices': 0, 'excessive_moves': 0, 'total_processed': 0}
 
     def sanitize_bars(self, bars: pd.DataFrame, symbol: str='UNKNOWN') -> tuple[pd.DataFrame, dict[str, Any]]:

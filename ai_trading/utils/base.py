@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+from ai_trading.logging import get_logger
 import os
 import random
 import subprocess
@@ -481,7 +482,6 @@ def get_pid_on_port(port: int) -> int | None:
     except COMMON_EXC as e:
         logger.error("get_pid_on_port failed", exc_info=e)
         return None
-    return None
 
 
 def get_rolling_atr(symbol: str, window: int = 14) -> float:

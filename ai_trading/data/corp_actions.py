@@ -7,7 +7,7 @@ features, labels, and execution sizing to ensure consistency.
 from __future__ import annotations
 
 import json
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class CorporateAction:
@@ -75,7 +75,7 @@ class CorporateActionRegistry:
         """
         self.data_path = Path(data_path)
         self.data_path.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._actions: dict[str, list[CorporateAction]] = {}
         self._load_actions()
 

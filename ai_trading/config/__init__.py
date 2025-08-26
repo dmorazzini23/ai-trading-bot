@@ -1,4 +1,4 @@
-import logging
+from ai_trading.logging import get_logger
 import os
 import threading
 from typing import Any
@@ -11,7 +11,7 @@ from .management import (
     derive_cap_from_settings,
 )
 from .settings import Settings, broker_keys, get_settings
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
 _lock_state = threading.local()

@@ -1,9 +1,9 @@
 from __future__ import annotations
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 import pandas as pd
 from .base import StrategySignal
-log = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class MovingAverageCrossoverStrategy:

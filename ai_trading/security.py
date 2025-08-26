@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from ai_trading.logging import get_logger
 import os
 import secrets
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ except (ValueError, TypeError):
         def decrypt(self, token: bytes) -> bytes:
             return token
     hashes = PBKDF2HMAC = None
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SecurityLevel(Enum):
     """Security event severity levels."""
@@ -75,7 +76,7 @@ class SecureConfig:
     """Secure configuration management with encryption."""
 
     def __init__(self, master_key: str | None=None):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._master_key = master_key or self._generate_master_key()
         self._fernet = self._init_encryption() if _CRYPTOGRAPHY_AVAILABLE else None
         self._config_cache: dict[str, Any] = {}
@@ -109,7 +110,7 @@ class SecureConfig:
 
     def _setup_audit_logging(self) -> logging.Logger:
         """Setup dedicated audit logging."""
-        audit_logger = logging.getLogger('ai_trading.audit')
+        audit_logger = get_logger('ai_trading.audit')
         audit_logger.setLevel(logging.INFO)
         if not audit_logger.handlers:
             log_dir = Path('logs')
@@ -249,7 +250,7 @@ class SecurityManager:
     """Central security management for the trading platform."""
 
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.secure_config = SecureConfig()
         self.safe_logger = SafeLogger(self.logger, self.secure_config)
         self._security_events: list[AuditEvent] = []
@@ -325,7 +326,7 @@ def get_security_manager() -> SecurityManager:
 
 def get_safe_logger(name: str) -> SafeLogger:
     """Get a safe logger that masks sensitive data."""
-    base_logger = logging.getLogger(name)
+    base_logger = get_logger(name)
     security_manager = get_security_manager()
     return SafeLogger(base_logger, security_manager.secure_config)
 

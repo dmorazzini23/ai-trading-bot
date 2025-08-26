@@ -9,21 +9,21 @@ except (ValueError, TypeError):
     from ai_trading.capital_scaling import drawdown_adjusted_kelly
 from ai_trading.config.settings import get_settings
 from ai_trading.core.bot_engine import _fetch_intraday_bars_chunked
-log = get_logger(__name__)
+logger = get_logger(__name__)
 
 def should_enter_trade(price_data, signals, risk_params):
     """Determine whether a trade entry conditions are met."""
     if not isinstance(signals, dict) or not isinstance(risk_params, dict):
-        log.warning('Invalid input types for trade entry evaluation')
+        logger.warning('Invalid input types for trade entry evaluation')
         return False
     try:
         if price_data is None or len(price_data) < 2:
-            log.debug('Insufficient price data for trade entry')
+            logger.debug('Insufficient price data for trade entry')
             return False
         last_price, prev_price = (float(price_data[-1]), float(price_data[-2]))
         recent_gain = (last_price - prev_price) / max(prev_price, 1e-09)
     except (ValueError, TypeError):
-        log.warning('Failed to calculate recent gain from price data')
+        logger.warning('Failed to calculate recent gain from price data')
         return False
     signal_strength = signals.get('signal_strength', 0)
     max_risk = risk_params.get('max_risk', 0.02)
@@ -31,16 +31,16 @@ def should_enter_trade(price_data, signals, risk_params):
         signal_strength = float(signal_strength)
         max_risk = float(max_risk)
     except (ValueError, TypeError):
-        log.warning('Invalid signal_strength or max_risk values')
+        logger.warning('Invalid signal_strength or max_risk values')
         return False
     result = signal_strength > 0.7 and recent_gain > 0.001 and (max_risk < 0.05)
-    log.debug('Trade entry evaluation: signal=%.3f, gain=%.4f, risk=%.3f, result=%s', signal_strength, recent_gain, max_risk, result)
+    logger.debug('Trade entry evaluation: signal=%.3f, gain=%.4f, risk=%.3f, result=%s', signal_strength, recent_gain, max_risk, result)
     return result
 
 def extract_price(data: Any) -> float:
     """Return the last price from various data structures."""
     import logging
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
     try:
         if data is None:
             logger.warning('extract_price called with None; returning fallback value')
@@ -97,11 +97,11 @@ def execute_trade(signal: int, position_size: float, price: float, equity_peak: 
     adj_kelly = drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
     final_size = position_size * adj_kelly
     if signal == 1:
-        log.info('BUY %s at %s', final_size, price)
+        logger.info('BUY %s at %s', final_size, price)
     elif signal == -1:
-        log.info('SELL %s at %s', final_size, price)
+        logger.info('SELL %s at %s', final_size, price)
     else:
-        log.info('HOLD')
+        logger.info('HOLD')
 
 def evaluate_entries(ctx, candidates):
     """

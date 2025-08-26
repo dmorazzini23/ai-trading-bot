@@ -1,9 +1,9 @@
 """Basic plotting helpers."""
 from __future__ import annotations
-import logging
+from ai_trading.logging import get_logger
 from ai_trading.utils.optdeps import OptionalDependencyError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def render_equity_curve(series, *, title: str = "Equity") -> None:
     """Render a simple equity curve using matplotlib if available."""

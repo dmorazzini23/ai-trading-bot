@@ -6,14 +6,14 @@ tracks per-signal attribution, and provides shadow mode for
 experimental model validation.
 """
 import json
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 import numpy as np
 import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class DriftMetrics:
@@ -82,7 +82,7 @@ class DriftMonitor:
         self.baseline_path = Path(baseline_data_path)
         self.baseline_path.mkdir(parents=True, exist_ok=True)
         self.alert_thresholds = alert_thresholds or AlertThreshold()
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._baseline_stats: dict[str, dict[str, float]] = {}
         self._load_baseline_stats()
         self._signal_history: dict[str, list[SignalAttribution]] = {}
@@ -284,7 +284,7 @@ class ShadowMode:
         """
         self.log_path = Path(log_path)
         self.log_path.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
 
     def evaluate_shadow_model(self, model_name: str, shadow_predictions: dict[str, float], production_predictions: dict[str, float], market_data: dict[str, Any] | None=None) -> dict[str, Any]:
         """

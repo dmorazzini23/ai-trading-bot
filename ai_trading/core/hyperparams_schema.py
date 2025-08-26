@@ -6,12 +6,13 @@ schema compatibility across different versions of the trading system.
 """
 import json
 import logging
+from ai_trading.logging import get_logger
 import os
 from datetime import UTC, datetime
 from typing import Any
 from pydantic import BaseModel, Field, validator
 PYDANTIC_AVAILABLE = True
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 HYPERPARAMS_SCHEMA_VERSION = '1.0.0'
 _last_missing_warning = 0
 _warning_interval = 3600
