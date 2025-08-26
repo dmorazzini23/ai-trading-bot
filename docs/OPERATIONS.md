@@ -19,3 +19,10 @@ Set `RUN_HEALTHCHECK=1` in the environment to enable the Flask endpoints.
 ### Paths & default files
 - Trade log file defaults to `<repo>/logs/trades.jsonl` when `TRADE_LOG_PATH` is not set. The directory is auto-created.
 - Empty model path disables ML quietly. Set `MODEL_PATH` to enable.
+
+### Position sizing environment variables
+Set the following to control position sizing:
+
+- `CAPITAL_CAP`: fraction of equity usable per cycle.
+- `DOLLAR_RISK_LIMIT`: fraction of equity at risk per position.
+- `MAX_POSITION_SIZE`: absolute USD cap per position. Must be positive or the bot derives a value from `CAPITAL_CAP` and equity.
