@@ -308,17 +308,13 @@ curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 **Response:**
 ```json
 {
-    "status": "healthy",
-    "timestamp": "2024-01-15T10:30:00Z",
-    "components": {
-        "database": "healthy",
-        "api_connection": "healthy",
-        "model_status": "loaded"
-    },
-    "uptime": "2d 4h 32m",
-    "version": "0.1.0"
+  "ok": true,
+  "ts": "2025-01-01T00:00:00+00:00",
+  "service": "ai-trading"
 }
 ```
+
+If required environment variables are missing the response remains HTTP 200 with `"ok": false` and an `"error"` field.
 
 #### Metrics Endpoint
 
