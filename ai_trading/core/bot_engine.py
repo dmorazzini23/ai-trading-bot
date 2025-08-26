@@ -4837,7 +4837,10 @@ def _parse_local_positions() -> dict[str, int]:
             dtype=str,
         )
         if df.empty:
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.debug(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                TRADE_LOG_FILE,
+            )
     except pd.errors.ParserError as e:
         get_logger(__name__).warning(
             "Failed to parse TRADE_LOG_FILE (malformed row): %s; returning empty set",
@@ -5251,7 +5254,10 @@ class SignalManager:
                 usecols=["signal_name", "weight"],
             )
             if df.empty:
-                logger.info("Loaded DataFrame is empty after parsing/fallback")
+                logger.warning(
+                    "Loaded DataFrame from %s is empty after parsing/fallback",
+                    SIGNAL_WEIGHTS_FILE,
+                )
                 return {}
             return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
         except ValueError as e:
@@ -6868,9 +6874,15 @@ def count_day_trades() -> int:
     )
     if df.empty:
         if _is_market_open_now():
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.debug(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                TRADE_LOG_FILE,
+            )
         else:
-            logger.info("Loaded DataFrame is empty (market closed)")
+            logger.debug(
+                "Loaded DataFrame from %s is empty (market closed)",
+                TRADE_LOG_FILE,
+            )
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
     df = df.dropna(subset=["entry_time", "exit_time"])
@@ -7068,9 +7080,15 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     )
     if df.empty:
         if _is_market_open_now():
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.debug(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                TRADE_LOG_FILE,
+            )
         else:
-            logger.info("Loaded DataFrame is empty (market closed)")
+            logger.debug(
+                "Loaded DataFrame from %s is empty (market closed)",
+                TRADE_LOG_FILE,
+            )
     if "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
@@ -10015,7 +10033,10 @@ def update_signal_weights() -> None:
             ],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.debug(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                TRADE_LOG_FILE,
+            )
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
@@ -10055,7 +10076,10 @@ def update_signal_weights() -> None:
                     usecols=["signal_name", "weight"],
                 )
                 if old_df.empty:
-                    logger.info("Loaded DataFrame is empty after parsing/fallback")
+                    logger.debug(
+                        "Loaded DataFrame from %s is empty after parsing/fallback",
+                        SIGNAL_WEIGHTS_FILE,
+                    )
                     old = {}
                 else:
                     old = old_df.set_index("signal_name")["weight"].to_dict()
@@ -10144,7 +10168,10 @@ def run_meta_learning_weight_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.warning(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                trade_log_path,
+            )
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -10213,7 +10240,10 @@ def run_bayesian_meta_learning_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side"],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.warning(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                trade_log_path,
+            )
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -11463,9 +11493,15 @@ def daily_summary() -> None:
         ).dropna(subset=["entry_price", "exit_price"])
         if df.empty:
             if _is_market_open_now():
-                logger.info("Loaded DataFrame is empty after parsing/fallback")
+                logger.debug(
+                    "Loaded DataFrame from %s is empty after parsing/fallback",
+                    TRADE_LOG_FILE,
+                )
             else:
-                logger.info("Loaded DataFrame is empty (market closed)")
+                logger.debug(
+                    "Loaded DataFrame from %s is empty (market closed)",
+                    TRADE_LOG_FILE,
+                )
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df.exit_price - df.entry_price) * direction
         total_trades = len(df)
@@ -11583,9 +11619,15 @@ def _average_reward(n: int = 20) -> float:
     ).tail(n)
     if df.empty:
         if _is_market_open_now():
-            logger.info("Loaded DataFrame is empty after parsing/fallback")
+            logger.debug(
+                "Loaded DataFrame from %s is empty after parsing/fallback",
+                REWARD_LOG_FILE,
+            )
         else:
-            logger.info("Loaded DataFrame is empty (market closed)")
+            logger.debug(
+                "Loaded DataFrame from %s is empty (market closed)",
+                REWARD_LOG_FILE,
+            )
     if df.empty or "reward" not in df.columns:
         return 0.0
     return float(df["reward"].mean())
