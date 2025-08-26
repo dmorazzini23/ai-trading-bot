@@ -52,7 +52,8 @@ class ProcessManager:
 
     def __enter__(self) -> ProcessManager:
         if not self.ensure_single_instance():
-            raise SystemExit('Another ai-trading instance is already running.')
+            msg = 'Another ai-trading instance is already running.'
+            raise RuntimeError(msg)
         return self
 
     def __exit__(self, *exc) -> bool:
