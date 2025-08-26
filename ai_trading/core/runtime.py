@@ -109,6 +109,9 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
         basis = equity if equity and equity > 0 else 200000.0
         val = float(round(cap * basis, 2))
 
+    if val is None or float(val) <= 0:
+        raise ValueError("MAX_POSITION_SIZE must be positive")
+
     params["MAX_POSITION_SIZE"] = float(val)
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     runtime.model = NullAlphaModel()

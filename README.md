@@ -677,11 +677,11 @@ python verify_config.py
   # Risk parameters
   CAPITAL_CAP=0.04                    # Fraction of equity usable per cycle
   DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
-  MAX_POSITION_SIZE=5000              # Absolute USD cap per position (derived from CAPITAL_CAP if unset)
+  MAX_POSITION_SIZE=5000              # Absolute USD cap per position (1-10000; derived from CAPITAL_CAP if unset)
   ```
 
-  `MAX_POSITION_SIZE` must be a positive dollar value. If omitted or nonpositive,
-  the bot derives a value from `CAPITAL_CAP` and available equity. Optionally
+  `MAX_POSITION_SIZE` must be a positive dollar value (>0). Values ≤0 are rejected.
+  If omitted, the bot derives a value from `CAPITAL_CAP` and available equity. Optionally
   set `MAX_POSITION_SIZE_PCT` to cap positions as a percentage of the portfolio.
 
 If any `ALPACA_*` credentials are missing or `alpaca-trade-api` is not installed,

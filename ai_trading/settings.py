@@ -147,6 +147,13 @@ class Settings(BaseSettings):
             raise ValueError(f'{info.field_name} must be in (0, 1], got {v}')
         return float(v)
 
+    @field_validator('max_position_size')
+    @classmethod
+    def _max_pos_positive(cls, v):
+        if v is not None and float(v) <= 0.0:
+            raise ValueError('max_position_size must be positive')
+        return v
+
     @computed_field
     @property
     def trade_cooldown(self) -> timedelta:
