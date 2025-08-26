@@ -6,6 +6,7 @@ from typing import Any
 import os
 from ai_trading.logging import get_logger
 from ai_trading.net.http import get_global_session
+from ai_trading.settings import get_alpaca_secret_key_plain
 _log = get_logger(__name__)
 
 @dataclass
@@ -95,7 +96,7 @@ def _get_equity_from_alpaca(cfg) -> float:
         base = str(getattr(cfg, 'alpaca_base_url', '')).rstrip('/')
         url = f'{base}/v2/account'
         key = getattr(cfg, 'alpaca_api_key', None)
-        secret = getattr(cfg, 'alpaca_secret_key_plain', None)
+        secret = getattr(cfg, 'alpaca_secret_key_plain', None) or get_alpaca_secret_key_plain()
         if not key or not secret or (not base):
             return 0.0
         s = get_global_session()

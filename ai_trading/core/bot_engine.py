@@ -72,6 +72,7 @@ from ai_trading.config.management import (
     is_shadow_mode,
     TradingConfig,
 )
+from ai_trading.settings import get_alpaca_secret_key_plain
 
 
 def _alpaca_available() -> bool:
@@ -3738,9 +3739,8 @@ class DataFetcher:
                 return self._daily_cache[symbol]
 
         api_key = get_settings().alpaca_api_key
-        api_secret = (
-            get_settings().alpaca_secret_key_plain
-        )  # AI-AGENT-REF: use plain secret string
+        api_secret = get_alpaca_secret_key_plain()
+        # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
@@ -4012,9 +4012,8 @@ class DataFetcher:
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
         api_key = get_settings().alpaca_api_key
-        api_secret = (
-            get_settings().alpaca_secret_key_plain
-        )  # AI-AGENT-REF: use plain secret string
+        api_secret = get_alpaca_secret_key_plain()
+        # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
@@ -4262,9 +4261,8 @@ def prefetch_daily_data(
     symbols: list[str], start_date: date, end_date: date
 ) -> dict[str, pd.DataFrame]:
     alpaca_key = get_settings().alpaca_api_key
-    alpaca_secret = (
-        get_settings().alpaca_secret_key_plain
-    )  # AI-AGENT-REF: use plain secret string
+    alpaca_secret = get_alpaca_secret_key_plain()
+    # AI-AGENT-REF: use plain secret string
     if not alpaca_key or not alpaca_secret:
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"

@@ -156,6 +156,12 @@ class Settings(BaseSettings):
 
     @computed_field
     @property
+    def alpaca_secret_key_plain(self) -> str | None:
+        """Return the Alpaca secret key as a plain string."""
+        return _secret_to_str(self.alpaca_secret_key)
+
+    @computed_field
+    @property
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=_to_int(getattr(self, 'trade_cooldown_min', 15), 15))
     model_config = SettingsConfigDict(env_prefix='AI_TRADER_', extra='ignore', case_sensitive=False)
