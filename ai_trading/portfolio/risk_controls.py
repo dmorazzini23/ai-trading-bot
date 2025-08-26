@@ -8,9 +8,11 @@ from ai_trading.logging import get_logger
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
+
+if TYPE_CHECKING:  # pragma: no cover - heavy import for type checking only
+    import pandas as pd
 
 def _import_clustering():
     from ai_trading.config import get_settings
@@ -97,11 +99,11 @@ class AdaptiveRiskController:
         self.drawdown_multiplier = 1.0
         self.green_days_count = 0
         self.turnover_budget = TurnoverBudget(total_budget=self.risk_budget.max_turnover_daily)
-        self._correlation_matrix: pd.DataFrame | None = None
+        self._correlation_matrix: 'pd.DataFrame | None' = None
         self._cluster_assignments: dict[str, int] = {}
         self._volatilities: dict[str, float] = {}
 
-    def calculate_volatilities(self, returns_data: pd.DataFrame, lookback_days: int | None=None) -> dict[str, float]:
+    def calculate_volatilities(self, returns_data: 'pd.DataFrame', lookback_days: int | None=None) -> dict[str, float]:
         """
         Calculate rolling volatilities for symbols.
 
@@ -114,6 +116,7 @@ class AdaptiveRiskController:
         """
         if lookback_days is None:
             lookback_days = self.risk_budget.vol_lookback_days
+        import pandas as pd  # heavy import; keep local
         volatilities = {}
         for symbol in returns_data.columns:
             symbol_returns = returns_data[symbol].dropna()
@@ -127,7 +130,7 @@ class AdaptiveRiskController:
         self._volatilities = volatilities
         return volatilities
 
-    def calculate_correlation_clusters(self, returns_data: pd.DataFrame, lookback_days: int | None=None, max_clusters: int=10) -> dict[str, int]:
+    def calculate_correlation_clusters(self, returns_data: 'pd.DataFrame', lookback_days: int | None=None, max_clusters: int=10) -> dict[str, int]:
         """
         Calculate correlation-based clusters for risk diversification.
 
@@ -139,6 +142,7 @@ class AdaptiveRiskController:
         Returns:
             Dict of symbol -> cluster_id
         """
+        import pandas as pd  # heavy import; keep local
         fcluster, linkage, squareform, clustering_available = _import_clustering()
         if not clustering_available:
             self.logger.warning('Clustering not available, using single cluster')
@@ -168,7 +172,7 @@ class AdaptiveRiskController:
             self.logger.error(f'Clustering failed: {e}')
             return dict.fromkeys(returns_data.columns, 0)
 
-    def calculate_kelly_fractions(self, expected_returns: dict[str, float], volatilities: dict[str, float], correlation_matrix: pd.DataFrame | None=None) -> dict[str, float]:
+    def calculate_kelly_fractions(self, expected_returns: dict[str, float], volatilities: dict[str, float], correlation_matrix: 'pd.DataFrame | None'=None) -> dict[str, float]:
         """
         Calculate Kelly fractions for position sizing.
 
@@ -246,7 +250,7 @@ class AdaptiveRiskController:
                 self.logger.warning(f'Cluster {cluster_id} over limit: {cluster_risk.total_risk:.2%} > {risk_limit:.2%}')
         return cluster_risk_objects
 
-    def calculate_position_sizes(self, signals: dict[str, float], returns_data: pd.DataFrame, portfolio_value: float, current_positions: dict[str, float] | None=None) -> dict[str, float]:
+    def calculate_position_sizes(self, signals: dict[str, float], returns_data: 'pd.DataFrame', portfolio_value: float, current_positions: dict[str, float] | None=None) -> dict[str, float]:
         """
         Calculate position sizes with full risk controls.
 
@@ -317,7 +321,7 @@ def get_risk_controller() -> AdaptiveRiskController:
         _global_risk_controller = AdaptiveRiskController()
     return _global_risk_controller
 
-def calculate_adaptive_positions(signals: dict[str, float], returns_data: pd.DataFrame, portfolio_value: float, current_positions: dict[str, float] | None=None) -> dict[str, float]:
+def calculate_adaptive_positions(signals: dict[str, float], returns_data: 'pd.DataFrame', portfolio_value: float, current_positions: dict[str, float] | None=None) -> dict[str, float]:
     """
     Convenience function for adaptive position sizing.
 

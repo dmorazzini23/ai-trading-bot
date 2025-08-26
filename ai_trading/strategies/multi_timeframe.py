@@ -7,11 +7,13 @@ institutional-grade trading strategies.
 """
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
-import pandas as pd
+from typing import Any, TYPE_CHECKING
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
 from ..core.enums import TimeFrame
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pandas as pd
 
 class SignalStrength(Enum):
     """Signal strength enumeration."""
@@ -119,7 +121,7 @@ class MultiTimeframeAnalyzer:
         self.confidence_threshold = 0.6
         logger.info(f'MultiTimeframeAnalyzer initialized with timeframes: {[tf.value for tf in self.primary_timeframes]}')
 
-    def analyze_symbol(self, symbol: str, market_data: dict[TimeFrame, pd.DataFrame]) -> dict[str, Any]:
+    def analyze_symbol(self, symbol: str, market_data: dict[TimeFrame, 'pd.DataFrame']) -> dict[str, Any]:
         """
         Perform comprehensive multi-timeframe analysis for a symbol.
 
@@ -148,7 +150,7 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error analyzing symbol {symbol}: {e}')
             return {'error': str(e), 'symbol': symbol}
 
-    def _analyze_timeframe(self, symbol: str, timeframe: TimeFrame, data: pd.DataFrame) -> list[MultiTimeframeSignal]:
+    def _analyze_timeframe(self, symbol: str, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Analyze a single timeframe and generate signals."""
         try:
             signals = []
@@ -171,8 +173,9 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error analyzing timeframe {timeframe.value}: {e}')
             return []
 
-    def _generate_ma_signals(self, timeframe: TimeFrame, data: pd.DataFrame) -> list[MultiTimeframeSignal]:
+    def _generate_ma_signals(self, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Generate moving average signals."""
+        import pandas as pd  # heavy import; keep local
         try:
             signals = []
             data['SMA_20'] = data['close'].rolling(20).mean()
@@ -209,8 +212,9 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error generating MA signals: {e}')
             return []
 
-    def _generate_rsi_signals(self, timeframe: TimeFrame, data: pd.DataFrame) -> list[MultiTimeframeSignal]:
+    def _generate_rsi_signals(self, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Generate RSI-based signals."""
+        import pandas as pd  # heavy import; keep local
         try:
             signals = []
             delta = data['close'].diff()
@@ -239,8 +243,9 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error generating RSI signals: {e}')
             return []
 
-    def _generate_macd_signals(self, timeframe: TimeFrame, data: pd.DataFrame) -> list[MultiTimeframeSignal]:
+    def _generate_macd_signals(self, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Generate MACD signals."""
+        import pandas as pd  # heavy import; keep local
         try:
             signals = []
             ema_12 = data['close'].ewm(span=12).mean()
@@ -268,8 +273,9 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error generating MACD signals: {e}')
             return []
 
-    def _generate_bollinger_signals(self, timeframe: TimeFrame, data: pd.DataFrame) -> list[MultiTimeframeSignal]:
+    def _generate_bollinger_signals(self, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Generate Bollinger Band signals."""
+        import pandas as pd  # heavy import; keep local
         try:
             signals = []
             data['BB_Middle'] = data['close'].rolling(20).mean()
@@ -301,8 +307,9 @@ class MultiTimeframeAnalyzer:
             logger.error(f'Error generating Bollinger signals: {e}')
             return []
 
-    def _generate_volume_signals(self, timeframe: TimeFrame, data: pd.DataFrame) -> list[MultiTimeframeSignal]:
+    def _generate_volume_signals(self, timeframe: TimeFrame, data: 'pd.DataFrame') -> list[MultiTimeframeSignal]:
         """Generate volume-based signals."""
+        import pandas as pd  # heavy import; keep local
         try:
             signals = []
             if 'volume' not in data.columns:

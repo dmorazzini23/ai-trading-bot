@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 import numpy as np
-import pandas as pd
 from ai_trading.config.management import TradingConfig
 from ai_trading.config.settings import get_settings
 from ai_trading.logging import logger

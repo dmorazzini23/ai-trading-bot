@@ -6,11 +6,13 @@ using multiple indicators and statistical models for adaptive trading strategies
 """
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pandas as pd
 
 class MarketRegime(Enum):
     """Market regime classifications."""
@@ -57,7 +59,7 @@ class RegimeDetector:
         self.regime_confidence = 0.0
         logger.info(f'RegimeDetector initialized with {lookback_periods} day lookback')
 
-    def detect_regime(self, market_data: pd.DataFrame, supplementary_data: dict=None) -> dict[str, Any]:
+    def detect_regime(self, market_data: 'pd.DataFrame', supplementary_data: dict=None) -> dict[str, Any]:
         """
         Detect current market regime using comprehensive analysis.
 
@@ -89,8 +91,9 @@ class RegimeDetector:
             logger.error(f'Error detecting market regime: {e}')
             return {'error': str(e)}
 
-    def _analyze_trend(self, data: pd.DataFrame) -> dict[str, Any]:
+    def _analyze_trend(self, data: 'pd.DataFrame') -> dict[str, Any]:
         """Analyze trend characteristics."""
+        import pandas as pd  # heavy import; keep local
         try:
             returns_1m = data['close'].iloc[-1] / data['close'].iloc[-21] - 1 if len(data) >= 21 else 0
             returns_3m = data['close'].iloc[-1] / data['close'].iloc[-63] - 1 if len(data) >= 63 else 0
@@ -116,7 +119,7 @@ class RegimeDetector:
             logger.error(f'Error analyzing trend: {e}')
             return {'direction': 'unknown', 'strength': TrendStrength.WEAK}
 
-    def _analyze_volatility(self, data: pd.DataFrame) -> dict[str, Any]:
+    def _analyze_volatility(self, data: 'pd.DataFrame') -> dict[str, Any]:
         """Analyze volatility characteristics."""
         try:
             data['returns'] = data['close'].pct_change()
@@ -150,8 +153,9 @@ class RegimeDetector:
             logger.error(f'Error analyzing volatility: {e}')
             return {'regime': VolatilityRegime.NORMAL_VOL, 'current_vol': 0.2}
 
-    def _analyze_momentum(self, data: pd.DataFrame) -> dict[str, Any]:
+    def _analyze_momentum(self, data: 'pd.DataFrame') -> dict[str, Any]:
         """Analyze momentum characteristics."""
+        import pandas as pd  # heavy import; keep local
         try:
             delta = data['close'].diff()
             gain = delta.where(delta > 0, 0).rolling(window=14).mean()
@@ -184,8 +188,9 @@ class RegimeDetector:
             logger.error(f'Error analyzing momentum: {e}')
             return {'state': 'neutral', 'rsi': 50, 'momentum_strength': 'weak'}
 
-    def _analyze_volume(self, data: pd.DataFrame) -> dict[str, Any]:
+    def _analyze_volume(self, data: 'pd.DataFrame') -> dict[str, Any]:
         """Analyze volume characteristics."""
+        import pandas as pd  # heavy import; keep local
         try:
             if 'volume' not in data.columns:
                 return {'trend': 'unknown', 'strength': 'weak'}
@@ -282,7 +287,7 @@ class RegimeDetector:
             logger.error(f'Error determining primary regime: {e}')
             return MarketRegime.SIDEWAYS
 
-    def _detect_secondary_characteristics(self, data: pd.DataFrame, volume_analysis: dict, sentiment_analysis: dict) -> list[str]:
+    def _detect_secondary_characteristics(self, data: 'pd.DataFrame', volume_analysis: dict, sentiment_analysis: dict) -> list[str]:
         """Detect secondary market characteristics."""
         try:
             characteristics = []
@@ -346,7 +351,7 @@ class RegimeDetector:
             logger.error(f'Error calculating regime confidence: {e}')
             return 0.5
 
-    def _analyze_regime_transitions(self, data: pd.DataFrame) -> dict[str, Any]:
+    def _analyze_regime_transitions(self, data: 'pd.DataFrame') -> dict[str, Any]:
         """Analyze probability of regime transitions."""
         try:
             if len(self.regime_history) < 10:

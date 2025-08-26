@@ -1,7 +1,10 @@
 from __future__ import annotations
-import pandas as pd
+from typing import TYPE_CHECKING
 from ai_trading.logging import logger as log
 from .base import StrategySignal
+
+if TYPE_CHECKING:  # pragma: no cover - heavy import only for typing
+    import pandas as pd
 
 class MeanReversionStrategy:
 
@@ -11,7 +14,8 @@ class MeanReversionStrategy:
         self.lookback = lookback
         self.z_entry = z_entry
 
-    def _latest_stats(self, series: pd.Series, window: int):
+    def _latest_stats(self, series: 'pd.Series', window: int):
+        import pandas as pd  # heavy import; keep local
         if len(series) < max(3, window):
             log.warning('mean_reversion: insufficient data')
             return (None, None)
