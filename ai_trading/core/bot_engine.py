@@ -662,8 +662,8 @@ def _load_required_model() -> Any:
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
 
-    path = os.getenv("AI_TRADER_MODEL_PATH")
-    modname = os.getenv("AI_TRADER_MODEL_MODULE")
+    path = os.getenv("AI_TRADING_MODEL_PATH") or os.getenv("AI_TRADER_MODEL_PATH")
+    modname = os.getenv("AI_TRADING_MODEL_MODULE") or os.getenv("AI_TRADER_MODEL_MODULE")
 
     if path and os.path.isfile(path):
         mdl = joblib.load(path)
@@ -680,7 +680,7 @@ def _load_required_model() -> Any:
             mod = importlib.import_module(modname)
         except COMMON_EXC as e:  # noqa: BLE001
             raise RuntimeError(
-                f"Failed to import AI_TRADER_MODEL_MODULE='{modname}': {e}"
+                f"Failed to import AI_TRADING_MODEL_MODULE='{modname}': {e}"
             ) from e
         factory = getattr(mod, "get_model", None) or getattr(mod, "Model", None)
         if not factory:
@@ -701,15 +701,15 @@ def _load_required_model() -> Any:
     msg = (
         "Model required but not configured. "
         "Set one of: "
-        "AI_TRADER_MODEL_PATH=<abs path to .joblib/.pkl> "
-        "or AI_TRADER_MODEL_MODULE=<import.path with get_model()/Model()>."
+        "AI_TRADING_MODEL_PATH=<abs path to .joblib/.pkl> "
+        "or AI_TRADING_MODEL_MODULE=<import.path with get_model()/Model()>."
     )
     logger.error(
         "MODEL_CONFIG_MISSING",
-        extra={
-            "hint_paths": ["AI_TRADER_MODEL_PATH", "TradingConfig.ml_model_path"],
-            "hint_modules": ["AI_TRADER_MODEL_MODULE", "TradingConfig.ml_model_module"],
-        },
+            extra={
+                "hint_paths": ["AI_TRADING_MODEL_PATH", "TradingConfig.ml_model_path"],
+                "hint_modules": ["AI_TRADING_MODEL_MODULE", "TradingConfig.ml_model_module"],
+            },
     )
     raise RuntimeError(msg)
 
@@ -6904,7 +6904,7 @@ def check_halt_flag(runtime) -> bool:
     """
     Determine whether the trading loop should halt for safety/ops.
     Priority:
-      1) Env var AI_TRADER_HALT=1
+      1) Env var AI_TRADING_HALT=1
       2) Config-defined halt file with truthy content
       3) runtime.halt boolean attribute
     """
@@ -6912,7 +6912,9 @@ def check_halt_flag(runtime) -> bool:
 
     # AI-AGENT-REF: thread runtime into halt checks and drop global ctx
     # 1) Environment override
-    if os.getenv("AI_TRADER_HALT", "").strip() in {"1", "true", "True"}:
+    if os.getenv("AI_TRADING_HALT", "").strip() in {"1", "true", "True"} or os.getenv(
+        "AI_TRADER_HALT", ""
+    ).strip() in {"1", "true", "True"}:
         return True
 
     # 2) Config file flag (if provided)

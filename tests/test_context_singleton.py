@@ -69,8 +69,8 @@ def test_model_loaded_once_across_wrappers(monkeypatch):
     mod.get_model = lambda: object()
     import sys
     sys.modules['fake_mod'] = mod
-    monkeypatch.setenv('AI_TRADER_MODEL_MODULE', 'fake_mod')
-    monkeypatch.delenv('AI_TRADER_MODEL_PATH', raising=False)
+    monkeypatch.setenv('AI_TRADING_MODEL_MODULE', 'fake_mod')
+    monkeypatch.delenv('AI_TRADING_MODEL_PATH', raising=False)
 
     for name in ['_init_metrics', '_initialize_alpaca_clients']:
         monkeypatch.setattr(be, name, lambda: None)

@@ -512,8 +512,8 @@ BOT_MODE=production
 SCHEDULER_SLEEP_SECONDS=60
 MAX_POSITION_PCT=0.05
 MAX_PORTFOLIO_HEAT=0.15
-AI_TRADER_MODEL_PATH=/app/artifacts/model.pkl  # or AI_TRADER_MODEL_MODULE=your.module
-AI_TRADER_TICKERS_CSV=/app/data/tickers.csv    # optional override
+AI_TRADING_MODEL_PATH=/app/artifacts/model.pkl  # or AI_TRADING_MODEL_MODULE=your.module
+AI_TRADING_TICKERS_CSV=/app/data/tickers.csv    # optional override
 
 # API Configuration
 ALPACA_BASE_URL=https://api.alpaca.markets

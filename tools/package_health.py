@@ -42,10 +42,10 @@ def _probe_async_testing() -> bool:
 
 def _probe_model_and_universe():
     import os
-    os.getenv('AI_TRADER_TICKERS_FILE', 'tickers.csv')
-    os.getenv('AI_TRADER_TICKERS_CSV')
-    os.getenv('AI_TRADER_MODEL_PATH')
-    os.getenv('AI_TRADER_MODEL_MODULE')
+    os.getenv('AI_TRADING_TICKERS_FILE', os.getenv('AI_TRADER_TICKERS_FILE', 'tickers.csv'))
+    os.getenv('AI_TRADING_TICKERS_CSV') or os.getenv('AI_TRADER_TICKERS_CSV')
+    os.getenv('AI_TRADING_MODEL_PATH') or os.getenv('AI_TRADER_MODEL_PATH')
+    os.getenv('AI_TRADING_MODEL_MODULE') or os.getenv('AI_TRADER_MODEL_MODULE')
     try:
         import joblib
     except (KeyError, ValueError, TypeError):
@@ -53,8 +53,8 @@ def _probe_model_and_universe():
 
 def _probe_model_config():
     import os
-    p = os.getenv('AI_TRADER_MODEL_PATH')
-    m = os.getenv('AI_TRADER_MODEL_MODULE')
+    p = os.getenv('AI_TRADING_MODEL_PATH') or os.getenv('AI_TRADER_MODEL_PATH')
+    m = os.getenv('AI_TRADING_MODEL_MODULE') or os.getenv('AI_TRADER_MODEL_MODULE')
     if p:
         pass
     elif m:

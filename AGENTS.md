@@ -56,7 +56,7 @@ from ai_trading.config import management as config
 api_port = config.get_env("API_PORT", "9001", cast=int)
 paper = config.get_env("ALPACA_PAPER", "true", cast=bool)
 seed = config.SEED  # defaults to 42
-conf_threshold = config.get_env("AI_TRADER_CONF_THRESHOLD", "0.75", cast=float)
+conf_threshold = config.get_env("AI_TRADING_CONF_THRESHOLD", "0.75", cast=float)
 
 # Reload if you must re-read .env after edits (avoid in hot paths):
 config.reload_env()

@@ -51,7 +51,7 @@ startup the validation result is cached and `/healthz` reuses it, returning
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `AI_TRADER_CONF_THRESHOLD` | Minimum model confidence required before acting | 0.75 |
+| `AI_TRADING_CONF_THRESHOLD` | Minimum model confidence required before acting | 0.75 |
 
 ### Health endpoints & env
 

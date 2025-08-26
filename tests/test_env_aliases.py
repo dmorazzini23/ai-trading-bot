@@ -13,7 +13,7 @@ except Exception:  # AI-AGENT-REF: timing module optional in tests
 
 def test_get_news_api_key_alias(monkeypatch):
     monkeypatch.delenv("NEWS_API_KEY", raising=False)
-    monkeypatch.setenv("AI_TRADER_NEWS_API_KEY", "alt")
+    monkeypatch.setenv("AI_TRADING_NEWS_API_KEY", "alt")
     importlib.reload(settings)
     assert settings.get_news_api_key() == "alt"
 
@@ -34,7 +34,7 @@ def test_http_workers_alias(monkeypatch):
 
 
 def test_rebalance_interval_alias(monkeypatch):
-    monkeypatch.setenv("AI_TRADER_REBALANCE_INTERVAL_MIN", "7")
+    monkeypatch.setenv("AI_TRADING_REBALANCE_INTERVAL_MIN", "7")
     importlib.reload(settings)
     assert settings.get_rebalance_interval_min() == 7
 

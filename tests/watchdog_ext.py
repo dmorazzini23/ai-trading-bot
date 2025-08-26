@@ -115,7 +115,7 @@ def _block_external_network():
 def _test_env():
     os.environ.setdefault("TESTING", "1")
     os.environ.setdefault("CPU_ONLY", "1")
-    os.environ.setdefault("AI_TRADER_HEALTH_TICK_SECONDS", "2")
+    os.environ.setdefault("AI_TRADING_HEALTH_TICK_SECONDS", "2")
     os.environ.setdefault("AI_HTTP_TIMEOUT", "10")
     os.environ.setdefault("FLASK_PORT", "0")  # avoid port collisions
     yield
