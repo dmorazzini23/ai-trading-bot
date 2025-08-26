@@ -68,7 +68,7 @@ def run_trade() -> None:
     import os
 
     os.environ["TRADING_MODE"] = "paper" if args.paper else "live"
-    from ai_trading.settings import ensure_dotenv_loaded
+    from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
     from ai_trading import runner
@@ -93,7 +93,7 @@ def run_backtest() -> None:
     import os
 
     os.environ["TRADING_MODE"] = "paper" if args.paper else "live"
-    from ai_trading.settings import ensure_dotenv_loaded
+    from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
     from ai_trading import runner
@@ -118,7 +118,7 @@ def run_healthcheck() -> None:
     import os
 
     os.environ["TRADING_MODE"] = "paper" if args.paper else "live"
-    from ai_trading.settings import ensure_dotenv_loaded
+    from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
     from ai_trading.health_monitor import run_health_check
@@ -144,7 +144,7 @@ def main() -> None:
     import os
 
     os.environ["TRADING_MODE"] = "paper" if args.paper else "live"
-    from ai_trading.settings import ensure_dotenv_loaded
+    from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
     from ai_trading import runner

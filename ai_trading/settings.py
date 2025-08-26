@@ -4,8 +4,6 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
-from dataclasses import dataclass
-from ai_trading.env import ensure_dotenv_loaded
 from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 try:
@@ -113,7 +111,6 @@ class Settings(BaseSettings):
         alias='MAX_POSITION_EQUITY_FALLBACK',
         description='Equity used when deriving max_position_size when real equity is unavailable.',
     )
-    'Single source of truth for runtime configuration.'
     interval: int = Field(60, alias='AI_TRADING_INTERVAL')
     iterations: int = Field(0, alias='AI_TRADING_ITERATIONS')
     scheduler_iterations: int = Field(0, validation_alias='SCHEDULER_ITERATIONS')
@@ -282,12 +279,4 @@ def get_seed_int(default: int=42) -> int:
     s = get_settings()
     return _to_int(getattr(s, 'ai_trading_seed', default), default)
 
-
-@dataclass
-class TradingConfig:
-    """Minimal trading config exposing max_position_size for runtime helpers."""
-
-    capital_cap: float = 0.04
-    dollar_risk_limit: float = 0.05
-    max_position_size: float | None = None
 
