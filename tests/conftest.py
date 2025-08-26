@@ -87,6 +87,9 @@ def _env_defaults(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET_KEY", "dummy")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.setenv("CAPITAL_CAP", "0.04")
+    monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")
+    monkeypatch.setenv("MAX_POSITION_SIZE", "1000")
 
 
 @pytest.fixture(autouse=True)
