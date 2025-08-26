@@ -15,13 +15,14 @@ def test_sentiment_module():
     try:
         from ai_trading.analysis import sentiment
         logging.info('  ✅ sentiment module imported successfully')
-        required_functions = ['fetch_sentiment', 'predict_text_sentiment', 'sentiment_lock']
+        required_functions = ['fetch_sentiment', 'analyze_text', 'sentiment_lock']
         for func_name in required_functions:
             assert hasattr(sentiment, func_name), f'Missing function: {func_name}'
         logging.info('  ✅ All required sentiment functions available')
-        result = sentiment.predict_text_sentiment('This is a test')
-        assert isinstance(result, int | float), 'predict_text_sentiment should return a number'
-        logging.info(f'  ✅ predict_text_sentiment works: {result}')
+        result = sentiment.analyze_text('This is a test')
+        assert isinstance(result, dict), 'analyze_text should return a dict'
+        assert {'available', 'pos', 'neg', 'neu'} <= set(result), 'analyze_text result keys missing'
+        logging.info(f"  ✅ analyze_text works: {result}")
         return True
     except (KeyError, ValueError, TypeError) as e:
         logging.info(f'  ❌ Sentiment module test failed: {e}')
