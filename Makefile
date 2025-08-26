@@ -1,4 +1,4 @@
-# ==== knobs with safe defaults ====
+		# ==== knobs with safe defaults ====
 TOP_N ?= 5
 FAIL_ON_IMPORT_ERRORS ?= 0
 DISABLE_ENV_ASSERT ?= 0
@@ -8,7 +8,7 @@ SKIP_INSTALL ?= 0
 # Ensure artifact dir exists even on CI
 $(shell mkdir -p artifacts >/dev/null 2>&1)
 
-.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy lint
+.PHONY: ensure-runtime test-collect-report ci-smoke smoke test test-all test-all-heavy lint tests-self lint-core
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
@@ -34,8 +34,21 @@ ci-smoke: test-collect-report
 	@echo "=== END import-repair-report ==="
 
 # Deterministic smoke: explicit test files, plugin autoload off
-smoke:
-	./tools/ci_smoke.sh
+smoke: tests-self
+	@echo "== pytest (targeted) =="
+	pytest -q \
+		tests/test_cli_dry_run.py::test_cli_dry_run_exits_zero_and_marks_indicator \
+		tests/test_import_side_effects.py::test_module_imports_without_heavy_stacks \
+		tests/test_single_instance_lock.py::test_single_instance_lock_no_sys_exit \
+		tests/test_env_validation.py::test_empty_interval_is_handled_gracefully
+
+tests-self:
+	@echo "== tools/selftest.sh =="
+	@bash tools/selftest.sh
+
+lint-core:
+	@echo "== ruff (core) =="
+	@ruff check ai_trading/main.py ai_trading/core/bot_engine.py ai_trading/runner.py ai_trading/process_manager.py
 
 .PHONY: scan-extras
 scan-extras:

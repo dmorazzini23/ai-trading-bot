@@ -21,14 +21,14 @@ class ProcessManager:
         return str(self._lockfile)
 
     def ensure_single_instance(self) -> bool:
-        """Acquire lock or return False if another instance is running."""
+        """Acquire lock or raise if another instance is running."""
         self._fd = os.open(self._lockfile, os.O_CREAT | os.O_RDWR, 420)
         try:
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.write(self._fd, str(os.getpid()).encode('utf-8'))
+            os.write(self._fd, str(os.getpid()).encode("utf-8"))
             os.fsync(self._fd)
-        except OSError:
-            return False
+        except OSError as e:
+            raise RuntimeError("Another ai-trading instance is already running.") from e
         atexit.register(self._cleanup)
         signal.signal(signal.SIGTERM, self._sigexit)
         signal.signal(signal.SIGINT, self._sigexit)
