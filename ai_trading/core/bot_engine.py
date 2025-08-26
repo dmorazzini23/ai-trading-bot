@@ -1404,50 +1404,27 @@ from ai_trading.data_providers import get_yfinance, has_yfinance
 YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
 
-# Production Alpaca SDK imports are performed lazily. Create harmless stand-ins
-# when the SDK is unavailable.
-class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
-    """Lightweight no-op stub used before lazy-importing real Alpaca classes.
-    Accepts any args/kwargs and safely no-ops attribute access/calls.
-    """
+# Attempt to import Alpaca SDK classes; raise if unavailable to avoid silent
+# fallbacks that mask missing dependencies.
+try:  # pragma: no cover - import resolution
+    from alpaca_trade_api.rest import (
+        Quote,
+        StockLatestQuoteRequest,
+        OrderSide,
+        OrderStatus,
+        TimeInForce,
+        Order,
+        MarketOrderRequest,
+    )
+except ImportError as e:  # pragma: no cover - executed only when dep missing
+    import logging
 
-    def __init__(self, *args, **kwargs):
-        self._args = args
-        self._kwargs = kwargs
+    logging.getLogger(__name__).critical(
+        "alpaca_trade_api.rest import failed; ensure alpaca-trade-api is installed",
+        exc_info=e,
+    )
+    raise
 
-    def __getattr__(self, _name):  # return a no-op callable for any missing attr
-        def _noop(*args, **kwargs):
-            return None
-
-        return _noop
-
-
-# Assign lightweight stubs for Alpaca SDK types; keep TimeFrame separate for constants.
-Quote = StockBarsRequest = StockLatestQuoteRequest = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = _AlpacaStub  # type: ignore
-
-# Minimal enum-like placeholder so code can reference TimeFrame.Day etc.
-class _TimeFrame:  # AI-AGENT-REF: safe constants when Alpaca SDK not installed
-    Day = "Day"
-    Minute = "Minute"
-    Hour = "Hour"
-    Week = "Week"
-    Month = "Month"
-
-    def __init__(self, amount, unit):
-        self.amount = amount
-        self.unit = unit
-
-
-class _TimeFrameUnit:
-    Minute = "Minute"
-    Hour = "Hour"
-    Day = "Day"
-    Week = "Week"
-    Month = "Month"
-
-# Expose placeholder under expected name
-TimeFrame = _TimeFrame
-TimeFrameUnit = _TimeFrameUnit
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
