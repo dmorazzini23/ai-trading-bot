@@ -18,7 +18,7 @@ class TestCriticalFixesValidation(unittest.TestCase):
         """Test P0 CRITICAL: Quantity calculation bug fix."""
         logging.info('\n🔧 Testing P0 Fix: Quantity Calculation Bug')
         from tests.support.mocks import MockContext, MockOrder
-        from trade_execution import ExecutionEngine
+        from ai_trading.execution.engine import ExecutionEngine
         ctx = MockContext()
         engine = ExecutionEngine(ctx)
         mock_order = MockOrder(filled_qty=2)
@@ -67,7 +67,7 @@ class TestCriticalFixesValidation(unittest.TestCase):
         """Test P2 MEDIUM: Short selling validation foundation."""
         logging.info('\n🔧 Testing P2 Fix: Short Selling Validation (Foundation)')
         from tests.support.mocks import MockContextShortSelling
-        from trade_execution import ExecutionEngine
+        from ai_trading.execution.engine import ExecutionEngine
         ctx = MockContextShortSelling()
         engine = ExecutionEngine(ctx)
         self.assertTrue(hasattr(engine, '_validate_short_selling'), 'Short selling validation method should exist')
