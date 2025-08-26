@@ -60,7 +60,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         """Fallback APIError when alpaca-trade-api is unavailable."""
 
         pass
-from ai_trading.config.management import derive_cap_from_settings
+from ai_trading.config.management import derive_cap_from_settings, is_shadow_mode
 from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
@@ -352,11 +352,7 @@ def _alpaca_diag_info() -> dict[str, object]:
     # AI-AGENT-REF: structured diag for once-per-process logging
     try:
         key, secret, base_url = _resolve_alpaca_env()
-        shadow = getattr(config, "SHADOW_MODE", False) or os.getenv("SHADOW_MODE", "").lower() in (
-            "true",
-            "1",
-            "yes",
-        )
+        shadow = is_shadow_mode()
         paper = bool(base_url and ("paper" in base_url))
         return {
             "has_key": bool(key),
@@ -1558,13 +1554,8 @@ def _ensure_alpaca_env_or_raise():
     - Outside SHADOW_MODE, if missing key/secret, raise with a clear message.
     """
     k, s, b = _resolve_alpaca_env()
-    # Check both config and environment for SHADOW_MODE
-    shadow_mode = getattr(config, "SHADOW_MODE", False) or os.getenv(
-        "SHADOW_MODE", ""
-    ).lower() in (
-        "true",
-        "1",
-    )
+    # Check for shadow mode
+    shadow_mode = is_shadow_mode()
     if shadow_mode:
         return k, s, b
     if not (k and s):

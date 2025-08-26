@@ -11,12 +11,12 @@ from typing import Any, Optional, TYPE_CHECKING
 import requests
 import importlib.util
 from ai_trading.logging import get_logger
+from ai_trading.config.management import is_shadow_mode
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
 
 _log = get_logger(__name__)
-SHADOW_MODE = os.getenv('SHADOW_MODE', '').lower() in {'1', 'true', 'yes'}
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
@@ -194,8 +194,8 @@ class _AlpacaConfig:
         base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
         key = os.getenv("ALPACA_API_KEY_ID") or os.getenv("APCA_API_KEY_ID")
         sec = os.getenv("ALPACA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
-        shadow_env = os.getenv("ALPACA_SHADOW") or os.getenv("SHADOW_MODE") or ""
-        shadow = SHADOW_MODE or str(shadow_env).strip().lower() in {"1", "true", "yes", "on"}
+        shadow_env = os.getenv("ALPACA_SHADOW", "")
+        shadow = is_shadow_mode() or str(shadow_env).strip().lower() in {"1", "true", "yes", "on"}
         return _AlpacaConfig(base, key, sec, shadow)
 
 
@@ -424,7 +424,7 @@ def start_trade_updates_stream(*_a, **_k):
     return None
 __all__ = [
     'ALPACA_AVAILABLE',
-    'SHADOW_MODE',
+    'is_shadow_mode',
     'RETRY_HTTP_CODES',
     'RETRYABLE_HTTP_STATUSES',
     'submit_order',

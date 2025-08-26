@@ -50,6 +50,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import types
 try:
     # Optional dev dependency. Provide a benign fallback for smoke/collect.
     from freezegun import freeze_time  # type: ignore
@@ -117,6 +118,19 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         for item in items:
             if "integration" in item.keywords:
                 item.add_marker(skip_integration)
+
+
+@pytest.fixture
+def dummy_alpaca_client():
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def submit_order(self, **order_data):
+            self.calls += 1
+            return types.SimpleNamespace(id="123", **order_data)
+
+    return Client()
 
 
 def _install_vendor_stubs() -> None:
