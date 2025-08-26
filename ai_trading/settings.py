@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     webhook_secret: str | None = Field(default=None, alias='WEBHOOK_SECRET')
     testing: bool = Field(False, alias='TESTING')
     shadow_mode: bool = Field(False, alias='SHADOW_MODE')
+    disable_daily_retrain: bool = Field(False, alias='DISABLE_DAILY_RETRAIN')
     log_market_fetch: bool = Field(True, alias='LOG_MARKET_FETCH')
     healthcheck_port: int = Field(9001, alias='HEALTHCHECK_PORT')
     min_health_rows: int = Field(120, alias='MIN_HEALTH_ROWS')
