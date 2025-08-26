@@ -1429,8 +1429,8 @@ YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availabilit
 # fallbacks that mask missing dependencies.
 try:  # pragma: no cover - import resolution
     from alpaca_trade_api.entity import Quote, Order
-    from alpaca_trade_api.common.enums import OrderSide, OrderStatus, TimeInForce
-    from alpaca_trade_api.common.types import MarketOrderRequest
+    from alpaca_trade_api.enums import OrderSide, OrderStatus, TimeInForce
+    from alpaca_trade_api.types import MarketOrderRequest
     try:  # pragma: no cover - StockLatestQuoteRequest may not exist
         from alpaca_trade_api.rest import StockLatestQuoteRequest  # type: ignore
     except Exception:
