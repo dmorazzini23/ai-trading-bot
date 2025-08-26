@@ -180,6 +180,10 @@ def ensure_alpaca_attached(ctx) -> None:
                 setattr(inner, "api", trading_client)
             except COMMON_EXC:
                 pass
+    if getattr(ctx, "api", None) is None:
+        logger_once.error(
+            "FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed"
+        )
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
