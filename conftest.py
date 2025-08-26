@@ -40,6 +40,7 @@ def pytest_ignore_collect(path, config):
             repo / "tests" / "test_runner_smoke.py",
             repo / "tests" / "test_utils_timing.py",
             repo / "tests" / "unit" / "test_trading_config_aliases.py",
+            repo / "tests" / "test_current_api.py",
         }
         try:
             rel = p.resolve()
