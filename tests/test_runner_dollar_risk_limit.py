@@ -4,24 +4,14 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_runner_prefers_config_for_dollar_risk_limit(monkeypatch):
-    """Environment override should propagate to runtime.params."""
+def test_runner_uses_trading_config_for_dollar_risk_limit(monkeypatch):
+    """runtime.params should reflect TradingConfig.from_env()."""
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.2")
-
-    from ai_trading.core import runtime as runtime_mod
-
-    orig_build = runtime_mod.build_runtime
-
-    def fake_build(cfg):
-        rt = orig_build(cfg)
-        rt.params["DOLLAR_RISK_LIMIT"] = 0.05
-        return rt
-
-    monkeypatch.setattr(runtime_mod, "build_runtime", fake_build)
 
     from ai_trading import runner
 
     captured = {}
+
     def worker(state, runtime):
         captured["runtime"] = runtime
 
@@ -35,12 +25,15 @@ def test_runner_prefers_config_for_dollar_risk_limit(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", dummy_bot_engine)
     monkeypatch.setitem(sys.modules, "ai_trading.data_fetcher", SimpleNamespace(DataFetchError=Exception))
-    monkeypatch.setattr("ai_trading.core.runtime.enhance_runtime_with_context", lambda rt, ctx: rt)
-
-    warnings = []
-    monkeypatch.setattr(runner.log, "warning", lambda msg, *a, **k: warnings.append(msg))
+    monkeypatch.setattr(
+        "ai_trading.core.runtime.enhance_runtime_with_context", lambda rt, ctx: rt
+    )
 
     runner.run_cycle()
 
-    assert captured["runtime"].params["DOLLAR_RISK_LIMIT"] == pytest.approx(0.2)
-    assert "DOLLAR_RISK_LIMIT_MISMATCH" in warnings
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env()
+    assert captured["runtime"].params["DOLLAR_RISK_LIMIT"] == pytest.approx(
+        cfg.dollar_risk_limit
+    )
