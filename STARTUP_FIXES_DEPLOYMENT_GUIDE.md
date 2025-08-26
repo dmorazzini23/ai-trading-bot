@@ -84,7 +84,7 @@ pytest -q -k "env_order or dual_schema or utc_timefmt"
 **Before:**
 ```python
 # ai_trading/core/bot_engine.py (BROKEN)
-if not (API_KEY and API_SECRET) and not config.SHADOW_MODE:
+if not (API_KEY and API_SECRET) and not config.is_shadow_mode():
     logger.critical("Alpaca credentials missing – aborting startup")
     sys.exit(1)  # ❌ Crashes during import
 ```
@@ -97,7 +97,7 @@ def _initialize_alpaca_clients():
     try:
         api_key, secret_key, base_url = _ensure_alpaca_env_or_raise()
     except RuntimeError as e:
-        if config.SHADOW_MODE:
+        if config.is_shadow_mode():
             logger.warning("Running in SHADOW_MODE with missing credentials: %s", e)
             return
         else:

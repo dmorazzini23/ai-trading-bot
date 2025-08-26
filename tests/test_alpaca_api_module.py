@@ -1,4 +1,5 @@
 import types
+import pytest
 
 from ai_trading import alpaca_api
 
@@ -19,26 +20,23 @@ class DummyAPI:
 
 def test_submit_order_shadow(monkeypatch):
     api = DummyAPI()
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", True)
-    res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
-    assert res.success
-    assert res.status == "shadow"
+    monkeypatch.setenv("SHADOW_MODE", "1")
+    res = alpaca_api.submit_order("AAPL", 1, "buy", client=api)
+    assert res["id"].startswith("shadow-")
     assert api.calls == 0
 
 
 def test_submit_order_missing_submit(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
     api = object()
-    res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
-    assert res.success
-    assert res.status == "shadow"
+    with pytest.raises(AttributeError):
+        alpaca_api.submit_order("AAPL", 1, "buy", client=api)
 
 
 def test_submit_order_rate_limit(monkeypatch):
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
     api = DummyAPI(fail_status=429)
-    res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
-    assert not res.success
-    assert res.retryable
-    assert res.status == 429
+    with pytest.raises(Exception) as e:
+        alpaca_api.submit_order("AAPL", 1, "buy", client=api)
+    assert getattr(e.value, "status", None) == 429
     assert api.calls == 1

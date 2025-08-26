@@ -47,6 +47,11 @@ def get_env(
         ) from e
 
 
+def is_shadow_mode() -> bool:
+    """Return True when the ``SHADOW_MODE`` env var is truthy."""
+    return bool(get_env("SHADOW_MODE", "0", cast=bool))
+
+
 # Canonical runtime seed used by risk/engine and anywhere else needing determinism.
 SEED: int = int(os.environ.get("SEED", "42"))  # AI-AGENT-REF: expose runtime seed
 
@@ -104,6 +109,7 @@ __all__ = [
     "get_settings",
     "derive_cap_from_settings",
     "get_env",
+    "is_shadow_mode",
     "SEED",
     "validate_required_env",
 ]

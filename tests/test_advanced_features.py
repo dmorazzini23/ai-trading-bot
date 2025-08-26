@@ -35,14 +35,9 @@ def test_submit_order_shadow(monkeypatch):
         def submit_order(self, order_data=None):
             raise AssertionError("should not call in shadow")
 
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", True)
-    log = types.SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None)
-    resp = alpaca_api.submit_order(
-        DummyAPI(),
-        types.SimpleNamespace(symbol="AAPL", qty=1, side="buy", time_in_force="day"),
-        log,
-    )
-    assert resp["status"] == "shadow"
+    monkeypatch.setenv("SHADOW_MODE", "1")
+    resp = alpaca_api.submit_order("AAPL", 1, "buy", client=DummyAPI())
+    assert resp["status"] == "accepted"
 
 
 def test_monitor_slippage_alert(monkeypatch):

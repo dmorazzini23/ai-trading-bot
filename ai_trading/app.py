@@ -24,12 +24,9 @@ def create_app():
             except (KeyError, ValueError, TypeError):
                 trading_client, key, secret, base_url, paper = (None, None, None, '', False)
 
-            from ai_trading.config import management as config
+            from ai_trading.config.management import is_shadow_mode
 
-            shadow = bool(
-                getattr(config, 'SHADOW_MODE', False)
-                or os.getenv('SHADOW_MODE', '').lower() in ('true', '1', 'yes')
-            )
+            shadow = is_shadow_mode()
 
             return jsonify(
                 alpaca=dict(

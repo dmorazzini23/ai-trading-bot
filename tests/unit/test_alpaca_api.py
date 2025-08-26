@@ -30,7 +30,7 @@ def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
 
     # Mock the DRY_RUN setting to False so the actual client is used
     monkeypatch.setattr(alpaca_api, "DRY_RUN", False)
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
+    monkeypatch.setenv("SHADOW_MODE", "0")
 
     # Create a simple order request object
     class OrderReq:
@@ -46,9 +46,15 @@ def test_submit_order_uses_client_and_returns(dummy_alpaca_client, monkeypatch):
             return None
 
     order_req = OrderReq()
-    res = submit(dummy_alpaca_client, order_req)
+    res = submit(
+        order_req.symbol,
+        order_req.qty,
+        order_req.side,
+        time_in_force=order_req.time_in_force,
+        client=dummy_alpaca_client,
+    )
     assert res is not None
-    assert getattr(res, "id", None) is not None
+    assert res.get("id") is not None
     assert dummy_alpaca_client.calls, "Client submit_order should be called"
 
 
