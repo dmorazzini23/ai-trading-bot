@@ -17,7 +17,7 @@ from . import _load_rl_stack, is_rl_available
 
 
 class _SB3Stub:
-    """Minimal placeholder used when RL stack is unavailable."""
+    """Minimal stub used when RL stack is unavailable."""
 
     def __init__(self, *a, **k):
         pass
@@ -61,7 +61,7 @@ def evaluate_policy(*a, **k):
 
 
 def _ensure_rl() -> bool:
-    """Import the RL stack on demand, replacing global placeholders."""
+    """Import the RL stack on demand, replacing global stubs."""
     global PPO, A2C, DQN, BaseCallback, EvalCallback, make_vec_env, evaluate_policy, DummyVecEnv
     if PPO is not _SB3Stub:
         return True

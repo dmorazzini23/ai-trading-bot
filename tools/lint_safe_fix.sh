@@ -13,7 +13,6 @@ ruff check . --select I,E402 --fix || true
 
 # Pass 2: unuseds & None-comparisons
 ruff check . --select F401,F403,F405,F841,E711,E712 --fix || true
-python tools/codemods/none_comparison_fix.py || true
 
 # Pass 3: report DTZ/T201 needed manual spots (no auto-fix)
 ruff check . --select DTZ,T201 | tee artifacts/ruff-phase2b-dtz-t201.txt || true

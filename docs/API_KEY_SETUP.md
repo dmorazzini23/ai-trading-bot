@@ -38,17 +38,17 @@ This trading bot requires API keys from Alpaca Markets to function. This guide e
 
 ### 2. Configure Your .env File
 
-Copy `.env.example` to `.env` and replace the placeholder values:
+Copy `.env.example` to `.env` and replace the sample values:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and replace the placeholders:
+Edit `.env` and replace these values:
 
 ```env
 # Production environment configuration
-# IMPORTANT: Replace these placeholder values with your real API keys
+# IMPORTANT: Replace these sample values with your real API keys
 # Get your keys from: https://app.alpaca.markets/paper/dashboard/overview
 ALPACA_API_KEY=YOUR_ACTUAL_API_KEY_HERE
 ALPACA_SECRET_KEY=YOUR_ACTUAL_SECRET_KEY_HERE

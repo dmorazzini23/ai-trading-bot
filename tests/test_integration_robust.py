@@ -275,7 +275,7 @@ class _Alloc:
         return []
 
     def update_reward(self, strategy: str, reward: float) -> None:
-        """Update reward for a strategy (placeholder for test compatibility)."""
+        """Update reward for a strategy (used for test compatibility)."""
         pass
 
 

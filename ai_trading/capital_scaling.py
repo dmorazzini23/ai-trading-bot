@@ -157,7 +157,7 @@ class CapitalScalingEngine:
         Parameters
         ----------
         ctx : Any
-            Unused context placeholder for future use.
+            Unused context stub for future use.
         equity : float
             Current account equity.
         """
