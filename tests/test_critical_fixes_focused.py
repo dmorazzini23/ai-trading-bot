@@ -78,8 +78,8 @@ class TestCriticalFixes(unittest.TestCase):
         self.assertNotEqual(sector, "Unknown", "BABA should have a fallback sector classification")
         self.assertEqual(sector, "Technology", "BABA should be classified as Technology")
 
-    def test_trade_execution_quantity_fix_exists(self):
-        """Test that trade execution has the quantity calculation fix."""
+    def test_execution_engine_quantity_fix_exists(self):
+        """Test that the execution engine has the quantity calculation fix."""
         # P0 Fix: Quantity calculation bug
         # We can't easily test the actual fix without mocking orders, but we can verify
         # the _reconcile_partial_fills method exists and has been updated

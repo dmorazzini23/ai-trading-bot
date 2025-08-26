@@ -212,8 +212,8 @@ class ProductionIntegrator:
             return func(*args, **kwargs)
         return wrapper
 
-    def monitor_trade_execution(self, symbol: str, side: str, quantity: float, price: float, pnl: float=0.0, order_id: str=None):
-        """Monitor trade execution across all systems."""
+    def monitor_order_execution(self, symbol: str, side: str, quantity: float, price: float, pnl: float=0.0, order_id: str=None):
+        """Monitor order execution across all systems."""
         try:
             if self.monitoring_dashboard:
                 self.monitoring_dashboard.record_trade(symbol, side, quantity, price, pnl, order_id)
@@ -222,9 +222,9 @@ class ProductionIntegrator:
                 if anomaly:
                     self.logger.warning(f'Trade anomaly detected: {anomaly}')
             if self.security_manager is not None:
-                self.security_manager.audit_logger.log_trade_execution(symbol, side, quantity, price, order_id or 'unknown', 'system')
+                self.security_manager.audit_logger.log_order_execution(symbol, side, quantity, price, order_id or 'unknown', 'system')
         except (ValueError, TypeError) as e:
-            self.logger.error(f'Error monitoring trade execution: {e}')
+            self.logger.error(f'Error monitoring order execution: {e}')
 
     def get_system_status(self) -> dict[str, Any]:
         """Get comprehensive system status."""

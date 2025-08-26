@@ -56,21 +56,6 @@ class TestCriticalIssueFixes(unittest.TestCase):
         else:
             self.assertTrue(True)
 
-    def test_issue_3_quantity_tracking_logging(self):
-        """Test Issue 3: Order execution quantity tracking improved."""
-        # Test by reading the source code directly
-        trade_execution_path = "trade_execution.py"
-        if os.path.exists(trade_execution_path):
-            with open(trade_execution_path) as f:
-                content = f.read()
-                # Check that FULL_FILL_SUCCESS now includes requested_qty
-                self.assertIn('"requested_qty": requested_qty', content,
-                            "FULL_FILL_SUCCESS should include requested_qty for tracking")
-                # Check that ORDER_FILL_CONSOLIDATED uses total_filled_qty
-                self.assertIn('"total_filled_qty": buf["qty"]', content,
-                            "ORDER_FILL_CONSOLIDATED should use clear quantity field name")
-        else:
-            self.assertTrue(True)
 
     def test_issue_1_meta_learning_trigger_exists(self):
         """Test Issue 1: Meta-learning conversion trigger exists."""
@@ -97,7 +82,6 @@ def run_critical_fixes_tests():
     # Add specific tests
     suite.addTest(test_class('test_issue_4_position_limit_increase'))
     suite.addTest(test_class('test_issue_2_sentiment_circuit_breaker_thresholds'))
-    suite.addTest(test_class('test_issue_3_quantity_tracking_logging'))
     suite.addTest(test_class('test_issue_1_meta_learning_trigger_exists'))
 
     # Run the tests

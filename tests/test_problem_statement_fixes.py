@@ -79,27 +79,6 @@ class TestProblemStatementFixes(unittest.TestCase):
         else:
             self.fail("bot_engine.py not found")
 
-    def test_order_quantity_tracking_clarity(self):
-        """Test that order quantity tracking provides clear distinction between
-        requested, submitted, and filled quantities."""
-        # Check that the trade execution logs have clear field names
-        trade_execution_path = "trade_execution.py"
-        if os.path.exists(trade_execution_path):
-            with open(trade_execution_path) as f:
-                content = f.read()
-
-                # Check for clear quantity field names in FULL_FILL_SUCCESS
-                self.assertIn('"requested_qty":', content,
-                            "FULL_FILL_SUCCESS should include clear requested_qty field")
-                self.assertIn('"filled_qty":', content,
-                            "FULL_FILL_SUCCESS should include clear filled_qty field")
-
-                # Check for clear quantity field names in ORDER_FILL_CONSOLIDATED
-                self.assertIn('"total_filled_qty":', content,
-                            "ORDER_FILL_CONSOLIDATED should use clear total_filled_qty field name")
-
-        else:
-            self.fail("trade_execution.py not found")
 
 
 def run_problem_statement_tests():
@@ -113,7 +92,6 @@ def run_problem_statement_tests():
     suite.addTest(test_class('test_sentiment_circuit_breaker_requirements'))
     suite.addTest(test_class('test_meta_learning_minimum_trades_requirement'))
     suite.addTest(test_class('test_pltr_sector_classification'))
-    suite.addTest(test_class('test_order_quantity_tracking_clarity'))
 
     # Run the tests
     runner = unittest.TextTestRunner(verbosity=2)

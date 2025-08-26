@@ -22,5 +22,5 @@ ruff check . --statistics | tee artifacts/ruff-phase2b-final.txt || true
 
 # Typecheck & tests
 python -m mypy --version | tee artifacts/mypy-version.txt
-python -m mypy ai_trading trade_execution | tee artifacts/mypy-phase2b.txt || true
+python -m mypy ai_trading | tee artifacts/mypy-phase2b.txt || true
 pytest -n auto --disable-warnings --maxfail=0 -q | tee artifacts/pytest-phase2b.txt || true

@@ -162,9 +162,9 @@ class AuditLogger:
         audit_record['audit_hash'] = audit_hash
         self.logger.info(json.dumps(audit_record))
 
-    def log_trade_execution(self, symbol: str, side: str, quantity: float, price: float, order_id: str, user_id: str=None):
-        """Log trade execution for audit trail."""
-        self.log_event(event_type='TRADE_EXECUTION', details={'symbol': symbol, 'side': side, 'quantity': quantity, 'price': price, 'order_id': order_id, 'total_value': quantity * price}, user_id=user_id)
+    def log_order_execution(self, symbol: str, side: str, quantity: float, price: float, order_id: str, user_id: str=None):
+        """Log order execution for audit trail."""
+        self.log_event(event_type='ORDER_EXECUTION', details={'symbol': symbol, 'side': side, 'quantity': quantity, 'price': price, 'order_id': order_id, 'total_value': quantity * price}, user_id=user_id)
 
     def log_risk_violation(self, violation_type: str, details: dict[str, Any]):
         """Log risk management violations."""

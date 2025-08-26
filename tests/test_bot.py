@@ -27,7 +27,6 @@ mods = [
     "prometheus_client",
     "finnhub",
     "pybreaker",
-    "trade_execution",
     "ai_trading.capital_scaling",
     "strategy_allocator",
 ]

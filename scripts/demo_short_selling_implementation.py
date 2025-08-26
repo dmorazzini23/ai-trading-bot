@@ -15,7 +15,7 @@ def demonstrate_short_selling():
     """Demonstrate the short selling capability."""
     logging.info('=== Short Selling Capability Demonstration ===')
     try:
-        from trade_execution import ExecutionEngine
+        from ai_trading.execution.engine import ExecutionEngine
         mock_ctx = Mock()
         mock_api = Mock()
         mock_account = Mock()
@@ -61,7 +61,8 @@ def demonstrate_order_monitoring():
     """Demonstrate the order monitoring capability."""
     logging.info('\n=== Order Monitoring Capability Demonstration ===')
     try:
-        from trade_execution import ExecutionEngine, _active_orders, _order_tracking_lock
+        from ai_trading.execution.engine import ExecutionEngine
+        from ai_trading.monitoring.order_health_monitor import _active_orders, _order_tracking_lock
         mock_ctx = Mock()
         mock_ctx.api = Mock()
         engine = ExecutionEngine(mock_ctx)

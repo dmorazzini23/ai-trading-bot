@@ -286,11 +286,11 @@ def _check_trading_system(self) -> HealthCheckResult:
             issues.append(f'bot_engine import failed: {e}')
             details['bot_engine'] = f'FAILED: {e}'
         try:
-            import trade_execution
-            details['trade_execution'] = 'OK'
+            from ai_trading.execution import engine
+            details['execution_engine'] = 'OK'
         except ImportError as e:
-            issues.append(f'trade_execution import failed: {e}')
-            details['trade_execution'] = f'FAILED: {e}'
+            issues.append(f'execution_engine import failed: {e}')
+            details['execution_engine'] = f'FAILED: {e}'
         try:
             from ai_trading.core.bot_engine import get_risk_engine
             get_risk_engine()

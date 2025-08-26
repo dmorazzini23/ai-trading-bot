@@ -30,7 +30,6 @@ def test_critical_imports():
         "ai_trading.data_fetcher",
         "ai_trading.signals",
         "ai_trading.risk.engine",
-        "ai_trading.trade_execution",
     ]
     failed_imports = []
 

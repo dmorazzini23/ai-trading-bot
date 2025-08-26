@@ -1890,7 +1890,7 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
         """
-        Fallback execution engine used when the real trade_execution module is
+        Fallback execution engine used when the real execution module is
         unavailable.  Many parts of the trading logic expect an execution
         engine exposing ``execute_order`` as well as ``start_cycle`` and
         ``end_cycle`` hooks.  Without these methods the bot would raise
@@ -12783,7 +12783,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     BotState : Central state management
     pre_trade_health_check : System health validation
     BotContext : Global context and configuration
-    trade_execution : Order execution and monitoring
+    ai_trading.execution : Order execution and monitoring
     """
     _ensure_alpaca_classes()
     if _ALPACA_IMPORT_ERROR is not None:

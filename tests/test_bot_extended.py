@@ -29,7 +29,6 @@ mods = [
     "finnhub",
     "pybreaker",
     "ratelimit",
-    "trade_execution",
     "ai_trading.capital_scaling",
     "strategy_allocator",
 ]

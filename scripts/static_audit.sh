@@ -46,7 +46,4 @@ echo "== Heavy ML/RL top-level imports =="
 grep -R --line-number --include='*.py' "^import torch\|^from torch" ai_trading | grep -v "TYPE_CHECKING" || true
 grep -R --line-number --include='*.py' "^import stable_baselines3\|^from stable_baselines3" ai_trading | grep -v "TYPE_CHECKING" || true
 
-echo "== Orphan/typo’d modules =="
-grep -R --line-number --include='*.py' "ai_trading\.trade_execution" ai_trading && { echo "FAIL: orphan trade_execution import"; exit 1; } || echo "OK: no orphan import"
-
 echo "All static checks completed."

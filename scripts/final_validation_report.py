@@ -37,27 +37,6 @@ def validate_issue_2_sentiment_circuit_breaker():
     logging.info('   ❌ Fix not found')
     return False
 
-def validate_issue_3_quantity_tracking():
-    """Validate Issue 3: Order Execution Quantity Discrepancies"""
-    logging.info('\n🔍 Issue 3: Order Execution Quantity Discrepancies')
-    logging.info('   Problem: Mismatches between calculated, submitted, and filled quantities')
-    logging.info('   Examples: AMZN calculated=80, submitted=40, filled_qty=80')
-    logging.info('   Root Cause: Incorrect quantity tracking in logging')
-    trade_execution_path = 'trade_execution.py'
-    if os.path.exists(trade_execution_path):
-        with open(trade_execution_path) as f:
-            content = f.read()
-        fixes_found = 0
-        if '"requested_qty": requested_qty' in content:
-            logging.info('   ✅ Fix: FULL_FILL_SUCCESS now logs both requested and filled quantities')
-            fixes_found += 1
-        if '"total_filled_qty": buf["qty"]' in content:
-            logging.info('   ✅ Fix: ORDER_FILL_CONSOLIDATED uses clear quantity field names')
-            fixes_found += 1
-        if fixes_found == 2:
-            return True
-    logging.info('   ❌ Fix not found')
-    return False
 
 def validate_issue_4_position_limits():
     """Validate Issue 4: Position Limit Reached Too Early"""
@@ -95,15 +74,13 @@ def main():
         fixes_validated += 1
     if validate_issue_2_sentiment_circuit_breaker():
         fixes_validated += 1
-    if validate_issue_3_quantity_tracking():
-        fixes_validated += 1
     if validate_issue_4_position_limits():
         fixes_validated += 1
     logging.info(str('\n' + '=' * 60))
     logging.info('📋 VALIDATION SUMMARY')
     logging.info(str('=' * 60))
-    logging.info(f'✅ Issues Fixed: {fixes_validated}/4')
-    if fixes_validated == 4:
+    logging.info(f'✅ Issues Fixed: {fixes_validated}/3')
+    if fixes_validated == 3:
         logging.info('🎉 ALL CRITICAL ISSUES SUCCESSFULLY FIXED!')
         logging.info('\n💡 Expected Benefits:')
         logging.info('   • Meta-learning will process trade data automatically')

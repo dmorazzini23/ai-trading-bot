@@ -477,7 +477,7 @@ class ProductionValidator:
     def _test_trading_engine(self) -> float:
         """Test trading engine functionality."""
         try:
-            import trade_execution
+            from ai_trading.execution import engine
             from ai_trading.core import bot_engine
             return 95
         except ImportError:

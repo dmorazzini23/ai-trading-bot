@@ -50,7 +50,7 @@ class AuditEventType(Enum):
     """Types of audit events."""
     CONFIG_ACCESS = 'config_access'
     API_KEY_ACCESS = 'api_key_access'
-    TRADE_EXECUTION = 'trade_execution'
+    ORDER_EXECUTION = 'order_execution'
     POSITION_CHANGE = 'position_change'
     RISK_VIOLATION = 'risk_violation'
     DATA_ACCESS = 'data_access'

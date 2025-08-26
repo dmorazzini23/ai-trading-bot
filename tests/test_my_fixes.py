@@ -76,20 +76,6 @@ class TestMyFixes(unittest.TestCase):
         self.assertIn('LIQUIDITY_VOL_THRESHOLD", "0.08"', content)
 
 
-    def test_data_quality_handling_improved(self):
-        """Test that data quality validation is improved."""
-        with open("trade_execution.py") as f:
-            content = f.read()
-
-        # Should require minimum 3 rows instead of 5
-        self.assertIn('len(df) < 3:', content)
-
-        # Should handle limited data gracefully
-        self.assertIn('Limited minute data', content)
-
-        # Should use adaptive calculations
-        self.assertIn('min(5, len(df))', content)
-
 
     def test_confidence_algorithm_correctness(self):
         """Test that the confidence normalization algorithm works correctly."""

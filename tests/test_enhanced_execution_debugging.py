@@ -217,7 +217,7 @@ class TestPositionReconciliation(unittest.TestCase):
         symbol = "AAPL"
 
         # Update position
-        self.reconciler.update_bot_position(symbol, 100, "trade_execution")
+        self.reconciler.update_bot_position(symbol, 100, "live_trading")
 
         positions = self.reconciler.get_bot_positions()
         self.assertEqual(positions[symbol], 100)
@@ -491,7 +491,7 @@ class TestIntegratedExecutionDebugging(unittest.TestCase):
 
         # Update position tracking
         from ai_trading.execution.position_reconciler import update_bot_position
-        update_bot_position(symbol, qty, f"trade_execution_{correlation_id}")
+        update_bot_position(symbol, qty, f"live_trading_{correlation_id}")
 
         # Record PnL
         from ai_trading.execution.pnl_attributor import (
