@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from tests.optdeps import require
-require("pandas")
 
 from datetime import UTC, datetime, timedelta
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.core import bot_engine as be
 
 

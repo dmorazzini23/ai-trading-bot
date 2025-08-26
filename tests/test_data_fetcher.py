@@ -1,13 +1,12 @@
-from tests.optdeps import require
-require("pandas")
 import datetime
 import os
 import sys
 import types
 from pathlib import Path
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 from alpaca_trade_api.rest import APIError  # type: ignore
 from tests.helpers.asserts import assert_df_like
@@ -45,8 +44,7 @@ class _DummyHist:
         pass
 
     def get_stock_bars(self, *a, **k):
-        import pandas as pd
-
+        pd = pytest.importorskip("pandas")
         return types.SimpleNamespace(df=pd.DataFrame())
 
 

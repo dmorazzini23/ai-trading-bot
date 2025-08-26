@@ -1,8 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def test_now_is_aware_utc():
     # AI-AGENT-REF: ensure timezone-aware UTC now
     now_utc = pd.Timestamp.now(tz="UTC")

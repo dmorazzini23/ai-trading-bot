@@ -1,13 +1,10 @@
-from tests.optdeps import require
-require("numpy")
-require("pandas")
-require("sklearn")
 import types
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import pytest
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+sklearn = pytest.importorskip("sklearn")
 import sklearn.linear_model
 from ai_trading import meta_learning
 

@@ -1,6 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
+import pytest
+pd = pytest.importorskip("pandas")
 from ai_trading.strategies.mean_reversion import MeanReversionStrategy
 
 

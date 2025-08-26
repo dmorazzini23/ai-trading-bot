@@ -1,6 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
+import pytest
+pd = pytest.importorskip("pandas")
 from ai_trading.features import compute_macd, compute_macds, ensure_columns
 
 

@@ -1,11 +1,9 @@
-from tests.optdeps import require
-require("pandas")
 import sys
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 

@@ -1,7 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 from ai_trading.core.bot_engine import DataFetchError, fetch_minute_df_safe
 
 

@@ -1,10 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 import types
 
 import joblib
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 
 pytest.importorskip("alpaca_trade_api")
 

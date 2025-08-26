@@ -1,9 +1,6 @@
-from tests.optdeps import require
-require("pandas")
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def test_stop_levels():
     stop, take = risk_engine.compute_stop_levels(100, 2)
     assert stop == 98 and take == 104

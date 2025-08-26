@@ -1,8 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def test_grid_search_results():
     try:
         df = pd.read_csv("logs/grid_results.csv")

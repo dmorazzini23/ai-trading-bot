@@ -1,7 +1,6 @@
-from tests.optdeps import require
-require("pandas")
 import numpy as np
-import pandas as pd
+import pytest
+pd = pytest.importorskip("pandas")
 from ai_trading import signals
 
 

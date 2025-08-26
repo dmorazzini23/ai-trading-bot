@@ -1,8 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 import time
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.market import cache as mcache
 
 

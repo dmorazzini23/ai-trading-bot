@@ -1,5 +1,4 @@
 from tests.optdeps import require
-require("pandas")
 require("numpy")
 import builtins
 import importlib
@@ -9,9 +8,9 @@ import types
 from datetime import datetime
 
 import numpy as np
-import pandas as pd
-import pydantic
 import pytest
+pd = pytest.importorskip("pandas")
+import pydantic
 
 try:
     import pydantic_settings  # noqa: F401

@@ -1,9 +1,7 @@
-from tests.optdeps import require
-require("pandas")
 
-import pandas as pd
+import pytest
 
-
+pd = pytest.importorskip("pandas")
 def test_ichimoku_indicator_returns_dataframe(monkeypatch):
     from ai_trading.core import bot_engine as bot
 

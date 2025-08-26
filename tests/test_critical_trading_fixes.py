@@ -9,8 +9,6 @@ Tests the five main areas of improvement:
 4. Partial Order Management
 5. Order Status Monitoring
 """
-from tests.optdeps import require
-require("pandas")
 
 import csv
 import os
@@ -21,8 +19,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 # Import modules under test
 try:

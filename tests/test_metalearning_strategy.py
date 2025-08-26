@@ -2,16 +2,14 @@
 """
 Test suite for MetaLearning strategy.
 """
-from tests.optdeps import require
-require("pandas")
 
 import os
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
-import pandas as pd
-
+import pytest
+pd = pytest.importorskip("pandas")
 # Set minimal environment variables to avoid config errors
 os.environ['ALPACA_API_KEY'] = 'test'
 os.environ['ALPACA_SECRET_KEY'] = 'test'

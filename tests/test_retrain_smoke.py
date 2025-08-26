@@ -1,12 +1,11 @@
-from tests.optdeps import require
-require("pandas")
 import importlib
 import sys
 import types
 from pathlib import Path
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 
 def _import_retrain(monkeypatch):

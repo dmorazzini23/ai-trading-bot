@@ -1,10 +1,9 @@
-from tests.optdeps import require
-require("pandas")
 import sys
 import types
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.features import build_features_pipeline
 
 ps_stub = types.ModuleType("pydantic_settings")
@@ -23,7 +22,6 @@ sys.modules.setdefault("validate_env", validate_stub)
 
 pytestmark = pytest.mark.usefixtures("default_env", "features_env")
 
-import pytest
 
 
 @pytest.fixture(autouse=True)

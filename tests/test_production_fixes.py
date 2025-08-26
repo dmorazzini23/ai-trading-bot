@@ -8,8 +8,6 @@ This test suite validates the four main fixes:
 3. Market-aware data staleness thresholds
 4. Enhanced environment debugging capabilities
 """
-from tests.optdeps import require
-require("pandas")
 
 import os
 import sys
@@ -83,7 +81,8 @@ class TestDataStalenessThresholds(unittest.TestCase):
     def setUp(self):
         """Set up data validation test."""
         try:
-            import pandas as pd
+            import pytest
+            pd = pytest.importorskip("pandas")
             from ai_trading.data_validation import (
                 check_data_freshness,
                 get_staleness_threshold,

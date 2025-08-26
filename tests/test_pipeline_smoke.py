@@ -1,13 +1,11 @@
-from tests.optdeps import require
-require("pandas")
 import importlib
 import sys
 import types
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 
 
 def force_coverage(mod):

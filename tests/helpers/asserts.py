@@ -1,8 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def assert_df_like(df: pd.DataFrame) -> None:
     """Check DataFrame shape without enforcing row count."""  # AI-AGENT-REF
     assert isinstance(df, pd.DataFrame)

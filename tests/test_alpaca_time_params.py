@@ -1,9 +1,9 @@
-from tests.optdeps import require
-require("pandas")
 import datetime as dt
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.alpaca_api import get_bars_df
 
 from tests.helpers.asserts import assert_df_like

@@ -4,16 +4,14 @@ Test for advanced strategy components - multi-timeframe analysis and regime dete
 Tests the functionality of the new strategy modules without requiring
 full market data or external dependencies.
 """
-from tests.optdeps import require
-require("pandas")
 
 import asyncio
 import os
 import sys
 
 import numpy as np
-import pandas as pd
-
+import pytest
+pd = pytest.importorskip("pandas")
 # Add the project root to the Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 

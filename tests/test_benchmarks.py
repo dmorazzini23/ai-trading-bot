@@ -1,10 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 import inspect
 
 import numpy as np
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 from ai_trading import indicators, signals
 
 df = pd.DataFrame({

@@ -1,11 +1,8 @@
-from tests.optdeps import require
-require("numpy")
-require("torch")
 import types
 
-import numpy as np
 import pytest
-import torch
+np = pytest.importorskip("numpy")
+torch = pytest.importorskip("torch")
 from torch import nn
 
 np.random.seed(0)

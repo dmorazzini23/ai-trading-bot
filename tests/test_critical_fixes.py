@@ -7,15 +7,13 @@ Tests for the fixes addressing the critical issues:
 3. Process management enhancements
 4. Data validation functionality
 """
-from tests.optdeps import require
-require("pandas")
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
-import pandas as pd
+import pytest
 
-
+pd = pytest.importorskip("pandas")
 def test_risk_engine_missing_methods():
     """Test that RiskEngine has the missing critical methods."""
     from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import

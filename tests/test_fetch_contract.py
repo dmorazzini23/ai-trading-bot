@@ -1,11 +1,10 @@
-from tests.optdeps import require
-require("pandas")
 import os
 import sys
 import types
 
-import pandas as pd
+import pytest
 
+pd = pytest.importorskip("pandas")
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 

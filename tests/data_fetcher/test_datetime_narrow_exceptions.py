@@ -1,7 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 import sys
 import types
 

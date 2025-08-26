@@ -2,14 +2,12 @@
 """
 Tests for peak performance hardening modules.
 """
-from tests.optdeps import require
-require("pandas")
 
 from datetime import UTC, datetime
 
 import numpy as np
-import pandas as pd
 import pytest
+pd = pytest.importorskip("pandas")
 
 
 # Test idempotency

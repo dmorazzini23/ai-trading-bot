@@ -1,11 +1,10 @@
-from tests.optdeps import require
-require("pandas")
 import sys
 import types
 from pathlib import Path
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 # Ensure repository root on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -1,8 +1,5 @@
-from tests.optdeps import require
-require("pandas")
-import pandas as pd
-
-
+import pytest
+pd = pytest.importorskip("pandas")
 def test_slippage_limits():
     df = pd.read_csv("logs/slippage.csv")
     if df.empty:

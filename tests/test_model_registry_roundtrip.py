@@ -1,12 +1,9 @@
 """Test model registry register → latest_for → load_model workflow."""
-from tests.optdeps import require
-require("numpy")
-require("sklearn")
-
 import tempfile
 
-import numpy as np
 import pytest
+np = pytest.importorskip("numpy")
+sklearn = pytest.importorskip("sklearn")
 from ai_trading.model_registry import ModelRegistry
 from sklearn.linear_model import LinearRegression
 

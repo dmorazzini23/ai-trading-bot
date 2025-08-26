@@ -1,8 +1,8 @@
-from tests.optdeps import require
-require("pandas")
 from types import SimpleNamespace
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 from ai_trading.portfolio import core as portfolio_core
 from ai_trading import utils as _utils  # type: ignore
 
