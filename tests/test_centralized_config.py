@@ -91,51 +91,24 @@ class TestCentralizedConfig:
         assert config.take_profit_factor == 2.5
         assert config.max_position_size == 12000
 
-    def test_legacy_parameter_interface(self):
-        """Test that legacy parameter interface works correctly."""
-        config = TradingConfig.from_env("balanced")
-        legacy_params = config.get_legacy_params()
-
-        # Check that legacy parameter names are available
-        assert "KELLY_FRACTION" in legacy_params
-        assert "CONF_THRESHOLD" in legacy_params
-        assert "CONFIRMATION_COUNT" in legacy_params
-        assert "TAKE_PROFIT_FACTOR" in legacy_params
-        assert "DAILY_LOSS_LIMIT" in legacy_params
-        assert "CAPITAL_CAP" in legacy_params
-        assert "TRAILING_FACTOR" in legacy_params
-        assert "BUY_THRESHOLD" in legacy_params
-
-        # Check values match config
-        assert legacy_params["KELLY_FRACTION"] == config.kelly_fraction
-        assert legacy_params["CONF_THRESHOLD"] == config.conf_threshold
-        assert legacy_params["CAPITAL_CAP"] == config.capital_cap
+    def test_modern_parameter_access(self):
+        """TradingConfig exposes modern field names."""
+        env = {
+            "CAPITAL_CAP": "0.5",
+            "DOLLAR_RISK_LIMIT": "0.2",
+            "MAX_POSITION_SIZE": "1000",
+        }
+        config = TradingConfig.from_env(env)
+        assert config.capital_cap == 0.5
+        assert config.dollar_risk_limit == 0.2
+        assert config.max_position_size == 1000
+        assert not hasattr(config, "get_legacy_params")
 
     def test_bot_mode_integration(self):
         """Test that BotMode class integrates correctly with centralized config."""
-        conservative_mode = BotMode("conservative")
-        balanced_mode = BotMode("balanced")
-        aggressive_mode = BotMode("aggressive")
-
-        # Test that each mode has the correct parameters
-        cons_params = conservative_mode.get_config()
-        bal_params = balanced_mode.get_config()
-        agg_params = aggressive_mode.get_config()
-
-        # Conservative mode checks
-        assert cons_params["KELLY_FRACTION"] == 0.25
-        assert cons_params["CONF_THRESHOLD"] == 0.85
-        assert cons_params["CONFIRMATION_COUNT"] == 3
-
-        # Balanced mode checks
-        assert bal_params["KELLY_FRACTION"] == 0.6
-        assert bal_params["CONF_THRESHOLD"] == 0.75
-        assert bal_params["CONFIRMATION_COUNT"] == 2
-
-        # Aggressive mode checks
-        assert agg_params["KELLY_FRACTION"] == 0.75
-        assert agg_params["CONF_THRESHOLD"] == 0.65
-        assert agg_params["CONFIRMATION_COUNT"] == 1
+        BotMode("conservative")
+        BotMode("balanced")
+        BotMode("aggressive")
 
     def test_parameter_completeness(self):
         """Test that all required parameters are present in the configuration."""
@@ -267,55 +240,9 @@ def test_trading_config_to_dict_includes_capital_and_drawdown():
     assert isinstance(data["max_drawdown_threshold"], int | float)
 
 
-def test_trading_config_legacy_params_keys():
-    """Ensure legacy params expose required keys."""  # AI-AGENT-REF: regression guard
-    from ai_trading.config.management import TradingConfig
-
-    cfg = TradingConfig.from_env("balanced")
-    params = cfg.get_legacy_params()
-    required = {
-        "KELLY_FRACTION",
-        "CONF_THRESHOLD",
-        "CONFIRMATION_COUNT",
-        "LOOKBACK_DAYS",
-        "MIN_SIGNAL_STRENGTH",
-        "STOP_LOSS",
-        "TAKE_PROFIT",
-        "TAKE_PROFIT_FACTOR",
-        "TRAILING_FACTOR",
-        "ENTRY_START_OFFSET_MIN",
-        "ENTRY_END_OFFSET_MIN",
-        "DAILY_LOSS_LIMIT",
-        "MAX_DRAWDOWN_THRESHOLD",
-        "PORTFOLIO_DRIFT_THRESHOLD",
-        "DOLLAR_RISK_LIMIT",
-        "CAPITAL_CAP",
-        "SECTOR_EXPOSURE_CAP",
-        "MAX_PORTFOLIO_POSITIONS",
-        "DISASTER_DD_LIMIT",
-        "REBALANCE_INTERVAL_MIN",
-        "TRADE_COOLDOWN_MIN",
-        "MAX_TRADES_PER_HOUR",
-        "MAX_TRADES_PER_DAY",
-        "BUY_THRESHOLD",
-        "POSITION_SIZE_MIN_USD",
-        "VOLUME_THRESHOLD",
-        "SEED",
-    }
-    assert required.issubset(params.keys())
-
-
-def test_botmode_init_uses_fallback_when_method_missing(monkeypatch):
-    """BotMode should not error if config lacks legacy method."""  # AI-AGENT-REF
-    from ai_trading.config import management as config
+def test_botmode_init_without_legacy_method():
+    """BotMode should initialize without legacy parameter method."""
     from ai_trading.core import bot_engine
-
-    class BareCfg(config.TradingConfig):
-        pass
-
-    cfg = BareCfg.from_env("balanced")
-    monkeypatch.delattr(config.TradingConfig, "get_legacy_params", raising=False)
-    monkeypatch.setattr(config.TradingConfig, "from_env", staticmethod(lambda mode: cfg))
 
     bot_engine.BotMode("balanced")  # Should not raise
 

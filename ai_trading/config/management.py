@@ -288,26 +288,6 @@ class TradingConfig:
             data_provider=_get("DATA_PROVIDER", str),
         )
 
-    def get_legacy_params(self) -> Dict[str, Any]:
-        """Return minimal legacy params for runner compatibility.
-
-        AI-AGENT-REF: expose legacy params without external helpers
-        """
-        from ai_trading import settings as S  # lazy import to avoid cycles
-
-        params: Dict[str, Any] = {
-            "CAPITAL_CAP": float(getattr(S, "get_capital_cap")()),
-            "DOLLAR_RISK_LIMIT": float(getattr(S, "get_dollar_risk_limit")()),
-        }
-        try:
-            from ai_trading.position_sizing import resolve_max_position_size
-            mps = resolve_max_position_size(capital_cap=params["CAPITAL_CAP"])
-            if mps is not None:
-                params["MAX_POSITION_SIZE"] = float(mps)
-        except Exception:
-            pass
-        return params
-
     def snapshot_sanitized(self) -> Dict[str, Any]:
         """Return a sanitized dict suitable for logging."""
         return {
