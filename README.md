@@ -684,6 +684,10 @@ python verify_config.py
   the bot derives a value from `CAPITAL_CAP` and available equity. Optionally
   set `MAX_POSITION_SIZE_PCT` to cap positions as a percentage of the portfolio.
 
+If any `ALPACA_*` credentials are missing or `alpaca-trade-api` is not installed,
+the bot now aborts startup with a clear error instead of running without broker
+connectivity.
+
 4. **Quick Self-Check**
   ```bash
   make self-check
