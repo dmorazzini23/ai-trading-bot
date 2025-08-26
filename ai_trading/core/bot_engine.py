@@ -12279,9 +12279,16 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     from ai_trading.utils import portfolio_lock
 
     """Prepare trading run by syncing positions and generating symbols."""
-    ensure_data_fetcher(runtime)
-    cancel_all_open_orders(runtime)
-    audit_positions(runtime)
+    try:
+        ensure_data_fetcher(runtime)
+        cancel_all_open_orders(runtime)
+        audit_positions(runtime)
+    except APIError as e:
+        logger.warning(
+            "PREPARE_RUN_API_ERROR",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise DataFetchError("api error during pre-run") from e
     try:
         acct = safe_alpaca_get_account(runtime)
         equity = float(acct.equity) if acct else 0.0
@@ -12840,11 +12847,26 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             else:
                 logger.debug("MARKET_FETCH")
 
-            try:
-                current_cash, regime_ok, symbols = _prepare_run(runtime, state)
-            except DataFetchError as e:
-                logger.warning("DATA_FETCHER_UNAVAILABLE", extra={"detail": str(e)})
-                return
+            for attempt in range(3):
+                try:
+                    current_cash, regime_ok, symbols = _prepare_run(runtime, state)
+                    break
+                except DataFetchError as e:
+                    logger.warning(
+                        "DATA_FETCHER_UNAVAILABLE",
+                        extra={"detail": str(e), "attempt": attempt + 1},
+                    )
+                    if attempt == 2:
+                        return
+                    time.sleep(1.0)
+                except APIError as e:
+                    logger.warning(
+                        "PREPARE_RUN_API_ERROR",
+                        extra={"detail": str(e), "attempt": attempt + 1},
+                    )
+                    if attempt == 2:
+                        return
+                    time.sleep(1.0)
 
             # AI-AGENT-REF: Add memory monitoring and cleanup to prevent resource issues
             if MEMORY_OPTIMIZATION_AVAILABLE:
@@ -13208,8 +13230,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     "PNL_RETRIEVAL_FAILED",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
+        except APIError as e:  # AI-AGENT-REF: skip cycle on Alpaca API errors
+            logger.warning(
+                "TRADING_CYCLE_API_ERROR",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            return
         except (
-            APIError,
             TimeoutError,
             ConnectionError,
             ValueError,
