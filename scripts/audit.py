@@ -76,7 +76,7 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     except PermissionError as exc:
         logger.error('ERROR [audit] permission denied writing %s: %s', TRADE_LOG_FILE, exc)
         try:
-            from process_manager import ProcessManager
+            from ai_trading.process_manager import ProcessManager
             pm = ProcessManager()
             repair_result = pm.fix_file_permissions([TRADE_LOG_FILE])
             if repair_result['paths_fixed']:

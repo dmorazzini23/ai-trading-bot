@@ -117,7 +117,7 @@
   Line: self.latency_tracker: Dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
 - production_monitoring.py:267 - 1000 (old MAX_POSITION_SIZE)
   Line: elapsed = (time.perf_counter() - start_time) * 1000  # Convert to ms
-- process_manager.py:347 - 1000 (old MAX_POSITION_SIZE)
+- ai_trading/process_manager.py:347 - 1000 (old MAX_POSITION_SIZE)
   Line: if total_memory > 1000:
 - profile_indicators.py:28 - 1000 (old MAX_POSITION_SIZE)
   Line: 'volume': np.random.randint(1000, 10000, size=100_000)

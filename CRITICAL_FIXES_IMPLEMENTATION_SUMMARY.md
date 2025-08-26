@@ -34,7 +34,7 @@ def alpaca_client(self):
 - `check_multiple_instances()` - Detection and remediation recommendations
 - Integrated into `runner.py` startup to prevent duplicate instances
 
-**Files**: `process_manager.py` (lines 355-428), `runner.py` (lines 109-138)
+**Files**: `ai_trading/process_manager.py` (lines 355-428), `runner.py` (lines 109-138)
 
 ### 4. ✅ Data Staleness Validation
 **Problem**: All symbols trading on stale data
@@ -131,7 +131,7 @@ def alpaca_client(self):
 
 1. **risk_engine.py**: Added missing critical methods (4 new methods, 35 lines)
 2. **bot_engine.py**: Added alpaca_client compatibility property (4 lines)
-3. **process_manager.py**: Enhanced with locking and instance detection (73 lines)
+3. **ai_trading/process_manager.py**: Enhanced with locking and instance detection (73 lines)
 4. **runner.py**: Integrated process management (29 lines)
 5. **audit.py**: Enhanced permission error handling (35 lines)
 6. **data_validation.py**: Complete new module for data validation (217 lines)
