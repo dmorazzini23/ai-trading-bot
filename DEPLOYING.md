@@ -34,7 +34,9 @@ present before the service starts:
 | `WEBHOOK_SECRET` | Protects inbound webhooks |
 
 If any are missing or empty the process exits with a `RuntimeError` listing the
-missing keys; values are masked in logs and exceptions.
+missing keys; values are masked in logs and exceptions. During health server
+startup the validation result is cached and `/healthz` reuses it, returning
+`{"ok": false, "error": "..."}` while still responding with HTTP 200.
 
 ### Health endpoints & env
 
