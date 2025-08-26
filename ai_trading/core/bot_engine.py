@@ -560,8 +560,15 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()[:12]
 
 
+_MODEL_CACHE: Any | None = None
+
+
 def _load_required_model() -> Any:
     """Load ML model from path or module; fail fast if missing."""  # AI-AGENT-REF: strict model loader
+    global _MODEL_CACHE
+    if _MODEL_CACHE is not None:
+        return _MODEL_CACHE
+
     path = os.getenv("AI_TRADER_MODEL_PATH")
     modname = os.getenv("AI_TRADER_MODEL_MODULE")
 
@@ -572,6 +579,7 @@ def _load_required_model() -> Any:
         except OSError:  # hashing is best-effort; missing/perm issues shouldn't crash
             digest = "unknown"
         logger.info("MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest})
+        _MODEL_CACHE = mdl
         return mdl
 
     if modname:
@@ -594,6 +602,7 @@ def _load_required_model() -> Any:
                 "model_module": modname,
             },  # AI-AGENT-REF: avoid reserved key
         )
+        _MODEL_CACHE = mdl
         return mdl
 
     msg = (
@@ -5629,7 +5638,10 @@ class LazyBotContext:
         data_fetcher = fetcher
         # One-time, mandatory model load
         if getattr(self._context, "model", None) is None:
-            self._context.model = _load_required_model()
+            if _MODEL_CACHE is None:
+                self._context.model = _load_required_model()
+            else:
+                self._context.model = _MODEL_CACHE
 
         # Propagate the capital_scaler to the risk engine so that position_size
         self._context.risk_engine.capital_scaler = self._context.capital_scaler
