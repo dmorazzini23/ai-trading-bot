@@ -67,7 +67,11 @@ except Exception:  # pragma: no cover - fallback when SDK missing
 
         pass
 
-from ai_trading.config.management import derive_cap_from_settings, is_shadow_mode
+from ai_trading.config.management import (
+    derive_cap_from_settings,
+    is_shadow_mode,
+    TradingConfig,
+)
 
 
 def _alpaca_available() -> bool:
@@ -3096,8 +3100,9 @@ def _env_float(default: float, *keys: str) -> float:
 
 
 CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
-DOLLAR_RISK_LIMIT = _env_float(
-    0.05, "AI_TRADING_DOLLAR_RISK_LIMIT", "get_dollar_risk_limit()"
+_cfg = TradingConfig.from_env()
+DOLLAR_RISK_LIMIT = (
+    _cfg.dollar_risk_limit if _cfg.dollar_risk_limit is not None else 0.05
 )
 BUY_THRESHOLD = params.get(
     "get_buy_threshold()",
@@ -3126,7 +3131,7 @@ def _as_int(v, default, min_v=1, max_v=1_000_000):
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
 def validate_trading_parameters():
     """Validate critical trading parameters and log warnings for invalid values."""
-    global get_capital_cap, get_dollar_risk_limit, MAX_POSITION_SIZE, get_conf_threshold, get_buy_threshold
+    global get_capital_cap, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE, get_conf_threshold, get_buy_threshold
 
     # Validate get_capital_cap() (should be between 0.01 and 0.5)
     if not isinstance(get_capital_cap(), int | float) or not (
@@ -3137,13 +3142,13 @@ def validate_trading_parameters():
         )
         CAPITAL_CAP = 0.25
 
-    # Validate get_dollar_risk_limit() (should be between 0.005 and 0.1)
-    if not isinstance(get_dollar_risk_limit(), int | float) or not (
-        0.005 <= get_dollar_risk_limit() <= 0.1
+    # Validate DOLLAR_RISK_LIMIT (should be between 0.005 and 0.1)
+    if not isinstance(DOLLAR_RISK_LIMIT, int | float) or not (
+        0.005 <= DOLLAR_RISK_LIMIT <= 0.1
     ):
         logger.error(
-            "Invalid get_dollar_risk_limit() %s, using default 0.05",
-            get_dollar_risk_limit(),
+            "Invalid DOLLAR_RISK_LIMIT %s, using default 0.05",
+            DOLLAR_RISK_LIMIT,
         )
         DOLLAR_RISK_LIMIT = 0.05
 
@@ -3172,7 +3177,7 @@ def validate_trading_parameters():
         "TRADING_PARAMS_VALIDATED",
         extra={
             "get_capital_cap()": f"{get_capital_cap():.3f}",
-            "get_dollar_risk_limit()": f"{get_dollar_risk_limit():.3f}",
+            "dollar_risk_limit": f"{DOLLAR_RISK_LIMIT:.3f}",
             "MAX_POSITION_SIZE": MAX_POSITION_SIZE,
         },
     )
