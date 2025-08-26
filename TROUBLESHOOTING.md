@@ -196,11 +196,11 @@ nslookup api.alpaca.markets 8.8.8.8
 # test_data_providers.py
 from ai_trading import data_fetcher
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 def test_data_provider(symbol='SPY', timeframe='1h'):
     """Test all data providers for a symbol."""
-    end_date = datetime.now()
+    end_date = datetime.now(UTC)
     start_date = end_date - timedelta(days=5)
     
     providers = ['alpaca', 'finnhub', 'yahoo']
@@ -235,12 +235,12 @@ if __name__ == "__main__":
 ```python
 # check_market_hours.py
 import pandas_market_calendars as mcal
-from datetime import datetime
+from datetime import UTC, datetime
 
 def check_market_status():
     """Check if market is currently open."""
     nyse = mcal.get_calendar('NYSE')
-    now = datetime.now()
+    now = datetime.now(UTC)
     
     # Check if today is a trading day
     schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
