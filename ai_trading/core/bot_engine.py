@@ -700,29 +700,51 @@ def is_runtime_ready() -> bool:
     return _RUNTIME_READY
 
 
+_HEALTH_CHECK_FAILURES = 0
+_HEALTH_CHECK_FAIL_THRESHOLD = 3
+
+
 def _initialize_bot_context_post_setup(ctx: Any) -> None:
     """
     Optional, non-fatal finishing steps after LazyBotContext builds its services.
     Never raise: any failure logs a warning and returns.
     """
+    global _HEALTH_CHECK_FAILURES
     try:
         if "data_source_health_check" in globals() and "REGIME_SYMBOLS" in globals():
-            try:
-                data_source_health_check(ctx, REGIME_SYMBOLS)  # type: ignore[name-defined]
-                logger.info("Post-setup data source health check completed.")
-            except (
-                APIError,
-                TimeoutError,
-                ConnectionError,
-                KeyError,
-                ValueError,
-                TypeError,
-                OSError,
-            ) as e:  # AI-AGENT-REF: tighten health probe error handling
-                logger.warning(
-                    "HEALTH_CHECK_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    data_source_health_check(ctx, REGIME_SYMBOLS)  # type: ignore[name-defined]
+                    logger.info("Post-setup data source health check completed.")
+                    _HEALTH_CHECK_FAILURES = 0
+                    break
+                except APIError as e:
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "HEALTH_CHECK_FAILED",
+                            extra={"cause": "APIError", "attempt": attempt, "detail": str(e)},
+                        )
+                        time.sleep(attempt)
+                        continue
+                    _HEALTH_CHECK_FAILURES += 1
+                    level = (
+                        logger.warning
+                        if _HEALTH_CHECK_FAILURES < _HEALTH_CHECK_FAIL_THRESHOLD
+                        else logger.error
+                    )
+                    level(
+                        "HEALTH_CHECK_FAILED",
+                        extra={
+                            "cause": "APIError",
+                            "detail": str(e),
+                            "failures": _HEALTH_CHECK_FAILURES,
+                        },
+                    )
+                    try:
+                        ctx.data_fetcher = data_fetcher_module.build_fetcher(ctx)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
         else:
             logger.debug("Post-setup health check not available; skipping.")
     except (
@@ -734,9 +756,15 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
         TypeError,
         OSError,
     ) as e:  # AI-AGENT-REF: tighten health probe error handling
-        logger.warning(
+        _HEALTH_CHECK_FAILURES += 1
+        level = (
+            logger.warning
+            if _HEALTH_CHECK_FAILURES < _HEALTH_CHECK_FAIL_THRESHOLD
+            else logger.error
+        )
+        level(
             "HEALTH_CHECK_FAILED",
-            extra={"cause": e.__class__.__name__, "detail": str(e)},
+            extra={"cause": e.__class__.__name__, "detail": str(e), "failures": _HEALTH_CHECK_FAILURES},
         )
 
 
