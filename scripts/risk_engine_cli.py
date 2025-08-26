@@ -1,16 +1,24 @@
 import logging
-import os
 import random
 from collections.abc import Sequence
 from datetime import UTC
 from typing import Any
 import numpy as np
 import pandas as pd
-from ai_trading.config.management import SEED, TradingConfig
+from ai_trading.config.management import (
+    SEED,
+    TradingConfig,
+    get_env,
+    validate_required_env,
+)
 from ai_trading.strategies.base import StrategySignal as TradeSignal
 from ai_trading.logging import _get_metrics_logger
 from ai_trading.utils.base import get_phase_logger
 logger = get_phase_logger(__name__, 'RISK_CHECK')
+if not get_env('PYTEST_RUNNING', '0', cast=bool):
+    _ENV_SNAPSHOT = validate_required_env()
+    logger.debug('ENV_VARS_MASKED', extra=_ENV_SNAPSHOT)
+
 random.seed(SEED)
 np.random.seed(SEED)
 if not hasattr(np, 'NaN'):
@@ -57,21 +65,21 @@ class RiskEngine:
         self._update_event = Event()
         self._last_update = 0.0
         try:
-            max_drawdown = float(os.getenv('MAX_DRAWDOWN_THRESHOLD', '0.15'))
+            max_drawdown = get_env('MAX_DRAWDOWN_THRESHOLD', '0.15', cast=float)
             if not 0 < max_drawdown <= 1.0:
                 logger.warning('Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15', max_drawdown)
                 max_drawdown = 0.15
-            self.max_drawdown_threshold = max_drawdown
-        except (ValueError, TypeError) as e:
+            self.max_drawdown_threshold = float(max_drawdown)
+        except (RuntimeError, ValueError, TypeError) as e:
             logger.error('Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15', e)
             self.max_drawdown_threshold = 0.15
         try:
-            cooldown = float(os.getenv('HARD_STOP_COOLDOWN_MIN', '10'))
+            cooldown = get_env('HARD_STOP_COOLDOWN_MIN', '10', cast=float)
             if cooldown < 0:
                 logger.warning('Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10', cooldown)
                 cooldown = 10.0
-            self.hard_stop_cooldown = cooldown
-        except (ValueError, TypeError) as e:
+            self.hard_stop_cooldown = float(cooldown)
+        except (RuntimeError, ValueError, TypeError) as e:
             logger.error('Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10', e)
             self.hard_stop_cooldown = 10.0
         self._hard_stop_until: float | None = None
@@ -198,13 +206,13 @@ class RiskEngine:
             signal_weight = 0.0
         if asset_exp + signal_weight > asset_cap:
             logger.warning('Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f', signal.symbol, getattr(signal, 'qty', 'n/a'), signal_weight, asset_exp + signal_weight, asset_cap)
-            if os.getenv('FORCE_CONTINUE_ON_EXPOSURE', 'false').lower() != 'true':
+            if not get_env('FORCE_CONTINUE_ON_EXPOSURE', 'false', cast=bool):
                 return False
             logger.warning('FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap')
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
         if signal_weight > strat_cap:
             logger.warning('Strategy %s weight %.2f exceeds cap %.2f', signal.strategy, signal_weight, strat_cap)
-            if os.getenv('FORCE_CONTINUE_ON_EXPOSURE', 'false').lower() != 'true':
+            if not get_env('FORCE_CONTINUE_ON_EXPOSURE', 'false', cast=bool):
                 return False
             logger.warning('FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap')
         return True
