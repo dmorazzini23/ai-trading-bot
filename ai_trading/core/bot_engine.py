@@ -2376,11 +2376,14 @@ def abspath(fname: str) -> str:
 
 # AI-AGENT-REF: safe ML model path resolution
 MODEL_PATH = abspath_safe(getattr(S, "model_path", None))
-if not MODEL_PATH:
+if not MODEL_PATH or not os.path.exists(MODEL_PATH):
     logger.warning(
-        "ML_MODEL_MISSING", extra={"path": os.path.join(BASE_DIR, "trained_model.pkl")}
+        "ML_MODEL_MISSING",
+        extra={"path": MODEL_PATH or os.path.join(BASE_DIR, "trained_model.pkl")},
     )
-USE_ML = bool(MODEL_PATH)
+    USE_ML = False
+else:
+    USE_ML = True
 
 info_kv(
     logger,

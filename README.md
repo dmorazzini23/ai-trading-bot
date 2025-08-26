@@ -1366,6 +1366,16 @@ Set exactly one of:
 Service example:
 Environment="AI_TRADER_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
 
+`trained_model.pkl` is expected at the project root when using
+`AI_TRADER_MODEL_PATH`. Generate it via the training workflow, for example:
+
+```bash
+python -m ai_trading.training.train_ml
+```
+
+If the file is absent, the bot logs `ML_MODEL_MISSING` and falls back to the
+baseline model (`USE_ML=False`).
+
 ### Universe CSV
 - Optional: `AI_TRADER_TICKERS_CSV=/abs/path/to/tickers.csv`
 - Default: packaged `ai_trading/data/tickers.csv` (S&P-100)
