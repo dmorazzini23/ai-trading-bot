@@ -8,7 +8,7 @@ from typing import Any
 
 try:  # optional dependency
     import numpy as np
-except Exception:  # noqa: BLE001 - numpy not required unless training
+except ImportError:
     np = None
 
 from ai_trading.exc import COMMON_EXC

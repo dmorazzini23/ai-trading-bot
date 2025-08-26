@@ -11,7 +11,7 @@ import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api.rest import APIError  # type: ignore
-except Exception:  # pragma: no cover - fallback when SDK missing
+except ImportError:  # pragma: no cover - fallback when SDK missing
     class APIError(Exception):
         """Fallback APIError when alpaca-trade-api is unavailable."""
 
