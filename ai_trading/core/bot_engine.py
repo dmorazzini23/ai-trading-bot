@@ -149,29 +149,37 @@ data_client = None
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
+    if getattr(ctx, "api", None) is not None:
+        return
     try:
-        if getattr(ctx, "api", None) is not None:
-            return
         _initialize_alpaca_clients()
-        global trading_client
-        if trading_client is None:
-            return
-        if hasattr(ctx, "_ensure_initialized"):
+    except COMMON_EXC as e:  # AI-AGENT-REF: surface init failure
+        logger_once.error(
+            "ALPACA_CLIENT_INIT_FAILED - %s",
+            e,
+            key="alpaca_client_init_failed",
+        )
+        return
+    global trading_client
+    if trading_client is None:
+        logger_once.error(
+            "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
+        )
+        return
+    if hasattr(ctx, "_ensure_initialized"):
+        try:
+            ctx._ensure_initialized()  # type: ignore[attr-defined]
+        except COMMON_EXC:
+            pass
+    try:
+        setattr(ctx, "api", trading_client)
+    except COMMON_EXC:
+        inner = getattr(ctx, "_context", None)
+        if inner is not None and getattr(inner, "api", None) is None:
             try:
-                ctx._ensure_initialized()  # type: ignore[attr-defined]
+                setattr(inner, "api", trading_client)
             except COMMON_EXC:
                 pass
-        try:
-            setattr(ctx, "api", trading_client)
-        except COMMON_EXC:
-            inner = getattr(ctx, "_context", None)
-            if inner is not None and getattr(inner, "api", None) is None:
-                try:
-                    setattr(inner, "api", trading_client)
-                except COMMON_EXC:
-                    pass
-    except COMMON_EXC:
-        pass
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
@@ -3422,7 +3430,7 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
     ensure_alpaca_attached(ctx)
     if ctx.api is None:
         # Log once per process to avoid per-cycle noise when creds are missing
-        logger_once.info(
+        logger_once.error(
             "ctx.api is None - Alpaca trading client unavailable",
             key="alpaca_unavailable",
         )  # AI-AGENT-REF: unify key to dedupe across call sites
@@ -5472,25 +5480,16 @@ def _initialize_alpaca_clients():
         from alpaca_trade_api import REST as AlpacaREST
 
         logger.debug("Successfully imported Alpaca SDK class")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:
+    except COMMON_EXC as e:
         logger.error(
-            "alpaca_trade_api import failed; cannot initialize clients", exc_info=e
+            "ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)}
         )
-        if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
-            logger.info(
-                "Test environment detected, skipping Alpaca client initialization",
-            )
-            return
-        raise
+        logger_once.error(
+            "ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed"
+        )
+        trading_client = None
+        data_client = None
+        return
     trading_client = AlpacaREST(
         key_id=key,
         secret_key=secret,
@@ -12598,6 +12597,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         if not is_market_open():
             logger.info("MARKET_CLOSED_NO_FETCH")
             return  # FIXED: skip work when market closed
+        ensure_alpaca_attached(runtime)
+        if getattr(runtime, "api", None) is None:
+            logger_once.error(
+                "ALPACA_CLIENT_MISSING - entering paper mode", key="alpaca_client_missing"
+            )
+            _send_heartbeat()
+            return
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
             return
