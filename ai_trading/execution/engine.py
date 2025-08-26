@@ -490,58 +490,67 @@ class ExecutionEngine:
         except (ValueError, TypeError):
             pass
 
-    def execute_order(self, symbol: str, quantity_or_side=None, side_or_quantity=None, order_type: OrderType=OrderType.MARKET, method=None, **kwargs):
-        """
-        Execute a trading order.
-
-        Supports both new signature (symbol, side, quantity) and legacy signature (symbol, quantity, side).
+    def execute_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: int,
+        order_type: OrderType = OrderType.MARKET,
+        **kwargs: Any,
+    ):
+        """Execute a trading order.
 
         Args:
-            symbol: Trading symbol
-            quantity_or_side: Either quantity (legacy) or OrderSide (new)
-            side_or_quantity: Either side string (legacy) or quantity int (new)
-            order_type: Type of order
-            method: Execution method (for legacy compatibility)
-            **kwargs: Additional order parameters
+            symbol: Trading symbol.
+            side: Order side, ``OrderSide.BUY`` or ``OrderSide.SELL``.
+            quantity: Quantity to trade.
+            order_type: Type of order.
+            **kwargs: Additional order parameters.
 
         Returns:
-            Order ID if successful, None if failed
+            Order ID if successful, ``None`` if rejected.
         """
         try:
-            if isinstance(quantity_or_side, int):
-                quantity = quantity_or_side
-                side_str = side_or_quantity
-                if isinstance(side_str, str):
-                    if side_str.lower() == 'buy':
-                        side = OrderSide.BUY
-                    elif side_str.lower() == 'sell':
-                        side = OrderSide.SELL
-                    else:
-                        raise ValueError(f'Invalid side: {side_str}')
-                else:
-                    side = side_str
-            else:
-                side = quantity_or_side
-                quantity = side_or_quantity
-            if method == 'twap':
-                return self.execute_sliced(symbol, quantity, side, **kwargs)
+            if isinstance(side, str):
+                side = OrderSide(side)
             quantity = int(_ensure_positive_qty(quantity))
-            kwargs['limit_price'] = _ensure_valid_price(kwargs.get('limit_price'))
-            kwargs['stop_price'] = _ensure_valid_price(kwargs.get('stop_price'))
-            payload: dict[str, Any] = {'symbol': symbol, 'side': getattr(side, 'value', side), 'qty': quantity, 'type': getattr(order_type, 'value', order_type), 'time_in_force': kwargs.get('time_in_force'), 'limit_price': kwargs.get('limit_price'), 'stop_price': kwargs.get('stop_price')}
-            logger.debug('ORDER_SUBMIT_PAYLOAD', extra={k: payload.get(k) for k in ('symbol', 'side', 'qty', 'type', 'time_in_force', 'limit_price', 'stop_price')})
+            kwargs["limit_price"] = _ensure_valid_price(kwargs.get("limit_price"))
+            kwargs["stop_price"] = _ensure_valid_price(kwargs.get("stop_price"))
+            payload: dict[str, Any] = {
+                "symbol": symbol,
+                "side": getattr(side, "value", side),
+                "qty": quantity,
+                "type": getattr(order_type, "value", order_type),
+                "time_in_force": kwargs.get("time_in_force"),
+                "limit_price": kwargs.get("limit_price"),
+                "stop_price": kwargs.get("stop_price"),
+            }
+            logger.debug(
+                "ORDER_SUBMIT_PAYLOAD",
+                extra={k: payload.get(k) for k in (
+                    "symbol",
+                    "side",
+                    "qty",
+                    "type",
+                    "time_in_force",
+                    "limit_price",
+                    "stop_price",
+                )},
+            )
             order = Order(symbol, side, quantity, order_type, **kwargs)
             if self.order_manager.submit_order(order):
-                self.execution_stats['total_orders'] += 1
+                self.execution_stats["total_orders"] += 1
                 if order_type == OrderType.MARKET:
                     self._simulate_market_execution(order)
                 return order.id
-            else:
-                self.execution_stats['rejected_orders'] += 1
-                return None
+            self.execution_stats["rejected_orders"] += 1
+            return None
         except (ValueError, TypeError, KeyError) as e:
-            logger.error('EXECUTE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
-            self.execution_stats['rejected_orders'] += 1
+            logger.error(
+                "EXECUTE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            self.execution_stats["rejected_orders"] += 1
             raise
 
     def execute_sliced(self, symbol: str, quantity: int, side: OrderSide, **kwargs):

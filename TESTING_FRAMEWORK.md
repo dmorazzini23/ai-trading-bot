@@ -481,10 +481,11 @@ class TestAlpacaIntegration:
             pytest.skip("ALPACA_API_KEY not set")
         
         executor = OrderExecutor()
-        
+
         # Use a very small quantity for testing
         with patch.dict(os.environ, {'DRY_RUN': 'true'}):
-            result = executor.execute_order('SPY', 1, 'buy')
+            from ai_trading.core.enums import OrderSide
+            result = executor.execute_order('SPY', OrderSide.BUY, 1)
             
             # In dry run mode, should return mock order
             assert result is not None

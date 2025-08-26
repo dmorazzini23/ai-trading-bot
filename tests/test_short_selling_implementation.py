@@ -9,6 +9,8 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
+from ai_trading.core.enums import OrderSide
+
 # Set minimal environment variables
 os.environ['ALPACA_API_KEY'] = 'test_key'
 os.environ['ALPACA_SECRET_KEY'] = 'test_secret'
@@ -52,7 +54,7 @@ class TestShortSellingImplementation(unittest.TestCase):
         # Mock _available_qty to return 0 (no existing position)
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=self.mock_api):
-                result = engine.execute_order("AAPL", 10, "sell")
+                result = engine.execute_order("AAPL", OrderSide.SELL, 10)
 
                 # Should return None due to SKIP_NO_POSITION logic
                 self.assertIsNone(result)
@@ -98,7 +100,7 @@ class TestShortSellingImplementation(unittest.TestCase):
 
                         # Test that sell_short orders reach the validation step (don't get blocked by SKIP_NO_POSITION)
                         try:
-                            result = engine.execute_order("AAPL", 10, "sell_short")
+                            result = engine.execute_order("AAPL", "sell_short", 10)
                         except RuntimeError:
                             # Expected to reach this point, meaning it passed the initial validation
                             pass
@@ -112,7 +114,7 @@ class TestShortSellingImplementation(unittest.TestCase):
                         engine._validate_short_selling.reset_mock()
                         engine.logger.reset_mock()
 
-                        result = engine.execute_order("AAPL", 10, "sell")
+                        result = engine.execute_order("AAPL", OrderSide.SELL, 10)
 
                         # Should return None and log SKIP_NO_POSITION
                         self.assertIsNone(result)

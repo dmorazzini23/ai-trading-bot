@@ -2,6 +2,8 @@
 import os
 from unittest.mock import Mock, patch
 
+from ai_trading.core.enums import OrderSide
+
 import pytest
 
 # Set test environment BEFORE any imports
@@ -89,7 +91,9 @@ def test_submit_order_successful_execution():
             result = submit_order(mock_ctx, "AAPL", 10, "buy")
 
             assert result == mock_order
-            mock_exec_engine.execute_order.assert_called_once_with("AAPL", 10, "buy")
+            mock_exec_engine.execute_order.assert_called_once_with(
+                "AAPL", OrderSide.BUY, 10
+            )
 
     finally:
         # Restore original state
