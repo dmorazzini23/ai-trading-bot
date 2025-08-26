@@ -43,7 +43,6 @@ from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
     get_minute_df,
-    warmup_cache,
 )
 from ai_trading.utils.time import last_market_session
 from ai_trading.capital_scaling import capital_scale, update_if_present
@@ -2532,8 +2531,17 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
     if not getattr(settings, "data_cache_enable", False):
         return
     try:
-        # Daily warm-up
-        warmup_cache(ctx.symbols, lookback_days=settings.data_warmup_lookback_days)
+        # Daily warm-up via batched fetch
+        end_dt = datetime.now(UTC)
+        start_dt = end_dt - timedelta(days=int(settings.data_warmup_lookback_days))
+        if ctx.symbols:
+            get_bars_batch(
+                ctx.symbols,
+                "1D",
+                start_dt,
+                end_dt,
+                feed=getattr(ctx, "data_feed", None),
+            )
         # Optional intraday warm-up
         if getattr(settings, "intraday_batch_enable", True):
             end_dt = datetime.now(UTC)

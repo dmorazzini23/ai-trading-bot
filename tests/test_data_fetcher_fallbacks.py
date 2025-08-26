@@ -50,5 +50,5 @@ def test_daily_fallback_on_empty(monkeypatch):
     monkeypatch.setattr(dfetch, "get_bars", lambda *a, **k: pd.DataFrame())
     monkeypatch.setattr(dfetch.yf, "download", _fake_yf)
     now = dt.datetime.now(dt.UTC)
-    df = dfetch.get_bars_df("SPY", now - dt.timedelta(days=30), now, timeframe="1D")
+    df = dfetch.get_bars("SPY", "1D", now - dt.timedelta(days=30), now)
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode

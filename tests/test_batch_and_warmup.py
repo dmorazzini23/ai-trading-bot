@@ -1,9 +1,7 @@
-from datetime import UTC, datetime, timedelta
-
 import pytest
 
 try:
-    from ai_trading.data_fetcher import get_bars_batch, warmup_cache
+    from ai_trading.data_fetcher import get_bars_batch
 except (ValueError, TypeError):
     pytest.skip("data_fetcher deps missing", allow_module_level=True)
 
@@ -13,6 +11,4 @@ def test_get_bars_batch_handles_empty_list():
     assert out == {}
 
 
-def test_warmup_cache_no_symbols():
-    n = warmup_cache([], "1D", datetime.now(UTC)-timedelta(days=1), datetime.now(UTC))
-    assert n == 0
+
