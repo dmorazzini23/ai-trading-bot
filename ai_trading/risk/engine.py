@@ -23,6 +23,7 @@ from ai_trading.config.management import (
     validate_required_env,
 )
 from ai_trading.config.settings import get_settings
+from ai_trading.settings import get_alpaca_secret_key_plain
 
 if not hasattr(np, 'NaN'):
     np.NaN = np.nan
@@ -89,8 +90,9 @@ class RiskEngine:
         self.data_client = None
         try:
             s = get_settings()
-            if AlpacaREST and getattr(s, 'alpaca_api_key', None) and getattr(s, 'alpaca_secret_key_plain', None) and getattr(s, 'alpaca_base_url', None):
-                self.data_client = AlpacaREST(s.alpaca_api_key, s.alpaca_secret_key_plain, s.alpaca_base_url)
+            secret = get_alpaca_secret_key_plain()
+            if AlpacaREST and getattr(s, 'alpaca_api_key', None) and secret and getattr(s, 'alpaca_base_url', None):
+                self.data_client = AlpacaREST(s.alpaca_api_key, secret, s.alpaca_base_url)
         except (APIError, ValueError, TypeError, AttributeError, OSError) as e:
             logger.warning('Could not initialize AlpacaREST: %s', e)
         self._returns: list[float] = []
