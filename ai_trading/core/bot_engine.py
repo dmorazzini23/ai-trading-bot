@@ -1674,12 +1674,14 @@ def _resolve_alpaca_env():
         ensure_dotenv_loaded()
     except COMMON_EXC:
         pass
-    key = os.getenv("ALPACA_API_KEY")
-    secret = os.getenv("ALPACA_SECRET_KEY")
-    base_url = (
-        os.getenv("ALPACA_BASE_URL")
-        or getattr(config, "ALPACA_BASE_URL", None)
-        or "https://paper-api.alpaca.markets"
+    key = cast(str | None, config.get_env("ALPACA_API_KEY"))
+    secret = cast(str | None, config.get_env("ALPACA_SECRET_KEY"))
+    base_url = cast(
+        str,
+        config.get_env(
+            "ALPACA_BASE_URL",
+            "https://paper-api.alpaca.markets",
+        ),
     )
     return key, secret, base_url
 
@@ -5483,72 +5485,82 @@ def get_strategies():
 stream = None
 
 
-def _initialize_alpaca_clients():
+def _initialize_alpaca_clients() -> None:
     """Initialize Alpaca trading clients lazily to avoid import delays."""
     global trading_client, data_client, stream
     if trading_client is not None:
         return  # Already initialized
-    # Validate at runtime, now that .env should be present
-    try:
-        key, secret, base_url = _ensure_alpaca_env_or_raise()
-    except Exception as e:  # AI-AGENT-REF: surface env resolution failures
-        logger.error(
-            "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
-        )
-        logger_once.error(
-            "ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed"
-        )
-        trading_client = None
-        data_client = None
-        raise
-    if not (key and secret):
-        # In SHADOW_MODE we may not have creds; skip client init
-        diag = _alpaca_diag_info()
-        # AI-AGENT-REF: surface skip reason for tests via standard logger
-        logger.info(
-            "Shadow mode or missing credentials: skipping Alpaca client initialization"
-        )
-        logger_once.warning(
-            "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
-            key="alpaca_init_skipped",
-        )
-        logger.info("ALPACA_DIAG", extra=_redact(diag))
-        return
-    try:
-        from alpaca_trade_api import REST as AlpacaREST
+    for attempt in (1, 2):
+        try:
+            key, secret, base_url = _ensure_alpaca_env_or_raise()
+        except Exception as e:  # AI-AGENT-REF: surface env resolution failures
+            logger.error(
+                "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
+            )
+            if attempt == 1:
+                try:
+                    config.reload_env(override=False)
+                except COMMON_EXC:
+                    pass
+                continue
+            logger_once.error(
+                "ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed"
+            )
+            trading_client = None
+            data_client = None
+            raise
+        if not (key and secret):
+            # In SHADOW_MODE we may not have creds; skip client init
+            diag = _alpaca_diag_info()
+            # AI-AGENT-REF: surface skip reason for tests via standard logger
+            logger.info(
+                "Shadow mode or missing credentials: skipping Alpaca client initialization"
+            )
+            logger_once.warning(
+                "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
+                key="alpaca_init_skipped",
+            )
+            logger.info("ALPACA_DIAG", extra=_redact(diag))
+            return
+        try:
+            from alpaca_trade_api import REST as AlpacaREST
 
-        logger.debug("Successfully imported Alpaca SDK class")
-    except COMMON_EXC as e:
-        logger.error(
-            "ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)}
+            logger.debug("Successfully imported Alpaca SDK class")
+        except COMMON_EXC as e:
+            logger.error(
+                "ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)}
+            )
+            if attempt == 1:
+                time.sleep(1)
+                continue
+            logger_once.error(
+                "ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed"
+            )
+            trading_client = None
+            data_client = None
+            return
+        try:
+            trading_client = AlpacaREST(
+                key_id=key,
+                secret_key=secret,
+                base_url=base_url,
+            )
+        except Exception as e:  # AI-AGENT-REF: expose network or auth issues
+            logger.error(
+                "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
+            )
+            logger_once.error(
+                "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
+            )
+            trading_client = None
+            data_client = None
+            return
+        data_client = trading_client
+        logger.info(
+            "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
         )
-        logger_once.error(
-            "ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed"
-        )
-        trading_client = None
-        data_client = None
+        stream = None  # initialize stream lazily elsewhere if/when required
         return
-    try:
-        trading_client = AlpacaREST(
-            key_id=key,
-            secret_key=secret,
-            base_url=base_url,
-        )
-    except Exception as e:  # AI-AGENT-REF: expose network or auth issues
-        logger.error(
-            "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
-        )
-        logger_once.error(
-            "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
-        )
-        trading_client = None
-        data_client = None
-        return
-    data_client = trading_client
-    logger.info(
-        "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
-    )
-    stream = None  # initialize stream lazily elsewhere if/when required
 
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
@@ -6705,6 +6717,7 @@ def check_pdt_rule(runtime) -> bool:
     Returns False when Alpaca is unavailable, allowing the bot to continue
     operating in simulation mode.
     """
+    ensure_alpaca_attached(runtime)
     acct = safe_alpaca_get_account(runtime)
 
     # If account is unavailable (Alpaca not available), assume no PDT blocking
