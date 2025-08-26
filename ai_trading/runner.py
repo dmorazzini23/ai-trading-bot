@@ -164,7 +164,17 @@ def run_cycle() -> None:
         # Build a proper runtime with guaranteed parameter hydration
         cfg = TradingConfig.from_env()  # Load config from environment
         runtime = build_runtime(cfg)
-        
+
+        # Ensure runtime params use TradingConfig as single source of truth
+        cfg_risk = getattr(cfg, "dollar_risk_limit", None)
+        rt_risk = runtime.params.get("DOLLAR_RISK_LIMIT")
+        if cfg_risk != rt_risk:
+            log.warning(
+                "DOLLAR_RISK_LIMIT_MISMATCH",
+                extra={"config_value": cfg_risk, "runtime_value": rt_risk},
+            )
+            runtime.params["DOLLAR_RISK_LIMIT"] = cfg_risk
+
         # One-time validation & log as specified in problem statement
         missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
         if missing:
