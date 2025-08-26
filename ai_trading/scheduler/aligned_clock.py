@@ -4,7 +4,7 @@ Exchange-aligned clock and scheduling module.
 Provides timing synchronization with exchange schedules and validates
 bar finality before signal generation.
 """
-import logging
+from ai_trading.logging import get_logger
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,7 +13,7 @@ try:
 except (ValueError, TypeError):
     mcal = None
 MARKET_CALENDAR_AVAILABLE = mcal is not None
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def _get_calendar(cal_name: str):
     if mcal is None:
@@ -53,7 +53,7 @@ class AlignedClock:
         """
         self.max_skew_ms = max_skew_ms
         self.exchange = exchange
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.calendar = _get_calendar(exchange)
         self._bar_close_cache: dict[str, datetime] = {}
 

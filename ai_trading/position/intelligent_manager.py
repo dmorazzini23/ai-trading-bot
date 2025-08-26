@@ -10,7 +10,7 @@ Coordinates all position management strategies:
 
 AI-AGENT-REF: Main intelligent position management orchestrator
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -21,7 +21,7 @@ from .market_regime import MarketRegime, MarketRegimeDetector, RegimeMetrics
 from .profit_taking import ProfitTakingEngine
 from .technical_analyzer import DivergenceType, SignalStrength, TechnicalSignalAnalyzer
 from .trailing_stops import TrailingStopManager
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class PositionAction(Enum):
     """Recommended position actions."""
@@ -65,7 +65,7 @@ class IntelligentPositionManager:
 
     def __init__(self, ctx=None):
         self.ctx = ctx
-        self.logger = logging.getLogger(__name__ + '.IntelligentPositionManager')
+        self.logger = get_logger(__name__ + '.IntelligentPositionManager')
         self.regime_detector = MarketRegimeDetector(ctx)
         self.technical_analyzer = TechnicalSignalAnalyzer(ctx)
         self.trailing_stop_manager = TrailingStopManager(ctx)

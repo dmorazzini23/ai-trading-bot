@@ -1,12 +1,12 @@
 """Technical indicator helpers used across the bot."""
 from __future__ import annotations
-import logging
+from ai_trading.logging import get_logger
 from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
 import numpy as np
 from ai_trading.utils.lazy_imports import load_pandas
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Lazy pandas proxy
 pd = load_pandas()

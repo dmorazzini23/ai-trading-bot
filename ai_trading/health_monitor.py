@@ -9,7 +9,7 @@ AI-AGENT-REF: Production health monitoring for institutional trading
 from __future__ import annotations
 import asyncio
 import contextlib
-import logging
+from ai_trading.logging import get_logger
 import os
 import threading
 import time
@@ -24,7 +24,7 @@ if _HAS_PSUTIL:
     import psutil
 else:
     psutil = None
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class HealthStatus(Enum):
@@ -160,7 +160,7 @@ class HealthMonitor:
     """Comprehensive health monitoring system."""
 
     def __init__(self, check_interval: float = 60.0, labels: dict[str, str] | None = None):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.check_interval = check_interval
         self.labels = {} if labels is None else dict(labels)
         self.checkers: dict[str, HealthChecker] = dict()

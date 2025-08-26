@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+from ai_trading.logging import get_logger
 import random
 import threading
 from collections.abc import Sequence
@@ -34,7 +35,7 @@ try:  # optional pandas_ta import for ta accessor registration
     import pandas_ta as ta  # type: ignore  # noqa: F401
 except ImportError:  # pragma: no cover - optional dependency
     ta = None
-    logging.getLogger(__name__).info(
+    get_logger(__name__).info(
         'PANDAS_TA_MISSING', extra={'hint': 'pip install pandas-ta'}
     )
 try:  # pragma: no cover - optional dependency
@@ -58,7 +59,7 @@ class TradeSignal:
     weight: float
     asset_class: str
     strength: float = 1.0
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 if not get_env("PYTEST_RUNNING", "0", cast=bool):
     _ENV_SNAPSHOT = validate_required_env()
     logger.debug("ENV_VARS_MASKED", extra=_ENV_SNAPSHOT)

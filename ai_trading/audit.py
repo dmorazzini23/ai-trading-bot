@@ -1,7 +1,7 @@
 import csv
-import logging
+from ai_trading.logging import get_logger
 from pathlib import Path
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 TRADE_LOG_FILE = 'trades.csv'
 
 def fix_file_permissions(path: str) -> bool:

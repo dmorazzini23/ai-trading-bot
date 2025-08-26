@@ -1,10 +1,10 @@
 from __future__ import annotations
 import csv
-import logging
+from ai_trading.logging import get_logger
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def compute_max_drawdown(curve: Sequence[float]) -> float:
     """Return max peak-to-trough drawdown as a fraction."""

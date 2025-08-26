@@ -1,7 +1,7 @@
 import importlib
 import importlib.util
-import logging
-_log = logging.getLogger(__name__)
+from ai_trading.logging import get_logger
+logger = get_logger(__name__)
 
 def _try_import(module_name: str, cls_name: str):
     """find_spec + import_module; returns class or None; logs exceptions."""
@@ -12,7 +12,7 @@ def _try_import(module_name: str, cls_name: str):
         mod = importlib.import_module(module_name)
         return getattr(mod, cls_name, None)
     except (KeyError, ValueError, TypeError) as e:
-        _log.error('Failed to import %s (%s): %s', module_name, cls_name, e)
+        logger.error('Failed to import %s (%s): %s', module_name, cls_name, e)
         return None
 
 def resolve_risk_engine_cls():

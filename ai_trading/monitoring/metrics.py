@@ -1,17 +1,23 @@
 """Performance metrics for trading results with numerical stability."""
 from __future__ import annotations
+
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
+from importlib.util import find_spec
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
-HAS_PANDAS = True
+HAS_PANDAS = find_spec("pandas") is not None
 HAS_NUMPY = True
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 def compute_basic_metrics(df) -> dict[str, float]:
     """Return Sharpe ratio and max drawdown from ``df`` with a ``return`` column."""
+    pd = load_pandas()
     if 'return' not in df:
         return {'sharpe': 0.0, 'max_drawdown': 0.0}
     ret = df['return'].astype(float)
@@ -67,6 +73,7 @@ def safe_divide(numerator: float, denominator: float, default: float=0.0) -> flo
 
 def calculate_atr(df: pd.DataFrame, period: int=14) -> pd.Series:
     """Calculate Average True Range with numerical stability."""
+    pd = load_pandas()
     if df.empty or not all((col in df.columns for col in ['high', 'low', 'close'])):
         return pd.Series(dtype=float)
     epsilon = 1e-08
@@ -178,6 +185,7 @@ class PerformanceMonitor:
         current_time = time.time()
         if not force_refresh and current_time - self.last_cache_update < self.cache_ttl:
             return self.performance_cache
+        pd = load_pandas()
         if self.trade_history:
             df = pd.DataFrame(self.trade_history)
             if 'return' in df.columns:

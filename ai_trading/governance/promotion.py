@@ -5,13 +5,13 @@ Manages the promotion process from shadow testing to production deployment
 with performance validation and safety checks.
 """
 import json
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from ..model_registry import ModelRegistry
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class PromotionCriteria:
@@ -58,7 +58,7 @@ class ModelPromotion:
         self.criteria = criteria or PromotionCriteria()
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.active_dir = self.base_path / 'active'
         self.active_dir.mkdir(exist_ok=True)
 

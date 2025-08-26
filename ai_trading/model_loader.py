@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import logging
+from ai_trading.logging import get_logger
 import pickle
 from datetime import UTC
 from pathlib import Path
 from pickle import UnpicklingError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
 ML_MODELS: dict[str, object | None] = {}
 

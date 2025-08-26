@@ -5,7 +5,7 @@ Provides parallel processing, caching, and vectorized operations
 for improved performance.
 """
 import functools
-import logging
+from ai_trading.logging import get_logger
 import multiprocessing as mp
 import time
 from collections.abc import Callable
@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 import numpy as np
 import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class BenchmarkResult:
@@ -45,7 +45,7 @@ class PerformanceCache:
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
         self._cache: dict[str, dict[str, Any]] = {}
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
 
     def _is_expired(self, entry: dict[str, Any]) -> bool:
         """Check if cache entry is expired."""
@@ -133,7 +133,7 @@ class ParallelProcessor:
         if max_workers is None:
             max_workers = min(mp.cpu_count(), 8)
         self.max_workers = max_workers
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
 
     def parallel_apply(self, func: Callable, data_chunks: list[Any], *args, **kwargs) -> list[Any]:
         """

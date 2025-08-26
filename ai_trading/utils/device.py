@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from ai_trading.logging import get_logger
 
 # torch is optional and heavy; import lazily inside functions
 # Cache references for repeated calls
@@ -8,7 +8,7 @@ torch = None  # type: ignore[assignment]
 _torch_tensor = None
 _device = None
 
-_log = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def get_device() -> str:
@@ -31,7 +31,7 @@ def get_device() -> str:
         except Exception:  # defensive: do not let CUDA probing blow up
             _device = "cpu"
 
-    _log.info("ML_DEVICE_DETECTED", extra={"device": _device})  # AI-AGENT-REF: default CPU / optional CUDA
+    logger.info("ML_DEVICE_DETECTED", extra={"device": _device})  # AI-AGENT-REF: default CPU / optional CUDA
     return _device
 
 

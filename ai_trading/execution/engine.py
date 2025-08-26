@@ -6,6 +6,7 @@ and real-time execution monitoring with institutional controls.
 """
 from __future__ import annotations
 import logging
+from ai_trading.logging import get_logger
 import math
 import threading
 import time
@@ -24,7 +25,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         pass
 from ai_trading.logging.emit_once import emit_once
 
-_log = logging.getLogger(__name__)
+logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
 
 @dataclass(slots=True)
@@ -118,7 +119,7 @@ class Order:
         self.notes = kwargs.get('notes', '')
         self.source_system = kwargs.get('source_system', 'ai_trading')
         self.parent_order_id = kwargs.get('parent_order_id')
-        _log.debug(f'Order created: {self.id} {self.side} {self.quantity} {self.symbol}')
+        logger.debug(f'Order created: {self.id} {self.side} {self.quantity} {self.symbol}')
 
     @property
     def remaining_quantity(self) -> int:
@@ -164,17 +165,17 @@ class Order:
         elif self.is_partially_filled:
             self.status = OrderStatus.PARTIALLY_FILLED
         self.updated_at = timestamp
-        _log.debug(f'Fill added to order {self.id}: {quantity}@{price} ({self.fill_percentage:.1f}% filled)')
+        logger.debug(f'Fill added to order {self.id}: {quantity}@{price} ({self.fill_percentage:.1f}% filled)')
 
     def cancel(self, reason: str='User cancelled'):
         """Cancel the order."""
         if self.status in [OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED]:
-            _log.warning(f'Cannot cancel order {self.id} in status {self.status}')
+            logger.warning(f'Cannot cancel order {self.id} in status {self.status}')
             return False
         self.status = OrderStatus.CANCELED
         self.updated_at = datetime.now(UTC)
         self.notes += f' | Cancelled: {reason}'
-        _log.info(f'Order {self.id} cancelled: {reason}')
+        logger.info(f'Order {self.id} cancelled: {reason}')
         return True
 
     def to_dict(self) -> dict:
@@ -200,7 +201,7 @@ class OrderManager:
         self._monitor_thread = None
         self._monitor_running = False
         self._idempotency_cache: OrderIdempotencyCache | None = None
-        emit_once(_log, 'ORDER_MANAGER_INIT', 'info', 'OrderManager initialized')
+        emit_once(logger, 'ORDER_MANAGER_INIT', 'info', 'OrderManager initialized')
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
         """Ensure idempotency cache is instantiated."""
@@ -208,7 +209,7 @@ class OrderManager:
             try:
                 self._idempotency_cache = OrderIdempotencyCache()
             except (KeyError, ValueError, TypeError, RuntimeError) as e:
-                _log.error('IDEMPOTENCY_CACHE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+                logger.error('IDEMPOTENCY_CACHE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
                 raise
         return self._idempotency_cache
 
@@ -228,12 +229,12 @@ class OrderManager:
             cache = self._ensure_idempotency_cache()
             key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(UTC))
             if cache.is_duplicate(key):
-                _log.warning(f'ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}')
+                logger.warning(f'ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}')
                 order.status = OrderStatus.REJECTED
                 order.notes += ' | Rejected: Duplicate order detected'
                 return False
             if len(self.active_orders) >= self.max_concurrent_orders:
-                _log.error(f'Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})')
+                logger.error(f'Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})')
                 order.status = OrderStatus.REJECTED
                 order.notes += ' | Rejected: Max concurrent orders reached'
                 return False
@@ -242,11 +243,11 @@ class OrderManager:
             cache.mark_submitted(key, order.id)
             if not self._monitor_running:
                 self.start_monitoring()
-            _log.info(f'Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}')
+            logger.info(f'Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}')
             self._notify_callbacks(order, 'submitted')
             return True
         except (APIError, TimeoutError, ConnectionError) as e:
-            _log.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'submit', 'symbol': order.symbol, 'qty': order.quantity, 'side': getattr(order.side, 'value', order.side), 'type': getattr(order.order_type, 'value', order.order_type)})
+            logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'submit', 'symbol': order.symbol, 'qty': order.quantity, 'side': getattr(order.side, 'value', order.side), 'type': getattr(order.order_type, 'value', order.order_type)})
             order.status = OrderStatus.REJECTED
             order.notes += f' | Error: {e}'
             return False
@@ -254,12 +255,12 @@ class OrderManager:
     def cancel_order(self, order_id: str, reason: str='User request') -> bool:
         """Cancel an active order."""
         if not order_id:
-            _log.warning('CANCEL_SKIPPED', extra={'reason': 'empty_order_id'})
+            logger.warning('CANCEL_SKIPPED', extra={'reason': 'empty_order_id'})
             return False
         try:
             order = self.active_orders.get(order_id)
             if not order:
-                _log.warning(f'Cannot cancel order {order_id}: not found in active orders')
+                logger.warning(f'Cannot cancel order {order_id}: not found in active orders')
                 return False
             success = order.cancel(reason)
             if success:
@@ -267,7 +268,7 @@ class OrderManager:
                 self._notify_callbacks(order, 'cancelled')
             return success
         except (APIError, TimeoutError, ConnectionError) as e:
-            _log.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'cancel', 'order_id': order_id})
+            logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'cancel', 'order_id': order_id})
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:
@@ -300,43 +301,43 @@ class OrderManager:
         self._monitor_running = True
         self._monitor_thread = threading.Thread(target=self._monitor_orders, daemon=True)
         self._monitor_thread.start()
-        _log.info('Order monitoring started')
+        logger.info('Order monitoring started')
 
     def stop_monitoring(self):
         """Stop order monitoring thread."""
         self._monitor_running = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=5)
-        _log.info('Order monitoring stopped')
+        logger.info('Order monitoring stopped')
 
     def _validate_order(self, order: Order) -> bool:
         """Validate order before submission."""
         try:
             if not order.symbol or order.quantity <= 0:
-                _log.error(f'Invalid order parameters: symbol={order.symbol}, quantity={order.quantity}')
+                logger.error(f'Invalid order parameters: symbol={order.symbol}, quantity={order.quantity}')
                 return False
             tick = get_tick_size(order.symbol)
             lot = get_lot_size(order.symbol)
             original_quantity = order.quantity
             order.quantity = round_to_lot(order.quantity, lot)
             if original_quantity != order.quantity:
-                _log.debug(f'Quantity adjusted for {order.symbol}: {original_quantity} -> {order.quantity} (lot={lot})')
+                logger.debug(f'Quantity adjusted for {order.symbol}: {original_quantity} -> {order.quantity} (lot={lot})')
             if order.order_type == OrderType.LIMIT:
                 if not order.price or order.price <= 0:
-                    _log.error(f'Limit order requires valid price: {order.price}')
+                    logger.error(f'Limit order requires valid price: {order.price}')
                     return False
                 if not isinstance(order.price, Money):
                     order.price = Money(order.price)
                 original_price = order.price
                 order.price = round_to_tick(order.price, tick)
                 if float(original_price) != float(order.price):
-                    _log.debug(f'Price adjusted for {order.symbol}: {original_price} -> {order.price} (tick={tick})')
+                    logger.debug(f'Price adjusted for {order.symbol}: {original_price} -> {order.price} (tick={tick})')
             if order.side not in [OrderSide.BUY, OrderSide.SELL]:
-                _log.error(f'Invalid order side: {order.side}')
+                logger.error(f'Invalid order side: {order.side}')
                 return False
             return True
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
-            _log.error('ORDER_VALIDATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('ORDER_VALIDATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return False
 
     def _monitor_orders(self):
@@ -358,13 +359,13 @@ class OrderManager:
                         order.status = OrderStatus.EXPIRED
                         order.updated_at = current_time
                         self.active_orders.pop(order_id, None)
-                        _log.warning(f'Order {order_id} expired after {self.order_timeout} seconds')
+                        logger.warning(f'Order {order_id} expired after {self.order_timeout} seconds')
                         self._notify_callbacks(order, 'expired')
                 from .reconcile import reconcile_positions_and_orders
                 reconcile_positions_and_orders()
                 time.sleep(1)
             except (APIError, TimeoutError, ConnectionError) as e:
-                _log.error('ORDER_MONITOR_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+                logger.error('ORDER_MONITOR_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
                 time.sleep(5)
 
     def _notify_callbacks(self, order: Order, event_type: str):
@@ -374,9 +375,9 @@ class OrderManager:
                 try:
                     callback(order, event_type)
                 except (KeyError, ValueError, TypeError, RuntimeError) as e:
-                    _log.error('CALLBACK_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
+                    logger.error('CALLBACK_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
-            _log.error('CALLBACK_NOTIFICATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
+            logger.error('CALLBACK_NOTIFICATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
 
 class ExecutionEngine:
     """
@@ -393,10 +394,10 @@ class ExecutionEngine:
         self.order_manager = OrderManager()
         self.market_data_feed = market_data_feed
         self.broker_interface = broker_interface
-        self.logger = _log
+        self.logger = logger
         self._open_orders: dict[str, OrderInfo] = {}
         self.execution_stats = {'total_orders': 0, 'filled_orders': 0, 'cancelled_orders': 0, 'rejected_orders': 0, 'total_volume': 0.0, 'average_fill_time': 0.0}
-        emit_once(_log, 'EXECUTION_ENGINE_INIT', 'info', 'ExecutionEngine initialized')
+        emit_once(logger, 'EXECUTION_ENGINE_INIT', 'info', 'ExecutionEngine initialized')
 
     def _assess_liquidity(self, symbol: str, quantity: int) -> tuple[int, bool]:
         """Assess liquidity and optionally adjust quantity."""
@@ -437,12 +438,12 @@ class ExecutionEngine:
         try:
             broker = getattr(self, 'broker', None) or getattr(self, 'broker_interface', None)
             if broker is None or not hasattr(broker, 'list_positions'):
-                _log.debug('check_stops: no broker/list_positions; skipping')
+                logger.debug('check_stops: no broker/list_positions; skipping')
                 return
             positions = broker.list_positions() or []
-            _log.debug('check_stops: inspected %d positions', len(positions))
+            logger.debug('check_stops: inspected %d positions', len(positions))
         except (ValueError, TypeError) as e:
-            _log.info('check_stops: suppressed exception: %s', e)
+            logger.info('check_stops: suppressed exception: %s', e)
 
     def _validate_short_selling(self, symbol: str, qty: float, price: float) -> None:
         from ai_trading.risk.short_selling import validate_short_selling
@@ -498,7 +499,7 @@ class ExecutionEngine:
             kwargs['limit_price'] = _ensure_valid_price(kwargs.get('limit_price'))
             kwargs['stop_price'] = _ensure_valid_price(kwargs.get('stop_price'))
             payload: dict[str, Any] = {'symbol': symbol, 'side': getattr(side, 'value', side), 'qty': quantity, 'type': getattr(order_type, 'value', order_type), 'time_in_force': kwargs.get('time_in_force'), 'limit_price': kwargs.get('limit_price'), 'stop_price': kwargs.get('stop_price')}
-            _log.debug('ORDER_SUBMIT_PAYLOAD', extra={k: payload.get(k) for k in ('symbol', 'side', 'qty', 'type', 'time_in_force', 'limit_price', 'stop_price')})
+            logger.debug('ORDER_SUBMIT_PAYLOAD', extra={k: payload.get(k) for k in ('symbol', 'side', 'qty', 'type', 'time_in_force', 'limit_price', 'stop_price')})
             order = Order(symbol, side, quantity, order_type, **kwargs)
             if self.order_manager.submit_order(order):
                 self.execution_stats['total_orders'] += 1
@@ -509,7 +510,7 @@ class ExecutionEngine:
                 self.execution_stats['rejected_orders'] += 1
                 return None
         except (ValueError, TypeError, KeyError) as e:
-            _log.error('EXECUTE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error('EXECUTE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             self.execution_stats['rejected_orders'] += 1
             raise
 
@@ -535,7 +536,7 @@ class ExecutionEngine:
                 fill_time = (order.executed_at - order.created_at).total_seconds()
                 self.execution_stats['average_fill_time'] = (self.execution_stats['average_fill_time'] * (self.execution_stats['filled_orders'] - 1) + fill_time) / self.execution_stats['filled_orders']
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
-            _log.error('SIMULATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
+            logger.error('SIMULATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
 
     def get_execution_stats(self) -> dict:
         """Get execution engine statistics."""

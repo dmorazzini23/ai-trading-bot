@@ -398,7 +398,7 @@ def _safe_shutdown_logging():
 
 def get_logger(name: str) -> SanitizingLoggerAdapter:
     _ensure_single_handler(logging.getLogger())
-    'Return a named logger wrapped with :class:`SanitizingLoggerAdapter`.'
+    "Return a named logger wrapped with :class:`SanitizingLoggerAdapter`."
     if name not in _loggers:
         setup_logging()
         base = logging.getLogger(name or _ROOT_LOGGER_NAME)
@@ -426,7 +426,7 @@ def get_phase_logger(name: str, phase: str | None=None) -> logging.Logger:
     logging.Logger
         Logger with phase filtering enabled and propagation disabled
     """
-    logger = logging.getLogger(name)
+    logger = get_logger(name)
     logger.propagate = False
     if phase:
 
@@ -520,7 +520,7 @@ def log_trading_event(event_type: str, symbol: str, details: dict[str, any], lev
     - Large objects are truncated to prevent log bloat
     - Context information is cached for performance
     """
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
     if not isinstance(event_type, str) or not event_type.strip():
         logger.error('Invalid event_type: %s', event_type)
         return
@@ -585,7 +585,8 @@ def _get_system_context() -> dict[str, any]:
         return {'context_error': f'psutil missing: {e}'}
     try:
         context = {'memory_usage_mb': round(psutil.virtual_memory().used / 1024 / 1024, 1), 'memory_percent': psutil.virtual_memory().percent, 'cpu_percent': psutil.cpu_percent(interval=None), 'disk_usage_percent': psutil.disk_usage('/').percent}
-        context.update({'python_version': sys.version.split()[0], 'log_level': logging.getLogger().level, 'handlers_count': len(logging.getLogger().handlers)})
+        root = logging.getLogger()
+        context.update({'python_version': sys.version.split()[0], 'log_level': root.level, 'handlers_count': len(root.handlers)})
         return context
     except COMMON_EXC as e:
         return {'context_error': str(e)}
@@ -647,7 +648,7 @@ def setup_enhanced_logging(log_file: str=None, level: str='INFO', enable_json_fo
 
 def _setup_performance_logging():
     """Setup performance-specific logging handlers."""
-    perf_logger = logging.getLogger('performance')
+    perf_logger = get_logger('performance')
     perf_file = os.path.join(os.getenv('BOT_LOG_DIR', 'logs'), 'performance.log')
     try:
         os.makedirs(os.path.dirname(perf_file), exist_ok=True)
@@ -667,11 +668,11 @@ def dedupe_stream_handlers(log: logging.Logger) -> int:
 
     Returns the final total number of handlers on the logger after dedupe.
     """
-    before = len(log.handlers)
+    before = len(logger.handlers)
     _ensure_single_handler(log)
-    after = len(log.handlers)
+    after = len(logger.handlers)
     if after < before:
-        logging.getLogger(__name__).info('LOGGING_SETUP_DEDUPED', extra={'before': before, 'after': after})
+        get_logger(__name__).info('LOGGING_SETUP_DEDUPED', extra={'before': before, 'after': after})
     return after
 
 def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=False) -> dict[str, Any]:
@@ -701,13 +702,13 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     if after_count > 2:
         validation_result['validation_passed'] = False
         validation_result['issues'].append(f'Too many handlers detected: {after_count} (expected ≤ 2)')
-        logging.getLogger(__name__).warning('WARNING: %d handlers detected - possible duplicate logging setup', after_count)
+        get_logger(__name__).warning('WARNING: %d handlers detected - possible duplicate logging setup', after_count)
     if after_count == 0 and (not _LOGGING_CONFIGURED):
         validation_result['validation_passed'] = False
         validation_result['issues'].append('No logging handlers configured')
     if validation_result['validation_passed']:
-        logging.getLogger(__name__).info('Logging validation passed - %d handlers configured', after_count)
+        get_logger(__name__).info('Logging validation passed - %d handlers configured', after_count)
     else:
-        logging.getLogger(__name__).error('Logging validation failed: %s', validation_result['issues'])
+        get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
 __all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']

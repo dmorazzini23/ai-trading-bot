@@ -6,11 +6,11 @@ Reconciles local trading state with broker truth by:
 2. Comparing with local state
 3. Fixing drifts (cancel stale locals, resync quantities)
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from ai_trading.core.interfaces import Order, OrderStatus, Position
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class PositionDrift:
@@ -68,7 +68,7 @@ class PositionReconciler:
         """
         self.tolerance_pct = tolerance_pct
         self.min_drift_qty = min_drift_qty
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
 
     def reconcile_positions(self, local_positions: dict[str, Position], broker_positions: dict[str, Position]) -> list[PositionDrift]:
         """

@@ -6,6 +6,7 @@ breaking when performance degrades beyond acceptable thresholds.
 """
 import json
 import logging
+from ai_trading.logging import get_logger
 import threading
 from collections import defaultdict, deque
 from collections.abc import Callable
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SLOStatus(Enum):
     """SLO status levels."""
@@ -62,7 +63,7 @@ class SLOMonitor:
         Args:
             config_path: Optional path to SLO configuration file
         """
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._metrics: dict[str, deque] = defaultdict(lambda: deque(maxlen=1000))
         self._slo_thresholds: dict[str, SLOThreshold] = {}
         self._slo_status: dict[str, SLOStatus] = {}

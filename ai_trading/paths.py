@@ -4,10 +4,10 @@ Runtime paths for AI Trading Bot.
 Defines writable data, log, and cache directories with environment overrides.
 Creates directories at import time.
 """
-import logging
+from ai_trading.logging import get_logger
 import os
 from pathlib import Path
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
 APP_NAME = 'ai-trading-bot'
 

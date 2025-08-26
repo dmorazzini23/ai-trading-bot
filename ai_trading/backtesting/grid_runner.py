@@ -5,9 +5,9 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from itertools import product
 from typing import Any
-import logging
+from ai_trading.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 try:  # optional joblib import
     from joblib import Parallel, delayed
 except ImportError:  # pragma: no cover - optional dependency

@@ -6,7 +6,7 @@ SKLEARN_AVAILABLE = bool(find_spec("sklearn"))
 "Utility helpers for meta-learning weight management."
 import csv
 import json
-import logging
+from ai_trading.logging import get_logger
 import os
 import pickle
 import random
@@ -37,7 +37,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing helpers
     import pandas as _pd  # noqa: F401
 
 open = open
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _import_numpy(optional: bool = False):
@@ -154,7 +154,7 @@ class MetaLearning:
 
     def __init__(self):
         """Initialize the MetaLearning instance."""
-        self.logger = logging.getLogger(__name__ + '.MetaLearning')
+        self.logger = get_logger(__name__ + '.MetaLearning')
         self.logger.debug('MetaLearning instance initialized')
 
 def validate_trade_data_quality(trade_log_path: str) -> dict:
@@ -792,7 +792,7 @@ def _generate_realistic_price(base_price: float) -> float:
     return round(price, 2)
 
 def _append_bootstrap_trades_to_log(trade_log_path: str, bootstrap_trades: list) -> None:
-    """Append bootstrap trades to the trade log."""
+    """Append bootstrap trades to the trade logger."""
     try:
         if not os.path.exists(trade_log_path):
             _create_emergency_trade_log(trade_log_path)
