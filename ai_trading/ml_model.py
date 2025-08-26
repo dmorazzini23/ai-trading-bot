@@ -2,10 +2,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-import joblib
-import numpy as np
-import pandas as pd
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers only
+    import numpy as np  # noqa: F401
+    import pandas as pd  # noqa: F401
 
 @dataclass
 class _DummyPipe:
@@ -16,14 +17,23 @@ class _DummyPipe:
         self.fitted = True
         return self
 
-    def predict(self, X: Iterable) -> np.ndarray:
+    def predict(self, X: Iterable) -> list[float]:
         if not self.fitted:
             raise AttributeError('not fitted')
         try:
+            from pandas.errors import EmptyDataError  # type: ignore
+        except Exception:  # pragma: no cover - pandas optional
+            class EmptyDataError(Exception):
+                pass
+        try:
             n = len(X)
-        except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+        except (EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
             n = 0
-        return np.zeros(n)
+        try:
+            import numpy as np
+        except ImportError:
+            return [0.0] * n
+        return list(np.zeros(n))
 
 class MLModel:
 
@@ -45,7 +55,11 @@ class MLModel:
             self.model.fit(X, y)
         return self
 
-    def predict(self, df: pd.DataFrame) -> np.ndarray:
+    def predict(self, df: 'pd.DataFrame') -> 'np.ndarray':  # type: ignore[name-defined]
+        try:
+            import pandas as pd
+        except ImportError as exc:
+            raise ImportError('pandas is required for predict()') from exc
         self._require('predict')
         if not isinstance(df, pd.DataFrame):
             raise TypeError('df must be a pandas DataFrame')
@@ -56,11 +70,19 @@ class MLModel:
         return self.model.predict(df)
 
     def save(self, path: str | Path) -> str:
+        try:
+            import joblib
+        except ImportError as exc:
+            raise ImportError('joblib is required to save models') from exc
         joblib.dump(self.model, path)
         return str(path)
 
     @classmethod
     def load(cls, path: str | Path) -> MLModel:
+        try:
+            import joblib
+        except ImportError as exc:
+            raise ImportError('joblib is required to load models') from exc
         return cls(joblib.load(path))
 
     @property
@@ -77,9 +99,17 @@ class MLModel:
         self.model = value
 
 def save_model(model: Any, path: str | Path) -> None:
+    try:
+        import joblib
+    except ImportError as exc:
+        raise ImportError('joblib is required to save models') from exc
     joblib.dump(model, path)
 
 def load_model(path: str | Path) -> Any:
+    try:
+        import joblib
+    except ImportError as exc:
+        raise ImportError('joblib is required to load models') from exc
     return joblib.load(path)
 
 def train_model(X: Any, y: Any, algorithm: str='dummy') -> MLModel:
@@ -89,9 +119,13 @@ def train_model(X: Any, y: Any, algorithm: str='dummy') -> MLModel:
         raise ValueError('invalid training data')
     return MLModel(_DummyPipe()).fit(X, y)
 
-def predict_model(model: Any, X: Iterable | pd.DataFrame | None) -> list[float]:
+def predict_model(model: Any, X: Iterable | 'pd.DataFrame' | None) -> list[float]:
     if model is None or X is None:
         raise ValueError('invalid input')
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError('pandas is required for predict_model()') from exc
     df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
     preds = model.predict(df)
     try:
