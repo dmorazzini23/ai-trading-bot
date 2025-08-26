@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pytest
-pd = pytest.importorskip("pandas")
 
 
 # Test idempotency
@@ -162,6 +161,7 @@ def test_symbol_costs():
 def test_adaptive_risk_controls():
     """Test adaptive risk control system."""
     from ai_trading.portfolio.risk_controls import AdaptiveRiskController
+    pd = pytest.importorskip("pandas")
 
     # Create test data
     np.random.seed(42)
@@ -203,6 +203,7 @@ def test_adaptive_risk_controls():
 def test_determinism():
     """Test deterministic training setup."""
     from ai_trading.utils.determinism import hash_data, set_random_seeds
+    pd = pytest.importorskip("pandas")
 
     # Test seed setting
     set_random_seeds(42)
@@ -234,6 +235,7 @@ def test_determinism():
 def test_drift_monitoring():
     """Test drift monitoring functionality."""
     from ai_trading.monitoring.drift import DriftMonitor
+    pd = pytest.importorskip("pandas")
 
     monitor = DriftMonitor()
 
@@ -270,6 +272,7 @@ def test_performance_optimizations():
         VectorizedOperations,
         benchmark_operation,
     )
+    pd = pytest.importorskip("pandas")
 
     # Test caching
     cache = PerformanceCache(max_size=10, ttl_seconds=60)

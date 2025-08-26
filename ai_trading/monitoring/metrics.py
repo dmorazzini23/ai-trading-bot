@@ -5,8 +5,8 @@ import time
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any, TYPE_CHECKING
-import numpy as np
 from importlib.util import find_spec
+
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
 HAS_PANDAS = find_spec("pandas") is not None
@@ -18,6 +18,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 def compute_basic_metrics(df) -> dict[str, float]:
     """Return Sharpe ratio and max drawdown from ``df`` with a ``return`` column."""
     pd = load_pandas()
+    import numpy as np
     if 'return' not in df:
         return {'sharpe': 0.0, 'max_drawdown': 0.0}
     ret = df['return'].astype(float)
@@ -38,8 +39,11 @@ def compute_basic_metrics(df) -> dict[str, float]:
         max_dd = float(drawdown.max()) if not drawdown.empty else 0.0
     return {'sharpe': float(sharpe), 'max_drawdown': float(max_dd)}
 
-def compute_advanced_metrics(df: pd.DataFrame) -> dict[str, float]:
+def compute_advanced_metrics(df: 'pd.DataFrame') -> dict[str, float]:
     """Compute advanced performance metrics with numerical stability."""
+    pd = load_pandas()
+    import numpy as np
+
     if 'return' not in df:
         return {'sortino': 0.0, 'calmar': 0.0, 'win_rate': 0.0, 'profit_factor': 0.0}
     ret = df['return'].astype(float).fillna(0)
@@ -62,7 +66,12 @@ def compute_advanced_metrics(df: pd.DataFrame) -> dict[str, float]:
     gross_profit = ret[ret > 0].sum()
     gross_loss = abs(ret[ret < 0].sum())
     profit_factor = gross_profit / max(gross_loss, epsilon)
-    return {'sortino': float(sortino), 'calmar': float(calmar), 'win_rate': float(win_rate), 'profit_factor': float(profit_factor)}
+    return {
+        'sortino': float(sortino),
+        'calmar': float(calmar),
+        'win_rate': float(win_rate),
+        'profit_factor': float(profit_factor),
+    }
 
 def safe_divide(numerator: float, denominator: float, default: float=0.0) -> float:
     """Safe division with epsilon protection to prevent division by zero."""
@@ -71,9 +80,11 @@ def safe_divide(numerator: float, denominator: float, default: float=0.0) -> flo
         return default
     return numerator / denominator
 
-def calculate_atr(df: pd.DataFrame, period: int=14) -> pd.Series:
+def calculate_atr(df: 'pd.DataFrame', period: int = 14) -> 'pd.Series':
     """Calculate Average True Range with numerical stability."""
     pd = load_pandas()
+    import numpy as np
+
     if df.empty or not all((col in df.columns for col in ['high', 'low', 'close'])):
         return pd.Series(dtype=float)
     epsilon = 1e-08
@@ -137,10 +148,25 @@ class MetricsCollector:
 
     def get_metrics_summary(self) -> dict[str, Any]:
         """Get a summary of all collected metrics."""
-        summary = {'counters': dict(self.counters), 'gauges': dict(self.gauges), 'histograms_stats': {}, 'uptime_seconds': time.time() - self.start_time}
+        import numpy as np
+
+        summary = {
+            'counters': dict(self.counters),
+            'gauges': dict(self.gauges),
+            'histograms_stats': {},
+            'uptime_seconds': time.time() - self.start_time,
+        }
         for name, values in self.histograms.items():
             if values:
-                summary['histograms_stats'][name] = {'count': len(values), 'avg': np.mean(values), 'min': np.min(values), 'max': np.max(values), 'p50': np.percentile(values, 50), 'p95': np.percentile(values, 95), 'p99': np.percentile(values, 99)}
+                summary['histograms_stats'][name] = {
+                    'count': len(values),
+                    'avg': np.mean(values),
+                    'min': np.min(values),
+                    'max': np.max(values),
+                    'p50': np.percentile(values, 50),
+                    'p95': np.percentile(values, 95),
+                    'p99': np.percentile(values, 99),
+                }
         return summary
 
 class PerformanceMonitor:
