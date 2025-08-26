@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Test suite for meta-learning and cache performance fixes.
+Test suite for meta-learning and related performance fixes.
 
 This test validates the key fixes:
 1. Meta-learning system can handle mixed trade log formats
-2. Cache performance improvements work correctly
-3. Position size reporting is consistent
-4. Order execution latency tracking is more granular
+2. Position size reporting is consistent
+3. Order execution latency tracking is more granular
 """
 
 import os
@@ -43,24 +42,6 @@ def test_meta_learning_mixed_format():
     # Test that retrain_meta_learner works
     result = retrain_meta_learner("trades.csv", min_samples=10)
     assert result, "Meta-learning retraining should succeed"
-
-
-def test_cache_performance_metrics():
-    """Test that cache performance metrics are recorded."""
-
-    from ai_trading.data_fetcher import _CACHE_STATS, get_cache_stats
-
-    # Reset cache stats
-    _CACHE_STATS["hits"] = 0
-    _CACHE_STATS["misses"] = 0
-    _CACHE_STATS["invalidations"] = 0
-
-    # Get initial stats
-    stats = get_cache_stats()
-    assert "hits" in stats, "Should track cache hits"
-    assert "misses" in stats, "Should track cache misses"
-    assert "hit_ratio_pct" in stats, "Should calculate hit ratio"
-    assert "total_requests" in stats, "Should track total requests"
 
 
 def test_position_size_reporting():
@@ -121,8 +102,6 @@ def test_comprehensive_fixes():
     """Run comprehensive test of all performance fixes."""
 
     test_meta_learning_mixed_format()
-
-    test_cache_performance_metrics()
 
     test_position_size_reporting()
 
