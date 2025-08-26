@@ -77,7 +77,7 @@ from performance_monitor import start_performance_monitoring
 start_performance_monitoring()
 ```
 
-### 4. Process Manager (`process_manager.py`)
+### 4. Process Manager (`ai_trading/process_manager.py`)
 
 Process management and service cleanup utilities.
 
@@ -90,7 +90,7 @@ Process management and service cleanup utilities.
 
 **Usage:**
 ```bash
-python process_manager.py
+python -m ai_trading.process_manager
 ```
 
 ### 5. Optimized Startup (`optimized_startup.py`)
@@ -202,7 +202,7 @@ python optimized_startup.py
 python system_diagnostic.py
 
 # Monitor processes
-python process_manager.py
+python -m ai_trading.process_manager
 ```
 
 ### Development
@@ -237,14 +237,14 @@ result = emergency_memory_cleanup()
 
 ### Process Conflicts
 ```bash
-python process_manager.py
+python -m ai_trading.process_manager
 # Follow prompts for duplicate cleanup
 ```
 
 ### Service Failures
 ```bash
 # Check service status
-python process_manager.py
+python -m ai_trading.process_manager
 
 # Manual service restart
 sudo systemctl restart ai-trading-bot.service
@@ -255,7 +255,7 @@ sudo systemctl restart ai-trading-bot.service
 - `system_diagnostic.py`: System health monitoring
 - `memory_optimizer.py`: Memory management and optimization
 - `performance_monitor.py`: Real-time performance monitoring
-- `process_manager.py`: Process and service management
+- `ai_trading/process_manager.py`: Process and service management
 - `optimized_startup.py`: Production startup script
 - `performance_demo.py`: Demonstration of all features
 
