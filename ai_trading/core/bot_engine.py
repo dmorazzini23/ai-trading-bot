@@ -1090,6 +1090,10 @@ class _LazyModule(types.ModuleType):
                 self._module = importlib.import_module(self.__name__)
             except COMMON_EXC:
                 self._failed = True
+                logger.info(
+                    f"{self.__name__.upper()}_MISSING",
+                    extra={"hint": f"pip install {self.__name__}"},
+                )
 
     def _create_fallback(self):
         """Create a fallback module object with common methods."""
