@@ -98,6 +98,11 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
         return None
     now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     return max(0, now_s - int(ts))
+
+
+def warmup_cache(*_args: Any, **_kwargs: Any) -> None:
+    """Backward-compatibility shim; cache warm-up now occurs lazily."""
+    return None
 _DEFAULT_FEED = 'iex'
 _VALID_FEEDS = ('iex', 'sip')
 
@@ -499,5 +504,5 @@ def is_market_open() -> bool:
     """Simplistic market-hours check used in tests."""
     return True
 
-__all__ = ['_DEFAULT_FEED', '_VALID_FEEDS', 'ensure_datetime', '_yahoo_get_bars', '_fetch_bars', 'get_bars', 'get_bars_batch', 'fetch_minute_yfinance', 'is_market_open', 'get_last_available_bar', 'fh_fetcher', 'get_minute_df', 'build_fetcher', 'DataFetchError']
+__all__ = ['_DEFAULT_FEED', '_VALID_FEEDS', 'ensure_datetime', '_yahoo_get_bars', '_fetch_bars', 'get_bars', 'get_bars_batch', 'fetch_minute_yfinance', 'is_market_open', 'get_last_available_bar', 'fh_fetcher', 'get_minute_df', 'build_fetcher', 'DataFetchError', 'warmup_cache']
 
