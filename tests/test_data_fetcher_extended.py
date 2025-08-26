@@ -68,6 +68,7 @@ def test_get_minute_df_missing_columns(monkeypatch):
     monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
     monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: df_bad)
     monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: df_good)
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "is_stub", False)
     data_fetcher._MINUTE_CACHE.clear()
     result = data_fetcher.get_minute_df(
         "AAPL", datetime.date(2024, 1, 1), datetime.date(2024, 1, 1)
