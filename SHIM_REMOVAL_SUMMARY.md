@@ -83,7 +83,7 @@ The implementation carefully followed AGENTS.md guidance:
 ### Production guidance
 
 - Use a single Alpaca SDK (`alpaca-trade-api`) in production. Switching to `alpaca-py` requires updating brokers, tests, and docs.
-- Avoid `optional_import(...)` in runtime code. Gate heavy, optional dependencies inside function scope instead of shimming imports.
+- Avoid `optional_import(...)` in runtime code. Gate heavy, optional dependencies inside function scope using direct `try`/`except ImportError` or `importlib.util.find_spec` patterns instead of shimming imports.
 
 ### Feature Flag Approach
 Rather than removing all optional imports, converted them to explicit feature flags:

@@ -47,7 +47,7 @@ config.reload_env()
 ```
 
 `.env` at the repo root is loaded at startup with `override=True`.
-Production code paths must **not** use `optional_import(...)`; reserve such patterns for research or development utilities. Gate heavy imports inside function scope when possible.
+Production code paths must avoid shim helpers like `optional_import(...)`; use direct `try`/`except ImportError` blocks or `importlib.util.find_spec` to guard optional dependencies and gate heavy imports inside function scope when possible.
 
 ## Timezones
 
