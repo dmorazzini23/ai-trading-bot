@@ -162,6 +162,7 @@ class TradingConfig:
     """
     seed: int = SEED  # AI-AGENT-REF: propagate runtime seed
     enable_finbert: bool = False
+    disable_daily_retrain: bool = False
     capital_cap: Optional[float] = None
     dollar_risk_limit: Optional[float] = None
     max_position_size: Optional[float] = None
@@ -196,6 +197,7 @@ class TradingConfig:
         keys = [
             "seed",
             "enable_finbert",
+            "disable_daily_retrain",
             "capital_cap",
             "dollar_risk_limit",
             "max_position_size",
@@ -279,6 +281,9 @@ class TradingConfig:
             ),
             max_position_mode=_get("MAX_POSITION_MODE", str, default="STATIC"),
             paper=_get("PAPER", _to_bool, default=True),
+            disable_daily_retrain=_get(
+                "DISABLE_DAILY_RETRAIN", _to_bool, default=False
+            ),
             data_feed=_get("DATA_FEED", str),
             data_provider=_get("DATA_PROVIDER", str),
         )
