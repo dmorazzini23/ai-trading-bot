@@ -29,7 +29,7 @@ ratelimit==2.2.1
 # Explicit because main.py uses dotenv.load_dotenv directly
 python-dotenv==1.1.1
 python-dateutil>=2.8.2,<3
-tenacity==8.5.0
+tenacity>=8
 # ML stack used by non-RL code paths
 scikit-learn==1.5.1
 scipy==1.13.1
