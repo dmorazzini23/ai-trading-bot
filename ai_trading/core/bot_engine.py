@@ -2971,12 +2971,13 @@ RF_ESTIMATORS = 300
 RF_MAX_DEPTH = 3
 RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
-CONF_THRESHOLD = params.get(
-    "get_conf_threshold()", state.mode_obj.config.conf_threshold
+CONF_THRESHOLD = float(
+    params.get(
+        "CONF_THRESHOLD",
+        getattr(state.mode_obj.config, "confidence_level", 0.75),
+    )
 )
-CONFIRMATION_COUNT = params.get(
-    "CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count
-)
+CONFIRMATION_COUNT = int(params.get("CONFIRMATION_COUNT", 2))
 
 
 def _env_float(default: float, *keys: str) -> float:

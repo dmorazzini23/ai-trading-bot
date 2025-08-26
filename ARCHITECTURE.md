@@ -8,9 +8,10 @@
   - `/healthz` JSON and `/metrics` Prometheus served on the port specified by the `HEALTHCHECK_PORT` environment variable (default **9001**).
 
 ## Object Model
-- **TradingConfig**: static config (API keys, paths, thresholds).
-- **BotRuntime**: process runtime (cfg, params, tickers, model, broker clients, etc.).
-  - Required fields: `cfg`, `params: dict`, `tickers: list[str]`, `model: Any (optional)`.
+ - **TradingConfig**: static config (API keys, paths, thresholds).
+   - Confidence gate: `AI_TRADER_CONF_THRESHOLD` sets minimum model confidence (default **0.75**).
+ - **BotRuntime**: process runtime (cfg, params, tickers, model, broker clients, etc.).
+   - Required fields: `cfg`, `params: dict`, `tickers: list[str]`, `model: Any (optional)`.
 
 ## Control Flow (happy path)
 1. `runner.py` → loads config → constructs `BotRuntime`.

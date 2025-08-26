@@ -6,10 +6,14 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import numpy as np
+    import pandas as pd
 
 logger = get_logger(__name__)
 
@@ -106,7 +110,7 @@ class DriftMonitor:
         except (ValueError, TypeError) as e:
             self.logger.error(f'Failed to save baseline stats: {e}')
 
-    def update_baseline(self, feature_data: 'pd.DataFrame') -> None:
+    def update_baseline(self, feature_data: pd.DataFrame) -> None:
         """Update baseline feature statistics."""
 
         pd = load_pandas()
@@ -124,7 +128,7 @@ class DriftMonitor:
         self._save_baseline_stats()
         self.logger.info(f'Updated baseline for {len(feature_data.columns)} features')
 
-    def calculate_psi(self, baseline_data: 'np.ndarray', current_data: 'np.ndarray', n_bins: int=10) -> float:
+    def calculate_psi(self, baseline_data: np.ndarray, current_data: np.ndarray, n_bins: int=10) -> float:
         """
         Calculate Population Stability Index (PSI).
 
@@ -157,7 +161,7 @@ class DriftMonitor:
             self.logger.warning(f'PSI calculation failed: {e}')
             return 0.0
 
-    def monitor_feature_drift(self, current_features: 'pd.DataFrame') -> list[DriftMetrics]:
+    def monitor_feature_drift(self, current_features: pd.DataFrame) -> list[DriftMetrics]:
         """
         Monitor feature drift against baseline.
 
@@ -200,8 +204,8 @@ class DriftMonitor:
     def calculate_signal_attribution(
         self,
         signal_name: str,
-        signal_returns: 'pd.Series',
-        benchmark_returns: 'pd.Series | None'=None,
+        signal_returns: pd.Series,
+        benchmark_returns: pd.Series | None = None,
         period_start: datetime | None=None,
         period_end: datetime | None=None,
     ) -> SignalAttribution:
@@ -405,7 +409,7 @@ def get_shadow_mode() -> ShadowMode:
         _global_shadow_mode = ShadowMode()
     return _global_shadow_mode
 
-def monitor_drift(current_features: 'pd.DataFrame') -> list[DriftMetrics]:
+def monitor_drift(current_features: pd.DataFrame) -> list[DriftMetrics]:
     """Convenience function to monitor feature drift."""
 
     monitor = get_drift_monitor()

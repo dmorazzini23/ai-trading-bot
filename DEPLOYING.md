@@ -40,6 +40,12 @@ missing keys; values are masked in logs and exceptions. During health server
 startup the validation result is cached and `/healthz` reuses it, returning
 `{"ok": false, "error": "..."}` while still responding with HTTP 200.
 
+### Optional risk parameters
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `AI_TRADER_CONF_THRESHOLD` | Minimum model confidence required before acting | 0.75 |
+
 ### Health endpoints & env
 
 Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on the port defined by the `HEALTHCHECK_PORT` environment variable (default **9001**).
