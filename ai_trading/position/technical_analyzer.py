@@ -9,13 +9,13 @@ Analyzes technical indicators to inform position holding decisions:
 
 AI-AGENT-REF: Technical signal analysis for intelligent position exits
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SignalStrength(Enum):
     """Technical signal strength levels."""
@@ -63,7 +63,7 @@ class TechnicalSignalAnalyzer:
 
     def __init__(self, ctx=None):
         self.ctx = ctx
-        self.logger = logging.getLogger(__name__ + '.TechnicalSignalAnalyzer')
+        self.logger = get_logger(__name__ + '.TechnicalSignalAnalyzer')
         self.momentum_period = 14
         self.volume_period = 20
         self.divergence_lookback = 10

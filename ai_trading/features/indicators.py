@@ -7,10 +7,10 @@ technical indicators used in trading strategies.
 Moved from root features.py for package-safe imports.
 """
 from __future__ import annotations
-import logging
+from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.indicators import atr, ema
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Lazy pandas proxy
 pd = load_pandas()

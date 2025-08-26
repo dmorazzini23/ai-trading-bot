@@ -1,10 +1,10 @@
 from __future__ import annotations
-import logging
+from ai_trading.logging import get_logger
 import threading
 import time
 from pathlib import Path
 from typing import Any
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 try:
     import pandas as pd
 except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):

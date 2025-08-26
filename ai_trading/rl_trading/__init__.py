@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 import importlib
-import logging
+from ai_trading.logging import get_logger
 from pathlib import Path
 from typing import Any
 
 from typing import TYPE_CHECKING
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Exposed for tests to monkeypatch
 PPO: Any | None = None

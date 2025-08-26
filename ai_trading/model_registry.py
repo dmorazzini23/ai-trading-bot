@@ -1,3 +1,4 @@
+from ai_trading.logging import get_logger
 """
 Clean model registry for storage, versioning, and retrieval with metadata.
 """
@@ -13,7 +14,7 @@ try:
     from ai_trading.logging import logger
 except (ValueError, TypeError):
     import logging
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
 
 class ModelRegistry:
     """Centralized registry for trained models."""

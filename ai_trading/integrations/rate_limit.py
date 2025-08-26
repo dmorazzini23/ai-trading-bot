@@ -6,7 +6,7 @@ and async-safe interfaces to prevent 429 errors and API throttling.
 """
 
 import asyncio
-import logging
+from ai_trading.logging import get_logger
 import random
 import threading
 import time
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from ai_trading.utils.timing import sleep as psleep
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -107,7 +107,7 @@ class RateLimiter:
             global_capacity: Global burst capacity across all routes (override)
             global_rate: Global refill rate (tokens per second) (override)
         """
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = get_logger(f"{__name__}.{self.__class__.__name__}")
         if config is not None:
             capacity = getattr(config, "capacity", global_capacity)
             rate = getattr(config, "refill_rate", global_rate)

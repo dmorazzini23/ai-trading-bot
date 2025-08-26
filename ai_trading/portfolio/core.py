@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from ai_trading.logging import get_logger
 import threading
 from typing import TYPE_CHECKING
 
@@ -15,7 +15,7 @@ from ai_trading.data.bars import (
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 _portfolio_lock = threading.RLock()
 
 def _last_close_from(df: pd.DataFrame) -> float | None:

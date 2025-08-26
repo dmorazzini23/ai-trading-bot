@@ -3,13 +3,13 @@
 All dependencies are imported directly. Optional features are controlled
 via Settings flags rather than import guards.
 """
-import logging
+from ai_trading.logging import get_logger
 import numpy as np
 import pandas as pd
 from sklearn import metrics
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 NUMPY_AVAILABLE = True
 PANDAS_AVAILABLE = True
 SKLEARN_AVAILABLE = True

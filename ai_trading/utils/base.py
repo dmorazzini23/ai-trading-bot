@@ -2,6 +2,7 @@
 
 import datetime as dt
 import logging
+from ai_trading.logging import get_logger
 import os
 import random
 import subprocess
@@ -63,7 +64,7 @@ def ensure_utc_index(df: DataFrame) -> DataFrame:
     return df
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 _LAST_MARKET_HOURS_LOG = 0.0
 _LAST_MARKET_STATE = ""
 _LAST_HEALTH_ROW_LOG = 0.0
@@ -86,7 +87,7 @@ class PhaseLoggerAdapter(logging.LoggerAdapter):
 
 def get_phase_logger(name: str, phase: str) -> logging.Logger:
     """Return logger with ``bot_phase`` context."""
-    base = logging.getLogger(name)
+    base = get_logger(name)
     return PhaseLoggerAdapter(base, {"bot_phase": phase})
 
 
@@ -475,7 +476,7 @@ def get_pid_on_port(port: int) -> int | None:
                 if int(local.split(":")[1], 16) == port:
                     return _pid_from_inode(inode)
     except COMMON_EXC as e:
-        logging.getLogger(__name__).error("get_pid_on_port failed", exc_info=e)
+        get_logger(__name__).error("get_pid_on_port failed", exc_info=e)
         return None
     return None
 

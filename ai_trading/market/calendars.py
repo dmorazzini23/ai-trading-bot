@@ -4,11 +4,11 @@ Per-symbol trading calendar registry for session validation.
 Provides calendar-aware trading session validation to prevent trades
 outside market hours and handle ETF half-days, futures sessions, etc.
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AssetClass(Enum):
     """Asset class for calendar determination."""
@@ -51,7 +51,7 @@ class CalendarRegistry:
 
     def __init__(self):
         """Initialize calendar registry."""
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._symbol_calendars: dict[str, TradingSession] = {}
         self._asset_calendars: dict[AssetClass, TradingSession] = {}
         self._holidays: set[date] = set()

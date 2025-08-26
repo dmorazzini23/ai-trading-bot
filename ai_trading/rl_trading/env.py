@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-import logging
+from ai_trading.logging import get_logger
 from typing import TYPE_CHECKING
 
 try:  # optional dependency
@@ -13,7 +13,7 @@ except Exception:  # noqa: BLE001 - numpy is optional until env used
 
 from . import _load_rl_stack
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
     import gymnasium as gym

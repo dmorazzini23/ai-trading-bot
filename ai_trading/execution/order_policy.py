@@ -4,12 +4,12 @@ Enhanced order policy with marketable limit orders and smart routing.
 Provides intelligent order placement with symbol-specific parameters,
 IOC for fades, and market fallback logic.
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from ai_trading.execution.costs import get_symbol_costs
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class OrderType(Enum):
     """Order type enumeration."""
@@ -70,7 +70,7 @@ class SmartOrderRouter:
 
     def __init__(self):
         """Initialize smart order router."""
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._symbol_params: dict[str, OrderParameters] = {}
         self._active_orders: dict[str, dict] = {}
 

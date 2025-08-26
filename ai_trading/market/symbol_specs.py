@@ -4,10 +4,10 @@ Symbol specifications for tick sizes and lot sizes.
 Provides centralized mapping of symbol trading specifications for
 precise order sizing and execution.
 """
-import logging
+from ai_trading.logging import get_logger
 from decimal import Decimal
 from typing import NamedTuple
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SymbolSpec(NamedTuple):
     """Trading specifications for a symbol."""

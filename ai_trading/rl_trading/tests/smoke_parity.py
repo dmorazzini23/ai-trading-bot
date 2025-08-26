@@ -6,6 +6,7 @@ in both training environment and inference wrapper.
 """
 
 import logging
+from ai_trading.logging import get_logger
 import os
 import tempfile
 
@@ -13,7 +14,7 @@ import numpy as np
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def test_action_space_parity():

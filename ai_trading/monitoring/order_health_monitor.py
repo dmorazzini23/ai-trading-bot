@@ -8,7 +8,7 @@ Addresses the critical issues:
 """
 from __future__ import annotations
 import json
-import logging
+from ai_trading.logging import get_logger
 import threading
 import time
 from collections import deque
@@ -34,7 +34,7 @@ class OrderInfo:
         return self.qty
 _active_orders: dict[str, OrderInfo] = {}
 _order_tracking_lock = threading.Lock()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class OrderHealthMetrics:
@@ -77,7 +77,7 @@ class OrderHealthMonitor:
     def __init__(self, execution_engine=None):
         """Initialize the order health monitor."""
         self.execution_engine = execution_engine
-        self.logger = logging.getLogger(__name__ + '.OrderHealthMonitor')
+        self.logger = get_logger(__name__ + '.OrderHealthMonitor')
         self._partial_fills: dict[str, PartialFillInfo] = {}
         self._fill_times: deque = deque(maxlen=1000)
         self._order_metrics: deque = deque(maxlen=100)

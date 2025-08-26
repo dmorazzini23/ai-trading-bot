@@ -4,13 +4,13 @@ Exact money math using Decimal for profit-critical P&L calculations.
 Provides Money class for precise financial calculations, avoiding float
 arithmetic errors that can cause silent P&L drag.
 """
-import logging
+from ai_trading.logging import get_logger
 from decimal import ROUND_HALF_EVEN, Decimal, getcontext
 from typing import TYPE_CHECKING, Union
 if TYPE_CHECKING:
     pass
 getcontext().prec = 28
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 Number = Union[int, float, str, Decimal, 'Money']
 
 class Money:

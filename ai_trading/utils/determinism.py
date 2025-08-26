@@ -6,14 +6,14 @@ model hashes, and data specifications.
 """
 import hashlib
 import json
-import logging
+from ai_trading.logging import get_logger
 import os
 import random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 try:
     import numpy as np  # type: ignore
@@ -138,7 +138,7 @@ class ModelSpecification:
             spec_file: Path to specification file
         """
         self.spec_file = Path(spec_file)
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._spec: dict[str, Any] = {}
         self._is_locked = False
         self._load_spec()

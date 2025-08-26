@@ -4,7 +4,7 @@ Live trading execution engine with real Alpaca SDK integration.
 This module provides production-ready order execution with proper error handling,
 retry mechanisms, circuit breakers, and comprehensive monitoring.
 """
-import logging
+from ai_trading.logging import get_logger
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
 from ai_trading.config import AlpacaConfig, get_alpaca_config
 from ai_trading.logging import logger
 
-_log = logging.getLogger(__name__)
+logger = get_logger(__name__)
 try:  # pragma: no cover - optional dependency
     from alpaca_trade_api import REST as AlpacaREST  # type: ignore
 except (ValueError, TypeError, ModuleNotFoundError, ImportError):
@@ -42,7 +42,7 @@ def submit_market_order(symbol: str, side: str, quantity: int):
     try:
         quantity = int(_pos_num('qty', quantity))
     except (ValueError, TypeError) as e:
-        _log.error('ORDER_INPUT_INVALID', extra={'cause': type(e).__name__, 'detail': str(e)})
+        logger.error('ORDER_INPUT_INVALID', extra={'cause': type(e).__name__, 'detail': str(e)})
         return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
     return {'status': 'submitted', 'symbol': symbol, 'side': side, 'quantity': quantity}
 
@@ -358,16 +358,16 @@ class AlpacaExecutionEngine:
             quantity = order_data.get('quantity', 0)
             side = order_data.get('side', '')
             if not symbol or symbol == 'INVALID' or len(symbol) < 1:
-                _log.error(f'Invalid symbol rejected: {symbol}')
+                logger.error(f'Invalid symbol rejected: {symbol}')
                 return None
             if quantity <= 0:
-                _log.error(f'Invalid quantity rejected: {quantity}')
+                logger.error(f'Invalid quantity rejected: {quantity}')
                 return None
             if side not in ['buy', 'sell']:
-                _log.error(f'Invalid side rejected: {side}')
+                logger.error(f'Invalid side rejected: {side}')
                 return None
             mock_resp = {'id': f'mock_order_{int(time.time())}', 'status': 'filled', 'symbol': order_data['symbol'], 'side': order_data['side'], 'quantity': order_data['quantity']}
-            _log.debug('ORDER_SUBMIT_OK', extra={'symbol': order_data['symbol'], 'qty': order_data['quantity'], 'side': order_data['side'], 'id': mock_resp['id']})
+            logger.debug('ORDER_SUBMIT_OK', extra={'symbol': order_data['symbol'], 'qty': order_data['quantity'], 'side': order_data['side'], 'id': mock_resp['id']})
             return mock_resp
         else:
             try:
@@ -376,26 +376,26 @@ class AlpacaExecutionEngine:
                 else:
                     resp = self.trading_client.submit_order(symbol=order_data['symbol'], qty=order_data['quantity'], side=order_data['side'], type='limit', time_in_force='day', limit_price=order_data['limit_price'], client_order_id=order_data.get('client_order_id'))
             except (APIError, TimeoutError, ConnectionError) as e:
-                _log.error('ORDER_API_FAILED', extra={'op': 'submit', 'cause': e.__class__.__name__, 'detail': str(e), 'symbol': order_data.get('symbol'), 'qty': order_data.get('quantity'), 'side': order_data.get('side'), 'type': order_data.get('type'), 'time_in_force': order_data.get('time_in_force')})
+                logger.error('ORDER_API_FAILED', extra={'op': 'submit', 'cause': e.__class__.__name__, 'detail': str(e), 'symbol': order_data.get('symbol'), 'qty': order_data.get('quantity'), 'side': order_data.get('side'), 'type': order_data.get('type'), 'time_in_force': order_data.get('time_in_force')})
                 raise
             else:
-                _log.debug('ORDER_SUBMIT_OK', extra={'symbol': order_data.get('symbol'), 'qty': order_data.get('quantity'), 'side': order_data.get('side'), 'id': getattr(resp, 'id', None)})
+                logger.debug('ORDER_SUBMIT_OK', extra={'symbol': order_data.get('symbol'), 'qty': order_data.get('quantity'), 'side': order_data.get('side'), 'id': getattr(resp, 'id', None)})
                 return {'id': resp.id, 'status': resp.status, 'symbol': resp.symbol, 'side': resp.side, 'quantity': resp.qty, 'filled_qty': resp.filled_qty, 'filled_avg_price': resp.filled_avg_price}
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""
         import os
         if os.environ.get('PYTEST_RUNNING'):
-            _log.debug('ORDER_CANCEL_OK', extra={'id': order_id})
+            logger.debug('ORDER_CANCEL_OK', extra={'id': order_id})
             return True
         else:
             try:
                 self.trading_client.cancel_order(order_id)
             except (APIError, TimeoutError, ConnectionError) as e:
-                _log.error('ORDER_API_FAILED', extra={'op': 'cancel', 'cause': e.__class__.__name__, 'detail': str(e), 'id': order_id})
+                logger.error('ORDER_API_FAILED', extra={'op': 'cancel', 'cause': e.__class__.__name__, 'detail': str(e), 'id': order_id})
                 raise
             else:
-                _log.debug('ORDER_CANCEL_OK', extra={'id': order_id})
+                logger.debug('ORDER_CANCEL_OK', extra={'id': order_id})
                 return True
 
     def _get_order_status_alpaca(self, order_id: str) -> dict:

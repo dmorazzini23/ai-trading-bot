@@ -5,13 +5,13 @@ Maintains per-symbol cost parameters (half_spread_bps, slip_k) and applies
 them in both backtesting and live position sizing.
 """
 import json
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 import numpy as np
 import pandas as pd
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class SymbolCosts:
@@ -117,7 +117,7 @@ class SymbolCostModel:
         """
         self.data_path = Path(data_path)
         self.data_path.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self._costs: dict[str, SymbolCosts] = {}
         self._default_costs = SymbolCosts(symbol='DEFAULT', half_spread_bps=2.0, slip_k=1.5, commission_bps=0.5, min_commission=1.0, borrow_fee_bps=10.0, overnight_bps=0.5, locate_required=False)
         self._load_cost_data()

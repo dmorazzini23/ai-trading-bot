@@ -4,7 +4,7 @@ Adaptive risk controls and exposure management.
 Provides vol-targeting, adaptive Kelly sizing, correlation clustering,
 cluster exposure caps, and turnover budget enforcement.
 """
-import logging
+from ai_trading.logging import get_logger
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -17,7 +17,7 @@ def _import_clustering():
     S = get_settings()
     if not S.ENABLE_PORTFOLIO_FEATURES:
         return (None, None, None, False)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class RiskBudget:
@@ -93,7 +93,7 @@ class AdaptiveRiskController:
             risk_budget: Risk budget parameters
         """
         self.risk_budget = risk_budget or RiskBudget()
-        self.logger = logging.getLogger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
         self.drawdown_multiplier = 1.0
         self.green_days_count = 0
         self.turnover_budget = TurnoverBudget(total_budget=self.risk_budget.max_turnover_daily)

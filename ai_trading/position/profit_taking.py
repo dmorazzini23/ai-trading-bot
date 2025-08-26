@@ -9,14 +9,14 @@ Implements sophisticated profit taking strategies:
 
 AI-AGENT-REF: Advanced profit taking with multi-tiered scale-out strategies
 """
-import logging
+from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 import pandas as pd
 from ai_trading.exc import COMMON_EXC
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class ProfitTakingStrategy(Enum):
     """Profit taking strategy types."""
@@ -65,7 +65,7 @@ class ProfitTakingEngine:
 
     def __init__(self, ctx=None):
         self.ctx = ctx
-        self.logger = logging.getLogger(__name__ + '.ProfitTakingEngine')
+        self.logger = get_logger(__name__ + '.ProfitTakingEngine')
         self.default_targets = [{'level': 2.0, 'quantity_pct': 25.0, 'strategy': ProfitTakingStrategy.RISK_MULTIPLE}, {'level': 3.0, 'quantity_pct': 25.0, 'strategy': ProfitTakingStrategy.RISK_MULTIPLE}, {'level': 5.0, 'quantity_pct': 25.0, 'strategy': ProfitTakingStrategy.RISK_MULTIPLE}]
         self.resistance_buffer = 0.5
         self.overbought_threshold = 75
