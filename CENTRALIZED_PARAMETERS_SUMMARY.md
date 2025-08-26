@@ -25,8 +25,8 @@
    - Runtime configuration without code changes
 
 4. **Backward Compatibility** ✅
-   - All existing code continues to work
-   - Legacy parameter interface provided via `get_legacy_params()`
+   - All existing code updated to use modern parameter names
+   - Legacy `get_legacy_params()` interface removed
    - Existing `hyperparams.json` still supported during transition
 
 ## 🔧 Files Successfully Updated

@@ -2871,8 +2871,6 @@ class BotMode:
         # AI-AGENT-REF: canonical TradingConfig build
         self.config = config.TradingConfig.from_env()
         params: dict[str, float] = {}
-        if hasattr(self.config, "get_legacy_params"):
-            params.update(self.config.get_legacy_params())
         from ai_trading import settings as S
         try:
             params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
