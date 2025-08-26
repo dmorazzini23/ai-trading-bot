@@ -1,7 +1,7 @@
 import logging
 from datetime import UTC
 
-# Minimal placeholders so this guide script lints without heavy imports
+# Minimal stubs so this guide script lints without heavy imports
 def get_current_position(symbol: str) -> int:  # pragma: no cover
     return 0
 

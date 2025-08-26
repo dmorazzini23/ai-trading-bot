@@ -58,9 +58,6 @@ import numpy as np
 
 ### Run when environment has dependencies:
 ```bash
-# Remove import guards automatically
-python tools/codemods/remove_import_guards.py
-
 # Manual verification and fixes
 ./tools/ci/guard_shims.sh
 

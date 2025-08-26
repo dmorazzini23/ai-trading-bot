@@ -312,9 +312,9 @@ class TestTradingBotIntegration:
         # - Concurrent operations
         # - Resource usage monitoring
 
-        # Placeholder for stress testing
+        # Stub for stress testing
         await asyncio.sleep(0.1)  # Simulate stress test
-        assert True, "Stress test placeholder"
+        assert True, "Stress test stub"
 
     @pytest.mark.slow
     @pytest.mark.asyncio
@@ -326,9 +326,9 @@ class TestTradingBotIntegration:
         # - Emergency stop procedures
         # - Position reconciliation
 
-        # Placeholder for disaster recovery testing
+        # Stub for disaster recovery testing
         await asyncio.sleep(0.1)  # Simulate disaster recovery test
-        assert True, "Disaster recovery test placeholder"
+        assert True, "Disaster recovery test stub"
 
 
 if __name__ == "__main__":

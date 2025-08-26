@@ -11,9 +11,6 @@ pytest --version   >> artifacts/tool-versions.txt 2>&1 || true
 # Pass 1: quick auto-fix
 ruff check . --fix --unsafe-fixes || true
 
-# Safe None-comparison codemod
-python tools/codemods/none_is_codemap.py . || true
-
 # Pass 2: import sort & cleanup
 ruff check . --select I,F,E,UP,PL,BLE --fix || true
 

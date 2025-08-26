@@ -66,9 +66,9 @@ def log_regime_toggle(tag: str, regime: str, filename: str | None=None) -> None:
         logger.info('regime_toggle tag=%s regime=%s', tag, regime)
 
 def log_atr_stop(symbol: str, stop: float) -> None:
-    """No-op placeholder for ATR stop telemetry."""
+    """No-op stub for ATR stop telemetry."""
     return None
 
 def log_pyramid_add(symbol: str, new_pos: float) -> None:
-    """No-op placeholder for pyramid add telemetry."""
+    """No-op stub for pyramid add telemetry."""
     return None

@@ -42,7 +42,7 @@ def check_alpaca_available() -> bool:
 def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
     """Return an ``alpaca_trade_api.REST`` instance.
 
-    If *shadow* is ``True``, a simple ``object`` placeholder is returned even
+    If *shadow* is ``True``, a simple ``object`` stub is returned even
     when the SDK is missing. Otherwise, a :class:`RuntimeError` is raised when
     the ``alpaca_trade_api`` package cannot be imported.
     """

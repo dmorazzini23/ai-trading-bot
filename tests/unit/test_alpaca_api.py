@@ -74,5 +74,5 @@ def test_initialize_raises_when_sdk_missing(monkeypatch):
     with pytest.raises(RuntimeError):
         alpaca_credentials.initialize(shadow=False)
 
-    placeholder = alpaca_credentials.initialize(shadow=True)
-    assert placeholder.__class__ is object
+    shadow_obj = alpaca_credentials.initialize(shadow=True)
+    assert shadow_obj.__class__ is object

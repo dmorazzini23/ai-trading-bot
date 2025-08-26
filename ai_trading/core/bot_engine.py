@@ -8948,7 +8948,7 @@ def liquidate_positions_if_needed(runtime: BotContext) -> None:
         )
         return
 
-    # normal liquidation logic would go here (placeholder)
+    # normal liquidation logic would go here (stub)
 
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────

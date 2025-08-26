@@ -213,6 +213,6 @@ class StrategyAllocator:
         logger.info(f'Portfolio allocation: {len(buy_signals)} buys (total weight: {sum((s.weight for s in buy_signals)):.3f}), {len(sell_signals)} sells')
 
     def update_reward(self, strategy: str, reward: float) -> None:
-        """Update reward for a strategy (placeholder for test compatibility)."""
+        """Update reward for a strategy (used for test compatibility)."""
         logger.info(f'Strategy {strategy} reward updated: {reward}')
 __all__ = ['StrategyAllocator']

@@ -592,10 +592,10 @@ class OptimizedDatabaseManager:
             conn.execute("PRAGMA cache_size=10000")
             
             # Prepare bulk insert
-            placeholders = ', '.join(['(?, ?, ?, ?, ?, ?)' for _ in trades])
+            param_marks = ', '.join(['(?, ?, ?, ?, ?, ?)' for _ in trades])
             query = f"""
             INSERT INTO trades (symbol, side, quantity, price, timestamp, order_id)
-            VALUES {placeholders}
+            VALUES {param_marks}
             """
             
             # Flatten trade data

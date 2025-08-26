@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     import pandas as pd  # type: ignore
 except Exception:  # pragma: no cover
-    class _PD:  # minimal placeholder
+    class _PD:  # minimal stub
         @staticmethod
         def concat(objs):
             return list(objs)

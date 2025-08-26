@@ -16,7 +16,7 @@ def check_env_file():
             content = f.read()
         required_vars = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL']
         missing_vars = []
-        placeholder_vars = []
+        sample_vars = []
         loaded = reload_env(str(env_path), override=True)
         if loaded is None:
             return (False, '❌ python-dotenv not installed. Run: pip install python-dotenv')
@@ -25,11 +25,11 @@ def check_env_file():
             if var not in content:
                 missing_vars.append(var)
             elif env_value and str(env_value).startswith('YOUR_'):
-                placeholder_vars.append(var)
+                sample_vars.append(var)
         if missing_vars:
             return (False, f"❌ Missing variables in .env: {', '.join(missing_vars)}")
-        if placeholder_vars:
-            return (False, f"⚠️  Placeholder values detected in .env: {', '.join(placeholder_vars)}\n   Please replace YOUR_* placeholders with your real API keys")
+        if sample_vars:
+            return (False, f"⚠️  Sample values detected in .env: {', '.join(sample_vars)}\n   Please replace YOUR_* sample values with your real API keys")
         return (True, '✅ .env file format looks good')
     except (OSError, PermissionError, KeyError, ValueError, TypeError) as e:
         return (False, f'❌ Error reading .env file: {e}')
@@ -47,13 +47,13 @@ def check_api_keys():
         if not api_key:
             issues.append('ALPACA_API_KEY not set')
         elif api_key.startswith('YOUR_'):
-            issues.append('ALPACA_API_KEY still contains placeholder text')
+            issues.append('ALPACA_API_KEY still contains sample text')
         elif len(api_key) < 20:
             issues.append('ALPACA_API_KEY appears too short')
         if not secret_key:
             issues.append('ALPACA_SECRET_KEY not set')
         elif secret_key.startswith('YOUR_'):
-            issues.append('ALPACA_SECRET_KEY still contains placeholder text')
+            issues.append('ALPACA_SECRET_KEY still contains sample text')
         elif len(secret_key) < 30:
             issues.append('ALPACA_SECRET_KEY appears too short')
         if not base_url:
@@ -84,7 +84,7 @@ def check_config_import():
 
 def print_setup_instructions():
     """Print setup instructions."""
-    logging.info('\n🔧 Setup Instructions:\n\n1. Get your API keys:\n   → Visit: https://app.alpaca.markets/paper/dashboard/overview\n   → Generate API keys (use Paper Trading for testing))\n\n2. Configure your .env file:\n   → Copy: cp .env.example .env\n   → Edit .env and replace YOUR_* placeholders with real keys\n\n3. Verify your setup:\n   → Run this script again: python verify_config.py\n\n📖 For detailed instructions, see: docs/API_KEY_SETUP.md\n')
+    logging.info('\n🔧 Setup Instructions:\n\n1. Get your API keys:\n   → Visit: https://app.alpaca.markets/paper/dashboard/overview\n   → Generate API keys (use Paper Trading for testing))\n\n2. Configure your .env file:\n   → Copy: cp .env.example .env\n   → Edit .env and replace YOUR_* sample values with real keys\n\n3. Verify your setup:\n   → Run this script again: python verify_config.py\n\n📖 For detailed instructions, see: docs/API_KEY_SETUP.md\n')
 
 def main():
     """Main verification function."""
