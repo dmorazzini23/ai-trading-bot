@@ -40,7 +40,7 @@ __all__ = tuple(sorted({
     "retry",
     "timing",
     "device",
-    "pathlib_shim",
+    "paths",
     "datetime",
     "capital_scaling",
 }))
@@ -50,7 +50,7 @@ _LAZY_MAP = {
     "retry": ("ai_trading.utils.retry", None),
     "timing": ("ai_trading.utils.timing", None),
     "device": ("ai_trading.utils.device", None),
-    "pathlib_shim": ("ai_trading.utils.pathlib_shim", None),
+    "paths": ("ai_trading.utils.paths", None),
     "datetime": ("ai_trading.utils.datetime", None),
     "capital_scaling": ("ai_trading.utils.capital_scaling", None),
 
@@ -75,7 +75,7 @@ if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
     from . import retry as retry  # type: ignore
     from . import timing as timing  # type: ignore
     from . import device as device  # type: ignore
-    from . import pathlib_shim as pathlib_shim  # type: ignore
+    from . import paths as paths  # type: ignore
     from . import datetime as datetime  # type: ignore
     from .base import (  # type: ignore
         EASTERN_TZ,

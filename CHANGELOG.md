@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - **Package Structure**: Root modules previously moved into `ai_trading/` package
   - **Migration Required**: Use `from ai_trading.signals import ...` instead of `from signals import ...`
   - **Breaking**: Root imports are no longer supported as of this version
+- **Utils**: remove legacy `pathlib_shim` re-export; use `ai_trading.utils.paths` instead
 
 ### Fixed
 - Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
