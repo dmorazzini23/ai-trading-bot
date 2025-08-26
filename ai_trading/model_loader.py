@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+"""Model persistence utilities.
+
+This module prefers :mod:`joblib` for serializing simple fallback models and
+avoids ``pickle.load`` where possible.
+"""
+
 from ai_trading.logging import get_logger
-import pickle
 from datetime import UTC
 from pathlib import Path
-from pickle import UnpicklingError
+
+import joblib
 
 logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
+ALLOWED_MODELS_DIR = (BASE_DIR / "models").resolve()
 ML_MODELS: dict[str, object | None] = {}
 
 
@@ -55,9 +62,8 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
 
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
-        with open(models_dir / f"{symbol}.pkl", "wb") as f:
-            pickle.dump(model, f)
-    except (ValueError, TypeError) as exc:
+        joblib.dump(model, models_dir / f"{symbol}.pkl")
+    except (OSError, ValueError, TypeError) as exc:
         logger.warning("Failed saving model for %s: %s", symbol, exc)
 
     return model
@@ -67,21 +73,24 @@ def load_model(symbol: str) -> object:
     """Load or train an ML model for ``symbol``.
 
     The models directory is resolved via ``config.get_env('MODELS_DIR')`` if set,
-    otherwise defaults to ``<project>/models``. If loading fails due to
-    ``ValueError``, ``TypeError``, or ``UnpicklingError``, a ``RuntimeError`` is
-    raised that includes the absolute path and ``symbol`` for context.
+    otherwise defaults to ``<project>/models``. Paths are validated to reside
+    within the allowed models directory. Any deserialization error results in a
+    ``RuntimeError`` that includes the absolute path and ``symbol`` for
+    context.
     """
     from ai_trading.config import management as config
 
-    models_dir = Path(config.get_env("MODELS_DIR") or BASE_DIR / "models")
-    path = models_dir / f"{symbol}.pkl"
+    models_dir = Path(config.get_env("MODELS_DIR") or ALLOWED_MODELS_DIR).resolve()
+    if not models_dir.is_relative_to(ALLOWED_MODELS_DIR):
+        raise RuntimeError(f"Disallowed models directory: {models_dir}")
+    path = (models_dir / f"{symbol}.pkl").resolve()
+    if not path.is_relative_to(models_dir):
+        raise RuntimeError(f"Model path escapes models directory: {path}")
     if path.exists():
         try:
-            with open(path, "rb") as f:
-                model = pickle.load(f)
-        except (ValueError, TypeError, UnpicklingError) as exc:
-            abs_path = path.resolve()
-            msg = f"Failed to load model for '{symbol}' at '{abs_path}': {exc}"
+            model = joblib.load(path)
+        except (OSError, ValueError, TypeError) as exc:
+            msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
             raise RuntimeError(msg) from exc
     else:
         model = train_and_save_model(symbol, models_dir)
