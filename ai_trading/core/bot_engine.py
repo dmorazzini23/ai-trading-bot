@@ -1458,33 +1458,72 @@ def _ensure_alpaca_classes() -> None:
         return
     try:  # pragma: no cover - import resolution
         from alpaca_trade_api.entity import Quote as _Quote, Order as _Order
-        from alpaca_trade_api.enums import (
-            OrderSide as _OrderSide,
-            OrderStatus as _OrderStatus,
-            TimeInForce as _TimeInForce,
-        )
-        from alpaca_trade_api.types import MarketOrderRequest as _MarketOrderRequest
-        try:  # pragma: no cover - StockLatestQuoteRequest may not exist
-            from alpaca_trade_api.rest import (
-                StockLatestQuoteRequest as _StockLatestQuoteRequest,  # type: ignore
-            )
-        except Exception:
-            @dataclass
-            class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
-                symbol_or_symbols: Any
-        Quote = _Quote
-        Order = _Order
-        OrderSide = _OrderSide
-        OrderStatus = _OrderStatus
-        TimeInForce = _TimeInForce
-        MarketOrderRequest = _MarketOrderRequest
-        StockLatestQuoteRequest = _StockLatestQuoteRequest
-    except Exception as e:  # pragma: no cover - executed only when dep missing
+    except Exception as e:  # pragma: no cover - executed only when base dep missing
         _ALPACA_IMPORT_ERROR = e
         get_logger(__name__).critical(
             "required Alpaca trade API classes missing; ensure alpaca-trade-api is installed",
             exc_info=e,
         )
+        return
+
+    try:
+        from alpaca_trade_api.enums import (
+            OrderSide as _OrderSide,
+            OrderStatus as _OrderStatus,
+            TimeInForce as _TimeInForce,
+        )
+    except Exception:
+        from enum import Enum
+
+        class _OrderSide(str, Enum):  # pragma: no cover - fallback enum
+            BUY = "buy"
+            SELL = "sell"
+
+        class _OrderStatus(str, Enum):  # pragma: no cover - fallback enum
+            NEW = "new"
+            PARTIALLY_FILLED = "partially_filled"
+            FILLED = "filled"
+            CANCELED = "canceled"
+            REJECTED = "rejected"
+            EXPIRED = "expired"
+
+        class _TimeInForce(str, Enum):  # pragma: no cover - fallback enum
+            DAY = "day"
+            GTC = "gtc"
+
+    try:
+        from alpaca_trade_api.types import MarketOrderRequest as _MarketOrderRequest
+    except Exception:
+        from dataclasses import dataclass
+
+        @dataclass
+        class _MarketOrderRequest:  # pragma: no cover - minimal request object
+            symbol: str
+            qty: int
+            side: _OrderSide
+            time_in_force: _TimeInForce
+            limit_price: float | None = None
+            stop_price: float | None = None
+            client_order_id: str | None = None
+
+    try:  # pragma: no cover - StockLatestQuoteRequest may not exist
+        from alpaca_trade_api.rest import (
+            StockLatestQuoteRequest as _StockLatestQuoteRequest,  # type: ignore
+        )
+    except Exception:
+        from dataclasses import dataclass
+
+        @dataclass
+        class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
+            symbol_or_symbols: Any
+
+    Quote = _Quote
+    Order = _Order
+    OrderSide = _OrderSide
+    OrderStatus = _OrderStatus
+    TimeInForce = _TimeInForce
+    MarketOrderRequest = _MarketOrderRequest
+    StockLatestQuoteRequest = _StockLatestQuoteRequest
 
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
