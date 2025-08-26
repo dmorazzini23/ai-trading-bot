@@ -1,9 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass
-import numpy as np
-import pandas as pd
 
-def _safe_series(x: pd.Series | None, size: int, fill: float=0.0) -> pd.Series:
+from ai_trading.utils.lazy_imports import load_pandas
+
+def _safe_series(x: 'pd.Series | None', size: int, fill: float = 0.0) -> 'pd.Series':
+    pd = load_pandas()
     if x is None:
         return pd.Series([fill] * size)
     x = pd.to_numeric(x, errors='coerce').fillna(fill)
@@ -11,7 +12,10 @@ def _safe_series(x: pd.Series | None, size: int, fill: float=0.0) -> pd.Series:
         return x.tail(size)
     return pd.concat([pd.Series([fill] * (size - len(x))), x], ignore_index=True)
 
-def rsi(close: pd.Series, length: int=14) -> pd.Series:
+def rsi(close: 'pd.Series', length: int = 14) -> 'pd.Series':
+    pd = load_pandas()
+    import numpy as np
+
     close = pd.to_numeric(close, errors='coerce')
     delta = close.diff()
     up = delta.clip(lower=0.0)
@@ -21,7 +25,9 @@ def rsi(close: pd.Series, length: int=14) -> pd.Series:
     rs = au / (ad + 1e-12)
     return 100.0 - 100.0 / (1.0 + rs)
 
-def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int=14) -> pd.Series:
+def atr(high: 'pd.Series', low: 'pd.Series', close: 'pd.Series', length: int = 14) -> 'pd.Series':
+    pd = load_pandas()
+
     high = pd.to_numeric(high, errors='coerce')
     low = pd.to_numeric(low, errors='coerce')
     close = pd.to_numeric(close, errors='coerce')
@@ -29,7 +35,10 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int=14) -> pd
     tr = pd.concat([(high - low).abs(), (high - pc).abs(), (low - pc).abs()], axis=1).max(axis=1)
     return tr.ewm(alpha=1 / length, adjust=False).mean()
 
-def vwap_bias(close, high, low, volume, length=20) -> pd.Series:
+def vwap_bias(close, high, low, volume, length: int = 20) -> 'pd.Series':
+    pd = load_pandas()
+    import numpy as np
+
     close = pd.to_numeric(close, errors='coerce')
     high = pd.to_numeric(high, errors='coerce')
     low = pd.to_numeric(low, errors='coerce')
@@ -41,7 +50,10 @@ def vwap_bias(close, high, low, volume, length=20) -> pd.Series:
     diff = (close - vwap) / (np.abs(vwap) + 1e-12)
     return np.tanh(diff)
 
-def bollinger_position(close: pd.Series, length: int=20, nstd: float=2.0) -> pd.Series:
+def bollinger_position(close: 'pd.Series', length: int = 20, nstd: float = 2.0) -> 'pd.Series':
+    pd = load_pandas()
+    import numpy as np
+
     close = pd.to_numeric(close, errors='coerce')
     ma = close.rolling(length, min_periods=1).mean()
     sd = close.rolling(length, min_periods=1).std().fillna(0.0)
@@ -51,7 +63,10 @@ def bollinger_position(close: pd.Series, length: int=20, nstd: float=2.0) -> pd.
     pos = (close - ma) / (rng + 1e-12)
     return pos.clip(-1.0, 1.0).fillna(0.0)
 
-def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+def obv(close: 'pd.Series', volume: 'pd.Series') -> 'pd.Series':
+    pd = load_pandas()
+    import numpy as np
+
     close = pd.to_numeric(close, errors='coerce')
     volume = pd.to_numeric(volume, errors='coerce').fillna(0.0)
     sign = np.sign(close.diff().fillna(0.0))
@@ -61,7 +76,10 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
 class FeatureConfig:
     window: int = 64
 
-def compute_features(df: pd.DataFrame, cfg: FeatureConfig | None=None) -> np.ndarray:
+def compute_features(df: 'pd.DataFrame', cfg: FeatureConfig | None = None) -> 'np.ndarray':
+    pd = load_pandas()
+    import numpy as np
+
     if cfg is None:
         cfg = FeatureConfig()
     w = cfg.window
@@ -77,7 +95,10 @@ def compute_features(df: pd.DataFrame, cfg: FeatureConfig | None=None) -> np.nda
     vwapb = vwap_bias(close, high, low, _safe_series(vol, len(df), 0.0)).fillna(0.0).tail(w)
     bbpos = bollinger_position(close).tail(w)
     obv_s = obv(close, _safe_series(vol, len(df), 0.0))
-    obv_s = ((obv_s - obv_s.rolling(w, min_periods=1).mean()) / (obv_s.rolling(w, min_periods=1).std() + 1e-08)).fillna(0.0).clip(-1.0, 1.0).tail(w)
+    obv_s = (
+        (obv_s - obv_s.rolling(w, min_periods=1).mean())
+        / (obv_s.rolling(w, min_periods=1).std() + 1e-08)
+    ).fillna(0.0).clip(-1.0, 1.0).tail(w)
     parts = [rets, rsi_s, atr_s, vwapb, bbpos, obv_s]
     vec = np.concatenate([p.to_numpy(dtype=np.float32) for p in parts], axis=0)
     return vec

@@ -1,18 +1,16 @@
-"""
-Feature drift monitoring and signal attribution module.
+"""Feature drift monitoring and signal attribution module."""
 
-Monitors feature drift using Population Stability Index (PSI),
-tracks per-signal attribution, and provides shadow mode for
-experimental model validation.
-"""
+from __future__ import annotations
+
 import json
-from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-import numpy as np
-import pandas as pd
+
+from ai_trading.logging import get_logger
+from ai_trading.utils.lazy_imports import load_pandas
+
 logger = get_logger(__name__)
 
 @dataclass
@@ -108,21 +106,25 @@ class DriftMonitor:
         except (ValueError, TypeError) as e:
             self.logger.error(f'Failed to save baseline stats: {e}')
 
-    def update_baseline(self, feature_data: pd.DataFrame) -> None:
-        """
-        Update baseline feature statistics.
+    def update_baseline(self, feature_data: 'pd.DataFrame') -> None:
+        """Update baseline feature statistics."""
 
-        Args:
-            feature_data: Baseline feature dataset
-        """
+        pd = load_pandas()
         for column in feature_data.columns:
             feature_values = feature_data[column].dropna()
             if len(feature_values) > 0:
-                self._baseline_stats[column] = {'mean': float(feature_values.mean()), 'std': float(feature_values.std()), 'min': float(feature_values.min()), 'max': float(feature_values.max()), 'count': len(feature_values), 'updated_at': datetime.now(UTC).isoformat()}
+                self._baseline_stats[column] = {
+                    'mean': float(feature_values.mean()),
+                    'std': float(feature_values.std()),
+                    'min': float(feature_values.min()),
+                    'max': float(feature_values.max()),
+                    'count': len(feature_values),
+                    'updated_at': datetime.now(UTC).isoformat(),
+                }
         self._save_baseline_stats()
         self.logger.info(f'Updated baseline for {len(feature_data.columns)} features')
 
-    def calculate_psi(self, baseline_data: np.ndarray, current_data: np.ndarray, n_bins: int=10) -> float:
+    def calculate_psi(self, baseline_data: 'np.ndarray', current_data: 'np.ndarray', n_bins: int=10) -> float:
         """
         Calculate Population Stability Index (PSI).
 
@@ -136,6 +138,8 @@ class DriftMonitor:
         """
         if len(baseline_data) == 0 or len(current_data) == 0:
             return 0.0
+        import numpy as np
+
         try:
             bins = np.quantile(baseline_data, np.linspace(0, 1, n_bins + 1))
             bins = np.unique(bins)
@@ -153,7 +157,7 @@ class DriftMonitor:
             self.logger.warning(f'PSI calculation failed: {e}')
             return 0.0
 
-    def monitor_feature_drift(self, current_features: pd.DataFrame) -> list[DriftMetrics]:
+    def monitor_feature_drift(self, current_features: 'pd.DataFrame') -> list[DriftMetrics]:
         """
         Monitor feature drift against baseline.
 
@@ -163,6 +167,9 @@ class DriftMonitor:
         Returns:
             List of drift metrics for each feature
         """
+        pd = load_pandas()
+        import numpy as np
+
         drift_metrics = []
         for feature_name in current_features.columns:
             if feature_name not in self._baseline_stats:
@@ -190,7 +197,14 @@ class DriftMonitor:
                 self.logger.warning(f'Feature drift detected for {feature_name}: PSI={psi_score:.4f} ({drift_level})')
         return drift_metrics
 
-    def calculate_signal_attribution(self, signal_name: str, signal_returns: pd.Series, benchmark_returns: pd.Series | None=None, period_start: datetime | None=None, period_end: datetime | None=None) -> SignalAttribution:
+    def calculate_signal_attribution(
+        self,
+        signal_name: str,
+        signal_returns: 'pd.Series',
+        benchmark_returns: 'pd.Series | None'=None,
+        period_start: datetime | None=None,
+        period_end: datetime | None=None,
+    ) -> SignalAttribution:
         """
         Calculate performance attribution for a signal.
 
@@ -204,12 +218,27 @@ class DriftMonitor:
         Returns:
             SignalAttribution metrics
         """
+        pd = load_pandas()
+        import numpy as np
+
         if period_start is None:
             period_start = signal_returns.index[0] if len(signal_returns) > 0 else datetime.now(UTC)
         if period_end is None:
             period_end = signal_returns.index[-1] if len(signal_returns) > 0 else datetime.now(UTC)
         if len(signal_returns) == 0:
-            return SignalAttribution(signal_name=signal_name, period_return=0.0, hit_ratio=0.0, sharpe_ratio=0.0, turnover=0.0, max_drawdown=0.0, trade_count=0, avg_hold_period=0.0, total_pnl=0.0, period_start=period_start, period_end=period_end)
+            return SignalAttribution(
+                signal_name=signal_name,
+                period_return=0.0,
+                hit_ratio=0.0,
+                sharpe_ratio=0.0,
+                turnover=0.0,
+                max_drawdown=0.0,
+                trade_count=0,
+                avg_hold_period=0.0,
+                total_pnl=0.0,
+                period_start=period_start,
+                period_end=period_end,
+            )
         total_return = (1 + signal_returns).prod() - 1
         hit_ratio = (signal_returns > 0).mean()
         if signal_returns.std() > 0:
@@ -263,9 +292,19 @@ class DriftMonitor:
         """Get summary of drift monitoring results."""
         if not drift_metrics:
             return {}
+        import numpy as np
+
         drift_levels = [m.drift_level for m in drift_metrics]
         psi_scores = [m.psi_score for m in drift_metrics]
-        return {'total_features': len(drift_metrics), 'high_drift_count': drift_levels.count('high'), 'medium_drift_count': drift_levels.count('medium'), 'low_drift_count': drift_levels.count('low'), 'avg_psi': np.mean(psi_scores), 'max_psi': np.max(psi_scores), 'features_with_alerts': [m.feature_name for m in drift_metrics if m.drift_level in ['medium', 'high']]}
+        return {
+            'total_features': len(drift_metrics),
+            'high_drift_count': drift_levels.count('high'),
+            'medium_drift_count': drift_levels.count('medium'),
+            'low_drift_count': drift_levels.count('low'),
+            'avg_psi': np.mean(psi_scores),
+            'max_psi': np.max(psi_scores),
+            'features_with_alerts': [m.feature_name for m in drift_metrics if m.drift_level in ['medium', 'high']],
+        }
 
 class ShadowMode:
     """
@@ -286,7 +325,13 @@ class ShadowMode:
         self.log_path.mkdir(parents=True, exist_ok=True)
         self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
 
-    def evaluate_shadow_model(self, model_name: str, shadow_predictions: dict[str, float], production_predictions: dict[str, float], market_data: dict[str, Any] | None=None) -> dict[str, Any]:
+    def evaluate_shadow_model(
+        self,
+        model_name: str,
+        shadow_predictions: dict[str, float],
+        production_predictions: dict[str, float],
+        market_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Evaluate shadow model against production model.
 
@@ -304,12 +349,32 @@ class ShadowMode:
         if not common_symbols:
             self.logger.warning('No common symbols between shadow and production predictions')
             return {}
+        import numpy as np
+
         differences = {}
         for symbol in common_symbols:
             diff = shadow_predictions[symbol] - production_predictions[symbol]
             differences[symbol] = diff
         diff_values = list(differences.values())
-        evaluation = {'model_name': model_name, 'timestamp': timestamp.isoformat(), 'num_predictions': len(common_symbols), 'avg_difference': np.mean(diff_values), 'max_difference': np.max(np.abs(diff_values)), 'std_difference': np.std(diff_values), 'correlation': np.corrcoef([shadow_predictions[s] for s in common_symbols], [production_predictions[s] for s in common_symbols])[0, 1] if len(common_symbols) > 1 else 0.0, 'shadow_predictions': shadow_predictions, 'production_predictions': production_predictions, 'differences': differences}
+        evaluation = {
+            'model_name': model_name,
+            'timestamp': timestamp.isoformat(),
+            'num_predictions': len(common_symbols),
+            'avg_difference': np.mean(diff_values),
+            'max_difference': np.max(np.abs(diff_values)),
+            'std_difference': np.std(diff_values),
+            'correlation': (
+                np.corrcoef(
+                    [shadow_predictions[s] for s in common_symbols],
+                    [production_predictions[s] for s in common_symbols],
+                )[0, 1]
+                if len(common_symbols) > 1
+                else 0.0
+            ),
+            'shadow_predictions': shadow_predictions,
+            'production_predictions': production_predictions,
+            'differences': differences,
+        }
         if market_data:
             evaluation['market_context'] = market_data
         self._log_shadow_evaluation(evaluation)
@@ -340,15 +405,8 @@ def get_shadow_mode() -> ShadowMode:
         _global_shadow_mode = ShadowMode()
     return _global_shadow_mode
 
-def monitor_drift(current_features: pd.DataFrame) -> list[DriftMetrics]:
-    """
-    Convenience function to monitor feature drift.
+def monitor_drift(current_features: 'pd.DataFrame') -> list[DriftMetrics]:
+    """Convenience function to monitor feature drift."""
 
-    Args:
-        current_features: Current feature dataset
-
-    Returns:
-        List of drift metrics
-    """
     monitor = get_drift_monitor()
     return monitor.monitor_feature_drift(current_features)
