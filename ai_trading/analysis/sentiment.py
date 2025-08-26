@@ -4,7 +4,6 @@ Sentiment analysis module for AI trading bot.
 This module provides sentiment analysis functionality using FinBERT and NewsAPI,
 extracted from bot_engine.py to enable standalone imports and testing.
 """
-import time
 import time as pytime
 from datetime import datetime
 from threading import Lock
@@ -17,12 +16,21 @@ from ai_trading.utils.timing import HTTP_TIMEOUT
 from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.utils.device import get_device, tensors_to_device  # AI-AGENT-REF: guard torch import
 
-if not get_env("PYTEST_RUNNING", "0", cast=bool):
-    _ENV_SNAPSHOT = validate_required_env()
-    logger.debug("ENV_VARS_MASKED", extra=_ENV_SNAPSHOT)
-
 SENTIMENT_API_KEY = get_env("SENTIMENT_API_KEY", "")
-DEVICE = get_device()
+DEVICE = None
+_SENTIMENT_INITIALIZED = False
+
+
+def _init_sentiment() -> None:
+    """Initialize sentiment utilities once."""
+    global _SENTIMENT_INITIALIZED, DEVICE
+    if _SENTIMENT_INITIALIZED:
+        return
+    if not get_env("PYTEST_RUNNING", "0", cast=bool):
+        validate_required_env()
+    DEVICE = get_device()
+    _SENTIMENT_INITIALIZED = True
+    logger.debug("SENTIMENT_INIT")
 _BS4 = None
 _TRANSFORMERS = None
 _SENT_DEPS_LOGGED: set[str] = set()
@@ -115,6 +123,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     Returns:
         Sentiment score between -1.0 and 1.0
     """
+    _init_sentiment()
     settings = get_settings()
     api_key = SENTIMENT_API_KEY or getattr(settings, 'sentiment_api_key', None) or get_news_api_key()
     if not api_key:
@@ -220,10 +229,13 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
         cached = _SENTIMENT_CACHE.get(ticker)
         if cached:
             cache_ts, sentiment_val = cached
-            if time.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
-                logger.info(f'SENTIMENT_RATE_LIMIT_USING_EXTENDED_CACHE | ticker={ticker} age_hours={int((time.time() - cache_ts) / 3600)}')
+            if pytime.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
+                logger.info(
+                    f'SENTIMENT_RATE_LIMIT_USING_EXTENDED_CACHE | ticker={ticker} '
+                    f'age_hours={int((pytime.time() - cache_ts) / 3600)}'
+                )
                 return sentiment_val
-        now_ts = time.time()
+        now_ts = pytime.time()
         _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
     logger.warning('SENTIMENT_RATE_LIMIT_ALL_FALLBACKS_EXHAUSTED', extra={'ticker': ticker, 'fallback_strategies_tried': len(fallback_sources), 'cache_ttl_hours': SENTIMENT_RATE_LIMITED_TTL_SEC / 3600, 'recommendation': 'Consider upgrading NewsAPI plan, adding alternative sentiment sources, or reviewing rate limits'})
     return 0.0
@@ -239,7 +251,7 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
         timeout_v = HTTP_TIMEOUT
         primary_resp = requests.get(primary_url_full, timeout=timeout_v)
         if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
-            time.sleep(0.5)
+            pytime.sleep(0.5)
             alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
             alt_resp = requests.get(alt_url, timeout=timeout_v)
             if alt_resp.status_code == 200:
@@ -266,7 +278,7 @@ def _try_cached_similar_symbols(ticker: str) -> float | None:
             cached = _SENTIMENT_CACHE.get(similar_symbol)
             if cached:
                 cache_ts, sentiment_val = cached
-                if time.time() - cache_ts < SENTIMENT_TTL_SEC:
+                if pytime.time() - cache_ts < SENTIMENT_TTL_SEC:
                     logger.info(f'SENTIMENT_SIMILAR_SYMBOL_PROXY | ticker={ticker} proxy={similar_symbol} score={sentiment_val}')
                     proxy_sentiment = sentiment_val * 0.8
                     return proxy_sentiment
@@ -281,7 +293,7 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
                 cached = _SENTIMENT_CACHE.get(sector_etf)
                 if cached:
                     cache_ts, sentiment_val = cached
-                    if time.time() - cache_ts < SENTIMENT_TTL_SEC * 2:
+                    if pytime.time() - cache_ts < SENTIMENT_TTL_SEC * 2:
                         logger.info(f'SENTIMENT_SECTOR_PROXY | ticker={ticker} sector_etf={sector_etf} score={sentiment_val}')
                         sector_sentiment = sentiment_val * 0.6
                         return sector_sentiment
@@ -293,7 +305,7 @@ def _get_cached_or_neutral_sentiment(ticker: str) -> float:
         cached = _SENTIMENT_CACHE.get(ticker)
         if cached:
             cache_ts, sentiment_val = cached
-            if time.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
+            if pytime.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
                 return sentiment_val
     return 0.0
 
@@ -302,6 +314,7 @@ def analyze_text(text: str, logger=logger) -> dict:
 
     Falls back to neutral if transformers are unavailable.
     """
+    _init_sentiment()
     deps = _load_transformers(logger)
     if deps is None:
         return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
@@ -321,6 +334,7 @@ def analyze_text(text: str, logger=logger) -> dict:
 
 def predict_text_sentiment(text: str) -> float:
     """Legacy float sentiment interface."""
+    _init_sentiment()
     res = analyze_text(text)
     if not res.get('available'):
         return 0.0
@@ -348,7 +362,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         for attempt in range(3):
             r = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT)
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
-                time.sleep(backoff)
+                pytime.sleep(backoff)
                 backoff *= 2
                 continue
             break
