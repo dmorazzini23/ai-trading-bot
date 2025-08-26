@@ -8,10 +8,10 @@ import pytest
 sys.path.insert(0, '/tmp')
 
 from tests.optdeps import require
+from ai_trading.utils.retry import retry, stop_after_attempt, wait_exponential
 
 # Skip when tenacity isn't installed (CI smoke with SKIP_INSTALL=1)
 require("tenacity")
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 pytestmark = pytest.mark.integration
 
