@@ -1418,16 +1418,19 @@ YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availabilit
 # Attempt to import Alpaca SDK classes; raise if unavailable to avoid silent
 # fallbacks that mask missing dependencies.
 try:  # pragma: no cover - import resolution
-    from alpaca_trade_api.rest import (
-        Quote,
-        StockLatestQuoteRequest,
-        OrderSide,
-        OrderStatus,
-        TimeInForce,
-        Order,
-        MarketOrderRequest,
-    )
-except ImportError as e:  # pragma: no cover - executed only when dep missing
+    from alpaca_trade_api import rest as _alpaca_rest
+    Quote = _alpaca_rest.Quote
+    OrderSide = _alpaca_rest.OrderSide
+    OrderStatus = _alpaca_rest.OrderStatus
+    TimeInForce = _alpaca_rest.TimeInForce
+    Order = _alpaca_rest.Order
+    MarketOrderRequest = _alpaca_rest.MarketOrderRequest
+    StockLatestQuoteRequest = getattr(_alpaca_rest, "StockLatestQuoteRequest", None)
+    if StockLatestQuoteRequest is None:
+        @dataclass
+        class StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
+            symbol_or_symbols: Any
+except Exception as e:  # pragma: no cover - executed only when dep missing
     import logging
 
     get_logger(__name__).critical(
