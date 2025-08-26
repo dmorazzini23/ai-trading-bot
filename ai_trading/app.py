@@ -47,12 +47,24 @@ def create_app():
     def healthz():
         """Minimal liveness probe."""
         from datetime import UTC, datetime
+        from ai_trading.config.management import validate_required_env
 
-        return jsonify(
-            ok=True,
-            ts=datetime.now(UTC).isoformat(),
-            service="ai-trading",
-        )
+        try:
+            validate_required_env()
+            ok = True
+            err = None
+        except Exception as e:  # noqa: BLE001
+            ok = False
+            err = str(e)
+
+        payload = {
+            "ok": ok,
+            "ts": datetime.now(UTC).isoformat(),
+            "service": "ai-trading",
+        }
+        if err:
+            payload["error"] = err
+        return jsonify(payload)
 
     @app.route('/metrics')
     def metrics():

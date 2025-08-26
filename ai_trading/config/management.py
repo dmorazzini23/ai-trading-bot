@@ -61,6 +61,9 @@ _MANDATORY_ENV_VARS: tuple[str, ...] = (
     "ALPACA_SECRET_KEY",
     "ALPACA_BASE_URL",
     "WEBHOOK_SECRET",
+    "CAPITAL_CAP",
+    "DOLLAR_RISK_LIMIT",
+    "MAX_POSITION_SIZE",
 )
 
 
