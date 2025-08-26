@@ -626,6 +626,29 @@ def _emit_once(logger: logging.Logger, key: str, level: int, msg: str) -> None:
 
 _RUNTIME_READY: bool = False
 
+# Guard to ensure configuration-loaded log only fires once per reload cycle
+_CONFIG_LOGGED: bool = False
+
+
+def _log_config_loaded() -> None:
+    """Log that configuration settings have been loaded."""
+    global _CONFIG_LOGGED
+    if not _CONFIG_LOGGED:
+        logger.info("Config settings loaded, validation deferred to runtime")
+        _CONFIG_LOGGED = True
+
+
+def _reset_config_log() -> None:
+    global _CONFIG_LOGGED
+    _CONFIG_LOGGED = False
+
+
+def _reload_env(path: str | None = None, *, override: bool = True) -> str | None:
+    """Reload environment variables and reset log guard."""
+    result = config.reload_env(path, override=override)
+    _reset_config_log()
+    return result
+
 
 def is_runtime_ready() -> bool:
     """Check if runtime context is fully initialized."""
@@ -871,12 +894,7 @@ try:
     # Only import config module, don't validate at import time
     from ai_trading.config.settings import get_settings
 
-    _emit_once(
-        logger,
-        "config_loaded",
-        logging.INFO,
-        "Config settings loaded, validation deferred to runtime",
-    )
+    _log_config_loaded()
 except (
     FileNotFoundError,
     PermissionError,
@@ -992,7 +1010,7 @@ import os
 
 
 # Refresh environment variables on startup for reliability
-config.reload_env()
+_reload_env()
 
 
 # BOT_MODE must be defined before any classes that reference it
@@ -1630,7 +1648,7 @@ def _require_cfg(value: str | None, name: str) -> str:
         while not value:
             logger.critical("Missing %s; retrying in 60s", name)
             time.sleep(60)
-            config.reload_env()
+            _reload_env()
             import importlib
 
             importlib.reload(config)
@@ -2788,7 +2806,7 @@ class BotMode:
             except Exception:
                 pass
         self.params = params
-        logger.info("Config settings loaded, validation deferred to runtime")
+        _log_config_loaded()
 
     def set_parameters(self) -> dict[str, float]:
         """Return trading parameters for the current mode.
@@ -11300,7 +11318,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
 def daily_reset(state: BotState) -> None:
     """Reset daily counters and in-memory slippage logs."""
     try:
-        config.reload_env()
+        _reload_env()
         _slippage_log.clear()
         state.loss_streak = 0
         logger.info("DAILY_STATE_RESET")
@@ -13266,7 +13284,7 @@ def main() -> None:
     logger_once.info(f"Config: ALPACA_BASE_URL={cfg.alpaca_base_url}")
     logger_once.info(f"Config: TRADING_MODE={cfg.trading_mode}")
 
-    config.reload_env()
+    _reload_env()
 
     # AI-AGENT-REF: Ensure only one bot instance is running
     try:
