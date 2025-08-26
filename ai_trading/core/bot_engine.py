@@ -11301,7 +11301,13 @@ def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
 def get_stock_bars_safe(api, symbol, timeframe):
     """Safely get stock bars with proper error handling."""
     try:
-        return api.get_stock_bars(symbol, timeframe)  # Ensure correct API method
+        get_stock_bars_fn = getattr(api, "get_stock_bars", None)
+        if callable(get_stock_bars_fn):
+            return get_stock_bars_fn(symbol, timeframe)
+        get_bars_fn = getattr(api, "get_bars", None)
+        if callable(get_bars_fn):
+            return get_bars_fn(symbol, timeframe)
+        raise AttributeError("API missing get_stock_bars/get_bars")
     except AttributeError as e:
         logger.error(f"Alpaca API Error: {e}")
         return None
