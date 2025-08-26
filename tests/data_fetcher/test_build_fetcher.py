@@ -63,6 +63,21 @@ def test_build_fetcher_fallback(monkeypatch):
     assert getattr(fetcher, "source") == "fallback"
 
 
+def test_build_fetcher_singleton(monkeypatch, caplog):
+    """Repeated calls should reuse a single DataFetcher instance."""
+    df._FETCHER_SINGLETON = None
+    alpaca_stub.ALPACA_AVAILABLE = False
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+    monkeypatch.setitem(sys.modules, "yfinance", None)
+    caplog.set_level("INFO")
+    first = df.build_fetcher({})
+    second = df.build_fetcher({})
+    assert first is second
+    msgs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("DATA_FETCHER_BUILD")]
+    assert len(msgs) == 1
+
+
 def test_build_fetcher_raises_and_engine_skips(monkeypatch, caplog):
     alpaca_stub.ALPACA_AVAILABLE = False
     monkeypatch.delenv("APCA_API_KEY_ID", raising=False)

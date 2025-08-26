@@ -125,8 +125,16 @@ class FinnhubAPIException(Exception):
         self.status_code = status_code
         super().__init__(str(status_code))
 
+
+# Singleton holder for DataFetcher instances
+_FETCHER_SINGLETON: Any | None = None
+
 def build_fetcher(config: Any):
     """Return a market data fetcher with safe fallbacks."""
+    global _FETCHER_SINGLETON
+    if _FETCHER_SINGLETON is not None:
+        return _FETCHER_SINGLETON
+
     from ai_trading.alpaca_api import ALPACA_AVAILABLE
     bot_mod = importlib.import_module('ai_trading.core.bot_engine')
     DataFetcher = bot_mod.DataFetcher
@@ -149,16 +157,19 @@ def build_fetcher(config: Any):
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'alpaca'})
         fetcher = DataFetcher()
         setattr(fetcher, 'source', 'alpaca')
+        _FETCHER_SINGLETON = fetcher
         return fetcher
     if yf is not None and requests is not None:
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'yfinance'})
         fetcher = DataFetcher()
         setattr(fetcher, 'source', 'yfinance')
+        _FETCHER_SINGLETON = fetcher
         return fetcher
     if requests is not None:
         logger.warning('DATA_FETCHER_BUILD_FALLBACK', extra={'source': 'yahoo-requests'})
         fetcher = DataFetcher()
         setattr(fetcher, 'source', 'fallback')
+        _FETCHER_SINGLETON = fetcher
         return fetcher
     logger.error('DATA_FETCHER_UNAVAILABLE', extra={'reason': 'no deps'})
     raise DataFetchError('No market data source available')

@@ -5611,7 +5611,8 @@ class LazyBotContext:
         self._context.execution_engine = _exec_engine
         data_fetcher = fetcher
         # One-time, mandatory model load
-        self._context.model = _load_required_model()
+        if getattr(self._context, "model", None) is None:
+            self._context.model = _load_required_model()
 
         # Propagate the capital_scaler to the risk engine so that position_size
         self._context.risk_engine.capital_scaler = self._context.capital_scaler
