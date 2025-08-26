@@ -74,7 +74,7 @@ target-version = ["py312"]
 target-version = "py312"
 line-length = 100
 src = ["ai_trading", "tests", "tools"]
-extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts", "tools/static_import_rewrites.txt"]
+extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifacts"]
 
 # Focus on safe mechanical families only.
 [tool.ruff.lint]

@@ -1,8 +1,0 @@
-# Redirect removed/legacy module names to the current surfaces
-^ai_trading\.position\.core(\b|$) => ai_trading.position
-^ai_trading\.runtime\.http_wrapped(\b|$) => ai_trading.utils.http
-^ai_trading\.monitoring\.performance_monitor(\b|$) => ai_trading.monitoring.monitoring
-
-# Intra-package renames that sometimes appear in older tests
-^ai_trading\.monitoring\.dashboard(\b|$) => ai_trading.monitoring.monitoring
-
