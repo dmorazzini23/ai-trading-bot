@@ -5,12 +5,15 @@ This module provides a simple long-only momentum strategy used in tests and
 example workflows.
 """
 from __future__ import annotations
+from typing import TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from ai_trading.logging import logger
 from ..core.enums import RiskLevel
 from ..core.interfaces import OrderSide
 from .base import BaseStrategy, StrategySignal
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pandas as pd
 
 class MomentumStrategy(BaseStrategy):
     """Momentum-based trading strategy."""
@@ -21,6 +24,7 @@ class MomentumStrategy(BaseStrategy):
         self.threshold = threshold
 
     def generate_signals(self, market_data: dict) -> list[StrategySignal]:
+        import pandas as pd  # heavy import; keep local
         """
         Generate momentum-based long-only signals using price changes over a
         lookback period. Accepts market_data with keys:

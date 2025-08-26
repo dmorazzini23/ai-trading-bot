@@ -1,8 +1,11 @@
 from __future__ import annotations
-import pandas as pd
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pandas as pd
 CANON = {'open': {'open', 'o', 'Open', 'OPEN'}, 'high': {'high', 'h', 'High', 'HIGH'}, 'low': {'low', 'l', 'Low', 'LOW'}, 'close': {'close', 'c', 'Close', 'CLOSE', 'adj_close', 'Adj Close'}, 'volume': {'volume', 'v', 'Volume', 'VOL', 'Vol'}}
 
-def standardize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+def standardize_ohlcv(df: 'pd.DataFrame') -> 'pd.DataFrame':
     """
     Return a copy with canonical lowercase ['open','high','low','close','volume'] where possible.
     Unknown columns are preserved. Missing OHLCV fields are left absent (caller must handle).

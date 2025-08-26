@@ -5,13 +5,15 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
-import pandas as pd
+from typing import Any, TYPE_CHECKING
 from ai_trading.core.bot_engine import get_risk_engine
 risk_engine_instance = get_risk_engine()
 from ai_trading import config, signals
 from ai_trading.core import bot_engine
 from ai_trading.logging import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pandas as pd
 logger = get_logger(__name__)
 
 @dataclass
@@ -117,8 +119,8 @@ class DefaultExecutionModel(ExecutionModel):
 
 @dataclass
 class BacktestResult:
-    trades: pd.DataFrame
-    equity_curve: pd.DataFrame
+    trades: 'pd.DataFrame'
+    equity_curve: 'pd.DataFrame'
     net_pnl: float
     cagr: float
     max_drawdown: float
@@ -129,7 +131,7 @@ class BacktestResult:
 class BacktestEngine:
     """Historical simulator executing the live trading cycle."""
 
-    def __init__(self, data: dict[str, pd.DataFrame], execution_model: ExecutionModel, initial_cash: float=100000.0) -> None:
+    def __init__(self, data: dict[str, 'pd.DataFrame'], execution_model: ExecutionModel, initial_cash: float=100000.0) -> None:
         config.reload_env()
         self.data = data
         self.execution_model = execution_model
@@ -146,14 +148,14 @@ class BacktestEngine:
         self.trades = []
         self.equity_curve = []
 
-    def run_single_symbol(self, df: pd.DataFrame, risk: Any) -> BacktestResult:
+    def run_single_symbol(self, df: 'pd.DataFrame', risk: Any) -> BacktestResult:
         """Run the backtest for ``df`` using the live bot cycle."""
         self.data = {'symbol': df}
         self.positions = {'symbol': 0}
         self.reset()
         return self.run(['symbol'])
 
-    def _apply_fill(self, fill: Fill, ts: pd.Timestamp) -> None:
+    def _apply_fill(self, fill: Fill, ts: 'pd.Timestamp') -> None:
         if hasattr(bot_engine, 'apply_fill'):
             try:
                 bot_engine.apply_fill(fill)
@@ -168,7 +170,7 @@ class BacktestEngine:
         self.positions[fill.order.symbol] += qty
         self.trades.append(fill)
 
-    def _snapshot(self, ts: pd.Timestamp) -> None:
+    def _snapshot(self, ts: 'pd.Timestamp') -> None:
         pos_val = 0.0
         for sym, qty in self.positions.items():
             df = self.data.get(sym)
@@ -178,6 +180,7 @@ class BacktestEngine:
         self.equity_curve.append({'timestamp': ts, 'cash': self.cash, 'positions': pos_val, 'total_equity': total})
 
     def run(self, symbols: list[str]) -> BacktestResult:
+        import pandas as pd  # heavy import; keep local
         combined = sorted(set().union(*(df.index for df in self.data.values())))
         for ts in combined:
             for sym in symbols:
@@ -205,7 +208,7 @@ class BacktestEngine:
         stats = self._stats(eq_df, trades_df)
         return BacktestResult(trades_df, eq_df, **stats)
 
-    def _stats(self, equity: pd.DataFrame, trades: pd.DataFrame) -> dict[str, float]:
+    def _stats(self, equity: 'pd.DataFrame', trades: 'pd.DataFrame') -> dict[str, float]:
         if equity.empty:
             return dict.fromkeys(['net_pnl', 'cagr', 'max_drawdown', 'sharpe', 'calmar', 'turnover'], 0.0)
         net_pnl = float(equity['total_equity'].iloc[-1] - equity['total_equity'].iloc[0])
@@ -230,6 +233,7 @@ def main(argv: list[str] | None=None) -> None:
     parser.add_argument('--slippage-pips', type=float, default=0.0, help='Slippage in pips.')
     parser.add_argument('--latency-bars', type=int, default=0, help='Execution latency in bars.')
     args = parser.parse_args(argv)
+    import pandas as pd  # heavy import; keep local
     engine = BacktestEngine({}, DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars))
     get_risk_engine()
     results: dict[str, BacktestResult] = {}

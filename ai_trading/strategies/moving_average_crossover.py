@@ -1,8 +1,11 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
-import pandas as pd
 from .base import StrategySignal
+
+if TYPE_CHECKING:  # pragma: no cover - heavy import for typing only
+    import pandas as pd
 logger = get_logger(__name__)
 
 @dataclass
@@ -17,7 +20,8 @@ class MovingAverageCrossoverStrategy:
     long_window: int = 50
     min_history: int = 55
 
-    def _latest_cross(self, short: pd.Series, long: pd.Series) -> str | None:
+    def _latest_cross(self, short: 'pd.Series', long: 'pd.Series') -> str | None:
+        import pandas as pd  # heavy import; keep local
         if len(short) < 2 or len(long) < 2:
             return None
         s_prev, s_now = (short.iloc[-2], short.iloc[-1])
