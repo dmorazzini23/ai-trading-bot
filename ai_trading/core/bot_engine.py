@@ -79,7 +79,20 @@ def _alpaca_available() -> bool:
     """Return ``True`` if the alpaca_trade_api SDK is importable."""
 
     return ALPACA_AVAILABLE
-from ai_trading.data.bars import (_ensure_df, safe_get_stock_bars, _create_empty_bars_dataframe, StockBarsRequest, TimeFrame, TimeFrameUnit, _resample_minutes_to_daily)
+from ai_trading.data.bars import (
+    _ensure_df as _bars_ensure_df,
+    safe_get_stock_bars as _bars_safe_get_stock_bars,
+    _create_empty_bars_dataframe as _bars_create_empty_bars_dataframe,
+    StockBarsRequest,
+    TimeFrame,
+    TimeFrameUnit,
+    _resample_minutes_to_daily as _bars_resample_minutes_to_daily,
+)
+from ai_trading.core.runtime import (
+    BotRuntime as _BotRuntime,
+    build_runtime as _runtime_build_runtime,
+    enhance_runtime_with_context as _runtime_enhance_runtime_with_context,
+)
 
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
     warnings.filterwarnings("default", category=DeprecationWarning)
@@ -122,6 +135,45 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     FinnhubAPIException = Exception  # type: ignore
     FINNHUB_AVAILABLE = False
+
+# Backwards-compatibility shims for relocated helpers
+def ensure_df(obj):
+    """Backward-compatibility shim for ai_trading.data.bars._ensure_df."""
+    return _bars_ensure_df(obj)
+
+
+def create_empty_bars_dataframe():
+    """Backward-compatibility shim for ai_trading.data.bars._create_empty_bars_dataframe."""
+    return _bars_create_empty_bars_dataframe()
+
+
+def resample_minutes_to_daily(df):
+    """Backward-compatibility shim for ai_trading.data.bars._resample_minutes_to_daily."""
+    return _bars_resample_minutes_to_daily(df)
+
+
+def safe_get_stock_bars(*args, **kwargs):
+    """Backward-compatibility shim for ai_trading.data.bars.safe_get_stock_bars."""
+    return _bars_safe_get_stock_bars(*args, **kwargs)
+
+
+BotRuntime = _BotRuntime
+BotRuntime.__doc__ = "Backward-compatibility shim for ai_trading.core.runtime.BotRuntime."
+
+
+def build_runtime(*args, **kwargs):
+    """Backward-compatibility shim for ai_trading.core.runtime.build_runtime."""
+    return _runtime_build_runtime(*args, **kwargs)
+
+
+def enhance_runtime_with_context(*args, **kwargs):
+    """Backward-compatibility shim for ai_trading.core.runtime.enhance_runtime_with_context."""
+    return _runtime_enhance_runtime_with_context(*args, **kwargs)
+
+
+StockBarsRequest.__doc__ = "Backward-compatibility shim for ai_trading.data.bars.StockBarsRequest."
+TimeFrame.__doc__ = "Backward-compatibility shim for ai_trading.data.bars.TimeFrame."
+TimeFrameUnit.__doc__ = "Backward-compatibility shim for ai_trading.data.bars.TimeFrameUnit."
 
 
 def _rf_class():
@@ -236,6 +288,17 @@ __all__ = [
     "DataFetchError",
     "MockSignal",
     "MockContext",
+    # Backwards-compatibility shims
+    "StockBarsRequest",
+    "TimeFrame",
+    "TimeFrameUnit",
+    "safe_get_stock_bars",
+    "ensure_df",
+    "create_empty_bars_dataframe",
+    "resample_minutes_to_daily",
+    "BotRuntime",
+    "build_runtime",
+    "enhance_runtime_with_context",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
