@@ -166,6 +166,7 @@ All Python packages are specified in `requirements.txt`, including:
 - **pandas-market-calendars**: Exchange session calendars
 - **scikit-learn**: Machine learning algorithms
 - **alpaca-trade-api**: Broker integration
+- **tenacity** *(optional)*: Robust retry helpers; falls back to a lightweight internal version if absent
 
 **Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
 

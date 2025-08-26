@@ -1370,75 +1370,15 @@ def sleep_and_retry(func):
         return _sr(func)(*a, **k)
 
     return wrapped
-
-
-def retry(*dargs, **dkwargs):
-    def decorator(func):
-        def wrapped(*a, **k):
-            from tenacity import retry as _retry
-
-            return _retry(*dargs, **dkwargs)(func)(*a, **k)
-
-        return wrapped
-
-    return decorator
-
-
-def stop_after_attempt(*args, **kwargs):
-    from tenacity import stop_after_attempt as _saa
-
-    return _saa(*args, **kwargs)
-
-
-def wait_exponential(*args, **kwargs):
-    from tenacity import wait_exponential as _we
-
-    return _we(*args, **kwargs)
-
-
-def wait_random(*args, **kwargs):
-    from tenacity import wait_random as _wr
-
-    return _wr(*args, **kwargs)
-
-
-def retry_if_exception_type(*args, **kwargs):
-    from tenacity import retry_if_exception_type as _riet
-
-    return _riet(*args, **kwargs)
-
-
-# Tenacity retry error import with validation
-try:
-    # Import RetryError from tenacity.  In some test environments Tenacity may be
-    # monkeypatched so that RetryError is not actually an exception class.  To
-    # avoid ``TypeError: catching classes that do not inherit from BaseException``
-    # when using ``except RetryError``, verify that the imported symbol is a
-    # proper exception type.  Fall back to a simple Exception subclass when
-    # Tenacity is unavailable or invalid.
-    from tenacity import RetryError as _TenacityRetryError  # type: ignore[assignment]
-
-    if not isinstance(_TenacityRetryError, type) or not issubclass(
-        _TenacityRetryError, BaseException
-    ):
-        raise TypeError("Invalid RetryError type")
-    RetryError = _TenacityRetryError  # type: ignore[assignment]
-except (
-    FileNotFoundError,
-    PermissionError,
-    IsADirectoryError,
-    JSONDecodeError,
-    ValueError,
-    KeyError,
-    TypeError,
-    OSError,
-):  # AI-AGENT-REF: narrow exception
-
-    class RetryError(
-        Exception
-    ):  # pragma: no cover - fallback when tenacity.RetryError is invalid
-        """Fallback RetryError used when Tenacity's RetryError is unavailable or not an exception."""
-
+# Retry helpers (optional Tenacity)
+from ai_trading.utils.retry import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+    RetryError,
+)
 
 # AI-AGENT-REF: lazy ichimoku setup to avoid pandas_ta import in tests
 if not os.getenv("PYTEST_RUNNING"):

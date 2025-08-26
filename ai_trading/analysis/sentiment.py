@@ -8,7 +8,13 @@ import time as pytime
 from datetime import datetime
 from threading import Lock
 import requests
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential, wait_random
+from ai_trading.utils.retry import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 from ai_trading.logging import logger
 from ai_trading.settings import get_news_api_key
 from ai_trading.config import get_settings
