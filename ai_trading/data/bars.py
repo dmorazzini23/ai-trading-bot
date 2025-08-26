@@ -84,6 +84,26 @@ def _is_minute_timeframe(tf) -> bool:
     except (ValueError, TypeError):
         return False
 
+
+def _client_fetch_stock_bars(client: Any, request: StockBarsRequest):
+    """Call the appropriate Alpaca SDK method to fetch bars."""
+    get_stock_bars_fn = getattr(client, "get_stock_bars", None)
+    if callable(get_stock_bars_fn):
+        return get_stock_bars_fn(request)
+    get_bars_fn = getattr(client, "get_bars", None)
+    if not callable(get_bars_fn):
+        raise AttributeError("Alpaca client missing get_stock_bars/get_bars")
+    params = {}
+    if getattr(request, "start", None) is not None:
+        params["start"] = request.start
+    if getattr(request, "end", None) is not None:
+        params["end"] = request.end
+    if getattr(request, "limit", None) is not None:
+        params["limit"] = request.limit
+    if getattr(request, "feed", None) is not None:
+        params["feed"] = request.feed
+    return get_bars_fn(request.symbol_or_symbols, request.timeframe, **params)
+
 def safe_get_stock_bars(client: Any, request: StockBarsRequest, symbol: str, context: str='') -> pd.DataFrame:
     """
     Safely fetch stock bars via Alpaca client and always return a DataFrame.
@@ -96,15 +116,15 @@ def safe_get_stock_bars(client: Any, request: StockBarsRequest, symbol: str, con
     start_dt = ensure_utc_datetime(getattr(request, 'start', None) or prev_open, default=prev_open, clamp_to='bod', allow_callables=False)
     try:
         try:
-            response = client.get_stock_bars(request)
+            response = _client_fetch_stock_bars(client, request)
         except (ValueError, TypeError) as e:
             status = getattr(e, 'status_code', None)
             if status in (401, 403):
                 _log.error('ALPACA_BARS_UNAUTHORIZED', extra={'symbol': symbol, 'context': context, 'feed': _canon_feed(getattr(request, 'feed', None))})
                 raise
             raise
-        df = getattr(response, 'df', None)
-        if df is None or df.empty:
+        df = _ensure_df(getattr(response, 'df', response))
+        if df.empty:
             _log.warning('ALPACA_BARS_EMPTY', extra={'symbol': symbol, 'context': context})
             tf_str = _canon_tf(getattr(request, 'timeframe', ''))
             feed_str = _canon_feed(getattr(request, 'feed', None))
@@ -121,8 +141,8 @@ def safe_get_stock_bars(client: Any, request: StockBarsRequest, symbol: str, con
                 if df.empty:
                     try:
                         alt_req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=2, feed=feed_str)
-                        alt_resp = client.get_stock_bars(alt_req)
-                        df2 = getattr(alt_resp, 'df', pd.DataFrame())
+                        alt_resp = _client_fetch_stock_bars(client, alt_req)
+                        df2 = _ensure_df(getattr(alt_resp, 'df', alt_resp))
                         if isinstance(df2.index, pd.MultiIndex):
                             df2 = df2.xs(symbol, level=0, drop_level=False).droplevel(0)
                         df2 = df2.sort_index()
