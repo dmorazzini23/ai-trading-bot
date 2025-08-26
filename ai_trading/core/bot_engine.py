@@ -3590,11 +3590,42 @@ def compute_spy_vol_stats(runtime) -> None:
         if _VOL_STATS["last_update"] == today:
             return
 
-    try:
-        df = runtime.data_fetcher.get_daily_df(runtime, REGIME_SYMBOLS[0])
-    except DataFetchError as e:
-        logger.error("SPY_VOL_DATA_UNAVAILABLE", extra={"cause": str(e)})
-        raise
+    symbol = REGIME_SYMBOLS[0]
+    max_attempts = 3
+    backoff = 1
+    df = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            df = runtime.data_fetcher.get_daily_df(runtime, symbol)
+            break
+        except DataFetchError as e:
+            logger.warning(
+                "SPY_VOL_FETCH_RETRY",
+                extra={"attempt": attempt, "symbol": symbol, "cause": str(e)},
+            )
+            if attempt == max_attempts:
+                logger.error(
+                    "SPY_VOL_DATA_UNAVAILABLE",
+                    extra={"symbol": symbol, "attempts": attempt},
+                )
+                halt_mgr = getattr(runtime, "halt_manager", None)
+                if halt_mgr is not None:
+                    try:
+                        halt_mgr.manual_halt_trading("volatility data unavailable")
+                    except Exception as hm_exc:  # noqa: BLE001
+                        logger.error(
+                            "HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)}
+                        )
+                with vol_lock:
+                    if _VOL_STATS["mean"] is None:
+                        _VOL_STATS["mean"] = 0.0
+                    if _VOL_STATS["std"] is None:
+                        _VOL_STATS["std"] = 0.0
+                    if _VOL_STATS["last"] is None:
+                        _VOL_STATS["last"] = 0.0
+                return
+            time.sleep(backoff)
+            backoff *= 2
     if df is None or len(df) < 252 + ATR_LENGTH:
         raise DataFetchError("insufficient data for SPY volatility stats")
 
@@ -3788,6 +3819,16 @@ class DataFetcher:
         end_ts = datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC) + timedelta(days=1)
         start_ts = end_ts - timedelta(days=150)
 
+        logger.info(
+            "DAILY_FETCH_REQUEST",
+            extra={
+                "symbol": symbol,
+                "timeframe": "1Day",
+                "start": start_ts.isoformat(),
+                "end": end_ts.isoformat(),
+            },
+        )
+
         with cache_lock:
             if symbol in self._daily_cache:
                 if daily_cache_hit:
@@ -3805,7 +3846,19 @@ class DataFetcher:
                     ) as exc:  # AI-AGENT-REF: narrow exception
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
-                return self._daily_cache[symbol]
+                cached = self._daily_cache[symbol]
+                logger.info(
+                    "DAILY_FETCH_RESULT",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": "1Day",
+                        "start": start_ts.isoformat(),
+                        "end": end_ts.isoformat(),
+                        "rows": 0 if cached is None else len(cached),
+                        "cache": True,
+                    },
+                )
+                return cached
 
         api_key = get_settings().alpaca_api_key
         api_secret = get_alpaca_secret_key_plain()
@@ -4051,6 +4104,17 @@ class DataFetcher:
 
         with cache_lock:
             self._daily_cache[symbol] = df
+        logger.info(
+            "DAILY_FETCH_RESULT",
+            extra={
+                "symbol": symbol,
+                "timeframe": "1Day",
+                "start": start_ts.isoformat(),
+                "end": end_ts.isoformat(),
+                "rows": 0 if df is None else len(df),
+                "cache": False,
+            },
+        )
         return df
 
     def get_minute_df(

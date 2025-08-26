@@ -28,10 +28,17 @@ def test_get_daily_df_empty_bars_raises(monkeypatch):
         fetcher.get_daily_df(ctx, "AAPL")
 
 
-def test_compute_spy_vol_stats_propagates(monkeypatch):
+def test_compute_spy_vol_stats_handles_failure(monkeypatch):
     runtime = SimpleNamespace()
     runtime.data_fetcher = SimpleNamespace(
         get_daily_df=lambda *a, **k: (_ for _ in ()).throw(bot_engine.DataFetchError("boom"))
     )
-    with pytest.raises(bot_engine.DataFetchError):
-        bot_engine.compute_spy_vol_stats(runtime)
+    calls: list[str] = []
+    runtime.halt_manager = SimpleNamespace(
+        manual_halt_trading=lambda reason: calls.append(reason)
+    )
+    bot_engine._VOL_STATS.update({"mean": None, "std": None, "last": None, "last_update": None})
+    bot_engine.compute_spy_vol_stats(runtime)
+    assert bot_engine._VOL_STATS["mean"] == 0.0
+    assert bot_engine._VOL_STATS["std"] == 0.0
+    assert calls, "halt manager should be invoked"
