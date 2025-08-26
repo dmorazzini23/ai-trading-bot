@@ -59,7 +59,7 @@ except ImportError:
 requests = _requests
 try:
     from requests.exceptions import ConnectionError, HTTPError, RequestException, Timeout
-except (ValueError, TypeError):
+except ImportError:  # requests is optional
     RequestException = Timeout = ConnectionError = HTTPError = Exception
 
 def _format_fallback_payload_df(tf_str: str, feed_str: str, start_dt: _dt.datetime, end_dt: _dt.datetime) -> list[str]:
