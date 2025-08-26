@@ -23,6 +23,13 @@ from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
 
+# Emit deprecation warning at import time
+warnings.warn(
+    "data_fetcher.py is deprecated",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 # Optional dependency placeholders
 pd: Any | None = None
 
