@@ -8,9 +8,6 @@ from zoneinfo import ZoneInfo
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas
 
-# Lazy pandas proxy
-pd = load_pandas()
-
 try:
     from ai_trading.config import get_settings
 except Exception:
@@ -25,6 +22,39 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
+
+# Optional dependency placeholders
+pd: Any | None = None
+
+
+class _RequestsModulePlaceholder:
+    get = None
+
+
+requests: Any = _RequestsModulePlaceholder()
+
+
+class _YFinancePlaceholder:
+    download = None
+
+
+yf: Any = _YFinancePlaceholder()
+
+
+class RequestException(Exception):
+    """Fallback request exception when ``requests`` is missing."""
+
+
+class Timeout(RequestException):
+    pass
+
+
+class ConnectionError(RequestException):
+    pass
+
+
+class HTTPError(RequestException):
+    pass
 
 
 def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
@@ -41,26 +71,52 @@ def _to_timeframe_str(tf: object) -> str:
 
 def _to_feed_str(feed: object) -> str:
     return _canon_feed(feed)
-try:
-    # Avoid relying on package-level __getattr__ for submodule resolution.
-    # Import explicitly via importlib to prevent recursive attribute lookups
-    # if utils/__init__ lazy loader misbehaves in the future.
-    from importlib import import_module
 
-    _http = import_module("ai_trading.utils.http")
-    logger.debug('HTTP_INIT_PRIMARY', extra={'transport': 'ai_trading.utils.http'})
-except ImportError:
-    logger.debug('HTTP_INIT_FALLBACK', extra={'transport': 'requests'})
-    _http = None
-try:
-    import requests as _requests
-except ImportError:
-    _requests = None
-requests = _requests
-try:
-    from requests.exceptions import ConnectionError, HTTPError, RequestException, Timeout
-except ImportError:  # requests is optional
-    RequestException = Timeout = ConnectionError = HTTPError = Exception
+
+class DataFetchError(Exception):
+    """Error raised when market data retrieval fails."""  # AI-AGENT-REF: stable public symbol
+
+
+# Backwards compat alias
+DataFetchException = DataFetchError
+
+
+class FinnhubAPIException(Exception):
+    """Minimal Finnhub API error for tests."""
+
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        super().__init__(str(status_code))
+
+
+def ensure_datetime(value: Any) -> _dt.datetime:
+    """Coerce various datetime inputs into timezone-aware UTC datetime.
+
+    Rules for market-data windows:
+    - If ``value`` is callable, call it (no args) and re-normalize.
+    - If ``value`` is a *naive* ``datetime``, interpret it as **America/New_York**
+      (exchange time) before converting to UTC.
+    - Otherwise, delegate to ``ensure_utc_datetime``.
+    """
+    pd_mod = _ensure_pandas()
+    out_of_bounds = ()
+    if pd_mod is not None:
+        try:
+            out_of_bounds = (pd_mod.errors.OutOfBoundsDatetime,)
+        except Exception:
+            out_of_bounds = ()
+    if callable(value):
+        try:
+            value = value()
+        except (*out_of_bounds, TypeError, ValueError, AttributeError) as e:  # type: ignore[misc]
+            raise TypeError(f'Invalid datetime input: {e}') from e
+    if isinstance(value, _dt.datetime) and value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo('America/New_York'))
+    try:
+        return ensure_utc_datetime(value, allow_callables=False)
+    except (*out_of_bounds, TypeError, ValueError, AttributeError) as e:  # type: ignore[misc]
+        raise TypeError(f'Invalid datetime input: {e}') from e
+
 
 def _format_fallback_payload_df(tf_str: str, feed_str: str, start_dt: _dt.datetime, end_dt: _dt.datetime) -> list[str]:
     """UTC ISO payload for consistent logging."""
@@ -118,89 +174,6 @@ def get_last_available_bar(symbol: str) -> pd.DataFrame:
     """Placeholder; tests monkeypatch this to return a last available daily bar."""
     raise NotImplementedError('Tests should monkeypatch get_last_available_bar')
 
-class DataFetchError(Exception):
-    """Error raised when market data retrieval fails."""  # AI-AGENT-REF: stable public symbol
-
-# Backwards compat alias
-DataFetchException = DataFetchError
-
-class FinnhubAPIException(Exception):
-    """Minimal Finnhub API error for tests."""
-
-    def __init__(self, status_code: int):
-        self.status_code = status_code
-        super().__init__(str(status_code))
-
-
-# Singleton holder for DataFetcher instances
-_FETCHER_SINGLETON: Any | None = None
-
-def build_fetcher(config: Any):
-    """Return a market data fetcher with safe fallbacks."""
-    global _FETCHER_SINGLETON
-    if _FETCHER_SINGLETON is not None:
-        return _FETCHER_SINGLETON
-
-    from ai_trading.alpaca_api import ALPACA_AVAILABLE
-    bot_mod = importlib.import_module('ai_trading.core.bot_engine')
-    DataFetcher = bot_mod.DataFetcher
-
-    try:  # optional yfinance import
-        import yfinance as yf  # type: ignore
-        try:
-            if hasattr(yf, 'set_tz_cache_location'):
-                os.makedirs('/tmp/py-yfinance', exist_ok=True)
-                yf.set_tz_cache_location('/tmp/py-yfinance')
-        except OSError:
-            pass
-    except ImportError:  # pragma: no cover - optional dependency
-        yf = None  # type: ignore
-        logger.info('YFINANCE_MISSING', extra={'hint': 'pip install yfinance'})
-
-    alpaca_ok = bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'))
-    has_keys = alpaca_ok
-    if ALPACA_AVAILABLE and has_keys:
-        logger.info('DATA_FETCHER_BUILD', extra={'source': 'alpaca'})
-        fetcher = DataFetcher()
-        setattr(fetcher, 'source', 'alpaca')
-        _FETCHER_SINGLETON = fetcher
-        return fetcher
-    if yf is not None and requests is not None:
-        logger.info('DATA_FETCHER_BUILD', extra={'source': 'yfinance'})
-        fetcher = DataFetcher()
-        setattr(fetcher, 'source', 'yfinance')
-        _FETCHER_SINGLETON = fetcher
-        return fetcher
-    if requests is not None:
-        logger.warning('DATA_FETCHER_BUILD_FALLBACK', extra={'source': 'yahoo-requests'})
-        fetcher = DataFetcher()
-        setattr(fetcher, 'source', 'fallback')
-        _FETCHER_SINGLETON = fetcher
-        return fetcher
-    logger.error('DATA_FETCHER_UNAVAILABLE', extra={'reason': 'no deps'})
-    raise DataFetchError('No market data source available')
-
-def ensure_datetime(value: Any) -> _dt.datetime:
-    """Coerce various datetime inputs into timezone-aware UTC datetime.
-
-    Rules for market-data windows:
-    - If ``value`` is callable, call it (no args) and re-normalize.
-    - If ``value`` is a *naive* ``datetime``, interpret it as **America/New_York**
-      (exchange time) before converting to UTC.
-    - Otherwise, delegate to ``ensure_utc_datetime``.
-    """
-    if callable(value):
-        try:
-            value = value()
-        except (TypeError, ValueError, AttributeError, pd.errors.OutOfBoundsDatetime) as e:
-            raise TypeError(f'Invalid datetime input: {e}') from e
-    if isinstance(value, _dt.datetime) and value.tzinfo is None:
-        value = value.replace(tzinfo=ZoneInfo('America/New_York'))
-    try:
-        return ensure_utc_datetime(value, allow_callables=False)
-    except (TypeError, ValueError, AttributeError, pd.errors.OutOfBoundsDatetime) as e:
-        raise TypeError(f'Invalid datetime input: {e}') from e
-
 def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
     """Derive [start, end] when callers omit them."""
     now = _dt.datetime.now(tz=UTC)
@@ -221,6 +194,9 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None=None) -> p
     - ensure 'close' exists (fallback to 'adj_close')
     - de-duplicate & sort index, convert index to UTC and tz-naive
     """
+    pd = _ensure_pandas()
+    if pd is None:
+        return []  # type: ignore[return-value]
     if isinstance(df.columns, pd.MultiIndex):
         try:
             lvl0 = set(map(str, df.columns.get_level_values(0)))
@@ -245,19 +221,13 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None=None) -> p
 
 def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Return a DataFrame with a tz-aware 'timestamp' column between start and end."""
+    pd = _ensure_pandas()
+    yf = _ensure_yfinance()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    try:  # local import to avoid hard dependency
-        import yfinance as yf  # type: ignore
-        try:
-            if hasattr(yf, 'set_tz_cache_location'):
-                os.makedirs('/tmp/py-yfinance', exist_ok=True)
-                yf.set_tz_cache_location('/tmp/py-yfinance')
-        except OSError:
-            pass
-    except ImportError:  # pragma: no cover - optional dependency
-        yf = None  # type: ignore
-    if yf is None:
+    if pd is None:
+        return []  # type: ignore[return-value]
+    if getattr(yf, "download", None) is None:
         idx = pd.DatetimeIndex([], tz='UTC', name='timestamp')
         cols = ['open', 'high', 'low', 'close', 'volume']
         return pd.DataFrame(columns=cols, index=idx).reset_index()
@@ -288,12 +258,116 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
 
 def _post_process(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize OHLCV DataFrame or return empty."""
+    pd = _ensure_pandas()
+    if pd is None:
+        return []  # type: ignore[return-value]
     if df is None or getattr(df, 'empty', True):
         return pd.DataFrame()
     return _flatten_and_normalize_ohlcv(df)
 
+
+def _ensure_http_client():
+    try:
+        from importlib import import_module
+
+        client = import_module("ai_trading.utils.http")
+        logger.debug('HTTP_INIT_PRIMARY', extra={'transport': 'ai_trading.utils.http'})
+        return client
+    except ImportError:  # pragma: no cover - optional dependency
+        logger.debug('HTTP_INIT_FALLBACK', extra={'transport': 'requests'})
+        return None
+
+
+def _ensure_pandas():
+    global pd
+    if pd is None:
+        try:
+            pd = load_pandas()
+        except Exception:  # pragma: no cover - optional dependency
+            pd = None
+    return pd
+
+
+def _ensure_yfinance():
+    global yf
+    if getattr(yf, "download", None) is None:
+        try:
+            import yfinance as _yf  # type: ignore
+            try:
+                if hasattr(_yf, 'set_tz_cache_location'):
+                    os.makedirs('/tmp/py-yfinance', exist_ok=True)
+                    _yf.set_tz_cache_location('/tmp/py-yfinance')
+            except OSError:
+                pass
+            yf = _yf
+        except ImportError:  # pragma: no cover - optional dependency
+            yf = _YFinancePlaceholder()
+            logger.info('YFINANCE_MISSING', extra={'hint': 'pip install yfinance'})
+    return yf
+
+
+def _ensure_requests():
+    global requests, ConnectionError, HTTPError, RequestException, Timeout
+    if getattr(requests, "get", None) is None:
+        try:
+            import requests as _requests  # type: ignore
+            from requests.exceptions import ConnectionError as _ConnectionError, HTTPError as _HTTPError, RequestException as _RequestException, Timeout as _Timeout
+            requests = _requests
+            ConnectionError = _ConnectionError
+            HTTPError = _HTTPError
+            RequestException = _RequestException
+            Timeout = _Timeout
+        except Exception:  # pragma: no cover - optional dependency
+            requests = _RequestsModulePlaceholder()
+    return requests
+
+
+# Singleton holder for DataFetcher instances
+_FETCHER_SINGLETON: Any | None = None
+
+
+def build_fetcher(config: Any):
+    """Return a market data fetcher with safe fallbacks."""
+    global _FETCHER_SINGLETON
+    if _FETCHER_SINGLETON is not None:
+        return _FETCHER_SINGLETON
+
+    from ai_trading.alpaca_api import ALPACA_AVAILABLE
+    bot_mod = importlib.import_module('ai_trading.core.bot_engine')
+    DataFetcher = bot_mod.DataFetcher
+    _ensure_http_client()
+    yf_mod = _ensure_yfinance()
+    req_mod = _ensure_requests()
+
+    alpaca_ok = bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'))
+    has_keys = alpaca_ok
+    if ALPACA_AVAILABLE and has_keys:
+        logger.info('DATA_FETCHER_BUILD', extra={'source': 'alpaca'})
+        fetcher = DataFetcher()
+        setattr(fetcher, 'source', 'alpaca')
+        _FETCHER_SINGLETON = fetcher
+        return fetcher
+    if getattr(yf_mod, 'download', None) is not None and getattr(req_mod, 'get', None) is not None:
+        logger.info('DATA_FETCHER_BUILD', extra={'source': 'yfinance'})
+        fetcher = DataFetcher()
+        setattr(fetcher, 'source', 'yfinance')
+        _FETCHER_SINGLETON = fetcher
+        return fetcher
+    if getattr(req_mod, 'get', None) is not None:
+        logger.warning('DATA_FETCHER_BUILD_FALLBACK', extra={'source': 'yahoo-requests'})
+        fetcher = DataFetcher()
+        setattr(fetcher, 'source', 'fallback')
+        _FETCHER_SINGLETON = fetcher
+        return fetcher
+    logger.error('DATA_FETCHER_UNAVAILABLE', extra={'reason': 'no deps'})
+    raise DataFetchError('No market data source available')
+
 def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=_DEFAULT_FEED, adjustment: str='raw') -> pd.DataFrame:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
+    pd = _ensure_pandas()
+    _ensure_requests()
+    if pd is None or getattr(requests, "get", None) is None:
+        raise RuntimeError('requests not available')
     _start = ensure_datetime(start)
     _end = ensure_datetime(end)
     _interval = _canon_tf(timeframe)
@@ -305,7 +379,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
     def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
         params = {'symbols': symbol, 'timeframe': _interval, 'start': _start.isoformat(), 'end': _end.isoformat(), 'limit': 10000, 'feed': _feed, 'adjustment': adjustment}
-        if requests is None:
+        if getattr(requests, "get", None) is None:
             raise RuntimeError('requests not available')
         url = 'https://data.alpaca.markets/v2/stocks/bars'
         headers = {'APCA-API-KEY-ID': os.getenv('ALPACA_API_KEY', ''), 'APCA-API-SECRET-KEY': os.getenv('ALPACA_SECRET_KEY', '')}
@@ -445,6 +519,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
 def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None=None) -> pd.DataFrame:
     """Minute bars fetch with provider fallback and downgraded errors.
     Also updates in-memory minute cache for freshness checks."""
+    pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     use_finnhub = (
@@ -471,7 +546,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None=None) -> p
     if df is None or getattr(df, 'empty', True):
         df = _yahoo_get_bars(symbol, start_dt, end_dt, interval='1m')
     try:
-        if isinstance(df, pd.DataFrame) and (not df.empty):
+        if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
                 last_ts = int(pd.Timestamp(df.index[-1]).tz_convert('UTC').timestamp())
             elif 'timestamp' in df.columns:
@@ -504,5 +579,23 @@ def is_market_open() -> bool:
     """Simplistic market-hours check used in tests."""
     return True
 
-__all__ = ['_DEFAULT_FEED', '_VALID_FEEDS', 'ensure_datetime', '_yahoo_get_bars', '_fetch_bars', 'get_bars', 'get_bars_batch', 'fetch_minute_yfinance', 'is_market_open', 'get_last_available_bar', 'fh_fetcher', 'get_minute_df', 'build_fetcher', 'DataFetchError', 'warmup_cache']
+__all__ = [
+    '_DEFAULT_FEED',
+    '_VALID_FEEDS',
+    'ensure_datetime',
+    '_yahoo_get_bars',
+    '_fetch_bars',
+    'get_bars',
+    'get_bars_batch',
+    'fetch_minute_yfinance',
+    'is_market_open',
+    'get_last_available_bar',
+    'fh_fetcher',
+    'get_minute_df',
+    'build_fetcher',
+    'DataFetchError',
+    'DataFetchException',
+    'FinnhubAPIException',
+    'warmup_cache',
+]
 
