@@ -43,6 +43,7 @@ from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
     get_minute_df,
+    warmup_cache,
 )
 from ai_trading.utils.time import last_market_session
 from ai_trading.capital_scaling import capital_scale, update_if_present
@@ -315,7 +316,7 @@ def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, 
 import asyncio
 import atexit
 import hashlib  # AI-AGENT-REF: model hash helper
-import importlib as _importlib  # AI-AGENT-REF: legacy alias for pipeline
+import importlib
 import inspect
 import io
 import logging
@@ -351,12 +352,9 @@ from ai_trading.utils.prof import StageTimer
 
 # AI-AGENT-REF: optional pipeline import
 try:
-    pipeline = _importlib.import_module("ai_trading.pipeline")  # type: ignore
+    pipeline = importlib.import_module("ai_trading.pipeline")  # type: ignore
 except ImportError:  # pragma: no cover - optional (import resolution only)
-    try:
-        pipeline = _importlib.import_module("pipeline")  # type: ignore
-    except ImportError:  # pragma: no cover
-        pipeline = None  # type: ignore  # AI-AGENT-REF: fallback when pipeline absent
+    pipeline = None  # type: ignore  # AI-AGENT-REF: fallback when pipeline absent
 
 logger = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
@@ -865,18 +863,6 @@ WEEKLY_DRAWDOWN_LIMIT = getattr(CFG, "weekly_drawdown_limit", 0.10)
 # AI-AGENT-REF: cached runtime settings for env aliases
 S = CFG
 SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
-
-
-def get_minute_bars(*args, **kwargs):  # pragma: no cover - legacy
-    raise NotImplementedError("get_minute_bars removed")
-
-
-def get_minute_bars_batch(*args, **kwargs):  # pragma: no cover - legacy
-    raise NotImplementedError("get_minute_bars_batch removed")
-
-
-def warmup_cache(*args, **kwargs):  # pragma: no cover - legacy
-    return None
 
 
 from ai_trading.market.calendars import ensure_final_bar
@@ -1676,20 +1662,15 @@ else:
         return args[0] if args else []  # Return signals as-is
 
 
-# AI-AGENT-REF: late import for model pipeline with legacy fallback
+# AI-AGENT-REF: late import for model pipeline
 def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
     try:  # pragma: no cover - import path resolution
         from ai_trading.pipeline import model_pipeline  # type: ignore
 
         return model_pipeline
-    except ImportError as _pkg_err:  # pragma: no cover  # AI-AGENT-REF: narrow import
-        try:
-            from pipeline import model_pipeline  # type: ignore
-
-            return model_pipeline
-        except ImportError as _legacy_err:  # pragma: no cover
-            logger.error("model_pipeline import failed: %s", _pkg_err)
-            raise ImportError("model_pipeline import failed") from _legacy_err
+    except ImportError as e:  # pragma: no cover  # AI-AGENT-REF: narrow import
+        logger.error("model_pipeline import failed: %s", e)
+        raise
 
 
 # ML dependencies - sklearn is a hard dependency
@@ -2564,7 +2545,6 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
                 minutes=int(settings.intraday_lookback_minutes)
             )
             _fetch_intraday_bars_chunked(
-                ctx,
                 ctx.symbols,
                 start=start_dt,
                 end=end_dt,
@@ -2584,7 +2564,6 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
 
 
 def _fetch_universe_bars(
-    ctx: BotContext | None,
     symbols: list[str],
     timeframe: str,
     start: datetime | str,
@@ -2592,13 +2571,8 @@ def _fetch_universe_bars(
     feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch bars using batch API with safe fallback."""  # AI-AGENT-REF
-    fetch_client = None
-    if ctx is not None and hasattr(ctx, "data_fetcher"):
-        fetch_client = getattr(ctx, "data_fetcher", None)
     try:
-        batch = get_bars_batch(
-            symbols, timeframe, start, end, feed=feed, client=fetch_client
-        )
+        batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
         if isinstance(batch, dict):
             return batch
     except COMMON_EXC:
@@ -2606,14 +2580,13 @@ def _fetch_universe_bars(
     out: Dict[str, pd.DataFrame] = {}
     for s in symbols:
         try:
-            out[s] = get_bars(s, timeframe, start, end, feed=feed, client=fetch_client)
+            out[s] = get_bars(s, timeframe, start, end, feed=feed)
         except COMMON_EXC:
             pass
     return out
 
 
 def _fetch_universe_bars_chunked(
-    ctx: BotContext,
     symbols: list[str],
     timeframe: str,
     start: datetime | str,
@@ -2630,7 +2603,7 @@ def _fetch_universe_bars_chunked(
     out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), batch_size):
         chunk = symbols[i : i + batch_size]
-        out.update(_fetch_universe_bars(ctx, chunk, timeframe, start, end, feed))
+        out.update(_fetch_universe_bars(chunk, timeframe, start, end, feed))
     total_symbols = len(out)
     try:
         bars_loaded = sum(len(v) for v in out.values())
@@ -2649,7 +2622,6 @@ def _fetch_universe_bars_chunked(
 
 
 def _fetch_intraday_bars_chunked(
-    ctx: BotContext,
     symbols: list[str],
     start: datetime | str,
     end: datetime | str,
@@ -2662,13 +2634,13 @@ def _fetch_intraday_bars_chunked(
         return {}
     settings = get_settings()
     if not getattr(settings, "intraday_batch_enable", True):
-        return {s: get_minute_bars(s, start, end, feed=feed) for s in symbols}
+        return {s: get_minute_df(s, start, end, feed=feed) for s in symbols}
     batch_size = max(1, int(getattr(settings, "intraday_batch_size", 40)))
     out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), batch_size):
         chunk = symbols[i : i + batch_size]
         try:
-            got = get_minute_bars_batch(chunk, start, end, feed=feed)
+            got = get_bars_batch(chunk, "1Min", start, end, feed=feed)
         except (
             FileNotFoundError,
             PermissionError,
@@ -2697,7 +2669,7 @@ def _fetch_intraday_bars_chunked(
 
             def _pull(sym: str):
                 try:
-                    return sym, get_minute_bars(sym, start, end, feed=feed)
+                    return sym, get_minute_df(sym, start, end, feed=feed)
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -2751,7 +2723,7 @@ def _fetch_regime_bars(
     syms_csv = (getattr(settings, "regime_symbols_csv", None) or "SPY").strip()
     symbols = [s.strip() for s in syms_csv.split(",") if s.strip()]
     return _fetch_universe_bars_chunked(
-        ctx, symbols, timeframe, start, end, getattr(ctx, "data_feed", None)
+        symbols, timeframe, start, end, getattr(ctx, "data_feed", None)
     )
 
 
@@ -6153,42 +6125,6 @@ def _update_risk_engine_exposure():
         logger.warning("Risk engine exposure update failed: %s", e)
 
 
-def _initialize_bot_context_post_setup_legacy(ctx):
-    """Complete bot context setup after creation - legacy version."""
-    try:
-        equity_init = float(ctx.api.get_account().equity)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        equity_init = 0.0
-    update_if_present(ctx, equity_init)
-    ctx.last_positions = load_portfolio_snapshot()
-
-    # Warm up regime history cache so initial regime checks pass
-    try:
-        ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning(f"[warm_cache] failed to seed regime history: {e}")
-
-    return ctx
-
-
 def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     """Log warnings if no market data is available on startup."""
     missing: list[str] = []
@@ -6304,7 +6240,6 @@ def pre_trade_health_check(
     _start = getattr(ctx, "lookback_start", _now - timedelta(days=_fallback_days))
     _end = getattr(ctx, "lookback_end", _now)
     frames = _fetch_universe_bars_chunked(
-        ctx=ctx,
         symbols=symbols,
         timeframe="1D",
         start=_start,
@@ -6471,7 +6406,7 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
     from ai_trading.config.settings import get_settings  # AI-AGENT-REF: modern settings source
 
     settings = get_settings()
-    # AI-AGENT-REF: guard missing attributes across legacy Settings versions
+    # AI-AGENT-REF: guard missing attributes across older Settings versions
     api_key = (
         getattr(settings, "sentiment_api_key", None)
         or getattr(settings, "azure_language_key", None)
@@ -12137,7 +12072,7 @@ def run_multi_strategy(ctx) -> None:
     for strat in ctx.strategies:
         try:
             gen = getattr(strat, "generate", None)
-            # AI-AGENT-REF: support legacy generate() and new generate_signals()
+            # AI-AGENT-REF: support generate() and generate_signals()
             if callable(gen):
                 sigs = gen(ctx)
             else:

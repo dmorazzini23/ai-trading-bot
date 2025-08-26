@@ -1,6 +1,5 @@
 import threading
 import time
-import types
 
 import ai_trading.core.bot_engine as be
 import pytest
@@ -15,33 +14,30 @@ def _mk_df():
 
 def test_daily_fallback_parallel(monkeypatch):
     # Force batch to return empty so we hit fallback path for all.
-    ctx = types.SimpleNamespace()
     calls = {"single": []}
     monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
     def fake_single(sym, *a, **k):
         calls["single"].append(sym)
         return _mk_df()
     monkeypatch.setattr(be, "get_bars", fake_single)
-    out = be._fetch_universe_bars(ctx, ["A","B","C","D"], "1D", "2024-01-01", "2024-02-01", None)
+    out = be._fetch_universe_bars(["A","B","C","D"], "1D", "2024-01-01", "2024-02-01", None)
     assert set(out.keys()) == {"A","B","C","D"}
     # We can't assert true parallelism, but we can ensure all fallbacks executed.
     assert set(calls["single"]) == {"A","B","C","D"}
 
 def test_intraday_fallback_parallel(monkeypatch):
-    ctx = types.SimpleNamespace()
     calls = {"single": []}
-    monkeypatch.setattr(be, "get_minute_bars_batch", lambda *a, **k: {})
+    monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
     def fake_single(sym, *a, **k):
         calls["single"].append(sym)
         return _mk_df()
-    monkeypatch.setattr(be, "get_minute_bars", fake_single)
-    out = be._fetch_intraday_bars_chunked(ctx, ["X","Y","Z"], "2024-01-01 09:30", "2024-01-01 10:30", None)
+    monkeypatch.setattr(be, "get_minute_df", fake_single)
+    out = be._fetch_intraday_bars_chunked(["X","Y","Z"], "2024-01-01 09:30", "2024-01-01 10:30", None)
     assert set(out.keys()) == {"X","Y","Z"}
     assert set(calls["single"]) == {"X","Y","Z"}
 
 def test_parallel_execution_timing(monkeypatch):
     """Test that parallel execution provides performance benefit."""
-    ctx = types.SimpleNamespace()
     call_times = []
 
     monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
@@ -56,7 +52,7 @@ def test_parallel_execution_timing(monkeypatch):
 
     # Test with 4 symbols that should run in parallel
     start_time = time.time()
-    out = be._fetch_universe_bars(ctx, ["A","B","C","D"], "1D", "2024-01-01", "2024-02-01", None)
+    out = be._fetch_universe_bars(["A","B","C","D"], "1D", "2024-01-01", "2024-02-01", None)
     end_time = time.time()
 
     # Should complete faster than sequential (0.4s) due to parallelism
@@ -75,15 +71,15 @@ def test_parallel_execution_timing(monkeypatch):
 
 def test_bounded_concurrency_respects_limit(monkeypatch):
     """Test that the worker limit is respected."""
-    ctx = types.SimpleNamespace()
     active_workers = []
     max_concurrent = 0
 
     # Mock settings to use only 2 workers
     def mock_get_settings():
-        settings = types.SimpleNamespace()
-        settings.batch_fallback_workers = 2
-        return settings
+        class Settings:
+            batch_fallback_workers = 2
+
+        return Settings()
 
     monkeypatch.setattr(be, "get_settings", mock_get_settings)
     monkeypatch.setattr(be, "get_bars_batch", lambda *a, **k: {})
@@ -102,7 +98,7 @@ def test_bounded_concurrency_respects_limit(monkeypatch):
     monkeypatch.setattr(be, "get_bars", track_concurrent)
 
     # Test with 6 symbols but limit to 2 workers
-    out = be._fetch_universe_bars(ctx, ["A","B","C","D","E","F"], "1D", "2024-01-01", "2024-02-01", None)
+    out = be._fetch_universe_bars(["A","B","C","D","E","F"], "1D", "2024-01-01", "2024-02-01", None)
 
     assert len(out) == 6
     # Should never exceed our worker limit

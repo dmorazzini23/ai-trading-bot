@@ -111,7 +111,9 @@ def evaluate_entries(ctx, candidates):
     lookback_min = max(5, int(getattr(settings, 'intraday_lookback_minutes', 120)))
     end_ts = getattr(ctx, 'intraday_end', None) or datetime.now(UTC)
     start_ts = getattr(ctx, 'intraday_start', None) or end_ts - timedelta(minutes=lookback_min)
-    frames = _fetch_intraday_bars_chunked(ctx, candidates, start=start_ts, end=end_ts, feed=getattr(ctx, 'data_feed', None))
+    frames = _fetch_intraday_bars_chunked(
+        candidates, start=start_ts, end=end_ts, feed=getattr(ctx, 'data_feed', None)
+    )
     signals = {}
     for sym in candidates:
         df = frames.get(sym)
@@ -136,7 +138,9 @@ def evaluate_exits(ctx, open_positions):
     lookback_min = max(5, int(getattr(settings, 'intraday_lookback_minutes', 120)))
     end_ts = getattr(ctx, 'intraday_end', None) or datetime.now(UTC)
     start_ts = getattr(ctx, 'intraday_start', None) or end_ts - timedelta(minutes=lookback_min)
-    frames = _fetch_intraday_bars_chunked(ctx, syms, start=start_ts, end=end_ts, feed=getattr(ctx, 'data_feed', None))
+    frames = _fetch_intraday_bars_chunked(
+        syms, start=start_ts, end=end_ts, feed=getattr(ctx, 'data_feed', None)
+    )
     exits = {}
     for sym in syms:
         df = frames.get(sym)
