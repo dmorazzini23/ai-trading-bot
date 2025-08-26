@@ -21,6 +21,8 @@ curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 
 Configure environment in `/home/aiuser/ai-trading-bot/.env` (loaded with `override=True` at startup) and ensure PATH in the unit points to your venv.
 
+Startup runs an import preflight and will exit if the `alpaca-trade-api` package is missing.
+
 ### Required environment variables
 
 `ai_trading.config.management.validate_required_env()` ensures these keys are

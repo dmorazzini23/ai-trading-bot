@@ -3,14 +3,9 @@ import os
 import threading
 from typing import Any
 
-from .alpaca import AlpacaConfig, get_alpaca_config
 from .locks import LockWithTimeout
-# AI-AGENT-REF: re-export config management helpers
-from .management import (
-    TradingConfig,
-    derive_cap_from_settings,
-)
-from .settings import Settings, broker_keys, get_settings
+# AI-AGENT-REF: re-export config management helpers without triggering optional deps
+from .management import TradingConfig, derive_cap_from_settings
 logger = get_logger(__name__)
 _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
@@ -37,6 +32,14 @@ def __getattr__(name: str):
     if name == 'TradingConfig':
         from .management import TradingConfig as _TC
         return _TC
+    if name in {'Settings', 'broker_keys', 'get_settings'}:
+        from .settings import Settings as _S, broker_keys as _bk, get_settings as _gs
+
+        return {'Settings': _S, 'broker_keys': _bk, 'get_settings': _gs}[name]
+    if name in {'AlpacaConfig', 'get_alpaca_config'}:
+        from .alpaca import AlpacaConfig as _AC, get_alpaca_config as _gac
+
+        return {'AlpacaConfig': _AC, 'get_alpaca_config': _gac}[name]
     raise AttributeError(name)
 
 def _is_lock_held_by_current_thread() -> bool:
@@ -83,8 +86,10 @@ def validate_environment() -> None:
         _set_lock_held_by_current_thread(True)
         try:
             try:
-                get_settings.cache_clear()
-            except (KeyError, ValueError, TypeError):
+                from .settings import get_settings as _gs
+
+                _gs.cache_clear()
+            except (Exception):
                 pass
             _perform_env_validation()
         finally:
@@ -105,7 +110,9 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
     """
     global _CONFIG_LOGGED
     _CONFIG_LOGGED = True
-    s = get_settings()
+    from .settings import get_settings as _gs
+
+    s = _gs()
     conf = {'ALPACA_API_KEY': '***' if s.alpaca_api_key else '', 'ALPACA_SECRET_KEY': '***REDACTED***' if s.alpaca_secret_key else '', 'ALPACA_BASE_URL': s.alpaca_base_url or '', 'CAPITAL_CAP': getattr(s, 'capital_cap', None) or 0.25, 'CONF_THRESHOLD': getattr(s, 'conf_threshold', None) or 0.75, 'DAILY_LOSS_LIMIT': getattr(s, 'daily_loss_limit', None) or 0.03}
     if masked_keys is None and secrets_to_redact is not None:
         masked_keys = secrets_to_redact

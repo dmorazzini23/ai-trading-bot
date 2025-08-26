@@ -57,6 +57,9 @@ def run_trade() -> None:
     if args.dry_run:
         logger.info("AI Trade: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
+        import logging, time
+        time.sleep(0.1)
+        logging.shutdown()
         sys.exit(0)
 
     import os
@@ -66,6 +69,7 @@ def run_trade() -> None:
 
     ensure_dotenv_loaded()
     from ai_trading import runner
+    runner._preflight_import_health()
 
     _run_loop(runner.run_cycle, args, "Trade")
 
@@ -78,6 +82,9 @@ def run_backtest() -> None:
     if args.dry_run:
         logger.info("AI Backtest: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
+        import logging, time
+        time.sleep(0.1)
+        logging.shutdown()
         sys.exit(0)
 
     import os
@@ -87,6 +94,7 @@ def run_backtest() -> None:
 
     ensure_dotenv_loaded()
     from ai_trading import runner
+    runner._preflight_import_health()
 
     _run_loop(runner.run_cycle, args, "Backtest")
 
@@ -99,6 +107,9 @@ def run_healthcheck() -> None:
     if args.dry_run:
         logger.info("AI Health: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
+        import logging, time
+        time.sleep(0.1)
+        logging.shutdown()
         sys.exit(0)
 
     import os
@@ -108,6 +119,8 @@ def run_healthcheck() -> None:
 
     ensure_dotenv_loaded()
     from ai_trading.health_monitor import run_health_check
+    from ai_trading import runner
+    runner._preflight_import_health()
 
     _run_loop(run_health_check, args, "Health check")
 
@@ -120,6 +133,9 @@ def main() -> None:
     if args.dry_run:
         logger.info("AI Main: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
+        import logging, time
+        time.sleep(0.1)
+        logging.shutdown()
         sys.exit(0)
 
     import os
@@ -129,6 +145,7 @@ def main() -> None:
 
     ensure_dotenv_loaded()
     from ai_trading import runner
+    runner._preflight_import_health()
 
     _run_loop(runner.run_cycle, args, "Main")
 

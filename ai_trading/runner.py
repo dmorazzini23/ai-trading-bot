@@ -43,6 +43,7 @@ def _preflight_import_health() -> None:
         "ai_trading.risk.engine",
         "ai_trading.rl_trading",
         "ai_trading.telemetry.metrics_logger",
+        "alpaca_trade_api",
     ]
     for mod in core_modules:
         try:
@@ -56,8 +57,7 @@ def _preflight_import_health() -> None:
                     "exc_type": exc.__class__.__name__,
                 },  # AI-AGENT-REF: avoid reserved key
             )
-            if os.environ.get("FAIL_FAST_IMPORTS", "").lower() in {"1", "true"}:
-                raise SystemExit(1)
+            raise SystemExit(1)
     log.info("IMPORT_PREFLIGHT_OK")
 
 

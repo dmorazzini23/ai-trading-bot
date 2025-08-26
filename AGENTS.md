@@ -15,6 +15,7 @@ This document defines what automated agents (including LLM coding agents) may do
   - `reload_env(path=None, override=True)` (use sparingly, not in hot paths)
   - `SEED` (default **42**; may be overridden in `.env`)
 - **Single Alpaca SDK in production:** prefer `alpaca-trade-api`. Do **not** mix with `alpaca-py` in prod.
+- Alpaca SDK imports are deferred; runtime preflight ensures `alpaca-trade-api` is installed before trading begins.
 - **No production shims:** Do **not** introduce or rely on `optional_import(...)` in runtime code paths.
 
 ## 2) Performance & resource guardrails

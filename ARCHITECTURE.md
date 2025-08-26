@@ -3,6 +3,7 @@
 ## System
 - Python 3.12 app running on a DigitalOcean droplet, supervised by `systemd`.
 - Entry: `ai_trading/runner.py`; core loop in `ai_trading/core/bot_engine.py`.
+- Alpaca SDK (`alpaca-trade-api`) is imported lazily; startup preflight aborts if the SDK is missing.
 - Health & metrics via `ai_trading/app.py` when `RUN_HEALTHCHECK=1`.
   - `/healthz` JSON and `/metrics` Prometheus served on the port specified by the `HEALTHCHECK_PORT` environment variable (default **9001**).
 

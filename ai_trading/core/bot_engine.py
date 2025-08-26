@@ -1424,29 +1424,52 @@ from ai_trading.data_providers import get_yfinance, has_yfinance
 
 YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
+# Alpaca SDK classes are imported lazily to keep module import light.  Runtime
+# code must call ``_ensure_alpaca_classes()`` before referencing these symbols.
+Quote: Any | None = None
+Order: Any | None = None
+OrderSide: Any | None = None
+OrderStatus: Any | None = None
+TimeInForce: Any | None = None
+MarketOrderRequest: Any | None = None
+StockLatestQuoteRequest: Any | None = None
+_ALPACA_IMPORT_ERROR: Exception | None = None
 
-# Attempt to import Alpaca SDK classes; raise if unavailable to avoid silent
-# fallbacks that mask missing dependencies.
-try:  # pragma: no cover - import resolution
-    from alpaca_trade_api.entity import Quote, Order
-    from alpaca_trade_api.enums import OrderSide, OrderStatus, TimeInForce
-    from alpaca_trade_api.types import MarketOrderRequest
-    try:  # pragma: no cover - StockLatestQuoteRequest may not exist
-        from alpaca_trade_api.rest import StockLatestQuoteRequest  # type: ignore
-    except Exception:
-        StockLatestQuoteRequest = None
-    if StockLatestQuoteRequest is None:
-        @dataclass
-        class StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
-            symbol_or_symbols: Any
-except Exception as e:  # pragma: no cover - executed only when dep missing
-    import logging
 
-    get_logger(__name__).critical(
-        "required Alpaca trade API classes missing; ensure alpaca-trade-api is installed",
-        exc_info=e,
-    )
-    raise
+def _ensure_alpaca_classes() -> None:
+    """Import Alpaca SDK types on demand."""
+    global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
+    if Quote is not None:
+        return
+    try:  # pragma: no cover - import resolution
+        from alpaca_trade_api.entity import Quote as _Quote, Order as _Order
+        from alpaca_trade_api.enums import (
+            OrderSide as _OrderSide,
+            OrderStatus as _OrderStatus,
+            TimeInForce as _TimeInForce,
+        )
+        from alpaca_trade_api.types import MarketOrderRequest as _MarketOrderRequest
+        try:  # pragma: no cover - StockLatestQuoteRequest may not exist
+            from alpaca_trade_api.rest import (
+                StockLatestQuoteRequest as _StockLatestQuoteRequest,  # type: ignore
+            )
+        except Exception:
+            @dataclass
+            class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
+                symbol_or_symbols: Any
+        Quote = _Quote
+        Order = _Order
+        OrderSide = _OrderSide
+        OrderStatus = _OrderStatus
+        TimeInForce = _TimeInForce
+        MarketOrderRequest = _MarketOrderRequest
+        StockLatestQuoteRequest = _StockLatestQuoteRequest
+    except Exception as e:  # pragma: no cover - executed only when dep missing
+        _ALPACA_IMPORT_ERROR = e
+        get_logger(__name__).critical(
+            "required Alpaca trade API classes missing; ensure alpaca-trade-api is installed",
+            exc_info=e,
+        )
 
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
@@ -12472,6 +12495,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     BotContext : Global context and configuration
     trade_execution : Order execution and monitoring
     """
+    _ensure_alpaca_classes()
+    if _ALPACA_IMPORT_ERROR is not None:
+        raise RuntimeError("Alpaca SDK is required") from _ALPACA_IMPORT_ERROR
     if getattr(runtime, "risk_engine", None) is None:
         runtime.risk_engine = RiskEngine()
     _init_metrics()
