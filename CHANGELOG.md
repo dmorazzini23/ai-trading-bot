@@ -38,6 +38,7 @@ All notable changes to this project will be documented in this file.
 - **Config**: unify centralized defaults and add `from_optimization`
 - **Utils**: re-export `ensure_utc` and enforce type assertions
 - **validate_env**: support execution via `runpy.run_module`
+- **Alpaca API**: provide lightweight fallback for `StockLatestQuoteRequest` to avoid startup ImportError when class is absent
 - **CLI dry-run**: log indicator import confirmation and exit with code 0 before heavy imports.
 - **Settings**: centralize value normalization and eliminate `FieldInfo` leaks
 
