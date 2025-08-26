@@ -4,7 +4,7 @@
 - Python 3.12 app running on a DigitalOcean droplet, supervised by `systemd`.
 - Entry: `ai_trading/runner.py`; core loop in `ai_trading/core/bot_engine.py`.
 - Health & metrics via `ai_trading/app.py` when `RUN_HEALTHCHECK=1`.
-  - `/healthz` JSON and `/metrics` Prometheus on `$HEALTHCHECK_PORT` (default **9001**).
+  - `/healthz` JSON and `/metrics` Prometheus served on the port specified by the `HEALTHCHECK_PORT` environment variable (default **9001**).
 
 ## Object Model
 - **TradingConfig**: static config (API keys, paths, thresholds).

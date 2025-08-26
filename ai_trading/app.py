@@ -48,7 +48,13 @@ def create_app():
     @app.route('/healthz')
     def healthz():
         """Minimal liveness probe."""
-        return jsonify(ok=True)
+        from datetime import UTC, datetime
+
+        return jsonify(
+            ok=True,
+            ts=datetime.now(UTC).isoformat(),
+            service="ai-trading",
+        )
 
     @app.route('/metrics')
     def metrics():
@@ -72,7 +78,7 @@ if __name__ == '__main__':
 
         validate_required_env()
         s = get_settings()
-        port = int(s.api_port or 9001)
+        port = int(s.healthcheck_port or 9001)
         app = create_app()
         app.logger.info('Starting Flask', extra={'port': port})
         app.run(host='0.0.0.0', port=port)

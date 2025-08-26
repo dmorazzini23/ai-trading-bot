@@ -38,7 +38,7 @@ missing keys; values are masked in logs and exceptions.
 
 ### Health endpoints & env
 
-Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on `$HEALTHCHECK_PORT` (default **9001**).
+Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on the port defined by the `HEALTHCHECK_PORT` environment variable (default **9001**).
 
 | Key | Purpose |
 | --- | --- |
