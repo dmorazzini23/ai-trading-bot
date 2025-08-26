@@ -3,11 +3,12 @@
 ## System
 - Python 3.12 app running on a DigitalOcean droplet, supervised by `systemd`.
 - Entry: `ai_trading/runner.py`; core loop in `ai_trading/core/bot_engine.py`.
-- HTTP status via `ai_trading/app.py` (Flask).
+- Health & metrics via `ai_trading/app.py` when `RUN_HEALTHCHECK=1`.
+  - `/healthz` JSON and `/metrics` Prometheus on `$HEALTHCHECK_PORT` (default **9001**).
 
 ## Object Model
 - **TradingConfig**: static config (API keys, paths, thresholds).
-- **BotRuntime**: process runtime (cfg, params, tickers, model, broker clients, etc.).  
+- **BotRuntime**: process runtime (cfg, params, tickers, model, broker clients, etc.).
   - Required fields: `cfg`, `params: dict`, `tickers: list[str]`, `model: Any (optional)`.
 
 ## Control Flow (happy path)
@@ -46,3 +47,10 @@
   sudo systemctl restart ai-trading.service
   journalctl -u ai-trading.service -f | sed -n '1,200p'
   ```
+
+## CLI
+- `ai-trade`, `ai-backtest`, `ai-health`
+  - `--dry-run`
+  - `--once`
+  - `--interval SECONDS`
+  - `--paper` / `--live`

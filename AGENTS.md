@@ -1,6 +1,6 @@
 # AGENTS: Operating Contract & Playbook
 
-**Last updated:** 2025-08-25  
+**Last updated:** 2025-08-25
 **Runtime targets:** Ubuntu 24.04 • Python 3.12 • zoneinfo-only • Flask on :9001
 
 This document defines what automated agents (including LLM coding agents) may do in this repository and how they must do it.
@@ -9,7 +9,7 @@ This document defines what automated agents (including LLM coding agents) may do
 - **Python:** 3.12 (`requires-python=">=3.12"`). Tooling targets **py312**.
 - **Timezones:** Use stdlib **zoneinfo**; never depend on `pytz`.
 - **Service:** `ai-trading.service` runs a Flask API on **0.0.0.0:9001**.
-- **Health:** `GET /health` must always return JSON and never 500.
+- **Health:** `GET /healthz` must always return JSON and never 500.
 - **Config access:** via `ai_trading.config.management`:
   - `get_env(key, default=None, cast=None, required=False)`
   - `reload_env(path=None, override=True)` (use sparingly, not in hot paths)
@@ -36,7 +36,7 @@ python -m pip install -U pip
 pip install -e .
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
-curl -s http://127.0.0.1:9001/health
+curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 ```
 
 ## 5) Timezone examples (docs reference)
@@ -60,11 +60,13 @@ seed = config.SEED  # defaults to 42
 config.reload_env()
 ```
 
-## 7) Health endpoint (docs reference)
+## 7) Health & metrics endpoints (docs reference)
 
-* Route: `GET /health`
-* Response: `{"ok": true, "ts": "...", "service": "ai-trading"}`
-* Requirement: Never raise exceptions. Log, return `ok: false` if degraded.
+* Routes: `GET /healthz`, `GET /metrics`
+* `/healthz` JSON: `{"ok": true, "ts": "...", "service": "ai-trading"}`
+* `/metrics` exposes Prometheus format
+* Set `RUN_HEALTHCHECK=1` to serve these on `$HEALTHCHECK_PORT` (default **9001**)
+* Requirement: Endpoints must not raise exceptions; log and return `ok: false` if degraded.
 
 ## 8) Alpaca SDK stance
 

@@ -10,6 +10,7 @@ The AI Trading Bot provides both internal APIs for component interaction and ext
 - [Web Interface APIs](#web-interface-apis)
 - [Trading APIs](#trading-apis)
 - [Data APIs](#data-apis)
+- [Command-Line Interface (CLI)](#command-line-interface-cli)
 - [Monitoring APIs](#monitoring-apis)
 - [Authentication](#authentication)
 - [Error Handling](#error-handling)
@@ -27,10 +28,10 @@ from bot_engine import pre_trade_health_check, run_all_trades_worker, BotState
 def pre_trade_health_check() -> bool:
     """
     Performs comprehensive system health check before trading.
-    
+
     Returns:
         bool: True if system is healthy and ready for trading
-        
+
     Raises:
         SystemError: If critical systems are unavailable
         ValidationError: If configuration is invalid
@@ -43,15 +44,15 @@ def run_all_trades_worker(
 ) -> Dict[str, Any]:
     """
     Execute trading logic for specified symbols and timeframes.
-    
+
     Args:
         symbols: List of trading symbols (e.g., ['SPY', 'AAPL'])
         timeframes: List of timeframes to analyze
         dry_run: If True, simulate trades without execution
-        
+
     Returns:
         Dict containing trade results and performance metrics
-        
+
     Example:
         >>> results = run_all_trades_worker(['SPY'], dry_run=True)
         >>> print(results['trades_executed'])
@@ -59,13 +60,13 @@ def run_all_trades_worker(
 
 class BotState:
     """Manages bot operational state and configuration."""
-    
+
     def get_current_positions(self) -> Dict[str, float]:
         """Get current portfolio positions."""
-        
+
     def get_performance_metrics(self) -> Dict[str, float]:
         """Get current performance statistics."""
-        
+
     def update_risk_parameters(self, params: Dict[str, Any]) -> None:
         """Update risk management parameters."""
 ```
@@ -85,7 +86,7 @@ async def execute_order_async(
 ) -> Dict[str, Any]:
     """
     Execute trading order asynchronously.
-    
+
     Args:
         symbol: Trading symbol (e.g., 'AAPL')
         quantity: Number of shares to trade
@@ -93,10 +94,10 @@ async def execute_order_async(
         order_type: 'market', 'limit', 'stop'
         time_in_force: 'day', 'gtc', 'ioc', 'fok'
         limit_price: Price for limit orders
-        
+
     Returns:
         Dict containing order status and execution details
-        
+
     Example:
         >>> result = await execute_order_async('AAPL', 10, 'buy')
         >>> print(result['order_id'])
@@ -110,7 +111,7 @@ def validate_order(
 ) -> Tuple[bool, str]:
     """
     Validate order before execution.
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
@@ -135,17 +136,17 @@ def get_historical_data(
 ) -> pd.DataFrame:
     """
     Fetch historical market data.
-    
+
     Args:
         symbol: Trading symbol
         timeframe: '1m', '5m', '15m', '1h', '1d'
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
         provider: 'alpaca', 'finnhub', 'yahoo' (auto-select if None)
-        
+
     Returns:
         DataFrame with OHLCV data
-        
+
     Example:
         >>> data = get_historical_data('SPY', '1h', '2024-01-01', '2024-01-31')
         >>> print(data.head())
@@ -156,10 +157,10 @@ async def get_real_time_data(symbols: List[str]) -> Dict[str, Dict]:
 
 class DataProvider:
     """Abstract base class for data providers."""
-    
+
     def validate_connection(self) -> bool:
         """Check if data provider is accessible."""
-        
+
     def get_data(self, symbol: str, **kwargs) -> pd.DataFrame:
         """Fetch data from provider."""
 ```
@@ -178,15 +179,15 @@ def generate_signals(
 ) -> Dict[str, Any]:
     """
     Generate trading signals from market data.
-    
+
     Args:
         data: OHLCV DataFrame
         signal_types: List of signal types to generate
         timeframe: Data timeframe
-        
+
     Returns:
         Dict containing signals and metadata
-        
+
     Example:
         >>> signals = generate_signals(data, ['momentum', 'mean_reversion'])
         >>> print(signals['momentum']['strength'])
@@ -195,7 +196,7 @@ def generate_signals(
 class SignalType(Enum):
     """Available signal types."""
     MOMENTUM = "momentum"
-    MEAN_REVERSION = "mean_reversion" 
+    MEAN_REVERSION = "mean_reversion"
     MOVING_AVERAGE_CROSSOVER = "ma_crossover"
     REGIME_DETECTION = "regime"
 
@@ -228,14 +229,14 @@ def calculate_position_size(
 ) -> float:
     """
     Calculate optimal position size using Kelly criterion and volatility.
-    
+
     Args:
         symbol: Trading symbol
         signal_strength: Signal confidence (-1 to 1)
         account_equity: Current account value
         volatility: Symbol volatility (annualized)
         max_position_pct: Maximum position as % of equity
-        
+
     Returns:
         Position size in shares
     """
@@ -246,22 +247,33 @@ def check_risk_limits(
 ) -> Tuple[bool, List[str]]:
     """
     Check if new position violates risk limits.
-    
+
     Returns:
         Tuple of (is_within_limits, violation_messages)
     """
 
 class RiskMetrics:
     """Risk calculation utilities."""
-    
+
     @staticmethod
     def calculate_var(returns: pd.Series, confidence: float = 0.05) -> float:
         """Calculate Value at Risk."""
-        
+
     @staticmethod
     def calculate_sharpe_ratio(returns: pd.Series, risk_free_rate: float = 0.02) -> float:
         """Calculate Sharpe ratio."""
 ```
+
+## Command-Line Interface (CLI)
+
+`ai-trade`, `ai-backtest`, and `ai-health` expose common runtime flags:
+
+| Flag | Description |
+| ---- | ----------- |
+| `--dry-run` | Exit after imports without running logic |
+| `--once` | Run a single iteration then exit |
+| `--interval SECONDS` | Sleep between iterations |
+| `--paper` / `--live` | Select paper (default) or live trading |
 
 ## Web Interface APIs
 
@@ -270,10 +282,10 @@ class RiskMetrics:
 #### Health Check Endpoint
 
 ```http
-GET http://127.0.0.1:9001/health
+GET http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 ```
 
-Always returns JSON and must never 500.
+Available when `RUN_HEALTHCHECK=1` on `$HEALTHCHECK_PORT` (default **9001**); always returns JSON and must never 500.
 
 **Response:**
 ```json
@@ -290,35 +302,19 @@ Always returns JSON and must never 500.
 }
 ```
 
-#### Performance Metrics
+#### Metrics Endpoint
 
 ```http
-GET /api/metrics
+GET http://127.0.0.1:$HEALTHCHECK_PORT/metrics
 ```
 
+Prometheus metrics; available when `RUN_HEALTHCHECK=1` on the same port.
+
 **Response:**
-```json
-{
-    "performance": {
-        "total_return": 0.15,
-        "sharpe_ratio": 1.8,
-        "max_drawdown": -0.05,
-        "win_rate": 0.65
-    },
-    "positions": {
-        "AAPL": {"shares": 50, "value": 8500.00},
-        "SPY": {"shares": 25, "value": 12000.00}
-    },
-    "recent_trades": [
-        {
-            "symbol": "AAPL",
-            "side": "buy",
-            "quantity": 10,
-            "price": 170.50,
-            "timestamp": "2024-01-15T09:30:00Z"
-        }
-    ]
-}
+```text
+# HELP trades_total Total trades executed
+# TYPE trades_total counter
+trades_total 42
 ```
 
 #### Configuration Management
@@ -496,7 +492,7 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 ### Default Limits
 
 - **Public endpoints**: 100 requests per minute
-- **Trading endpoints**: 50 requests per minute  
+- **Trading endpoints**: 50 requests per minute
 - **Webhook endpoints**: 1000 requests per minute
 
 ### Rate Limit Headers

@@ -16,7 +16,7 @@ Check logs and health:
 
 ```bash
 journalctl -u ai-trading.service -n 200 --no-pager
-curl -s http://127.0.0.1:9001/health
+curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 ```
 
 Configure environment in `/home/aiuser/ai-trading-bot/.env` (loaded with `override=True` at startup) and ensure PATH in the unit points to your venv.
@@ -36,3 +36,29 @@ present before the service starts:
 If any are missing or empty the process exits with a `RuntimeError` listing the
 missing keys; values are masked in logs and exceptions.
 
+### Health endpoints & env
+
+Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on `$HEALTHCHECK_PORT` (default **9001**).
+
+| Key | Purpose |
+| --- | --- |
+| `RUN_HEALTHCHECK` | Enable lightweight Flask health server |
+| `HEALTHCHECK_PORT` | Port for `/healthz` and `/metrics` |
+
+### CLI
+
+`ai-trade`, `ai-backtest`, and `ai-health` share flags:
+
+| Flag | Description |
+| ---- | ----------- |
+| `--dry-run` | Exit after importing modules |
+| `--once` | Run a single iteration then exit |
+| `--interval SECONDS` | Sleep between iterations |
+| `--paper` / `--live` | Select paper (default) or live trading |
+
+### Operational checklist
+
+1. `sudo systemctl restart ai-trading.service`
+2. `journalctl -u ai-trading.service -n 200 --no-pager`
+3. `curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz`
+4. Roll back to previous release and restart if the health check fails
