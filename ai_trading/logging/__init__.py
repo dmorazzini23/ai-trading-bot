@@ -118,6 +118,38 @@ class ExtraSanitizerFilter(logging.Filter):
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
     """Adapter that sanitizes ``extra`` keys to avoid LogRecord collisions."""
 
+    def __getattribute__(self, name):
+        """Delegate missing attributes to the underlying logger."""
+        try:
+            return super().__getattribute__(name)
+        except AttributeError:
+            logger = super().__getattribute__("logger")
+            return getattr(logger, name)
+
+    @property
+    def handlers(self):
+        return self.logger.handlers
+
+    @handlers.setter
+    def handlers(self, value):
+        self.logger.handlers = value
+
+    @property
+    def filters(self):
+        return self.logger.filters
+
+    @filters.setter
+    def filters(self, value):
+        self.logger.filters = value
+
+    @property
+    def propagate(self):
+        return self.logger.propagate
+
+    @propagate.setter
+    def propagate(self, value):
+        self.logger.propagate = value
+
     def process(self, msg, kwargs):
         extra = kwargs.get('extra')
         if extra is not None:
