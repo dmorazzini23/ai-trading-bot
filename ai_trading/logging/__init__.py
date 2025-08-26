@@ -127,27 +127,33 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
             return getattr(logger, name)
 
     @property
-    def handlers(self):
+    def handlers(self) -> list[logging.Handler]:
+        """Delegate handler list to the underlying logger."""
         return self.logger.handlers
 
     @handlers.setter
-    def handlers(self, value):
+    def handlers(self, value: list[logging.Handler]) -> None:
+        """Replace handlers on the underlying logger."""
         self.logger.handlers = value
 
     @property
-    def filters(self):
+    def filters(self) -> list[logging.Filter]:
+        """Delegate filter list to the underlying logger."""
         return self.logger.filters
 
     @filters.setter
-    def filters(self, value):
+    def filters(self, value: list[logging.Filter]) -> None:
+        """Replace filters on the underlying logger."""
         self.logger.filters = value
 
     @property
-    def propagate(self):
+    def propagate(self) -> bool:
+        """Whether the underlying logger propagates messages."""
         return self.logger.propagate
 
     @propagate.setter
-    def propagate(self, value):
+    def propagate(self, value: bool) -> None:
+        """Set propagation behaviour for the underlying logger."""
         self.logger.propagate = value
 
     def process(self, msg, kwargs):
