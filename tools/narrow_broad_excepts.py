@@ -119,7 +119,7 @@ def main() -> int:
         s = str(p)
         if 'tests' in p.parts:
             continue
-        if any((seg in s for seg in ('ai_trading/core/bot_engine.py', 'ai_trading/runner.py', 'trade_execution/__init__.py'))):
+        if any((seg in s for seg in ('ai_trading/core/bot_engine.py', 'ai_trading/runner.py'))):
             continue
         if any((seg in p.parts for seg in ('scripts', 'tools', 'ai_trading'))):
             if rewrite_file(p):

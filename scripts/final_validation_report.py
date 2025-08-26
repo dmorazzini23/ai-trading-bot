@@ -43,9 +43,9 @@ def validate_issue_3_quantity_tracking():
     logging.info('   Problem: Mismatches between calculated, submitted, and filled quantities')
     logging.info('   Examples: AMZN calculated=80, submitted=40, filled_qty=80')
     logging.info('   Root Cause: Incorrect quantity tracking in logging')
-    trade_execution_path = 'trade_execution.py'
-    if os.path.exists(trade_execution_path):
-        with open(trade_execution_path) as f:
+    live_trading_path = 'ai_trading/execution/live_trading.py'
+    if os.path.exists(live_trading_path):
+        with open(live_trading_path) as f:
             content = f.read()
         fixes_found = 0
         if '"requested_qty": requested_qty' in content:

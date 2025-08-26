@@ -122,6 +122,6 @@ def graceful_shutdown(reason: str='Unknown'):
         trade_monitor.log_periodic_summary()
     except ImportError:
         pass
-trade_execution_error_handler = with_error_handling(error_type=Exception, default_return=None, log_level='error', reraise=False)
+execution_error_handler = with_error_handling(error_type=Exception, default_return=None, log_level='error', reraise=False)
 api_error_handler = with_error_handling(error_type=Exception, default_return=None, log_level='warning', reraise=False)
 critical_error_handler = with_error_handling(error_type=Exception, default_return=None, log_level='critical', reraise=True)
