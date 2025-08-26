@@ -164,6 +164,7 @@ signal = aggregator.aggregate_signals(signals, method="weighted_average")
 
 # NEW - With meta-learning
 from ai_trading.strategies.signals import SignalAggregator
+from datetime import UTC, datetime
 
 aggregator = SignalAggregator(
     enable_stacking=True,
@@ -173,10 +174,10 @@ aggregator = SignalAggregator(
 )
 
 signal = aggregator.aggregate_signals(
-    signals, 
+    signals,
     method="stacking",  # Meta-learning approach
     market_data=current_market_data,
-    timestamp=datetime.now()
+    timestamp=datetime.now(UTC)
 )
 
 # Update performance for meta-learning

@@ -744,7 +744,7 @@ class TestPerformanceBenchmarks:
 from unittest.mock import Mock, MagicMock
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 class MockDataFactory:
@@ -782,14 +782,14 @@ class MockDataFactory:
     def create_alpaca_order_mock(symbol='AAPL', qty=100, side='buy', status='filled'):
         """Create mock Alpaca order object."""
         order = Mock()
-        order.id = f'order-{symbol}-{int(datetime.now().timestamp())}'
+        order.id = f'order-{symbol}-{int(datetime.now(UTC).timestamp())}'
         order.symbol = symbol
         order.qty = str(qty)
         order.side = side
         order.status = status
         order.filled_qty = str(qty) if status == 'filled' else '0'
         order.filled_avg_price = '150.25' if status == 'filled' else None
-        order.created_at = datetime.now().isoformat()
+        order.created_at = datetime.now(UTC).isoformat()
         return order
     
     @staticmethod
