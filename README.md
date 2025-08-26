@@ -665,11 +665,11 @@ python verify_config.py
    MAX_PORTFOLIO_HEAT=0.15             # Maximum 15% total risk
    ENABLE_STOP_LOSS=true               # Enable stop-loss orders
 
-   # Required risk parameters
-   CAPITAL_CAP=0.04                    # Fraction of equity usable per cycle
-   DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
-   MAX_POSITION_SIZE=1000              # Absolute USD cap per position
-   ```
+  # Risk parameters
+  CAPITAL_CAP=0.04                    # Fraction of equity usable per cycle
+  DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
+  # Optional: MAX_POSITION_SIZE=1000   # Absolute USD cap per position (derived if unset)
+  ```
 
 4. **Quick Self-Check**
    ```bash

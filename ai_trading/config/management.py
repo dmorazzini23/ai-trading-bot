@@ -55,7 +55,9 @@ def is_shadow_mode() -> bool:
 # Canonical runtime seed used by risk/engine and anywhere else needing determinism.
 SEED: int = int(os.environ.get("SEED", "42"))  # AI-AGENT-REF: expose runtime seed
 
-# Required environment variables for a functional deployment
+# Required environment variables for a functional deployment. "MAX_POSITION_SIZE"
+# is intentionally excluded; when unset the runtime derives an appropriate value
+# based on capital constraints.
 _MANDATORY_ENV_VARS: tuple[str, ...] = (
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
@@ -63,7 +65,6 @@ _MANDATORY_ENV_VARS: tuple[str, ...] = (
     "WEBHOOK_SECRET",
     "CAPITAL_CAP",
     "DOLLAR_RISK_LIMIT",
-    "MAX_POSITION_SIZE",
 )
 
 
