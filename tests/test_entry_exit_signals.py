@@ -15,7 +15,6 @@ sys.modules.setdefault("ai_trading.logging", logger_mod)
 
 cap_mod = types.ModuleType("ai_trading.capital_scaling")
 cap_mod.drawdown_adjusted_kelly = lambda *a, **k: 1.0
-cap_mod.drawdown_adjusted_kelly_alt = cap_mod.drawdown_adjusted_kelly
 sys.modules.setdefault("ai_trading.capital_scaling", cap_mod)
 
 settings_mod = types.ModuleType("ai_trading.config.settings")
