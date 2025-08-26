@@ -19,7 +19,6 @@ from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
 from ai_trading.settings import get_verbose_logging
-from ai_trading.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd  # pylint: disable=unused-import
