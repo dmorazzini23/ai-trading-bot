@@ -3562,14 +3562,18 @@ def compute_spy_vol_stats(runtime) -> None:
         if _VOL_STATS["last_update"] == today:
             return
 
-    df = runtime.data_fetcher.get_daily_df(runtime, REGIME_SYMBOLS[0])
+    try:
+        df = runtime.data_fetcher.get_daily_df(runtime, REGIME_SYMBOLS[0])
+    except DataFetchError as e:
+        logger.error("SPY_VOL_DATA_UNAVAILABLE", extra={"cause": str(e)})
+        raise
     if df is None or len(df) < 252 + ATR_LENGTH:
-        return True
+        raise DataFetchError("insufficient data for SPY volatility stats")
 
     # Compute ATR series for last 252 trading days
     atr_series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH).dropna()
     if len(atr_series) < 252:
-        return True
+        raise DataFetchError("insufficient ATR series for SPY")
 
     recent = atr_series.iloc[-252:]
     mean_val = float(recent.mean())
@@ -3884,7 +3888,7 @@ class DataFetcher:
                 if bars is None or bars.empty:
                     bars = _minute_resample()
                     if bars is None or bars.empty:
-                        return None
+                        raise DataFetchError(f"no daily data for {symbol}")
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -3900,7 +3904,7 @@ class DataFetcher:
                 )
                 bars = _minute_resample()
                 if bars is None or bars.empty:
-                    return None
+                    raise DataFetchError(f"no daily data for {symbol}")
             if len(bars.index) and isinstance(bars.index[0], tuple):
                 idx_vals = [t[1] for t in bars.index]
             else:
@@ -3912,7 +3916,7 @@ class DataFetcher:
                 logger.warning(
                     f"Invalid daily index for {symbol}; skipping. {reason} | {e}"
                 )
-                return None
+                raise DataFetchError(f"invalid daily index for {symbol}")
             bars.index = idx
             df = bars.rename(columns=lambda c: c.lower()).drop(
                 columns=["symbol"], errors="ignore"
@@ -3926,7 +3930,7 @@ class DataFetcher:
                     req.feed = "iex"
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
                     if df_iex is None:
-                        return None
+                        raise DataFetchError(f"no IEX data for {symbol}")
                     if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
@@ -3944,7 +3948,7 @@ class DataFetcher:
                         logger.warning(
                             f"Invalid IEX daily index for {symbol}; skipping. {reason} | {e}"
                         )
-                        return None
+                        raise DataFetchError(f"invalid IEX daily index for {symbol}")
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except (
@@ -4015,7 +4019,7 @@ class DataFetcher:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
-            return None
+            raise DataFetchError(f"failed to fetch daily data for {symbol}") from e
 
         with cache_lock:
             self._daily_cache[symbol] = df
