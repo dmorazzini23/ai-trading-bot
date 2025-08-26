@@ -3583,6 +3583,9 @@ def asset_class_for(symbol: str) -> str:
     return "equity"
 
 
+MAX_VOL_FETCH_RETRIES = 3
+
+
 def compute_spy_vol_stats(runtime) -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
     today = date.today()
@@ -3591,43 +3594,65 @@ def compute_spy_vol_stats(runtime) -> None:
             return
 
     symbol = REGIME_SYMBOLS[0]
-    max_attempts = 3
-    backoff = 1
+    required_rows = 252 + ATR_LENGTH
     df = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            df = runtime.data_fetcher.get_daily_df(runtime, symbol)
-            break
-        except DataFetchError as e:
-            logger.warning(
-                "SPY_VOL_FETCH_RETRY",
-                extra={"attempt": attempt, "symbol": symbol, "cause": str(e)},
-            )
-            if attempt == max_attempts:
-                logger.error(
-                    "SPY_VOL_DATA_UNAVAILABLE",
-                    extra={"symbol": symbol, "attempts": attempt},
+
+    fetcher = getattr(runtime, "data_fetcher", None)
+    cached = None
+    if fetcher is not None:
+        with cache_lock:
+            cached = getattr(fetcher, "_daily_cache", {}).get(symbol)
+    if cached is not None and len(cached) >= required_rows:
+        df = cached
+        logger.info(
+            "SPY_VOL_FETCH_SKIP",
+            extra={"symbol": symbol, "reason": "cache", "rows": len(cached)},
+        )
+    else:
+        logger.info("SPY_VOL_FETCH_REQUEST", extra={"symbol": symbol})
+        backoff = 1
+        for attempt in range(1, MAX_VOL_FETCH_RETRIES + 1):
+            try:
+                df = runtime.data_fetcher.get_daily_df(runtime, symbol)
+                break
+            except DataFetchError as e:
+                logger.warning(
+                    "SPY_VOL_FETCH_RETRY",
+                    extra={"attempt": attempt, "symbol": symbol, "cause": str(e)},
                 )
-                halt_mgr = getattr(runtime, "halt_manager", None)
-                if halt_mgr is not None:
-                    try:
-                        halt_mgr.manual_halt_trading("volatility data unavailable")
-                    except Exception as hm_exc:  # noqa: BLE001
-                        logger.error(
-                            "HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)}
-                        )
-                with vol_lock:
-                    if _VOL_STATS["mean"] is None:
-                        _VOL_STATS["mean"] = 0.0
-                    if _VOL_STATS["std"] is None:
-                        _VOL_STATS["std"] = 0.0
-                    if _VOL_STATS["last"] is None:
-                        _VOL_STATS["last"] = 0.0
-                return
-            time.sleep(backoff)
-            backoff *= 2
-    if df is None or len(df) < 252 + ATR_LENGTH:
-        raise DataFetchError("insufficient data for SPY volatility stats")
+                if attempt == MAX_VOL_FETCH_RETRIES:
+                    logger.error(
+                        "SPY_VOL_DATA_UNAVAILABLE",
+                        extra={
+                            "symbol": symbol,
+                            "attempts": attempt,
+                            "hint": "acquire more historical data",
+                        },
+                    )
+                    halt_mgr = getattr(runtime, "halt_manager", None)
+                    if halt_mgr is not None:
+                        try:
+                            halt_mgr.manual_halt_trading("volatility data unavailable")
+                        except Exception as hm_exc:  # noqa: BLE001
+                            logger.error(
+                                "HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)}
+                            )
+                    with vol_lock:
+                        if _VOL_STATS["mean"] is None:
+                            _VOL_STATS["mean"] = 0.0
+                        if _VOL_STATS["std"] is None:
+                            _VOL_STATS["std"] = 0.0
+                        if _VOL_STATS["last"] is None:
+                            _VOL_STATS["last"] = 0.0
+                    return
+                time.sleep(backoff)
+                backoff *= 2
+
+    if df is None or len(df) < required_rows:
+        raise DataFetchError(
+            f"insufficient data for SPY volatility stats; have {0 if df is None else len(df)} rows, need {required_rows}. "
+            "Acquire more historical data manually."
+        )
 
     # Compute ATR series for last 252 trading days
     atr_series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH).dropna()
