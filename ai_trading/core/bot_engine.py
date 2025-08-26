@@ -3584,6 +3584,8 @@ def asset_class_for(symbol: str) -> str:
 
 
 MAX_VOL_FETCH_RETRIES = 3
+# Default lookback for daily bar requests (~1.5 years to cover 252 trading days)
+DEFAULT_DAILY_LOOKBACK_DAYS = 400
 
 
 def compute_spy_vol_stats(runtime) -> None:
@@ -3614,6 +3616,17 @@ def compute_spy_vol_stats(runtime) -> None:
         for attempt in range(1, MAX_VOL_FETCH_RETRIES + 1):
             try:
                 df = runtime.data_fetcher.get_daily_df(runtime, symbol)
+                row_count = 0 if df is None else len(df)
+                if row_count < required_rows:
+                    logger.error(
+                        "SPY_VOL_FETCH_INSUFFICIENT",
+                        extra={
+                            "symbol": symbol,
+                            "required": required_rows,
+                            "received": row_count,
+                        },
+                    )
+                    break
                 break
             except DataFetchError as e:
                 logger.warning(
@@ -3648,9 +3661,14 @@ def compute_spy_vol_stats(runtime) -> None:
                 time.sleep(backoff)
                 backoff *= 2
 
-    if df is None or len(df) < required_rows:
+    row_count = 0 if df is None else len(df)
+    logger.info(
+        "SPY_VOL_ROW_COUNTS",
+        extra={"symbol": symbol, "required": required_rows, "received": row_count},
+    )
+    if row_count < required_rows:
         raise DataFetchError(
-            f"insufficient data for SPY volatility stats; have {0 if df is None else len(df)} rows, need {required_rows}. "
+            f"insufficient data for SPY volatility stats; have {row_count} rows, need {required_rows}. "
             "Acquire more historical data manually."
         )
 
@@ -3842,7 +3860,7 @@ class DataFetcher:
                             break
 
         end_ts = datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC) + timedelta(days=1)
-        start_ts = end_ts - timedelta(days=150)
+        start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
 
         logger.info(
             "DAILY_FETCH_REQUEST",
