@@ -43,7 +43,11 @@ def _resolve_max_position_size(
     *,
     default_equity: float = 200000.0,
 ) -> tuple[float, str]:
-    """Resolve ``max_position_size`` with strict validation."""
+    """Resolve ``max_position_size`` with strict validation.
+
+    When ``equity`` is ``None`` or non-positive, ``default_equity`` is used
+    as the basis for the derived position size.
+    """
 
     env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
     if env_val is not None:
@@ -62,6 +66,11 @@ def _resolve_max_position_size(
     if provided > 0:
         return (float(provided), "provided")
 
+    if equity is None:
+        _log.warning(
+            "EQUITY_MISSING",
+            extra={"field": "equity", "default_equity": default_equity, "capital_cap": capital_cap},
+        )
     basis = equity if equity is not None and equity > 0 else default_equity
     resolved = float(round(capital_cap * basis, 2))
     _log.info(
@@ -78,6 +87,14 @@ def _resolve_max_position_size(
     return (resolved, "autofix")
 
 def _fallback_max_size(cfg, tcfg) -> float:
+    env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
+    if env_val is not None:
+        try:
+            v = float(env_val)
+            if v > 0:
+                return v
+        except ValueError:
+            _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
     for name in ('max_position_size_fallback', 'max_position_size_default'):
         v = getattr(tcfg, name, None)
         if v is not None:
@@ -106,7 +123,7 @@ def _get_equity_from_alpaca(cfg) -> float:
         data = resp.json()
         eq = _coerce_float(data.get('equity'), 0.0)
         return eq
-    except (ValueError, TypeError):
+    except Exception:
         return 0.0
 
 def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[float, dict[str, Any]]:
@@ -116,6 +133,10 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)
     vmin = getattr(tcfg, 'max_position_size_min', None)
     vmax = getattr(tcfg, 'max_position_size_max', None)
+    default_eq = _coerce_float(
+        getattr(tcfg, 'max_position_equity_fallback', getattr(cfg, 'max_position_equity_fallback', 200000.0)),
+        200000.0,
+    )
     if mode != 'AUTO':
         raw_val = getattr(tcfg, 'max_position_size', None)
         cur = _coerce_float(raw_val, 0.0)
@@ -124,7 +145,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             if raw_val is not None:
                 raise ValueError('max_position_size must be positive')
             eq = getattr(tcfg, 'equity', getattr(cfg, 'equity', None))
-            cur, source = _resolve_max_position_size(cur, cap, eq)
+            cur, source = _resolve_max_position_size(cur, cap, eq, default_equity=default_eq)
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
         return (
             cur,
@@ -140,12 +161,39 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     eq = _get_equity_from_alpaca(cfg)
     if eq <= 0.0 or cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
+        _log.info(
+            "CONFIG_AUTOFIX",
+            extra={
+                'field': 'max_position_size',
+                'given': 0.0,
+                'fallback': fb,
+                'reason': 'missing_equity_or_cap',
+                'equity': eq,
+                'capital_cap': cap,
+            },
+        )
         val = _clamp(fb, vmin, vmax)
         _CACHE.value, _CACHE.ts = (val, _now_utc())
-        return (val, {'mode': mode, 'source': 'fallback', 'equity': eq, 'capital_cap': cap, 'clamp_min': vmin, 'clamp_max': vmax, 'refreshed_at': _CACHE.ts.isoformat()})
+        return (
+            val,
+            {
+                'mode': mode,
+                'source': 'fallback',
+                'equity': eq,
+                'capital_cap': cap,
+                'clamp_min': vmin,
+                'clamp_max': vmax,
+                'refreshed_at': _CACHE.ts.isoformat(),
+            },
+        )
     computed = float(floor(eq * cap))
-    val = _clamp(computed, _coerce_float(vmin, None) if vmin is not None else None, _coerce_float(vmax, None) if vmax is not None else None)
+    val = _clamp(
+        computed,
+        _coerce_float(vmin, None) if vmin is not None else None,
+        _coerce_float(vmax, None) if vmax is not None else None,
+    )
     if val <= 0.0:
         val = _fallback_max_size(cfg, tcfg)
     _CACHE.value, _CACHE.ts = (val, _now_utc())
     return (val, {'mode': mode, 'source': 'alpaca', 'equity': eq, 'capital_cap': cap, 'computed': computed, 'clamp_min': vmin, 'clamp_max': vmax, 'refreshed_at': _CACHE.ts.isoformat()})
+

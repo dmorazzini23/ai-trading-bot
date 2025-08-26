@@ -16,7 +16,7 @@ from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact
 from ai_trading.net.http import build_retrying_session, set_global_session
-from ai_trading.position_sizing import resolve_max_position_size
+from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca
 from ai_trading.config.management import get_env
 
 
@@ -107,6 +107,18 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         errors.append(f"CAPITAL_CAP out of range: {cap}")
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
+    eq = _get_equity_from_alpaca(cfg)
+    if eq > 0:
+        try:
+            setattr(tcfg, "equity", eq)
+        except Exception:
+            object.__setattr__(tcfg, "equity", eq)
+    else:
+        logger.warning("ACCOUNT_EQUITY_MISSING", extra={"equity": eq})
+        try:
+            setattr(tcfg, "equity", None)
+        except Exception:
+            object.__setattr__(tcfg, "equity", None)
     try:
         resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
         if hasattr(tcfg, "max_position_size"):

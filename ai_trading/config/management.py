@@ -165,6 +165,7 @@ class TradingConfig:
     capital_cap: Optional[float] = None
     dollar_risk_limit: Optional[float] = None
     max_position_size: Optional[float] = None
+    max_position_equity_fallback: float = 200000.0
     sector_exposure_cap: Optional[float] = None
     max_drawdown_threshold: Optional[float] = None
     trailing_factor: Optional[float] = None
@@ -198,6 +199,7 @@ class TradingConfig:
             "capital_cap",
             "dollar_risk_limit",
             "max_position_size",
+            "max_position_equity_fallback",
             "sector_exposure_cap",
             "max_drawdown_threshold",
             "trailing_factor",
@@ -245,6 +247,9 @@ class TradingConfig:
                 "DOLLAR_RISK_LIMIT", float, aliases=("DAILY_LOSS_LIMIT",)
             ),
             max_position_size=mps,
+            max_position_equity_fallback=_get(
+                "MAX_POSITION_EQUITY_FALLBACK", float, default=200000.0
+            ),
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
             max_drawdown_threshold=_get("MAX_DRAWDOWN_THRESHOLD", float),
             trailing_factor=_get("TRAILING_FACTOR", float),
