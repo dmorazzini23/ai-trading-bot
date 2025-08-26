@@ -76,7 +76,7 @@ SENTIMENT_BASE_DELAY = 5
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 _SENTIMENT_CIRCUIT_BREAKER = {'failures': 0, 'last_failure': 0, 'state': 'closed'}
 sentiment_lock = Lock()
-__all__ = ['fetch_sentiment', 'predict_text_sentiment', 'analyze_text', 'sentiment_lock', '_SENTIMENT_CACHE', 'SENTIMENT_FAILURE_THRESHOLD', 'SENTIMENT_API_KEY']
+__all__ = ['fetch_sentiment', 'analyze_text', 'sentiment_lock', '_SENTIMENT_CACHE', 'SENTIMENT_FAILURE_THRESHOLD', 'SENTIMENT_API_KEY']
 
 def _check_sentiment_circuit_breaker() -> bool:
     """Check if sentiment circuit breaker allows requests."""
@@ -170,7 +170,9 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             for art in articles:
                 text = (art.get('title') or '') + '. ' + (art.get('description') or '')
                 if text.strip():
-                    scores.append(predict_text_sentiment(text))
+                    res = analyze_text(text)
+                    if res.get('available'):
+                        scores.append(float(res['pos'] - res['neg']))
         news_score = float(sum(scores) / len(scores)) if scores else 0.0
         form4_score = 0.0
         try:
@@ -331,14 +333,6 @@ def analyze_text(text: str, logger=logger) -> dict:
     except (ValueError, TypeError) as exc:
         logger.warning('analyze_text inference failed: %s', exc)
         return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
-
-def predict_text_sentiment(text: str) -> float:
-    """Legacy float sentiment interface."""
-    _init_sentiment()
-    res = analyze_text(text)
-    if not res.get('available'):
-        return 0.0
-    return float(res['pos'] - res['neg'])
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
     """
