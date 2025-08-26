@@ -310,9 +310,10 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             logging.getLogger(__name__).debug('Logging already configured, skipping duplicate setup')
             return logging.getLogger()
         logger = logging.getLogger()
-        _ensure_single_handler(logger)
         if _configured:
             return logger
+        _configured = True
+        _ensure_single_handler(logger)
         logger.handlers.clear()
         logger.setLevel(logging.DEBUG)
         try:
@@ -360,7 +361,6 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
         _listener.start()
         atexit.register(_safe_shutdown_logging)
-        _configured = True
         _LOGGING_CONFIGURED = True
         logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
         return logger
@@ -404,7 +404,8 @@ def get_logger(name: str) -> SanitizingLoggerAdapter:
     _ensure_single_handler(logging.getLogger())
     "Return a named logger wrapped with :class:`SanitizingLoggerAdapter`."
     if name not in _loggers:
-        setup_logging()
+        if not _LOGGING_CONFIGURED:
+            setup_logging()
         base = logging.getLogger(name or _ROOT_LOGGER_NAME)
         base.propagate = True
         base.setLevel(logging.NOTSET)
