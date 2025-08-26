@@ -68,6 +68,11 @@ config.reload_env()
 * `/healthz` JSON: `{"ok": true, "ts": "...", "service": "ai-trading"}`
 * `/metrics` exposes Prometheus format
 * Set `RUN_HEALTHCHECK=1` to serve these on `$HEALTHCHECK_PORT` (default **9001**)
+* Local check:
+  ```bash
+  RUN_HEALTHCHECK=1 python -m ai_trading.app &
+  curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
+  ```
 * Requirement: Endpoints must not raise exceptions; log and return `ok: false` if degraded.
 
 ## 8) Alpaca SDK stance
