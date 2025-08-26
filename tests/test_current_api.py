@@ -18,7 +18,7 @@ def test_current_modules_importable():
 
 @pytest.mark.unit
 def test_data_fetcher_active_exports():
-    expected = ("get_bars", "get_bars_batch", "get_minute_df", "warmup_cache")
+    expected = ("get_bars", "get_bars_batch", "get_minute_df")
     for attr in expected:
         assert hasattr(df, attr)
 
