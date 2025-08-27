@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-legacy_modules=(trade_execution signals portfolio rebalancer)
+legacy_modules=(trade_execution signals portfolio rebalancer data_fetcher pipeline indicators)
 found=0
 
 while IFS= read -r -d '' f; do
