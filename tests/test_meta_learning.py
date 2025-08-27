@@ -168,7 +168,7 @@ def test_portfolio_rl_trigger(monkeypatch):
             return x
 
     monkeypatch.setattr(nn, "Linear", lambda *a, **k: FakeLinear())
-    import portfolio_rl
+    import ai_trading.portfolio_rl as portfolio_rl
     monkeypatch.setattr(portfolio_rl, "_TORCH_AVAILABLE", True)
     monkeypatch.setattr(portfolio_rl.optim, "Adam", lambda *a, **k: types.SimpleNamespace(step=lambda: None))
     learner = meta_learning.PortfolioReinforcementLearner()

@@ -52,6 +52,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing helpers
 open = open
 logger = get_logger(__name__)
 
+try:
+    from ai_trading.portfolio_rl import PortfolioReinforcementLearner
+except Exception:  # pragma: no cover - optional dependency
+    PortfolioReinforcementLearner = None  # type: ignore[assignment]
+
 
 def _import_numpy(optional: bool = False):
     """Import :mod:`numpy` lazily."""
@@ -1080,9 +1085,8 @@ def trigger_rebalance_on_regime(df: 'pd.DataFrame') -> None:
     settings = get_settings()
     if not settings.enable_reinforcement_learning:
         return
-    if find_spec('portfolio_rl') is None:
-        raise RuntimeError('Reinforcement learning enabled but portfolio_rl module unavailable. Set ENABLE_REINFORCEMENT_LEARNING=False to disable')
-    from portfolio_rl import PortfolioReinforcementLearner
+    if PortfolioReinforcementLearner is None:
+        raise RuntimeError('Reinforcement learning enabled but ai_trading.portfolio_rl module unavailable. Set ENABLE_REINFORCEMENT_LEARNING=False to disable')
     rl = PortfolioReinforcementLearner()
     if 'Regime' in df.columns and len(df) > 2:
         if df['Regime'].iloc[-1] != df['Regime'].iloc[-2]:

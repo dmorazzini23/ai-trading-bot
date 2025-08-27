@@ -98,6 +98,7 @@ class PortfolioReinforcementLearner:
                     total = 1.0
                 return [w / total for w in weights]
             return weights
+
         try:
             state_tensor = torch.tensor(state, dtype=torch.float32)
             weights = self.actor(state_tensor).detach().numpy()
