@@ -40,6 +40,14 @@ except Exception:  # pragma: no cover - only hit in test bootstrap
         "alpaca.data.requests",
         _importlib.import_module("tests.vendor_stubs.alpaca.data.requests"),
     )
+    _sys.modules.setdefault(
+        "alpaca.common",
+        _importlib.import_module("tests.vendor_stubs.alpaca.common"),
+    )
+    _sys.modules.setdefault(
+        "alpaca.common.exceptions",
+        _importlib.import_module("tests.vendor_stubs.alpaca.common.exceptions"),
+    )
     from alpaca.trading.client import TradingClient  # noqa: F401
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # noqa: F401
 

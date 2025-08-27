@@ -1,5 +1,6 @@
 import builtins
 import importlib
+import sys
 
 import pytest
 from tests.optdeps import require
@@ -70,6 +71,9 @@ def test_initialize_raises_when_sdk_missing(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.delitem(sys.modules, "alpaca", raising=False)
+    monkeypatch.delitem(sys.modules, "alpaca.trading", raising=False)
+    monkeypatch.delitem(sys.modules, "alpaca.trading.client", raising=False)
 
     with pytest.raises(RuntimeError):
         alpaca_credentials.initialize(shadow=False)
