@@ -245,8 +245,8 @@ pip install -r requirements-test.txt -c constraints-dev.txt
 # Install project in editable mode
 pip install -e .
 
-# Optional RL extras
-# pip install -r requirements-extras-rl.txt
+# Optional RL extras (CUDA pins bundled to match torch)
+pip install -r requirements-extras-rl.txt -c constraints.txt -c constraints-dev.txt
 
 # Optional training extras
 # pip install -r requirements-extras-train.txt
