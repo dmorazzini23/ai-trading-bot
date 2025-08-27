@@ -82,6 +82,9 @@ from ai_trading.data.fetch import get_minute_df
 from ai_trading.execution.engine import ExecutionEngine
 ```
 Root imports (e.g., `from signals import ...`) have been removed.
+CI enforces this via `ci/scripts/forbid_legacy_imports.sh`, which fails if
+legacy modules like `trade_execution`, `signals`, `portfolio`, or `rebalancer`
+are imported directly.
 
 ## ✨ Key Features
 
