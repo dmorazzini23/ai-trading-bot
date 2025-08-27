@@ -601,7 +601,7 @@ pytest -m "integration"  # Integration tests
 python -m cProfile -m ai_trading > profile_output.txt
 
 # Memory profiling
-python -m memory_profiler bot_engine.py
+python -m memory_profiler -m ai_trading.core.bot_engine
 
 # Benchmark indicators
 python profile_indicators.py
@@ -1227,10 +1227,10 @@ p.sort_stats('cumulative').print_stats(20)
 
 # Memory profiling
 pip install memory-profiler
-python -m memory_profiler bot_engine.py
+python -m memory_profiler -m ai_trading.core.bot_engine
 
 # Line-by-line profiling
-kernprof -l -v bot_engine.py
+kernprof -l -v -m ai_trading.core.bot_engine
 
 # Real-time performance monitoring
 python performance_optimizer.py --monitor --duration 3600

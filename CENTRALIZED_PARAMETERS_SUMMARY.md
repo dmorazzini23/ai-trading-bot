@@ -119,10 +119,10 @@ export TRADING_MODE=aggressive
 
 ### Legacy Compatibility
 ```python
-from bot_engine import BotMode
+from ai_trading.core import bot_engine
 
 # Existing code continues to work
-bot_mode = BotMode("balanced")
+bot_mode = bot_engine.BotMode("balanced")
 params = bot_mode.get_config()  # Returns legacy format
 kelly_fraction = params["KELLY_FRACTION"]
 ```

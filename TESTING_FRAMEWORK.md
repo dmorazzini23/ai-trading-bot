@@ -139,7 +139,7 @@ import numpy as np
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch, MagicMock
 
-from bot_engine import BotState, pre_trade_health_check, run_all_trades_worker
+from ai_trading.core import bot_engine
 from ai_trading.risk.engine import calculate_position_size
 
 
@@ -148,7 +148,7 @@ class TestBotState:
 
     def test_bot_state_initialization(self):
         """Test BotState initializes with correct defaults."""
-        state = BotState()
+        state = bot_engine.BotState()
 
         assert state.loss_streak == 0
         assert state.streak_halt_until is None
@@ -161,7 +161,7 @@ class TestBotState:
 
     def test_bot_state_position_tracking(self):
         """Test position tracking functionality."""
-        state = BotState()
+        state = bot_engine.BotState()
 
         # Add positions
         state.position_cache['AAPL'] = 100
@@ -176,7 +176,7 @@ class TestBotState:
 
     def test_bot_state_risk_tracking(self):
         """Test risk management state tracking."""
-        state = BotState()
+        state = bot_engine.BotState()
 
         # Test drawdown tracking
         state.last_drawdown = -0.05
@@ -211,13 +211,13 @@ class TestPreTradeHealthCheck:
     def test_health_check_with_valid_data(self, mock_bot_context, sample_symbols):
         """Test health check with valid market data."""
         # Mock successful data fetching
-        with patch('bot_engine.get_historical_data') as mock_fetch:
+        with patch('ai_trading.core.bot_engine.get_historical_data') as mock_fetch:
             mock_fetch.return_value = pd.DataFrame({
                 'close': np.random.randn(50) + 100,
                 'volume': np.random.randint(1000, 10000, 50)
             }, index=pd.date_range('2024-01-01', periods=50))
 
-            result = pre_trade_health_check(mock_bot_context, sample_symbols, min_rows=30)
+            result = bot_engine.pre_trade_health_check(mock_bot_context, sample_symbols, min_rows=30)
 
             assert isinstance(result, dict)
             assert result['checked'] == len(sample_symbols)
@@ -225,14 +225,14 @@ class TestPreTradeHealthCheck:
 
     def test_health_check_with_insufficient_data(self, mock_bot_context, sample_symbols):
         """Test health check with insufficient market data."""
-        with patch('bot_engine.get_historical_data') as mock_fetch:
+        with patch('ai_trading.core.bot_engine.get_historical_data') as mock_fetch:
             # Return insufficient data (only 10 rows)
             mock_fetch.return_value = pd.DataFrame({
                 'close': np.random.randn(10) + 100,
                 'volume': np.random.randint(1000, 10000, 10)
             }, index=pd.date_range('2024-01-01', periods=10))
 
-            result = pre_trade_health_check(mock_bot_context, sample_symbols, min_rows=30)
+            result = bot_engine.pre_trade_health_check(mock_bot_context, sample_symbols, min_rows=30)
 
             assert isinstance(result, dict)
             assert len(result['failures']) > 0
@@ -240,10 +240,10 @@ class TestPreTradeHealthCheck:
 
     def test_health_check_with_api_failure(self, mock_bot_context, sample_symbols):
         """Test health check when API calls fail."""
-        with patch('bot_engine.get_historical_data') as mock_fetch:
+        with patch('ai_trading.core.bot_engine.get_historical_data') as mock_fetch:
             mock_fetch.side_effect = ConnectionError("API unavailable")
 
-            result = pre_trade_health_check(mock_bot_context, sample_symbols)
+            result = bot_engine.pre_trade_health_check(mock_bot_context, sample_symbols)
 
             assert isinstance(result, dict)
             assert len(result['failures']) > 0
@@ -543,10 +543,10 @@ class TestTradingWorkflow:
     @patch.dict(os.environ, {'DRY_RUN': 'true', 'TRADING_MODE': 'testing'})
     def test_complete_trading_cycle(self):
         """Test a complete trading cycle in dry run mode."""
-        from bot_engine import BotState, run_all_trades_worker
+        from ai_trading.core import bot_engine
 
         # Initialize bot state
-        state = BotState()
+        state = bot_engine.BotState()
         state.running = False  # Ensure not already running
 
         # Mock model
@@ -554,7 +554,7 @@ class TestTradingWorkflow:
 
         # Run trading cycle
         try:
-            run_all_trades_worker(state, mock_model)
+            bot_engine.run_all_trades_worker(state, mock_model)
 
             # Check that state was updated
             assert state.last_run_at is not None
@@ -933,9 +933,9 @@ class TestHelpers:
         if symbols is None:
             symbols = {'AAPL': 100, 'SPY': 50}
 
-        from bot_engine import BotState
+        from ai_trading.core import bot_engine
 
-        state = BotState()
+        state = bot_engine.BotState()
         state.position_cache = symbols.copy()
 
         for symbol in symbols:
