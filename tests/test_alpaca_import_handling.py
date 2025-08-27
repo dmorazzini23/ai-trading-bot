@@ -27,7 +27,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
         original_import = __import__
 
         def mock_import(name, *args, **kwargs):
-            if name.startswith("alpaca_trade_api"):
+            if name.startswith("alpaca"):
                 raise TypeError("'function' object is not iterable")
             return original_import(name, *args, **kwargs)
 
@@ -37,7 +37,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
             REST = None
 
             try:
-                from alpaca_trade_api import REST
+                from alpaca import REST
 
                 self.fail("Expected alpaca import to fail")
             except TypeError as e:

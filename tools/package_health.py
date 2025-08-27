@@ -12,10 +12,10 @@ def _probe_psutil() -> bool:
     except (KeyError, ValueError, TypeError):
         return False
 
-def _probe_alpaca_trade_api() -> bool:
+def _probe_alpaca() -> bool:
     try:
-        import alpaca_trade_api
-        getattr(alpaca_trade_api, '__version__', 'unknown')
+        import alpaca
+        getattr(alpaca, '__version__', 'unknown')
         return True
     except (KeyError, ValueError, TypeError):
         return False
@@ -68,7 +68,7 @@ def _probe_model_config():
     return True
 if __name__ == '__main__':
     _probe_psutil()
-    _probe_alpaca_trade_api()
+    _probe_alpaca()
     _probe_strategy_allocator()
     _probe_async_testing()
     _probe_model_and_universe()

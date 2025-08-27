@@ -9,6 +9,7 @@ HINT = {
     "talib":        'pip install "ai-trading-bot[ta]"',
     "stable_baselines3": 'pip install "stable-baselines3 gymnasium torch"',
     "gymnasium":    'pip install "stable-baselines3 gymnasium torch"',
+    "alpaca": 'pip install "alpaca-py"',
     "alpaca_trade_api": 'pip install "alpaca-trade-api"',
     "alpaca_api":   'pip install "ai-trading-bot"',
     "tenacity":     'pip install "tenacity"',

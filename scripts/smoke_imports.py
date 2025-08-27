@@ -48,7 +48,7 @@ def main():
     tests.append(test_class_instantiation('ai_trading.monitoring', 'MetricsCollector', description='- metrics collector instantiation'))
     tests.append(test_class_instantiation('ai_trading.monitoring', 'PerformanceMonitor', description='- performance monitor instantiation'))
     tests.append(test_import('pandas_market_calendars', '- market calendars'))
-    tests.append(test_import('alpaca_trade_api.rest', '- Alpaca legacy API'))
+    tests.append(test_import('alpaca.trading.client', '- Alpaca SDK (alpaca-py)'))
     tests.append(test_import('ai_trading.portfolio.optimizer', '- portfolio optimizer'))
     tests.append(test_import('ai_trading.execution.transaction_costs', '- transaction costs'))
     tests.append(test_import('scripts.strategy_allocator', '- strategy allocator'))

@@ -2,7 +2,7 @@
 numpy>=1.26
 pandas>=2.2
 pandas-market-calendars>=4.4
-alpaca-trade-api==3.2.0
+alpaca-py==0.42.0
 pytest>=7.4
 pytest-xdist>=3.6
 psutil>=5.9

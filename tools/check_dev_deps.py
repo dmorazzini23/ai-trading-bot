@@ -15,7 +15,6 @@ REQUIRED = [
     ("gymnasium", "gymnasium"),
     # Both SDK lines should import cleanly during collection
     ("alpaca-py", "alpaca"),  # AI-AGENT-REF: modern SDK top-level name is `alpaca`
-    ("alpaca-trade-api", "alpaca_trade_api"),
 ]
 
 
