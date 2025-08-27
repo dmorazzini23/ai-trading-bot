@@ -84,9 +84,22 @@ class RiskEngine:
             secret = get_alpaca_secret_key_plain()
             api_key = getattr(s, 'alpaca_api_key', None)
             base_url = getattr(s, 'alpaca_base_url', None)
+            oauth = get_env('ALPACA_OAUTH')
             has_keypair = api_key and secret
-            if base_url and has_keypair:
-                self.data_client = TradingClient(api_key, secret, base_url)
+            if base_url:
+                if has_keypair and oauth:
+                    logger.warning('Both API key/secret and OAuth token provided; using API key/secret')
+                if has_keypair:
+                    self.data_client = TradingClient(
+                        api_key=api_key,
+                        secret_key=secret,
+                        url_override=base_url,
+                    )
+                elif oauth:
+                    self.data_client = TradingClient(
+                        oauth_token=oauth,
+                        url_override=base_url,
+                    )
         except (APIError, TypeError, AttributeError, OSError) as e:
             logger.warning('Could not initialize TradingClient: %s', e)
         self._returns: list[float] = []
