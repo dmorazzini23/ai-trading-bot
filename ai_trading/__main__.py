@@ -71,10 +71,10 @@ def run_trade() -> None:
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
-    from ai_trading import runner
-    runner._preflight_import_health()
+    from ai_trading import main as _main
+    _main.preflight_import_health()
 
-    _run_loop(runner.run_cycle, args, "Trade")
+    _run_loop(_main.run_cycle, args, "Trade")
 
 
 def run_backtest() -> None:
@@ -96,10 +96,10 @@ def run_backtest() -> None:
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
-    from ai_trading import runner
-    runner._preflight_import_health()
+    from ai_trading import main as _main
+    _main.preflight_import_health()
 
-    _run_loop(runner.run_cycle, args, "Backtest")
+    _run_loop(_main.run_cycle, args, "Backtest")
 
 
 def run_healthcheck() -> None:
@@ -122,8 +122,8 @@ def run_healthcheck() -> None:
 
     ensure_dotenv_loaded()
     from ai_trading.health_monitor import run_health_check
-    from ai_trading import runner
-    runner._preflight_import_health()
+    from ai_trading import main as _main
+    _main.preflight_import_health()
 
     _run_loop(run_health_check, args, "Health check")
 
@@ -147,10 +147,10 @@ def main() -> None:
     from ai_trading.env import ensure_dotenv_loaded
 
     ensure_dotenv_loaded()
-    from ai_trading import runner
-    runner._preflight_import_health()
+    from ai_trading import main as _main
+    _main.preflight_import_health()
 
-    _run_loop(runner.run_cycle, args, "Main")
+    _run_loop(_main.run_cycle, args, "Main")
 
 
 if __name__ == "__main__":

@@ -11,9 +11,6 @@ python -X dev -c "import ai_trading; print('IMPORT_OK')"
 echo "== CLI dry-run =="
 python -m ai_trading --dry-run || { echo 'dry-run failed'; exit 1; }
 
-echo "== Runner one-cycle =="
-python -m ai_trading.runner -n 1 -i 0 || { echo 'runner -n1 failed'; exit 1; }
-
 echo "== Heavy import check =="
 python - <<'PY'
 import importlib, sys
@@ -29,7 +26,7 @@ PY
 
 echo "== Ruff (core) =="
 if command -v ruff >/dev/null 2>&1; then
-  ruff check ai_trading/main.py ai_trading/core/bot_engine.py ai_trading/runner.py ai_trading/process_manager.py || true
+  ruff check ai_trading/main.py ai_trading/core/bot_engine.py ai_trading/process_manager.py || true
 else
   echo "ruff not installed; skipping lint"
 fi

@@ -32,9 +32,9 @@ def alpaca_client(self):
 **Solution**: Enhanced `ProcessManager` with:
 - `acquire_process_lock()` - File-based process locking mechanism
 - `check_multiple_instances()` - Detection and remediation recommendations
-- Integrated into `runner.py` startup to prevent duplicate instances
+- Integrated into `main.py` startup to prevent duplicate instances
 
-**Files**: `ai_trading/process_manager.py` (lines 355-428), `runner.py` (lines 109-138)
+**Files**: `ai_trading/process_manager.py` (lines 355-428), `main.py` (lines 109-138)
 
 ### 4. ✅ Data Staleness Validation
 **Problem**: All symbols trading on stale data
@@ -60,7 +60,7 @@ def alpaca_client(self):
 
 ### Surgical Changes (Following AGENTS.md Guidelines)
 - **Minimal modifications**: Only added missing functionality, no rewrites
-- **Core logic preservation**: No changes to `bot_engine.py`, `runner.py`, `trade_execution.py` core logic
+- **Core logic preservation**: No changes to `bot_engine.py`, `main.py`, `trade_execution.py` core logic
 - **Backward compatibility**: All existing code continues to work unchanged
 - **Defensive programming**: Graceful fallbacks for all new functionality
 
@@ -132,7 +132,7 @@ def alpaca_client(self):
 1. **risk_engine.py**: Added missing critical methods (4 new methods, 35 lines)
 2. **bot_engine.py**: Added alpaca_client compatibility property (4 lines)
 3. **ai_trading/process_manager.py**: Enhanced with locking and instance detection (73 lines)
-4. **runner.py**: Integrated process management (29 lines)
+4. **main.py**: Integrated process management (29 lines)
 5. **audit.py**: Enhanced permission error handling (35 lines)
 6. **data_validation.py**: Complete new module for data validation (217 lines)
 

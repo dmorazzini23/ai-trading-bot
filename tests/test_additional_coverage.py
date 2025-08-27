@@ -281,14 +281,6 @@ def test_risk_engine_branches(monkeypatch):
     assert res == 10
 
 
-def test_runner_main_loop(monkeypatch):
-    """Runner exits on SystemExit 0 from bot.main."""
-    bot_mod = types.ModuleType("bot")
-    bot_mod.main = lambda: (_ for _ in ()).throw(SystemExit(0))
-    sys.modules["bot"] = bot_mod
-    runpy.run_module("runner", run_name="__main__")
-
-
 def test_mean_reversion_nan_and_short(monkeypatch):
     """NaN close and negative z triggers branches."""
     strat = MeanReversionStrategy(lookback=1, z=1.0)

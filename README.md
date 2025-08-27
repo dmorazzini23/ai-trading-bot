@@ -1436,7 +1436,7 @@ python -m venv .venv && . .venv/bin/activate
 bash scripts/bootstrap.sh
 python -m compileall ai_trading
 pytest -q
-python -m ai_trading.runner --help
+python -m ai_trading --help
 ```
 
 If imports fail for missing scientific packages, ensure you've run

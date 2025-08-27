@@ -91,7 +91,7 @@ def test_build_fetcher_raises_and_engine_skips(monkeypatch, caplog):
         raise df.DataFetchError("no fetcher")
 
     monkeypatch.setattr(df, "build_fetcher", boom)
-    logger = logging.getLogger("ai_trading.runner")
+    logger = logging.getLogger("ai_trading.main")
     seen = {}
 
     def fake_warning(msg, *a, **k):

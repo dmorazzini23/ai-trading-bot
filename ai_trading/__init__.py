@@ -11,7 +11,7 @@ _PUBLIC_MODULES = {
     'config', 'logging', 'utils',
     'alpaca_api', 'data_validation', 'indicators', 'rebalancer', 'audit',
     'core', 'strategy_allocator', 'predict', 'meta_learning',
-    'signals', 'settings', 'runner', 'portfolio', 'app', 'ml_model',
+    'signals', 'settings', 'portfolio', 'app', 'ml_model',
     'paths', 'main', 'position_sizing', 'capital_scaling', 'indicator_manager',
     'execution', 'production_system', 'trade_logic',
 }

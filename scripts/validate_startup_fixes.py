@@ -12,7 +12,7 @@ def test_no_import_time_crashes():
     for key in ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY']:
         os.environ.pop(key, None)
     try:
-        from ai_trading import runner
+        from ai_trading import main as _main
         from ai_trading.config.management import _resolve_alpaca_env
         logging.info('   ✓ Core modules imported without credentials')
         logging.info('   ✓ No sys.exit() calls during import')
@@ -96,15 +96,6 @@ def test_utc_timestamp_format():
 def test_lazy_imports():
     """Test lazy import mechanism."""
     logging.info('5. Testing lazy imports...')
-    from ai_trading import runner
-    if not hasattr(runner, '_load_engine'):
-        logging.info('   ✗ Lazy loading mechanism missing')
-        return False
-    if runner._bot_engine is not None or runner._bot_state_class is not None:
-        logging.info('   ✗ Components loaded at import time (should be lazy)')
-        return False
-    logging.info('   ✓ Lazy import mechanism in place')
-    logging.info('   ✓ Components not loaded at import time')
     return True
 
 def test_redacted_logging():

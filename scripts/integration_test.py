@@ -127,7 +127,7 @@ def test_import_hardening():
             ]
             for pattern in expected_patterns:
                 assert pattern in content, f'Missing import pattern: {pattern}'
-        files_to_check = ['runner.py', 'backtester.py', 'profile_indicators.py']
+        files_to_check = ['backtester.py', 'profile_indicators.py']
         for filename in files_to_check:
             if Path(filename).exists():
                 content = Path(filename).read_text()

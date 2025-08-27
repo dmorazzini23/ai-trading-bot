@@ -83,7 +83,7 @@ This document summarizes the implementation of fixes for critical issues identif
 
 ### Code Quality Standards
 - All changes follow AGENTS.md guidelines for minimal modifications
-- Core trading logic in `bot_engine.py`, `runner.py`, `trade_execution.py` preserved
+- Core trading logic in `bot_engine.py`, `main.py`, `trade_execution.py` preserved
 - Added `AI-AGENT-REF` comments for all modifications
 - Maintained backward compatibility
 - Used existing patterns and conventions
