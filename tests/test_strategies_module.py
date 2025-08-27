@@ -37,24 +37,18 @@ df_stub.get_minute_df = lambda *a, **k: None
 df_stub.DataFetchError = Exception
 df_stub.get_cached_minute_timestamp = lambda *a, **k: 0
 df_stub.last_minute_bar_age_seconds = lambda *a, **k: 0
-data_pkg = types.ModuleType("ai_trading.data")
-data_pkg.fetch = df_stub
-sys.modules["ai_trading.data"] = data_pkg
 sys.modules["ai_trading.data.fetch"] = df_stub
 
-market_pkg = types.ModuleType("ai_trading.market")
 cal_stub = types.ModuleType("ai_trading.market.calendars")
 cal_stub.ensure_final_bar = lambda *a, **k: None
-sys.modules["ai_trading.market"] = market_pkg
 sys.modules["ai_trading.market.calendars"] = cal_stub
 
-risk_pkg = types.ModuleType("ai_trading.risk")
 cb_stub = types.ModuleType("ai_trading.risk.circuit_breakers")
 cb_stub.DrawdownCircuitBreaker = object
-sys.modules["ai_trading.risk"] = risk_pkg
 sys.modules["ai_trading.risk.circuit_breakers"] = cb_stub
 adaptive_stub = types.ModuleType("ai_trading.risk.adaptive_sizing")
 adaptive_stub.AdaptivePositionSizer = object
+adaptive_stub.MarketRegime = type("MarketRegime", (object,), {})
 sys.modules["ai_trading.risk.adaptive_sizing"] = adaptive_stub
 
 pandas_ta_stub = types.ModuleType("pandas_ta")

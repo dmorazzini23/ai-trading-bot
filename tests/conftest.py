@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 import pathlib
 
 import pytest
-import types
 
 try:
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
@@ -75,3 +74,12 @@ def _seed_prng() -> None:
         pass
     else:
         torch.manual_seed(0)
+
+
+def reload_module(mod):
+    """Reload a module by object or name for tests."""
+    import importlib
+
+    if isinstance(mod, str):
+        return importlib.reload(importlib.import_module(mod))
+    return importlib.reload(mod)

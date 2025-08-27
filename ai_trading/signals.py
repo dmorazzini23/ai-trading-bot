@@ -72,6 +72,8 @@ def _get_gaussian_hmm():
         return GaussianHMM
     except Exception:
         return None
+
+GaussianHMM = _get_gaussian_hmm()
 _LAST_SIGNAL_BAR = None
 _LAST_SIGNAL_MATRIX = None
 
