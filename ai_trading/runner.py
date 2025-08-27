@@ -157,7 +157,7 @@ def run_cycle() -> None:
         from ai_trading.core.bot_engine import get_ctx
         from ai_trading.core.runtime import build_runtime, REQUIRED_PARAM_DEFAULTS
         from ai_trading.config.management import TradingConfig
-        from ai_trading.data_fetcher import DataFetchError
+        from ai_trading.data.fetch import DataFetchError
         
         lazy_ctx = get_ctx()
         

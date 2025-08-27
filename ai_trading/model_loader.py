@@ -39,7 +39,7 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     import pandas as pd
     from sklearn.linear_model import LinearRegression
 
-    from ai_trading.data_fetcher import get_daily_df
+    from ai_trading.data.fetch import get_daily_df
 
     end = datetime.now(UTC)
     start = end - timedelta(days=30)

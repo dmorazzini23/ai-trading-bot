@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover
     pd = _PD()  # type: ignore
 try:
     from ai_trading.config.management import TradingConfig
-    from ai_trading.data_fetcher import DataFetcher
+    from ai_trading.core.bot_engine import DataFetcher
     from ai_trading.evaluation.walkforward import WalkForwardEvaluator
     from ai_trading.logging import logger
     from ai_trading.signals import SignalDecisionPipeline, generate_cost_aware_signals

@@ -259,7 +259,7 @@ def get_current_price(symbol: str) -> float:
     if price <= 0:
         logger.warning("get_current_price invalid price %.2f for %s; falling back to last close", price, symbol)
         try:
-            from ai_trading.data_fetcher import get_daily_df
+            from ai_trading.data.fetch import get_daily_df
 
             end = dt.date.today()
             start = end - dt.timedelta(days=5)

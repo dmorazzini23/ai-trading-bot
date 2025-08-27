@@ -116,7 +116,15 @@ def test_import_hardening():
         bot_engine_path = Path('ai_trading/core/bot_engine.py')
         if bot_engine_path.exists():
             content = bot_engine_path.read_text()
-            expected_patterns = ['from ai_trading.meta_learning import optimize_signals', 'from meta_learning import optimize_signals', 'from ai_trading.pipeline import model_pipeline', 'from pipeline import model_pipeline', 'from ai_trading.execution import ExecutionEngine', 'from ai_trading.data_fetcher import', 'from ai_trading.data_fetcher import']
+            expected_patterns = [
+                'from ai_trading.meta_learning import optimize_signals',
+                'from meta_learning import optimize_signals',
+                'from ai_trading.pipeline import model_pipeline',
+                'from pipeline import model_pipeline',
+                'from ai_trading.execution import ExecutionEngine',
+                'from ai_trading.data.fetch import',
+                'from ai_trading.data.fetch import',
+            ]
             for pattern in expected_patterns:
                 assert pattern in content, f'Missing import pattern: {pattern}'
         files_to_check = ['runner.py', 'backtester.py', 'profile_indicators.py']

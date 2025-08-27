@@ -37,12 +37,14 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
 from threading import Lock
 import warnings
 
-import ai_trading.data_fetcher as data_fetcher_module
-from ai_trading.data_fetcher import (
+import ai_trading.data.fetch as data_fetcher_module
+from ai_trading.data.fetch import (
     DataFetchError,
     get_bars,
     get_bars_batch,
     get_minute_df,
+    get_cached_minute_timestamp,
+    last_minute_bar_age_seconds,
 )
 from ai_trading.utils.time import last_market_session
 from ai_trading.capital_scaling import capital_scale, update_if_present
@@ -6115,7 +6117,7 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     Logs UTC timestamps and fails fast if any symbol is stale.
     """
     try:
-        from ai_trading.data_fetcher import last_minute_bar_age_seconds
+        from ai_trading.data.fetch import last_minute_bar_age_seconds
     except (ValueError, TypeError) as e:  # AI-AGENT-REF: soft-fail if import missing
         logger.warning("Data freshness check unavailable; skipping", exc_info=e)
         return

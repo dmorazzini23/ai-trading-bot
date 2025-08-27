@@ -161,11 +161,6 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
         return None
     now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     return max(0, now_s - int(ts))
-
-
-def warmup_cache(*_args: Any, **_kwargs: Any) -> None:
-    """Backward-compatibility shim; cache warm-up now occurs lazily."""
-    return None
 _DEFAULT_FEED = 'iex'
 _VALID_FEEDS = ('iex', 'sip')
 
@@ -603,6 +598,5 @@ __all__ = [
     'DataFetchError',
     'DataFetchException',
     'FinnhubAPIException',
-    'warmup_cache',
 ]
 

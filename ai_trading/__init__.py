@@ -10,7 +10,7 @@ from importlib import import_module as _import_module
 _PUBLIC_MODULES = {
     'config', 'logging', 'utils',
     'alpaca_api', 'data_validation', 'indicators', 'rebalancer', 'audit',
-    'core', 'strategy_allocator', 'predict', 'meta_learning', 'data_fetcher',
+    'core', 'strategy_allocator', 'predict', 'meta_learning',
     'signals', 'settings', 'runner', 'portfolio', 'app', 'ml_model',
     'paths', 'main', 'position_sizing', 'capital_scaling', 'indicator_manager',
     'execution', 'production_system', 'trade_logic',
@@ -18,8 +18,8 @@ _PUBLIC_MODULES = {
 
 _PUBLIC_SYMBOLS = {
     'ExecutionEngine': 'ai_trading.execution.engine:ExecutionEngine',
-    'DataFetchError': 'ai_trading.data_fetcher:DataFetchError',
-    'DataFetchException': 'ai_trading.data_fetcher:DataFetchException',
+    'DataFetchError': 'ai_trading.data.fetch:DataFetchError',
+    'DataFetchException': 'ai_trading.data.fetch:DataFetchException',
 }
 
 __all__ = sorted(set(_PUBLIC_MODULES) | set(_PUBLIC_SYMBOLS))
