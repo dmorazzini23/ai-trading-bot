@@ -74,26 +74,21 @@ tests/
 ├── __init__.py
 ├── conftest.py                 # Pytest configuration and fixtures
 ├── root.pth                    # Python path configuration
-├── unit/                       # Unit tests
+├── unit/                       # Narrow unit tests
 │   ├── test_bot_engine.py
 │   ├── test_signals.py
-│   ├── test_risk_engine.py
-│   ├── test_data.fetch
-│   └── test_trade_execution.py
+│   └── test_execution_algorithms_narrow.py
 ├── integration/                # Integration tests
-│   ├── test_alpaca_integration.py
-│   ├── test_data_pipeline.py
-│   └── test_trading_workflow.py
-├── performance/                # Performance tests
-│   ├── test_indicator_speed.py
-│   └── test_memory_usage.py
-├── fixtures/                   # Test data and fixtures
-│   ├── sample_data.csv
-│   ├── test_config.json
-│   └── mock_responses.json
+│   └── test_regime_fallback.py
+├── execution/                  # Execution related tests
+│   └── test_fetch_minute_df_safe_empty.py
+├── lint/                       # Lint checks
+│   └── test_no_shims_term.py
+├── slow/                       # Slow-running scenarios
+│   └── test_meta_learning_heavy.py
 └── utils/                      # Testing utilities
-    ├── test_helpers.py
-    └── mock_factories.py
+    ├── test_http_retry.py
+    └── test_retry.py
 ```
 
 ### Test Categories and Markers
@@ -573,7 +568,7 @@ class TestTradingWorkflow:
 ### Performance Benchmarks
 
 ```python
-# tests/performance/test_performance_benchmarks.py
+# tests/test_peak_performance.py
 import pytest
 import time
 import numpy as np
@@ -1143,7 +1138,7 @@ jobs:
 
     - name: Run performance tests
       run: |
-        pytest tests/performance/ -v --benchmark-only
+        pytest tests/test_peak_performance.py -v --benchmark-only
 
     - name: Upload performance results
       uses: actions/upload-artifact@v3
