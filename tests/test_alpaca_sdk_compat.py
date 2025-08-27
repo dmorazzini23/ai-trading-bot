@@ -62,7 +62,12 @@ prom_stub.Counter = prom_stub.Gauge = prom_stub.Histogram = prom_stub.Summary = 
 prom_stub.start_http_server = lambda *a, **k: None
 sys.modules.setdefault("prometheus_client", prom_stub)
 
-from ai_trading.data.bars import StockBarsRequest, safe_get_stock_bars
+from ai_trading.data.bars import (
+    StockBarsRequest,
+    TimeFrame,
+    TimeFrameUnit,
+    safe_get_stock_bars,
+)
 from ai_trading.core.bot_engine import get_stock_bars_safe
 
 
@@ -86,7 +91,9 @@ def test_safe_get_stock_bars_uses_get_stock_bars():
         def get_stock_bars(self, request):
             return types.SimpleNamespace(df=_make_df())
 
-    req = StockBarsRequest(symbol_or_symbols="SPY", timeframe="1Day")
+    req = StockBarsRequest(
+        symbol_or_symbols="SPY", timeframe=TimeFrame(1, TimeFrameUnit.Day)
+    )
     df = safe_get_stock_bars(Client(), req, "SPY", "TEST")
     assert not df.empty
 
@@ -96,7 +103,9 @@ def test_safe_get_stock_bars_falls_back_to_get_bars():
         def get_bars(self, symbol_or_symbols, timeframe, **kwargs):
             return _make_df()
 
-    req = StockBarsRequest(symbol_or_symbols="SPY", timeframe="1Day")
+    req = StockBarsRequest(
+        symbol_or_symbols="SPY", timeframe=TimeFrame(1, TimeFrameUnit.Day)
+    )
     df = safe_get_stock_bars(Client(), req, "SPY", "TEST")
     assert not df.empty
 
