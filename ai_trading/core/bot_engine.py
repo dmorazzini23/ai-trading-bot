@@ -9096,10 +9096,19 @@ def _fetch_feature_data(
     ``(None, None, False)``; when indicators are insufficient returns
     ``(raw_df, None, True)``.
     """
+    def _halt(reason: str) -> None:
+        logger.error("DATA_FETCH_EMPTY", extra={"symbol": symbol, "reason": reason})
+        halt_mgr = getattr(ctx, "halt_manager", None)
+        if halt_mgr is not None:
+            try:
+                halt_mgr.manual_halt_trading(f"{symbol}:{reason}")
+            except Exception as hm_exc:  # noqa: BLE001
+                logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
+
     try:
         raw_df = fetch_minute_df_safe(symbol)
     except DataFetchError:
-        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        _halt("minute_data_unavailable")
         return None, None, False
     except APIError as e:
         msg = str(e).lower()
@@ -9108,12 +9117,12 @@ def _fetch_feature_data(
             raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
             if raw_df is None or raw_df.empty:
                 logger.debug(f"{symbol}: no daily data either; skipping.")
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                _halt("daily_data_unavailable")
                 return None, None, False
         else:
             raise
     if raw_df is None or raw_df.empty:
-        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        _halt("empty_frame")
         return None, None, False
 
     # Guard: validate OHLCV shape before feature engineering
@@ -12633,16 +12642,24 @@ def _process_symbols(
             if not is_market_open():
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
+            def _halt(reason: str) -> None:
+                logger.error("DATA_FETCH_EMPTY", extra={"symbol": symbol, "reason": reason})
+                halt_mgr = getattr(ctx, "halt_manager", None)
+                if halt_mgr is not None:
+                    try:
+                        halt_mgr.manual_halt_trading(f"{symbol}:{reason}")
+                    except Exception as hm_exc:  # noqa: BLE001
+                        logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
             try:
                 price_df = fetch_minute_df_safe(symbol)
             except DataFetchError:
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                _halt("minute_data_unavailable")
                 return
             # AI-AGENT-REF: record raw row count before validation
             row_counts[symbol] = len(price_df)
             logger.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
             if price_df.empty or "close" not in price_df.columns:
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                _halt("empty_frame")
                 return
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
