@@ -496,7 +496,7 @@ class ProductionValidator:
         """Test data processing functionality."""
         try:
             from ai_trading import data_fetcher
-            import indicators
+            from ai_trading import indicators
             return 90
         except ImportError:
             return 40
