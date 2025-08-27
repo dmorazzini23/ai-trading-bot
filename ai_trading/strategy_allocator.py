@@ -42,7 +42,8 @@ class StrategyAllocator:
         for attr, default in required.items():
             if not hasattr(self.config, attr) or getattr(self.config, attr, None) is None:
                 logger.warning("Config missing attribute %s, setting default: %s", attr, default)
-                setattr(self.config, attr, default)
+                # TradingConfig is frozen; bypass immutability for defaults
+                object.__setattr__(self.config, attr, default)
 
     def select_signals(self, signals_by_strategy: dict[str, list[Any]]) -> list[Any]:
         """Compatibility wrapper for allocate()."""
