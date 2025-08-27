@@ -36,11 +36,14 @@ class _Resp:
 @patch("ai_trading.alpaca_api._get_rest")
 def test_day_timeframe_normalized(mock_rest_cls):
     mock_rest = MagicMock()
-    mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
+    mock_rest.get_stock_bars.return_value = _Resp(
+        pd.DataFrame({"open": [1.0], "close": [1.1]})
+    )
     mock_rest_cls.return_value = mock_rest
 
     df = get_bars_df("SPY", "Day", feed="iex", adjustment="all")
-    args, kwargs = mock_rest.get_bars.call_args
+    mock_rest_cls.assert_called_once_with(bars=True)
+    args, kwargs = mock_rest.get_stock_bars.call_args
     assert kwargs["timeframe"] in ("1Day", "1D")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
@@ -48,11 +51,14 @@ def test_day_timeframe_normalized(mock_rest_cls):
 @patch("ai_trading.alpaca_api._get_rest")
 def test_tf_object_normalized(mock_rest_cls):
     mock_rest = MagicMock()
-    mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
+    mock_rest.get_stock_bars.return_value = _Resp(
+        pd.DataFrame({"open": [1.0], "close": [1.1]})
+    )
     mock_rest_cls.return_value = mock_rest
 
     df = get_bars_df("SPY", TimeFrame(1, TimeFrameUnit.Day), feed="iex", adjustment="all")
-    args, kwargs = mock_rest.get_bars.call_args
+    mock_rest_cls.assert_called_once_with(bars=True)
+    args, kwargs = mock_rest.get_stock_bars.call_args
     assert kwargs["timeframe"] in ("1Day", "1D")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
@@ -60,10 +66,13 @@ def test_tf_object_normalized(mock_rest_cls):
 @patch("ai_trading.alpaca_api._get_rest")
 def test_minute_normalized(mock_rest_cls):
     mock_rest = MagicMock()
-    mock_rest.get_bars.return_value = _Resp(pd.DataFrame({"open": [1.0], "close": [1.1]}))
+    mock_rest.get_stock_bars.return_value = _Resp(
+        pd.DataFrame({"open": [1.0], "close": [1.1]})
+    )
     mock_rest_cls.return_value = mock_rest
 
     df = get_bars_df("SPY", "Minute", feed="iex", adjustment="all")
-    args, kwargs = mock_rest.get_bars.call_args
+    mock_rest_cls.assert_called_once_with(bars=True)
+    args, kwargs = mock_rest.get_stock_bars.call_args
     assert kwargs["timeframe"] in ("1Min", "1Minute")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode

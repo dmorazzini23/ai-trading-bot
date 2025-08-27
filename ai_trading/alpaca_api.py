@@ -90,14 +90,49 @@ def _format_start_end_for_tradeapi(timeframe: str, start, end):
     params = compose_daily_params(sd, ed) if is_daily else compose_intraday_params(sd, ed)
     return (params['start'], params['end'])
 
-def _get_rest() -> Any:
-    """Return a new `alpaca-py` TradingClient instance."""
+def _get_rest(*, bars: bool = False) -> Any:
+    """Return a new `alpaca-py` client instance.
+
+    Parameters
+    ----------
+    bars:
+        When ``True`` return a :class:`StockHistoricalDataClient`; otherwise a
+        :class:`TradingClient`.
+    """
+
+    key = os.getenv("ALPACA_API_KEY")
+    secret = os.getenv("ALPACA_SECRET_KEY")
+    oauth = os.getenv("ALPACA_OAUTH")
+    base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    paper = "paper" in str(base).lower()
+    if oauth and (key or secret):
+        raise RuntimeError(
+            "Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both"
+        )
+
+    if bars:
+        from alpaca.data.historical import StockHistoricalDataClient
+
+        if oauth:
+            return StockHistoricalDataClient(
+                oauth_token=oauth, url_override=base, paper=paper
+            )
+        return StockHistoricalDataClient(
+            api_key=key, secret_key=secret, url_override=base, paper=paper
+        )
+
     from alpaca.trading.client import TradingClient
 
-    key = os.getenv('ALPACA_API_KEY')
-    secret = os.getenv('ALPACA_SECRET_KEY')
-    base = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-    return TradingClient(key, secret, base)
+    if oauth:
+        return TradingClient(
+            oauth_token=oauth, url_override=base, paper=paper
+        )
+    return TradingClient(
+        api_key=key,
+        secret_key=secret,
+        url_override=base,
+        paper=paper,
+    )
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
@@ -136,7 +171,7 @@ def get_bars_df(
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
     _pd = _require_pandas("get_bars_df")
-    rest = _get_rest()
+    rest = _get_rest(bars=True)
     feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
     adjustment = adjustment or os.getenv('ALPACA_ADJUSTMENT', 'all')
     tf_raw = timeframe
@@ -149,18 +184,46 @@ def get_bars_df(
         start, end = _bars_time_window(base_tf)
     start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
     try:
-        df = rest.get_bars(symbol, timeframe=tf, start=start_s, end=end_s, adjustment=adjustment, feed=feed, limit=None).df
+        df = rest.get_stock_bars(
+            symbol,
+            timeframe=tf,
+            start=start_s,
+            end=end_s,
+            adjustment=adjustment,
+            feed=feed,
+            limit=None,
+        ).df
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
         return _pd.DataFrame()
     except APIError as e:
-        req = {'timeframe_raw': str(tf_raw), 'timeframe_norm': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'adjustment': adjustment}
-        body = ''
+        req = {
+            "timeframe_raw": str(tf_raw),
+            "timeframe_norm": tf,
+            "feed": feed,
+            "start": start_s,
+            "end": end_s,
+            "adjustment": adjustment,
+        }
+        body = ""
         try:
             body = e.response.text
         except (ValueError, TypeError):
             pass
-        _log.error('ALPACA_FAIL', extra={'symbol': symbol, 'timeframe': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'status_code': getattr(e, 'status_code', None), 'endpoint': 'alpaca/bars', 'query_params': req, 'body': body})
+        _log.error(
+            "ALPACA_FAIL",
+            extra={
+                "symbol": symbol,
+                "timeframe": tf,
+                "feed": feed,
+                "start": start_s,
+                "end": end_s,
+                "status_code": getattr(e, "status_code", None),
+                "endpoint": "alpaca/bars",
+                "query_params": req,
+                "body": body,
+            },
+        )
         return _pd.DataFrame()
 
 
