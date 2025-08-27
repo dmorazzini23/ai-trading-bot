@@ -42,3 +42,20 @@ def test_compute_spy_vol_stats_handles_failure(monkeypatch):
     assert bot_engine._VOL_STATS["mean"] == 0.0
     assert bot_engine._VOL_STATS["std"] == 0.0
     assert calls, "halt manager should be invoked"
+
+
+def test_fetch_feature_data_halts_on_empty(monkeypatch):
+    calls: list[str] = []
+    ctx = SimpleNamespace(
+        data_fetcher=SimpleNamespace(get_daily_df=lambda *a, **k: pd.DataFrame()),
+        halt_manager=SimpleNamespace(manual_halt_trading=lambda r: calls.append(r)),
+    )
+    state = SimpleNamespace()
+    monkeypatch.setattr(
+        bot_engine,
+        "fetch_minute_df_safe",
+        lambda s: (_ for _ in ()).throw(bot_engine.DataFetchError("empty")),
+    )
+    raw, feat, skip = bot_engine._fetch_feature_data(ctx, state, "AAPL")
+    assert raw is None and feat is None and skip is False
+    assert calls, "halt manager should be invoked on empty data"
