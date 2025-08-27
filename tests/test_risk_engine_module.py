@@ -2,11 +2,8 @@ from tests.optdeps import require
 require("numpy")
 import sys
 import types
-from pathlib import Path
 
 import numpy as np
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
     sys.modules.pop(m, None)
 sys.modules.pop("risk_engine", None)

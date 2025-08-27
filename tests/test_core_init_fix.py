@@ -4,12 +4,6 @@ Test for the specific fix: ai_trading/core/__init__.py
 This test validates that the core module ImportError mentioned in the
 problem statement has been resolved by adding the missing __init__.py file.
 """
-import os
-import sys
-
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
 
 
 class TestCoreModuleInit:

@@ -1,15 +1,11 @@
 import sys
 import types
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from ai_trading.config import management as config
 
 pd = pytest.importorskip("pandas")
-
-# Ensure project root is importable and stub heavy optional deps
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:

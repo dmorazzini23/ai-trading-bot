@@ -5,7 +5,6 @@ This module tests that the environment validation works correctly
 with Pydantic V2 field_validator decorators.
 """
 import os
-import sys
 from unittest.mock import patch
 
 from pydantic import ValidationError
@@ -57,8 +56,6 @@ def test_pydantic_v2_migration_syntax():
 def test_validate_env_import():
     """Test that validate_env can be imported without errors."""
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
         # Mock environment variables to avoid validation errors
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'TEST_API_KEY_123456789',
@@ -90,8 +87,6 @@ def test_validate_env_import():
 def test_field_validator_functionality():
     """Test that field validators work correctly with V2 syntax."""
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'INVALID_KEY',  # Should trigger validation warning
             'ALPACA_SECRET_KEY': 'short',     # Should trigger validation error

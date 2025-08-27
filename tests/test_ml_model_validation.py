@@ -1,10 +1,7 @@
 import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_trading.ml_model import MLModel  # AI-AGENT-REF: canonical import
 
 

@@ -5,13 +5,7 @@ Validates that the parameter validation system correctly identifies
 safe and unsafe parameter values and changes.
 """
 
-import os
-import sys
-
 import pytest
-
-# Add the project root to Python path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def test_parameter_validator_initialization():
     """Test that parameter validator initializes correctly."""

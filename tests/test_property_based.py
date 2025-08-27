@@ -1,14 +1,10 @@
 import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-# Ensure project root is on path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 from ai_trading import signals, utils
 

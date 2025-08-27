@@ -5,14 +5,8 @@ Validates that optimized parameters maintain safety standards while
 improving profit potential.
 """
 
-import os
-import sys
-
 import pytest
 from tests.support.mocks import MockOrderManager
-
-# Add the project root to Python path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def test_kelly_parameters_optimization():
     """Test that Kelly parameters are optimized correctly."""

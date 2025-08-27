@@ -6,11 +6,6 @@ and execution coordination without requiring full dependencies.
 """
 
 import asyncio
-import os
-import sys
-
-# Add the project root to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
     from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
@@ -228,8 +223,6 @@ async def run_all_tests():
     # Asynchronous tests
     test_results.append(("Production Execution Coordinator", await test_production_execution_coordinator()))
 
-    # Report results
-
     passed = 0
     total = len(test_results)
 
@@ -237,20 +230,4 @@ async def run_all_tests():
         if result:
             passed += 1
 
-
-    if passed == total:
-        pass
-    else:
-        pass
-
     return passed == total
-
-
-if __name__ == "__main__":
-    # Run tests
-    try:
-        result = asyncio.run(run_all_tests())
-        exit_code = 0 if result else 1
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        sys.exit(1)
