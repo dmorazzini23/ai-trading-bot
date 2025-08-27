@@ -528,7 +528,6 @@ class BotEngine:
         return _DataClient(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            base_url=_get_env_str("ALPACA_BASE_URL"),
         )
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
@@ -3942,9 +3941,9 @@ class DataFetcher:
             StockHistoricalDataClient as _DataClient,  # type: ignore
         )
 
-        base_url = get_settings().alpaca_base_url
         client = _DataClient(
-            api_key=api_key, secret_key=api_secret, base_url=base_url
+            api_key=api_key,
+            secret_key=api_secret,
         )
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
@@ -4245,9 +4244,9 @@ class DataFetcher:
             StockHistoricalDataClient as _DataClient,  # type: ignore
         )
 
-        base_url = get_settings().alpaca_base_url
         client = _DataClient(
-            api_key=api_key, secret_key=api_secret, base_url=base_url
+            api_key=api_key,
+            secret_key=api_secret,
         )
 
         try:
@@ -4486,7 +4485,6 @@ def prefetch_daily_data(
 ) -> dict[str, pd.DataFrame]:
     alpaca_key = get_settings().alpaca_api_key
     alpaca_secret = get_alpaca_secret_key_plain()
-    base_url = get_settings().alpaca_base_url
     # AI-AGENT-REF: use plain secret string
     if not alpaca_key or not alpaca_secret:
         raise RuntimeError(
@@ -4497,7 +4495,8 @@ def prefetch_daily_data(
     )
 
     client = _DataClient(
-        api_key=alpaca_key, secret_key=alpaca_secret, base_url=base_url
+        api_key=alpaca_key,
+        secret_key=alpaca_secret,
     )
 
     try:
@@ -5813,7 +5812,8 @@ def _initialize_alpaca_clients() -> bool:
                 url_override=base_url,
             )
             data_client = stock_client_cls(
-                api_key=key, secret_key=secret, base_url=base_url
+                api_key=key,
+                secret_key=secret,
             )
         except Exception as e:  # AI-AGENT-REF: expose network or auth issues
             logger.error(
