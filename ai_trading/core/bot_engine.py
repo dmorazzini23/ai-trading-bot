@@ -13231,6 +13231,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
                 return
 
+            if not symbols:
+                logger.info("SKIP_MINUTE_FETCH", extra={"reason": "no_symbols"})
+                return
+
             retries = 3
             processed, row_counts = [], {}
             for attempt in range(retries):
