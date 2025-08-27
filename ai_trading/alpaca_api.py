@@ -449,7 +449,7 @@ def submit_order(
         rest = _REST(
             api_key=cfg.key_id,
             secret_key=cfg.secret_key,
-            base_url=cfg.base_url,
+            url_override=cfg.base_url,
         )
         return _sdk_submit(
             rest,

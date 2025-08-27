@@ -5794,7 +5794,7 @@ def _initialize_alpaca_clients() -> bool:
             trading_client = AlpacaREST(
                 api_key=key,
                 secret_key=secret,
-                base_url=base_url,
+                url_override=base_url,
             )
             data_client = stock_client_cls(
                 api_key=key, secret_key=secret, base_url=base_url
