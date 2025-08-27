@@ -57,6 +57,8 @@ def run_cycle() -> None:
         BotState,
         run_all_trades_worker,
         get_ctx,
+    )
+    from ai_trading.core.runtime import (
         build_runtime,
         REQUIRED_PARAM_DEFAULTS,
     )
