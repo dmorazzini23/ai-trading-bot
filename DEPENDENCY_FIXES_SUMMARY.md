@@ -145,8 +145,8 @@ With these fixes implemented:
 
 ## Files Modified
 
-1. `requirements.txt` - Added missing alpaca-trade-api dependency
-2. `pyproject.toml` - Added missing alpaca-trade-api dependency
+1. `requirements.txt` - Added missing alpaca-py dependency
+2. `pyproject.toml` - Added missing alpaca-py dependency
 3. `ai_trading/utils/base.py` - Enhanced Alpaca SDK and market schedule error handling
 4. `ai_trading/core/bot_engine.py` - Fixed imports and regime model validation
 5. `ai_trading/main.py` - Enhanced environment validation and startup sequence

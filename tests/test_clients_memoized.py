@@ -36,9 +36,7 @@ def test_clients_built_once(monkeypatch):
         raising=False,
     )
     import alpaca
-    import sys
     monkeypatch.setattr(alpaca.trading.client, "TradingClient", fake_rest, raising=True)
-    monkeypatch.setattr(sys.modules["alpaca_trade_api"], "REST", fake_rest, raising=True)
 
     engine = be.BotEngine()
     _ = engine.trading_client

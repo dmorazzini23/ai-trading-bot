@@ -33,7 +33,7 @@ def preflight_import_health() -> None:
         "ai_trading.risk.engine",
         "ai_trading.rl_trading",
         "ai_trading.telemetry.metrics_logger",
-        "alpaca_trade_api",
+        "alpaca.trading.client",
     ]
     for mod in core_modules:
         try:
