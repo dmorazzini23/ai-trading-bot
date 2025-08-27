@@ -1482,7 +1482,7 @@ except ImportError:  # pragma: no cover - schedule may be absent in tests
     schedule = types.SimpleNamespace()
 
 # AI-AGENT-REF: optional yfinance provider
-from ai_trading.data_providers import get_yfinance, has_yfinance
+from ai_trading.data.providers.yfinance_provider import get_yfinance, has_yfinance
 
 YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
