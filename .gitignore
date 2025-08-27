@@ -32,6 +32,9 @@ logs/
 *.backup.*
 *.corrupted.*
 
+# Profiling data
+*.stats
+
 # Include packaged tickers data
 !ai_trading/data/
 !ai_trading/data/tickers.csv
