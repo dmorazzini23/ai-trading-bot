@@ -3,10 +3,22 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
     runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      ALPACA_ENV: "paper"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
