@@ -800,14 +800,10 @@ def validate_ohlcv_basic(df: DataFrame) -> bool:
 
 
 def _get_alpaca_rest():
-    """Get Alpaca REST API class."""
-    try:
-        from alpaca_trade_api.rest import REST  # pylint: disable=import-error
-    except ImportError as exc:  # pragma: no cover - alpaca SDK missing
-        raise ImportError(
-            "alpaca-trade-api is required for Alpaca REST access. Install with `pip install alpaca-trade-api`."
-        ) from exc
-    return REST
+    """Get Alpaca TradingClient class."""
+    from alpaca.trading.client import TradingClient
+
+    return TradingClient
 
 
 def check_symbol(symbol: str, api: Any) -> bool:

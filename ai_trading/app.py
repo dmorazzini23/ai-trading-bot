@@ -22,10 +22,7 @@ def create_app():
     def health():
         """Lightweight liveness probe with Alpaca diagnostics."""
         try:
-            try:
-                from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
-            except (KeyError, ValueError, TypeError):
-                sdk_ok = False
+            sdk_ok = True
 
             try:
                 from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client

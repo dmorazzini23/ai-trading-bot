@@ -328,7 +328,6 @@ def build_fetcher(config: Any):
     if _FETCHER_SINGLETON is not None:
         return _FETCHER_SINGLETON
 
-    from ai_trading.alpaca_api import ALPACA_AVAILABLE
     bot_mod = importlib.import_module('ai_trading.core.bot_engine')
     DataFetcher = bot_mod.DataFetcher
     _ensure_http_client()
@@ -337,7 +336,7 @@ def build_fetcher(config: Any):
 
     alpaca_ok = bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'))
     has_keys = alpaca_ok
-    if ALPACA_AVAILABLE and has_keys:
+    if has_keys:
         logger.info('DATA_FETCHER_BUILD', extra={'source': 'alpaca'})
         fetcher = DataFetcher()
         setattr(fetcher, 'source', 'alpaca')

@@ -29,38 +29,23 @@ def resolve_alpaca_credentials(env: Mapping[str, str] | None = None) -> AlpacaCr
     )
 
 
-def check_alpaca_available() -> bool:
-    """Return ``True`` if the ``alpaca_trade_api`` SDK is importable."""
-
-    try:  # pragma: no cover - purely a presence check
-        import alpaca_trade_api  # type: ignore  # noqa: F401
-    except ModuleNotFoundError:
-        return False
-    return True
-
-
 def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
-    """Return an ``alpaca_trade_api.REST`` instance.
+    """Return an ``alpaca.trading.client.TradingClient`` instance.
 
-    If *shadow* is ``True``, a simple ``object`` stub is returned even
-    when the SDK is missing. Otherwise, a :class:`RuntimeError` is raised when
-    the ``alpaca_trade_api`` package cannot be imported.
+    If *shadow* is ``True``, a simple ``object`` stub is returned.
     """
 
     creds = resolve_alpaca_credentials(env)
     if shadow:
         return object()
-    try:  # pragma: no cover - optional dependency
-        from alpaca_trade_api import REST  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover - tested via unit test
-        raise RuntimeError("alpaca_trade_api package is required") from exc
-    return REST(key_id=creds.api_key, secret_key=creds.secret_key, base_url=creds.base_url)
+    from alpaca.trading.client import TradingClient
+
+    return TradingClient(
+        creds.api_key,
+        creds.secret_key,
+        base_url=creds.base_url,
+    )
 
 
-__all__ = [
-    "AlpacaCredentials",
-    "resolve_alpaca_credentials",
-    "check_alpaca_available",
-    "initialize",
-]
+__all__ = ["AlpacaCredentials", "resolve_alpaca_credentials", "initialize"]
 

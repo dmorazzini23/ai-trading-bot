@@ -8,21 +8,11 @@ from ai_trading.logging import get_logger
 import time
 from datetime import UTC, datetime
 from typing import Any
-try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import APIError  # type: ignore
-except Exception:  # pragma: no cover - fallback when SDK missing
-    class APIError(Exception):
-        """Fallback APIError when alpaca-trade-api is unavailable."""
-
-        pass
+from alpaca.common.exceptions import APIError
 from ai_trading.config import AlpacaConfig, get_alpaca_config
 from ai_trading.logging import logger
 
 logger = get_logger(__name__)
-try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api import REST as AlpacaREST  # type: ignore
-except (ValueError, TypeError, ModuleNotFoundError, ImportError):
-    AlpacaREST = None
 
 def _req_str(name: str, v: str | None) -> str:
     if not v:
@@ -86,10 +76,12 @@ class AlpacaExecutionEngine:
                     self.trading_client = MockTradingClient(paper=True)
                     self.is_initialized = True
                     return True
+            from alpaca.trading.client import TradingClient
+
             self.config = get_alpaca_config()
-            raw_client = AlpacaREST(
-                key_id=self.config.key_id,
-                secret_key=self.config.secret_key,
+            raw_client = TradingClient(
+                self.config.key_id,
+                self.config.secret_key,
                 base_url=self.config.base_url,
             )
             logger.info(

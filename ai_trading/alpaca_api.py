@@ -42,17 +42,13 @@ def _unit_from_norm(tf_norm: str) -> str:
         if tf_norm.endswith(u):
             return u
     return 'Day'
+
 def _module_exists(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
     except ModuleNotFoundError:
         return False
 
-
-ALPACA_AVAILABLE = (
-    _module_exists('alpaca_trade_api')
-    and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
-)
 
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
@@ -63,7 +59,7 @@ generate_client_order_id = _make_client_order_id
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
-        from alpaca_trade_api.rest import TimeFrame
+        from alpaca.data.timeframe import TimeFrame
     except (ValueError, TypeError, ImportError):
         TimeFrame = None
     if isinstance(tf_raw, str):
@@ -95,13 +91,13 @@ def _format_start_end_for_tradeapi(timeframe: str, start, end):
     return (params['start'], params['end'])
 
 def _get_rest() -> Any:
-    """Return a new `alpaca_trade_api.REST` instance."""
-    from alpaca_trade_api import REST  # type: ignore
+    """Return a new `alpaca.trading.client.TradingClient` instance."""
+    from alpaca.trading.client import TradingClient
 
     key = os.getenv('ALPACA_API_KEY')
     secret = os.getenv('ALPACA_SECRET_KEY')
     base = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-    return REST(key, secret, base)
+    return TradingClient(key, secret, base_url=base)
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
@@ -136,7 +132,8 @@ def get_bars_df(
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
-    from alpaca_trade_api.rest import APIError, TimeFrame, TimeFrameUnit  # type: ignore
+    from alpaca.common.exceptions import APIError
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest()
@@ -382,12 +379,11 @@ def submit_order(
         )
 
     try:
-        import alpaca_trade_api as _alp  # type: ignore
-        rest = _alp.REST(
-            key_id=cfg.key_id,
-            secret_key=cfg.secret_key,
+        from alpaca.trading.client import TradingClient as _TradingClient
+        rest = _TradingClient(
+            cfg.key_id,
+            cfg.secret_key,
             base_url=cfg.base_url,
-            api_version="v2",
         )
         return _sdk_submit(
             rest,
@@ -423,7 +419,6 @@ def alpaca_get(*_a, **_k):
 def start_trade_updates_stream(*_a, **_k):
     return None
 __all__ = [
-    'ALPACA_AVAILABLE',
     'is_shadow_mode',
     'RETRY_HTTP_CODES',
     'RETRYABLE_HTTP_STATUSES',

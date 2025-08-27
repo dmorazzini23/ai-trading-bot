@@ -42,19 +42,7 @@ class StockBarsRequest:
     end: Any | None = None
     limit: int | None = None
     feed: Any | None = None
-try:
-    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
-except (ValueError, TypeError, ImportError):
-
-    class TimeFrame:
-
-        def __init__(self, n: int, unit: Any) -> None:
-            self.n = n
-            self.unit = unit
-
-    class TimeFrameUnit:
-        Day = 'Day'
-        Minute = 'Minute'
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 COMMON_EXC = (ValueError, KeyError, AttributeError, TypeError, RuntimeError, ImportError, OSError, ConnectionError, TimeoutError)
 
 def _ensure_df(obj: Any) -> pd.DataFrame:
