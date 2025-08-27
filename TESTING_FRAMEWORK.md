@@ -580,8 +580,8 @@ import numpy as np
 import pandas as pd
 from memory_profiler import memory_usage
 
-from indicators import calculate_rsi, calculate_macd
-from signals import generate_signal
+from ai_trading.indicators import calculate_rsi, calculate_macd
+from ai_trading.signals import generate_signal
 
 
 class TestPerformanceBenchmarks:
