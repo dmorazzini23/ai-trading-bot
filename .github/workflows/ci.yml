@@ -3,6 +3,11 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ci:
@@ -10,7 +15,6 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: 1
       PYTHONUNBUFFERED: 1
-      # Ensure tests never call live services
       AI_TRADING_OFFLINE_TESTS: "1"
       ALPACA_API_KEY: "test"
       ALPACA_SECRET_KEY: "test"
