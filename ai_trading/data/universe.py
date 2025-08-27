@@ -7,7 +7,7 @@ from ai_trading.logging import logger
 pd = load_pandas()
 
 def locate_tickers_csv() -> str | None:
-    env = os.getenv('AI_TRADING_TICKERS_CSV') or os.getenv('AI_TRADER_TICKERS_CSV')
+    env = os.getenv('AI_TRADING_TICKERS_CSV')
     if env and os.path.isfile(env):
         return os.path.abspath(env)
     try:

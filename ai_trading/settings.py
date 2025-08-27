@@ -183,7 +183,6 @@ def get_news_api_key() -> str | None:
     return (
         os.getenv('NEWS_API_KEY')
         or os.getenv('AI_TRADING_NEWS_API_KEY')
-        or os.getenv('AI_TRADER_NEWS_API_KEY')
     )
 
 def get_rebalance_interval_min() -> int:
@@ -198,7 +197,7 @@ def get_rebalance_interval_min() -> int:
         v = 60
     if v == 60:
         import os
-        alt = os.getenv('AI_TRADING_REBALANCE_INTERVAL_MIN') or os.getenv('AI_TRADER_REBALANCE_INTERVAL_MIN')
+        alt = os.getenv('AI_TRADING_REBALANCE_INTERVAL_MIN')
         if alt is not None:
             try:
                 return int(alt)

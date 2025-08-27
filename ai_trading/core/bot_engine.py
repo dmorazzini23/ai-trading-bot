@@ -628,8 +628,8 @@ def _load_required_model() -> Any:
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
 
-    path = os.getenv("AI_TRADING_MODEL_PATH") or os.getenv("AI_TRADER_MODEL_PATH")
-    modname = os.getenv("AI_TRADING_MODEL_MODULE") or os.getenv("AI_TRADER_MODEL_MODULE")
+    path = os.getenv("AI_TRADING_MODEL_PATH")
+    modname = os.getenv("AI_TRADING_MODEL_MODULE")
 
     if path and os.path.isfile(path):
         mdl = joblib.load(path)
@@ -2389,7 +2389,7 @@ def abspath(fname: str) -> str:
 
 # AI-AGENT-REF: safe ML model path resolution
 DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
-env_model = os.getenv("AI_TRADING_MODEL_PATH") or os.getenv("AI_TRADER_MODEL_PATH")
+env_model = os.getenv("AI_TRADING_MODEL_PATH")
 MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
 if MODEL_PATH and os.path.exists(MODEL_PATH):
     USE_ML = True
@@ -6881,9 +6881,7 @@ def check_halt_flag(runtime) -> bool:
 
     # AI-AGENT-REF: thread runtime into halt checks and drop global ctx
     # 1) Environment override
-    if os.getenv("AI_TRADING_HALT", "").strip() in {"1", "true", "True"} or os.getenv(
-        "AI_TRADER_HALT", ""
-    ).strip() in {"1", "true", "True"}:
+    if os.getenv("AI_TRADING_HALT", "").strip() in {"1", "true", "True"}:
         return True
 
     # 2) Config file flag (if provided)
