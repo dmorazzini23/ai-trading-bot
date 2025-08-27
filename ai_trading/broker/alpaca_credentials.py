@@ -57,7 +57,8 @@ def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
     return TradingClient(
         api_key=creds.api_key,
         secret_key=creds.secret_key,
-        base_url=creds.base_url,
+        paper="paper" in creds.base_url.lower(),
+        url_override=creds.base_url,
     )
 
 
