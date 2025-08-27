@@ -115,10 +115,10 @@ def _get_rest(*, bars: bool = False) -> Any:
         if oauth:
             return StockHistoricalDataClient(
                 oauth_token=oauth,
-                base_url=base_url,
             )
         return StockHistoricalDataClient(
-            api_key=key, secret_key=secret, base_url=base_url
+            api_key=key,
+            secret_key=secret,
         )
 
     from alpaca.trading.client import TradingClient
