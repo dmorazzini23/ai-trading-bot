@@ -14,14 +14,13 @@ This demo shows how the system:
 AI-AGENT-REF: Demo of advanced intelligent position management capabilities
 """
 import logging
-import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-position_path = os.path.join(os.path.dirname(__file__), 'ai_trading', 'position')
-if position_path not in sys.path:
-    sys.path.insert(0, position_path)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+)
 
 @dataclass
 class DemoPosition:
@@ -36,7 +35,10 @@ def demo_market_regime_adaptation():
     """Demo 1: Market regime detection and adaptation."""
     logging.info('🌟 DEMO 1: Market Regime Detection & Adaptation')
     logging.info(str('=' * 60))
-    from market_regime import MarketRegime, MarketRegimeDetector
+    from ai_trading.position.market_regime import (
+        MarketRegime,
+        MarketRegimeDetector,
+    )
     detector = MarketRegimeDetector()
     regimes = [MarketRegime.TRENDING_BULL, MarketRegime.TRENDING_BEAR, MarketRegime.RANGE_BOUND, MarketRegime.HIGH_VOLATILITY, MarketRegime.LOW_VOLATILITY]
     logging.info('📊 Position Management Parameters by Market Regime:')
@@ -56,7 +58,7 @@ def demo_technical_signal_analysis():
     """Demo 2: Technical signal analysis for exit timing."""
     logging.info('\n🌟 DEMO 2: Technical Signal Analysis for Exit Timing')
     logging.info(str('=' * 60))
-    from technical_analyzer import TechnicalSignalAnalyzer
+    from ai_trading.position.technical_analyzer import TechnicalSignalAnalyzer
     TechnicalSignalAnalyzer()
     logging.info('📈 Technical Analysis Components:')
     logging.info('🔹 MOMENTUM ANALYSIS:')
@@ -85,7 +87,7 @@ def demo_dynamic_trailing_stops():
     """Demo 3: Dynamic trailing stop management."""
     logging.info('\n🌟 DEMO 3: Dynamic Trailing Stop Management')
     logging.info(str('=' * 60))
-    from trailing_stops import TrailingStopManager
+    from ai_trading.position.trailing_stops import TrailingStopManager
     stop_manager = TrailingStopManager()
     logging.info('🛡️ Adaptive Trailing Stop Algorithms:')
     logging.info('🔹 VOLATILITY-ADJUSTED (ATR-based):')
@@ -113,7 +115,7 @@ def demo_multi_tiered_profit_taking():
     """Demo 4: Multi-tiered profit taking system."""
     logging.info('\n🌟 DEMO 4: Multi-Tiered Profit Taking System')
     logging.info(str('=' * 60))
-    from profit_taking import ProfitTakingEngine
+    from ai_trading.position.profit_taking import ProfitTakingEngine
     profit_engine = ProfitTakingEngine()
     logging.info('💰 Intelligent Profit Taking Strategies:')
     logging.info('🔹 RISK-MULTIPLE TARGETS:')
@@ -144,7 +146,9 @@ def demo_portfolio_correlation_intelligence():
     """Demo 5: Portfolio correlation and risk management."""
     logging.info('\n🌟 DEMO 5: Portfolio Correlation Intelligence')
     logging.info(str('=' * 60))
-    from correlation_analyzer import PortfolioCorrelationAnalyzer
+    from ai_trading.position.correlation_analyzer import (
+        PortfolioCorrelationAnalyzer,
+    )
     corr_analyzer = PortfolioCorrelationAnalyzer()
     logging.info('🔗 Portfolio-Level Risk Management:')
     logging.info('🔹 CONCENTRATION MONITORING:')
@@ -178,7 +182,9 @@ def demo_intelligent_integration():
     """Demo 6: Complete intelligent position management."""
     logging.info('\n🌟 DEMO 6: Complete Intelligent Integration')
     logging.info(str('=' * 60))
-    from intelligent_manager import IntelligentPositionManager
+    from ai_trading.position.intelligent_manager import (
+        IntelligentPositionManager,
+    )
     manager = IntelligentPositionManager()
     logging.info('🧠 Intelligent Position Decision Making:')
     logging.info('🔹 ANALYSIS COMPONENT WEIGHTS:')
