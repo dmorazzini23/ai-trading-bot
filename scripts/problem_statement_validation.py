@@ -19,11 +19,11 @@ def check_model_registry():
 def check_env_flag():
     """Check DISABLE_DAILY_RETRAIN is correctly implemented."""
     logging.info('✓ Correct env toggle:')
-    config_path = Path('config.py')
+    config_path = Path('ai_trading/settings.py')
     if config_path.exists():
         content = config_path.read_text()
-        assert 'DISABLE_DAILY_RETRAIN = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")' in content
-        logging.info('  - DISABLE_DAILY_RETRAIN read from correct key with safe default ✓')
+        assert "disable_daily_retrain: bool = Field(False, alias='DISABLE_DAILY_RETRAIN')" in content
+        logging.info('  - DISABLE_DAILY_RETRAIN configured via Settings alias ✓')
 
 def check_import_hardening():
     """Check that imports are hardened across key modules."""

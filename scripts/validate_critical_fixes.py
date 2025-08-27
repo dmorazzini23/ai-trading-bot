@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import traceback
+from pathlib import Path
 os.environ.setdefault('ALPACA_API_KEY', 'test')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'test')
 os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
@@ -59,19 +60,19 @@ def test_alpaca_api_endpoints():
     """Test that Alpaca API endpoints are correctly configured."""
     logging.info('🌐 Testing Alpaca API Configuration...')
     try:
-        with open('data_fetcher.py') as f:
-            data_fetcher_content = f.read()
+        data_fetcher_path = Path('ai_trading/data_fetcher.py')
+        data_fetcher_content = data_fetcher_path.read_text()
         if 'data.alpaca.markets' in data_fetcher_content:
-            logging.info('  ✅ data_fetcher.py correctly uses data.alpaca.markets for market data')
+            logging.info('  ✅ ai_trading/data_fetcher.py correctly uses data.alpaca.markets for market data')
         else:
-            logging.info('  ❌ data_fetcher.py does not use data.alpaca.markets')
+            logging.info('  ❌ ai_trading/data_fetcher.py does not use data.alpaca.markets')
             return False
-        with open('config.py') as f:
-            config_content = f.read()
+        config_path = Path('ai_trading/config/alpaca.py')
+        config_content = config_path.read_text()
         if 'paper-api.alpaca.markets' in config_content:
-            logging.info('  ✅ config.py correctly uses paper-api.alpaca.markets for trading')
+            logging.info('  ✅ ai_trading/config/alpaca.py correctly uses paper-api.alpaca.markets for trading')
         else:
-            logging.info('  ❌ config.py does not use paper-api.alpaca.markets')
+            logging.info('  ❌ ai_trading/config/alpaca.py does not use paper-api.alpaca.markets')
             return False
         logging.info('  ✅ Alpaca API endpoints are correctly configured')
         return True
