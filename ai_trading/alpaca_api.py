@@ -103,8 +103,7 @@ def _get_rest(*, bars: bool = False) -> Any:
     key = os.getenv("ALPACA_API_KEY")
     secret = os.getenv("ALPACA_SECRET_KEY")
     oauth = os.getenv("ALPACA_OAUTH")
-    base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    paper = "paper" in str(base).lower()
+    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     if oauth and (key or secret):
         raise RuntimeError(
             "Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both"
@@ -115,23 +114,24 @@ def _get_rest(*, bars: bool = False) -> Any:
 
         if oauth:
             return StockHistoricalDataClient(
-                oauth_token=oauth, url_override=base, paper=paper
+                oauth_token=oauth,
+                base_url=base_url,
             )
         return StockHistoricalDataClient(
-            api_key=key, secret_key=secret, url_override=base, paper=paper
+            api_key=key, secret_key=secret, base_url=base_url
         )
 
     from alpaca.trading.client import TradingClient
 
     if oauth:
         return TradingClient(
-            oauth_token=oauth, url_override=base, paper=paper
+            oauth_token=oauth,
+            base_url=base_url,
         )
     return TradingClient(
         api_key=key,
         secret_key=secret,
-        url_override=base,
-        paper=paper,
+        base_url=base_url,
     )
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
@@ -252,8 +252,8 @@ class _AlpacaConfig:
     @staticmethod
     def from_env() -> "_AlpacaConfig":
         base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
-        key = os.getenv("ALPACA_API_KEY_ID") or os.getenv("APCA_API_KEY_ID")
-        sec = os.getenv("ALPACA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+        key = os.getenv("ALPACA_API_KEY_ID")
+        sec = os.getenv("ALPACA_API_SECRET_KEY")
         shadow_env = os.getenv("ALPACA_SHADOW", "")
         shadow = is_shadow_mode() or str(shadow_env).strip().lower() in {"1", "true", "yes", "on"}
         return _AlpacaConfig(base, key, sec, shadow)

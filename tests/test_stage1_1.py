@@ -38,5 +38,5 @@ def test_fetch_sentiment_graceful_when_requests_unavailable(monkeypatch):
 def test_alpaca_stubs_are_not_exceptions():
     from ai_trading.core import bot_engine as be
 
-    # TradingClient (and other stubs) should not be Exception subclasses
+    # TradingClient and other stubs should not be Exception subclasses
     assert not issubclass(be.TradingClient, Exception)

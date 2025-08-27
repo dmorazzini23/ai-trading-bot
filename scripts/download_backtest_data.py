@@ -22,7 +22,10 @@ def main() -> None:
     ensure_dotenv_loaded()
     api_key = get_env("ALPACA_API_KEY")
     secret_key = get_env("ALPACA_SECRET_KEY")
-    client = StockHistoricalDataClient(api_key, secret_key)
+    base_url = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    client = StockHistoricalDataClient(
+        api_key=api_key, secret_key=secret_key, base_url=base_url
+    )
 
     symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "TSLA", "META"]
     start = datetime(2023, 1, 1, tzinfo=ZoneInfo("UTC"))
