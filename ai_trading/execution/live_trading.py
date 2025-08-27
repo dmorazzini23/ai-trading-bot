@@ -90,7 +90,7 @@ class AlpacaExecutionEngine:
             raw_client = AlpacaREST(
                 api_key=self.config.key_id,
                 secret_key=self.config.secret_key,
-                base_url=self.config.base_url,
+                url_override=self.config.base_url,
             )
             logger.info(
                 f'Real Alpaca client initialized (paper={self.config.use_paper})'

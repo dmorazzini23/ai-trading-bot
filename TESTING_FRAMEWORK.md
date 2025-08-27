@@ -431,7 +431,7 @@ class TestAlpacaIntegration:
         return TradingClient(
             os.getenv('ALPACA_API_KEY'),
             os.getenv('ALPACA_SECRET_KEY'),
-            base_url='https://paper-api.alpaca.markets',
+            url_override='https://paper-api.alpaca.markets',
         )
 
     @pytest.fixture

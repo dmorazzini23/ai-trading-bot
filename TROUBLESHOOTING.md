@@ -151,7 +151,7 @@ try:
     client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        base_url=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+        url_override=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
     )
     account = client.get_account()
     print(f'Connected to Alpaca. Account: {account.id}')
@@ -290,7 +290,7 @@ def debug_order_issue(symbol, quantity, side):
     client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        base_url=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
+        url_override=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
     )
 
     account = client.get_account()
