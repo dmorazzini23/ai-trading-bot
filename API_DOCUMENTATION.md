@@ -90,10 +90,10 @@ result = engine.execute_order(
 
 ### Data Management API
 
-#### `data_fetcher.py` - Market Data
+#### `data.fetch` - Market Data
 
 ```python
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 
 def get_historical_data(
     symbol: str,

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import ai_trading.data.bars as data_bars
 import pytest
 pd = pytest.importorskip("pandas")
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 from ai_trading.core import bot_engine
 
 

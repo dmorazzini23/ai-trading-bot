@@ -85,7 +85,7 @@ def check_minute_cache():
         content = data_fetcher_path.read_text()
         assert 'def get_cached_minute_timestamp' in content
         assert 'def last_minute_bar_age_seconds' in content
-        logging.info('  - Exported helpers from ai_trading.data_fetcher ✓')
+        logging.info('  - Exported helpers from ai_trading.data.fetch ✓')
     bot_engine_path = Path('ai_trading/core/bot_engine.py')
     if bot_engine_path.exists():
         content = bot_engine_path.read_text()

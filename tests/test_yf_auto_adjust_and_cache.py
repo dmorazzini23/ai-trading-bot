@@ -26,7 +26,7 @@ def test_yfinance_auto_adjust_and_cache(monkeypatch):
     fake.download = download
     monkeypatch.setitem(sys.modules, "yfinance", fake)
 
-    from ai_trading.data_fetcher import _yahoo_get_bars
+    from ai_trading.data.fetch import _yahoo_get_bars
 
     _ = _yahoo_get_bars("SPY", datetime(2025, 8, 1, tzinfo=UTC), datetime(2025, 8, 2, tzinfo=UTC), "1Day")
 

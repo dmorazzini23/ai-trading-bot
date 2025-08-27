@@ -1,11 +1,11 @@
 import importlib
 
 import pytest
-import ai_trading.data_fetcher as df
+import ai_trading.data.fetch as df
 import ai_trading.config.management as config
 
 CURRENT_MODULES = [
-    "ai_trading.data_fetcher",
+    "ai_trading.data.fetch",
     "ai_trading.config.management",
 ]
 

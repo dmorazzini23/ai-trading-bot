@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from ai_trading.data_fetcher import ensure_datetime
+from ai_trading.data.fetch import ensure_datetime
 
 
 def test_naive_et_is_converted_to_utc():

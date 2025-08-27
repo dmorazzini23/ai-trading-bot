@@ -37,7 +37,7 @@ def test_bot_engine_import_fallbacks():
         "from meta_learning import optimize_signals",
         "from ai_trading.pipeline import model_pipeline",
         "from pipeline import model_pipeline",
-        "from ai_trading.data_fetcher import",
+        "from ai_trading.data.fetch import",
         "from data_fetcher import",
         "from ai_trading.indicators import rsi",
         "from indicators import rsi",
@@ -66,7 +66,7 @@ def test_backtester_import_fallbacks():
     expected_patterns = [
         "import ai_trading.signals as signals",
         "import signals",
-        "import ai_trading.data_fetcher as data_fetcher",
+        "import ai_trading.data.fetch as data_fetcher",
         "import data_fetcher",
     ]
 
@@ -122,7 +122,7 @@ def test_import_robustness():
 def test_data_fetcher_helpers_available():
     """Test that the new data_fetcher helper functions are available."""
     try:
-        from ai_trading.data_fetcher import (
+        from ai_trading.data.fetch import (
             clear_cached_minute_cache,
             get_cached_age_seconds,
             get_cached_minute_timestamp,
@@ -134,7 +134,7 @@ def test_data_fetcher_helpers_available():
         assert callable(get_cached_age_seconds)
         assert callable(clear_cached_minute_cache)
     except ImportError:
-        from ai_trading.data_fetcher import (
+        from ai_trading.data.fetch import (
             clear_cached_minute_cache,
             get_cached_age_seconds,
             get_cached_minute_timestamp,

@@ -12,7 +12,7 @@ def test_ai_trading_module_imports():
     # Test each moved module can be imported from ai_trading
     modules = [
         "signals",
-        "data_fetcher",
+        "data.fetch",
         "execution",
         "indicators",
         "pipeline",
@@ -29,7 +29,6 @@ def test_ai_trading_init_exports():
 
     modules = [
         "signals",
-        "data_fetcher",
         "execution",
         "indicators",
         "pipeline",

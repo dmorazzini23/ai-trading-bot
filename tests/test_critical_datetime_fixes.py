@@ -20,7 +20,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
 
     def test_ensure_datetime_returns_timezone_aware(self):
         """Test that ensure_datetime returns timezone-aware datetime objects."""
-        from ai_trading.data_fetcher import ensure_datetime
+        from ai_trading.data.fetch import ensure_datetime
 
         # Test with naive datetime
         naive_dt = datetime(2025, 1, 1, 12, 0, 0)
@@ -31,7 +31,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
 
     def test_alpaca_api_format_compatibility(self):
         """Test that datetime format is compatible with Alpaca API RFC3339 requirements."""
-        from ai_trading.data_fetcher import ensure_datetime
+        from ai_trading.data.fetch import ensure_datetime
 
         # Test various input formats
         test_inputs = [
@@ -57,7 +57,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
 
     def test_get_bars_datetime_parameters(self):
         """Test that get_bars handles timezone-aware datetime parameters."""
-        from ai_trading.data_fetcher import get_bars
+        from ai_trading.data.fetch import get_bars
 
         start_dt = datetime.now(UTC)
         end_dt = start_dt + timedelta(hours=1)

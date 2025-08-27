@@ -6,7 +6,7 @@ def test_force_full_coverage():
     """Force coverage of critical modules to ensure all code paths are tested."""
     modules = [
         "ai_trading.core.bot_engine",
-        "ai_trading.data_fetcher",
+        "ai_trading.data.fetch",
         "ai_trading.signals",
         "ai_trading.alpaca_api",
     ]
@@ -20,7 +20,7 @@ def test_critical_imports():
     """Test that all critical modules can be imported without errors."""
     critical_modules = [
         "ai_trading.core.bot_engine",
-        "ai_trading.data_fetcher",
+        "ai_trading.data.fetch",
         "ai_trading.signals",
         "ai_trading.risk.engine",
         "ai_trading.execution",

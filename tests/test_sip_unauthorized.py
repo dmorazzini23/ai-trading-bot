@@ -2,7 +2,7 @@ from datetime import datetime, UTC
 
 import pandas as pd
 
-import ai_trading.data_fetcher as data_fetcher
+import ai_trading.data.fetch as data_fetcher
 from ai_trading.core import bot_engine
 
 

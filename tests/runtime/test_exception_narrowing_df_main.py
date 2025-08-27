@@ -1,7 +1,7 @@
 import inspect
 import re
 
-import ai_trading.data_fetcher as df_mod
+import ai_trading.data.fetch as df_mod
 import ai_trading.main as main_mod
 
 
