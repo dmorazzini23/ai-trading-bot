@@ -250,6 +250,15 @@ class TradingConfig:
                     return cast(val) if cast is not str else val
             return default
 
+        base_url = _get(
+            "ALPACA_BASE_URL",
+            str,
+            default="https://paper-api.alpaca.markets",
+            aliases=("ALPACA_API_URL",),
+        )
+        app_env = _get("APP_ENV", str, default="test") or "test"
+        paper_default = "paper" in str(base_url).lower() or app_env.lower() != "prod"
+
         mps = _get("MAX_POSITION_SIZE", float)
         if mps is not None and mps <= 0:
             raise ValueError("MAX_POSITION_SIZE must be positive")
@@ -291,7 +300,7 @@ class TradingConfig:
                 aliases=("AI_TRADING_CONFIDENCE_LEVEL",),
             ),
             max_position_mode=_get("MAX_POSITION_MODE", str, default="STATIC"),
-            paper=_get("PAPER", _to_bool, default=True),
+            paper=_get("PAPER", _to_bool, default=paper_default),
             disable_daily_retrain=_get(
                 "DISABLE_DAILY_RETRAIN", _to_bool, default=False
             ),

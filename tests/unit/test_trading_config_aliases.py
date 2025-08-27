@@ -24,3 +24,18 @@ def test_trading_config_env_aliases():
     assert snap["data"]["feed"] == "iex"
     assert snap["data"]["provider"] == "alpaca"
 
+
+def test_paper_inferred_from_base_url():
+    env = {"ALPACA_BASE_URL": "https://paper-api.alpaca.markets"}
+    cfg = TradingConfig.from_env(env)
+    assert cfg.paper is True
+
+
+def test_paper_false_when_live_prod():
+    env = {
+        "ALPACA_BASE_URL": "https://api.alpaca.markets",
+        "APP_ENV": "prod",
+    }
+    cfg = TradingConfig.from_env(env)
+    assert cfg.paper is False
+

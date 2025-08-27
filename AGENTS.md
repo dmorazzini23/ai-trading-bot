@@ -54,7 +54,8 @@ now_ny = datetime.now(ZoneInfo("America/New_York"))
 from ai_trading.config import management as config
 
 api_port = config.get_env("API_PORT", "9001", cast=int)
-paper = config.get_env("ALPACA_PAPER", "true", cast=bool)
+base_url = config.get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+is_paper = "paper" in base_url.lower() or config.get_env("APP_ENV", "test") != "prod"
 seed = config.SEED  # defaults to 42
 conf_threshold = config.get_env("AI_TRADING_CONF_THRESHOLD", "0.75", cast=float)
 
