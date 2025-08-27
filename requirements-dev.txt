@@ -3,7 +3,7 @@
 -r requirements.txt
 
 # Ensure Alpaca SDK available for tests
-alpaca-trade-api==3.2.0
+alpaca-py==0.42.0
 
 # Lint & format
 ruff==0.5.6

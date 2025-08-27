@@ -34,7 +34,7 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 * `GET /healthz` &mdash; minimal JSON liveness probe
 * `GET /metrics` &mdash; Prometheus metrics (returns **501** if metrics are disabled)
 
-Use **one** Alpaca SDK in production (recommended: `alpaca-trade-api`). If choosing `alpaca-py`, update broker modules accordingly.
+Use **one** Alpaca SDK in production (recommended: `alpaca-py`).
 
 ## Config
 
@@ -165,7 +165,7 @@ All Python packages are specified in `requirements.txt`, including:
 - **pandas**, **numpy**: Data processing and numerical computations
 - **pandas-market-calendars**: Exchange session calendars
 - **scikit-learn**: Machine learning algorithms
-- **alpaca-trade-api**: Broker integration
+- **alpaca-py**: Broker integration
 - **tenacity** *(optional)*: Robust retry helpers; falls back to a lightweight internal version if absent
 
 **Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
@@ -688,7 +688,7 @@ python verify_config.py
   If omitted, the bot derives a value from `CAPITAL_CAP` and available equity. Optionally
   set `MAX_POSITION_SIZE_PCT` to cap positions as a percentage of the portfolio.
 
-If any `ALPACA_*` credentials are missing or `alpaca-trade-api` is not installed,
+If any `ALPACA_*` credentials are missing or `alpaca-py` is not installed,
 the bot now aborts startup with a clear error instead of running without broker
 connectivity.
 
@@ -773,14 +773,14 @@ python -m ai_trading.tools.env_validate
 
 # Check API connectivity
 python -c "
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
 import os
-api = tradeapi.REST(
+client = TradingClient(
     os.getenv('ALPACA_API_KEY'),
     os.getenv('ALPACA_SECRET_KEY'),
-    os.getenv('ALPACA_BASE_URL')
+    paper=True,
 )
-account = api.get_account()
+account = client.get_account()
 print(f'✅ Connected! Account: {account.id}')
 print(f'💰 Buying Power: ${account.buying_power}')
 "
