@@ -128,7 +128,9 @@ class HealthChecker:
                 status = HealthStatus.UNKNOWN
                 message = f"Unexpected result type: {type(result)}"
                 details = {"raw_result": str(result)}
-            self.consecutive_failures = 0 if status == HealthStatus.HEALTHY else self.consecutive_failures + 1
+            self.consecutive_failures = (
+                0 if status == HealthStatus.HEALTHY else self.consecutive_failures + 1
+            )
         except TimeoutError:
             response_time = self.timeout_seconds * 1000
             status = HealthStatus.CRITICAL
@@ -187,13 +189,25 @@ class HealthMonitor:
     def _register_default_checks(self) -> None:
         """Register default system health checks."""
         self.register_check(
-            "system_cpu", ComponentType.CPU, self._check_cpu_usage, timeout_seconds=5.0, interval_seconds=30.0
+            "system_cpu",
+            ComponentType.CPU,
+            self._check_cpu_usage,
+            timeout_seconds=5.0,
+            interval_seconds=30.0,
         )
         self.register_check(
-            "system_memory", ComponentType.MEMORY, self._check_memory_usage, timeout_seconds=5.0, interval_seconds=30.0
+            "system_memory",
+            ComponentType.MEMORY,
+            self._check_memory_usage,
+            timeout_seconds=5.0,
+            interval_seconds=30.0,
         )
         self.register_check(
-            "system_disk", ComponentType.DISK, self._check_disk_usage, timeout_seconds=5.0, interval_seconds=60.0
+            "system_disk",
+            ComponentType.DISK,
+            self._check_disk_usage,
+            timeout_seconds=5.0,
+            interval_seconds=60.0,
         )
         self.register_check(
             "trading_engine",
@@ -374,7 +388,9 @@ class HealthMonitor:
         if not self.alerts_enabled:
             return
         recent_results = [
-            result for result in self.health_history if result.timestamp > datetime.now(UTC) - timedelta(minutes=5)
+            result
+            for result in self.health_history
+            if result.timestamp > datetime.now(UTC) - timedelta(minutes=5)
         ]
         component_results = {}
         for result in recent_results:
@@ -386,13 +402,18 @@ class HealthMonitor:
             if latest_result.status == HealthStatus.CRITICAL:
                 self._send_alert(f"CRITICAL: {component} health check failed", latest_result)
             checker = self.checkers.get(component)
-            if checker and checker.consecutive_failures >= self.thresholds["consecutive_failures_critical"]:
+            if (
+                checker
+                and checker.consecutive_failures >= self.thresholds["consecutive_failures_critical"]
+            ):
                 self._send_alert(
-                    f"CRITICAL: {component} has {checker.consecutive_failures} consecutive failures", latest_result
+                    f"CRITICAL: {component} has {checker.consecutive_failures} consecutive failures",
+                    latest_result,
                 )
             if latest_result.response_time_ms > self.thresholds["response_time_critical"]:
                 self._send_alert(
-                    f"CRITICAL: {component} response time {latest_result.response_time_ms:.0f}ms", latest_result
+                    f"CRITICAL: {component} response time {latest_result.response_time_ms:.0f}ms",
+                    latest_result,
                 )
 
     def _send_alert(self, message: str, result: HealthCheckResult) -> None:
@@ -409,7 +430,9 @@ class HealthMonitor:
     def _cleanup_history(self) -> None:
         """Clean up old history data."""
         cutoff_time = datetime.now(UTC) - timedelta(hours=24)
-        self.health_history = [result for result in self.health_history if result.timestamp > cutoff_time]
+        self.health_history = [
+            result for result in self.health_history if result.timestamp > cutoff_time
+        ]
         self.system_metrics_history = [
             metrics for metrics in self.system_metrics_history if metrics.timestamp > cutoff_time
         ]
@@ -469,7 +492,11 @@ class HealthMonitor:
     def _check_disk_usage(self) -> dict[str, Any]:
         """Check disk usage."""
         if not _HAS_PSUTIL:
-            return {"status": HealthStatus.UNKNOWN.value, "message": "psutil unavailable", "details": {}}
+            return {
+                "status": HealthStatus.UNKNOWN.value,
+                "message": "psutil unavailable",
+                "details": {},
+            }
         import psutil
 
         disk = psutil.disk_usage("/")
@@ -511,7 +538,11 @@ class HealthMonitor:
     def get_overall_health(self) -> dict[str, Any]:
         """Get overall system health status."""
         if not self.checkers:
-            return {"status": HealthStatus.UNKNOWN.value, "message": "No health checks configured", "components": []}
+            return {
+                "status": HealthStatus.UNKNOWN.value,
+                "message": "No health checks configured",
+                "components": [],
+            }
         component_statuses = {}
         for name, checker in self.checkers.items():
             if checker.last_result:
@@ -535,7 +566,9 @@ class HealthMonitor:
             "message": message,
             "timestamp": datetime.now(UTC).isoformat(),
             "components": {name: status.value for name, status in component_statuses.items()},
-            "metrics": self.system_metrics_history[-1].__dict__ if self.system_metrics_history else None,
+            "metrics": self.system_metrics_history[-1].__dict__
+            if self.system_metrics_history
+            else None,
         }
 
 
@@ -566,3 +599,9 @@ def get_system_health() -> dict[str, Any]:
     """Get current system health status."""
     monitor = get_health_monitor()
     return monitor.get_overall_health()
+
+
+def run_health_check() -> list[HealthCheckResult]:
+    """Convenience wrapper to execute all health checks once."""
+    monitor = get_health_monitor()
+    return asyncio.run(monitor.run_all_checks())
