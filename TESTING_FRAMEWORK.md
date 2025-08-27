@@ -271,40 +271,40 @@ class TestSignalGeneration:
 
     def test_signal_generation_basic(self, sample_market_data):
         """Test basic signal generation functionality."""
-        from signals import generate_signal
+        from ai_trading import signals
 
         # Add a simple momentum indicator
         sample_market_data['momentum'] = sample_market_data['close'].pct_change(5)
 
-        signals = generate_signal(sample_market_data, 'momentum')
+        signal_series = signals.generate_signal(sample_market_data, 'momentum')
 
-        assert isinstance(signals, pd.Series)
-        assert len(signals) == len(sample_market_data)
-        assert signals.dtype == int
-        assert set(signals.unique()).issubset({-1, 0, 1})
+        assert isinstance(signal_series, pd.Series)
+        assert len(signal_series) == len(sample_market_data)
+        assert signal_series.dtype == int
+        assert set(signal_series.unique()).issubset({-1, 0, 1})
 
     def test_signal_generation_with_nan_values(self, sample_market_data):
         """Test signal generation handles NaN values correctly."""
-        from signals import generate_signal
+        from ai_trading import signals
 
         # Add momentum with NaN values
         sample_market_data['momentum'] = sample_market_data['close'].pct_change(5)
         sample_market_data.loc[sample_market_data.index[10:15], 'momentum'] = np.nan
 
-        signals = generate_signal(sample_market_data, 'momentum')
+        signal_series = signals.generate_signal(sample_market_data, 'momentum')
 
         # NaN values should become neutral signals (0)
         nan_indices = sample_market_data.index[10:15]
-        assert all(signals.loc[nan_indices] == 0)
+        assert all(signal_series.loc[nan_indices] == 0)
 
     def test_ensemble_signal_generation(self, sample_market_data):
         """Test ensemble signal generation with multiple indicators."""
-        from signals import generate_ensemble_signal
+        from ai_trading import signals
 
         # This would test the ensemble method if implemented
         # For now, we'll test that it doesn't crash
         try:
-            ensemble_signal = generate_ensemble_signal(sample_market_data)
+            ensemble_signal = signals.generate_ensemble_signal(sample_market_data)
             assert ensemble_signal is not None
         except NotImplementedError:
             pytest.skip("Ensemble signal generation not implemented")
@@ -491,8 +491,8 @@ class TestDataPipeline:
     def test_end_to_end_data_flow(self):
         """Test complete data flow from fetch to signals."""
         from ai_trading.data import fetch as data_fetcher
-        from signals import generate_signal
-        from indicators import calculate_indicators
+        from ai_trading import signals
+        from ai_trading import indicators
 
         # Fetch real data
         data = get_historical_data('SPY', '2024-01-01', '2024-01-31', '1DAY')
@@ -501,16 +501,16 @@ class TestDataPipeline:
             pytest.skip("No market data available")
 
         # Calculate indicators
-        data_with_indicators = calculate_indicators(data)
+        data_with_indicators = indicators.calculate_indicators(data)
 
         assert not data_with_indicators.empty
         assert len(data_with_indicators.columns) > len(data.columns)
 
         # Generate signals
         if 'momentum' in data_with_indicators.columns:
-            signals = generate_signal(data_with_indicators, 'momentum')
-            assert isinstance(signals, pd.Series)
-            assert len(signals) == len(data_with_indicators)
+            signal_series = signals.generate_signal(data_with_indicators, 'momentum')
+            assert isinstance(signal_series, pd.Series)
+            assert len(signal_series) == len(data_with_indicators)
 
     @pytest.mark.integration
     def test_multi_symbol_data_processing(self):
