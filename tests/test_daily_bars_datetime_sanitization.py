@@ -6,13 +6,13 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ai_trading.data.bars import StockBarsRequest, safe_get_stock_bars
+from ai_trading.data.bars import StockBarsRequest, TimeFrame, safe_get_stock_bars
 
 
 def test_request_timestamps_sanitized_and_passed_to_get_bars():
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = datetime(2024, 1, 2, tzinfo=UTC)
-    req = StockBarsRequest("SPY", "1Day", start=start, end=end, feed="sip")
+    req = StockBarsRequest("SPY", TimeFrame.Day, start=start, end=end, feed="sip")
 
     captured: dict[str, str] = {}
 
@@ -33,7 +33,7 @@ def test_request_timestamps_sanitized_and_passed_to_get_bars():
 def test_request_timestamps_sanitized_for_get_stock_bars():
     start = datetime(2024, 1, 3, tzinfo=UTC)
     end = datetime(2024, 1, 4, tzinfo=UTC)
-    req = StockBarsRequest("SPY", "1Day", start=start, end=end, feed="sip")
+    req = StockBarsRequest("SPY", TimeFrame.Day, start=start, end=end, feed="sip")
 
     captured: dict[str, str] = {}
 
