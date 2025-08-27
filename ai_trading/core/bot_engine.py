@@ -76,11 +76,11 @@ except Exception:  # pragma: no cover - fallback when SDK missing
             raise RuntimeError("alpaca-py is required")
 
 from ai_trading.config.management import (
-    derive_cap_from_settings,
     get_env,
     is_shadow_mode,
     TradingConfig,
 )
+from ai_trading.position_sizing import get_max_position_size
 from ai_trading.settings import get_alpaca_secret_key_plain
 
 
@@ -3168,8 +3168,7 @@ LIMIT_ORDER_SLIPPAGE = params.get(
         getattr(state.mode_obj.config, "limit_order_slippage", 0.001),
     ),
 )
-_capital_cap = getattr(S, "capital_cap", getattr(state.mode_obj.config, "capital_cap", 0.04))
-MAX_POSITION_SIZE = derive_cap_from_settings(S, None, 8000.0, _capital_cap)
+MAX_POSITION_SIZE = get_max_position_size(S, state.mode_obj.config)
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get(
     "POV_SLICE_PCT",

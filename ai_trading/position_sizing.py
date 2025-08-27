@@ -207,3 +207,19 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     _CACHE.value, _CACHE.ts = (val, _now_utc())
     return (val, {'mode': mode, 'source': 'alpaca', 'equity': eq, 'capital_cap': cap, 'computed': computed, 'clamp_min': vmin, 'clamp_max': vmax, 'refreshed_at': _CACHE.ts.isoformat()})
 
+
+def get_max_position_size(cfg, tcfg, *, force_refresh: bool = False) -> float:
+    """Return only the resolved ``max_position_size`` value.
+
+    This is a thin convenience wrapper around :func:`resolve_max_position_size`
+    used by modules that only care about the numeric size and not the
+    accompanying metadata. Both the bot engine and external callers should use
+    this helper to ensure consistent sizing logic across the codebase.
+    """
+
+    val, _ = resolve_max_position_size(cfg, tcfg, force_refresh=force_refresh)
+    return val
+
+
+__all__ = ["resolve_max_position_size", "get_max_position_size"]
+
