@@ -248,6 +248,10 @@ pip install -e .
 # Optional RL extras
 # pip install -r requirements-extras-rl.txt
 
+# Optional training extras
+# pip install -r requirements-extras-train.txt
+# pip install ai-trading-bot[train]
+
 # Verify installation
 pip list | grep -E "(pandas|numpy|alpaca|scikit-learn)"
 ```
@@ -1410,6 +1414,14 @@ Environment="AI_TRADING_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl
 
 `trained_model.pkl` is expected at the project root when using
 `AI_TRADING_MODEL_PATH`. Generate it via the training workflow, for example:
+
+To install optional training dependencies (LightGBM, XGBoost, Optuna), run:
+
+```bash
+pip install ai-trading-bot[train]
+# or
+pip install -r requirements-extras-train.txt
+```
 
 ```bash
 python -m ai_trading.training.train_ml

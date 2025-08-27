@@ -52,8 +52,13 @@ ta = [
   "ta>=0.11.0",
   "TA-Lib>=0.4.26"
 ]
+train = [
+  "lightgbm==4.6.0",
+  "xgboost==3.0.4",
+  "optuna==4.5.0",
+]
 all = [
-  "ai-trading-bot[pandas,plot,ml,ta]"
+  "ai-trading-bot[pandas,plot,ml,ta,train]"
 ]
 test = ["pytest>=7.4", "pytest-cov>=4.1"]
 
