@@ -1,6 +1,6 @@
 """
 Validation script for portfolio optimizer and transaction costs migration.
-Tests the migration without requiring external dependencies.
+Ensures core modules exist and no legacy script imports remain.
 """
 import ast
 import os
@@ -39,7 +39,11 @@ def extract_imports(filepath):
 
 def main():
     """Run migration validation."""
-    required_files = ['ai_trading/portfolio/optimizer.py', 'ai_trading/execution/transaction_costs.py', 'ai_trading/portfolio/__init__.py', 'scripts/portfolio_optimizer.py', 'scripts/transaction_cost_calculator.py']
+    required_files = [
+        'ai_trading/portfolio/optimizer.py',
+        'ai_trading/execution/transaction_costs.py',
+        'ai_trading/portfolio/__init__.py',
+    ]
     all_files_exist = True
     for filepath in required_files:
         if check_file_exists(filepath):
@@ -70,13 +74,6 @@ def main():
         pass
     else:
         return 1
-    for shim_file in ['scripts/portfolio_optimizer.py', 'scripts/transaction_cost_calculator.py']:
-        shim_imports = extract_imports(shim_file)
-        has_ai_trading_imports = any(('ai_trading' in imp for imp in shim_imports))
-        if has_ai_trading_imports:
-            pass
-        else:
-            return 1
     ai_trading_files = ['ai_trading/signals.py', 'ai_trading/rebalancer.py', 'ai_trading/portfolio/__init__.py']
     scripts_imports_found = False
     for filepath in ai_trading_files:

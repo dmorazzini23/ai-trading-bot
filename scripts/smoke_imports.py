@@ -51,8 +51,6 @@ def main():
     tests.append(test_import('alpaca_trade_api.rest', '- Alpaca legacy API'))
     tests.append(test_import('ai_trading.portfolio.optimizer', '- portfolio optimizer'))
     tests.append(test_import('ai_trading.execution.transaction_costs', '- transaction costs'))
-    tests.append(test_import('scripts.transaction_cost_calculator', '- transaction cost calculator shim'))
-    tests.append(test_import('scripts.portfolio_optimizer', '- portfolio optimizer shim'))
     tests.append(test_import('scripts.strategy_allocator', '- strategy allocator'))
     tests.append(test_class_instantiation('ai_trading.config.management', 'TradingConfig', description='- config with all new attributes'))
     tests.append(test_class_instantiation('ai_trading.integrations.rate_limit', 'RateLimiter', description='- rate limiter with config support'))
