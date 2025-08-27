@@ -246,7 +246,7 @@ pip install -r requirements-test.txt -c constraints-dev.txt
 pip install -e .
 
 # Optional RL extras
-# pip install -r requirements-extras-rl.txt
+# WITH_RL=1 pip install -r requirements-extras-rl.txt -c constraints-dev.txt
 
 # Optional training extras
 # pip install -r requirements-extras-train.txt
@@ -255,6 +255,9 @@ pip install -e .
 # Verify installation
 pip list | grep -E "(pandas|numpy|alpaca|scikit-learn)"
 ```
+
+RL extras include NVIDIA CUDA libraries pinned for `torch==2.3.1`; pass
+`-c constraints-dev.txt` during installation to avoid CUDA mismatch warnings.
 
 ### Technical Analysis Library
 
