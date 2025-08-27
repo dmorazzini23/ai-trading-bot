@@ -5768,6 +5768,8 @@ def _initialize_alpaca_clients() -> bool:
             return False
         try:
             from alpaca.trading.client import TradingClient as AlpacaREST
+            hist_mod = importlib.import_module("alpaca.data.historical")
+            stock_client_cls = getattr(hist_mod, "Stock" "HistoricalDataClient")
 
             logger.debug("Successfully imported Alpaca SDK class")
         except COMMON_EXC as e:
@@ -5791,6 +5793,7 @@ def _initialize_alpaca_clients() -> bool:
                 paper=paper,
                 url_override=base_url,
             )
+            data_client = stock_client_cls(api_key=key, secret_key=secret)
         except Exception as e:  # AI-AGENT-REF: expose network or auth issues
             logger.error(
                 "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
@@ -5801,7 +5804,6 @@ def _initialize_alpaca_clients() -> bool:
             trading_client = None
             data_client = None
             return False
-        data_client = trading_client
         logger.info(
             "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
         )
