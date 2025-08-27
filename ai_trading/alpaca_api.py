@@ -37,10 +37,10 @@ def _is_intraday_unit(unit_tok: str) -> bool:
     return unit_tok in ('Min', 'Hour')
 
 def _unit_from_norm(tf_norm: str) -> str:
-    """Extract the unit token (e.g. 'Min', 'Day') from a normalized timeframe."""
-    for u in ('Min', 'Hour', 'Day', 'Week', 'Month'):
+    """Extract the unit token (e.g. 'Minute', 'Day') from a normalized timeframe."""
+    for u in ('Minute', 'Min', 'Hour', 'Day', 'Week', 'Month'):
         if tf_norm.endswith(u):
-            return u
+            return 'Minute' if u in {'Min', 'Minute'} else u
     return 'Day'
 def _module_exists(name: str) -> bool:
     try:
@@ -50,7 +50,7 @@ def _module_exists(name: str) -> bool:
 
 
 ALPACA_AVAILABLE = (
-    _module_exists('alpaca_trade_api')
+    _module_exists('alpaca')
     and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
 )
 
@@ -63,7 +63,7 @@ generate_client_order_id = _make_client_order_id
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
-        from alpaca_trade_api.rest import TimeFrame
+        from alpaca.data.timeframe import TimeFrame
     except (ValueError, TypeError, ImportError):
         TimeFrame = None
     if isinstance(tf_raw, str):
@@ -95,13 +95,13 @@ def _format_start_end_for_tradeapi(timeframe: str, start, end):
     return (params['start'], params['end'])
 
 def _get_rest() -> Any:
-    """Return a new `alpaca_trade_api.REST` instance."""
-    from alpaca_trade_api import REST  # type: ignore
+    """Return a new ``StockHistoricalDataClient`` instance."""
+    from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
 
     key = os.getenv('ALPACA_API_KEY')
     secret = os.getenv('ALPACA_SECRET_KEY')
     base = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-    return REST(key, secret, base)
+    return StockHistoricalDataClient(api_key=key, secret_key=secret, url_override=base)
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
@@ -136,34 +136,56 @@ def get_bars_df(
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
-    from alpaca_trade_api.rest import APIError, TimeFrame, TimeFrameUnit  # type: ignore
+    from alpaca.common.exceptions import APIError  # type: ignore
+    from alpaca.data.requests import StockBarsRequest  # type: ignore
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # type: ignore
 
     _pd = _require_pandas("get_bars_df")
-    rest = _get_rest()
+    client = _get_rest()
     feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
     adjustment = adjustment or os.getenv('ALPACA_ADJUSTMENT', 'all')
     tf_raw = timeframe
-    tf = _normalize_timeframe_for_tradeapi(tf_raw)
-    if start is None or end is None:
-        try:
-            base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
-        except (ValueError, TypeError):
-            base_tf = TimeFrame(1, TimeFrameUnit.Day)
-        start, end = _bars_time_window(base_tf)
-    start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
+    tf_norm = _normalize_timeframe_for_tradeapi(tf_raw)
+    amt = int(''.join(ch for ch in str(tf_norm) if ch.isdigit()) or '1')
+    unit = _unit_from_norm(tf_norm)
     try:
-        df = rest.get_bars(symbol, timeframe=tf, start=start_s, end=end_s, adjustment=adjustment, feed=feed, limit=None).df
+        unit_enum = getattr(TimeFrameUnit, unit)
+    except AttributeError:
+        unit_enum = TimeFrameUnit.Day
+    tf_obj = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(amt, unit_enum)
+    if start is None or end is None:
+        start_s, end_s = _bars_time_window(tf_obj)
+        start_dt = dt.datetime.fromisoformat(start_s.replace('Z', '+00:00'))
+        end_dt = dt.datetime.fromisoformat(end_s.replace('Z', '+00:00'))
+    else:
+        start_dt = _to_utc(start)
+        end_dt = _to_utc(end)
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=tf_obj,
+        start=start_dt,
+        end=end_dt,
+        adjustment=adjustment,
+        feed=feed,
+        limit=None,
+    )
+    try:
+        resp = getattr(client, 'get_stock_bars', None)
+        if callable(resp):
+            df = resp(req).df
+        else:
+            df = client.get_bars(symbol, timeframe=tf_norm, start=start_dt, end=end_dt, adjustment=adjustment, feed=feed, limit=None).df
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
         return _pd.DataFrame()
     except APIError as e:
-        req = {'timeframe_raw': str(tf_raw), 'timeframe_norm': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'adjustment': adjustment}
+        req_meta = {'timeframe_raw': str(tf_raw), 'timeframe_norm': tf_norm, 'feed': feed, 'start': start_dt.isoformat(), 'end': end_dt.isoformat(), 'adjustment': adjustment}
         body = ''
         try:
             body = e.response.text
         except (ValueError, TypeError):
             pass
-        _log.error('ALPACA_FAIL', extra={'symbol': symbol, 'timeframe': tf, 'feed': feed, 'start': start_s, 'end': end_s, 'status_code': getattr(e, 'status_code', None), 'endpoint': 'alpaca/bars', 'query_params': req, 'body': body})
+        _log.error('ALPACA_FAIL', extra={'symbol': symbol, 'timeframe': tf_norm, 'feed': feed, 'start': start_dt.isoformat(), 'end': end_dt.isoformat(), 'status_code': getattr(e, 'status_code', None), 'endpoint': 'alpaca/bars', 'query_params': req_meta, 'body': body})
         return _pd.DataFrame()
 
 

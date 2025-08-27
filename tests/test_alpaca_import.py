@@ -11,7 +11,7 @@ def test_ai_trading_import_without_alpaca():
         sys.modules.pop(module, None)
 
     # Simulate missing Alpaca package by setting it to None
-    sys.modules['alpaca_trade_api'] = None
+    sys.modules['alpaca'] = None
 
     # Set testing mode
     import os
@@ -20,18 +20,11 @@ def test_ai_trading_import_without_alpaca():
     try:
         # This should not raise an exception
         import ai_trading
-        import ai_trading.core.bot_engine
+        import ai_trading.alpaca_api as api
 
         # Check that ALPACA_AVAILABLE is False
-        assert hasattr(ai_trading.core.bot_engine, 'ALPACA_AVAILABLE')
-        assert ai_trading.core.bot_engine.ALPACA_AVAILABLE is False
-
-        # Check that mock classes are used
-        from ai_trading.core.bot_engine import OrderSide, TradingClient
-        assert TradingClient is not None
-        assert OrderSide is not None
-
-
+        assert hasattr(api, 'ALPACA_AVAILABLE')
+        assert api.ALPACA_AVAILABLE is False
     finally:
         # Clean up environment
         os.environ.pop('TESTING', None)

@@ -43,7 +43,7 @@ class StockBarsRequest:
     limit: int | None = None
     feed: Any | None = None
 try:
-    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 except (ValueError, TypeError, ImportError):
 
     class TimeFrame:

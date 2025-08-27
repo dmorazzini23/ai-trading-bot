@@ -10,10 +10,10 @@ import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import APIError  # type: ignore
+    from alpaca.common.exceptions import APIError  # type: ignore
 except ImportError:  # pragma: no cover - fallback when SDK missing
     class APIError(Exception):
-        """Fallback APIError when alpaca-trade-api is unavailable."""
+        """Fallback APIError when alpaca-py is unavailable."""
 
         pass
 from ai_trading.config.management import (
@@ -31,7 +31,7 @@ if not hasattr(np, 'NaN'):
 # Lazy pandas proxy
 pd = load_pandas()
 try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api import REST as AlpacaREST
+    from alpaca.trading.client import TradingClient as AlpacaREST
 except ImportError:
     AlpacaREST = None
 

@@ -7,10 +7,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 import numpy as np
 try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import APIError  # type: ignore
+    from alpaca.common.exceptions import APIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
     class APIError(Exception):
-        """Fallback APIError when alpaca-trade-api is unavailable."""
+        """Fallback APIError when alpaca-py is unavailable."""
 
         pass
 from ai_trading.config import get_settings

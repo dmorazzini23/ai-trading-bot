@@ -15,10 +15,10 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import APIError  # type: ignore
+    from alpaca.common.exceptions import APIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
     class APIError(Exception):
-        """Fallback APIError when alpaca-trade-api is unavailable."""
+        """Fallback APIError when alpaca-py is unavailable."""
 
         pass
 from ai_trading.logging.emit_once import emit_once

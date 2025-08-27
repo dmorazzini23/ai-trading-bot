@@ -3,7 +3,7 @@ from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.logging import logger
 
 try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import TimeFrame
+    from alpaca.data.timeframe import TimeFrame
 except ImportError:  # pragma: no cover - optional dependency
     TimeFrame = None
 
