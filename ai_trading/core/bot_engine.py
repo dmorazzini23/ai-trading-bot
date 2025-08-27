@@ -62,12 +62,17 @@ from ai_trading.alpaca_api import (
 )
 from ai_trading.utils.pickle_safe import safe_pickle_load
 try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import APIError  # type: ignore
+    from alpaca.common.exceptions import APIError  # type: ignore
+    from alpaca.trading.client import TradingClient  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
     class APIError(Exception):
-        """Fallback APIError when alpaca-trade-api is unavailable."""
+        """Fallback APIError when alpaca-py is unavailable."""
 
         pass
+
+    class TradingClient:  # type: ignore
+        def __init__(self, *a, **k):
+            raise RuntimeError("alpaca-py is required")
 
 from ai_trading.config.management import (
     derive_cap_from_settings,
@@ -78,7 +83,7 @@ from ai_trading.settings import get_alpaca_secret_key_plain
 
 
 def _alpaca_available() -> bool:
-    """Return ``True`` if the alpaca_trade_api SDK is importable."""
+    """Return ``True`` if the Alpaca SDK is importable."""
 
     return ALPACA_AVAILABLE
 from ai_trading.data.bars import (
@@ -402,22 +407,20 @@ class BotEngine:
 
     @cached_property
     def trading_client(self):
-        """alpaca-trade-api REST for order/trade ops."""
-        from alpaca_trade_api import REST  # type: ignore
-
-        return REST(
-            key_id=_get_env_str("ALPACA_API_KEY"),
+        """Alpaca TradingClient for order/trade ops."""
+        return TradingClient(
+            api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
             base_url=_get_env_str("ALPACA_BASE_URL"),
         )
 
     @cached_property
     def data_client(self):
-        """alpaca-trade-api REST for historical/market data."""
-        from alpaca_trade_api import REST  # type: ignore
+        """Alpaca TradingClient for historical/market data."""
+        from alpaca.trading.client import TradingClient as _TradingClient  # type: ignore
 
-        return REST(
-            key_id=_get_env_str("ALPACA_API_KEY"),
+        return _TradingClient(
+            api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
             base_url=_get_env_str("ALPACA_BASE_URL"),
         )
@@ -1500,18 +1503,30 @@ def _ensure_alpaca_classes() -> None:
     global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
     if Quote is not None or _ALPACA_IMPORT_ERROR is not None:
         return
-    try:  # pragma: no cover - import resolution
-        from alpaca_trade_api.entity import Quote as _Quote, Order as _Order
-    except Exception as e:  # pragma: no cover - executed only when base dep missing
-        _ALPACA_IMPORT_ERROR = e
-        get_logger(__name__).critical(
-            "required Alpaca trade API classes missing; ensure alpaca-trade-api is installed",
-            exc_info=e,
-        )
-        return
+    try:  # pragma: no cover - independent imports with fallbacks
+        from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
+    except Exception:
+        from dataclasses import dataclass
 
+        @dataclass
+        class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
+            symbol_or_symbols: Any
     try:
-        from alpaca_trade_api.enums import (
+        from alpaca.trading.requests import MarketOrderRequest as _MarketOrderRequest
+    except Exception:
+        from dataclasses import dataclass
+
+        @dataclass
+        class _MarketOrderRequest:  # pragma: no cover - minimal request object
+            symbol: str
+            qty: int
+            side: Any
+            time_in_force: Any
+            limit_price: float | None = None
+            stop_price: float | None = None
+            client_order_id: str | None = None
+    try:
+        from alpaca.trading.enums import (
             OrderSide as _OrderSide,
             OrderStatus as _OrderStatus,
             TimeInForce as _TimeInForce,
@@ -1534,32 +1549,23 @@ def _ensure_alpaca_classes() -> None:
         class _TimeInForce(str, Enum):  # pragma: no cover - fallback enum
             DAY = "day"
             GTC = "gtc"
-
     try:
-        from alpaca_trade_api.types import MarketOrderRequest as _MarketOrderRequest
+        from alpaca.data.models import Quote as _Quote  # type: ignore
     except Exception:
         from dataclasses import dataclass
 
         @dataclass
-        class _MarketOrderRequest:  # pragma: no cover - minimal request object
-            symbol: str
-            qty: int
-            side: _OrderSide
-            time_in_force: _TimeInForce
-            limit_price: float | None = None
-            stop_price: float | None = None
-            client_order_id: str | None = None
-
-    try:  # pragma: no cover - StockLatestQuoteRequest may not exist
-        from alpaca_trade_api.rest import (
-            StockLatestQuoteRequest as _StockLatestQuoteRequest,  # type: ignore
-        )
+        class _Quote:  # pragma: no cover - minimal quote stub
+            bid_price: float | None = None
+            ask_price: float | None = None
+    try:
+        from alpaca.trading.models import Order as _Order  # type: ignore
     except Exception:
         from dataclasses import dataclass
 
         @dataclass
-        class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
-            symbol_or_symbols: Any
+        class _Order:  # pragma: no cover - minimal order stub
+            id: str | None = None
 
     Quote = _Quote
     Order = _Order
@@ -2277,7 +2283,7 @@ import warnings
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
 
 # Logging: set root logger to INFO, send to both stderr and a log file
-get_logger("alpaca_trade_api").setLevel(logging.WARNING)
+get_logger("alpaca").setLevel(logging.WARNING)
 get_logger("urllib3").setLevel(logging.WARNING)
 get_logger("requests").setLevel(logging.WARNING)
 
@@ -3777,12 +3783,12 @@ class DataFetcher:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
 
-        from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+        from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
 
         client = AlpacaREST(
-            api_key,
-            api_secret,
-            get_settings().alpaca_base_url,
+            api_key=api_key,
+            secret_key=api_secret,
+            base_url=get_settings().alpaca_base_url,
         )
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
@@ -4079,12 +4085,12 @@ class DataFetcher:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
             )
-        from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+        from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
 
         client = AlpacaREST(
-            api_key,
-            api_secret,
-            get_settings().alpaca_base_url,
+            api_key=api_key,
+            secret_key=api_secret,
+            base_url=get_settings().alpaca_base_url,
         )
 
         try:
@@ -4328,12 +4334,12 @@ def prefetch_daily_data(
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
         )
-    from alpaca_trade_api import REST as AlpacaREST  # type: ignore
+    from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
 
     client = AlpacaREST(
-        alpaca_key,
-        alpaca_secret,
-        get_settings().alpaca_base_url,
+        api_key=alpaca_key,
+        secret_key=alpaca_secret,
+        base_url=get_settings().alpaca_base_url,
     )
 
     try:
@@ -5621,7 +5627,7 @@ def _initialize_alpaca_clients() -> None:
             logger.info("ALPACA_DIAG", extra=_redact(diag))
             return
         try:
-            from alpaca_trade_api import REST as AlpacaREST
+            from alpaca.trading.client import TradingClient as AlpacaREST
 
             logger.debug("Successfully imported Alpaca SDK class")
         except COMMON_EXC as e:
@@ -5639,7 +5645,7 @@ def _initialize_alpaca_clients() -> None:
             return
         try:
             trading_client = AlpacaREST(
-                key_id=key,
+                api_key=key,
                 secret_key=secret,
                 base_url=base_url,
             )

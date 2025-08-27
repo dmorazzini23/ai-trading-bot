@@ -166,7 +166,7 @@ All `try/except ImportError` blocks have been removed from:
 ### 2. Required Dependencies
 The following packages are now hard dependencies:
 - `pandas_market_calendars>=4.3`
-- `alpaca-trade-api>=3.1.0`
+- `alpaca-py>=0.42.0`
 - `hmmlearn>=0.3.0`
 - `psutil>=5.9.8`
 
@@ -174,7 +174,7 @@ The following packages are now hard dependencies:
 ```bash
 python -m pip install -U pip
 pip install -e .
-pip install alpaca-trade-api hmmlearn psutil pandas_market_calendars
+pip install alpaca-py hmmlearn psutil pandas_market_calendars
 ```
 
 If opting for `alpaca-py`, update broker modules, tests, and docs accordingly.
@@ -203,8 +203,7 @@ Alpaca SDK imports are now at module top level in `ai_trading/execution/live_tra
 **Impact**: Missing Alpaca SDK will cause immediate import errors.
 
 ### 6. Tooling Updates
-- Test dependency hints drop the legacy `alpaca_trade_api` package and now
-  expect the modern `alpaca-py` SDK (`import alpaca`).
+- Test dependency hints now expect the modern `alpaca-py` SDK (`import alpaca`).
 
 ## Enhanced Features
 

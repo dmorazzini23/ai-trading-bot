@@ -5,9 +5,7 @@ Ensure the `alpaca` package and its key submodules resolve to local vendor
 stubs so imports like
     from alpaca.trading.client import TradingClient
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-work during test collection. Legacy `alpaca_trade_api` imports are aliased to
-these stubs for backward compatibility. This is idempotent and does not affect
-runtime.
+work during test collection. This is idempotent and does not affect runtime.
 """
 import os
 import sys as _sys
@@ -51,15 +49,6 @@ except Exception:  # pragma: no cover - only hit in test bootstrap
     from alpaca.trading.client import TradingClient  # noqa: F401
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # noqa: F401
 
-# Alias legacy module names to new stubs for compatibility
-_sys.modules.setdefault(
-    "alpaca_trade_api",
-    _importlib.import_module("tests.vendor_stubs.alpaca_trade_api"),
-)
-_sys.modules.setdefault(
-    "alpaca_trade_api.rest",
-    _importlib.import_module("tests.vendor_stubs.alpaca_trade_api.rest"),
-)
 
 import asyncio
 import random

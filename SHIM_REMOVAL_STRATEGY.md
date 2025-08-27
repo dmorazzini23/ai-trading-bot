@@ -22,7 +22,7 @@ Files with import guards for core dependencies that should be hard requirements:
    - `scikit-learn` - Used in ML modules, should be hard dependency
 
 2. **Medium Priority - Domain Libraries**:
-   - `alpaca-trade-api` - Core trading functionality (use a single SDK)
+   - `alpaca-py` - Core trading functionality (use a single SDK)
    - `yfinance` - Market data (but could be optional with feature flags)
    - `flask` - Web interface (could be optional)
 

@@ -119,7 +119,7 @@ class _PCA:
         pass
 
 sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["alpaca.trading.client"].TradingClient = _FakeREST
+sys.modules["alpaca.trading.client"].TradingClient = object
 sys.modules["alpaca.trading.client"].APIError = Exception
 class _DummyReq:
     def __init__(self, *a, **k):
