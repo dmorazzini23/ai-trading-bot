@@ -643,6 +643,9 @@ python -m ai_trading.tools.env_validate
 python verify_config.py
 ```
 
+The CLI validates `DATA_FEED` and `TIMEFRAME` at startup using Pydantic and
+exits early with a clear error message when these values are invalid.
+
 ---
 
 ## 🔑 Configuration
