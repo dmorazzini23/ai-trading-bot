@@ -13231,6 +13231,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
                 return
 
+            if not symbols:
+                logger_once.warning(
+                    "SYMBOL_LIST_EMPTY",
+                    key="symbol_list_empty",
+                )
+                time.sleep(1.0)
+                return
+
             retries = 3
             processed, row_counts = [], {}
             for attempt in range(retries):
