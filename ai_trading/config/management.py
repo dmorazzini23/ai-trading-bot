@@ -102,7 +102,21 @@ def validate_required_env(
     """
 
     env = dict(env or os.environ)
+    api_key = env.get("ALPACA_API_KEY", "").strip()
+    secret = env.get("ALPACA_SECRET_KEY", "").strip()
+    oauth = env.get("ALPACA_OAUTH", "").strip()
+
+    if oauth and (api_key or secret):
+        raise RuntimeError(
+            "Provide either ALPACA_OAUTH or ALPACA_API_KEY/ALPACA_SECRET_KEY, not both"
+        )
+
     required = list(keys or _MANDATORY_ENV_VARS)
+    if oauth:
+        required = [
+            k for k in required if k not in {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}
+        ]
+
     missing: list[str] = []
     snapshot: Dict[str, str] = {}
     for k in required:
@@ -116,6 +130,10 @@ def validate_required_env(
         if not val.strip():
             missing.append(k)
         snapshot[k] = _mask(val)
+
+    if oauth:
+        snapshot["ALPACA_OAUTH"] = _mask(oauth)
+
     if missing:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)

@@ -85,10 +85,12 @@ class RiskEngine:
             api_key = getattr(s, 'alpaca_api_key', None)
             base_url = getattr(s, 'alpaca_base_url', None)
             oauth = get_env('ALPACA_OAUTH')
-            has_keypair = api_key and secret
+            has_keypair = bool(api_key and secret)
             if base_url:
                 if has_keypair and oauth:
-                    logger.warning('Both API key/secret and OAuth token provided; using API key/secret')
+                    raise RuntimeError(
+                        'Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both'
+                    )
                 if has_keypair:
                     self.data_client = TradingClient(
                         api_key=api_key,
