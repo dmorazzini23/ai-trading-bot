@@ -55,6 +55,17 @@ scan-extras:
 	@echo "[make] strict scan for raw install hints"
 	@python tools/scan_extras_hints.py --strict
 
+.PHONY: audit-exceptions legacy-scan
+audit-exceptions:
+	@echo "== audit broad exceptions =="
+	@python tools/audit_exceptions.py --paths ai_trading > artifacts/audit-exceptions.json
+
+legacy-scan:
+	@echo "== legacy import scan =="
+	@ci/scripts/forbid_alpaca_trade_api.sh
+	@ci/scripts/forbid_legacy_imports.sh
+
+
 # Alias for developer convenience
 test: smoke
 
