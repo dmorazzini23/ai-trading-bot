@@ -5,7 +5,6 @@ and other critical fixes for production readiness.
 """
 
 import os
-import sys
 import threading
 from unittest.mock import Mock, patch
 
@@ -14,15 +13,12 @@ import pytest
 pd = pytest.importorskip("pandas")
 # Set up test environment variables first
 os.environ.update({
-    'ALPACA_API_KEY': 'test_key_123456789012345',
-    'ALPACA_SECRET_KEY': 'test_secret_123456789012345',
-    'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
-    'WEBHOOK_SECRET': 'test_webhook_secret',
-    'FLASK_PORT': '5000'
+    "ALPACA_API_KEY": "test_key_123456789012345",
+    "ALPACA_SECRET_KEY": "test_secret_123456789012345",
+    "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+    "WEBHOOK_SECRET": "test_webhook_secret",
+    "FLASK_PORT": "5000",
 })
-
-# Add ai_trading to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'ai_trading'))
 
 
 def test_metrics_division_by_zero_protection():
@@ -128,7 +124,6 @@ def test_sentiment_cache_memory_leak_prevention():
 
 def test_circular_buffer_memory_efficiency():
     """Test circular buffer is memory efficient."""
-    sys.path.append('ai_trading')
     from ai_trading.indicator_manager import CircularBuffer
 
     # Test circular buffer bounds
@@ -148,7 +143,6 @@ def test_circular_buffer_memory_efficiency():
 
 def test_incremental_indicators():
     """Test incremental indicator calculations."""
-    sys.path.append('ai_trading')
     from ai_trading.indicator_manager import (
         IncrementalEMA,
         IncrementalRSI,
@@ -190,7 +184,6 @@ def test_incremental_indicators():
 
 def test_market_data_validation():
     """Test market data validation."""
-    sys.path.append('ai_trading')
     from ai_trading.data_validation import MarketDataValidator, ValidationSeverity
 
     validator = MarketDataValidator()
@@ -224,8 +217,7 @@ def test_market_data_validation():
 
 def test_security_manager():
     """Test security manager functionality."""
-    sys.path.append('ai_trading')
-    from security import mask_sensitive_data
+    from ai_trading.security import mask_sensitive_data
 
     # Test data masking
     sensitive_data = {
@@ -250,8 +242,7 @@ def test_configuration_validation():
 
 def test_dependency_injection():
     """Test dependency injection container."""
-    sys.path.append('ai_trading')
-    from core.interfaces import IConfigManager, SimpleDependencyContainer
+    from ai_trading.core.interfaces import IConfigManager, SimpleDependencyContainer
 
     container = SimpleDependencyContainer()
 
@@ -279,8 +270,7 @@ def test_dependency_injection():
 
 def test_performance_optimizations():
     """Test performance optimizations work correctly."""
-    sys.path.append('ai_trading')
-    from indicator_manager import IndicatorManager, IndicatorType
+    from ai_trading.indicator_manager import IndicatorManager, IndicatorType
 
     manager = IndicatorManager()
 

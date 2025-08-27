@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-"""
-Test Money math integration with execution engine.
-"""
+"""Test Money math integration with execution engine."""
 
-import sys
 import pytest
-
-sys.path.append('.')
 
 pytestmark = pytest.mark.integration
 
