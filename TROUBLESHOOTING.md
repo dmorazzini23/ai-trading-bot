@@ -466,7 +466,7 @@ def analyze_memory_usage():
     import numpy as np
     print(f"After pandas/numpy: {process.memory_info().rss / 1024 / 1024:.2f} MB")
 
-    import bot_engine
+    from ai_trading.core import bot_engine
     print(f"After bot_engine: {process.memory_info().rss / 1024 / 1024:.2f} MB")
 
     # Load test data

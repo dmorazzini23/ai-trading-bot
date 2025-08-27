@@ -742,20 +742,19 @@ class PerformanceProfiler:
     
     def benchmark_trading_cycle(self, num_cycles: int = 10) -> Dict[str, float]:
         """Benchmark complete trading cycle performance."""
-        from bot_engine import run_all_trades_worker
-        from bot_engine import BotState
+        from ai_trading.core import bot_engine
         
         cycle_times = []
         
         for i in range(num_cycles):
-            state = BotState()
+            state = bot_engine.BotState()
             
             start_time = time.perf_counter()
             
             # Run trading cycle (in dry run mode)
             try:
                 with patch.dict(os.environ, {'DRY_RUN': 'true'}):
-                    run_all_trades_worker(state, None)
+                    bot_engine.run_all_trades_worker(state, None)
             except Exception as e:
                 logging.warning(f"Benchmark cycle {i} failed: {e}")
                 continue
