@@ -11500,18 +11500,46 @@ def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
 
 # Fix for handling missing tickers.csv file
 def get_stock_bars_safe(api, symbol, timeframe):
-    """Safely get stock bars with proper error handling."""
+    """Safely fetch stock bars using Alpaca's request object."""
+
+    import pandas as pd
+
+    def _parse_tf(tf):
+        if isinstance(tf, TimeFrame):
+            return tf
+        tf_norm = str(tf).lower()
+        if tf_norm in {"1day", "1d", "day"}:
+            return TimeFrame(1, TimeFrameUnit.Day)
+        if tf_norm in {"1min", "1m", "minute"}:
+            return TimeFrame(1, TimeFrameUnit.Minute)
+        raise ValueError(f"Unsupported timeframe: {tf}")
+
     try:
-        get_stock_bars_fn = getattr(api, "get_stock_bars", None)
-        if callable(get_stock_bars_fn):
-            return get_stock_bars_fn(symbol, timeframe)
+        req = StockBarsRequest(symbol_or_symbols=[symbol], timeframe=_parse_tf(timeframe))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Malformed StockBarsRequest") from exc
+
+    get_stock_bars_fn = getattr(api, "get_stock_bars", None)
+    if callable(get_stock_bars_fn):
+        try:
+            resp = get_stock_bars_fn(req)
+        except TypeError as exc:
+            raise RuntimeError(
+                "Incompatible Alpaca SDK: expected get_stock_bars(request)"
+            ) from exc
+    else:
         get_bars_fn = getattr(api, "get_bars", None)
         if callable(get_bars_fn):
             return get_bars_fn(symbol, timeframe)
         raise AttributeError("API missing get_stock_bars/get_bars")
-    except AttributeError as e:
-        logger.error(f"Alpaca API Error: {e}")
-        return None
+
+    df = getattr(resp, "df", resp)
+    if not isinstance(df, pd.DataFrame):
+        try:
+            df = pd.DataFrame(df)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("Unexpected get_stock_bars response") from exc
+    return df
 
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
