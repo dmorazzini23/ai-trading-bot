@@ -540,7 +540,32 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None=None) -> p
             logger.warning('ALPACA_FETCH_FAILED', extra={'symbol': symbol, 'err': str(e)})
             df = None
     if df is None or getattr(df, 'empty', True):
-        df = _yahoo_get_bars(symbol, start_dt, end_dt, interval='1m')
+        max_span = _dt.timedelta(days=8)
+        total_span = end_dt - start_dt
+        if total_span > max_span:
+            logger.warning(
+                'YF_1M_RANGE_SPLIT',
+                extra={
+                    'symbol': symbol,
+                    'start': start_dt.isoformat(),
+                    'end': end_dt.isoformat(),
+                    'max_days': 8,
+                },
+            )
+            dfs: list[pd.DataFrame] = []  # type: ignore[var-annotated]
+            cur_start = start_dt
+            while cur_start < end_dt:
+                cur_end = min(cur_start + max_span, end_dt)
+                dfs.append(_yahoo_get_bars(symbol, cur_start, cur_end, interval='1m'))
+                cur_start = cur_end
+            if pd is not None and dfs:
+                df = pd.concat(dfs, ignore_index=True)
+            elif dfs:
+                df = dfs[0]
+            else:
+                df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
+        else:
+            df = _yahoo_get_bars(symbol, start_dt, end_dt, interval='1m')
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
