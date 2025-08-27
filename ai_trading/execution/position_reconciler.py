@@ -52,14 +52,14 @@ class PositionReconciler:
         self.running = False
         self._reconciliation_thread: Thread | None = None
 
-    def update_bot_position(self, symbol: str, quantity: float, reason: str='trade_execution') -> None:
+    def update_bot_position(self, symbol: str, quantity: float, reason: str='execution_engine') -> None:
         """Update the bot's internal position tracking."""
         with self._lock:
             old_qty = self._bot_positions.get(symbol, 0)
             self._bot_positions[symbol] = quantity
             self.logger.info('BOT_POSITION_UPDATE', extra={'symbol': symbol, 'old_qty': old_qty, 'new_qty': quantity, 'change': quantity - old_qty, 'reason': reason, 'timestamp': datetime.now(UTC).isoformat()})
 
-    def adjust_bot_position(self, symbol: str, quantity_change: float, reason: str='trade_execution') -> None:
+    def adjust_bot_position(self, symbol: str, quantity_change: float, reason: str='execution_engine') -> None:
         """Adjust the bot's position by a relative amount."""
         with self._lock:
             current_qty = self._bot_positions.get(symbol, 0)
@@ -237,12 +237,12 @@ def get_position_reconciler(api_client=None) -> PositionReconciler:
             _position_reconciler = PositionReconciler(api_client)
         return _position_reconciler
 
-def update_bot_position(symbol: str, quantity: float, reason: str='trade_execution') -> None:
+def update_bot_position(symbol: str, quantity: float, reason: str='execution_engine') -> None:
     """Update bot position tracking."""
     reconciler = get_position_reconciler()
     reconciler.update_bot_position(symbol, quantity, reason)
 
-def adjust_bot_position(symbol: str, quantity_change: float, reason: str='trade_execution') -> None:
+def adjust_bot_position(symbol: str, quantity_change: float, reason: str='execution_engine') -> None:
     """Adjust bot position by relative amount."""
     reconciler = get_position_reconciler()
     reconciler.adjust_bot_position(symbol, quantity_change, reason)
