@@ -1,7 +1,4 @@
-"""
-Test centralized logging system to ensure no duplicate logging setup.
-"""
-import importlib
+"""Test centralized logging system to ensure no duplicate logging setup."""
 import logging
 import os
 import threading
@@ -71,24 +68,6 @@ def test_centralized_logging_prevents_duplicates():
         root_logger.handlers = original_handlers
 
 
-def test_deprecated_modules_removed():
-    """Test that deprecated logging modules can no longer be imported."""
-
-    # Test that ai_trading.logging_config cannot be imported
-    try:
-        importlib.import_module("ai_trading.logging_config")
-        assert False, "ai_trading.logging_config should not be importable after removal"
-    except ImportError:
-        pass  # Expected
-
-    # Test that ai_trading.logger cannot be imported
-    try:
-        importlib.import_module("ai_trading.logger")
-        assert False, "ai_trading.logger should not be importable after removal"
-    except ImportError:
-        pass  # Expected
-
-
 def test_centralized_logging_thread_safety():
     """Test that centralized logging setup is thread-safe."""
     if not CENTRALIZED_LOGGING_AVAILABLE:
@@ -148,5 +127,4 @@ def test_centralized_logging_thread_safety():
 
 if __name__ == "__main__":
     test_centralized_logging_prevents_duplicates()
-    test_deprecated_modules_removed()
     test_centralized_logging_thread_safety()

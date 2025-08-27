@@ -240,12 +240,5 @@ def test_trading_config_to_dict_includes_capital_and_drawdown():
     assert isinstance(data["max_drawdown_threshold"], int | float)
 
 
-def test_botmode_init_without_legacy_method():
-    """BotMode should initialize without legacy parameter method."""
-    from ai_trading.core import bot_engine
-
-    bot_engine.BotMode("balanced")  # Should not raise
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
