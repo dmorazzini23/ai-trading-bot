@@ -1,11 +1,9 @@
 import sys
 import types
-from pathlib import Path
 
 import pytest
 
 pd = pytest.importorskip("pandas")
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 dummy = types.ModuleType("dummy")
 mods = [

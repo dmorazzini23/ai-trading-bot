@@ -5,14 +5,10 @@ Tests the specific issues identified in the problem statement.
 """
 
 import os
-import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
-
-# Add the project root to the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 class TestDatetimeTimezoneAwareness(unittest.TestCase):

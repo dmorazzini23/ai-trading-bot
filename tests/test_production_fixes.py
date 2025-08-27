@@ -15,9 +15,6 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-# Add the project root to Python path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 
 class TestSentimentAPIConfiguration(unittest.TestCase):
     """Test sentiment API configuration and backwards compatibility."""

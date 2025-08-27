@@ -1,12 +1,10 @@
 import sys
 import types
-from pathlib import Path
 
 import pytest
 
 pd = pytest.importorskip("pandas")
 # Minimal stubs so importing bot_engine succeeds without optional deps
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 mods = [
     "sklearn",
     "pandas_ta",

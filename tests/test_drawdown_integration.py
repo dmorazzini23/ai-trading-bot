@@ -7,7 +7,6 @@ into the main trading loop and responds correctly to equity changes.
 """
 
 import os
-import sys
 import unittest
 from unittest.mock import Mock, patch
 import pytest
@@ -17,9 +16,6 @@ os.environ["TESTING"] = "1"
 os.environ["PYTEST_RUNNING"] = "1"
 
 pytestmark = pytest.mark.integration
-
-# Add the current directory to the path so we can import modules
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ai_trading.config.management import TradingConfig
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker

@@ -6,14 +6,10 @@ full market data or external dependencies.
 """
 
 import asyncio
-import os
-import sys
 
 import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
-# Add the project root to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 def create_sample_market_data(periods: int = 100, symbol: str = "TEST") -> pd.DataFrame:
     """Create sample market data for testing."""
@@ -235,8 +231,6 @@ async def run_strategy_tests():
     test_results.append(("Integrated Strategy System", test_integrated_strategy_system()))
     test_results.append(("Strategy Performance Scenarios", test_strategy_performance_scenarios()))
 
-    # Report results
-
     passed = 0
     total = len(test_results)
 
@@ -244,20 +238,4 @@ async def run_strategy_tests():
         if result:
             passed += 1
 
-
-    if passed == total:
-        pass
-    else:
-        pass
-
     return passed == total
-
-
-if __name__ == "__main__":
-    # Run tests
-    try:
-        result = asyncio.run(run_strategy_tests())
-        exit_code = 0 if result else 1
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        sys.exit(1)

@@ -5,7 +5,6 @@ Focused test suite for the critical trading bot fixes per problem statement.
 
 import csv
 import os
-import sys
 import tempfile
 import unittest
 from datetime import UTC
@@ -14,9 +13,6 @@ from tests.support.mocks import MockContext, MockSignal
 
 # Set testing environment
 os.environ['TESTING'] = '1'
-
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 class TestCriticalFixes(unittest.TestCase):

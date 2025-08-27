@@ -5,8 +5,6 @@ import sys
 import time
 import pytest
 
-sys.path.insert(0, '/tmp')
-
 from tests.optdeps import require
 from ai_trading.utils.retry import retry, stop_after_attempt, wait_exponential
 

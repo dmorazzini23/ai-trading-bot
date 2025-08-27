@@ -5,14 +5,9 @@ This module tests that confidence values > 1.0 are properly normalized
 to valid probability ranges in the Kelly calculation.
 """
 import math
-import os
 
 # Test the actual import and function from bot_engine
-import sys
-
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 def test_kelly_confidence_normalization():
     """Test that high confidence values are properly normalized to probabilities."""

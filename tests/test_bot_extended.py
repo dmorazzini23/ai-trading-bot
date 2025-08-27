@@ -1,13 +1,9 @@
 import sys
 import types
-from pathlib import Path
 
 import pytest
 
 pd = pytest.importorskip("pandas")
-
-# Ensure repository root on path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Minimal stubs so that importing bot succeeds without optional deps
 mods = [
     "pandas_ta",

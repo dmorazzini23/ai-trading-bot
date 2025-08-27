@@ -5,7 +5,6 @@ Tests the specific changes needed to enable short selling capability.
 """
 
 import os
-import sys
 import unittest
 from unittest.mock import Mock, patch
 
@@ -17,9 +16,6 @@ os.environ['ALPACA_SECRET_KEY'] = 'test_secret'
 os.environ['ALPACA_BASE_URL'] = 'https://paper-api.alpaca.markets'
 os.environ['WEBHOOK_SECRET'] = 'test_webhook'
 os.environ['FLASK_PORT'] = '9000'
-
-# Add current directory to path for imports
-sys.path.insert(0, os.getcwd())
 
 class TestShortSellingImplementation(unittest.TestCase):
     """Test short selling capability implementation."""
