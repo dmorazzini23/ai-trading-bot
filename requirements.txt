@@ -3,7 +3,6 @@
 numpy==1.26.4
 tzlocal==4.3
 requests>=2.31,<3
-urllib3==2.5.0  # AI-AGENT-REF: align with Alpaca SDK
 certifi>=2023.7.22
 charset-normalizer>=3.2,<4
 idna>=3.4,<4
