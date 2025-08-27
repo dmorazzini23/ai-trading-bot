@@ -7,6 +7,15 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      # Ensure tests never call live services
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      # If your code looks at this to choose paper/live, force paper/offline
+      ALPACA_ENV: "paper"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
