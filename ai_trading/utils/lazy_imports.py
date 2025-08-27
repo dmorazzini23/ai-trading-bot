@@ -50,11 +50,3 @@ def load_pandas_ta() -> ModuleType | None:
         return None
 
 
-@lru_cache(maxsize=None)
-def optional_import(name: str) -> ModuleType | None:
-    """Return the imported module or ``None`` if not installed."""
-    try:
-        return importlib.import_module(name)
-    except Exception:  # pragma: no cover - optional dependency
-        get_logger(__name__).debug("optional_import failed", extra={"module": name})
-        return None
