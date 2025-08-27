@@ -17,6 +17,7 @@ class _RespForbidden:
 
 def test_get_bars_unauthorized_sip_returns_empty(monkeypatch):
     """Unauthorized SIP access returns an empty DataFrame."""
+    monkeypatch.setattr(data_fetcher, "_SIP_UNAUTHORIZED", False, raising=False)
 
     def fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
         return _RespForbidden()
@@ -31,6 +32,8 @@ def test_get_bars_unauthorized_sip_returns_empty(monkeypatch):
 
 def test_data_check_skips_unauthorized_symbols(monkeypatch):
     """Symbols returning empty data are skipped during data_check."""
+
+    monkeypatch.setattr(data_fetcher, "_SIP_UNAUTHORIZED", False, raising=False)
 
     class _RespOK:
         status_code = 200

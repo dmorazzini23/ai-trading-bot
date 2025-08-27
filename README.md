@@ -679,6 +679,8 @@ python verify_config.py
    # Set the following only if your Alpaca account has SIP permissions
    # ALPACA_DATA_FEED=sip
    # ALPACA_ALLOW_SIP=1
+   # Set if your account lacks SIP access to skip SIP requests entirely
+   # ALPACA_SIP_UNAUTHORIZED=1
    ALPACA_ADJUSTMENT=all
    DATA_LOOKBACK_DAYS_DAILY=200
    DATA_LOOKBACK_DAYS_MINUTE=5
@@ -701,6 +703,10 @@ python verify_config.py
   DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
   MAX_POSITION_SIZE=5000              # Absolute USD cap per position (1-10000; derived from CAPITAL_CAP if unset)
   ```
+
+  Unauthorized SIP requests return an empty DataFrame and automatically
+  disable further SIP retries.  Set `ALPACA_SIP_UNAUTHORIZED=1` to skip SIP
+  requests when your account lacks access.
 
   Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH. Do not set both.
 

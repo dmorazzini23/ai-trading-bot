@@ -157,6 +157,11 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
     return max(0, now_s - int(ts))
 _DEFAULT_FEED = 'iex'
 _VALID_FEEDS = ('iex', 'sip')
+_SIP_UNAUTHORIZED = os.getenv('ALPACA_SIP_UNAUTHORIZED', '').strip().lower() in {
+    '1',
+    'true',
+    'yes',
+}
 
 class _FinnhubFetcherStub:
     """Minimal stub with a fetch() method; tests monkeypatch this."""
@@ -372,8 +377,17 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
     def _tags() -> dict[str, str]:
         return {'provider': 'alpaca', 'symbol': symbol, 'feed': _feed, 'timeframe': _interval}
 
+    if _feed == 'sip' and _SIP_UNAUTHORIZED:
+        _incr('data.fetch.unauthorized', value=1.0, tags=_tags())
+        logger.warning(
+            'UNAUTHORIZED_SIP',
+            extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}),
+        )
+        return pd.DataFrame()
+
     def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
+        global _SIP_UNAUTHORIZED
         params = {'symbols': symbol, 'timeframe': _interval, 'start': _start.isoformat(), 'end': _end.isoformat(), 'limit': 10000, 'feed': _feed, 'adjustment': adjustment}
         if getattr(requests, "get", None) is None:
             raise RuntimeError('requests not available')
@@ -438,6 +452,8 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
                 extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}),
             )
             if _feed == 'sip':
+                _SIP_UNAUTHORIZED = True
+                os.environ['ALPACA_SIP_UNAUTHORIZED'] = '1'
                 return pd.DataFrame()
             if fallback:
                 _interval, _feed, _start, _end = fallback
@@ -509,7 +525,9 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
         _incr('data.fetch.success', value=1.0, tags=_tags())
         return df
     alt_feed = 'iex' if _feed != 'iex' else 'sip'
-    fallback = (_interval, alt_feed, _start, _end)
+    fallback = None
+    if not (alt_feed == 'sip' and _SIP_UNAUTHORIZED):
+        fallback = (_interval, alt_feed, _start, _end)
     return _req(fallback)
 
 def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None=None) -> pd.DataFrame:
@@ -586,6 +604,7 @@ def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
 __all__ = [
     '_DEFAULT_FEED',
     '_VALID_FEEDS',
+    '_SIP_UNAUTHORIZED',
     'ensure_datetime',
     '_yahoo_get_bars',
     '_fetch_bars',
