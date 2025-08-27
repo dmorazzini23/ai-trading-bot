@@ -1,11 +1,13 @@
 """
 Alpaca vendor stub wiring fix (tests only)
 -----------------------------------------
-Ensure `alpaca_trade_api` and `alpaca_trade_api.rest` resolve to the
-local test vendor stubs so imports like
-    from alpaca_trade_api import REST
-    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
-work during test collection. This is idempotent and does not affect runtime.
+Ensure the `alpaca` package and its key submodules resolve to local vendor
+stubs so imports like
+    from alpaca.trading.client import TradingClient
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+work during test collection. Legacy `alpaca_trade_api` imports are aliased to
+these stubs for backward compatibility. This is idempotent and does not affect
+runtime.
 """
 import os
 import sys as _sys
@@ -13,33 +15,43 @@ import sys as _sys
 import importlib as _importlib
 
 try:
-    import alpaca_trade_api as _alpaca_mod  # may be real lib or existing stub
+    from alpaca.trading.client import TradingClient  # type: ignore
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # type: ignore
 except Exception:  # pragma: no cover - only hit in test bootstrap
-    _alpaca_mod = None
-
-# If the module is absent or lacks expected attributes, bind to our stub package.
-if _alpaca_mod is None or not hasattr(_alpaca_mod, "REST"):
-    _alpaca_mod = _importlib.import_module("tests.vendor_stubs.alpaca_trade_api")
-    _sys.modules["alpaca_trade_api"] = _alpaca_mod
-
-# Ensure `alpaca_trade_api.rest` submodule provides TimeFrame/TimeFrameUnit
-try:
-    import alpaca_trade_api.rest as _alpaca_rest
-except Exception:  # pragma: no cover
-    _alpaca_rest = None
-
-if (
-    _alpaca_rest is None
-    or not all(hasattr(_alpaca_rest, n) for n in ("TimeFrame", "TimeFrameUnit"))
-):
-    _alpaca_rest_stub = _importlib.import_module(
-        "tests.vendor_stubs.alpaca_trade_api.rest"
+    _alpaca_pkg = _importlib.import_module("tests.vendor_stubs.alpaca")
+    _sys.modules.setdefault("alpaca", _alpaca_pkg)
+    _sys.modules.setdefault(
+        "alpaca.trading",
+        _importlib.import_module("tests.vendor_stubs.alpaca.trading"),
     )
-    _sys.modules["alpaca_trade_api.rest"] = _alpaca_rest_stub
-    _alpaca_rest = _alpaca_rest_stub
+    _sys.modules.setdefault(
+        "alpaca.trading.client",
+        _importlib.import_module("tests.vendor_stubs.alpaca.trading.client"),
+    )
+    _sys.modules.setdefault(
+        "alpaca.data",
+        _importlib.import_module("tests.vendor_stubs.alpaca.data"),
+    )
+    _sys.modules.setdefault(
+        "alpaca.data.timeframe",
+        _importlib.import_module("tests.vendor_stubs.alpaca.data.timeframe"),
+    )
+    _sys.modules.setdefault(
+        "alpaca.data.requests",
+        _importlib.import_module("tests.vendor_stubs.alpaca.data.requests"),
+    )
+    from alpaca.trading.client import TradingClient  # noqa: F401
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # noqa: F401
 
-if not hasattr(_alpaca_rest, "APIError"):
-    _alpaca_rest.APIError = Exception
+# Alias legacy module names to new stubs for compatibility
+_sys.modules.setdefault(
+    "alpaca_trade_api",
+    _importlib.import_module("tests.vendor_stubs.alpaca_trade_api"),
+)
+_sys.modules.setdefault(
+    "alpaca_trade_api.rest",
+    _importlib.import_module("tests.vendor_stubs.alpaca_trade_api.rest"),
+)
 
 import asyncio
 import random
@@ -156,7 +168,7 @@ def _install_vendor_stubs() -> None:
         pkg.__path__ = [str(_pathlib.Path(__file__).parent / "vendor_stubs" / path)]
         return pkg
 
-    _maybe_stub("alpaca_trade_api", lambda: _mk_pkg("alpaca_trade_api"))
+    _maybe_stub("alpaca", lambda: _mk_pkg("alpaca"))
     _maybe_stub("yfinance", lambda: importlib.import_module("tests.vendor_stubs.yfinance"))
 
 _install_vendor_stubs()

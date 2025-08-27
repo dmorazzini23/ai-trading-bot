@@ -21,7 +21,7 @@ except (ValueError, TypeError):
 try:
     from ai_trading import rebalancer
 except (ValueError, TypeError):
-    pytest.skip("alpaca_trade_api not available", allow_module_level=True)
+    pytest.skip("alpaca not available", allow_module_level=True)
 try:
     from ai_trading.execution import slippage  # AI-AGENT-REF: use prod slippage module
 except (ValueError, TypeError):  # pragma: no cover - module optional

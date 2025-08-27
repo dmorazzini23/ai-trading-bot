@@ -17,8 +17,10 @@ mods = [
     "flask",
     "schedule",
     "portalocker",
-        "alpaca_trade_api",
-    "alpaca_trade_api.rest",
+    "alpaca",
+    "alpaca.trading.client",
+    "alpaca.data.timeframe",
+    "alpaca.data.requests",
     "sklearn.ensemble",
     "sklearn.linear_model",
     "sklearn.decomposition",
@@ -106,11 +108,19 @@ sys.modules["requests"].exceptions = exc_mod
 sys.modules["requests"].get = lambda *a, **k: None
 sys.modules["requests.exceptions"] = exc_mod
 sys.modules["requests"].RequestException = Exception
-sys.modules["alpaca_trade_api"].REST = object
-sys.modules["alpaca_trade_api"].APIError = Exception
-sys.modules.setdefault("alpaca_trade_api.rest", types.ModuleType("alpaca_trade_api.rest"))
-sys.modules["alpaca_trade_api.rest"].REST = object
-sys.modules["alpaca_trade_api.rest"].APIError = Exception
+sys.modules["alpaca"].TradingClient = object
+sys.modules["alpaca"].APIError = Exception
+sys.modules.setdefault("alpaca.trading", types.ModuleType("alpaca.trading"))
+sys.modules["alpaca.trading.client"] = types.ModuleType("alpaca.trading.client")
+sys.modules["alpaca.trading.client"].TradingClient = object
+sys.modules["alpaca.trading.client"].APIError = Exception
+sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
+sys.modules.setdefault("alpaca.data.timeframe", types.ModuleType("alpaca.data.timeframe"))
+sys.modules.setdefault("alpaca.data.requests", types.ModuleType("alpaca.data.requests"))
+sys.modules["alpaca.data.timeframe"].TimeFrame = object
+sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
+sys.modules["alpaca.data.requests"].StockBarsRequest = object
+sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = object
 
 class _RF:
     def __init__(self, *a, **k):

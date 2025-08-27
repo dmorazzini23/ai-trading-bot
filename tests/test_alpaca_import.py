@@ -11,7 +11,7 @@ def test_ai_trading_import_without_alpaca():
         sys.modules.pop(module, None)
 
     # Simulate missing Alpaca package by setting it to None
-    sys.modules['alpaca_trade_api'] = None
+    sys.modules['alpaca'] = None
 
     # Set testing mode
     import os
