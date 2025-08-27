@@ -367,27 +367,26 @@ def main(argv: list[str] | None = None) -> None:
     }
     logger.info("STARTUP_BANNER", extra=_redact(banner))
     _install_signal_handlers()
-    warmup_code = 0
     try:
         run_cycle()
+    except (TypeError, ValueError) as e:
+        logger.critical(
+            "Warm-up run_cycle failed during trading initialization; shutting down",
+            exc_info=e,
+        )
+        raise SystemExit(1) from e
     except SystemExit as e:
-        warmup_code = int(getattr(e, "code", 1) or 1)
         logger.error(
-            "Warm-up run_cycle triggered SystemExit; continuing into main loop",
+            "Warm-up run_cycle triggered SystemExit; shutting down",
             exc_info=e,
         )
+        raise
     except Exception as e:  # noqa: BLE001
-        warmup_code = 1
         logger.exception(
-            "Warm-up run_cycle failed; continuing into main loop",
+            "Warm-up run_cycle failed unexpectedly; shutting down",
             exc_info=e,
         )
-    else:
-        if warmup_code:
-            logger.warning(
-                "Warm-up returned non-zero code=%s; continuing into main loop",
-                warmup_code,
-            )
+        raise SystemExit(1) from e
     api_ready = threading.Event()
     api_error = threading.Event()
     t = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
