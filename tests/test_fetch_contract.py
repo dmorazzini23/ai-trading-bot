@@ -8,7 +8,7 @@ pd = pytest.importorskip("pandas")
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 
 
 class DummyClient:

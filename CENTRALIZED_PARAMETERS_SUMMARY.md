@@ -114,7 +114,7 @@ aggressive_config = TradingConfig.from_env("aggressive")
 # Override any parameter via environment variable
 export KELLY_FRACTION=0.45
 export CONF_THRESHOLD=0.82
-export BOT_MODE=aggressive
+export TRADING_MODE=aggressive
 ```
 
 ### Legacy Compatibility

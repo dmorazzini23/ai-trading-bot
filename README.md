@@ -486,7 +486,7 @@ python health_check.py
 
 # API connectivity test
 python -c "
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 test_all_providers(['SPY'])
 "
 
@@ -601,7 +601,7 @@ python profile_indicators.py
 
 ```bash
 # Fetch and cache data for development
-python data_fetcher.py --cache --symbols SPY,AAPL --days 30
+python -m ai_trading.data.fetch --cache --symbols SPY,AAPL --days 30
 
 # Clean up old data
 python cleanup.py --older-than 30days
@@ -668,7 +668,7 @@ python verify_config.py
    TZ=UTC
    # ALPACA_BASE_URL=https://api.alpaca.markets     # Live trading (DANGER!)
    
-   # Bot Configuration (BOT_MODE is deprecated; use TRADING_MODE)
+   # Bot Configuration
    TRADING_MODE=balanced                    # Trading mode: conservative, balanced, aggressive
    BOT_LOG_FILE=logs/scheduler.log     # Log file location
    LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
@@ -757,7 +757,7 @@ WEBHOOK_URL=https://your-webhook-url.com/trading-alerts
 ### 🧪 Testing Configuration
 
 ```bash
-# .env.testing (BOT_MODE is deprecated; use TRADING_MODE)
+# .env.testing
 TRADING_MODE=paper
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
 DRY_RUN=true

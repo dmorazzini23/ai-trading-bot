@@ -25,7 +25,7 @@ def test_run_success(monkeypatch):
     def fake_info(msg, *args, **kwargs):
         logged.append((msg, kwargs.get("extra", {})))
 
-    monkeypatch.setattr("ai_trading.data_fetcher._build_daily_url", fake_build)
+    monkeypatch.setattr("ai_trading.data.fetch._build_daily_url", fake_build)
     monkeypatch.setattr("ai_trading.utils.http.map_get", fake_map_get)
     monkeypatch.setattr(
         "ai_trading.utils.http.pool_stats",

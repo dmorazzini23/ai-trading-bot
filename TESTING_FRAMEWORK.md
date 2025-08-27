@@ -78,7 +78,7 @@ tests/
 │   ├── test_bot_engine.py
 │   ├── test_signals.py
 │   ├── test_risk_engine.py
-│   ├── test_data_fetcher.py
+│   ├── test_data.fetch
 │   └── test_trade_execution.py
 ├── integration/                # Integration tests
 │   ├── test_alpaca_integration.py
@@ -365,9 +365,9 @@ class TestDataFetching:
     
     def test_data_fetching_with_valid_parameters(self):
         """Test data fetching with valid parameters."""
-        from ai_trading import data_fetcher
+        from ai_trading.data import fetch as data_fetcher
         
-        with patch('data_fetcher._fetch_bars') as mock_fetch:
+        with patch('data.fetch._fetch_bars') as mock_fetch:
             # Mock successful data fetch
             mock_data = pd.DataFrame({
                 'open': [100, 101, 102],
@@ -388,7 +388,7 @@ class TestDataFetching:
     
     def test_data_fetching_with_invalid_dates(self):
         """Test data fetching with invalid date parameters."""
-        from ai_trading import data_fetcher
+        from ai_trading.data import fetch as data_fetcher
         
         # Test with None dates
         with pytest.raises(ValueError):
@@ -399,9 +399,9 @@ class TestDataFetching:
     
     def test_data_fetching_with_connection_error(self):
         """Test data fetching when connection fails."""
-        from ai_trading import data_fetcher
+        from ai_trading.data import fetch as data_fetcher
         
-        with patch('data_fetcher._fetch_bars') as mock_fetch:
+        with patch('data.fetch._fetch_bars') as mock_fetch:
             mock_fetch.side_effect = ConnectionError("Network error")
             
             # Should handle error gracefully
@@ -497,7 +497,7 @@ class TestDataPipeline:
     @pytest.mark.integration
     def test_end_to_end_data_flow(self):
         """Test complete data flow from fetch to signals."""
-        from ai_trading import data_fetcher
+        from ai_trading.data import fetch as data_fetcher
         from signals import generate_signal
         from indicators import calculate_indicators
         
@@ -522,7 +522,7 @@ class TestDataPipeline:
     @pytest.mark.integration
     def test_multi_symbol_data_processing(self):
         """Test processing multiple symbols simultaneously."""
-        from ai_trading import data_fetcher
+        from ai_trading.data import fetch as data_fetcher
         
         symbols = ['SPY', 'QQQ', 'IWM']
         
@@ -547,7 +547,7 @@ class TestTradingWorkflow:
     """Integration tests for complete trading workflows."""
     
     @pytest.mark.integration
-    @patch.dict(os.environ, {'DRY_RUN': 'true', 'BOT_MODE': 'testing'})
+    @patch.dict(os.environ, {'DRY_RUN': 'true', 'TRADING_MODE': 'testing'})
     def test_complete_trading_cycle(self):
         """Test a complete trading cycle in dry run mode."""
         from bot_engine import BotState, run_all_trades_worker
@@ -1014,7 +1014,7 @@ def setup_test_environment():
     """Setup test environment variables."""
     test_env = {
         'DRY_RUN': 'true',
-        'BOT_MODE': 'testing',
+        'TRADING_MODE': 'testing',
         'LOG_LEVEL': 'ERROR',  # Reduce log noise in tests
         'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
     }

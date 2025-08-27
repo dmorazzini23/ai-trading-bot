@@ -31,7 +31,6 @@ def test_pydantic_v2_migration_syntax():
         '@field_validator(\'ALPACA_API_KEY\')',
         '@field_validator(\'ALPACA_SECRET_KEY\')',
         '@field_validator(\'ALPACA_BASE_URL\')',
-        '@field_validator(\'BOT_MODE\')',
         '@field_validator(\'TRADING_MODE\')',
         '@field_validator(\'FORCE_TRADES\')'
     ]
@@ -44,7 +43,6 @@ def test_pydantic_v2_migration_syntax():
         '@validator(\'ALPACA_API_KEY\')',
         '@validator(\'ALPACA_SECRET_KEY\')',
         '@validator(\'ALPACA_BASE_URL\')',
-        '@validator(\'BOT_MODE\')',
         '@validator(\'TRADING_MODE\')',
         '@validator(\'FORCE_TRADES\')'
     ]
@@ -66,8 +64,7 @@ def test_validate_env_import():
             'ALPACA_API_KEY': 'TEST_API_KEY_123456789',
             'ALPACA_SECRET_KEY': 'TEST_SECRET_KEY_123456789012345',
             'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
-            'BOT_MODE': 'testing',
-            'TRADING_MODE': 'paper',
+            'TRADING_MODE': 'testing',
             'FORCE_TRADES': 'false'
         }):
             from ai_trading.validation import (
@@ -80,7 +77,7 @@ def test_validate_env_import():
             # Verify some basic fields
             assert hasattr(settings, 'ALPACA_API_KEY')
             assert hasattr(settings, 'ALPACA_SECRET_KEY')
-            assert hasattr(settings, 'BOT_MODE')
+            assert hasattr(settings, 'TRADING_MODE')
 
     except ImportError as e:
         pytest.skip(f"Cannot import validate_env module: {e}")
@@ -99,8 +96,7 @@ def test_field_validator_functionality():
             'ALPACA_API_KEY': 'INVALID_KEY',  # Should trigger validation warning
             'ALPACA_SECRET_KEY': 'short',     # Should trigger validation error
             'ALPACA_BASE_URL': 'http://insecure.com',  # Should trigger HTTPS error
-            'BOT_MODE': 'invalid_mode',       # Should trigger validation error
-            'TRADING_MODE': 'invalid',        # Should trigger validation error
+            'TRADING_MODE': 'invalid_mode',   # Should trigger validation error
         }):
             from ai_trading.validation import (
                 validate_env,  # AI-AGENT-REF: normalized import
@@ -115,8 +111,7 @@ def test_field_validator_functionality():
                 # Validation errors are expected with invalid inputs
                 assert "ALPACA_SECRET_KEY appears too short" in str(e) or \
                        "ALPACA_BASE_URL must use HTTPS" in str(e) or \
-                       "BOT_MODE must be one of" in str(e) or \
-                       "Invalid TRADING_MODE" in str(e)
+                       "TRADING_MODE must be one of" in str(e)
 
     except ImportError:
         pytest.skip("Cannot import validate_env module")

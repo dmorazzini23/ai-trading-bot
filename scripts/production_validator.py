@@ -262,7 +262,7 @@ class ChaosEngineer:
         """Check if data integrity is preserved."""
         try:
             import os
-            critical_files = ['config.py', 'hyperparams.json']
+            critical_files = ['ai_trading/settings.py', 'hyperparams.json']
             for file_path in critical_files:
                 if os.path.exists(file_path):
                     with open(file_path) as f:
@@ -495,7 +495,7 @@ class ProductionValidator:
     def _test_data_processing(self) -> float:
         """Test data processing functionality."""
         try:
-            from ai_trading import data_fetcher
+            from ai_trading.data import fetch as data_fetcher
             import indicators
             return 90
         except ImportError:
@@ -517,7 +517,7 @@ class ProductionValidator:
     def _check_configuration_compliance(self) -> float:
         """Check configuration compliance."""
         import os
-        required_files = ['config.py', 'hyperparams.json']
+        required_files = ['ai_trading/settings.py', 'hyperparams.json']
         existing_files = sum((1 for f in required_files if os.path.exists(f)))
         return existing_files / len(required_files) * 100
 

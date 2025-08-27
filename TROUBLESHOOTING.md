@@ -93,7 +93,7 @@ pip install -e .
 # Check for missing environment variables
 python -c "
 import os
-required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'BOT_MODE']
+required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'TRADING_MODE']
 missing = [var for var in required if not os.getenv(var)]
 if missing:
     print(f'Missing: {missing}')
@@ -194,7 +194,7 @@ nslookup api.alpaca.markets 8.8.8.8
 
 ```python
 # test_data_providers.py
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 import pandas as pd
 from datetime import UTC, datetime, timedelta
 
@@ -208,7 +208,7 @@ def test_data_provider(symbol='SPY', timeframe='1h'):
     for provider in providers:
         try:
             print(f"\nTesting {provider}...")
-            data = data_fetcher.get_historical_data(
+            data = data.fetch.get_historical_data(
                 symbol=symbol,
                 timeframe=timeframe,
                 start_date=start_date.strftime('%Y-%m-%d'),
@@ -343,7 +343,7 @@ def debug_position_sizing(symbol, signal_strength, account_equity):
     
     try:
         # Get volatility data
-        data = data_fetcher.get_historical_data(
+        data = data.fetch.get_historical_data(
             symbol, '1d', 
             (pd.Timestamp.now() - pd.Timedelta(days=30)).strftime('%Y-%m-%d'),
             pd.Timestamp.now().strftime('%Y-%m-%d')

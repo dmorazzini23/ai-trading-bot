@@ -97,7 +97,7 @@ def demonstrate_parameter_optimizations():
         logging.info('  • All parameters can be overridden via environment variables')
         logging.info('  • Example: export KELLY_FRACTION=0.5')
         logging.info('  • Example: export CONF_THRESHOLD=0.8')
-        logging.info('  • Example: export BOT_MODE=aggressive')
+        logging.info('  • Example: export TRADING_MODE=aggressive')
         logging.info('  • Runtime configuration changes without code modification')
         logging.info(str('\n' + '-' * 60))
         logging.info('8. PARAMETER VALIDATION')

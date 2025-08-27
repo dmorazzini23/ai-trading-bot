@@ -1,4 +1,4 @@
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 from ai_trading.utils import http
 
 

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from ai_trading.data_fetcher import (
+from ai_trading.data.fetch import (
     _MINUTE_CACHE,  # type: ignore
     age_cached_minute_timestamps,
     clear_cached_minute_timestamp,

@@ -19,11 +19,11 @@ def check_model_registry():
 def check_env_flag():
     """Check DISABLE_DAILY_RETRAIN is correctly implemented."""
     logging.info('✓ Correct env toggle:')
-    config_path = Path('config.py')
+    config_path = Path('ai_trading/settings.py')
     if config_path.exists():
         content = config_path.read_text()
-        assert 'DISABLE_DAILY_RETRAIN = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")' in content
-        logging.info('  - DISABLE_DAILY_RETRAIN read from correct key with safe default ✓')
+        assert "disable_daily_retrain: bool = Field(False, alias='DISABLE_DAILY_RETRAIN')" in content
+        logging.info('  - DISABLE_DAILY_RETRAIN configured via Settings alias ✓')
 
 def check_import_hardening():
     """Check that imports are hardened across key modules."""
@@ -85,7 +85,7 @@ def check_minute_cache():
         content = data_fetcher_path.read_text()
         assert 'def get_cached_minute_timestamp' in content
         assert 'def last_minute_bar_age_seconds' in content
-        logging.info('  - Exported helpers from ai_trading.data_fetcher ✓')
+        logging.info('  - Exported helpers from ai_trading.data.fetch ✓')
     bot_engine_path = Path('ai_trading/core/bot_engine.py')
     if bot_engine_path.exists():
         content = bot_engine_path.read_text()
