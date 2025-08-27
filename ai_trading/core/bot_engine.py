@@ -174,6 +174,36 @@ def _ridge():
 trading_client = None
 data_client = None
 
+
+def _validate_trading_api(api: Any) -> bool:
+    """Ensure trading ``api`` exposes ``list_orders``.
+
+    Maps ``get_orders`` to ``list_orders`` when necessary and warns when the
+    client is not an instance of :class:`TradingClient`.
+    """  # AI-AGENT-REF: verify Alpaca client contract
+    if api is None:
+        logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
+        return False
+    if not hasattr(api, "list_orders"):
+        if hasattr(api, "get_orders"):
+            setattr(api, "list_orders", getattr(api, "get_orders"))  # type: ignore[attr-defined]
+            logger_once.warning(
+                "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
+            )
+        else:
+            logger_once.error(
+                "ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing"
+            )
+            if not is_shadow_mode():
+                raise RuntimeError("Alpaca client missing list_orders method")
+            return False
+    if not isinstance(api, TradingClient):
+        logger_once.warning(
+            "ALPACA_API_ADAPTER", key="alpaca_api_adapter"
+        )
+    return True
+
+
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
@@ -212,12 +242,15 @@ def ensure_alpaca_attached(ctx) -> None:
                 setattr(inner, "api", trading_client)
             except COMMON_EXC:
                 pass
-    if getattr(ctx, "api", None) is None:
+    api = getattr(ctx, "api", None)
+    if api is None:
         logger_once.error(
             "FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed"
         )
         if not is_shadow_mode():
             raise RuntimeError("Failed to attach Alpaca client to context")
+        return
+    _validate_trading_api(api)
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
@@ -2234,6 +2267,8 @@ def cancel_all_open_orders(runtime) -> None:
     """
     if runtime.api is None:
         logger.warning("runtime.api is None - cannot cancel orders")
+        return
+    if not _validate_trading_api(runtime.api):
         return
 
     try:
@@ -12825,10 +12860,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             logger.info("MARKET_CLOSED_NO_FETCH")
             return  # FIXED: skip work when market closed
         ensure_alpaca_attached(runtime)
-        if getattr(runtime, "api", None) is None:
-            logger_once.error(
-                "ALPACA_CLIENT_MISSING - entering paper mode", key="alpaca_client_missing"
-            )
+        api = getattr(runtime, "api", None)
+        if not _validate_trading_api(api):
             _send_heartbeat()
             return
         state.pdt_blocked = check_pdt_rule(runtime)
@@ -12842,19 +12875,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state._strategies_loaded = True
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
-            api = getattr(runtime, "api", None)
-            if api is None:
-                logger_once.warning(
-                    "ctx.api is None - Alpaca trading client unavailable",
-                    key="alpaca_unavailable",
-                )
-                return
-            if not hasattr(api, "list_orders"):
-                logger_once.warning(
-                    "api missing list_orders method - Alpaca client incompatible",
-                    key="alpaca_list_orders_missing",
-                )
-                return
             try:
                 open_orders = api.list_orders(status="open")
             except (
@@ -13326,6 +13346,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
 def schedule_run_all_trades(runtime):
     """Spawn run_all_trades_worker if market is open."""  # FIXED
+    ensure_alpaca_attached(runtime)
+    if not _validate_trading_api(getattr(runtime, "api", None)):
+        return
     if is_market_open():
         t = threading.Thread(
             target=run_all_trades_worker,
