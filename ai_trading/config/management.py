@@ -65,7 +65,7 @@ SEED: int = int(os.environ.get("SEED", "42"))  # AI-AGENT-REF: expose runtime se
 _MANDATORY_ENV_VARS: tuple[str, ...] = (
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
-    "ALPACA_BASE_URL",
+    "ALPACA_API_URL",
     "WEBHOOK_SECRET",
     "CAPITAL_CAP",
     "DOLLAR_RISK_LIMIT",
@@ -103,8 +103,19 @@ def validate_required_env(
 
     env = dict(env or os.environ)
     required = list(keys or _MANDATORY_ENV_VARS)
-    missing = [k for k in required if not env.get(k, "").strip()]
-    snapshot = {k: _mask(env.get(k, "")) for k in required}
+    missing: list[str] = []
+    snapshot: Dict[str, str] = {}
+    for k in required:
+        if k in {"ALPACA_API_URL", "ALPACA_BASE_URL"}:
+            val = env.get("ALPACA_API_URL") or env.get("ALPACA_BASE_URL", "")
+            if not val.strip():
+                missing.append(k)
+            snapshot[k] = _mask(val)
+            continue
+        val = env.get(k, "")
+        if not val.strip():
+            missing.append(k)
+        snapshot[k] = _mask(val)
     if missing:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)

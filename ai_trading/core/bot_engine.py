@@ -411,7 +411,11 @@ class BotEngine:
         return TradingClient(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            base_url=_get_env_str("ALPACA_BASE_URL"),
+            url_override=(
+                _get_env_str("ALPACA_API_URL")
+                if os.getenv("ALPACA_API_URL")
+                else _get_env_str("ALPACA_BASE_URL")
+            ),
         )
 
     @cached_property
@@ -422,7 +426,11 @@ class BotEngine:
         return _TradingClient(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            base_url=_get_env_str("ALPACA_BASE_URL"),
+            url_override=(
+                _get_env_str("ALPACA_API_URL")
+                if os.getenv("ALPACA_API_URL")
+                else _get_env_str("ALPACA_BASE_URL")
+            ),
         )
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once

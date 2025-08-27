@@ -133,7 +133,7 @@ The following new environment variables have been added to TradingConfig and can
 
 ### Core Trading Parameters
 - `TRADING_MODE` (default: "paper") - Trading mode: "paper" or "live"
-- `ALPACA_BASE_URL` (default: "https://paper-api.alpaca.markets") - Alpaca API base URL
+- `ALPACA_API_URL` (default: "https://paper-api.alpaca.markets") - Alpaca API endpoint URL (formerly `ALPACA_BASE_URL`)
 - `SLEEP_INTERVAL` (default: 1.0) - Sleep interval between operations in seconds
 - `MAX_RETRIES` (default: 3) - Maximum number of retry attempts
 - `BACKOFF_FACTOR` (default: 2.0) - Exponential backoff factor for retries
