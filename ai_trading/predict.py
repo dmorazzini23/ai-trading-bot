@@ -4,12 +4,12 @@ from ai_trading.features import prepare as feature_prepare
 
 try:
     from cachetools import TTLCache
+
     _CACHETOOLS_AVAILABLE = True
     _sentiment_cache = TTLCache(maxsize=1000, ttl=3600)
 except Exception:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
-
 
 @lru_cache(maxsize=1024)
 def predict(path: str):
