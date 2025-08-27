@@ -670,11 +670,7 @@ python verify_config.py
 
 3. **Required Configuration**
    ```bash
-   # Alpaca API Configuration (choose exactly ONE auth method)
-   # Option 1: OAuth token (comment out API key/secret below)
-   # ALPACA_OAUTH=your_oauth_token_here
-
-   # Option 2: API key + secret (leave ALPACA_OAUTH commented out)
+   # Alpaca API Configuration
    ALPACA_API_KEY=your_actual_api_key_here
    ALPACA_SECRET_KEY=your_actual_secret_key_here
    ALPACA_API_URL=https://paper-api.alpaca.markets  # Paper trading
@@ -702,9 +698,7 @@ python verify_config.py
   MAX_POSITION_SIZE=5000              # Absolute USD cap per position (1-10000; derived from CAPITAL_CAP if unset)
   ```
 
-   Only provide one credential set: either `ALPACA_OAUTH` or the `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` pair.
-
-  Supplying both will raise a startup error; choose one authentication method.
+  OAuth credentials are no longer supported; provide your API key and secret.
 
   `MAX_POSITION_SIZE` must be a positive dollar value (>0). Values ≤0 are rejected.
   If omitted, the bot derives a value from `CAPITAL_CAP` and available equity. Optionally

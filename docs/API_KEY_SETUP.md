@@ -15,15 +15,10 @@ This trading bot requires API keys from Alpaca Markets to function. This guide e
 ## 📋 Required API Keys
 
 ### Primary (Required)
-- `ALPACA_OAUTH`: OAuth token (alternative to API key/secret)
-- `ALPACA_API_KEY`: Your Alpaca Markets API key (required if not using OAuth)
-- `ALPACA_SECRET_KEY`: Your Alpaca Markets secret key (required if not using OAuth)
+- `ALPACA_API_KEY`: Your Alpaca Markets API key
+- `ALPACA_SECRET_KEY`: Your Alpaca Markets secret key
 - `ALPACA_BASE_URL`: Alpaca API endpoint URL
 - `WEBHOOK_SECRET`: Secret for webhook authentication
-
-Configure exactly one authentication method: either `ALPACA_OAUTH` **or** the
-`ALPACA_API_KEY`/`ALPACA_SECRET_KEY` pair. Defining both will cause a startup
-configuration error.
 
 ### Optional
 - `FINNHUB_API_KEY`: For additional market data
@@ -55,10 +50,6 @@ Edit `.env` and replace these values:
 # Production environment configuration
 # IMPORTANT: Replace these sample values with your real API keys
 # Get your keys from: https://app.alpaca.markets/paper/dashboard/overview
-# Option 1: OAuth token (comment out API key/secret below)
-# ALPACA_OAUTH=YOUR_OAUTH_TOKEN
-
-# Option 2: API key and secret (leave ALPACA_OAUTH commented out)
 ALPACA_API_KEY=YOUR_ACTUAL_API_KEY_HERE
 ALPACA_SECRET_KEY=YOUR_ACTUAL_SECRET_KEY_HERE
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
@@ -80,8 +71,6 @@ Example formats (these are NOT real keys):
 ALPACA_API_KEY=PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ
 ALPACA_SECRET_KEY=SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD
 ```
-
-> Provide either `ALPACA_OAUTH` or the `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` pair. Supplying both is not supported.
 
 ## 🧪 Development vs Production
 
