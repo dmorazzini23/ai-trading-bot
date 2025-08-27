@@ -408,14 +408,16 @@ class BotEngine:
     @cached_property
     def trading_client(self):
         """Alpaca TradingClient for order/trade ops."""
+        base_url = (
+            _get_env_str("ALPACA_API_URL")
+            if os.getenv("ALPACA_API_URL")
+            else _get_env_str("ALPACA_BASE_URL")
+        )
         return TradingClient(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            url_override=(
-                _get_env_str("ALPACA_API_URL")
-                if os.getenv("ALPACA_API_URL")
-                else _get_env_str("ALPACA_BASE_URL")
-            ),
+            paper="paper" in base_url.lower(),
+            url_override=base_url,
         )
 
     @cached_property
@@ -423,14 +425,16 @@ class BotEngine:
         """Alpaca TradingClient for historical/market data."""
         from alpaca.trading.client import TradingClient as _TradingClient  # type: ignore
 
+        base_url = (
+            _get_env_str("ALPACA_API_URL")
+            if os.getenv("ALPACA_API_URL")
+            else _get_env_str("ALPACA_BASE_URL")
+        )
         return _TradingClient(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            url_override=(
-                _get_env_str("ALPACA_API_URL")
-                if os.getenv("ALPACA_API_URL")
-                else _get_env_str("ALPACA_BASE_URL")
-            ),
+            paper="paper" in base_url.lower(),
+            url_override=base_url,
         )
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
@@ -3791,11 +3795,12 @@ class DataFetcher:
             return None
 
         from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-
+        base_url = get_settings().alpaca_base_url
         client = AlpacaREST(
             api_key=api_key,
             secret_key=api_secret,
-            base_url=get_settings().alpaca_base_url,
+            paper="paper" in base_url.lower(),
+            url_override=base_url,
         )
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
@@ -4093,11 +4098,12 @@ class DataFetcher:
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
             )
         from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-
+        base_url = get_settings().alpaca_base_url
         client = AlpacaREST(
             api_key=api_key,
             secret_key=api_secret,
-            base_url=get_settings().alpaca_base_url,
+            paper="paper" in base_url.lower(),
+            url_override=base_url,
         )
 
         try:
@@ -4342,11 +4348,12 @@ def prefetch_daily_data(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
         )
     from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-
+    base_url = get_settings().alpaca_base_url
     client = AlpacaREST(
         api_key=alpaca_key,
         secret_key=alpaca_secret,
-        base_url=get_settings().alpaca_base_url,
+        paper="paper" in base_url.lower(),
+        url_override=base_url,
     )
 
     try:
@@ -5654,10 +5661,12 @@ def _initialize_alpaca_clients() -> bool:
             data_client = None
             return False
         try:
+            paper = "paper" in (base_url or "").lower()
             trading_client = AlpacaREST(
                 api_key=key,
                 secret_key=secret,
-                base_url=base_url,
+                paper=paper,
+                url_override=base_url,
             )
         except Exception as e:  # AI-AGENT-REF: expose network or auth issues
             logger.error(
