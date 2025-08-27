@@ -16,8 +16,6 @@ from unittest.mock import Mock
 os.environ["TESTING"] = "1"
 os.environ["PYTEST_CURRENT_TEST"] = "test_performance_fixes"
 
-sys.path.append(".")
-
 
 def test_meta_learning_mixed_format():
     """Test that meta-learning can handle mixed audit/meta-learning log formats."""

@@ -328,10 +328,6 @@ class TestTaxAwareRebalancing(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
         try:
-            import os
-            import sys
-            sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
             from ai_trading.rebalancer import TaxAwareRebalancer
             self.TaxAwareRebalancer = TaxAwareRebalancer
             self.imports_available = True
@@ -412,10 +408,6 @@ class TestEnhancedRebalancer(unittest.TestCase):
 
     def test_enhanced_rebalancer_fallback(self):
         """Test that enhanced rebalancer falls back gracefully."""
-        import os
-        import sys
-        sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
         from ai_trading.rebalancer import enhanced_maybe_rebalance, rebalance_portfolio
 
         # Mock context
