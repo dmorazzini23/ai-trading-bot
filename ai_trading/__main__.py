@@ -4,6 +4,7 @@ import argparse
 import sys
 from collections.abc import Callable
 
+import requests
 from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
@@ -37,7 +38,13 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
 
     try:
         while True:
-            fn()
+            try:
+                fn()
+            except (ValueError, requests.HTTPError) as e:
+                logger.warning("%s recoverable error: %s", label, e, exc_info=True)
+            except Exception as e:
+                logger.error("%s failed: %s", label, e, exc_info=True)
+                raise
             if args.once:
                 break
             time.sleep(args.interval)
@@ -47,9 +54,6 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
     except SystemExit as e:  # AI-AGENT-REF: surface exit codes in logs
         logger.error("%s exited: %s", label, e, exc_info=True)
         raise
-    except Exception as e:
-        logger.error("%s failed: %s", label, e, exc_info=True)
-        sys.exit(1)
 
 
 def run_trade() -> None:
@@ -158,9 +162,13 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except Exception as e:
+    except (ValueError, requests.HTTPError) as e:
+        logger.error("startup error: %s", e, exc_info=True)
         if "--dry-run" in sys.argv:
             logger.warning("dry-run: ignoring startup exception: %s", e)
             sys.exit(0)
+        raise
+    except Exception:
+        logger.exception("unexpected startup error")
         raise
 
