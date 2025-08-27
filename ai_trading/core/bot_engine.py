@@ -2716,79 +2716,106 @@ def _fetch_intraday_bars_chunked(
     """
     if not symbols:
         return {}
+
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    if end_dt <= start_dt:
+        raise ValueError("end must be after start")
+
+    max_span = timedelta(days=8)
+
+    def _time_slices() -> Iterable[tuple[datetime, datetime]]:
+        cur = start_dt
+        while cur < end_dt:
+            nxt = min(cur + max_span, end_dt)
+            yield cur, nxt
+            cur = nxt
+
     settings = get_settings()
-    if not getattr(settings, "intraday_batch_enable", True):
-        return {s: get_minute_df(s, start, end, feed=feed) for s in symbols}
     batch_size = max(1, int(getattr(settings, "intraday_batch_size", 40)))
-    out: dict[str, pd.DataFrame] = {}
-    for i in range(0, len(symbols), batch_size):
-        chunk = symbols[i : i + batch_size]
-        try:
-            got = get_bars_batch(chunk, "1Min", start, end, feed=feed)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as exc:  # AI-AGENT-REF: narrow exception
-            logger.warning(
-                "Intraday batch failed for chunk size %d: %s; falling back",
-                len(chunk),
-                exc,
-            )
-            got = {}
-        # fill any missing with bounded concurrency
-        missing = [
-            s
-            for s in chunk
-            if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)
-        ]
-        if missing:
-            settings = get_settings()
-            max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
 
-            def _pull(sym: str):
-                try:
-                    return sym, get_minute_df(sym, start, end, feed=feed)
-                except (
-                    FileNotFoundError,
-                    PermissionError,
-                    IsADirectoryError,
-                    JSONDecodeError,
-                    ValueError,
-                    KeyError,
-                    TypeError,
-                    OSError,
-                ) as one_exc:  # AI-AGENT-REF: narrow exception
-                    logger.warning(
-                        "Intraday per-symbol fallback failed for %s: %s", sym, one_exc
+    def _fetch_symbol(sym: str) -> pd.DataFrame:
+        frames = []
+        for s_dt, e_dt in _time_slices():
+            if (e_dt - s_dt) > max_span:
+                raise ValueError("time slice exceeds 8-day limit")
+            df = get_minute_df(sym, s_dt, e_dt, feed=feed)
+            if df is not None and not getattr(df, "empty", False):
+                frames.append(df)
+        return pd.concat(frames) if frames else pd.DataFrame()
+
+    if not getattr(settings, "intraday_batch_enable", True):
+        return {s: _fetch_symbol(s) for s in symbols}
+
+    out: dict[str, pd.DataFrame] = {s: pd.DataFrame() for s in symbols}
+    for s_dt, e_dt in _time_slices():
+        for i in range(0, len(symbols), batch_size):
+            chunk = symbols[i : i + batch_size]
+            try:
+                got = get_bars_batch(chunk, "1Min", s_dt, e_dt, feed=feed)
+            except (
+                FileNotFoundError,
+                PermissionError,
+                IsADirectoryError,
+                JSONDecodeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+            ) as exc:  # AI-AGENT-REF: narrow exception
+                logger.warning(
+                    "Intraday batch failed for chunk size %d: %s; falling back",
+                    len(chunk),
+                    exc,
+                )
+                got = {}
+            missing = [
+                s
+                for s in chunk
+                if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)
+            ]
+            if missing:
+                max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
+
+                def _pull(sym: str):
+                    try:
+                        return sym, get_minute_df(sym, s_dt, e_dt, feed=feed)
+                    except (
+                        FileNotFoundError,
+                        PermissionError,
+                        IsADirectoryError,
+                        JSONDecodeError,
+                        ValueError,
+                        KeyError,
+                        TypeError,
+                        OSError,
+                    ) as one_exc:  # AI-AGENT-REF: narrow exception
+                        logger.warning(
+                            "Intraday per-symbol fallback failed for %s: %s", sym, one_exc
+                        )
+                        return sym, None
+
+                with ThreadPoolExecutor(
+                    max_workers=max_workers, thread_name_prefix="fallback-intraday"
+                ) as ex:
+                    for fut in as_completed([ex.submit(_pull, s) for s in missing]):
+                        sym, df = fut.result()
+                        if df is not None and not getattr(df, "empty", False):
+                            got[sym] = df
+            for sym, df in got.items():
+                if df is not None and not getattr(df, "empty", False):
+                    out[sym] = (
+                        df
+                        if out[sym].empty
+                        else pd.concat([out[sym], df])
                     )
-                    return sym, None
 
-            with ThreadPoolExecutor(
-                max_workers=max_workers, thread_name_prefix="fallback-intraday"
-            ) as ex:
-                for fut in as_completed([ex.submit(_pull, s) for s in missing]):
-                    sym, df = fut.result()
-                    if df is not None and not getattr(df, "empty", False):
-                        got[sym] = df
-        out.update(
-            {
-                k: v
-                for k, v in got.items()
-                if v is not None and not getattr(v, "empty", False)
-            }
-        )
-    total_symbols = len(out)
+    total_symbols = len({k: v for k, v in out.items() if not v.empty})
     try:
         bars_loaded = sum(len(v) for v in out.values())
     except (TypeError, AttributeError):  # AI-AGENT-REF: bars summary fallback
         bars_loaded = 0
-    first_symbol = next(iter(out.keys()), None)
+    first_symbol = next((k for k, v in out.items() if not v.empty), None)
     logger.info(
         "FETCH_SUMMARY",
         extra={
@@ -2797,7 +2824,7 @@ def _fetch_intraday_bars_chunked(
             "first_symbol": first_symbol,
         },
     )
-    return out
+    return {k: v for k, v in out.items() if not v.empty}
 
 
 def _fetch_regime_bars(
