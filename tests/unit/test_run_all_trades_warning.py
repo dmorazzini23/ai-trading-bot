@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import types
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import ai_trading.core.bot_engine as eng
 
 
 def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
-    """A valid client with list_orders should not trigger a warning."""
+    """A valid client with get_orders should not trigger a warning."""
 
     class DummyAPI:
-        def list_orders(self, status: str = "open"):
+        def __init__(self):
+            self.called_with: dict | None = None
+
+        def get_orders(self, **kwargs):
+            self.called_with = kwargs
             return []
 
     class DummyRiskEngine:
@@ -20,7 +24,8 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
             """No-op risk update."""
 
     state = eng.BotState()
-    runtime = types.SimpleNamespace(api=DummyAPI(), risk_engine=DummyRiskEngine())
+    api = DummyAPI()
+    runtime = types.SimpleNamespace(api=api, risk_engine=DummyRiskEngine())
 
     # Minimal patches to isolate the order-check logic
     monkeypatch.setattr(eng, "_ensure_alpaca_classes", lambda: None)
@@ -53,5 +58,12 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
 
     eng.run_all_trades_worker(state, runtime)
 
-    warn_mock.assert_not_called()
+    warn_mock.assert_has_calls(
+        [
+            call("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"),
+            call("ALPACA_API_ADAPTER", key="alpaca_api_adapter"),
+        ]
+    )
+    assert api.called_with is not None
+    assert "statuses" in api.called_with
 

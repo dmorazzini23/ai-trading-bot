@@ -186,7 +186,17 @@ def _validate_trading_api(api: Any) -> bool:
         return False
     if not hasattr(api, "list_orders"):
         if hasattr(api, "get_orders"):
-            setattr(api, "list_orders", getattr(api, "get_orders"))  # type: ignore[attr-defined]
+            def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
+                status = kwargs.pop("status", None)
+                if status == "open" and "statuses" not in kwargs:
+                    try:
+                        status_enum = OrderStatus.OPEN  # type: ignore[union-attr]
+                    except Exception:  # pragma: no cover - fallback when enum missing
+                        status_enum = "open"
+                    kwargs["statuses"] = [status_enum]
+                return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+
+            setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
             logger_once.warning(
                 "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
             )
@@ -202,6 +212,11 @@ def _validate_trading_api(api: Any) -> bool:
             "ALPACA_API_ADAPTER", key="alpaca_api_adapter"
         )
     return True
+
+
+def list_open_orders(api: Any):
+    """Return all open orders from ``api``."""
+    return api.list_orders(status="open")
 
 
 # -- New helper: ensure context has an attached Alpaca client -----------------
@@ -2272,7 +2287,7 @@ def cancel_all_open_orders(runtime) -> None:
         return
 
     try:
-        open_orders = runtime.api.list_orders(status="open")
+        open_orders = list_open_orders(runtime.api)
         if not open_orders:
             return
         for od in open_orders:
@@ -4921,7 +4936,7 @@ def validate_open_orders(ctx: BotContext) -> None:
         )
         return
     try:
-        open_orders = ctx.api.list_orders(status="open")
+        open_orders = list_open_orders(ctx.api)
     except (
         FileNotFoundError,
         PermissionError,
@@ -12876,7 +12891,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             try:
-                open_orders = api.list_orders(status="open")
+                open_orders = list_open_orders(api)
             except (
                 APIError,
                 TimeoutError,

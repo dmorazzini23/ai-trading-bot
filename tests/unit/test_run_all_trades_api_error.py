@@ -7,7 +7,11 @@ import ai_trading.core.bot_engine as eng
 
 def test_run_all_trades_handles_api_error(monkeypatch, caplog):
     class DummyAPI:
-        def list_orders(self, status: str = "open"):
+        def __init__(self):
+            self.called_with: dict | None = None
+
+        def get_orders(self, **kwargs):
+            self.called_with = kwargs
             return []
 
     class DummyRiskEngine:
@@ -15,7 +19,8 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
             pass
 
     state = eng.BotState()
-    runtime = types.SimpleNamespace(api=DummyAPI(), risk_engine=DummyRiskEngine())
+    api = DummyAPI()
+    runtime = types.SimpleNamespace(api=api, risk_engine=DummyRiskEngine())
 
     monkeypatch.setattr(eng, "_ensure_alpaca_classes", lambda: None)
     monkeypatch.setattr(eng, "_init_metrics", lambda: None)
@@ -45,3 +50,5 @@ def test_run_all_trades_handles_api_error(monkeypatch, caplog):
 
     assert any(str(r.msg).startswith("PREP") for r in caplog.records)
     assert state.running is False
+    assert api.called_with is not None
+    assert "statuses" in api.called_with
