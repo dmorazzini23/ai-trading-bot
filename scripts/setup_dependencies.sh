@@ -3,6 +3,9 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$SCRIPT_DIR/.."
+
 echo "Setting up system dependencies for AI Trading Bot..."
 
 # Detect the operating system
@@ -51,8 +54,10 @@ fi
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
+pip uninstall -y alpaca-trade-api || true
 pip install --upgrade pip
 pip install -r requirements.txt
+"$ROOT_DIR/ci/scripts/forbid_alpaca_trade_api.sh"
 
 # Verify TA-Lib installation
 echo "Verifying TA-Lib installation..."

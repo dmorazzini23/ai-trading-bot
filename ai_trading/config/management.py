@@ -4,6 +4,10 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, TypeVar
 
+from ai_trading.logging import logger
+
+# Exposed for tests to bypass certain validations
+TESTING: bool = bool(os.getenv("TESTING"))
 # Authoritative runtime settings come from ai_trading.config.settings (which
 # Lazy accessors avoid optional dependency imports at module import time.
 # re-exports _base_get_settings from ai_trading.settings in this repo.
@@ -13,7 +17,50 @@ def get_settings():  # type: ignore[override]
     return _gs()
 
 # Single source of truth for capital sizing math.
-from ai_trading.utils.capital_scaling import derive_cap_from_settings as _derive_cap_from_settings
+from ai_trading.utils.capital_scaling import (
+    derive_cap_from_settings as _derive_cap_from_settings,
+)
+from ai_trading.settings import Settings
+
+# re-export helpers expected by tests and callers
+derive_cap_from_settings = _derive_cap_from_settings
+
+
+def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
+    """Return Alpaca credentials resolving ALPACA_* and APCA_* variants."""
+    key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+    secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+    base_url = (
+        os.getenv("ALPACA_BASE_URL")
+        or os.getenv("ALPACA_API_URL")
+        or os.getenv("APCA_API_BASE_URL")
+        or "https://paper-api.alpaca.markets"
+    )
+    return key, secret, base_url
+
+
+def _warn_duplicate_env_keys() -> None:
+    """Log when ALPACA_* and APCA_* env vars disagree."""
+    pairs = [
+        ("ALPACA_API_KEY", "APCA_API_KEY_ID"),
+        ("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"),
+    ]
+    for a, b in pairs:
+        av = os.getenv(a)
+        bv = os.getenv(b)
+        if av and bv and av != bv:
+            logger.warning(
+                f"Duplicate env keys {a} and {b} have different values"
+            )
+
+
+def validate_alpaca_credentials() -> None:
+    """Ensure required Alpaca credentials are present."""
+    if TESTING:
+        return
+    validate_required_env(
+        ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL")
+    )
 
 T = TypeVar("T")
 
@@ -149,6 +196,10 @@ __all__ = [
     "is_shadow_mode",
     "SEED",
     "validate_required_env",
+    "validate_alpaca_credentials",
+    "Settings",
+    "_resolve_alpaca_env",
+    "_warn_duplicate_env_keys",
 ]
 
 # NOTE: Keep dotenv imports inside the function to avoid import-time costs.

@@ -294,6 +294,32 @@ class _Alloc:
 
 sys.modules["strategy_allocator"].StrategyAllocator = _Alloc
 sys.modules["ai_trading.capital_scaling"] = types.ModuleType("ai_trading.capital_scaling")
+_cap_mod = sys.modules["ai_trading.capital_scaling"]
+def _update_if_present(runtime, equity):
+    cs = getattr(runtime, "capital_scaler", None)
+    if cs is not None and hasattr(cs, "update"):
+        try:
+            result = cs.update(runtime, equity)
+            if hasattr(cs, "current_scale"):
+                return float(cs.current_scale())
+            if isinstance(result, (int, float)):
+                return float(result)
+        except Exception:
+            return 1.0
+    return 1.0
+
+def _capital_scale(runtime):
+    cs = getattr(runtime, "capital_scaler", None)
+    if cs is not None and hasattr(cs, "current_scale"):
+        try:
+            return float(cs.current_scale())
+        except Exception:
+            return 1.0
+    return 1.0
+
+_cap_mod.update_if_present = _update_if_present
+_cap_mod.capital_scale = _capital_scale
+_cap_mod.capital_scaler_update = _update_if_present
 
 
 class _CapScaler:
@@ -310,9 +336,9 @@ class _CapScaler:
         return size
 
 
-sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
-sys.modules["ai_trading.capital_scaling"].drawdown_adjusted_kelly = lambda *a, **k: 0.02
-sys.modules["ai_trading.capital_scaling"].volatility_parity_position = lambda *a, **k: 0.01
+_cap_mod.CapitalScalingEngine = _CapScaler
+_cap_mod.drawdown_adjusted_kelly = lambda *a, **k: 0.02
+_cap_mod.volatility_parity_position = lambda *a, **k: 0.01
 
 
 

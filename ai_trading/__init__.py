@@ -8,7 +8,7 @@ from importlib import import_module as _import_module
 
 # AI-AGENT-REF: public surface allowlist
 _PUBLIC_MODULES = {
-    'config', 'logging', 'utils',
+    'config', 'logging', 'utils', 'data',
     'alpaca_api', 'data_validation', 'indicators', 'rebalancer', 'audit',
     'core', 'strategy_allocator', 'predict', 'meta_learning',
     'signals', 'settings', 'portfolio', 'app', 'ml_model',

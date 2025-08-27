@@ -35,6 +35,7 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 * `GET /metrics` &mdash; Prometheus metrics (returns **501** if metrics are disabled)
 
 Use **one** Alpaca SDK in production (recommended: `alpaca-py`).
+Remove legacy `alpaca-trade-api` if present (`pip uninstall -y alpaca-trade-api`).
 ### Self-check
 
 Verify Alpaca connectivity and data access:

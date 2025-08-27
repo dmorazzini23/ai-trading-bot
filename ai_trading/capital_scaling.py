@@ -1,8 +1,11 @@
 """Utilities for adaptive capital allocation and risk-based position sizing."""
 from __future__ import annotations
 import math
-import numpy as np
 from ai_trading.logging import get_logger
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - only for type checkers
+    import numpy as np
 log = get_logger(__name__)
 
 def update_if_present(runtime, equity) -> float:
@@ -10,9 +13,11 @@ def update_if_present(runtime, equity) -> float:
     cs = getattr(runtime, 'capital_scaler', None)
     if cs is not None and hasattr(cs, 'update'):
         try:
-            cs.update(runtime, equity)
+            result = cs.update(runtime, equity)
             if hasattr(cs, 'current_scale'):
                 return float(cs.current_scale())
+            if isinstance(result, (int, float)):
+                return float(result)
             return 1.0
         except (TypeError, ValueError, AttributeError) as e:
             log.warning('CAPITAL_SCALE_UPDATE_FAILED', extra={'detail': str(e)})
@@ -229,12 +234,14 @@ def fractional_kelly(kelly: float, regime: str='neutral') -> float:
 
 def volatility_parity(weights: np.ndarray, volatilities: np.ndarray) -> np.ndarray:
     """Scale ``weights`` using inverse volatility."""
+    import numpy as np  # local import to avoid hard dependency at module import
     inv_vol = 1 / (volatilities + 1e-09)
     scaled = weights * inv_vol
     return scaled / np.sum(scaled) * np.sum(weights)
 
 def cvar_scaling(returns: np.ndarray, alpha: float=0.05) -> float:
     """Return scaling factor based on CVaR at ``alpha`` level."""
+    import numpy as np  # local import to avoid hard dependency at module import
     sorted_returns = np.sort(returns)
     var = sorted_returns[int(len(sorted_returns) * alpha)]
     cvar = np.mean(sorted_returns[sorted_returns <= var])

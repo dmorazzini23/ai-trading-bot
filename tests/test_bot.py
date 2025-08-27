@@ -29,7 +29,6 @@ mods = [
     "finnhub",
     "pybreaker",
     "ai_trading.execution",
-    "ai_trading.capital_scaling",
     "strategy_allocator",
 ]
 for name in mods:
@@ -77,6 +76,9 @@ class _FakeREST:
 
 sys.modules["alpaca.trading.client"].TradingClient = _FakeREST
 sys.modules["alpaca.trading.client"].APIError = Exception
+class _DummyTradingClient:
+    def __init__(self, *a, **k):
+        pass
 class _RF:
     def __init__(self, *a, **k):
         pass
@@ -140,8 +142,8 @@ class _CapScaler:
 
     def scale_position(self, size):
         return size
-
-sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
+import ai_trading.capital_scaling as _cap_mod
+_cap_mod.CapitalScalingEngine = _CapScaler
 if "pandas_market_calendars" in sys.modules:
     sys.modules["pandas_market_calendars"].get_calendar = (
         lambda *a, **k: types.SimpleNamespace(
