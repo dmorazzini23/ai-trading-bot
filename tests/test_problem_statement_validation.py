@@ -57,8 +57,8 @@ def test_package_safe_imports():
     from ai_trading.core.bot_engine import _alpaca_available
     assert callable(_alpaca_available)
 
-    # Test runner imports
-    from ai_trading.runner import run_cycle
+    # Test main imports
+    from ai_trading.main import run_cycle
     assert callable(run_cycle)
 
 

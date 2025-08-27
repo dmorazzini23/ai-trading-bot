@@ -53,23 +53,6 @@ def test_bot_engine_import_fallbacks():
         assert pattern in source, f"Expected import pattern not found: {pattern}"
 
 
-def test_runner_import_fallbacks():
-    """Test that runner.py import fallbacks are correctly implemented."""
-    import inspect
-
-    from ai_trading import runner
-
-    source = inspect.getsource(runner)
-
-    # Check for expected fallback patterns
-    expected_patterns = [
-        "from ai_trading.indicators import",
-        "from indicators import",
-    ]
-
-    for pattern in expected_patterns:
-        assert pattern in source, f"Expected import pattern not found in runner.py: {pattern}"
-
 
 def test_backtester_import_fallbacks():
     """Test that backtester.py import fallbacks are correctly implemented."""
@@ -121,7 +104,6 @@ def test_import_robustness():
     # Test that we can import core modules
     modules_to_test = [
         "ai_trading.core.bot_engine",
-        "ai_trading.runner",
         "ai_trading.strategies.backtester",
         "ai_trading.strategies.profile_indicators",
     ]

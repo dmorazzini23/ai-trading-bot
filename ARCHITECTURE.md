@@ -2,7 +2,7 @@
 
 ## System
 - Python 3.12 app running on a DigitalOcean droplet, supervised by `systemd`.
-- Entry: `ai_trading/runner.py`; core loop in `ai_trading/core/bot_engine.py`.
+- Entry: `ai_trading/main.py`; core loop in `ai_trading/core/bot_engine.py`.
 - Alpaca SDK (`alpaca-trade-api`) is imported lazily; startup preflight aborts if the SDK is missing.
 - Health & metrics via `python -m ai_trading.app` when `RUN_HEALTHCHECK=1`.
   - `/healthz` JSON and `/metrics` Prometheus served on the port specified by the `HEALTHCHECK_PORT` environment variable (default **9001**).
@@ -14,7 +14,7 @@
    - Required fields: `cfg`, `params: dict`, `tickers: list[str]`, `model: Any (optional)`.
 
 ## Control Flow (happy path)
-1. `runner.py` → loads config → constructs `BotRuntime`.
+1. `main.py` → loads config → constructs `BotRuntime`.
 2. `bot_engine.run_all_trades_worker(runtime, state)`:
    - Param validation, PDT check, data fetch health check.
    - Candidate screening: `screen_candidates(runtime)` → `screen_universe(..., runtime)`.

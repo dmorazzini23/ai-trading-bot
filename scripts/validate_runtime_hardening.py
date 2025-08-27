@@ -58,7 +58,7 @@ def test_http_timeouts():
 def test_package_imports():
     """Test that package-safe import patterns exist."""
     logging.info('Testing package-safe import patterns...')
-    files_to_check = ['ai_trading/core/bot_engine.py', 'ai_trading/runner.py']
+    files_to_check = ['ai_trading/core/bot_engine.py']
     found_patterns = 0
     for filepath in files_to_check:
         if not pathlib.Path(filepath).exists():

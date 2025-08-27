@@ -142,7 +142,7 @@ def test_no_missing_parameters_validation():
     cfg = TradingConfig.from_env()
     runtime = build_runtime(cfg)
 
-    # Simulate the validation logic from runner.py
+    # Simulate the validation logic from startup
     missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
 
     # Should be no missing parameters

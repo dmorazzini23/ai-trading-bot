@@ -39,7 +39,6 @@ def check_import_hardening():
             'from ai_trading import portfolio',
             'from ai_trading.alpaca_api import alpaca_get',
         ],
-        'runner.py': ['from ai_trading.indicators import'],
         'backtester.py': ['import ai_trading.signals as signals', 'import ai_trading.data.fetch as data_fetcher'],
         'profile_indicators.py': ['import ai_trading.signals as signals', 'import ai_trading.indicators as indicators'],
     }

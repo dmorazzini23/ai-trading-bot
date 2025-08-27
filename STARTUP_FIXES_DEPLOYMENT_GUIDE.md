@@ -131,7 +131,7 @@ from ai_trading.config import Settings
 
 ### 4. Lazy Import Mechanism
 
-**In runner.py:**
+**In main.py:**
 ```python
 def _load_engine():
     """Lazy loader for bot engine components."""
@@ -204,7 +204,7 @@ All existing functionality is preserved:
 3. Test import manually:
    ```bash
    cd /path/to/ai-trading-bot
-   python -c "from ai_trading import runner; print('✓ Import successful')"
+   python -c "from ai_trading import main; print('✓ Import successful')"
    ```
 
 ### Credential Issues

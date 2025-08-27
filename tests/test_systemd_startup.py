@@ -32,8 +32,8 @@ try:
     from ai_trading.config.management import _resolve_alpaca_env
     print("✓ Config management imported")
     
-    from ai_trading import runner
-    print("✓ Runner imported")
+    from ai_trading import main as _main
+    print("✓ Main imported")
     
     from ai_trading.utils.timefmt import utc_now_iso
     print("✓ Time utilities imported")
@@ -211,19 +211,12 @@ import os
 for key in ["ALPACA_API_KEY", "APCA_API_KEY_ID", "ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"]:
     os.environ.pop(key, None)
 
-# Import runner (should work without credentials)
-from ai_trading import runner
+from ai_trading import main as _main
 
-# Verify lazy loading variables exist
-assert hasattr(runner, '_load_engine')
-assert hasattr(runner, '_bot_engine') 
-assert hasattr(runner, '_bot_state_class')
+# Verify run_cycle exists
+assert hasattr(_main, 'run_cycle')
 
-# Verify initial state is None (not loaded)
-assert runner._bot_engine is None
-assert runner._bot_state_class is None
-
-print("✓ Lazy import mechanism working correctly")
+print("✓ Main module import works correctly")
 '''
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:

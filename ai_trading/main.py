@@ -20,20 +20,64 @@ from ai_trading.position_sizing import resolve_max_position_size, _get_equity_fr
 from ai_trading.config.management import get_env
 
 
-def _default_run_cycle():
-    return None
+def preflight_import_health() -> None:
+    """Best-effort import preflight to surface missing deps early."""
+    import importlib
+    import os
+
+    if os.environ.get("IMPORT_PREFLIGHT_DISABLED", "").lower() in {"1", "true"}:
+        return
+
+    core_modules = [
+        "ai_trading.core.bot_engine",
+        "ai_trading.risk.engine",
+        "ai_trading.rl_trading",
+        "ai_trading.telemetry.metrics_logger",
+        "alpaca_trade_api",
+    ]
+    for mod in core_modules:
+        try:
+            importlib.import_module(mod)
+        except (ImportError, RuntimeError) as exc:  # pragma: no cover - surface import issues
+            logger.error(
+                "IMPORT_PREFLIGHT_FAILED",
+                extra={
+                    "module_name": mod,
+                    "error": repr(exc),
+                    "exc_type": exc.__class__.__name__,
+                },
+            )
+            raise SystemExit(1)
+    logger.info("IMPORT_PREFLIGHT_OK")
 
 
-run_cycle = _default_run_cycle
+def run_cycle() -> None:
+    """Execute a single trading cycle using the core bot engine."""
+    from ai_trading.core.bot_engine import (
+        BotState,
+        run_all_trades_worker,
+        get_ctx,
+        build_runtime,
+        REQUIRED_PARAM_DEFAULTS,
+    )
+    from ai_trading.config.management import TradingConfig
 
+    state = BotState()
+    cfg = TradingConfig.from_env()
+    runtime = build_runtime(cfg)
 
-def _get_run_cycle():
-    global run_cycle
-    if run_cycle is _default_run_cycle:
-        from ai_trading.runner import run_cycle as _runner_run_cycle
+    lazy_ctx = get_ctx()
+    if hasattr(state, "ctx") and state.ctx is None:
+        state.ctx = lazy_ctx
 
-        run_cycle = _runner_run_cycle
-    return run_cycle
+    missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
+    if missing:
+        logger.error(
+            "PARAMS_VALIDATE: missing keys in runtime.params; defaults will be applied",
+            extra={"missing": missing},
+        )
+
+    run_all_trades_worker(state, runtime)
 
 
 def get_memory_optimizer():
@@ -187,8 +231,9 @@ def run_bot(*_a, **_k) -> int:
             memory_optimizer.enable_low_memory_mode()
             logger.info("Memory optimization enabled")
         logger.info("Bot startup complete - entering main loop")
-        rc = _get_run_cycle()
-        return rc()
+        preflight_import_health()
+        run_cycle()
+        return 0
     except (ValueError, TypeError) as e:
         logger.error("Bot startup failed: %s", e, exc_info=True)
         return 1
@@ -302,10 +347,9 @@ def main(argv: list[str] | None = None) -> None:
     }
     logger.info("STARTUP_BANNER", extra=_redact(banner))
     _install_signal_handlers()
-    rc = _get_run_cycle()
     warmup_code = 0
     try:
-        warmup_code = rc()
+        run_cycle()
     except SystemExit as e:
         warmup_code = int(getattr(e, "code", 1) or 1)
         logger.error(
@@ -391,7 +435,7 @@ def main(argv: list[str] | None = None) -> None:
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
                 with StageTimer(logger, "CYCLE_COMPUTE"):
-                    rc()
+                    run_cycle()
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
                 with StageTimer(logger, "CYCLE_EXECUTE"):

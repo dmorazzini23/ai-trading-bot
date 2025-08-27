@@ -1,9 +1,9 @@
 def test_package_first_single_tick_smoke(monkeypatch):
     # This test previously tolerated shims; now enforce package-only.
     import importlib
-    runner = importlib.import_module("ai_trading.runner")
-    assert hasattr(runner, "run_cycle")
-    assert callable(runner.run_cycle)
+    main_mod = importlib.import_module("ai_trading.main")
+    assert hasattr(main_mod, "run_cycle")
+    assert callable(main_mod.run_cycle)
 
 def test_ai_trading_module_imports():
     # Test that modules can be imported from the package
