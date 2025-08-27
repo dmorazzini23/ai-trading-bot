@@ -172,6 +172,7 @@ def get_bars_df(
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
     from alpaca.common.exceptions import APIError
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    from alpaca.data.requests import StockBarsRequest
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest(bars=True)
@@ -187,15 +188,15 @@ def get_bars_df(
         start, end = _bars_time_window(base_tf)
     start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
     try:
-        df = rest.get_stock_bars(
-            symbol,
+        req = StockBarsRequest(
+            symbol_or_symbols=[symbol],
             timeframe=tf,
             start=start_s,
             end=end_s,
             adjustment=adjustment,
             feed=feed,
-            limit=None,
-        ).df
+        )
+        df = rest.get_stock_bars(req).df
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
         return _pd.DataFrame()

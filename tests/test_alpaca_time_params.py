@@ -25,18 +25,10 @@ def test_daily_uses_date_only(mock_rest_cls):
     df = get_bars_df("SPY", "Day", feed="iex", adjustment="all")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
     mock_rest_cls.assert_called_once_with(bars=True)
-    _, kwargs = mock_rest.get_stock_bars.call_args
-    assert (
-        isinstance(kwargs["start"], str)
-        and len(kwargs["start"]) == 10
-        and kwargs["start"].count("-") == 2
-    )
-    assert (
-        isinstance(kwargs["end"], str)
-        and len(kwargs["end"]) == 10
-        and kwargs["end"].count("-") == 2
-    )
-    assert kwargs["timeframe"] in ("1Day", "1D")
+    (req,), kwargs = mock_rest.get_stock_bars.call_args
+    assert isinstance(req.start, str) and len(req.start) == 10 and req.start.count("-") == 2
+    assert isinstance(req.end, str) and len(req.end) == 10 and req.end.count("-") == 2
+    assert req.timeframe in ("1Day", "1D")
 
 
 @patch("ai_trading.alpaca_api._get_rest")
@@ -52,7 +44,7 @@ def test_intraday_uses_rfc3339z(mock_rest_cls):
     df = get_bars_df("SPY", "5Min", start=start, end=end, feed="iex", adjustment="all")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
     mock_rest_cls.assert_called_once_with(bars=True)
-    _, kwargs = mock_rest.get_stock_bars.call_args
-    assert kwargs["start"].endswith("Z") and "T" in kwargs["start"] and "." not in kwargs["start"]
-    assert kwargs["end"].endswith("Z") and "T" in kwargs["end"] and "." not in kwargs["end"]
-    assert kwargs["timeframe"] in ("5Min",)
+    (req,), kwargs = mock_rest.get_stock_bars.call_args
+    assert req.start.endswith("Z") and "T" in req.start and "." not in req.start
+    assert req.end.endswith("Z") and "T" in req.end and "." not in req.end
+    assert req.timeframe in ("5Min",)
