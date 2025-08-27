@@ -22,6 +22,16 @@ def test_settings_defaults(monkeypatch):
     assert s.dollar_risk_limit == 0.05
 
 
+def test_sip_feed_falls_back(monkeypatch, caplog):
+    """SIP feed requests fall back to IEX when not explicitly allowed."""  # AI-AGENT-REF
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
+    with caplog.at_level("WARNING"):
+        s = Settings()
+    assert s.alpaca_data_feed == "iex"
+    assert "SIP_FEED_DISABLED" in caplog.text
+
+
 def test_settings_invalid_risk(monkeypatch):
     """Invalid risk values raise ValidationError."""  # AI-AGENT-REF
     monkeypatch.setenv("CAPITAL_CAP", "0")

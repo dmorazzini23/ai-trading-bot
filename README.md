@@ -675,6 +675,9 @@ python verify_config.py
    ALPACA_SECRET_KEY=your_actual_secret_key_here
    ALPACA_API_URL=https://paper-api.alpaca.markets  # Paper trading
    ALPACA_DATA_FEED=iex
+   # Set the following only if your Alpaca account has SIP permissions
+   # ALPACA_DATA_FEED=sip
+   # ALPACA_ALLOW_SIP=1
    ALPACA_ADJUSTMENT=all
    DATA_LOOKBACK_DAYS_DAILY=200
    DATA_LOOKBACK_DAYS_MINUTE=5
