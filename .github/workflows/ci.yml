@@ -27,7 +27,7 @@ PY
           ruff --version
           ruff check .
           ruff format --check .
-          mypy ai_trading
+          mypy ai_trading tests
       - name: Audit exceptions
         run: make audit-exceptions
       - name: Legacy scan

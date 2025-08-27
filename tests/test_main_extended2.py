@@ -1,18 +1,26 @@
 import sys
 import types
+from typing import Any
 
 import pytest
 
-flask_mod = types.ModuleType("flask")
+flask_mod: Any = types.ModuleType("flask")
+
+
 class Flask:
     def __init__(self, *a, **k):
         pass
+
     def route(self, *a, **k):
         def deco(f):
             return f
+
         return deco
+
     def run(self, *a, **k):
         pass
+
+
 flask_mod.Flask = Flask
 flask_mod.jsonify = lambda *a, **k: {}
 sys.modules["flask"] = flask_mod
@@ -51,9 +59,7 @@ def test_run_bot_calls_cycle(monkeypatch):
     """run_bot executes a trading cycle in-process."""
     called = {}
 
-    monkeypatch.setattr(
-        main, "run_cycle", lambda: called.setdefault("ran", True)
-    )
+    monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("ran", True))
     assert main.run_bot() == 0
     assert called["ran"]
 
@@ -75,9 +81,12 @@ def test_main_runs_once(monkeypatch):
         called.setdefault("api", True)
         if ready_signal:
             ready_signal.set()  # Important: signal that API is ready
+
     monkeypatch.setattr(main, "start_api", mock_start_api)
+
     def _cycle():
         called["cycle"] = called.get("cycle", 0) + 1
+
     monkeypatch.setattr(main, "run_cycle", _cycle)
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
     main.main()
