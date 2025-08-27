@@ -4,8 +4,10 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+import os
 from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from ai_trading.logging import logger
 try:
     from pydantic.fields import FieldInfo
 except (ValueError, TypeError):
@@ -141,6 +143,20 @@ class Settings(BaseSettings):
     @classmethod
     def _norm_feed(cls, v):
         return str(v).lower().strip()
+
+    @field_validator('alpaca_data_feed', mode='after')
+    @classmethod
+    def _enforce_allowed_feed(cls, v: str) -> str:
+        """Force IEX feed unless SIP explicitly allowed."""
+        allow_sip = os.getenv('ALPACA_ALLOW_SIP', '').strip().lower() in {
+            '1',
+            'true',
+            'yes',
+        }
+        if v == 'sip' and not allow_sip:
+            logger.warning('SIP_FEED_DISABLED', extra={'requested': 'sip', 'using': 'iex'})
+            return 'iex'
+        return v
 
     @field_validator('alpaca_adjustment', mode='before')
     @classmethod

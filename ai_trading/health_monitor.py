@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 from ai_trading.monitoring.system_health import _HAS_PSUTIL, snapshot_basic
+from ai_trading.config import get_settings
 
 if _HAS_PSUTIL:
     import psutil
@@ -529,10 +530,17 @@ class HealthMonitor:
 
     def _check_market_data(self) -> dict[str, Any]:
         """Check market data feed health."""
+        feed = get_settings().alpaca_data_feed
+        if feed != "iex":
+            return {
+                "status": HealthStatus.WARNING.value,
+                "message": "Unauthorized Alpaca feed configured",
+                "details": {"feed": feed},
+            }
         return {
             "status": HealthStatus.HEALTHY.value,
             "message": "Market data feed operational",
-            "details": {"feed_status": "connected"},
+            "details": {"feed": feed},
         }
 
     def get_overall_health(self) -> dict[str, Any]:

@@ -1,5 +1,5 @@
-import os
 import datetime as dt
+import os
 from zoneinfo import ZoneInfo
 
 from alpaca.common.exceptions import APIError
@@ -24,6 +24,9 @@ def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
 
 def main() -> None:
     feed = get_env("ALPACA_DATA_FEED", "iex")
+    if feed.lower() == "sip" and not get_env("ALPACA_ALLOW_SIP", "0", cast=bool):
+        logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
+        feed = "iex"
     client = StockHistoricalDataClient(
         get_env("ALPACA_API_KEY"),
         get_env("ALPACA_SECRET_KEY"),
