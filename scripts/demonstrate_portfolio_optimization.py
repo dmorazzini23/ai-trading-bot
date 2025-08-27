@@ -5,8 +5,8 @@ import sys
 os.environ['TESTING'] = '1'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ai_trading.strategies.regime_detector import create_regime_detector
-from portfolio_optimizer import PortfolioDecision, create_portfolio_optimizer
-from transaction_cost_calculator import create_transaction_cost_calculator
+from ai_trading.portfolio.optimizer import PortfolioDecision, create_portfolio_optimizer
+from ai_trading.execution.transaction_costs import create_transaction_cost_calculator
 
 def demonstrate_portfolio_optimization():
     """Demonstrate the portfolio optimization capabilities."""
