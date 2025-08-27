@@ -6,7 +6,7 @@ import time as _time
 _real_sleep = _time.sleep
 from typing import Optional, Union
 
-HTTP_TIMEOUT: Union[int, float] = 10.0  # AI-AGENT-REF: canonical timeout across runtime
+HTTP_TIMEOUT: Union[int, float] = float(os.getenv("HTTP_TIMEOUT", "10"))  # AI-AGENT-REF: canonical timeout across runtime
 
 
 def clamp_timeout(value: Optional[float]) -> float:
