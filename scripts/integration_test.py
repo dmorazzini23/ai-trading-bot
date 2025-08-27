@@ -157,10 +157,10 @@ def test_http_timeouts():
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, PermissionError, ZeroDivisionError, OverflowError):
         return False
 
-def test_data_fetcher_helpers():
-    """Test that data_fetcher helpers are exported."""
+def test_data_fetch_helpers():
+    """Test that data.fetch helpers are exported."""
     try:
-        data_fetcher_path = Path('ai_trading/data_fetcher.py')
+        data_fetcher_path = Path('ai_trading/data/fetch.py')
         if data_fetcher_path.exists():
             content = data_fetcher_path.read_text()
             assert 'def get_cached_minute_timestamp' in content
@@ -173,7 +173,7 @@ def test_data_fetcher_helpers():
 def main():
     """Run all integration tests."""
     os.environ['TESTING'] = '1'
-    tests = [test_model_registry, test_disable_daily_retrain, test_executor_sizing, test_minute_cache_helpers, test_import_hardening, test_http_timeouts, test_data_fetcher_helpers]
+    tests = [test_model_registry, test_disable_daily_retrain, test_executor_sizing, test_minute_cache_helpers, test_import_hardening, test_http_timeouts, test_data_fetch_helpers]
     passed = 0
     failed = 0
     for test in tests:

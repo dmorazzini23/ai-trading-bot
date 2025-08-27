@@ -60,12 +60,12 @@ def test_alpaca_api_endpoints():
     """Test that Alpaca API endpoints are correctly configured."""
     logging.info('🌐 Testing Alpaca API Configuration...')
     try:
-        data_fetcher_path = Path('ai_trading/data_fetcher.py')
+        data_fetcher_path = Path('ai_trading/data/fetch.py')
         data_fetcher_content = data_fetcher_path.read_text()
         if 'data.alpaca.markets' in data_fetcher_content:
-            logging.info('  ✅ ai_trading/data_fetcher.py correctly uses data.alpaca.markets for market data')
+            logging.info('  ✅ ai_trading/data/fetch.py correctly uses data.alpaca.markets for market data')
         else:
-            logging.info('  ❌ ai_trading/data_fetcher.py does not use data.alpaca.markets')
+            logging.info('  ❌ ai_trading/data/fetch.py does not use data.alpaca.markets')
             return False
         config_path = Path('ai_trading/config/alpaca.py')
         config_content = config_path.read_text()

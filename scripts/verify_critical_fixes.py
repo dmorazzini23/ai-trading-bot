@@ -3,16 +3,16 @@ import logging
 from pathlib import Path
 
 def test_timestamp_fix_in_data_fetcher():
-    """Verify the RFC3339 timestamp fix is in data_fetcher.py"""
-    with Path('ai_trading/data_fetcher.py').open() as f:
+    """Verify the RFC3339 timestamp fix is in data/fetch.py"""
+    with Path('ai_trading/data/fetch.py').open() as f:
         content = f.read()
-    assert ".replace('+00:00', 'Z')" in content, 'RFC3339 timestamp fix not found in data_fetcher.py'
+    assert ".replace('+00:00', 'Z')" in content, 'RFC3339 timestamp fix not found in data/fetch.py'
     lines = content.split('\n')
     start_fixed = any((".replace('+00:00', 'Z')" in line and 'start' in line for line in lines))
     end_fixed = any((".replace('+00:00', 'Z')" in line and 'end' in line for line in lines))
     assert start_fixed, 'Start timestamp fix not found'
     assert end_fixed, 'End timestamp fix not found'
-    logging.info('✓ RFC3339 timestamp fix verified in data_fetcher.py')
+    logging.info('✓ RFC3339 timestamp fix verified in data/fetch.py')
 
 def test_position_sizing_fix_in_bot_engine():
     """Verify the position sizing fixes are in bot_engine.py"""
@@ -47,7 +47,7 @@ def test_stale_data_bypass_fix():
 def test_all_fixes_integrated():
     """Verify all critical fixes are properly integrated"""
     files_to_check = [
-        Path('ai_trading/data_fetcher.py'),
+        Path('ai_trading/data/fetch.py'),
         Path('ai_trading/core/bot_engine.py'),
         Path('ai_trading/meta_learning.py'),
     ]
