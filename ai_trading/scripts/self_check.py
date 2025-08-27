@@ -28,8 +28,9 @@ def main() -> None:
         logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
         feed = "iex"
     client = StockHistoricalDataClient(
-        get_env("ALPACA_API_KEY"),
-        get_env("ALPACA_SECRET_KEY"),
+        api_key=get_env("ALPACA_API_KEY"),
+        secret_key=get_env("ALPACA_SECRET_KEY"),
+        base_url=get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
     )
     try:
         req_day = StockBarsRequest(

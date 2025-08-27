@@ -804,7 +804,7 @@ import os
 client = TradingClient(
     os.getenv('ALPACA_API_KEY'),
     os.getenv('ALPACA_SECRET_KEY'),
-    paper=True,
+    base_url=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
 )
 account = client.get_account()
 print(f'✅ Connected! Account: {account.id}')

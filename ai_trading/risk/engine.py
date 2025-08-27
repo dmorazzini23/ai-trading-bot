@@ -95,12 +95,12 @@ class RiskEngine:
                     self.data_client = TradingClient(
                         api_key=api_key,
                         secret_key=secret,
-                        url_override=base_url,
+                        base_url=base_url,
                     )
                 elif oauth:
                     self.data_client = TradingClient(
                         oauth_token=oauth,
-                        url_override=base_url,
+                        base_url=base_url,
                     )
         except (APIError, TypeError, AttributeError, OSError) as e:
             logger.warning('Could not initialize TradingClient: %s', e)
