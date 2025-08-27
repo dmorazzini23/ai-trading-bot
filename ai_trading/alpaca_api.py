@@ -49,11 +49,7 @@ def _module_exists(name: str) -> bool:
         return False
 
 
-ALPACA_AVAILABLE = (
-    _module_exists('alpaca_trade_api')
-    and os.environ.get('ALPACA_FORCE_UNAVAILABLE', '').lower() not in {'1', 'true', 'yes'}
-)
-
+ALPACA_AVAILABLE = True
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
 def _make_client_order_id(prefix: str='ai') -> str:
@@ -63,7 +59,7 @@ generate_client_order_id = _make_client_order_id
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
-        from alpaca_trade_api.rest import TimeFrame
+        from alpaca.data.timeframe import TimeFrame
     except (ValueError, TypeError, ImportError):
         TimeFrame = None
     if isinstance(tf_raw, str):
@@ -95,13 +91,13 @@ def _format_start_end_for_tradeapi(timeframe: str, start, end):
     return (params['start'], params['end'])
 
 def _get_rest() -> Any:
-    """Return a new `alpaca_trade_api.REST` instance."""
-    from alpaca_trade_api import REST  # type: ignore
+    """Return a new `alpaca-py` TradingClient instance."""
+    from alpaca.trading.client import TradingClient
 
     key = os.getenv('ALPACA_API_KEY')
     secret = os.getenv('ALPACA_SECRET_KEY')
     base = os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
-    return REST(key, secret, base)
+    return TradingClient(key, secret, base)
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
@@ -136,7 +132,8 @@ def get_bars_df(
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
-    from alpaca_trade_api.rest import APIError, TimeFrame, TimeFrameUnit  # type: ignore
+    from alpaca.common.exceptions import APIError
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest()
@@ -382,12 +379,11 @@ def submit_order(
         )
 
     try:
-        import alpaca_trade_api as _alp  # type: ignore
-        rest = _alp.REST(
-            key_id=cfg.key_id,
+        from alpaca.trading.client import TradingClient as _REST
+        rest = _REST(
+            api_key=cfg.key_id,
             secret_key=cfg.secret_key,
             base_url=cfg.base_url,
-            api_version="v2",
         )
         return _sdk_submit(
             rest,
