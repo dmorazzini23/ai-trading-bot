@@ -8,3 +8,4 @@ pytest-cov>=5
 pytest-benchmark>=4.0
 hypothesis>=6.92
 coverage>=7.6
+alpaca-py==0.42.0

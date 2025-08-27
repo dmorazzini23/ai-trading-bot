@@ -14,11 +14,17 @@ trading_mod = types.ModuleType("alpaca.trading.client")
 trading_mod.TradingClient = object
 trading_mod.APIError = type("APIError", (Exception,), {})
 sys.modules["alpaca.trading.client"] = trading_mod
-sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
+data_mod = types.ModuleType("alpaca.data")
 tf_mod = types.ModuleType("alpaca.data.timeframe")
-tf_mod.TimeFrame = object
+tf_mod.TimeFrame = type("TimeFrame", (object,), {})
 tf_mod.TimeFrameUnit = type("TimeFrameUnit", (object,), {})
+req_mod = types.ModuleType("alpaca.data.requests")
+req_mod.StockBarsRequest = type("StockBarsRequest", (object,), {})
+sys.modules["alpaca.data"] = data_mod
 sys.modules["alpaca.data.timeframe"] = tf_mod
+sys.modules["alpaca.data.requests"] = req_mod
+data_mod.TimeFrame = tf_mod.TimeFrame
+data_mod.StockBarsRequest = req_mod.StockBarsRequest
 
 tzlocal_mod = types.ModuleType("tzlocal")
 tzlocal_mod.get_localzone = lambda: None

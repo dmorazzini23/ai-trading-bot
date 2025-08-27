@@ -119,6 +119,8 @@ sys.modules["alpaca.data.timeframe"].TimeFrame = object
 sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
 sys.modules["alpaca.data.requests"].StockBarsRequest = object
 sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = object
+sys.modules["alpaca.data"].TimeFrame = sys.modules["alpaca.data.timeframe"].TimeFrame
+sys.modules["alpaca.data"].StockBarsRequest = sys.modules["alpaca.data.requests"].StockBarsRequest
 
 class _RF:
     def __init__(self, *a, **k):

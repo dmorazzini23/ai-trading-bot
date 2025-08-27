@@ -2,7 +2,6 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
-from dataclasses import dataclass
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import get_settings
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
@@ -16,6 +15,7 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
+from alpaca.data import TimeFrame, StockBarsRequest
 
 # Lazy pandas proxy; only imported on first use
 pd = load_pandas()
@@ -30,40 +30,18 @@ def _format_fallback_payload(tf_str: str, feed_str: str, start_utc: datetime, en
 
 def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_utc: datetime) -> None:
     try:
-        logger.debug('DATA_FALLBACK_WINDOW_DEBUG', extra={'et_day': day_et.isoformat(), 'rth_et': '09:30-16:00', 'rth_utc': f'{start_utc.astimezone(UTC).isoformat()}..{end_utc.astimezone(UTC).isoformat()}'})
+        logger.debug(
+            'DATA_FALLBACK_WINDOW_DEBUG',
+            extra={
+                'et_day': day_et.isoformat(),
+                'rth_et': '09:30-16:00',
+                'rth_utc': f'{start_utc.astimezone(UTC).isoformat()}..{end_utc.astimezone(UTC).isoformat()}',
+            },
+        )
     except (ValueError, TypeError):
         pass
 
-try:
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # type: ignore
-    from alpaca.data.requests import StockBarsRequest  # type: ignore
-except (ValueError, TypeError, ImportError):
-
-    @dataclass
-    class StockBarsRequest:
-        symbol_or_symbols: Any
-        timeframe: Any
-        start: Any | None = None
-        end: Any | None = None
-        limit: int | None = None
-        feed: Any | None = None
-
-    class TimeFrame:
-
-        def __init__(self, n: int, unit: Any) -> None:
-            self.n = n
-            self.unit = unit
-
-        def __str__(self) -> str:  # pragma: no cover - simple utility
-            return f"{self.n}{self.unit}"
-
-    class TimeFrameUnit:
-        Day = "Day"
-        Minute = "Min"
-
-    # Provide enum-style helpers for compatibility
-    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)
-    TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)
+# Fallback shims removed: TimeFrame and StockBarsRequest now come from alpaca.data
 COMMON_EXC = (ValueError, KeyError, AttributeError, TypeError, RuntimeError, ImportError, OSError, ConnectionError, TimeoutError)
 
 def _ensure_df(obj: Any) -> pd.DataFrame:

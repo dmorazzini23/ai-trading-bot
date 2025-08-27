@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from ai_trading.data.bars import (
     StockBarsRequest,
     TimeFrame,
-    TimeFrameUnit,
     _ensure_df,
     empty_bars_dataframe,
     safe_get_stock_bars,
@@ -44,7 +43,7 @@ def get_latest_price(ctx, symbol: str) -> float | None:
     try:
         req = StockBarsRequest(
             symbol_or_symbols=[symbol],
-            timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+            timeframe=TimeFrame.Minute,
             start=start_iso,
             end=end_iso,
             feed="iex",
