@@ -7,13 +7,12 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from pathlib import Path
+
 os.environ['ALPACA_API_KEY'] = 'dummy'
 os.environ['ALPACA_SECRET_KEY'] = 'dummy'
 os.environ['ALPACA_BASE_URL'] = 'dummy'
 os.environ['WEBHOOK_SECRET'] = 'dummy'
 os.environ['FLASK_PORT'] = '5000'
-sys.path.insert(0, str(Path(__file__).parent))
 
 class OrderSide(Enum):
     BUY = 'buy'
@@ -46,7 +45,6 @@ class Order:
 def test_idempotency():
     """Test order idempotency system."""
     logging.info('Testing idempotency system...')
-    sys.path.append('ai_trading/execution')
     import threading
     import time
     from dataclasses import dataclass
