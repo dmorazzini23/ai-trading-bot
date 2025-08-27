@@ -14,9 +14,9 @@ def _import_predict(monkeypatch):
     req_mod.exceptions = types.SimpleNamespace(RequestException=Exception)
     monkeypatch.setitem(sys.modules, "requests", req_mod)
 
-    rt_mod = types.ModuleType("retrain")
-    rt_mod.prepare_indicators = lambda df, freq="intraday": df.assign(feat1=0)
-    monkeypatch.setitem(sys.modules, "retrain", rt_mod)
+    prep_mod = types.ModuleType("ai_trading.features.prepare")
+    prep_mod.prepare_indicators = lambda df, freq="intraday": df.assign(feat1=0)
+    monkeypatch.setitem(sys.modules, "ai_trading.features.prepare", prep_mod)
 
     if "ai_trading.predict" in sys.modules:
         del sys.modules["ai_trading.predict"]
