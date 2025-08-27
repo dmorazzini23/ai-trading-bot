@@ -55,6 +55,15 @@ def format_datetime_utc(dt: datetime) -> str:
         dt = dt.astimezone(UTC)
     return dt.isoformat().replace('+00:00', 'Z')
 
+
+def isoformat_z(dt: datetime) -> str:
+    """Return RFC3339 timestamp with trailing ``Z``.
+
+    Thin wrapper around :func:`format_datetime_utc` offering a clearer helper
+    name for callers that expect the ``Z``-suffixed UTC representation.
+    """
+    return format_datetime_utc(dt)
+
 def parse_iso_utc(timestamp_str: str) -> datetime | None:
     """
     Parse an ISO-8601 UTC timestamp string.
