@@ -516,19 +516,14 @@ class BotEngine:
 
     @cached_property
     def data_client(self):
-        """Alpaca TradingClient for historical/market data."""
-        from alpaca.trading.client import TradingClient as _TradingClient  # type: ignore
-
-        base_url = (
-            _get_env_str("ALPACA_API_URL")
-            if os.getenv("ALPACA_API_URL")
-            else _get_env_str("ALPACA_BASE_URL")
+        """Alpaca StockHistoricalDataClient for historical/market data."""
+        from alpaca.data.historical import (
+            StockHistoricalDataClient as _DataClient,  # type: ignore
         )
-        return _TradingClient(
+
+        return _DataClient(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-            paper="paper" in base_url.lower(),
-            url_override=base_url,
         )
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
@@ -3917,14 +3912,11 @@ class DataFetcher:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
 
-        from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-        base_url = get_settings().alpaca_base_url
-        client = AlpacaREST(
-            api_key=api_key,
-            secret_key=api_secret,
-            paper="paper" in base_url.lower(),
-            url_override=base_url,
+        from alpaca.data.historical import (
+            StockHistoricalDataClient as _DataClient,  # type: ignore
         )
+
+        client = _DataClient(api_key=api_key, secret_key=api_secret)
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
             try:
@@ -4220,14 +4212,11 @@ class DataFetcher:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
             )
-        from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-        base_url = get_settings().alpaca_base_url
-        client = AlpacaREST(
-            api_key=api_key,
-            secret_key=api_secret,
-            paper="paper" in base_url.lower(),
-            url_override=base_url,
+        from alpaca.data.historical import (
+            StockHistoricalDataClient as _DataClient,  # type: ignore
         )
+
+        client = _DataClient(api_key=api_key, secret_key=api_secret)
 
         try:
             req = StockBarsRequest(
@@ -4470,14 +4459,11 @@ def prefetch_daily_data(
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
         )
-    from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
-    base_url = get_settings().alpaca_base_url
-    client = AlpacaREST(
-        api_key=alpaca_key,
-        secret_key=alpaca_secret,
-        paper="paper" in base_url.lower(),
-        url_override=base_url,
+    from alpaca.data.historical import (
+        StockHistoricalDataClient as _DataClient,  # type: ignore
     )
+
+    client = _DataClient(api_key=alpaca_key, secret_key=alpaca_secret)
 
     try:
         req = StockBarsRequest(
