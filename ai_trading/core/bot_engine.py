@@ -5588,11 +5588,14 @@ def get_strategies():
 stream = None
 
 
-def _initialize_alpaca_clients() -> None:
-    """Initialize Alpaca trading clients lazily to avoid import delays."""
+def _initialize_alpaca_clients() -> bool:
+    """Initialize Alpaca trading clients lazily to avoid import delays.
+
+    Returns ``True`` on success, ``False`` if initialization fails or is skipped.
+    """
     global trading_client, data_client, stream
     if trading_client is not None:
-        return  # Already initialized
+        return True  # Already initialized
     for attempt in (1, 2):
         try:
             key, secret, base_url = _ensure_alpaca_env_or_raise()
@@ -5624,7 +5627,7 @@ def _initialize_alpaca_clients() -> None:
                 key="alpaca_init_skipped",
             )
             logger.info("ALPACA_DIAG", extra=_redact(diag))
-            return
+            return False
         try:
             from alpaca.trading.client import TradingClient as AlpacaREST
 
@@ -5641,7 +5644,7 @@ def _initialize_alpaca_clients() -> None:
             )
             trading_client = None
             data_client = None
-            return
+            return False
         try:
             trading_client = AlpacaREST(
                 api_key=key,
@@ -5657,13 +5660,14 @@ def _initialize_alpaca_clients() -> None:
             )
             trading_client = None
             data_client = None
-            return
+            return False
         data_client = trading_client
         logger.info(
             "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
         )
         stream = None  # initialize stream lazily elsewhere if/when required
-        return
+        return True
+    return False
 
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
@@ -13499,6 +13503,13 @@ def main() -> None:
     logger_once.info(f"Config: TRADING_MODE={cfg.trading_mode}")
 
     _reload_env()
+
+    # Initialize Alpaca client before starting the main loop
+    if not _initialize_alpaca_clients() or trading_client is None:
+        logger.critical(
+            "Alpaca client initialization failed; terminating startup"
+        )
+        sys.exit(1)
 
     # AI-AGENT-REF: Ensure only one bot instance is running
     try:
