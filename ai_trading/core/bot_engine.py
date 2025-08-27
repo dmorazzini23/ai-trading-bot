@@ -13,7 +13,7 @@ import os
 import sys
 from typing import Any, Dict, Iterable, cast
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 from json import JSONDecodeError
 # Safe 'requests' import with stub + RequestException binding
@@ -815,9 +815,18 @@ def _reset_config_log() -> None:
     _CONFIG_LOGGED = False
 
 
+@lru_cache(maxsize=1)
+def _get_trading_config() -> TradingConfig:
+    """Return cached ``TradingConfig`` and emit log once."""
+    cfg = TradingConfig.from_env()
+    _log_config_loaded()
+    return cfg
+
+
 def _reload_env(path: str | None = None, *, override: bool = True) -> str | None:
     """Reload environment variables and reset log guard."""
     result = config.reload_env(path, override=override)
+    _get_trading_config.cache_clear()
     _reset_config_log()
     return result
 
@@ -1081,8 +1090,7 @@ else:  # pragma: no cover - executed only when SDK missing
 try:
     # Only import config module, don't validate at import time
     from ai_trading.config.settings import get_settings
-
-    _log_config_loaded()
+    _get_trading_config()
 except (
     FileNotFoundError,
     PermissionError,
@@ -2950,7 +2958,7 @@ class BotMode:
     def __init__(self, mode: str = "balanced") -> None:
         self.mode = mode.lower()
         # AI-AGENT-REF: canonical TradingConfig build
-        self.config = config.TradingConfig.from_env()
+        self.config = _get_trading_config()
         params: dict[str, float] = {}
         from ai_trading import settings as S
         try:
@@ -2964,7 +2972,6 @@ class BotMode:
             except Exception:
                 pass
         self.params = params
-        _log_config_loaded()
 
     def set_parameters(self) -> dict[str, float]:
         """Return trading parameters for the current mode.
