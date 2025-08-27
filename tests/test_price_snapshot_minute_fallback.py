@@ -26,8 +26,7 @@ def test_price_snapshot_minute_fallback(monkeypatch):
 
     monkeypatch.setattr(portfolio_core, "safe_get_stock_bars", fake_safe_get_stock_bars)
     monkeypatch.setattr(portfolio_core, "StockBarsRequest", DummyRequest)
-    monkeypatch.setattr(portfolio_core, "TimeFrame", lambda *a, **k: None)
-    monkeypatch.setattr(portfolio_core, "TimeFrameUnit", SimpleNamespace(Minute=None))
+    monkeypatch.setattr(portfolio_core, "TimeFrame", SimpleNamespace(Minute=None))
 
     price = portfolio_core.get_latest_price(ctx, "SPY")
     assert price == 123.0

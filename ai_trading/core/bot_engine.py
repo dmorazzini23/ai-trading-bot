@@ -94,20 +94,12 @@ from ai_trading.data.bars import (
     safe_get_stock_bars,
     StockBarsRequest,
     TimeFrame,
-    TimeFrameUnit,
 )
 from ai_trading.core.runtime import (
     BotRuntime,
     build_runtime,
     enhance_runtime_with_context,
 )
-
-# Ensure fallback TimeFrame shim exposes enum-style attributes.
-if not hasattr(TimeFrame, "Day"):
-    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)  # type: ignore[attr-defined]
-if not hasattr(TimeFrame, "Minute"):
-    TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
-
 
 def _parse_timeframe(tf: Any) -> TimeFrame:
     """Map configuration values to :class:`TimeFrame` enums."""
@@ -169,9 +161,7 @@ except ImportError:  # pragma: no cover - optional dependency
     FinnhubAPIException = Exception  # type: ignore
     FINNHUB_AVAILABLE = False
 
-StockBarsRequest.__doc__ = "Backward-compatibility shim for ai_trading.data.bars.StockBarsRequest."
-TimeFrame.__doc__ = "Backward-compatibility shim for ai_trading.data.bars.TimeFrame."
-TimeFrameUnit.__doc__ = "Backward-compatibility shim for ai_trading.data.bars.TimeFrameUnit."
+
 
 
 def _rf_class():
@@ -383,7 +373,6 @@ __all__ = [
     # Backwards-compatibility shims
     "StockBarsRequest",
     "TimeFrame",
-    "TimeFrameUnit",
     "safe_get_stock_bars",
     "BotRuntime",
     "build_runtime",

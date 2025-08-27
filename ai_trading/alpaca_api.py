@@ -171,8 +171,7 @@ def get_bars_df(
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
     from alpaca.common.exceptions import APIError
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data import StockBarsRequest, TimeFrame, TimeFrameUnit
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest(bars=True)

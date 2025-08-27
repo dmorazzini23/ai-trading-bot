@@ -58,6 +58,7 @@ mods = [
     "portalocker",
     "alpaca",
     "alpaca.trading.client",
+    "alpaca.data",
     "alpaca.data.timeframe",
     "alpaca.data.requests",
     "finnhub",
@@ -105,6 +106,9 @@ sys.modules["alpaca"].APIError = Exception
 sys.modules["alpaca.trading.client"] = types.ModuleType("alpaca.trading.client")
 sys.modules["alpaca.trading.client"].TradingClient = object
 sys.modules["alpaca.trading.client"].APIError = Exception
+sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
+sys.modules.setdefault("alpaca.data.requests", types.ModuleType("alpaca.data.requests"))
+sys.modules.setdefault("alpaca.data.timeframe", types.ModuleType("alpaca.data.timeframe"))
 
 
 class _TClient:
@@ -160,6 +164,9 @@ class _StockBarsRequest:
     def __init__(self, *a, **k):
         pass
 
+sys.modules["alpaca.data.requests"].StockBarsRequest = _StockBarsRequest
+sys.modules["alpaca.data"].StockBarsRequest = _StockBarsRequest
+
 
 
 
@@ -199,6 +206,11 @@ class _TFUnit:
     Day = "Day"
 
 
+
+
+sys.modules["alpaca.data.timeframe"].TimeFrame = _TF
+sys.modules["alpaca.data.timeframe"].TimeFrameUnit = _TFUnit
+sys.modules["alpaca.data"].TimeFrame = _TF
 
 
 class _FClient:

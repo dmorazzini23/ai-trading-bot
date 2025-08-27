@@ -17,6 +17,7 @@ mods = [
     "portalocker",
     "alpaca",
     "alpaca.trading.client",
+    "alpaca.data",
     "alpaca.data.timeframe",
     "alpaca.data.requests",
     "sklearn.ensemble",
@@ -107,6 +108,8 @@ class _DummyTimeFrame:
 
 sys.modules["alpaca.data.timeframe"].TimeFrame = _DummyTimeFrame
 sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
+sys.modules["alpaca.data"].TimeFrame = _DummyTimeFrame
+sys.modules["alpaca.data"].StockBarsRequest = _DummyReq
 
 sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
 sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
