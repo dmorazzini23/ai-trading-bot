@@ -43,8 +43,8 @@ def test_day_timeframe_normalized(mock_rest_cls):
 
     df = get_bars_df("SPY", "Day", feed="iex", adjustment="all")
     mock_rest_cls.assert_called_once_with(bars=True)
-    args, kwargs = mock_rest.get_stock_bars.call_args
-    assert kwargs["timeframe"] in ("1Day", "1D")
+    (req,), kwargs = mock_rest.get_stock_bars.call_args
+    assert req.timeframe in ("1Day", "1D")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
@@ -58,8 +58,8 @@ def test_tf_object_normalized(mock_rest_cls):
 
     df = get_bars_df("SPY", TimeFrame(1, TimeFrameUnit.Day), feed="iex", adjustment="all")
     mock_rest_cls.assert_called_once_with(bars=True)
-    args, kwargs = mock_rest.get_stock_bars.call_args
-    assert kwargs["timeframe"] in ("1Day", "1D")
+    (req,), kwargs = mock_rest.get_stock_bars.call_args
+    assert req.timeframe in ("1Day", "1D")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
@@ -73,6 +73,6 @@ def test_minute_normalized(mock_rest_cls):
 
     df = get_bars_df("SPY", "Minute", feed="iex", adjustment="all")
     mock_rest_cls.assert_called_once_with(bars=True)
-    args, kwargs = mock_rest.get_stock_bars.call_args
-    assert kwargs["timeframe"] in ("1Min", "1Minute")
+    (req,), kwargs = mock_rest.get_stock_bars.call_args
+    assert req.timeframe in ("1Min", "1Minute")
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
