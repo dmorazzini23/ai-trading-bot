@@ -188,6 +188,25 @@ def _validate_trading_api(api: Any) -> bool:
         if hasattr(api, "get_orders"):
             def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
                 """Proxy ``list_orders`` to ``get_orders`` with compatible kwargs."""
+
+                status = kwargs.pop("status", None)
+                if status == "open":
+                    try:  # pragma: no cover - optional import paths
+                        from alpaca.trading.enums import OrderStatus  # type: ignore
+                        from alpaca.trading.requests import (  # type: ignore
+                            GetOrdersRequest,
+                        )
+
+                        req = GetOrdersRequest(statuses=[OrderStatus.OPEN])  # type: ignore
+                        try:
+                            return api.get_orders(*args, filter=req, **kwargs)  # type: ignore[attr-defined]
+                        except TypeError:
+                            return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
+                    except Exception:
+                        kwargs["status"] = "open"
+                        return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+                if status is not None:
+                    kwargs["status"] = status
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
@@ -209,7 +228,14 @@ def _validate_trading_api(api: Any) -> bool:
 
 
 def list_open_orders(api: Any):
-    """Return all open orders from ``api``."""
+    """Return all open orders from ``api``.
+
+    ``_validate_trading_api`` shims ``list_orders`` so that passing
+    ``status="open"`` works across Alpaca SDK versions. Newer clients expect a
+    ``GetOrdersRequest`` with ``OrderStatus.OPEN`` while older versions accept
+    the legacy string directly.
+    """
+
     return api.list_orders(status="open")
 
 
