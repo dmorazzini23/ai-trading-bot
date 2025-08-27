@@ -1,18 +1,22 @@
 import logging
-'\nSimple validation script for critical trading bot fixes.\n\nThis script validates that the fixes are properly implemented by checking\nthe actual code changes rather than running complex tests.\n'
+from pathlib import Path
 import os
 import re
 import sys
 
+"""Simple validation script for critical trading bot fixes.
+
+This script validates that the fixes are properly implemented by checking
+the actual code changes rather than running complex tests."""
+
 def validate_drawdown_circuit_breaker_fix():
     """Validate that the drawdown circuit breaker UnboundLocalError is fixed."""
     logging.info('1. Validating drawdown circuit breaker fix...')
-    bot_engine_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/bot_engine.py'
-    if not os.path.exists(bot_engine_path):
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if not bot_engine_path.exists():
         logging.info('   ❌ bot_engine.py not found')
         return False
-    with open(bot_engine_path) as f:
-        content = f.read()
+    content = bot_engine_path.read_text()
     fix_pattern = '# AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block\\s*status = ctx\\.drawdown_circuit_breaker\\.get_status\\(\\)'
     if re.search(fix_pattern, content):
         logging.info('   ✅ Status variable scoping fix found')
@@ -49,21 +53,19 @@ def validate_drawdown_circuit_breaker_fix():
 def validate_meta_learning_price_validation_fix():
     """Validate that meta-learning price validation improvements are implemented."""
     logging.info('2. Validating meta-learning price validation fix...')
-    meta_learning_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/meta_learning.py'
-    bot_engine_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/bot_engine.py'
+    meta_learning_path = Path('ai_trading/meta_learning.py')
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
     fixes_found = 0
-    if os.path.exists(meta_learning_path):
-        with open(meta_learning_path) as f:
-            content = f.read()
+    if meta_learning_path.exists():
+        content = meta_learning_path.read_text()
         if 'This may indicate data quality issues or insufficient trading history' in content:
             logging.info('   ✅ Meta-learning enhanced error message found')
             fixes_found += 1
         if 'logger.warning(' in content and 'METALEARN_INVALID_PRICES' in content:
             logging.info('   ✅ Meta-learning uses warning instead of error')
             fixes_found += 1
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if 'This suggests price data corruption or insufficient trading history' in content:
             logging.info('   ✅ Bot engine enhanced error message found')
             fixes_found += 1
@@ -77,12 +79,11 @@ def validate_meta_learning_price_validation_fix():
 def validate_data_fetching_optimization_fix():
     """Validate that data fetching optimizations are implemented."""
     logging.info('3. Validating data fetching optimization fix...')
-    data_fetcher_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/data_fetcher.py'
-    if not os.path.exists(data_fetcher_path):
+    data_fetcher_path = Path('ai_trading/data_fetcher.py')
+    if not data_fetcher_path.exists():
         logging.info('   ❌ data_fetcher.py not found')
         return False
-    with open(data_fetcher_path) as f:
-        content = f.read()
+    content = data_fetcher_path.read_text()
     fixes_found = 0
     if 'MINUTE_CACHE_HIT' in content and 'cache_age_minutes' in content:
         logging.info('   ✅ Enhanced cache hit logging found')
@@ -100,12 +101,11 @@ def validate_data_fetching_optimization_fix():
 def validate_circuit_breaker_error_handling_fix():
     """Validate that enhanced circuit breaker error handling is implemented."""
     logging.info('4. Validating circuit breaker error handling fix...')
-    circuit_breaker_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/risk/circuit_breakers.py'
-    if not os.path.exists(circuit_breaker_path):
+    circuit_breaker_path = Path('ai_trading/risk/circuit_breakers.py')
+    if not circuit_breaker_path.exists():
         logging.info('   ❌ circuit_breakers.py not found')
         return False
-    with open(circuit_breaker_path) as f:
-        content = f.read()
+    content = circuit_breaker_path.read_text()
     fixes_found = 0
     if 'if current_equity is None or not isinstance(current_equity, (int, float)):' in content:
         logging.info('   ✅ Input validation for equity found')

@@ -1,10 +1,12 @@
 import logging
-'\nVerification test that the critical fixes are properly implemented in the code.\nThis tests the actual code changes without requiring a full environment setup.\n'
+from pathlib import Path
+
+"""Verification test that the critical fixes are properly implemented in the code.
+This tests the actual code changes without requiring a full environment setup."""
 
 def test_timestamp_fix_in_data_fetcher():
     """Verify the RFC3339 timestamp fix is in data_fetcher.py"""
-    with open('data_fetcher.py') as f:
-        content = f.read()
+    content = Path('ai_trading/data_fetcher.py').read_text()
     assert ".replace('+00:00', 'Z')" in content, 'RFC3339 timestamp fix not found in data_fetcher.py'
     lines = content.split('\n')
     start_fixed = any((".replace('+00:00', 'Z')" in line and 'start' in line for line in lines))
@@ -15,8 +17,7 @@ def test_timestamp_fix_in_data_fetcher():
 
 def test_position_sizing_fix_in_bot_engine():
     """Verify the position sizing fixes are in bot_engine.py"""
-    with open('bot_engine.py') as f:
-        content = f.read()
+    content = Path('ai_trading/core/bot_engine.py').read_text()
     assert 'Fix zero quantity calculations' in content, 'Position sizing fix comment not found'
     assert 'balance > 1000 and target_weight > 0.001' in content, 'Minimum position logic not found'
     assert 'max(1, int(1000 / current_price))' in content, 'Minimum $1000 position logic not found'
@@ -26,8 +27,7 @@ def test_position_sizing_fix_in_bot_engine():
 
 def test_meta_learning_fix():
     """Verify the meta learning price conversion fixes are in meta_learning.py"""
-    with open('meta_learning.py') as f:
-        content = f.read()
+    content = Path('ai_trading/meta_learning.py').read_text()
     assert 'Fix meta learning data types' in content, 'Meta learning fix comment not found'
     assert 'pd.to_numeric' in content, 'Price conversion logic not found'
     assert 'errors="coerce"' in content, 'Error handling for price conversion not found'
@@ -36,8 +36,7 @@ def test_meta_learning_fix():
 
 def test_stale_data_bypass_fix():
     """Verify the stale data bypass is in bot_engine.py"""
-    with open('bot_engine.py') as f:
-        content = f.read()
+    content = Path('ai_trading/core/bot_engine.py').read_text()
     assert 'ALLOW_STALE_DATA_STARTUP' in content, 'Stale data bypass environment variable not found'
     assert 'BYPASS_STALE_DATA_STARTUP' in content, 'Stale data bypass logic not found'
     assert 'stale_data = summary.get("stale_data", [])' in content, 'Stale data extraction not found'
@@ -45,11 +44,14 @@ def test_stale_data_bypass_fix():
 
 def test_all_fixes_integrated():
     """Verify all critical fixes are properly integrated"""
-    files_to_check = ['data_fetcher.py', 'bot_engine.py', 'meta_learning.py']
+    files_to_check = [
+        'ai_trading/data_fetcher.py',
+        'ai_trading/core/bot_engine.py',
+        'ai_trading/meta_learning.py',
+    ]
     for filename in files_to_check:
         try:
-            with open(filename) as f:
-                content = f.read()
+            content = Path(filename).read_text()
             compile(content, filename, 'exec')
             logging.info(f'✓ {filename} syntax is valid')
         except SyntaxError as e:

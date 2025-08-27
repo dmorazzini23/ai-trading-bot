@@ -4,6 +4,7 @@
 import math
 import os
 import unittest
+from pathlib import Path
 
 
 class TestMyFixes(unittest.TestCase):
@@ -11,8 +12,8 @@ class TestMyFixes(unittest.TestCase):
 
     def test_meta_learning_thresholds_reduced(self):
         """Test that meta-learning thresholds are reduced to allow easier activation."""
-        with open("bot_engine.py") as f:
-            content = f.read()
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        content = bot_engine_path.read_text()
 
         # Should have reduced min_trades from 3 to 2
         self.assertIn('METALEARN_MIN_TRADES", "2"', content)
@@ -53,8 +54,8 @@ class TestMyFixes(unittest.TestCase):
 
     def test_position_limit_rebalancing(self):
         """Test that position limits allow rebalancing."""
-        with open("bot_engine.py") as f:
-            content = f.read()
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        content = bot_engine_path.read_text()
 
         # Function should accept symbol parameter
         self.assertIn('def too_many_positions(ctx: BotContext, symbol: Optional[str] = None)', content)

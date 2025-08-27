@@ -1,17 +1,19 @@
 import logging
-'\nFinal validation script for critical trading bot issue fixes.\nDemonstrates that each fix addresses the specific issues mentioned in the problem statement.\n'
+from pathlib import Path
 import os
 import sys
+
+"""Final validation script for critical trading bot issue fixes.
+Demonstrates that each fix addresses the specific issues mentioned in the problem statement."""
 
 def validate_issue_1_meta_learning():
     """Validate Issue 1: Meta-Learning System Not Functioning"""
     logging.info('🔍 Issue 1: Meta-Learning System Not Functioning')
     logging.info("   Problem: 'METALEARN_EMPTY_TRADE_LOG - No valid trades found' despite successful trades")
     logging.info('   Root Cause: Audit-to-meta conversion not triggered automatically')
-    bot_engine_path = 'bot_engine.py'
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if 'from meta_learning import validate_trade_data_quality' in content:
             logging.info('   ✅ Fix: Meta-learning trigger added to TradeLogger.log_exit()')
             if 'METALEARN_TRIGGER_CONVERSION' in content:
@@ -25,10 +27,9 @@ def validate_issue_2_sentiment_circuit_breaker():
     logging.info('\n🔍 Issue 2: Sentiment Circuit Breaker Stuck Open')
     logging.info('   Problem: Opens after 3 failures, stays open for entire cycle')
     logging.info('   Root Cause: Threshold too low (3) and recovery timeout insufficient (300s)')
-    bot_engine_path = 'bot_engine.py'
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if 'SENTIMENT_FAILURE_THRESHOLD = 8' in content:
             logging.info('   ✅ Fix: Failure threshold increased 3 → 8 (+167% tolerance)')
             if 'SENTIMENT_RECOVERY_TIMEOUT = 900' in content:
@@ -65,10 +66,9 @@ def validate_issue_4_position_limits():
     logging.info("   Problem: Bot stops at 10 positions with 'SKIP_TOO_MANY_POSITIONS'")
     logging.info('   Root Cause: MAX_PORTFOLIO_POSITIONS too low for modern portfolio sizes')
     fixes_found = 0
-    bot_engine_path = 'bot_engine.py'
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if '"20"' in content and 'MAX_PORTFOLIO_POSITIONS' in content:
             logging.info('   ✅ Fix: bot_engine.py default increased to 20 positions')
             fixes_found += 1

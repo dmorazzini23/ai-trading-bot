@@ -11,7 +11,7 @@ def test_validate_trading_parameters_no_name_error():
     """
 
     # Read the bot_engine.py source code
-    src_path = Path(__file__).resolve().parents[1] / 'bot_engine.py'
+    src_path = Path(__file__).resolve().parents[1] / 'ai_trading' / 'core' / 'bot_engine.py'
     source = src_path.read_text()
 
     # Parse the AST
@@ -67,7 +67,7 @@ def test_validate_trading_parameters_no_name_error():
 def test_buy_threshold_definition_order():
     """Specific test to ensure BUY_THRESHOLD is defined before validate_trading_parameters call."""
 
-    src_path = Path(__file__).resolve().parents[1] / 'bot_engine.py'
+    src_path = Path(__file__).resolve().parents[1] / 'ai_trading' / 'core' / 'bot_engine.py'
     source = src_path.read_text()
     lines = source.split('\n')
 

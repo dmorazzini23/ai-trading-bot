@@ -6,7 +6,12 @@ logger = logging.getLogger(__name__)
 
 def test_force_full_coverage():
     """Force coverage of critical modules to ensure all code paths are tested."""
-    modules = ["bot_engine.py", "data_fetcher.py", "signals.py", "alpaca_api.py"]
+    modules = [
+        "ai_trading/core/bot_engine.py",
+        "ai_trading/data_fetcher.py",
+        "ai_trading/signals.py",
+        "ai_trading/alpaca_api.py",
+    ]
     for fname in modules:
         path = pathlib.Path(fname)
         if not path.exists():
