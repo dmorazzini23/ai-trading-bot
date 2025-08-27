@@ -89,11 +89,10 @@ class RiskEngine:
                 raise ValueError(
                     'ALPACA_OAUTH cannot be used with ALPACA_API_KEY/ALPACA_SECRET_KEY'
                 )
-            has_keypair = api_key and secret
-            if base_url and oauth:
+            if oauth:
                 self.data_client = TradingClient(oauth=oauth, base_url=base_url)
-            elif base_url and has_keypair:
-                self.data_client = TradingClient(api_key, secret, base_url)
+            elif api_key and secret:
+                self.data_client = TradingClient(api_key, secret, base_url=base_url)
         except (APIError, TypeError, AttributeError, OSError) as e:
             logger.warning('Could not initialize TradingClient: %s', e)
         self._returns: list[float] = []
