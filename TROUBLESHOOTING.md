@@ -156,7 +156,7 @@ try:
     account = client.get_account()
     print(f'Connected to Alpaca. Account: {account.id}')
     print(f'Buying power: ${account.buying_power}')
-except Exception as e:
+except APIError as e:
     print(f'Alpaca connection failed: {e}')
 PY
 
@@ -318,13 +318,14 @@ def debug_order_issue(symbol, quantity, side):
             side=side,
         )
         print("Order validation: PASS")
-    except ValueError as e:
+    except (APIError, ValueError) as e:
         print("Order validation: FAIL")
         print(f"Error: {e}")
 
 # Example usage
 if __name__ == "__main__":
     debug_order_issue('AAPL', 10, 'buy')
+```
 ```
 
 **Position Sizing Problems:**

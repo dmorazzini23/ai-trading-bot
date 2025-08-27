@@ -96,7 +96,7 @@ Moved portfolio optimization and transaction cost modules from `scripts/` to the
 - **Updated:** `ai_trading/portfolio/__init__.py` to export `PortfolioDecision`, `PortfolioOptimizer`, `create_portfolio_optimizer`
 
 **2. Transaction Cost Calculator**
-- **Moved from:** `scripts/transaction_cost_calculator.py` 
+- **Moved from:** `scripts/transaction_cost_calculator.py`
 - **Moved to:** `ai_trading/execution/transaction_costs.py`
 - **Updated:** `ai_trading/signals.py` to import from new location
 
@@ -140,7 +140,7 @@ The following new environment variables have been added to TradingConfig and can
 - `MAX_BACKOFF_INTERVAL` (default: 60.0) - Maximum backoff interval in seconds
 - `PCT` (default: 0.05) - Percentage threshold for various operations
 
-### Model and Scheduler Configuration  
+### Model and Scheduler Configuration
 - `MODEL_PATH` (default: None) - Path to ML model files
 - `SCHEDULER_ITERATIONS` (default: 0) - Number of scheduler iterations (0 = infinite)
 - `SCHEDULER_SLEEP_SECONDS` (default: 60) - Sleep interval between scheduler cycles
@@ -202,11 +202,15 @@ Alpaca SDK imports are now at module top level in `ai_trading/execution/live_tra
 
 **Impact**: Missing Alpaca SDK will cause immediate import errors.
 
+### 6. Tooling Updates
+- Test dependency hints drop the legacy `alpaca_trade_api` package and now
+  expect the modern `alpaca-py` SDK (`import alpaca`).
+
 ## Enhanced Features
 
 ### 1. TradingConfig Enhancements
 - All missing attributes now have proper defaults
-- Environment variable overrides for all parameters  
+- Environment variable overrides for all parameters
 - Safe dictionary export with `to_dict(safe=True)` method that redacts secrets
 - Comprehensive validation for new fields
 
