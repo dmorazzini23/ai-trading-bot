@@ -80,7 +80,7 @@ def check_timeouts():
 def check_minute_cache():
     """Check minute-cache freshness helpers and validation."""
     logging.info('✓ Minute-cache freshness:')
-    data_fetcher_path = Path('ai_trading/data_fetcher.py')
+    data_fetcher_path = Path('ai_trading/data/fetch.py')
     if data_fetcher_path.exists():
         content = data_fetcher_path.read_text()
         assert 'def get_cached_minute_timestamp' in content

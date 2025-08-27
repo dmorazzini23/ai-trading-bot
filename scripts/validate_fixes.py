@@ -75,9 +75,9 @@ def validate_meta_learning_price_validation_fix():
 def validate_data_fetching_optimization_fix():
     """Validate that data fetching optimizations are implemented."""
     logging.info('3. Validating data fetching optimization fix...')
-    data_fetcher_path = Path('ai_trading/data_fetcher.py')
+    data_fetcher_path = Path('ai_trading/data/fetch.py')
     if not data_fetcher_path.exists():
-        logging.info('   ❌ data_fetcher.py not found')
+        logging.info('   ❌ data/fetch.py not found')
         return False
     content = data_fetcher_path.read_text()
     fixes_found = 0
