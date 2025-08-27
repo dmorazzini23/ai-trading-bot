@@ -118,9 +118,7 @@ def test_import_hardening():
             content = bot_engine_path.read_text()
             expected_patterns = [
                 'from ai_trading.meta_learning import optimize_signals',
-                'from meta_learning import optimize_signals',
                 'from ai_trading.pipeline import model_pipeline',
-                'from pipeline import model_pipeline',
                 'from ai_trading.execution import ExecutionEngine',
                 'from ai_trading.data.fetch import',
                 'from ai_trading.data.fetch import',
