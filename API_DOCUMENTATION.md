@@ -23,7 +23,7 @@ The AI Trading Bot provides both internal APIs for component interaction and ext
 #### `bot_engine.py` - Main Trading Engine
 
 ```python
-from bot_engine import pre_trade_health_check, run_all_trades_worker, BotState
+from ai_trading.core.bot_engine import pre_trade_health_check, run_all_trades_worker, BotState
 
 def pre_trade_health_check() -> bool:
     """
@@ -138,7 +138,7 @@ class DataProvider:
 #### `signals.py` - Trading Signals
 
 ```python
-from signals import generate_signals, SignalType, SignalStrength
+from ai_trading.signals import generate_signals, SignalType, SignalStrength
 
 def generate_signals(
     data: pd.DataFrame,
@@ -504,7 +504,7 @@ When rate limits are exceeded, a 429 status code is returned:
 ### Python Client
 
 ```python
-from ai_trading_client import TradingBotClient
+from ai_trading.client import TradingBotClient
 
 client = TradingBotClient(api_key="your_api_key")
 
@@ -590,6 +590,8 @@ python -m ai_trading.mock_server --port 5001
 Sample API responses for testing:
 
 ```python
+# Import the client library
+from ai_trading.client import TradingBotClient
 # Test configuration
 TEST_CONFIG = {
     "base_url": "http://localhost:5001",
