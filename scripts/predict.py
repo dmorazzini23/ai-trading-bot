@@ -10,7 +10,7 @@ import joblib
 import pandas as pd
 from ai_trading.config.management import TradingConfig, reload_env
 from ai_trading.utils.http import http, HTTP_TIMEOUT
-from scripts.retrain_model import prepare_indicators
+from ai_trading.features.prepare import prepare_indicators
 
 config = TradingConfig.from_env()
 _sentiment_lock = Lock()
