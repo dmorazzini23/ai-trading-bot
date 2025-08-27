@@ -59,8 +59,10 @@ mods = [
     "flask",
     "schedule",
     "portalocker",
-        "alpaca_trade_api",
-    "alpaca_trade_api.rest",
+    "alpaca",
+    "alpaca.trading.client",
+    "alpaca.data.timeframe",
+    "alpaca.data.requests",
     "finnhub",
     "sklearn.ensemble",
     "sklearn.linear_model",
@@ -101,9 +103,11 @@ req_mod.RequestException = Exception
 sys.modules["requests.exceptions"] = exc_mod
 sys.modules["urllib3"] = types.ModuleType("urllib3")
 sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
-sys.modules["alpaca_trade_api"].REST = object
-sys.modules["alpaca_trade_api"].APIError = Exception
-sys.modules["alpaca_trade_api.rest"].APIError = Exception
+sys.modules["alpaca"].TradingClient = object
+sys.modules["alpaca"].APIError = Exception
+sys.modules["alpaca.trading.client"] = types.ModuleType("alpaca.trading.client")
+sys.modules["alpaca.trading.client"].TradingClient = object
+sys.modules["alpaca.trading.client"].APIError = Exception
 
 
 class _TClient:

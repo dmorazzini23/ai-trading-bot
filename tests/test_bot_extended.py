@@ -18,8 +18,10 @@ mods = [
     "flask",
     "schedule",
     "portalocker",
-    "alpaca_trade_api",
-    "alpaca_trade_api.rest",
+    "alpaca",
+    "alpaca.trading.client",
+    "alpaca.data.timeframe",
+    "alpaca.data.requests",
     "sklearn.ensemble",
     "sklearn.linear_model",
     "sklearn.decomposition",
@@ -95,8 +97,8 @@ sys.modules["requests"].exceptions = exc_mod
 sys.modules["requests"].get = lambda *a, **k: None
 sys.modules["requests.exceptions"] = exc_mod
 sys.modules["requests"].RequestException = Exception
-sys.modules["alpaca_trade_api"].REST = object
-sys.modules["alpaca_trade_api"].APIError = Exception
+sys.modules["alpaca"].TradingClient = object
+sys.modules["alpaca"].APIError = Exception
 class _RF:
     def __init__(self, *a, **k):
         pass
@@ -117,19 +119,19 @@ class _PCA:
         pass
 
 sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["alpaca_trade_api.rest"].REST = object
-sys.modules["alpaca_trade_api.rest"].APIError = Exception
+sys.modules["alpaca.trading.client"].TradingClient = _FakeREST
+sys.modules["alpaca.trading.client"].APIError = Exception
 class _DummyReq:
     def __init__(self, *a, **k):
         pass
 
-sys.modules["alpaca_trade_api.rest"].StockBarsRequest = _DummyReq
-sys.modules["alpaca_trade_api.rest"].StockLatestQuoteRequest = _DummyReq
+sys.modules["alpaca.data.requests"].StockBarsRequest = _DummyReq
+sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _DummyReq
 class _DummyTimeFrame:
     Day = object()
 
-sys.modules["alpaca_trade_api.rest"].TimeFrame = _DummyTimeFrame
-sys.modules["alpaca_trade_api.rest"].TimeFrameUnit = object
+sys.modules["alpaca.data.timeframe"].TimeFrame = _DummyTimeFrame
+sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
 sys.modules["bs4"] = types.ModuleType("bs4")
 sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
 sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None

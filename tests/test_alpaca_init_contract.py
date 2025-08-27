@@ -68,18 +68,17 @@ def test_initialize_raises_when_missing_creds_and_not_shadow(monkeypatch):
 
 def test_ctx_api_attached_after_initialization(monkeypatch):
     """ensure_alpaca_attached attaches a trading client when creds are present."""
-    pytest.importorskip("alpaca_trade_api")
+    pytest.importorskip("alpaca")
     eng = pytest.importorskip("ai_trading.core.bot_engine")
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
     monkeypatch.setenv("PYTEST_RUNNING", "true")
 
-    class DummyREST:
+    class DummyTradingClient:
         def __init__(self, *a, **k):
             pass
-
-    monkeypatch.setattr("alpaca_trade_api.REST", DummyREST)
+    monkeypatch.setattr("alpaca.trading.client.TradingClient", DummyTradingClient)
     eng.trading_client = None
 
     ctx = types.SimpleNamespace()
@@ -106,21 +105,20 @@ def test_ensure_alpaca_attached_raises_without_creds(monkeypatch):
 
 def test_safe_get_account_attaches_client(monkeypatch):
     """safe_alpaca_get_account attaches a client and returns an account."""
-    pytest.importorskip("alpaca_trade_api")
+    pytest.importorskip("alpaca")
     eng = pytest.importorskip("ai_trading.core.bot_engine")
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
     monkeypatch.setenv("PYTEST_RUNNING", "true")
 
-    class DummyREST:
+    class DummyTradingClient:
         def __init__(self, *a, **k):
             pass
 
         def get_account(self):
             return object()
-
-    monkeypatch.setattr("alpaca_trade_api.REST", DummyREST)
+    monkeypatch.setattr("alpaca.trading.client.TradingClient", DummyTradingClient)
     eng.trading_client = None
 
     ctx = types.SimpleNamespace()

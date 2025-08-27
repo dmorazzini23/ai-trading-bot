@@ -8,12 +8,17 @@ sys.modules.setdefault(
     "pandas_market_calendars",
     types.SimpleNamespace(get_calendar=lambda *a, **k: None),
 )
-alpaca_pkg = types.ModuleType("alpaca_trade_api")
-alpaca_rest = types.ModuleType("alpaca_trade_api.rest")
-alpaca_rest.REST = object
-alpaca_rest.APIError = type("APIError", (Exception,), {})
-sys.modules["alpaca_trade_api"] = alpaca_pkg
-sys.modules["alpaca_trade_api.rest"] = alpaca_rest
+sys.modules.setdefault("alpaca", types.ModuleType("alpaca"))
+sys.modules.setdefault("alpaca.trading", types.ModuleType("alpaca.trading"))
+trading_mod = types.ModuleType("alpaca.trading.client")
+trading_mod.TradingClient = object
+trading_mod.APIError = type("APIError", (Exception,), {})
+sys.modules["alpaca.trading.client"] = trading_mod
+sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
+tf_mod = types.ModuleType("alpaca.data.timeframe")
+tf_mod.TimeFrame = object
+tf_mod.TimeFrameUnit = type("TimeFrameUnit", (object,), {})
+sys.modules["alpaca.data.timeframe"] = tf_mod
 
 tzlocal_mod = types.ModuleType("tzlocal")
 tzlocal_mod.get_localzone = lambda: None
@@ -23,6 +28,12 @@ sys.modules["tzlocal"] = tzlocal_mod
 df_stub = types.ModuleType("ai_trading.data.fetch")
 df_stub.get_bars = df_stub.get_bars_batch = lambda *a, **k: []
 df_stub.get_minute_df = lambda *a, **k: None
+df_stub.DataFetchError = Exception
+df_stub.get_cached_minute_timestamp = lambda *a, **k: 0
+df_stub.last_minute_bar_age_seconds = lambda *a, **k: 0
+data_pkg = types.ModuleType("ai_trading.data")
+data_pkg.fetch = df_stub
+sys.modules["ai_trading.data"] = data_pkg
 sys.modules["ai_trading.data.fetch"] = df_stub
 
 market_pkg = types.ModuleType("ai_trading.market")

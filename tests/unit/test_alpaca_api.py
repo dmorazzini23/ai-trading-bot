@@ -65,7 +65,7 @@ def test_initialize_raises_when_sdk_missing(monkeypatch):
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "alpaca_trade_api":
+        if name == "alpaca":
             raise ModuleNotFoundError
         return real_import(name, *args, **kwargs)
 

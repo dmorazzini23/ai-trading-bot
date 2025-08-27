@@ -4,7 +4,7 @@ import joblib
 import pytest
 pd = pytest.importorskip("pandas")
 
-pytest.importorskip("alpaca_trade_api")
+pytest.importorskip("alpaca")
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with proper imports from core module
 from ai_trading.core.bot_engine import (

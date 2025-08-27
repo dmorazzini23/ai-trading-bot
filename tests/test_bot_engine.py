@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
 
-pytest.importorskip("alpaca_trade_api")
+pytest.importorskip("alpaca")
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from shim module
 import os
@@ -12,7 +12,7 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "x")
 os.environ.setdefault("ALPACA_BASE_URL", "https://example.com")
 os.environ.setdefault("WEBHOOK_SECRET", "x")
 
-import alpaca_trade_api.rest as _alpaca_rest
+import alpaca.trading as _alpaca_trading
 
 _MISSING = [
     "StockLatestQuoteRequest",
@@ -25,8 +25,12 @@ _MISSING = [
 ]
 
 for _name in _MISSING:
-    if not hasattr(_alpaca_rest, _name):
-        setattr(_alpaca_rest, _name, type(_name, (), {"__init__": lambda self, *a, **k: None}))  # pragma: no cover - stubs
+    if not hasattr(_alpaca_trading, _name):
+        setattr(
+            _alpaca_trading,
+            _name,
+            type(_name, (), {"__init__": lambda self, *a, **k: None}),
+        )  # pragma: no cover - stubs
 
 from ai_trading.core.bot_engine import BotEngine, prepare_indicators
 

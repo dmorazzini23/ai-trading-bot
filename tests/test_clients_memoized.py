@@ -3,7 +3,7 @@ import pytest
 from tests.optdeps import require
 
 require("requests")
-require("alpaca_trade_api")
+require("alpaca")
 
 
 def test_clients_built_once(monkeypatch):
@@ -35,8 +35,10 @@ def test_clients_built_once(monkeypatch):
         fake_trading_client,
         raising=False,
     )
-    import alpaca_trade_api
-    monkeypatch.setattr(alpaca_trade_api, "REST", fake_rest, raising=True)
+    import alpaca
+    import sys
+    monkeypatch.setattr(alpaca.trading.client, "TradingClient", fake_rest, raising=True)
+    monkeypatch.setattr(sys.modules["alpaca_trade_api"], "REST", fake_rest, raising=True)
 
     engine = be.BotEngine()
     _ = engine.trading_client

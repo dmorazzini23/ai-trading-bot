@@ -18,7 +18,7 @@ pytestmark = pytest.mark.alpaca
 # Set test environment
 os.environ['PYTEST_RUNNING'] = '1'
 require("requests")
-require("alpaca_trade_api")
+require("alpaca")
 
 from ai_trading.execution.live_trading import AlpacaExecutionEngine
 
