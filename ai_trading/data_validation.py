@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.data_fetcher import get_bars
+from ai_trading.data.fetch import get_bars
 
 # Lazy pandas proxy for on-demand import
 pd = load_pandas()

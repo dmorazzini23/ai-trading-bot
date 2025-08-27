@@ -13,7 +13,7 @@ def run(symbols: list[str], timeout: float | None=None) -> int:
     """Fetch daily data for ``symbols`` using the pooled HTTP client."""
     if not symbols:
         return 0
-    from ai_trading.data_fetcher import _build_daily_url
+    from ai_trading.data.fetch import _build_daily_url
     end = datetime.now(UTC)
     start = end - timedelta(days=7)
     urls = [_build_daily_url(sym, start, end) for sym in symbols]

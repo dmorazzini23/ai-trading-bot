@@ -28,7 +28,21 @@ def check_env_flag():
 def check_import_hardening():
     """Check that imports are hardened across key modules."""
     logging.info('✓ Hardened imports:')
-    files_to_check = {'ai_trading/core/bot_engine.py': ['from ai_trading.meta_learning import optimize_signals', 'from ai_trading.pipeline import model_pipeline', 'from ai_trading.execution import ExecutionEngine', 'from ai_trading.data_fetcher import', 'from ai_trading.indicators import rsi', 'from ai_trading.signals import generate_position_hold_signals', 'from ai_trading import portfolio', 'from ai_trading.alpaca_api import alpaca_get'], 'runner.py': ['from ai_trading.indicators import'], 'backtester.py': ['import ai_trading.signals as signals', 'import ai_trading.data_fetcher as data_fetcher'], 'profile_indicators.py': ['import ai_trading.signals as signals', 'import ai_trading.indicators as indicators']}
+    files_to_check = {
+        'ai_trading/core/bot_engine.py': [
+            'from ai_trading.meta_learning import optimize_signals',
+            'from ai_trading.pipeline import model_pipeline',
+            'from ai_trading.execution import ExecutionEngine',
+            'from ai_trading.data.fetch import',
+            'from ai_trading.indicators import rsi',
+            'from ai_trading.signals import generate_position_hold_signals',
+            'from ai_trading import portfolio',
+            'from ai_trading.alpaca_api import alpaca_get',
+        ],
+        'runner.py': ['from ai_trading.indicators import'],
+        'backtester.py': ['import ai_trading.signals as signals', 'import ai_trading.data.fetch as data_fetcher'],
+        'profile_indicators.py': ['import ai_trading.signals as signals', 'import ai_trading.indicators as indicators'],
+    }
     for filepath, required_imports in files_to_check.items():
         if Path(filepath).exists():
             content = Path(filepath).read_text()
@@ -77,7 +91,7 @@ def check_minute_cache():
     if bot_engine_path.exists():
         content = bot_engine_path.read_text()
         assert 'def _ensure_data_fresh(symbols, max_age_seconds: int)' in content
-        assert 'from ai_trading.data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds' in content
+        assert 'from ai_trading.data.fetch import get_cached_minute_timestamp, last_minute_bar_age_seconds' in content
         assert '_dt.datetime.now(_dt.timezone.utc).isoformat()' in content
         logging.info('  - Fail fast in bot_engine.py when cached minute data is stale ✓')
         logging.info('  - Logs UTC timestamps ✓')

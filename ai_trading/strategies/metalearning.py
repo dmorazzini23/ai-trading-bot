@@ -17,7 +17,7 @@ from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from ai_trading.data_fetcher import get_minute_df
+from ai_trading.data.fetch import get_minute_df
 from ..core.enums import OrderSide, RiskLevel
 from .base import BaseStrategy, StrategySignal
 ML_AVAILABLE = True

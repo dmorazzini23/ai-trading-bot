@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import get_settings
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
-from ai_trading.data_fetcher import get_bars, get_minute_df
-from ai_trading.data_fetcher import get_bars as http_get_bars
+from ai_trading.data.fetch import get_bars, get_minute_df
+from ai_trading.data.fetch import get_bars as http_get_bars
 from ai_trading.logging import get_logger
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
