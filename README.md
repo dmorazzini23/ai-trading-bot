@@ -35,6 +35,16 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 * `GET /metrics` &mdash; Prometheus metrics (returns **501** if metrics are disabled)
 
 Use **one** Alpaca SDK in production (recommended: `alpaca-py`).
+### Self-check
+
+Verify Alpaca connectivity and data access:
+
+```bash
+python ai_trading/scripts/self_check.py
+```
+
+The script fetches a small sample of SPY bars using `alpaca-py` and exits with status **0** on success.
+
 
 ## Config
 

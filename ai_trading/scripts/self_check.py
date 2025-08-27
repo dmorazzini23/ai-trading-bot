@@ -1,34 +1,61 @@
-from ai_trading.alpaca_api import _bars_time_window, get_bars_df
+import os
+import datetime as dt
+from zoneinfo import ZoneInfo
+
+from alpaca.common.exceptions import APIError
+from alpaca.data import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+
 from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.logging import logger
 
-try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import TimeFrame
-except ImportError:  # pragma: no cover - optional dependency
-    TimeFrame = None
+
+def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
+    now = dt.datetime.now(tz=ZoneInfo("UTC"))
+    end = now - dt.timedelta(minutes=1)
+    if timeframe == TimeFrame.Day:
+        days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", 200))
+    else:
+        days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
+    start = end - dt.timedelta(days=days)
+    return start, end
 
 
 def main() -> None:
-    feed = get_env('ALPACA_DATA_FEED', 'iex')
+    feed = get_env("ALPACA_DATA_FEED", "iex")
+    client = StockHistoricalDataClient(
+        get_env("ALPACA_API_KEY"),
+        get_env("ALPACA_SECRET_KEY"),
+    )
     try:
-        df_day = get_bars_df('SPY', TimeFrame.Day)
-        df_min = get_bars_df('SPY', TimeFrame.Minute)
+        req_day = StockBarsRequest(
+            symbol_or_symbols="SPY",
+            timeframe=TimeFrame.Day,
+            feed=feed,
+        )
+        req_min = StockBarsRequest(
+            symbol_or_symbols="SPY",
+            timeframe=TimeFrame.Minute,
+            feed=feed,
+        )
+        df_day = client.get_stock_bars(req_day).df
+        df_min = client.get_stock_bars(req_min).df
         start, end = _bars_time_window(TimeFrame.Day)
         {
-            'msg': 'SELF_CHECK',
-            'feed': feed,
-            'spy_day_rows': len(df_day),
-            'spy_min_rows': len(df_min),
-            'start': start,
-            'end': end,
+            "msg": "SELF_CHECK",
+            "feed": feed,
+            "spy_day_rows": len(df_day),
+            "spy_min_rows": len(df_min),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
         }
-    except (KeyError, ValueError, TypeError):
+    except (APIError, KeyError, ValueError, TypeError):
         raise SystemExit(1)
 
 
-if __name__ == '__main__':
-    if not get_env('PYTEST_RUNNING', '0', cast=bool):
+if __name__ == "__main__":
+    if not get_env("PYTEST_RUNNING", "0", cast=bool):
         snapshot = validate_required_env()
-        logger.debug('ENV_VARS_MASKED', extra=snapshot)
+        logger.debug("ENV_VARS_MASKED", extra=snapshot)
     main()
-

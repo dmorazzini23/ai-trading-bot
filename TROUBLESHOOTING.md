@@ -144,22 +144,21 @@ except Exception as e:
 ```bash
 # Test Alpaca connection
 python -c "
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.common.exceptions import APIError
 import os
-
 try:
-    api = tradeapi.REST(
+    client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+        base_url=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
     )
-    account = api.get_account()
+    account = client.get_account()
     print(f'Connected to Alpaca. Account: {account.id}')
     print(f'Buying power: ${account.buying_power}')
-except Exception as e:
+except APIError as e:
     print(f'Alpaca connection failed: {e}')
 "
-
 # Check API key validity
 curl -u "${ALPACA_API_KEY}:${ALPACA_SECRET_KEY}" \
   https://paper-api.alpaca.markets/v2/account
@@ -278,36 +277,40 @@ if __name__ == "__main__":
 ```python
 # debug_order_validation.py
 from ai_trading.execution.engine import ExecutionEngine
-import alpaca_trade_api as tradeapi
+from alpaca.common.exceptions import APIError
+from alpaca.trading.client import TradingClient
 import os
 
 def debug_order_issue(symbol, quantity, side):
     """Debug order execution issues."""
-    
+
     print(f"Debugging order: {symbol} {side} {quantity}")
-    
+
     # Check account status
-    api = tradeapi.REST(
+    client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        os.getenv('ALPACA_BASE_URL')
+        base_url=os.getenv('ALPACA_BASE_URL'),
     )
-    
-    account = api.get_account()
-    print(f"Account status: {account.status}")
-    print(f"Trading blocked: {account.trading_blocked}")
-    print(f"Buying power: ${account.buying_power}")
-    
+    try:
+        account = client.get_account()
+        print(f"Account status: {account.status}")
+        print(f"Trading blocked: {account.trading_blocked}")
+        print(f"Buying power: ${account.buying_power}")
+        positions = client.get_all_positions()
+    except APIError as e:
+        print(f"Alpaca query failed: {e}")
+        return
+
     # Check position limits
-    positions = api.list_positions()
     current_position = next((p for p in positions if p.symbol == symbol), None)
-    
+
     if current_position:
         print(f"Current position: {current_position.qty} shares")
         print(f"Market value: ${current_position.market_value}")
     else:
         print("No current position")
-    
+
     engine = ExecutionEngine()
 
     # Validate order
@@ -318,13 +321,14 @@ def debug_order_issue(symbol, quantity, side):
             side=side,
         )
         print("Order validation: PASS")
-    except ValueError as e:
+    except (APIError, ValueError) as e:
         print("Order validation: FAIL")
         print(f"Error: {e}")
 
 # Example usage
 if __name__ == "__main__":
     debug_order_issue('AAPL', 10, 'buy')
+```
 ```
 
 **Position Sizing Problems:**
