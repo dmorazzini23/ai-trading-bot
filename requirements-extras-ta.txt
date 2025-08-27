@@ -1,0 +1,4 @@
+# Optional technical analysis extras for Ubuntu 24.04 / CPython 3.12
+# AI-AGENT-REF: install only when WITH_TA=1
+# Install via: WITH_TA=1 pip install -r requirements-extras-ta.txt -c constraints.txt
+pandas-ta==0.3.14b0

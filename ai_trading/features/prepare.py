@@ -8,7 +8,15 @@ logger = logging.getLogger(__name__)
 MFI_PERIOD = 14
 
 def prepare_indicators(df: pd.DataFrame, freq: str='daily') -> pd.DataFrame:
-    ta = importlib.import_module('pandas_ta')
+    try:
+        ta = importlib.import_module('pandas_ta')
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        msg = (
+            "pandas_ta is required for indicator calculations. "
+            "Install it via `pip install pandas-ta` or include it from "
+            "requirements-extras-ta.txt."
+        )
+        raise ImportError(msg) from exc
     df = df.copy()
     rename_map = {}
     variants = {'high': ['High', 'HIGH', 'H', 'h'], 'low': ['Low', 'LOW', 'L', 'l'], 'close': ['Close', 'CLOSE', 'C', 'c'], 'open': ['Open', 'OPEN', 'O', 'o'], 'volume': ['Volume', 'VOLUME', 'V', 'v']}
