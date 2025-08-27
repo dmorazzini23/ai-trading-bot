@@ -1,6 +1,6 @@
 import pytest
 pd = pytest.importorskip("pandas")
-from ai_trading.core.bot_engine import _ensure_df
+from ai_trading.data.bars import _ensure_df
 
 from tests.helpers.asserts import assert_df_like
 
