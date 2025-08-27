@@ -93,7 +93,7 @@ pip install -e .
 # Check for missing environment variables
 python -c "
 import os
-required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'BOT_MODE']
+required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'TRADING_MODE']
 missing = [var for var in required if not os.getenv(var)]
 if missing:
     print(f'Missing: {missing}')

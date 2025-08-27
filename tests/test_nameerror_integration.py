@@ -31,7 +31,7 @@ os.environ.update({
     "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
     "WEBHOOK_SECRET": "fake-test-webhook-not-real",
     "FLASK_PORT": "9000",
-    "BOT_MODE": "balanced",
+    "TRADING_MODE": "balanced",
     "DOLLAR_RISK_LIMIT": "0.05",
     "TESTING": "1",  # Enable testing mode to avoid expensive validations
     "TRADE_LOG_FILE": "test_trades.csv",
