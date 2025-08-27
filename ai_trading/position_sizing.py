@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from math import floor
 from typing import Any
 import os
+import requests
 from ai_trading.logging import get_logger
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
@@ -111,20 +112,29 @@ def _get_equity_from_alpaca(cfg) -> float:
     """
     try:
         base = str(getattr(cfg, 'alpaca_base_url', '')).rstrip('/')
-        url = f'{base}/v2/account'
+        url = f"{base}/v2/account"
         key = getattr(cfg, 'alpaca_api_key', None)
         secret = getattr(cfg, 'alpaca_secret_key_plain', None) or get_alpaca_secret_key_plain()
         if not key or not secret or (not base):
             return 0.0
         s = get_global_session()
         resp = s.get(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret})
-        if getattr(resp, 'status_code', 0) != 200:
-            return 0.0
+        resp.raise_for_status()
         data = resp.json()
         eq = _coerce_float(data.get('equity'), 0.0)
         return eq
-    except Exception:
+    except requests.HTTPError as e:
+        _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": getattr(e.response, "status_code", None)})
         return 0.0
+    except requests.RequestException as e:
+        _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
+        return 0.0
+    except ValueError as e:
+        _log.warning("ALPACA_INVALID_RESPONSE", extra={"url": url, "error": str(e)})
+        return 0.0
+    except Exception:
+        _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
+        raise
 
 def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[float, dict[str, Any]]:
     """Resolve max_position_size according to mode and settings."""
