@@ -40,3 +40,33 @@ def test_intraday_entries_and_exits(monkeypatch):
     exits = tl.evaluate_exits(ctx, {"AAPL": {}})
     assert "AAPL" in entries and "MSFT" in entries
     assert "AAPL" in exits
+
+
+def test_intraday_range_split(monkeypatch):
+    import math
+
+    calls: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+
+    def fake_get_bars_batch(chunk, timeframe, start, end, feed=None):
+        calls.append((pd.Timestamp(start), pd.Timestamp(end)))
+        return {s: _mk_df() for s in chunk}
+
+    monkeypatch.setattr(be, "get_bars_batch", fake_get_bars_batch)
+    monkeypatch.setattr(be, "get_minute_df", lambda *a, **k: _mk_df())
+    monkeypatch.setattr(
+        be,
+        "get_settings",
+        lambda: types.SimpleNamespace(
+            intraday_batch_enable=True, intraday_batch_size=2, batch_fallback_workers=1
+        ),
+    )
+
+    start = "2024-01-01 09:30"
+    end = "2024-02-15 16:00"
+    be._fetch_intraday_bars_chunked(["AAPL"], start, end)
+
+    max_span = pd.Timedelta(days=8)
+    assert calls
+    assert all((e - s) <= max_span for s, e in calls)
+    expected = math.ceil((pd.Timestamp(end) - pd.Timestamp(start)) / max_span)
+    assert len(calls) == expected
