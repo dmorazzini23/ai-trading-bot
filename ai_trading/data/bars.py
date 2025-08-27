@@ -34,17 +34,19 @@ def _log_fallback_window_debug(logger, day_et: date, start_utc: datetime, end_ut
     except (ValueError, TypeError):
         pass
 
-@dataclass
-class StockBarsRequest:
-    symbol_or_symbols: Any
-    timeframe: Any
-    start: Any | None = None
-    end: Any | None = None
-    limit: int | None = None
-    feed: Any | None = None
 try:
-    from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit  # type: ignore
+    from alpaca.data.requests import StockBarsRequest  # type: ignore
 except (ValueError, TypeError, ImportError):
+
+    @dataclass
+    class StockBarsRequest:
+        symbol_or_symbols: Any
+        timeframe: Any
+        start: Any | None = None
+        end: Any | None = None
+        limit: int | None = None
+        feed: Any | None = None
 
     class TimeFrame:
 
