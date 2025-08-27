@@ -53,7 +53,7 @@ def test_basic_validations():
         del os.environ[test_env_var]
     logging.info('\n=== Validation Summary ===')
     logging.info('✓ Final polish changes implemented successfully')
-    logging.info('✓ Bot engine replaced with shim')
+    logging.info('✓ Bot engine confirmed in package')
     logging.info('✓ Legacy imports updated')
     logging.info('✓ Shebangs standardized')
     logging.info('✓ CI matrix configured for multiple Python 3.12 versions')
