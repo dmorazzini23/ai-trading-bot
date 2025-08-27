@@ -547,7 +547,7 @@ class TestTradingWorkflow:
     """Integration tests for complete trading workflows."""
     
     @pytest.mark.integration
-    @patch.dict(os.environ, {'DRY_RUN': 'true', 'BOT_MODE': 'testing'})
+    @patch.dict(os.environ, {'DRY_RUN': 'true', 'TRADING_MODE': 'testing'})
     def test_complete_trading_cycle(self):
         """Test a complete trading cycle in dry run mode."""
         from bot_engine import BotState, run_all_trades_worker
@@ -1014,7 +1014,7 @@ def setup_test_environment():
     """Setup test environment variables."""
     test_env = {
         'DRY_RUN': 'true',
-        'BOT_MODE': 'testing',
+        'TRADING_MODE': 'testing',
         'LOG_LEVEL': 'ERROR',  # Reduce log noise in tests
         'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
     }

@@ -6,8 +6,7 @@ class Settings(BaseModel):
     ALPACA_API_KEY: str = Field(...)
     ALPACA_SECRET_KEY: str = Field(...)
     ALPACA_BASE_URL: str = Field(...)
-    BOT_MODE: str = Field('testing')
-    TRADING_MODE: str = Field('paper')
+    TRADING_MODE: str = Field('testing')
     FORCE_TRADES: bool = Field(False)
 
     @field_validator('ALPACA_API_KEY')
@@ -31,18 +30,11 @@ class Settings(BaseModel):
             raise ValueError('ALPACA_BASE_URL must use HTTPS')
         return v
 
-    @field_validator('BOT_MODE')
-    @classmethod
-    def _bot_mode(cls, v: str) -> str:
-        if v not in {'testing', 'production'}:
-            raise ValueError("BOT_MODE must be one of ['testing', 'production']")
-        return v
-
     @field_validator('TRADING_MODE')
     @classmethod
     def _trading_mode(cls, v: str) -> str:
-        if v not in {'paper', 'live'}:
-            raise ValueError('Invalid TRADING_MODE')
+        if v not in {'testing', 'production'}:
+            raise ValueError("TRADING_MODE must be one of ['testing', 'production']")
         return v
 
     @field_validator('FORCE_TRADES')

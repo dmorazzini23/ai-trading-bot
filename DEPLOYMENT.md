@@ -83,7 +83,7 @@ docker-compose -f docker-compose.dev.yml up
 cp .env.example .env.staging
 
 # Configure staging-specific variables
-export BOT_MODE=staging
+export TRADING_MODE=staging
 export ALPACA_BASE_URL=https://paper-api.alpaca.markets
 export LOG_LEVEL=DEBUG
 
@@ -218,7 +218,7 @@ services:
     container_name: ai-trading-bot
     restart: unless-stopped
     environment:
-      - BOT_MODE=production
+      - TRADING_MODE=production
       - PYTHONUNBUFFERED=1
     env_file:
       - .env.production
@@ -291,7 +291,7 @@ spec:
         ports:
         - containerPort: 5000
         env:
-        - name: BOT_MODE
+        - name: TRADING_MODE
           value: "production"
         envFrom:
         - secretRef:
@@ -508,7 +508,7 @@ echo "Deployment successful!"
 ```bash
 # .env.production
 # Trading Configuration
-BOT_MODE=production
+TRADING_MODE=production
 SCHEDULER_SLEEP_SECONDS=60
 MAX_POSITION_PCT=0.05
 MAX_PORTFOLIO_HEAT=0.15
@@ -555,16 +555,16 @@ def validate_production_config() -> Tuple[bool, List[str]]:
         'ALPACA_API_KEY',
         'ALPACA_SECRET_KEY',
         'API_SECRET_KEY',
-        'BOT_MODE'
+        'TRADING_MODE'
     ]
     
     for var in required_vars:
         if not os.getenv(var):
             errors.append(f"Missing required environment variable: {var}")
     
-    # Validate bot mode
-    if os.getenv('BOT_MODE') not in ['production', 'staging']:
-        errors.append("BOT_MODE must be 'production' or 'staging'")
+    # Validate trading mode
+    if os.getenv('TRADING_MODE') not in ['production', 'staging']:
+        errors.append("TRADING_MODE must be 'production' or 'staging'")
     
     # Validate numeric values
     try:
