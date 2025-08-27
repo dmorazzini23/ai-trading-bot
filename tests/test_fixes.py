@@ -90,7 +90,7 @@ def test_talib_imports():
 def test_screen_universe_logging():
     """Test that screen_universe function has enhanced logging."""
 
-    with open('bot_engine.py') as f:
+    with Path('ai_trading/core/bot_engine.py').open() as f:
         content = f.read()
 
     # Check for enhanced logging statements

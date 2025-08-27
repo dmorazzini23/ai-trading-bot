@@ -2,16 +2,16 @@ import logging
 '\nFinal validation script for critical trading bot issue fixes.\nDemonstrates that each fix addresses the specific issues mentioned in the problem statement.\n'
 import os
 import sys
+from pathlib import Path
 
 def validate_issue_1_meta_learning():
     """Validate Issue 1: Meta-Learning System Not Functioning"""
     logging.info('🔍 Issue 1: Meta-Learning System Not Functioning')
     logging.info("   Problem: 'METALEARN_EMPTY_TRADE_LOG - No valid trades found' despite successful trades")
     logging.info('   Root Cause: Audit-to-meta conversion not triggered automatically')
-    bot_engine_path = 'bot_engine.py'
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if 'from meta_learning import validate_trade_data_quality' in content:
             logging.info('   ✅ Fix: Meta-learning trigger added to TradeLogger.log_exit()')
             if 'METALEARN_TRIGGER_CONVERSION' in content:
@@ -25,10 +25,9 @@ def validate_issue_2_sentiment_circuit_breaker():
     logging.info('\n🔍 Issue 2: Sentiment Circuit Breaker Stuck Open')
     logging.info('   Problem: Opens after 3 failures, stays open for entire cycle')
     logging.info('   Root Cause: Threshold too low (3) and recovery timeout insufficient (300s)')
-    bot_engine_path = 'bot_engine.py'
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if 'SENTIMENT_FAILURE_THRESHOLD = 8' in content:
             logging.info('   ✅ Fix: Failure threshold increased 3 → 8 (+167% tolerance)')
             if 'SENTIMENT_RECOVERY_TIMEOUT = 900' in content:
@@ -43,10 +42,9 @@ def validate_issue_3_quantity_tracking():
     logging.info('   Problem: Mismatches between calculated, submitted, and filled quantities')
     logging.info('   Examples: AMZN calculated=80, submitted=40, filled_qty=80')
     logging.info('   Root Cause: Incorrect quantity tracking in logging')
-    live_trading_path = 'ai_trading/execution/live_trading.py'
-    if os.path.exists(live_trading_path):
-        with open(live_trading_path) as f:
-            content = f.read()
+    live_trading_path = Path('ai_trading/execution/live_trading.py')
+    if live_trading_path.exists():
+        content = live_trading_path.read_text()
         fixes_found = 0
         if '"requested_qty": requested_qty' in content:
             logging.info('   ✅ Fix: FULL_FILL_SUCCESS now logs both requested and filled quantities')
@@ -65,17 +63,15 @@ def validate_issue_4_position_limits():
     logging.info("   Problem: Bot stops at 10 positions with 'SKIP_TOO_MANY_POSITIONS'")
     logging.info('   Root Cause: MAX_PORTFOLIO_POSITIONS too low for modern portfolio sizes')
     fixes_found = 0
-    bot_engine_path = 'bot_engine.py'
-    if os.path.exists(bot_engine_path):
-        with open(bot_engine_path) as f:
-            content = f.read()
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        content = bot_engine_path.read_text()
         if '"20"' in content and 'MAX_PORTFOLIO_POSITIONS' in content:
             logging.info('   ✅ Fix: bot_engine.py default increased to 20 positions')
             fixes_found += 1
-    validate_env_path = os.path.join('ai_trading', 'tools', 'env_validate.py')
-    if os.path.exists(validate_env_path):
-        with open(validate_env_path) as f:
-            content = f.read()
+    validate_env_path = Path('ai_trading/tools/env_validate.py')
+    if validate_env_path.exists():
+        content = validate_env_path.read_text()
         if '"20"' in content and 'MAX_PORTFOLIO_POSITIONS' in content:
             logging.info('   ✅ Fix: env_validate.py default increased to 20 positions')
             fixes_found += 1

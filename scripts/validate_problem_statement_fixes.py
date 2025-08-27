@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+from pathlib import Path
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')
 os.environ.setdefault('ALPACA_SECRET_KEY', 'test_secret')
 os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
@@ -21,7 +22,8 @@ def validate_sentiment_circuit_breaker():
         actual_recovery = sentiment.SENTIMENT_RECOVERY_TIMEOUT
         logging.info(f"Failure threshold: {actual_failures} (expected: {expected_failures}) - {('✓' if actual_failures == expected_failures else '✗')}")
         logging.info(f"Recovery timeout: {actual_recovery}s (expected: {expected_recovery}s) - {('✓' if actual_recovery == expected_recovery else '✗')}")
-        with open('bot_engine.py') as f:
+        bot_engine_path = Path('ai_trading/core/bot_engine.py')
+        with bot_engine_path.open() as f:
             content = f.read()
         bot_failures = re.search('SENTIMENT_FAILURE_THRESHOLD = (\\d+)', content)
         bot_recovery = re.search('SENTIMENT_RECOVERY_TIMEOUT = (\\d+)', content)
@@ -39,7 +41,8 @@ def validate_meta_learning():
     logging.info('\nFix 3: Meta-Learning Minimum Trade Requirement')
     logging.info(str('=' * 50))
     try:
-        with open('bot_engine.py') as f:
+        bot_engine_path = Path('ai_trading/core/bot_engine.py')
+        with bot_engine_path.open() as f:
             content = f.read()
         pattern = 'def load_global_signal_performance\\(\\s*min_trades: int = (\\d+)'
         match = re.search(pattern, content)
@@ -60,7 +63,8 @@ def validate_pltr_sector():
     logging.info('\nFix 5: PLTR Sector Classification')
     logging.info(str('=' * 50))
     try:
-        with open('bot_engine.py') as f:
+        bot_engine_path = Path('ai_trading/core/bot_engine.py')
+        with bot_engine_path.open() as f:
             content = f.read()
         if '"PLTR": "Technology"' in content:
             logging.info('PLTR sector mapping: Technology ✓')
