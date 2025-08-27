@@ -8,8 +8,7 @@ from datetime import UTC
 def test_utc_helper():
     """Test UTC timestamp helper functionality."""
     logging.info('Testing UTC timestamp helper...')
-    sys.path.insert(0, 'ai_trading/utils')
-    from timefmt import format_datetime_utc, utc_now_iso
+    from ai_trading.utils.timefmt import format_datetime_utc, utc_now_iso
     timestamp = utc_now_iso()
     assert timestamp.endswith('Z'), 'UTC timestamp should end with Z'
     assert timestamp.count('Z') == 1, 'UTC timestamp should have exactly one Z'
