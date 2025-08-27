@@ -18,7 +18,7 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 
 ```bash
 python -m pip install -U pip
-pip install -e .
+pip install -e .  # installs alpaca-py==0.42.0
 python -m ai_trading --dry-run
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
@@ -122,7 +122,7 @@ This update introduces several critical enhancements:
 The bot now monitors a diversified portfolio of 24+ symbols across multiple sectors:
 
 - **Technology Leaders**: AAPL, MSFT, GOOGL, AMZN, TSLA, NVDA, AMD, META, NFLX, CRM
-- **Growth Stocks**: UBER, SHOP, SQ, PLTR  
+- **Growth Stocks**: UBER, SHOP, SQ, PLTR
 - **Market ETFs**: SPY, QQQ, IWM
 - **Blue Chip**: JPM, JNJ, PG, KO
 - **Energy**: XOM, CVX
@@ -165,7 +165,7 @@ All Python packages are specified in `requirements.txt`, including:
 - **pandas**, **numpy**: Data processing and numerical computations
 - **pandas-market-calendars**: Exchange session calendars
 - **scikit-learn**: Machine learning algorithms
-- **alpaca-py**: Broker integration
+- **alpaca-py==0.42.0**: Broker integration
 - **tenacity** *(optional)*: Robust retry helpers; falls back to a lightweight internal version if absent
 
 **Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
@@ -209,7 +209,7 @@ pip install "ai-trading-bot[all]"
 When a feature is used without its optional dependency, the code raises a helpful error like:
 
 > Missing optional dependency 'pandas'. Install with: `pip install "ai-trading-bot[pandas]"`
-> 
+>
 > Missing optional dependency 'pandas-market-calendars'. Install with: `pip install "ai-trading-bot[pandas-market-calendars]"`
 
 ### Manual Installation
@@ -322,7 +322,7 @@ docker logs ai-trading-bot
    # Ubuntu/Debian
    sudo apt-get update
    sudo apt-get install python3.12-dev build-essential
-   
+
    # macOS
    brew install python@3.12
    ```
@@ -331,10 +331,10 @@ docker logs ai-trading-bot
    ```bash
    # Verify ta library installation
    python -c "import ta; print('ta library version:', ta.__version__ if hasattr(ta, '__version__') else 'installed')"
-   
+
    # Check bot's technical analysis status
    python -c "from ai_trading.strategies.imports import TA_AVAILABLE; print(f'TA available: {TA_AVAILABLE}')"
-   
+
    # Reinstall if needed
    pip install --upgrade ta==0.11.0
    ```
@@ -508,14 +508,14 @@ class CustomMomentumStrategy(BaseStrategy):
         self.rsi_period = rsi_period
         self.rsi_oversold = rsi_oversold
         self.rsi_overbought = rsi_overbought
-    
+
     def generate_signals(self, data):
         """Generate custom trading signals."""
         signals = {}
-        
+
         # Calculate RSI
         rsi = self.calculate_rsi(data['close'], self.rsi_period)
-        
+
         # Generate signals
         if rsi.iloc[-1] < self.rsi_oversold:
             signals['action'] = 'BUY'
@@ -526,7 +526,7 @@ class CustomMomentumStrategy(BaseStrategy):
         else:
             signals['action'] = 'HOLD'
             signals['strength'] = 0
-            
+
         return signals
 
 # Usage
@@ -650,7 +650,7 @@ python verify_config.py
    ```bash
    # Copy template and edit
    cp .env.example .env
-   
+
    # Edit .env file with your credentials
    nano .env  # or use your preferred editor
    ```
@@ -667,12 +667,12 @@ python verify_config.py
    DATA_LOOKBACK_DAYS_MINUTE=5
    TZ=UTC
    # ALPACA_BASE_URL=https://api.alpaca.markets     # Live trading (DANGER!)
-   
+
    # Bot Configuration
    TRADING_MODE=balanced                    # Trading mode: conservative, balanced, aggressive
    BOT_LOG_FILE=logs/scheduler.log     # Log file location
    LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
-   
+
    # Risk Management
    MAX_POSITION_PCT=0.05               # Maximum 5% per position
    MAX_PORTFOLIO_HEAT=0.15             # Maximum 15% total risk
@@ -1164,7 +1164,7 @@ from ai_trading.new_feature import NewFeature
 
 class TestNewFeature:
     """Test suite for new feature."""
-    
+
     @pytest.fixture
     def sample_data(self):
         """Provide test data."""
@@ -1173,26 +1173,26 @@ class TestNewFeature:
             'price': 100.0,
             'volume': 1000
         }
-    
+
     def test_basic_functionality(self, sample_data):
         """Test basic feature functionality."""
         feature = NewFeature()
         result = feature.process(sample_data)
-        
+
         assert result is not None
         assert result['status'] == 'success'
-    
+
     @patch('ai_trading.new_feature.external_api_call')
     def test_with_mocked_api(self, mock_api, sample_data):
         """Test with mocked external dependencies."""
         mock_api.return_value = {'data': 'mocked'}
-        
+
         feature = NewFeature()
         result = feature.process_with_api(sample_data)
-        
+
         mock_api.assert_called_once()
         assert result['data'] == 'mocked'
-    
+
     @pytest.mark.slow
     def test_heavy_computation(self):
         """Test computationally intensive operations."""
@@ -1277,7 +1277,7 @@ memory_usage = Gauge('memory_usage_bytes', 'Current memory usage')
    # ✅ Correct - use centralized logging
    from ai_trading.logging import get_logger
    logger = get_logger(__name__)
-   
+
    # ❌ Avoid - direct logging imports in new code
    import logging
    logging.basicConfig(...)  # Don't do this
@@ -1327,7 +1327,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 1. **📚 Documentation**: Check our comprehensive guides
    - [Architecture Guide](ARCHITECTURE.md)
-   - [API Documentation](API_DOCUMENTATION.md)  
+   - [API Documentation](API_DOCUMENTATION.md)
    - [Deployment Guide](DEPLOYMENT.md)
    - [Troubleshooting Guide](TROUBLESHOOTING.md)
 
@@ -1442,5 +1442,3 @@ python -m ai_trading --help
 If imports fail for missing scientific packages, ensure you've run
 `bash scripts/bootstrap.sh` or manually installed
 `requirements-dev.txt`.
-
-
