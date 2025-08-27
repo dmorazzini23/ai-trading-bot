@@ -817,6 +817,9 @@ def cleanup_memory():
 
 ```python
 # Check available funds
+from ai_trading.core.bot_engine import list_open_orders
+
+
 def check_buying_power():
     account = api.get_account()
     print(f"Buying power: ${account.buying_power}")
@@ -824,9 +827,12 @@ def check_buying_power():
     print(f"Portfolio value: ${account.portfolio_value}")
 
     # Check pending orders
-    orders = api.list_orders(status='open')
-    pending_value = sum(float(order.qty) * float(order.limit_price or 0)
-                       for order in orders if order.side == 'buy')
+    orders = list_open_orders(api)
+    pending_value = sum(
+        float(order.qty) * float(order.limit_price or 0)
+        for order in orders
+        if order.side == 'buy'
+    )
     print(f"Pending orders value: ${pending_value}")
 ```
 
