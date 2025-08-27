@@ -143,22 +143,22 @@ except Exception as e:
 
 ```bash
 # Test Alpaca connection
-python -c "
-import alpaca_trade_api as tradeapi
+python - <<'PY'
+from alpaca.trading.client import TradingClient
 import os
 
 try:
-    api = tradeapi.REST(
+    client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+        base_url=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
     )
-    account = api.get_account()
+    account = client.get_account()
     print(f'Connected to Alpaca. Account: {account.id}')
     print(f'Buying power: ${account.buying_power}')
-except Exception as e:
+except APIError as e:
     print(f'Alpaca connection failed: {e}')
-"
+PY
 
 # Check API key validity
 curl -u "${ALPACA_API_KEY}:${ALPACA_SECRET_KEY}" \
@@ -202,9 +202,9 @@ def test_data_provider(symbol='SPY', timeframe='1h'):
     """Test all data providers for a symbol."""
     end_date = datetime.now(UTC)
     start_date = end_date - timedelta(days=5)
-    
+
     providers = ['alpaca', 'finnhub', 'yahoo']
-    
+
     for provider in providers:
         try:
             print(f"\nTesting {provider}...")
@@ -215,14 +215,14 @@ def test_data_provider(symbol='SPY', timeframe='1h'):
                 end_date=end_date.strftime('%Y-%m-%d'),
                 provider=provider
             )
-            
+
             if data is not None and not data.empty:
                 print(f"✓ {provider}: Got {len(data)} rows")
                 print(f"  Latest: {data.index[-1]}")
                 print(f"  Columns: {list(data.columns)}")
             else:
                 print(f"✗ {provider}: No data returned")
-                
+
         except Exception as e:
             print(f"✗ {provider}: Error - {e}")
 
@@ -241,20 +241,20 @@ def check_market_status():
     """Check if market is currently open."""
     nyse = mcal.get_calendar('NYSE')
     now = datetime.now(UTC)
-    
+
     # Check if today is a trading day
     schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
-    
+
     if schedule.empty:
         print("Market is closed today (holiday/weekend)")
         return False
-    
+
     # Check if within trading hours
     market_open = schedule.iloc[0]['market_open'].tz_convert('US/Eastern')
     market_close = schedule.iloc[0]['market_close'].tz_convert('US/Eastern')
-    
+
     current_et = pd.Timestamp.now(tz='US/Eastern')
-    
+
     if market_open <= current_et <= market_close:
         print(f"Market is OPEN (closes at {market_close.strftime('%H:%M ET')})")
         return True
@@ -278,36 +278,36 @@ if __name__ == "__main__":
 ```python
 # debug_order_validation.py
 from ai_trading.execution.engine import ExecutionEngine
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
 import os
 
 def debug_order_issue(symbol, quantity, side):
     """Debug order execution issues."""
-    
+
     print(f"Debugging order: {symbol} {side} {quantity}")
-    
+
     # Check account status
-    api = tradeapi.REST(
+    client = TradingClient(
         os.getenv('ALPACA_API_KEY'),
         os.getenv('ALPACA_SECRET_KEY'),
-        os.getenv('ALPACA_BASE_URL')
+        base_url=os.getenv('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets'),
     )
-    
-    account = api.get_account()
+
+    account = client.get_account()
     print(f"Account status: {account.status}")
     print(f"Trading blocked: {account.trading_blocked}")
     print(f"Buying power: ${account.buying_power}")
-    
+
     # Check position limits
-    positions = api.list_positions()
+    positions = client.get_all_positions()
     current_position = next((p for p in positions if p.symbol == symbol), None)
-    
+
     if current_position:
         print(f"Current position: {current_position.qty} shares")
         print(f"Market value: ${current_position.market_value}")
     else:
         print("No current position")
-    
+
     engine = ExecutionEngine()
 
     # Validate order
@@ -318,13 +318,14 @@ def debug_order_issue(symbol, quantity, side):
             side=side,
         )
         print("Order validation: PASS")
-    except ValueError as e:
+    except (APIError, ValueError) as e:
         print("Order validation: FAIL")
         print(f"Error: {e}")
 
 # Example usage
 if __name__ == "__main__":
     debug_order_issue('AAPL', 10, 'buy')
+```
 ```
 
 **Position Sizing Problems:**
@@ -336,24 +337,24 @@ import pandas as pd
 
 def debug_position_sizing(symbol, signal_strength, account_equity):
     """Debug position sizing calculations."""
-    
+
     print(f"Debugging position sizing for {symbol}")
     print(f"Signal strength: {signal_strength}")
     print(f"Account equity: ${account_equity}")
-    
+
     try:
         # Get volatility data
         data = data.fetch.get_historical_data(
-            symbol, '1d', 
+            symbol, '1d',
             (pd.Timestamp.now() - pd.Timedelta(days=30)).strftime('%Y-%m-%d'),
             pd.Timestamp.now().strftime('%Y-%m-%d')
         )
-        
+
         returns = data['close'].pct_change().dropna()
         volatility = returns.std() * (252 ** 0.5)  # Annualized
-        
+
         print(f"30-day volatility: {volatility:.4f}")
-        
+
         # Calculate position size
         position_size = risk_engine.calculate_position_size(
             symbol=symbol,
@@ -361,18 +362,18 @@ def debug_position_sizing(symbol, signal_strength, account_equity):
             account_equity=account_equity,
             volatility=volatility
         )
-        
+
         print(f"Calculated position size: {position_size} shares")
-        
+
         # Check against limits
         max_position_value = account_equity * 0.05  # 5% max
         current_price = data['close'].iloc[-1]
         max_shares = max_position_value / current_price
-        
+
         print(f"Current price: ${current_price:.2f}")
         print(f"Max allowed shares (5%): {max_shares:.0f}")
         print(f"Position within limits: {position_size <= max_shares}")
-        
+
     except Exception as e:
         print(f"Position sizing error: {e}")
         import traceback
@@ -421,22 +422,22 @@ def profile_bot():
     """Profile bot performance."""
     pr = cProfile.Profile()
     pr.enable()
-    
+
     # Run bot for a short period
     try:
         main.run_trading_cycle()
     except KeyboardInterrupt:
         pass
-    
+
     pr.disable()
-    
+
     # Generate report
     s = io.StringIO()
     ps = pstats.Stats(pr, stream=s)
     ps.sort_stats('cumulative').print_stats(20)
-    
+
     print(s.getvalue())
-    
+
     # Save to file
     ps.dump_stats('profile_results.prof')
 
@@ -457,24 +458,24 @@ from memory_profiler import profile
 def analyze_memory_usage():
     """Analyze memory usage of bot components."""
     process = psutil.Process(os.getpid())
-    
+
     print(f"Initial memory: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-    
+
     # Import heavy modules
     import pandas as pd
     import numpy as np
     print(f"After pandas/numpy: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-    
+
     import bot_engine
     print(f"After bot_engine: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-    
+
     # Load test data
     data = pd.DataFrame({
         'close': np.random.randn(10000),
         'volume': np.random.randint(1000, 10000, 10000)
     })
     print(f"After test data: {process.memory_info().rss / 1024 / 1024:.2f} MB")
-    
+
     del data
     print(f"After cleanup: {process.memory_info().rss / 1024 / 1024:.2f} MB")
 
@@ -493,7 +494,7 @@ import statistics
 def test_api_latency(url, num_tests=10):
     """Test API response times."""
     latencies = []
-    
+
     for i in range(num_tests):
         start_time = time.time()
         try:
@@ -503,9 +504,9 @@ def test_api_latency(url, num_tests=10):
             print(f"Test {i+1}: {latency:.2f}ms - Status: {response.status_code}")
         except Exception as e:
             print(f"Test {i+1}: FAILED - {e}")
-        
+
         time.sleep(1)
-    
+
     if latencies:
         print(f"\nLatency Statistics:")
         print(f"Average: {statistics.mean(latencies):.2f}ms")
@@ -515,13 +516,13 @@ def test_api_latency(url, num_tests=10):
 
 def run_network_diagnostics():
     """Run comprehensive network diagnostics."""
-    
+
     endpoints = [
         'https://api.alpaca.markets/v2/account',
         'https://finnhub.io/api/v1/quote?symbol=AAPL',
         'https://query1.finance.yahoo.com/v8/finance/chart/SPY'
     ]
-    
+
     for endpoint in endpoints:
         print(f"\nTesting {endpoint}:")
         test_api_latency(endpoint)
@@ -582,26 +583,26 @@ import pandas_ta as ta
 
 def optimize_indicators(data):
     """Optimized indicator calculation."""
-    
+
     # Use vectorized operations
     data['sma_20'] = data['close'].rolling(20).mean()
     data['ema_12'] = data['close'].ewm(span=12).mean()
-    
+
     # Parallel calculation for heavy indicators
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         # Submit heavy calculations
         rsi_future = executor.submit(ta.rsi, data['close'])
         macd_future = executor.submit(ta.macd, data['close'])
         bbands_future = executor.submit(ta.bbands, data['close'])
-        
+
         # Collect results
         data['rsi'] = rsi_future.result()
         macd_result = macd_future.result()
         bbands_result = bbands_future.result()
-        
+
         # Combine results
         data = pd.concat([data, macd_result, bbands_result], axis=1)
-    
+
     return data
 ```
 
@@ -620,27 +621,27 @@ class MemoryMonitor:
     def __init__(self, threshold_mb=1000):
         self.threshold_mb = threshold_mb
         self.monitoring = False
-        
+
     def start_monitoring(self):
         """Start memory monitoring in background."""
         self.monitoring = True
         thread = threading.Thread(target=self._monitor_loop)
         thread.daemon = True
         thread.start()
-        
+
     def _monitor_loop(self):
         """Monitor memory usage continuously."""
         while self.monitoring:
             process = psutil.Process()
             memory_mb = process.memory_info().rss / 1024 / 1024
-            
+
             if memory_mb > self.threshold_mb:
                 print(f"WARNING: Memory usage {memory_mb:.2f}MB exceeds threshold")
                 # Force garbage collection
                 gc.collect()
-                
+
             time.sleep(60)  # Check every minute
-            
+
     def stop_monitoring(self):
         """Stop memory monitoring."""
         self.monitoring = False
@@ -661,42 +662,42 @@ import pandas as pd
 
 def optimize_database():
     """Optimize database performance."""
-    
+
     conn = sqlite3.connect('trading_data.db')
     cursor = conn.cursor()
-    
+
     # Create indexes
     cursor.execute("""
-    CREATE INDEX IF NOT EXISTS idx_trades_symbol 
+    CREATE INDEX IF NOT EXISTS idx_trades_symbol
     ON trades(symbol)
     """)
-    
+
     cursor.execute("""
-    CREATE INDEX IF NOT EXISTS idx_trades_timestamp 
+    CREATE INDEX IF NOT EXISTS idx_trades_timestamp
     ON trades(timestamp)
     """)
-    
+
     # Analyze tables
     cursor.execute("ANALYZE")
-    
+
     # Vacuum database
     cursor.execute("VACUUM")
-    
+
     conn.close()
     print("Database optimization completed")
 
 def batch_insert_trades(trades_data):
     """Efficient batch insert for trades."""
-    
+
     conn = sqlite3.connect('trading_data.db')
-    
+
     # Use executemany for batch inserts
     cursor = conn.cursor()
     cursor.executemany("""
     INSERT INTO trades (symbol, side, quantity, price, timestamp)
     VALUES (?, ?, ?, ?, ?)
     """, trades_data)
-    
+
     conn.commit()
     conn.close()
 ```
@@ -740,28 +741,28 @@ class DataProviderManager:
     def __init__(self):
         self.providers = ['alpaca', 'finnhub', 'yahoo']
         self.current_provider = 0
-        
+
     def get_data_with_fallback(self, symbol, timeframe, start_date, end_date):
         """Get data with automatic provider fallback."""
-        
+
         for i, provider in enumerate(self.providers):
             try:
                 logging.info(f"Attempting data fetch with {provider}")
-                
+
                 data = self._fetch_data(provider, symbol, timeframe, start_date, end_date)
-                
+
                 if data is not None and not data.empty:
                     self.current_provider = i
                     logging.info(f"Successfully fetched data from {provider}")
                     return data
-                    
+
             except Exception as e:
                 logging.warning(f"Provider {provider} failed: {e}")
                 continue
-        
+
         logging.error("All data providers failed")
         return None
-        
+
     def _fetch_data(self, provider, symbol, timeframe, start_date, end_date):
         """Fetch data from specific provider."""
         if provider == 'alpaca':
@@ -797,7 +798,7 @@ import gc
 def cleanup_memory():
     """Periodic memory cleanup."""
     gc.collect()  # Force garbage collection
-    
+
     # Clear old data from memory
     if hasattr(self, 'historical_data'):
         # Keep only last 1000 rows
@@ -821,10 +822,10 @@ def check_buying_power():
     print(f"Buying power: ${account.buying_power}")
     print(f"Cash: ${account.cash}")
     print(f"Portfolio value: ${account.portfolio_value}")
-    
+
     # Check pending orders
     orders = api.list_orders(status='open')
-    pending_value = sum(float(order.qty) * float(order.limit_price or 0) 
+    pending_value = sum(float(order.qty) * float(order.limit_price or 0)
                        for order in orders if order.side == 'buy')
     print(f"Pending orders value: ${pending_value}")
 ```
@@ -843,7 +844,7 @@ def debug_indicators(data, symbol):
     print(f"Data shape: {data.shape}")
     print(f"Date range: {data.index[0]} to {data.index[-1]}")
     print(f"Missing values: {data.isnull().sum()}")
-    
+
     # Check for data gaps
     expected_periods = len(pd.date_range(data.index[0], data.index[-1], freq='1H'))
     actual_periods = len(data)
@@ -866,20 +867,20 @@ def robust_trading_loop():
     """Trading loop with comprehensive error handling."""
     retry_count = 0
     max_retries = 3
-    
+
     while True:
         try:
             run_trading_cycle()
             retry_count = 0  # Reset on success
-            
+
         except Exception as e:
             retry_count += 1
             logging.error(f"Trading cycle failed (attempt {retry_count}): {e}")
-            
+
             if retry_count >= max_retries:
                 logging.critical("Max retries exceeded, shutting down")
                 break
-            
+
             # Exponential backoff
             sleep_time = 2 ** retry_count
             logging.info(f"Retrying in {sleep_time} seconds...")

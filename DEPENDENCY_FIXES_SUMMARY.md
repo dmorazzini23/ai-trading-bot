@@ -6,18 +6,18 @@ This document summarizes the fixes implemented to resolve the critical issues id
 
 ## 1. Missing Alpaca SDK Dependency ✅ FIXED
 
-**Problem**: `Failed to import Alpaca SDK: No module named 'alpaca_trade_api'`
+**Problem**: `Failed to import Alpaca SDK: No module named 'alpaca-py'`
 
-**Root Cause**: Multiple Alpaca SDKs were mixed (`alpaca-py` and `alpaca_trade_api`).
+**Root Cause**: Multiple Alpaca SDKs were mixed. The project now standardizes on `alpaca-py`.
 
 **Solution**:
-- Standardized on `alpaca-trade-api>=3.1.0` as the production SDK
+- Standardized on `alpaca-py==0.42.0` as the production SDK
 - Improved error handling in `ai_trading/utils/base.py` with proper fallback to mock classes
 - Enhanced logging to distinguish between successful import and fallback usage
 
 **Files Modified**:
-- `requirements.txt`: Added alpaca-trade-api dependency
-- `pyproject.toml`: Added alpaca-trade-api dependency
+- `requirements.txt`: Added alpaca-py dependency
+- `pyproject.toml`: Added alpaca-py dependency
 - `ai_trading/utils/base.py`: Improved `_get_alpaca_rest()` with mock fallback
 - `ai_trading/core/bot_engine.py`: Fixed empty try block for SDK imports
 
@@ -26,24 +26,24 @@ This document summarizes the fixes implemented to resolve the critical issues id
 **Problem**: Poor error messages when dependencies are missing
 
 **Solution**:
-- Added graceful fallback using mock REST client when `alpaca_trade_api` is unavailable
+- Added graceful fallback using mock TradingClient when `alpaca-py` is unavailable
 - Enhanced logging to clearly indicate when fallbacks are being used
 - Added dependency validation in startup sequence
 
 **Key Improvements**:
 ```python
 # Before: Hard failure on missing dependency
-from alpaca_trade_api.rest import REST
+from alpaca.trading.client import TradingClient
 # Crash if not available
 
 # After: Graceful fallback with clear logging
 try:
-    from alpaca_trade_api.rest import REST as _REST
-    logger.debug("Successfully imported alpaca_trade_api.rest.REST")
+    from alpaca.trading.client import TradingClient as _TradingClient
+    logger.debug("Successfully imported alpaca.trading.client.TradingClient")
 except ImportError as e:
-    logger.warning("alpaca_trade_api not available, using fallback: %s", e)
-    # Mock REST class for development/testing
-    class MockREST: ...
+    logger.warning("alpaca-py not available, using fallback: %s", e)
+    # Mock TradingClient class for development/testing
+    class MockTradingClient: ...
 ```
 
 ## 3. Enhanced Regime Model Data Validation ✅ FIXED
@@ -65,7 +65,7 @@ if training.empty:
     logger.warning("Regime training dataset is empty after joining features and labels")
     return fallback_model
 
-logger.debug("Regime training data validation: %d rows available, minimum required: %d", 
+logger.debug("Regime training data validation: %d rows available, minimum required: %d",
             len(training), settings.REGIME_MIN_ROWS)
 ```
 
@@ -110,14 +110,14 @@ def validate_environment():
     # Check environment variables
     if not config.WEBHOOK_SECRET:
         raise RuntimeError("WEBHOOK_SECRET is required")
-    
+
     # Check optional dependencies with warnings
     try:
-        import alpaca_trade_api
-        logger.debug("alpaca_trade_api dependency available")
+        import alpaca
+        logger.debug("alpaca-py dependency available")
     except ImportError:
-        logger.warning("alpaca_trade_api not available - some features may use fallbacks")
-    
+        logger.warning("alpaca-py not available - some features may use fallbacks")
+
     # Create required directories
     os.makedirs("data", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
