@@ -12,6 +12,7 @@
 - **Structured logging only**. Use existing JSON logging helpers; do not print().
 - **Use `runtime`** (an instance of `BotRuntime`) across hot paths. **Do not introduce `ctx`**.
 - Keep `ai_trading` imports stable; avoid dynamic `exec`/`eval`.
+- **Single Alpaca SDK**: use only `alpaca-py`. Remove legacy `alpaca-trade-api` (`pip uninstall -y alpaca-trade-api`).
 
 ## Runtime & Config
 - `TradingConfig`: read-only settings (broker creds, paths, limits).
