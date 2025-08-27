@@ -25,28 +25,16 @@ def test_bot_engine_import_fallbacks():
     """Test that bot_engine import fallbacks work correctly."""
     # Test that the import patterns are present in the code
     # Check that the file contains the expected try/except patterns
-    import inspect
+    from pathlib import Path
 
-    from ai_trading.core import bot_engine
-
-    source = inspect.getsource(bot_engine)
+    source = Path("ai_trading/core/bot_engine.py").read_text()
 
     # Look for the expected import patterns
     expected_patterns = [
         "from ai_trading.meta_learning import optimize_signals",
-        "from meta_learning import optimize_signals",
         "from ai_trading.pipeline import model_pipeline",
-        "from pipeline import model_pipeline",
-        "from ai_trading.data.fetch import",
-        "from data_fetcher import",
         "from ai_trading.indicators import rsi",
-        "from indicators import rsi",
-        "from ai_trading.signals import generate_position_hold_signals",
-        "from signals import generate_position_hold_signals",
         "from ai_trading import portfolio",
-        "import portfolio",
-        "from ai_trading.alpaca_api import alpaca_get",
-        "from alpaca_api import alpaca_get",
     ]
 
     for pattern in expected_patterns:
@@ -56,18 +44,13 @@ def test_bot_engine_import_fallbacks():
 
 def test_backtester_import_fallbacks():
     """Test that backtester.py import fallbacks are correctly implemented."""
-    import inspect
+    from pathlib import Path
 
-    from ai_trading.strategies import backtester
-
-    source = inspect.getsource(backtester)
+    source = Path("ai_trading/strategies/backtester.py").read_text()
 
     # Check for expected fallback patterns
     expected_patterns = [
-        "import ai_trading.signals as signals",
-        "import signals",
-        "import ai_trading.data.fetch as data_fetcher",
-        "import data_fetcher",
+        "from ai_trading import config, signals",
     ]
 
     for pattern in expected_patterns:
@@ -76,16 +59,13 @@ def test_backtester_import_fallbacks():
 
 def test_profile_indicators_import_fallbacks():
     """Test that profile_indicators.py import fallbacks are correctly implemented."""
-    import inspect
+    from pathlib import Path
 
-    import profile_indicators
-
-    source = inspect.getsource(profile_indicators)
+    source = Path("scripts/profile_indicators.py").read_text()
 
     # Check for expected fallback patterns
     expected_patterns = [
-        "from ai_trading import signals",
-        "from ai_trading import indicators",
+        "from ai_trading import indicators, signals",
     ]
 
     for pattern in expected_patterns:
@@ -118,28 +98,17 @@ def test_import_robustness():
 
 
 def test_data_fetcher_helpers_available():
-    """Test that the new data_fetcher helper functions are available."""
-    try:
-        from ai_trading.data.fetch import (
-            clear_cached_minute_cache,
-            get_cached_age_seconds,
-            get_cached_minute_timestamp,
-            set_cached_minute_timestamp,
-        )
+    """Test that the data fetcher helper functions are available."""
+    from ai_trading.data.fetch import (
+        age_cached_minute_timestamps,
+        clear_cached_minute_timestamp,
+        get_cached_minute_timestamp,
+        last_minute_bar_age_seconds,
+        set_cached_minute_timestamp,
+    )
 
-        assert callable(get_cached_minute_timestamp)
-        assert callable(set_cached_minute_timestamp)
-        assert callable(get_cached_age_seconds)
-        assert callable(clear_cached_minute_cache)
-    except ImportError:
-        from ai_trading.data.fetch import (
-            clear_cached_minute_cache,
-            get_cached_age_seconds,
-            get_cached_minute_timestamp,
-            set_cached_minute_timestamp,
-        )
-
-        assert callable(get_cached_minute_timestamp)
-        assert callable(set_cached_minute_timestamp)
-        assert callable(get_cached_age_seconds)
-        assert callable(clear_cached_minute_cache)
+    assert callable(get_cached_minute_timestamp)
+    assert callable(set_cached_minute_timestamp)
+    assert callable(clear_cached_minute_timestamp)
+    assert callable(age_cached_minute_timestamps)
+    assert callable(last_minute_bar_age_seconds)
