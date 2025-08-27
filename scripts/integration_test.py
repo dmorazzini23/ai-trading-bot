@@ -160,7 +160,7 @@ def test_http_timeouts():
 def test_data_fetcher_helpers():
     """Test that data_fetcher helpers are exported."""
     try:
-        data_fetcher_path = Path('data_fetcher.py')
+        data_fetcher_path = Path('ai_trading/data_fetcher.py')
         if data_fetcher_path.exists():
             content = data_fetcher_path.read_text()
             assert 'def get_cached_minute_timestamp' in content
