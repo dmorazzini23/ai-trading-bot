@@ -65,7 +65,6 @@ sys.modules.setdefault("prometheus_client", prom_stub)
 from ai_trading.data.bars import (
     StockBarsRequest,
     TimeFrame,
-    TimeFrameUnit,
     safe_get_stock_bars,
 )
 from ai_trading.core.bot_engine import get_stock_bars_safe
@@ -91,9 +90,7 @@ def test_safe_get_stock_bars_uses_get_stock_bars():
         def get_stock_bars(self, request):
             return types.SimpleNamespace(df=_make_df())
 
-    req = StockBarsRequest(
-        symbol_or_symbols="SPY", timeframe=TimeFrame(1, TimeFrameUnit.Day)
-    )
+    req = StockBarsRequest(symbol_or_symbols="SPY", timeframe=TimeFrame.Day)
     df = safe_get_stock_bars(Client(), req, "SPY", "TEST")
     assert not df.empty
 
@@ -104,7 +101,7 @@ def test_safe_get_stock_bars_falls_back_to_get_bars():
             return _make_df()
     class Req:
         symbol_or_symbols = "SPY"
-        timeframe = TimeFrame(1, TimeFrameUnit.Day)
+        timeframe = TimeFrame.Day
 
     df = safe_get_stock_bars(Client(), Req(), "SPY", "TEST")
     assert not df.empty
@@ -115,7 +112,7 @@ def test_get_stock_bars_safe_uses_get_stock_bars():
         def get_stock_bars(self, request):  # pragma: no cover - simple stub
             return types.SimpleNamespace(df=_make_df())
 
-    df = get_stock_bars_safe(API(), "SPY", "1Day")
+    df = get_stock_bars_safe(API(), "SPY", TimeFrame.Day)
     assert not df.empty
 
 
@@ -124,5 +121,15 @@ def test_get_stock_bars_safe_falls_back_to_get_bars():
         def get_bars(self, symbol, timeframe):
             return _make_df()
 
-    df = get_stock_bars_safe(API(), "SPY", "1Day")
+    df = get_stock_bars_safe(API(), "SPY", TimeFrame.Day)
+
+
+def test_get_stock_bars_safe_accepts_timeframe_enum(caplog):
+    class API:
+        def get_stock_bars(self, request):  # pragma: no cover - simple stub
+            return types.SimpleNamespace(df=_make_df())
+
+    with caplog.at_level("ERROR"):
+        df = get_stock_bars_safe(API(), "SPY", TimeFrame.Day)
     assert not df.empty
+    assert caplog.records == []

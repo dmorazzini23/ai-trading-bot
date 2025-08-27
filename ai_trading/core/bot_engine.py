@@ -102,6 +102,31 @@ from ai_trading.core.runtime import (
     enhance_runtime_with_context,
 )
 
+# Ensure fallback TimeFrame shim exposes enum-style attributes.
+if not hasattr(TimeFrame, "Day"):
+    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)  # type: ignore[attr-defined]
+if not hasattr(TimeFrame, "Minute"):
+    TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
+
+
+def _parse_timeframe(tf: Any) -> TimeFrame:
+    """Map configuration values to :class:`TimeFrame` enums."""
+
+    if isinstance(tf, TimeFrame):
+        return tf
+    tf_map = {
+        "1day": TimeFrame.Day,
+        "1d": TimeFrame.Day,
+        "day": TimeFrame.Day,
+        "1min": TimeFrame.Minute,
+        "1m": TimeFrame.Minute,
+        "minute": TimeFrame.Minute,
+    }
+    key = str(tf).lower()
+    if key in tf_map:
+        return tf_map[key]
+    raise ValueError(f"Unsupported timeframe: {tf}")
+
 if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
     warnings.filterwarnings("default", category=DeprecationWarning)
     warnings.warn(
@@ -2773,7 +2798,7 @@ def _fetch_intraday_bars_chunked(
         for i in range(0, len(symbols), batch_size):
             chunk = symbols[i : i + batch_size]
             try:
-                got = get_bars_batch(chunk, "1Min", s_dt, e_dt, feed=feed)
+                got = get_bars_batch(chunk, str(TimeFrame.Minute), s_dt, e_dt, feed=feed)
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -3893,7 +3918,7 @@ class DataFetcher:
             "DAILY_FETCH_REQUEST",
             extra={
                 "symbol": symbol,
-                "timeframe": "1Day",
+                "timeframe": str(TimeFrame.Day),
                 "start": start_ts.isoformat(),
                 "end": end_ts.isoformat(),
             },
@@ -3921,7 +3946,7 @@ class DataFetcher:
                     "DAILY_FETCH_RESULT",
                     extra={
                         "symbol": symbol,
-                        "timeframe": "1Day",
+                        "timeframe": str(TimeFrame.Day),
                         "start": start_ts.isoformat(),
                         "end": end_ts.isoformat(),
                         "rows": 0 if cached is None else len(cached),
@@ -3950,7 +3975,7 @@ class DataFetcher:
             try:
                 m_req = StockBarsRequest(
                     symbol_or_symbols=[symbol],
-                    timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+                    timeframe=TimeFrame.Minute,
                     start=start_ts,
                     end=end_ts,
                     feed="iex",
@@ -3976,7 +4001,7 @@ class DataFetcher:
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                timeframe=TimeFrame(1, TimeFrameUnit.Day),
+                timeframe=TimeFrame.Day,
                 start=start_ts,
                 end=end_ts,
                 feed=_DEFAULT_FEED,
@@ -4179,7 +4204,7 @@ class DataFetcher:
             "DAILY_FETCH_RESULT",
             extra={
                 "symbol": symbol,
-                "timeframe": "1Day",
+                "timeframe": str(TimeFrame.Day),
                 "start": start_ts.isoformat(),
                 "end": end_ts.isoformat(),
                 "rows": 0 if df is None else len(df),
@@ -4502,7 +4527,7 @@ def prefetch_daily_data(
     try:
         req = StockBarsRequest(
             symbol_or_symbols=symbols,
-            timeframe=TimeFrame(1, TimeFrameUnit.Day),
+            timeframe=TimeFrame.Day,
             start=start_date,
             end=end_date,
             feed=_DEFAULT_FEED,
@@ -4580,7 +4605,7 @@ def prefetch_daily_data(
                     try:
                         req_sym = StockBarsRequest(
                             symbol_or_symbols=[sym],
-                            timeframe=TimeFrame(1, TimeFrameUnit.Day),
+                            timeframe=TimeFrame.Day,
                             start=start_date,
                             end=end_date,
                             feed=_DEFAULT_FEED,
@@ -11504,18 +11529,11 @@ def get_stock_bars_safe(api, symbol, timeframe):
 
     import pandas as pd
 
-    def _parse_tf(tf):
-        if isinstance(tf, TimeFrame):
-            return tf
-        tf_norm = str(tf).lower()
-        if tf_norm in {"1day", "1d", "day"}:
-            return TimeFrame(1, TimeFrameUnit.Day)
-        if tf_norm in {"1min", "1m", "minute"}:
-            return TimeFrame(1, TimeFrameUnit.Minute)
-        raise ValueError(f"Unsupported timeframe: {tf}")
-
     try:
-        req = StockBarsRequest(symbol_or_symbols=[symbol], timeframe=_parse_tf(timeframe))
+        req = StockBarsRequest(
+            symbol_or_symbols=[symbol],
+            timeframe=_parse_timeframe(timeframe),
+        )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("Malformed StockBarsRequest") from exc
 
