@@ -102,18 +102,18 @@ def test_safe_get_stock_bars_falls_back_to_get_bars():
     class Client:
         def get_bars(self, symbol_or_symbols, timeframe, **kwargs):
             return _make_df()
+    class Req:
+        symbol_or_symbols = "SPY"
+        timeframe = TimeFrame(1, TimeFrameUnit.Day)
 
-    req = StockBarsRequest(
-        symbol_or_symbols="SPY", timeframe=TimeFrame(1, TimeFrameUnit.Day)
-    )
-    df = safe_get_stock_bars(Client(), req, "SPY", "TEST")
+    df = safe_get_stock_bars(Client(), Req(), "SPY", "TEST")
     assert not df.empty
 
 
 def test_get_stock_bars_safe_uses_get_stock_bars():
     class API:
-        def get_stock_bars(self, symbol, timeframe):
-            return _make_df()
+        def get_stock_bars(self, request):  # pragma: no cover - simple stub
+            return types.SimpleNamespace(df=_make_df())
 
     df = get_stock_bars_safe(API(), "SPY", "1Day")
     assert not df.empty
