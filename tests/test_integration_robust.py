@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from ai_trading.config import management as config
 
 pd = pytest.importorskip("pandas")
 
@@ -312,14 +313,12 @@ def test_bot_main_normal(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
-    monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
-    monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
+    config.reload_env()
     monkeypatch.setattr(sys, "argv", ["bot.py"])
-    with patch("data_fetcher.get_minute_df", return_value=MagicMock()), patch(
-        "alpaca_api.submit_order", return_value={"status": "mocked"}
-    ), patch("signals.generate", return_value=1), patch("risk_engine.calculate_position_size", return_value=10), patch(
-        "data_fetcher.get_daily_df",
+    with patch("ai_trading.data.fetch.get_minute_df", return_value=MagicMock()), patch(
+        "ai_trading.alpaca_api.submit_order", return_value={"status": "mocked"}
+    ), patch("ai_trading.signals.generate", return_value=1), patch("ai_trading.risk.engine.calculate_position_size", return_value=10), patch(
+        "ai_trading.data.fetch.get_daily_df",
         return_value=pd.DataFrame(
             {
                 "open": [1],
@@ -342,12 +341,10 @@ def test_bot_main_data_fetch_error(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
-    monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
-    monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
+    config.reload_env()
     monkeypatch.setattr(sys, "argv", ["bot.py"])
-    with patch("data_fetcher.get_minute_df", side_effect=Exception("API error")), patch(
-        "data_fetcher.get_daily_df",
+    with patch("ai_trading.data.fetch.get_minute_df", side_effect=Exception("API error")), patch(
+        "ai_trading.data.fetch.get_daily_df",
         return_value=pd.DataFrame(
             {
                 "open": [1],
@@ -373,14 +370,12 @@ def test_bot_main_signal_nan(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
-    monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
-    monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
+    config.reload_env()
     monkeypatch.setattr(sys, "argv", ["bot.py"])
-    with patch("signals.generate", return_value=float("nan")), patch(
-        "data_fetcher.get_minute_df", return_value=MagicMock()
+    with patch("ai_trading.signals.generate", return_value=float("nan")), patch(
+        "ai_trading.data.fetch.get_minute_df", return_value=MagicMock()
     ), patch(
-        "data_fetcher.get_daily_df",
+        "ai_trading.data.fetch.get_daily_df",
         return_value=pd.DataFrame(
             {
                 "open": [1],
