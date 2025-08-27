@@ -12394,12 +12394,19 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     fetcher = getattr(runtime, "data_fetcher", None)
     if fetcher is not None:
         return fetcher
-    logger_once.error("DATA_FETCHER_MISSING", key="data_fetcher_missing")
+    if data_fetcher is not None:
+        logger_once.warning(
+            "DATA_FETCHER_ATTACHED_LATE", key="data_fetcher_attached_late"
+        )
+        runtime.data_fetcher = data_fetcher
+        return data_fetcher
+    logger_once.warning("DATA_FETCHER_MISSING", key="data_fetcher_missing")
     try:
         fetcher = data_fetcher_module.build_fetcher(getattr(runtime, "params", {}))
     except COMMON_EXC as exc:  # pragma: no cover - best effort during startup
         logger_once.error(
-            "DATA_FETCHER_INIT_FAILED - %s", exc, key="data_fetcher_init_failed"
+            "DATA_FETCHER_INIT_FAILED", extra={"detail": str(exc)},
+            key="data_fetcher_init_failed",
         )
         raise DataFetchError("data_fetcher not available") from exc
     runtime.data_fetcher = fetcher
@@ -13669,6 +13676,18 @@ def main() -> None:
     if args.mode != state.mode_obj.mode:
         state.mode_obj = BotMode(args.mode)
         params.update(state.mode_obj.get_config())
+
+    # Initialize context and data fetcher early in the startup sequence
+    lbc = get_ctx()
+    try:
+        lbc._ensure_initialized()
+        ctx = lbc._context
+        ensure_data_fetcher(ctx)
+    except DataFetchError as exc:
+        logger.critical(
+            "DATA_FETCHER_INIT_FAILED", extra={"detail": str(exc)}
+        )
+        sys.exit(1)
 
     try:
         logger.info(">>> BOT __main__ ENTERED – starting up")
