@@ -1,4 +1,3 @@
-# ruff: noqa
 # fmt: off
 """Trading bot core engine.
 
@@ -11,7 +10,7 @@ import importlib
 import importlib.util
 import os
 import sys
-from typing import Any, Dict, Iterable, cast
+from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property
 
@@ -46,6 +45,8 @@ from ai_trading.data.fetch import (
     get_cached_minute_timestamp,
     last_minute_bar_age_seconds,
 )
+if TYPE_CHECKING:  # pragma: no cover - type hints only
+    from ai_trading.risk.engine import RiskEngine, TradeSignal
 from ai_trading.utils.time import last_market_session
 from ai_trading.capital_scaling import capital_scale, update_if_present
 from ai_trading.utils.datetime import ensure_datetime
@@ -76,6 +77,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
 
 from ai_trading.config.management import (
     derive_cap_from_settings,
+    get_env,
     is_shadow_mode,
     TradingConfig,
 )
@@ -489,7 +491,7 @@ def _get_env_str(key: str) -> str:
         return cast(str, get_env(key, required=True))
     except RuntimeError as e:  # noqa: BLE001
         masked = _mask_env_name(key)
-        _log.error("Missing required environment variable: %s", masked)
+        logger.error("Missing required environment variable: %s", masked)
         raise RuntimeError(f"Missing required environment variable: {masked}") from e
 
 
@@ -1598,13 +1600,14 @@ OrderSide: Any | None = None
 OrderStatus: Any | None = None
 TimeInForce: Any | None = None
 MarketOrderRequest: Any | None = None
+LimitOrderRequest: Any | None = None
 StockLatestQuoteRequest: Any | None = None
 _ALPACA_IMPORT_ERROR: Exception | None = None
 
 
 def _ensure_alpaca_classes() -> None:
     """Import Alpaca SDK types on demand."""
-    global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
+    global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, LimitOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
     if Quote is not None or _ALPACA_IMPORT_ERROR is not None:
         return
     try:  # pragma: no cover - independent imports with fallbacks
@@ -1616,7 +1619,10 @@ def _ensure_alpaca_classes() -> None:
         class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
             symbol_or_symbols: Any
     try:
-        from alpaca.trading.requests import MarketOrderRequest as _MarketOrderRequest
+        from alpaca.trading.requests import (
+            MarketOrderRequest as _MarketOrderRequest,
+            LimitOrderRequest as _LimitOrderRequest,
+        )
     except Exception:
         from dataclasses import dataclass
 
@@ -1628,6 +1634,15 @@ def _ensure_alpaca_classes() -> None:
             time_in_force: Any
             limit_price: float | None = None
             stop_price: float | None = None
+            client_order_id: str | None = None
+
+        @dataclass
+        class _LimitOrderRequest:  # pragma: no cover - minimal request object
+            symbol: str
+            qty: int
+            side: Any
+            time_in_force: Any
+            limit_price: float
             client_order_id: str | None = None
     try:
         from alpaca.trading.enums import (
@@ -1677,6 +1692,7 @@ def _ensure_alpaca_classes() -> None:
     OrderStatus = _OrderStatus
     TimeInForce = _TimeInForce
     MarketOrderRequest = _MarketOrderRequest
+    LimitOrderRequest = _LimitOrderRequest
     StockLatestQuoteRequest = _StockLatestQuoteRequest
 
 
@@ -4819,7 +4835,7 @@ class TradeLogger:
                         pnl * conf,
                         pnl,
                         conf,
-                        ctx.capital_band,
+                        state.capital_band,
                     ]
                 )
         except (
@@ -4943,7 +4959,7 @@ def audit_positions(ctx) -> None:
                         side=OrderSide.SELL,
                         time_in_force=TimeInForce.DAY,
                     )
-                    safe_submit_order(runtime.api, req)
+                    safe_submit_order(ctx.api, req)
                 except APIError as exc:
                     logger.exception(
                         "bot.py unexpected",
@@ -4960,7 +4976,7 @@ def audit_positions(ctx) -> None:
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.DAY,
                     )
-                    safe_submit_order(runtime.api, req)
+                    safe_submit_order(ctx.api, req)
                 except APIError as exc:
                     logger.exception(
                         "bot.py unexpected",
@@ -9034,7 +9050,7 @@ def _safe_trade(
     state: BotState,
     symbol: str,
     balance: float,
-    model: RandomForestClassifier,
+    model: Any,
     regime_ok: bool,
     side: OrderSide | None = None,
 ) -> bool:
@@ -9849,7 +9865,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     logger.info("PORTFOLIO_REBALANCED")
 
 
-def pair_trade_signal(sym1: str, sym2: str) -> tuple[str, int]:
+def pair_trade_signal(ctx: BotContext, sym1: str, sym2: str) -> tuple[str, int]:
     from statsmodels.tsa.stattools import coint
 
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)
@@ -11699,8 +11715,8 @@ def update_bot_mode(state: BotState) -> None:
             new_mode = "balanced"
         if new_mode != state.mode_obj.mode:
             state.mode_obj = BotMode(new_mode)
-            params.update(state.mode_obj.get_config())
-            ctx.kelly_fraction = params.get("KELLY_FRACTION", 0.6)
+            state.params.update(state.mode_obj.get_config())
+            state.kelly_fraction = state.params.get("KELLY_FRACTION", 0.6)
             logger.info(
                 "MODE_SWITCH",
                 extra={
@@ -11866,8 +11882,13 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                             not os.path.exists(MODEL_PATH)
                         )  # AI-AGENT-REF: guard for missing model path
                         if is_market_open():
+                            from ai_trading.meta_learning import (
+                                retrain_meta_learner,  # AI-AGENT-REF: lazy import
+                            )
+
                             success = retrain_meta_learner(
-                                ctx, valid_symbols, force=force_train
+                                trade_log_path=TRADE_LOG_FILE,
+                                model_path=MODEL_PATH or "meta_model.pkl",
                             )
                         else:
                             logger.info(
@@ -11976,7 +11997,7 @@ def on_market_close() -> None:
         logger.info("RETRAIN_SKIP_EARLY", extra={"time": now_est.isoformat()})
         return
     try:
-        load_or_retrain_daily(ctx)
+        load_or_retrain_daily(get_ctx())
     except (
         FileNotFoundError,
         PermissionError,
@@ -13803,7 +13824,6 @@ def main() -> None:
         )
 
         # ai_trading/core/bot_engine.py:9768 - Convert import guard to settings-gated import
-        from ai_trading.config import get_settings
 
         settings = get_settings()
         if not settings.disable_daily_retrain:
