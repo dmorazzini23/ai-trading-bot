@@ -68,5 +68,6 @@ echo "Setup complete!"
 echo ""
 echo "Next steps:"
 echo "1. Copy .env.example to .env and configure your API keys"
-echo "2. Run the trading bot with: python run.py"
+echo "2. Run the trading bot with: python -m ai_trading"
 echo "3. Check logs/ directory for execution logs"
+
