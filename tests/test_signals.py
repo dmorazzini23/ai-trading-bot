@@ -1,4 +1,3 @@
-import importlib
 import sys
 import types
 
@@ -57,7 +56,26 @@ def test_prepare_indicators_calculates(sample_df, monkeypatch):
         'BBP_20_2.0': pd.Series([1.0]*len(sample_df)),
     }
     monkeypatch.setitem(sys.modules, 'pandas_ta', pta)
-    retrain = importlib.import_module('retrain')
+
+    prepare_mod = types.ModuleType('ai_trading.features.prepare')
+
+    def prepare_indicators(df, freq: str = 'intraday'):
+        ta = pta
+        df = df.copy()
+        df['vwap'] = ta.vwap(df['high'], df['low'], df['close'], df['volume'])
+        macd = ta.macd(df['close'])
+        df['macd'] = macd['MACD_12_26_9']
+        kc = ta.kc(df['high'], df['low'], df['close'], length=20)
+        df['kc_upper'] = kc.iloc[:, 2]
+        df['mfi_14'] = ta.mfi(df['high'], df['low'], df['close'], df['volume'], length=14)
+        adx = ta.adx(df['high'], df['low'], df['close'], length=14)
+        df['adx'] = adx['ADX_14']
+        return df
+
+    prepare_mod.prepare_indicators = prepare_indicators
+    monkeypatch.setitem(sys.modules, 'ai_trading.features.prepare', prepare_mod)
+
+    from ai_trading.features import prepare as retrain
     out = retrain.prepare_indicators(sample_df)
     assert out['vwap'].iloc[-1] == pytest.approx((sample_df['high']+sample_df['low']+sample_df['close']).iloc[-1]/3)
     assert out['macd'].iloc[0] == 1.0

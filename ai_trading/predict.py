@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from functools import lru_cache
-
-from ai_trading.features import prepare
+from ai_trading.features import prepare as feature_prepare
 
 try:
     from cachetools import TTLCache
@@ -13,15 +11,14 @@ except Exception:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
 
-
 @lru_cache(maxsize=1024)
 def predict(path: str):
     """Minimal prediction interface used in tests."""
     import pandas as pd
 
     df = pd.read_csv(path)
-    features = prepare.prepare_indicators(df)
-    model = load_model("default")
+    features = feature_prepare.prepare_indicators(df)
+    model = load_model('default')
     pred = model.predict(features)[0]
     proba = None
     if hasattr(model, "predict_proba"):
