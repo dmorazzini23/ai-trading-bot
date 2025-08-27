@@ -21,6 +21,10 @@ This trading bot requires API keys from Alpaca Markets to function. This guide e
 - `ALPACA_BASE_URL`: Alpaca API endpoint URL
 - `WEBHOOK_SECRET`: Secret for webhook authentication
 
+Configure exactly one authentication method: either `ALPACA_OAUTH` **or** the
+`ALPACA_API_KEY`/`ALPACA_SECRET_KEY` pair. Defining both will cause a startup
+configuration error.
+
 ### Optional
 - `FINNHUB_API_KEY`: For additional market data
 - `NEWS_API_KEY`: For news sentiment analysis
@@ -51,10 +55,10 @@ Edit `.env` and replace these values:
 # Production environment configuration
 # IMPORTANT: Replace these sample values with your real API keys
 # Get your keys from: https://app.alpaca.markets/paper/dashboard/overview
-# Option 1: OAuth token
+# Option 1: OAuth token (comment out API key/secret below)
 # ALPACA_OAUTH=YOUR_OAUTH_TOKEN
 
-# Option 2: API key and secret
+# Option 2: API key and secret (leave ALPACA_OAUTH commented out)
 ALPACA_API_KEY=YOUR_ACTUAL_API_KEY_HERE
 ALPACA_SECRET_KEY=YOUR_ACTUAL_SECRET_KEY_HERE
 ALPACA_BASE_URL=https://paper-api.alpaca.markets

@@ -670,11 +670,11 @@ python verify_config.py
 
 3. **Required Configuration**
    ```bash
-   # Alpaca API Configuration (choose ONE credential type)
-   # Option 1: OAuth token
+   # Alpaca API Configuration (choose exactly ONE auth method)
+   # Option 1: OAuth token (comment out API key/secret below)
    # ALPACA_OAUTH=your_oauth_token_here
 
-   # Option 2: API key + secret
+   # Option 2: API key + secret (leave ALPACA_OAUTH commented out)
    ALPACA_API_KEY=your_actual_api_key_here
    ALPACA_SECRET_KEY=your_actual_secret_key_here
    ALPACA_API_URL=https://paper-api.alpaca.markets  # Paper trading
