@@ -22,10 +22,10 @@ def resolve_risk_engine_cls():
     return None
 
 def resolve_strategy_allocator_cls():
-    cls = _try_import('ai_trading.strategies.performance_allocator', 'PerformanceBasedAllocator')
+    cls = _try_import('ai_trading.strategy_allocator', 'StrategyAllocator')
     if cls:
         return cls
-    cls = _try_import('scripts.strategy_allocator', 'StrategyAllocator')
+    cls = _try_import('ai_trading.strategies.performance_allocator', 'PerformanceBasedAllocator')
     if cls:
         return cls
     return None
