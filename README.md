@@ -704,6 +704,8 @@ python verify_config.py
 
    Only provide one credential set: either `ALPACA_OAUTH` or the `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` pair.
 
+  Supplying both will raise a startup error; choose one authentication method.
+
   `MAX_POSITION_SIZE` must be a positive dollar value (>0). Values ≤0 are rejected.
   If omitted, the bot derives a value from `CAPITAL_CAP` and available equity. Optionally
   set `MAX_POSITION_SIZE_PCT` to cap positions as a percentage of the portfolio.
