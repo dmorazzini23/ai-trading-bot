@@ -37,7 +37,7 @@ Fixed the production failure: `AttributeError: module 'ai_trading.config' has no
 ### 3. ai_trading/core/bot_engine.py  
 - **Added settings instance**: `S = get_settings()` (after existing get_settings import)
 - **Replaced 16 config.get_env calls**:
-  - `config.get_env("BOT_MODE", "balanced")` → `S.bot_mode`
+  - `config.get_env("TRADING_MODE", "balanced")` → `S.trading_mode`
   - `float(config.get_env("DISASTER_DD_LIMIT", "0.2"))` → `S.disaster_dd_limit`
   - `abspath(config.get_env("MODEL_PATH", "meta_model.pkl"))` → `abspath(S.model_path)`
   - `int(config.get_env("MAX_PORTFOLIO_POSITIONS", "20"))` → `S.max_portfolio_positions`
@@ -80,7 +80,7 @@ Fixed the production failure: `AttributeError: module 'ai_trading.config' has no
 ## Environment Variables Handled
 
 The following environment variables are now properly typed and bound:
-- `BOT_MODE`, `DISASTER_DD_LIMIT`, `MODEL_PATH`, `MODEL_RF_PATH`, `MODEL_XGB_PATH`, `MODEL_LGB_PATH`
+- `TRADING_MODE`, `DISASTER_DD_LIMIT`, `MODEL_PATH`, `MODEL_RF_PATH`, `MODEL_XGB_PATH`, `MODEL_LGB_PATH`
 - `MAX_PORTFOLIO_POSITIONS`, `SECTOR_EXPOSURE_CAP`, `MAX_OPEN_POSITIONS`, `WEEKLY_DRAWDOWN_LIMIT` 
 - `VOLUME_THRESHOLD`, `DOLLAR_RISK_LIMIT`, `FINNHUB_RPM`, `TRADE_COOLDOWN_MIN`
 - `MAX_TRADES_PER_HOUR`, `MAX_TRADES_PER_DAY`, `MINUTE_CACHE_TTL`, `HEALTHCHECK_PORT`

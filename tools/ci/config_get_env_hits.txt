@@ -1,4 +1,4 @@
-ai_trading/core/bot_engine.py:499:BOT_MODE = config.get_env("BOT_MODE", "balanced")
+ai_trading/core/bot_engine.py:499:TRADING_MODE = config.get_env("TRADING_MODE", "balanced")
 ai_trading/core/bot_engine.py:1829:DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
 ai_trading/core/bot_engine.py:2193:MODEL_PATH = abspath(config.get_env("MODEL_PATH", "meta_model.pkl"))
 ai_trading/core/bot_engine.py:2194:MODEL_RF_PATH = abspath(config.get_env("MODEL_RF_PATH", "model_rf.pkl"))

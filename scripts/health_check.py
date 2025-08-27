@@ -298,7 +298,7 @@ def _check_trading_system(self) -> HealthCheckResult:
         except ImportError as e:
             issues.append(f'risk_engine import failed: {e}')
             details['risk_engine'] = f'FAILED: {e}'
-        critical_files = ['config.py', 'hyperparams.json', 'best_hyperparams.json']
+        critical_files = ['ai_trading/settings.py', 'hyperparams.json', 'best_hyperparams.json']
         for file_path in critical_files:
             if os.path.exists(file_path):
                 details[f'file_{file_path}'] = 'EXISTS'

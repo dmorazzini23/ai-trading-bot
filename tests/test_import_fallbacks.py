@@ -84,10 +84,8 @@ def test_profile_indicators_import_fallbacks():
 
     # Check for expected fallback patterns
     expected_patterns = [
-        "import ai_trading.signals as signals",
-        "import signals",
-        "import ai_trading.indicators as indicators",
-        "import indicators",
+        "from ai_trading import signals",
+        "from ai_trading import indicators",
     ]
 
     for pattern in expected_patterns:

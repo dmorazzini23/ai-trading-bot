@@ -1094,7 +1094,7 @@ import os
 _reload_env()
 
 
-# BOT_MODE must be defined before any classes that reference it
+# TRADING_MODE must be defined before any classes that reference it
 # Define BotMode and a safe default at import time. Runtime may override later.
 class BotMode(str, Enum):
     AGGRESSIVE = "aggressive"
@@ -1103,7 +1103,7 @@ class BotMode(str, Enum):
 
 
 # Import-time safe default; runtime code may overwrite this
-BOT_MODE = BotMode.BALANCED
+TRADING_MODE = BotMode.BALANCED
 
 import csv
 import json
@@ -1641,7 +1641,7 @@ from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate
 # ai_trading/core/bot_engine.py:670 - Move retrain_meta_learner import to lazy location
 
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
-BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
+TRADING_MODE_ENV = getattr(config, "TRADING_MODE", TRADING_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
 
@@ -1655,11 +1655,11 @@ def _require_cfg(value: str | None, name: str) -> str:
         dummy_values = {
             "ALPACA_API_KEY": "test_api_key",
             "ALPACA_SECRET_KEY": "test_secret_key",
-            "BOT_MODE": "test",
+            "TRADING_MODE": "test",
         }
         return dummy_values.get(name, f"test_{name.lower()}")
 
-    if BOT_MODE_ENV == "production":
+    if TRADING_MODE_ENV == "production":
         while not value:
             logger.critical("Missing %s; retrying in 60s", name)
             time.sleep(60)
@@ -1716,7 +1716,7 @@ def init_runtime_config():
     cfg = get_settings()
 
     # Validate critical keys at runtime, not import time
-    global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
+    global ALPACA_API_KEY, ALPACA_SECRET_KEY, TRADING_MODE_ENV
 
     # Use the new credential resolution functions
     try:
@@ -1728,7 +1728,7 @@ def init_runtime_config():
         ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
         ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "")
 
-    BOT_MODE_ENV = _require_cfg(getattr(cfg, "BOT_MODE", None), "BOT_MODE")
+    TRADING_MODE_ENV = _require_cfg(getattr(cfg, "TRADING_MODE", None), "TRADING_MODE")
 
     if not callable(validate_alpaca_credentials):
         raise RuntimeError("validate_alpaca_credentials not found in config")
@@ -1737,7 +1737,7 @@ def init_runtime_config():
         "Runtime config initialized",
         extra={
             "alpaca_key_set": bool(ALPACA_API_KEY and len(ALPACA_API_KEY) > 8),
-            "bot_mode": BOT_MODE_ENV,
+            "trading_mode": TRADING_MODE_ENV,
         },
     )
     return cfg
@@ -1746,7 +1746,7 @@ def init_runtime_config():
 # Set module-level defaults that won't crash on import
 ALPACA_API_KEY = None
 ALPACA_SECRET_KEY = None
-BOT_MODE_ENV = "development"
+TRADING_MODE_ENV = "development"
 
 # AI-AGENT-REF: optional pybreaker dependency
 try:  # pragma: no cover - optional dependency
@@ -2911,7 +2911,7 @@ class BotState:
     running: bool = False
     current_regime: str = "sideways"
     rolling_losses: list[float] = field(default_factory=list)
-    mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE))
+    mode_obj: BotMode = field(default_factory=lambda: BotMode(TRADING_MODE))
 
     # Signal & Indicator State
     no_signal_events: int = 0
@@ -13548,7 +13548,7 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         choices=["aggressive", "balanced", "conservative"],
-        default=BOT_MODE_ENV or "balanced",
+        default=TRADING_MODE_ENV or "balanced",
     )
     args = parser.parse_args()
     if args.mode != state.mode_obj.mode:
