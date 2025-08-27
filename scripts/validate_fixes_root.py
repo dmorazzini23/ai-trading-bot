@@ -2,7 +2,10 @@
 import json
 import logging
 import sys
-sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot')
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
 
 def test_json_dumps_ensure_ascii():
     """Test that json.dumps with ensure_ascii=False preserves Unicode."""
@@ -18,9 +21,12 @@ def test_json_dumps_ensure_ascii():
 def test_compilation():
     """Test that the modified files compile correctly."""
     import compileall
-    files_to_check = ['/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/logging.py', '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/core/bot_engine.py']
+    files_to_check = [
+        BASE_DIR / 'ai_trading/logging.py',
+        BASE_DIR / 'ai_trading/core/bot_engine.py',
+    ]
     for file_path in files_to_check:
-        if not compileall.compile_file(file_path, quiet=True):
+        if not compileall.compile_file(str(file_path), quiet=True):
             return False
         else:
             pass
@@ -42,9 +48,8 @@ def test_logging_formatter_imports():
 
 def validate_bot_engine_functions():
     """Validate that the new functions exist in bot_engine without importing."""
-    bot_engine_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/core/bot_engine.py'
-    with open(bot_engine_path) as f:
-        content = f.read()
+    bot_engine_path = BASE_DIR / 'ai_trading/core/bot_engine.py'
+    content = bot_engine_path.read_text()
     required_functions = ['_get_runtime_context_or_none', '_update_risk_engine_exposure']
     for func_name in required_functions:
         if f'def {func_name}(' in content:
@@ -59,9 +64,8 @@ def validate_bot_engine_functions():
 
 def validate_logging_changes():
     """Validate that logging.py has the ensure_ascii=False changes."""
-    logging_path = '/home/runner/work/ai-trading-bot/ai-trading-bot/ai_trading/logging.py'
-    with open(logging_path) as f:
-        content = f.read()
+    logging_path = BASE_DIR / 'ai_trading/logging.py'
+    content = logging_path.read_text()
     ensure_ascii_false_count = content.count('ensure_ascii=False')
     if ensure_ascii_false_count >= 2:
         return True

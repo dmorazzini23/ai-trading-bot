@@ -2,16 +2,16 @@ import logging
 "\nBasic validation tests that don't require full config setup.\n"
 import os
 import tempfile
+from pathlib import Path
 
 def test_basic_validations():
     """Run basic validations that don't require config."""
     logging.info('=== Final Polish Validation Tests ===')
-    with open('bot_engine.py') as f:
-        content = f.read()
-    if len(content.strip().split('\n')) <= 5 and 'from ai_trading.core.bot_engine import *' in content:
-        logging.info('✓ Bot engine shim is correctly minimal')
+    bot_engine_path = Path('ai_trading/core/bot_engine.py')
+    if bot_engine_path.exists():
+        logging.info('✓ bot_engine module located in package')
     else:
-        logging.info('✗ Bot engine shim is not minimal')
+        logging.info('✗ bot_engine module missing')
     with open('.github/workflows/ci.yml') as f:
         ci_content = f.read()
     if 'matrix:' in ci_content and 'python-version:' in ci_content and ('3.12.3' in ci_content) and ("'3.12'" in ci_content):

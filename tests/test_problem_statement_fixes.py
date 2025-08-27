@@ -6,6 +6,7 @@ Focused test suite for the specific critical trading bot issues described in the
 import os
 import sys
 import unittest
+from pathlib import Path
 
 # Set up minimal environment for imports
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')
@@ -44,10 +45,9 @@ class TestProblemStatementFixes(unittest.TestCase):
     def test_meta_learning_minimum_trades_requirement(self):
         """Test that meta-learning minimum trade requirement is reduced to 2."""
         # Test by reading the source code directly to avoid import issues
-        bot_engine_path = "bot_engine.py"
-        if os.path.exists(bot_engine_path):
-            with open(bot_engine_path) as f:
-                content = f.read()
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        if bot_engine_path.exists():
+            content = bot_engine_path.read_text()
 
             # Look for the environment variable default
             import re
@@ -66,10 +66,9 @@ class TestProblemStatementFixes(unittest.TestCase):
     def test_pltr_sector_classification(self):
         """Test that PLTR is classified as Technology sector."""
         # Test by reading the source code directly to avoid import issues
-        bot_engine_path = "bot_engine.py"
-        if os.path.exists(bot_engine_path):
-            with open(bot_engine_path) as f:
-                content = f.read()
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        if bot_engine_path.exists():
+            content = bot_engine_path.read_text()
 
             # Check if PLTR is in the Technology sector mapping
             if '"PLTR": "Technology"' in content:

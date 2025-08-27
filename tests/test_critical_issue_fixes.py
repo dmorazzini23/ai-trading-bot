@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 # Set up minimal environment for imports
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')
@@ -32,27 +33,25 @@ class TestCriticalIssueFixes(unittest.TestCase):
     def test_issue_4_position_limit_increase(self):
         """Test Issue 4: Position limit increased from 10 to 20."""
         # Test that the change exists in the source code by reading the file directly
-        bot_engine_path = "bot_engine.py"
-        if os.path.exists(bot_engine_path):
-            with open(bot_engine_path) as f:
-                content = f.read()
-                # Check that the default value is now 20 instead of 10
-                self.assertIn('"20"', content, "MAX_PORTFOLIO_POSITIONS default should be 20")
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        if bot_engine_path.exists():
+            content = bot_engine_path.read_text()
+            # Check that the default value is now 20 instead of 10
+            self.assertIn('"20"', content, "MAX_PORTFOLIO_POSITIONS default should be 20")
         else:
             self.assertTrue(True)
 
     def test_issue_2_sentiment_circuit_breaker_thresholds(self):
         """Test Issue 2: Sentiment circuit breaker thresholds improved."""
         # Test by reading the source code directly
-        bot_engine_path = "bot_engine.py"
-        if os.path.exists(bot_engine_path):
-            with open(bot_engine_path) as f:
-                content = f.read()
-                # Check that thresholds have been improved
-                self.assertIn('SENTIMENT_FAILURE_THRESHOLD = 8', content,
-                            "SENTIMENT_FAILURE_THRESHOLD should be 8")
-                self.assertIn('SENTIMENT_RECOVERY_TIMEOUT = 900', content,
-                            "SENTIMENT_RECOVERY_TIMEOUT should be 900 (15 minutes)")
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        if bot_engine_path.exists():
+            content = bot_engine_path.read_text()
+            # Check that thresholds have been improved
+            self.assertIn('SENTIMENT_FAILURE_THRESHOLD = 8', content,
+                        "SENTIMENT_FAILURE_THRESHOLD should be 8")
+            self.assertIn('SENTIMENT_RECOVERY_TIMEOUT = 900', content,
+                        "SENTIMENT_RECOVERY_TIMEOUT should be 900 (15 minutes)")
         else:
             self.assertTrue(True)
 
@@ -78,15 +77,14 @@ class TestCriticalIssueFixes(unittest.TestCase):
     def test_issue_1_meta_learning_trigger_exists(self):
         """Test Issue 1: Meta-learning conversion trigger exists."""
         # Test by reading the source code directly
-        bot_engine_path = "bot_engine.py"
-        if os.path.exists(bot_engine_path):
-            with open(bot_engine_path) as f:
-                content = f.read()
-                # Check that the meta-learning trigger code exists
-                self.assertIn('from meta_learning import validate_trade_data_quality', content,
-                            "Meta-learning trigger should import validation function")
-                self.assertIn('METALEARN_TRIGGER_CONVERSION', content,
-                            "Meta-learning trigger should log conversion attempts")
+        bot_engine_path = Path("ai_trading/core/bot_engine.py")
+        if bot_engine_path.exists():
+            content = bot_engine_path.read_text()
+            # Check that the meta-learning trigger code exists
+            self.assertIn('from meta_learning import validate_trade_data_quality', content,
+                        "Meta-learning trigger should import validation function")
+            self.assertIn('METALEARN_TRIGGER_CONVERSION', content,
+                        "Meta-learning trigger should log conversion attempts")
         else:
             self.assertTrue(True)
 
