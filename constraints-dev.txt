@@ -203,8 +203,6 @@ pytz==2025.2
     # via pandas
 pytz-deprecation-shim==0.1.0.post0
     # via tzlocal
-pyyaml==6.0.2
-    # via libcst
 ratelimit==2.2.1
     # via -r requirements.txt
 requests==2.32.5
@@ -263,10 +261,6 @@ tzdata==2025.2
     #   pytz-deprecation-shim
 tzlocal==4.3
     # via -r requirements.txt
-urllib3==2.5.0
-    # via
-    #   -r requirements.txt
-    #   requests
 websockets==15.0.1
     # via alpaca-py
 werkzeug==3.1.3

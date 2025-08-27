@@ -143,8 +143,6 @@ python-dotenv==1.1.1
     # via
     #   -r requirements.txt
     #   pydantic-settings
-pyyaml==6.0.1
-    # via alpaca-py
 ratelimit==2.2.1
     # via -r requirements.txt
 requests==2.32.5
@@ -188,11 +186,6 @@ tzdata==2025.2
     #   pandas-market-calendars
 tzlocal==4.3
     # via -r requirements.txt
-urllib3==2.5.0
-    # via
-    #   -r requirements.txt
-    #   alpaca-py
-    #   requests
 websocket-client==1.8.0
     # via alpaca-py
 websockets==10.4
