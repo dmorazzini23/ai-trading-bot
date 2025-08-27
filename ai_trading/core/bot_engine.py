@@ -190,23 +190,48 @@ def _validate_trading_api(api: Any) -> bool:
                 """Proxy ``list_orders`` to ``get_orders`` with compatible kwargs."""
 
                 status = kwargs.pop("status", None)
-                if status == "open":
-                    try:  # pragma: no cover - optional import paths
-                        from alpaca.trading.enums import OrderStatus  # type: ignore
-                        from alpaca.trading.requests import (  # type: ignore
-                            GetOrdersRequest,
-                        )
+                if status is None:
+                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
-                        req = GetOrdersRequest(statuses=[OrderStatus.OPEN])  # type: ignore
-                        try:
-                            return api.get_orders(*args, filter=req, **kwargs)  # type: ignore[attr-defined]
-                        except TypeError:
-                            return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
-                    except Exception:
-                        kwargs["status"] = "open"
-                        return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-                if status is not None:
-                    kwargs["status"] = status
+                import inspect
+
+                params = inspect.signature(api.get_orders).parameters
+
+                enum_val: Any = status
+                try:  # pragma: no cover - optional import paths
+                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
+                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
+                        enums_mod, "OrderStatus", None
+                    )
+                    if enum_cls is not None:
+                        enum_val = getattr(enum_cls, str(status).upper(), status)
+                except Exception:  # pragma: no cover - optional import paths
+                    pass
+
+                if "status" in params:
+                    kwargs["status"] = enum_val
+                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+
+                req = None
+                try:  # pragma: no cover - optional import paths
+                    requests_mod = __import__("alpaca.trading.requests", fromlist=[""])
+                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
+                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
+                        enums_mod, "OrderStatus", None
+                    )
+                    if enum_cls is not None:
+                        enum_val = getattr(enum_cls, str(status).upper(), status)
+                    req_cls = getattr(requests_mod, "GetOrdersRequest")
+                    req = req_cls(statuses=[enum_val])
+                except Exception:
+                    pass
+                if req is not None:
+                    try:
+                        return api.get_orders(*args, filter=req, **kwargs)  # type: ignore[attr-defined]
+                    except TypeError:
+                        return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
+
+                kwargs["status"] = status
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
@@ -232,8 +257,9 @@ def list_open_orders(api: Any):
 
     ``_validate_trading_api`` shims ``list_orders`` so that passing
     ``status="open"`` works across Alpaca SDK versions. Newer clients expect a
-    ``GetOrdersRequest`` with ``OrderStatus.OPEN`` while older versions accept
-    the legacy string directly.
+    ``GetOrdersRequest`` with ``QueryOrderStatus.OPEN`` (or ``OrderStatus.OPEN``
+    on older SDKs) while legacy clients may accept the raw status string
+    directly.
     """
 
     return api.list_orders(status="open")
