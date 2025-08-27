@@ -1,7 +1,7 @@
 import pytest
 
 try:
-    from ai_trading.data_fetcher import get_bars_batch
+    from ai_trading.data.fetch import get_bars_batch
 except (ValueError, TypeError):
     pytest.skip("data_fetcher deps missing", allow_module_level=True)
 

@@ -6,7 +6,7 @@ from datetime import UTC
 
 import pytest
 
-import ai_trading.data_fetcher as df
+import ai_trading.data.fetch as df
 
 
 @dataclass

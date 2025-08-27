@@ -486,7 +486,7 @@ python health_check.py
 
 # API connectivity test
 python -c "
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 test_all_providers(['SPY'])
 "
 
@@ -601,7 +601,7 @@ python profile_indicators.py
 
 ```bash
 # Fetch and cache data for development
-python data_fetcher.py --cache --symbols SPY,AAPL --days 30
+python -m ai_trading.data.fetch --cache --symbols SPY,AAPL --days 30
 
 # Clean up old data
 python cleanup.py --older-than 30days

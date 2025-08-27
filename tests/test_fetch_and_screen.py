@@ -5,7 +5,7 @@ import types
 import pytest
 
 pd = pytest.importorskip("pandas")
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 from ai_trading.utils.base import health_check
 
 

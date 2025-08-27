@@ -3,7 +3,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ai_trading import data_fetcher
+from ai_trading.data import fetch as data_fetcher
 
 
 def test_get_minute_df_returns_empty_when_finnhub_disabled(monkeypatch):
