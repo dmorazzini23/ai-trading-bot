@@ -91,16 +91,19 @@ class RiskEngine:
                     raise RuntimeError(
                         'Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both'
                     )
+                is_paper = 'paper' in base_url.lower()
                 if has_keypair:
                     self.data_client = TradingClient(
                         api_key=api_key,
                         secret_key=secret,
-                        base_url=base_url,
+                        paper=is_paper,
+                        url_override=base_url,
                     )
                 elif oauth:
                     self.data_client = TradingClient(
                         oauth_token=oauth,
-                        base_url=base_url,
+                        paper=is_paper,
+                        url_override=base_url,
                     )
         except (APIError, TypeError, AttributeError, OSError) as e:
             logger.warning('Could not initialize TradingClient: %s', e)

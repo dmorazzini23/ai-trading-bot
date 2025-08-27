@@ -510,7 +510,10 @@ class BotEngine:
         api_key = _get_env_str("ALPACA_API_KEY")
         secret_key = _get_env_str("ALPACA_SECRET_KEY")
         return TradingClient(
-            api_key=api_key, secret_key=secret_key, base_url=base_url
+            api_key=api_key,
+            secret_key=secret_key,
+            paper="paper" in base_url.lower(),
+            url_override=base_url,
         )
 
     @cached_property

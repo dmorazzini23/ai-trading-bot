@@ -46,21 +46,21 @@ def test_all_python_has_explicit_alpaca_creds():
     assert not bad, f"Missing explicit Alpaca creds in: {sorted(set(bad))}"
 
 
-def test_tradingclient_uses_base_url_not_paper():
-    offenders_missing_base = []
-    offenders_with_paper = []
+def test_tradingclient_sets_paper_not_base_url():
+    offenders_missing_paper = []
+    offenders_with_base = []
     rx = re.compile(r"\bTradingClient\s*\((?P<args>[^)]*)\)", re.DOTALL)
     for p in PY:
         t = p.read_text(encoding="utf-8", errors="ignore")
         for m in rx.finditer(t):
             args = m.group("args")
-            if "base_url" not in args:
-                offenders_missing_base.append(p)
-            if "paper=" in args:
-                offenders_with_paper.append(p)
-    assert not offenders_missing_base, (
-        f"TradingClient must set base_url=: {sorted(set(offenders_missing_base))}"
+            if "paper=" not in args:
+                offenders_missing_paper.append(p)
+            if "base_url=" in args:
+                offenders_with_base.append(p)
+    assert not offenders_with_base, (
+        f"TradingClient must not set base_url=: {sorted(set(offenders_with_base))}"
     )
-    assert not offenders_with_paper, (
-        f"TradingClient must not set paper=: {sorted(set(offenders_with_paper))}"
-    )  # AI-AGENT-REF: enforce base_url without paper flag
+    assert not offenders_missing_paper, (
+        f"TradingClient must set paper=: {sorted(set(offenders_missing_paper))}"
+    )  # AI-AGENT-REF: enforce paper flag without base_url

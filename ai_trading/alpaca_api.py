@@ -123,15 +123,18 @@ def _get_rest(*, bars: bool = False) -> Any:
 
     from alpaca.trading.client import TradingClient
 
+    is_paper = bool(base_url and "paper" in base_url.lower())
     if oauth:
         return TradingClient(
             oauth_token=oauth,
-            base_url=base_url,
+            paper=is_paper,
+            url_override=base_url,
         )
     return TradingClient(
         api_key=key,
         secret_key=secret,
-        base_url=base_url,
+        paper=is_paper,
+        url_override=base_url,
     )
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
