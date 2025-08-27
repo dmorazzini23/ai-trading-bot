@@ -17,7 +17,6 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
 from alpaca.common.exceptions import APIError
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout
-from ai_trading.utils.lazy_imports import optional_import
 logger = get_logger(__name__)
 _log = logger
 
@@ -52,7 +51,11 @@ def _get_numpy():
 
 
 def _get_pandas():
-    return optional_import("pandas")
+    try:  # pragma: no cover - import is tested indirectly
+        import pandas as pd  # type: ignore
+        return pd
+    except ImportError:
+        return None
 
 
 def _get_requests():

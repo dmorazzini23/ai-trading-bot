@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Lightweight helpers for optional dependencies."""
 
-from importlib import import_module
 from types import ModuleType
 from typing import Any, Mapping, Optional
 
-__all__ = ["optional_import", "module_ok", "OptionalDependencyError"]
+__all__ = ["module_ok", "OptionalDependencyError"]
 
 
 # AI-AGENT-REF: map modules to extras for install hints
@@ -51,49 +50,6 @@ class OptionalDependencyError(ImportError):
         self.extra = extra
         self.feature = feature
         self.purpose = feature  # back-compat
-
-
-# AI-AGENT-REF: derive extras hints on optional imports
-def optional_import(
-    name: str,
-    *,
-    required: bool = False,
-    attr: Optional[str] = None,
-    message: Optional[str] = None,
-    extra: Optional[str] = None,
-    feature: Optional[str] = None,
-    purpose: Optional[str] = None,
-) -> Any | None:
-    """Import a module (and optionally attribute) if available."""
-
-    feature = feature or purpose
-    try:
-        mod = import_module(name)
-    except Exception:
-        if required:
-            resolved_extra = extra or _EXTRAS_BY_PKG.get(name)
-            raise OptionalDependencyError(
-                name,
-                extra=resolved_extra,
-                feature=feature,
-                message=message,
-            )
-        return None
-
-    if attr:
-        try:
-            return getattr(mod, attr)
-        except AttributeError:
-            if required:
-                resolved_extra = extra or _EXTRAS_BY_PKG.get(name)
-                raise OptionalDependencyError(
-                    name,
-                    extra=resolved_extra,
-                    feature=feature,
-                    message=message,
-                )
-            return None
-    return mod
 
 
 def module_ok(mod: Optional[ModuleType | Any]) -> bool:
