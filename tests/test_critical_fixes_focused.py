@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from datetime import UTC
 
+from ai_trading.utils.timefmt import isoformat_z
+
 from tests.support.mocks import MockContext, MockSignal
 
 # Set testing environment
@@ -229,13 +231,13 @@ def test_rfc3339_timestamp_api_format():
     """Test that the actual API timestamp format is RFC3339 compliant."""
     from datetime import datetime
 
-    # Test the exact format used in data_fetcher.py
+    # Test the exact format used in ai_trading.data.fetch
     start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
     end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=UTC)
 
-    # Apply the fix from data_fetcher.py
-    start_param = start_dt.isoformat().replace('+00:00', 'Z')
-    end_param = end_dt.isoformat().replace('+00:00', 'Z')
+    # Apply the fix from ai_trading.data.fetch using isoformat_z helper
+    start_param = isoformat_z(start_dt)
+    end_param = isoformat_z(end_dt)
 
 
     # Verify RFC3339 compliance

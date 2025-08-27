@@ -7,6 +7,7 @@ from datetime import UTC
 import pytest
 
 import ai_trading.data.fetch as df
+from ai_trading.utils.timefmt import isoformat_z
 
 
 @dataclass
@@ -29,7 +30,8 @@ def capmetrics(monkeypatch: pytest.MonkeyPatch):
 
 
 def _bars_payload(ts: dt.datetime) -> dict:
-    ts_s = ts.isoformat().replace("+00:00", "Z")
+    # Format timestamp with ai_trading.utils.timefmt helper
+    ts_s = isoformat_z(ts)
     return {"bars": [{"t": ts_s, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]}
 
 

@@ -5,13 +5,15 @@ Tests the specific issues identified in production logs.
 """
 from datetime import UTC, datetime
 
+from ai_trading.utils.timefmt import isoformat_z
+
 
 def test_timestamp_format_includes_timezone():
     """Test that timestamps include proper timezone information for RFC3339 compliance."""
     test_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
 
-    # Test the fixed timestamp format
-    result = test_dt.isoformat().replace('+00:00', 'Z')
+    # Use helper from ai_trading.utils.timefmt for proper RFC3339 formatting
+    result = isoformat_z(test_dt)
 
 
     # The fix should include 'Z' suffix for RFC3339 compliance
@@ -126,9 +128,9 @@ def test_rfc3339_timestamp_api_format():
     start_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=UTC)
     end_dt = datetime(2025, 1, 4, 16, 30, 0, tzinfo=UTC)
 
-    # Apply the fix from data_fetcher.py
-    start_param = start_dt.isoformat().replace('+00:00', 'Z')
-    end_param = end_dt.isoformat().replace('+00:00', 'Z')
+    # Apply the fix from ai_trading.data.fetch using isoformat_z helper
+    start_param = isoformat_z(start_dt)
+    end_param = isoformat_z(end_dt)
 
 
     # Verify RFC3339 compliance
