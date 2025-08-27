@@ -9,13 +9,7 @@ from typing import Any
 import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
-try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api.rest import APIError  # type: ignore
-except ImportError:  # pragma: no cover - fallback when SDK missing
-    class APIError(Exception):
-        """Fallback APIError when alpaca-trade-api is unavailable."""
-
-        pass
+from alpaca.common.exceptions import APIError
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
@@ -30,10 +24,7 @@ if not hasattr(np, 'NaN'):
 
 # Lazy pandas proxy
 pd = load_pandas()
-try:  # pragma: no cover - optional dependency
-    from alpaca_trade_api import REST as AlpacaREST
-except ImportError:
-    AlpacaREST = None
+from alpaca.trading.client import TradingClient
 
 
 def _safe_call(fn, *a, **k):
@@ -91,10 +82,10 @@ class RiskEngine:
         try:
             s = get_settings()
             secret = get_alpaca_secret_key_plain()
-            if AlpacaREST and getattr(s, 'alpaca_api_key', None) and secret and getattr(s, 'alpaca_base_url', None):
-                self.data_client = AlpacaREST(s.alpaca_api_key, secret, s.alpaca_base_url)
+            if getattr(s, 'alpaca_api_key', None) and secret and getattr(s, 'alpaca_base_url', None):
+                self.data_client = TradingClient(s.alpaca_api_key, secret, s.alpaca_base_url)
         except (APIError, ValueError, TypeError, AttributeError, OSError) as e:
-            logger.warning('Could not initialize AlpacaREST: %s', e)
+            logger.warning('Could not initialize TradingClient: %s', e)
         self._returns: list[float] = []
         self._drawdowns: list[float] = []
         self._last_portfolio_cap: float | None = None
