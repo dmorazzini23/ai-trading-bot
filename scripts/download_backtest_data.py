@@ -3,19 +3,18 @@
 This script fetches daily OHLCV bars for a predefined list of tickers and
 stores them as CSV files under ``data/``. Existing files are left untouched.
 """
-from __future__ import annotations
 
-import datetime as dt
+from __future__ import annotations
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
-from alpaca.common.exceptions import APIError
-from alpaca.data import StockHistoricalDataClient
+from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-
-from ai_trading.config.management import get_env
 from ai_trading.env import ensure_dotenv_loaded
+from ai_trading.config.management import get_env
 
 
 def main() -> None:
@@ -23,11 +22,11 @@ def main() -> None:
     ensure_dotenv_loaded()
     api_key = get_env("ALPACA_API_KEY")
     secret_key = get_env("ALPACA_SECRET_KEY")
-    feed = get_env("ALPACA_DATA_FEED", "iex")
     client = StockHistoricalDataClient(api_key, secret_key)
+
     symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "TSLA", "META"]
-    start = dt.datetime.fromisoformat("2023-01-01").replace(tzinfo=dt.timezone.utc)
-    end = dt.datetime.fromisoformat("2024-01-01").replace(tzinfo=dt.timezone.utc)
+    start = datetime(2023, 1, 1, tzinfo=ZoneInfo("UTC"))
+    end = datetime(2024, 1, 1, tzinfo=ZoneInfo("UTC"))
     data_dir = Path("data")
     data_dir.mkdir(exist_ok=True)
     for symbol in symbols:
@@ -40,11 +39,10 @@ def main() -> None:
             start=start,
             end=end,
             adjustment="raw",
-            feed=feed,
         )
         try:
             bars = client.get_stock_bars(req).df
-        except (APIError, pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
+        except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
             continue
         if bars is None or bars.empty:
             continue
