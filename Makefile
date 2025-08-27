@@ -48,7 +48,7 @@ tests-self:
 
 lint-core:
 	@echo "== ruff (core) =="
-        @ruff check ai_trading/main.py ai_trading/core/bot_engine.py ai_trading/process_manager.py
+	@ruff check ai_trading/main.py ai_trading/core/bot_engine.py ai_trading/process_manager.py
 
 .PHONY: scan-extras
 scan-extras:
