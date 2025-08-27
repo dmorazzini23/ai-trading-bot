@@ -111,7 +111,14 @@ class Settings(BaseSettings):
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
     capital_cap: float = Field(0.04, env='CAPITAL_CAP')
     dollar_risk_limit: float = Field(0.05, env='DOLLAR_RISK_LIMIT')
-    max_position_size: float | None = Field(default=None, description='Absolute max dollars per position. If None, derive from equity * capital_cap; if equity unknown, use static fallback.', alias='MAX_POSITION_SIZE')
+    max_position_size: float | None = Field(
+        5000.0,
+        description=(
+            'Absolute max dollars per position. If None, derive from equity * '
+            'capital_cap; if equity unknown, use static fallback.'
+        ),
+        alias='MAX_POSITION_SIZE',
+    )
     max_position_equity_fallback: float = Field(
         200000.0,
         alias='MAX_POSITION_EQUITY_FALLBACK',
