@@ -53,6 +53,7 @@ def _ts_window() -> tuple[dt.datetime, dt.datetime]:
 
 
 def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     start, end = _ts_window()
     responses = [Resp(429, {}), Resp(200, _bars_payload(start))]
 
@@ -74,6 +75,7 @@ def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics
 
 
 def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     start, end = _ts_window()
     events: list[object] = [df.Timeout("boom"), Resp(200, _bars_payload(start))]
 
@@ -96,31 +98,29 @@ def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: l
     assert capmetrics[1].tags["feed"] == "sip"
 
 
-def test_unauthorized_sip_fallback_success(
+def test_unauthorized_sip_returns_empty(
     monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]
 ):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     start, end = _ts_window()
-    responses = [Resp(403, {}), Resp(200, _bars_payload(start))]
+    responses = [Resp(403, {})]
 
     def fake_get(*args, **kwargs):
         return responses.pop(0)
 
     monkeypatch.setattr(df.requests, "get", fake_get, raising=True)
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="sip")
-    assert not out.empty
+    assert out.empty
     names = [r.name for r in capmetrics]
-    assert names == [
-        "data.fetch.unauthorized",
-        "data.fetch.fallback_attempt",
-        "data.fetch.success",
-    ]
+    assert names == ["data.fetch.unauthorized"]
     assert capmetrics[0].tags["feed"] == "sip"
-    assert capmetrics[1].tags["feed"] == "iex"
+    assert df._SIP_UNAUTHORIZED is True
 
 
 def test_empty_payload_fallback_success(
     monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]
 ):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     start, end = _ts_window()
     responses = [Resp(200, {"bars": []}), Resp(200, _bars_payload(start))]
 
