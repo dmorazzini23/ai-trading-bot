@@ -1222,12 +1222,15 @@ class TestNewFeature:
 
 ### Profiling Tools
 
+Store profiling output in the git-ignored `artifacts/` directory.
+
 ```bash
 # CPU profiling
-python -m cProfile -o profile.stats -m ai_trading
+mkdir -p artifacts
+python -m cProfile -o artifacts/profile.stats -m ai_trading
 python -c "
 import pstats
-p = pstats.Stats('profile.stats')
+p = pstats.Stats('artifacts/profile.stats')
 p.sort_stats('cumulative').print_stats(20)
 "
 
