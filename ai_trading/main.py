@@ -281,6 +281,41 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
         api_error.set()
 
 
+def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
+    """Initialize the global HTTP client session with retry logic."""
+    for attempt in range(1, retries + 1):
+        try:
+            session = build_retrying_session(
+                pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)),
+                total_retries=int(getattr(cfg, "http_total_retries", 3)),
+                backoff_factor=float(getattr(cfg, "http_backoff_factor", 0.3)),
+                connect_timeout=float(getattr(cfg, "http_connect_timeout", 5.0)),
+                read_timeout=float(getattr(cfg, "http_read_timeout", 10.0)),
+            )
+            set_global_session(session)
+            logger.info(
+                "REQUESTS_POOL_STATS",
+                extra={
+                    "transport": "requests",
+                    "pool_maxsize": getattr(cfg, "http_pool_maxsize", 32),
+                    "retries": getattr(cfg, "http_total_retries", 3),
+                    "backoff_factor": getattr(cfg, "http_backoff_factor", 0.3),
+                    "connect_timeout": getattr(cfg, "http_connect_timeout", 5.0),
+                    "read_timeout": getattr(cfg, "http_read_timeout", 10.0),
+                },
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "HTTP_SESSION_INIT_FAILED",
+                extra={"attempt": attempt, "error": str(exc)},
+            )
+            if attempt < retries:
+                _interruptible_sleep(delay)
+    logger.critical("HTTP session initialization failed after %s attempts", retries)
+    return False
+
+
 def parse_cli(argv: list[str] | None = None):
     """Parse CLI arguments, tolerating unknown flags."""
     parser = argparse.ArgumentParser(description="AI Trading Bot")
@@ -305,25 +340,8 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as e:
         logger.critical("RUNTIME_CONFIG_INVALID", extra={"error": str(e)})
         raise
-    session = build_retrying_session(
-        pool_maxsize=int(getattr(config, "http_pool_maxsize", 32)),
-        total_retries=int(getattr(config, "http_total_retries", 3)),
-        backoff_factor=float(getattr(config, "http_backoff_factor", 0.3)),
-        connect_timeout=float(getattr(config, "http_connect_timeout", 5.0)),
-        read_timeout=float(getattr(config, "http_read_timeout", 10.0)),
-    )
-    set_global_session(session)
-    logger.info(
-        "REQUESTS_POOL_STATS",
-        extra={
-            "transport": "requests",
-            "pool_maxsize": getattr(config, "http_pool_maxsize", 32),
-            "retries": getattr(config, "http_total_retries", 3),
-            "backoff_factor": getattr(config, "http_backoff_factor", 0.3),
-            "connect_timeout": getattr(config, "http_connect_timeout", 5.0),
-            "read_timeout": getattr(config, "http_read_timeout", 10.0),
-        },
-    )
+    if not _init_http_session(config):
+        return
     try:
         resolved_size, sizing_meta = resolve_max_position_size(config, S, force_refresh=True)
         try:
