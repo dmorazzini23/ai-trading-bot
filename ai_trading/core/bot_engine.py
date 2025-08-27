@@ -187,13 +187,7 @@ def _validate_trading_api(api: Any) -> bool:
     if not hasattr(api, "list_orders"):
         if hasattr(api, "get_orders"):
             def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
-                status = kwargs.pop("status", None)
-                if status == "open" and "statuses" not in kwargs:
-                    try:
-                        status_enum = OrderStatus.OPEN  # type: ignore[union-attr]
-                    except Exception:  # pragma: no cover - fallback when enum missing
-                        status_enum = "open"
-                    kwargs["statuses"] = [status_enum]
+                """Proxy ``list_orders`` to ``get_orders`` with compatible kwargs."""
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
