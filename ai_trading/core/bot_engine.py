@@ -4892,7 +4892,7 @@ def audit_positions(ctx) -> None:
 
     # 2) Fetch remote (broker) positions
     try:
-        remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
+        remote = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
     except APIError as e:
         logger = get_logger(__name__)
         logger.exception(
