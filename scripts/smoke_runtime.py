@@ -91,7 +91,7 @@ def test_empty_dataframe_helper():
     """Test the empty DataFrame helper creates valid indexes."""
     try:
         import pandas as pd
-        from ai_trading.core.bot_engine import _create_empty_bars_dataframe
+        from ai_trading.data.bars import _create_empty_bars_dataframe
         empty_df = _create_empty_bars_dataframe('daily')
         assert isinstance(empty_df.index, pd.DatetimeIndex)
         assert str(empty_df.index.tz) == 'UTC'
