@@ -39,6 +39,7 @@ All notable changes to this project will be documented in this file.
 - **Trading Loop**: guard missing Alpaca client and dedupe strategy logs
 - **Alpaca API**: fix submit/retry logic including 429 handling
 - **Alpaca API**: validate `list_orders` availability and map alternative clients before trading loop
+- **Alpaca API**: fix `list_orders` wrapper to forward `status` without introducing unsupported `statuses`
 - **Config**: unify centralized defaults and add `from_optimization`
 - **Utils**: re-export `ensure_utc` and enforce type assertions
 - **validate_env**: support execution via `runpy.run_module`
