@@ -1387,7 +1387,7 @@ Service example:
 Environment="AI_TRADING_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
 
 `trained_model.pkl` is expected at the project root when using
-`AI_TRADING_MODEL_PATH` (legacy `AI_TRADER_MODEL_PATH`). Generate it via the training workflow, for example:
+`AI_TRADING_MODEL_PATH`. Generate it via the training workflow, for example:
 
 ```bash
 python -m ai_trading.training.train_ml
@@ -1418,7 +1418,7 @@ Conventions (must follow)
 • Use runtime (instance of BotRuntime) across core paths; do not introduce ctx.
 • No shims; no try/except ImportError; no broad except Exception.
 • Structured JSON logging only; no print().
-• Models: configure via AI_TRADING_MODEL_PATH (or legacy AI_TRADER_MODEL_PATH) or AI_TRADING_MODEL_MODULE (legacy AI_TRADER_MODEL_MODULE); cached at runtime.model.
+• Models: configure via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE; cached at runtime.model.
 
 Common Pitfalls
 • tickers.csv missing → a single warning per process (defaults are used).

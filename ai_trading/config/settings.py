@@ -2,8 +2,8 @@ import os
 from functools import lru_cache
 from ai_trading.settings import Settings, _secret_to_str
 from ai_trading.settings import get_settings as _base_get_settings
-TICKERS_FILE = os.getenv('AI_TRADING_TICKERS_FILE', os.getenv('AI_TRADER_TICKERS_FILE', 'tickers.csv'))
-MODEL_PATH = os.getenv('AI_TRADING_MODEL_PATH') or os.getenv('AI_TRADER_MODEL_PATH')
+TICKERS_FILE = os.getenv('AI_TRADING_TICKERS_FILE', 'tickers.csv')
+MODEL_PATH = os.getenv('AI_TRADING_MODEL_PATH')
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
