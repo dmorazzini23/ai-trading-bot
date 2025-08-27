@@ -54,9 +54,16 @@ except (ValueError, TypeError, ImportError):
             self.n = n
             self.unit = unit
 
+        def __str__(self) -> str:  # pragma: no cover - simple utility
+            return f"{self.n}{self.unit}"
+
     class TimeFrameUnit:
-        Day = 'Day'
-        Minute = 'Minute'
+        Day = "Day"
+        Minute = "Min"
+
+    # Provide enum-style helpers for compatibility
+    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)
+    TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)
 COMMON_EXC = (ValueError, KeyError, AttributeError, TypeError, RuntimeError, ImportError, OSError, ConnectionError, TimeoutError)
 
 def _ensure_df(obj: Any) -> pd.DataFrame:
