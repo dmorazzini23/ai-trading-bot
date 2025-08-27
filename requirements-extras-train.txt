@@ -1,0 +1,6 @@
+# Optional training extras for Ubuntu 24.04 / CPython 3.12
+# AI-AGENT-REF: install only when WITH_TRAINING=1
+# Install via: pip install -r requirements-extras-train.txt (or `pip install ai-trading-bot[train]`)
+lightgbm==4.6.0
+xgboost==3.0.4
+optuna==4.5.0
