@@ -98,7 +98,7 @@ def validate_environment() -> None:
 def validate_alpaca_credentials() -> None:
     from .management import validate_required_env
 
-    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"))
+    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL"))
 
 def validate_env_vars() -> None:
     return validate_environment()
@@ -113,7 +113,7 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
     from .settings import get_settings as _gs
 
     s = _gs()
-    conf = {'ALPACA_API_KEY': '***' if s.alpaca_api_key else '', 'ALPACA_SECRET_KEY': '***REDACTED***' if s.alpaca_secret_key else '', 'ALPACA_BASE_URL': s.alpaca_base_url or '', 'CAPITAL_CAP': getattr(s, 'capital_cap', None) or 0.25, 'CONF_THRESHOLD': getattr(s, 'conf_threshold', None) or 0.75, 'DAILY_LOSS_LIMIT': getattr(s, 'daily_loss_limit', None) or 0.03}
+    conf = {'ALPACA_API_KEY': '***' if s.alpaca_api_key else '', 'ALPACA_SECRET_KEY': '***REDACTED***' if s.alpaca_secret_key else '', 'ALPACA_API_URL': s.alpaca_base_url or '', 'CAPITAL_CAP': getattr(s, 'capital_cap', None) or 0.25, 'CONF_THRESHOLD': getattr(s, 'conf_threshold', None) or 0.75, 'DAILY_LOSS_LIMIT': getattr(s, 'daily_loss_limit', None) or 0.03}
     if masked_keys is None and secrets_to_redact is not None:
         masked_keys = secrets_to_redact
     if masked_keys:

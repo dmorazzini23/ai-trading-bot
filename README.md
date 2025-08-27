@@ -441,7 +441,7 @@ python algorithm_optimizer.py --symbols SPY --iterations 100
 
 ```bash
 # Set environment for paper trading
-export ALPACA_BASE_URL=https://paper-api.alpaca.markets
+export ALPACA_API_URL=https://paper-api.alpaca.markets
 export TRADING_MODE=paper
 
 # Start bot
@@ -452,7 +452,7 @@ python -m ai_trading
 
 ```bash
 # ⚠️  CAUTION: Real money trading
-export ALPACA_BASE_URL=https://api.alpaca.markets
+export ALPACA_API_URL=https://api.alpaca.markets
 export TRADING_MODE=production
 export MAX_POSITION_PCT=0.03  # Conservative sizing
 
@@ -673,13 +673,14 @@ python verify_config.py
    # Alpaca API Configuration
    ALPACA_API_KEY=your_actual_api_key_here
    ALPACA_SECRET_KEY=your_actual_secret_key_here
-   ALPACA_BASE_URL=https://paper-api.alpaca.markets  # Paper trading
+   ALPACA_API_URL=https://paper-api.alpaca.markets  # Paper trading
    ALPACA_DATA_FEED=iex
    ALPACA_ADJUSTMENT=all
    DATA_LOOKBACK_DAYS_DAILY=200
    DATA_LOOKBACK_DAYS_MINUTE=5
    TZ=UTC
-   # ALPACA_BASE_URL=https://api.alpaca.markets     # Live trading (DANGER!)
+   # ALPACA_API_URL=https://api.alpaca.markets     # Live trading (DANGER!)
+   # ALPACA_BASE_URL is also accepted for backward compatibility
 
    # Bot Configuration
    TRADING_MODE=balanced                    # Trading mode: conservative, balanced, aggressive
@@ -772,7 +773,7 @@ WEBHOOK_URL=https://your-webhook-url.com/trading-alerts
 ```bash
 # .env.testing
 TRADING_MODE=paper
-ALPACA_BASE_URL=https://paper-api.alpaca.markets
+ALPACA_API_URL=https://paper-api.alpaca.markets
 DRY_RUN=true
 LOG_LEVEL=DEBUG
 MAX_POSITION_PCT=0.01  # Very small positions for testing

@@ -4,7 +4,7 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
-from pydantic import Field, SecretStr, computed_field, field_validator
+from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 try:
     from pydantic.fields import FieldInfo
@@ -67,7 +67,11 @@ class Settings(BaseSettings):
     alpaca_api_key: str | None = Field(default=None, alias='ALPACA_API_KEY')
     alpaca_secret_key: SecretStr | None = Field(default=None, alias='ALPACA_SECRET_KEY')
     redis_url: str | None = Field(default=None, alias='REDIS_URL')
-    alpaca_base_url: str = Field(default='https://paper-api.alpaca.markets', alias='ALPACA_BASE_URL')
+    alpaca_base_url: str = Field(
+        default='https://paper-api.alpaca.markets',
+        alias='ALPACA_API_URL',
+        validation_alias=AliasChoices('ALPACA_API_URL', 'ALPACA_BASE_URL'),
+    )
     trading_mode: str = Field(default='balanced', alias='TRADING_MODE')
     webhook_secret: str | None = Field(default=None, alias='WEBHOOK_SECRET')
     testing: bool = Field(False, alias='TESTING')
