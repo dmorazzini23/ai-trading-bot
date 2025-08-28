@@ -58,11 +58,54 @@ def _make_client_order_id(prefix: str='ai') -> str:
     return f'{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}'
 generate_client_order_id = _make_client_order_id
 
+
+def get_trading_client_cls():
+    """Return the Alpaca TradingClient class via lazy import."""
+    from alpaca.trading.client import TradingClient  # type: ignore
+
+    return TradingClient
+
+
+def get_data_client_cls():
+    """Return the Alpaca StockHistoricalDataClient class via lazy import."""
+    from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
+
+    return StockHistoricalDataClient
+
+
+def get_api_error_cls():
+    """Return the Alpaca APIError class via lazy import."""
+    from alpaca.common.exceptions import APIError  # type: ignore
+
+    return APIError
+
+
+def _data_classes():
+    """Return Alpaca data request classes lazily."""
+    from alpaca.data import StockBarsRequest, TimeFrame, TimeFrameUnit  # type: ignore
+
+    return StockBarsRequest, TimeFrame, TimeFrameUnit
+
+
+def get_stock_bars_request_cls():
+    StockBarsRequest, _, _ = _data_classes()
+    return StockBarsRequest
+
+
+def get_timeframe_cls():
+    _, TimeFrame, _ = _data_classes()
+    return TimeFrame
+
+
+def get_timeframe_unit_cls():
+    _, _, TimeFrameUnit = _data_classes()
+    return TimeFrameUnit
+
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
-        from alpaca.data.timeframe import TimeFrame
-    except (ValueError, TypeError, ImportError):
+        TimeFrame = get_timeframe_cls()
+    except Exception:
         TimeFrame = None
     if isinstance(tf_raw, str):
         s = tf_raw.strip()
@@ -112,7 +155,7 @@ def _get_rest(*, bars: bool = False) -> Any:
         )
 
     if bars:
-        from alpaca.data.historical import StockHistoricalDataClient
+        StockHistoricalDataClient = get_data_client_cls()
 
         if oauth:
             return StockHistoricalDataClient(
@@ -123,7 +166,7 @@ def _get_rest(*, bars: bool = False) -> Any:
             secret_key=secret,
         )
 
-    from alpaca.trading.client import TradingClient
+    TradingClient = get_trading_client_cls()
 
     is_paper = bool(base_url and "paper" in base_url.lower())
     if oauth:
@@ -172,8 +215,10 @@ def get_bars_df(
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
-    from alpaca.common.exceptions import APIError
-    from alpaca.data import StockBarsRequest, TimeFrame, TimeFrameUnit
+    APIError = get_api_error_cls()
+    StockBarsRequest = get_stock_bars_request_cls()
+    TimeFrame = get_timeframe_cls()
+    TimeFrameUnit = get_timeframe_unit_cls()
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest(bars=True)

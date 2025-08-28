@@ -1,17 +1,23 @@
 import datetime as dt
 import os
 from zoneinfo import ZoneInfo
+from typing import TYPE_CHECKING
 
-from alpaca.common.exceptions import APIError
-from alpaca.data import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
-
+from ai_trading.alpaca_api import (
+    get_api_error_cls,
+    get_data_client_cls,
+    get_stock_bars_request_cls,
+    get_timeframe_cls,
+)
 from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.logging import logger
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from alpaca.data.timeframe import TimeFrame  # type: ignore
 
-def _bars_time_window(timeframe: TimeFrame) -> tuple[dt.datetime, dt.datetime]:
+
+def _bars_time_window(timeframe: "TimeFrame") -> tuple[dt.datetime, dt.datetime]:
+    TimeFrame = get_timeframe_cls()
     now = dt.datetime.now(tz=ZoneInfo("UTC"))
     end = now - dt.timedelta(minutes=1)
     if timeframe == TimeFrame.Day:
@@ -27,7 +33,11 @@ def main() -> None:
     if feed.lower() == "sip" and not get_env("ALPACA_ALLOW_SIP", "0", cast=bool):
         logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
         feed = "iex"
-    client = StockHistoricalDataClient(
+    APIError = get_api_error_cls()
+    TimeFrame = get_timeframe_cls()
+    StockBarsRequest = get_stock_bars_request_cls()
+    DataClient = get_data_client_cls()
+    client = DataClient(
         api_key=get_env("ALPACA_API_KEY"),
         secret_key=get_env("ALPACA_SECRET_KEY"),
         base_url=get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),

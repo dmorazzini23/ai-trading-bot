@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import get_settings
@@ -15,7 +15,13 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
-from alpaca.data import TimeFrame, StockBarsRequest
+from ai_trading.alpaca_api import (
+    get_timeframe_cls,
+    get_stock_bars_request_cls,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from alpaca.data import TimeFrame, StockBarsRequest
 
 # Lazy pandas proxy; only imported on first use
 pd = load_pandas()
@@ -72,7 +78,7 @@ def _is_minute_timeframe(tf) -> bool:
         return False
 
 
-def _client_fetch_stock_bars(client: Any, request: StockBarsRequest):
+def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""
     get_stock_bars_fn = getattr(client, "get_stock_bars", None)
     if callable(get_stock_bars_fn):
@@ -91,12 +97,14 @@ def _client_fetch_stock_bars(client: Any, request: StockBarsRequest):
         params["feed"] = request.feed
     return get_bars_fn(request.symbol_or_symbols, request.timeframe, **params)
 
-def safe_get_stock_bars(client: Any, request: StockBarsRequest, symbol: str, context: str='') -> pd.DataFrame:
+def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, context: str='') -> pd.DataFrame:
     """
     Safely fetch stock bars via Alpaca client and always return a DataFrame.
     This is a faithful move of the original implementation from bot_engine,
     with identical behavior and logging fields.
     """
+    TimeFrame = get_timeframe_cls()
+    StockBarsRequest = get_stock_bars_request_cls()
     now = now_utc()
     prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
     end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)
