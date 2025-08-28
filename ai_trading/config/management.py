@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, TypeVar
@@ -243,9 +244,9 @@ class TradingConfig:
     seed: int = SEED  # AI-AGENT-REF: propagate runtime seed
     enable_finbert: bool = False
     disable_daily_retrain: bool = False
-    capital_cap: Optional[float] = None
-    dollar_risk_limit: Optional[float] = None
-    max_position_size: Optional[float] = None
+    capital_cap: Optional[float] = 0.04
+    dollar_risk_limit: Optional[float] = 0.05
+    max_position_size: Optional[float] = 1.0
     max_position_equity_fallback: float = 200000.0
     sector_exposure_cap: Optional[float] = None
     max_drawdown_threshold: Optional[float] = None
@@ -256,13 +257,28 @@ class TradingConfig:
     min_profit_factor: Optional[float] = None
     min_sharpe_ratio: Optional[float] = None
     min_win_rate: Optional[float] = None
+    kelly_fraction: Optional[float] = None
     kelly_fraction_max: float = 0.25
     min_sample_size: int = 10
     confidence_level: float = 0.90
+    lookback_periods: Optional[int] = None
+    market_calendar: Optional[str] = None
+    score_confidence_min: Optional[float] = None
+    extras: Optional[dict[str, Any]] = None
     max_position_mode: str = "STATIC"
     paper: bool = True
     data_feed: Optional[str] = None
     data_provider: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.lookback_periods is not None and self.lookback_periods <= 0:
+            raise ValueError("lookback_periods must be positive")
+        if self.kelly_fraction is not None and not (0.0 < self.kelly_fraction <= 1.0):
+            raise ValueError("kelly_fraction must be between 0 and 1")
+        if self.score_confidence_min is not None and not (
+            0.0 <= self.score_confidence_min <= 1.0
+        ):
+            raise ValueError("score_confidence_min must be between 0 and 1")
 
     # --- Ergonomics: safe update & dict view ---
     def update(self, **kwargs) -> None:
@@ -294,6 +310,11 @@ class TradingConfig:
             "kelly_fraction_max",
             "min_sample_size",
             "confidence_level",
+            "lookback_periods",
+            "kelly_fraction",
+            "extras",
+            "market_calendar",
+            "score_confidence_min",
             "max_position_mode",
             "paper",
             "data_feed",
@@ -328,14 +349,27 @@ class TradingConfig:
         app_env = _get("APP_ENV", str, default="test") or "test"
         paper_default = "paper" in str(base_url).lower() or app_env.lower() != "prod"
 
-        mps = _get("MAX_POSITION_SIZE", float)
+        mps = _get("MAX_POSITION_SIZE", float, default=1.0)
         if mps is not None and mps <= 0:
             raise ValueError("MAX_POSITION_SIZE must be positive")
 
+        extras_raw = _get("TRADING_CONFIG_EXTRAS", str)
+        extras = None
+        if extras_raw is not None:
+            try:
+                extras = json.loads(extras_raw)
+            except Exception as exc:  # pragma: no cover - defensive
+                raise ValueError(
+                    "TRADING_CONFIG_EXTRAS must be valid JSON"
+                ) from exc
+
         return cls(
-            capital_cap=_get("CAPITAL_CAP", float),
+            capital_cap=_get("CAPITAL_CAP", float, default=0.04),
             dollar_risk_limit=_get(
-                "DOLLAR_RISK_LIMIT", float, aliases=("DAILY_LOSS_LIMIT",)
+                "DOLLAR_RISK_LIMIT",
+                float,
+                default=0.05,
+                aliases=("DAILY_LOSS_LIMIT",),
             ),
             max_position_size=mps,
             max_position_equity_fallback=_get(
@@ -350,6 +384,7 @@ class TradingConfig:
             min_profit_factor=_get("MIN_PROFIT_FACTOR", float),
             min_sharpe_ratio=_get("MIN_SHARPE_RATIO", float),
             min_win_rate=_get("MIN_WIN_RATE", float),
+            kelly_fraction=_get("KELLY_FRACTION", float),
             kelly_fraction_max=_get(
                 "KELLY_FRACTION_MAX",
                 float,
@@ -368,6 +403,10 @@ class TradingConfig:
                 default=0.90,
                 aliases=("AI_TRADING_CONFIDENCE_LEVEL",),
             ),
+            lookback_periods=_get("LOOKBACK_PERIODS", int),
+            market_calendar=_get("MARKET_CALENDAR", str),
+            score_confidence_min=_get("SCORE_CONFIDENCE_MIN", float),
+            extras=extras,
             max_position_mode=_get("MAX_POSITION_MODE", str, default="STATIC"),
             paper=_get("PAPER", _to_bool, default=paper_default),
             disable_daily_retrain=_get(
