@@ -21,12 +21,13 @@ def clamp_timeout(value: Optional[float]) -> float:
 
 
 def _robust_sleep(seconds: Union[int, float]) -> None:
-    """Block for ``seconds`` using the original ``time.sleep``."""  # AI-AGENT-REF: deterministic sleep
+    """Block for ``seconds`` using the original ``time.sleep`` with a minimum delay."""  # AI-AGENT-REF: deterministic sleep
 
-    s = float(seconds)
-    if s <= 0.0:
-        return
-    _real_sleep(s)
+    try:
+        s = float(seconds)
+    except Exception:
+        s = 0.0
+    _real_sleep(max(s, 0.01))
 
 
 _force_local_sleep = str(os.getenv("AI_TRADING_FORCE_LOCAL_SLEEP", "1")).lower() in {"1", "true", "yes", "on"}

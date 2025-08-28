@@ -15,7 +15,7 @@ def test_timing_exports_exist_and_behave():
     assert clamp_timeout(-1) == pytest.approx(float(HTTP_TIMEOUT))
     # measure sleep roughly (<= 2x tolerance to absorb CI variability)
     start = perf_counter()
-    sleep(0.01)
+    sleep(0)  # request 0 -> enforced minimum
     elapsed = perf_counter() - start
     if elapsed == 0.0:
         pytest.skip("perf_counter frozen")

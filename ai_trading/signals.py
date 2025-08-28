@@ -6,6 +6,7 @@ import logging
 import os
 import math
 import statistics
+import time
 from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any, TYPE_CHECKING
@@ -21,12 +22,8 @@ logger = get_logger(__name__)
 _log = logger
 
 def psleep(_=None) -> None:
-    """Benchmark-friendly noop that accepts/ignores one arg."""
-    try:
-        from ai_trading.utils import sleep as _sleep
-        _sleep(0.0)
-    except (ImportError, AttributeError, OSError) as exc:
-        _log.debug('psleep fallback: %s', exc)
+    """Benchmark-friendly minimal sleep that accepts/ignores one arg."""
+    time.sleep(0.01)
 
 def clamp_timeout(df):
     """Benchmark-friendly helper returning input."""
