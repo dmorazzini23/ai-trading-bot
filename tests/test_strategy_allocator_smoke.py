@@ -17,9 +17,11 @@ def test_allocator():
     alloc = strategy_allocator.StrategyAllocator()
 
     # Configuration that properly tests signal confirmation workflow
-    alloc.config.delta_threshold = 0.0        # Allow repeated signals
-    alloc.config.signal_confirmation_bars = 2  # Require 2 bars for proper confirmation testing
-    alloc.config.min_confidence = 0.0         # Ensure confidence threshold is met
+    alloc.replace_config(
+        delta_threshold=0.0,  # Allow repeated signals
+        signal_confirmation_bars=2,  # Require 2 bars for proper confirmation testing
+        min_confidence=0.0,  # Ensure confidence threshold is met
+    )
 
     # AI-AGENT-REF: Add defensive verification to ensure config is applied correctly
     assert alloc.config.signal_confirmation_bars == 2, f"Expected signal_confirmation_bars=2, got {alloc.config.signal_confirmation_bars}"

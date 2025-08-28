@@ -6,6 +6,8 @@ confirmation bug that was causing test_allocator to fail with empty results
 on the second call when min_confidence=0.0.
 """
 
+from types import SimpleNamespace
+
 from ai_trading import strategy_allocator  # AI-AGENT-REF: normalized import
 from ai_trading.strategies import TradeSignal
 
@@ -23,9 +25,11 @@ class TestStrategyAllocatorRegression:
         alloc = strategy_allocator.StrategyAllocator()
 
         # Set exact configuration from original failing test
-        alloc.config.delta_threshold = 0.0
-        alloc.config.signal_confirmation_bars = 2
-        alloc.config.min_confidence = 0.0
+        alloc.replace_config(
+            delta_threshold=0.0,
+            signal_confirmation_bars=2,
+            min_confidence=0.0,
+        )
 
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
 
@@ -46,14 +50,8 @@ class TestStrategyAllocatorRegression:
         Previously, if min_confidence was missing from config, it could cause
         AttributeError or incorrect behavior.
         """
-        alloc = strategy_allocator.StrategyAllocator()
-
-        # Remove min_confidence attribute to simulate missing config
-        if hasattr(alloc.config, 'min_confidence'):
-            delattr(alloc.config, 'min_confidence')
-
-        alloc.config.delta_threshold = 0.0
-        alloc.config.signal_confirmation_bars = 2
+        cfg = SimpleNamespace(delta_threshold=0.0, signal_confirmation_bars=2)
+        alloc = strategy_allocator.StrategyAllocator(config=cfg)
 
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
 
@@ -74,9 +72,11 @@ class TestStrategyAllocatorRegression:
         """
         alloc = strategy_allocator.StrategyAllocator()
 
-        alloc.config.min_confidence = None
-        alloc.config.delta_threshold = 0.0
-        alloc.config.signal_confirmation_bars = 2
+        alloc.replace_config(
+            min_confidence=None,
+            delta_threshold=0.0,
+            signal_confirmation_bars=2,
+        )
 
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
 
@@ -106,9 +106,11 @@ class TestStrategyAllocatorRegression:
 
         for min_conf, sig_conf, should_confirm in test_cases:
             alloc = strategy_allocator.StrategyAllocator()
-            alloc.config.delta_threshold = 0.0
-            alloc.config.signal_confirmation_bars = 2
-            alloc.config.min_confidence = min_conf
+            alloc.replace_config(
+                delta_threshold=0.0,
+                signal_confirmation_bars=2,
+                min_confidence=min_conf,
+            )
 
             sig = TradeSignal(symbol="AAPL", side="buy", confidence=sig_conf, strategy="s1")
 
@@ -129,9 +131,11 @@ class TestStrategyAllocatorRegression:
         and don't cause the confirmation logic to fail.
         """
         alloc = strategy_allocator.StrategyAllocator()
-        alloc.config.delta_threshold = 0.0
-        alloc.config.signal_confirmation_bars = 2
-        alloc.config.min_confidence = 0.0
+        alloc.replace_config(
+            delta_threshold=0.0,
+            signal_confirmation_bars=2,
+            min_confidence=0.0,
+        )
 
         # Test high confidence (> 1.0)
         sig_high = TradeSignal(symbol="AAPL", side="buy", confidence=2.0, strategy="s1")
@@ -145,9 +149,11 @@ class TestStrategyAllocatorRegression:
 
         # Test negative confidence
         alloc_fresh = strategy_allocator.StrategyAllocator()
-        alloc_fresh.config.delta_threshold = 0.0
-        alloc_fresh.config.signal_confirmation_bars = 2
-        alloc_fresh.config.min_confidence = 0.0
+        alloc_fresh.replace_config(
+            delta_threshold=0.0,
+            signal_confirmation_bars=2,
+            min_confidence=0.0,
+        )
 
         sig_neg = TradeSignal(symbol="AAPL", side="buy", confidence=-0.5, strategy="s1")
 
@@ -167,9 +173,11 @@ class TestStrategyAllocatorRegression:
         """
         for i in range(3):
             alloc = strategy_allocator.StrategyAllocator()
-            alloc.config.delta_threshold = 0.0
-            alloc.config.signal_confirmation_bars = 2
-            alloc.config.min_confidence = 0.0
+            alloc.replace_config(
+                delta_threshold=0.0,
+                signal_confirmation_bars=2,
+                min_confidence=0.0,
+            )
 
             sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
 
