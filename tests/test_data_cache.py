@@ -28,6 +28,30 @@ def test_disk_cache_basic(tmp_path):
     assert list(retrieved.columns) == list(df.columns)
     assert len(retrieved) == len(df)
 
+    p = mcache.disk_path(cache_dir, "TSLA", "1h", "2024-01-01", "2024-01-02")
+    csv_p = p.with_suffix(".csv")
+    assert p.exists() or csv_p.exists()
+
+
+def test_disk_cache_parquet_import_error_fallback(tmp_path, monkeypatch):
+    """If the parquet engine is missing, the cache should fall back to CSV."""
+    cache_dir = str(tmp_path / "cache")
+    df = pd.DataFrame({"timestamp": [1], "open": [2]})
+
+    def raise_import_error(*_, **__):
+        raise ImportError("no parquet")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", raise_import_error)
+    monkeypatch.setattr(pd, "read_parquet", raise_import_error)
+
+    mcache.put_disk(cache_dir, "MSFT", "1h", "2024-01-01", "2024-01-02", df)
+    retrieved = mcache.get_disk(cache_dir, "MSFT", "1h", "2024-01-01", "2024-01-02")
+    assert retrieved is not None
+
+    p = mcache.disk_path(cache_dir, "MSFT", "1h", "2024-01-01", "2024-01-02")
+    assert not p.exists()
+    assert p.with_suffix(".csv").exists()
+
 def test_cache_key_generation():
     """Test cache key generation with special characters"""
     key1 = mcache._key("SPY", "1D", "2024-01-01", "2024-01-31")
