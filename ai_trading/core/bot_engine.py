@@ -47,6 +47,7 @@ from ai_trading.data.fetch import (
 )
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
+    from ai_trading.data.bars import TimeFrame, StockBarsRequest
 from ai_trading.utils.time import last_market_session
 from ai_trading.capital_scaling import capital_scale, update_if_present
 from ai_trading.utils.datetime import ensure_datetime
@@ -88,31 +89,24 @@ def _alpaca_available() -> bool:
     """Return ``True`` if the Alpaca SDK is importable."""
 
     return ALPACA_AVAILABLE
+import ai_trading.data.bars as _bars
 from ai_trading.data.bars import (
     _create_empty_bars_dataframe,
     _resample_minutes_to_daily,
-    safe_get_stock_bars,
-    StockBarsRequest,
-    TimeFrame,
-)
-from ai_trading.core.runtime import (
-    BotRuntime,
-    build_runtime,
-    enhance_runtime_with_context,
 )
 
-def _parse_timeframe(tf: Any) -> TimeFrame:
-    """Map configuration values to :class:`TimeFrame` enums."""
+def _parse_timeframe(tf: Any) -> _bars.TimeFrame:
+    """Map configuration values to :class:`_bars.TimeFrame` enums."""
 
-    if isinstance(tf, TimeFrame):
+    if isinstance(tf, _bars.TimeFrame):
         return tf
     tf_map = {
-        "1day": TimeFrame.Day,
-        "1d": TimeFrame.Day,
-        "day": TimeFrame.Day,
-        "1min": TimeFrame.Minute,
-        "1m": TimeFrame.Minute,
-        "minute": TimeFrame.Minute,
+        "1day": _bars.TimeFrame.Day,
+        "1d": _bars.TimeFrame.Day,
+        "day": _bars.TimeFrame.Day,
+        "1min": _bars.TimeFrame.Minute,
+        "1m": _bars.TimeFrame.Minute,
+        "minute": _bars.TimeFrame.Minute,
     }
     key = str(tf).lower()
     if key in tf_map:
@@ -370,13 +364,6 @@ __all__ = [
     "DataFetchError",
     "MockSignal",
     "MockContext",
-    # Backwards-compatibility shims
-    "StockBarsRequest",
-    "TimeFrame",
-    "safe_get_stock_bars",
-    "BotRuntime",
-    "build_runtime",
-    "enhance_runtime_with_context",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -415,7 +402,7 @@ def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate
         try:
             df = get_bars_df(
                 sym,
-                TimeFrame.Day,
+                _bars.TimeFrame.Day,
                 feed=os.getenv("ALPACA_DATA_FEED", "iex"),
             )  # AI-AGENT-REF: derive window & feed
             if df is None or df.empty:
@@ -443,7 +430,7 @@ def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, 
     results: dict[str, pd.DataFrame] = {}
     for sym in symbols:
         try:
-            df = get_bars_df(sym, TimeFrame.Day, feed=feed)
+            df = get_bars_df(sym, _bars.TimeFrame.Day, feed=feed)
         except ValueError:
             continue
         if df is None or df.empty:
@@ -2795,7 +2782,7 @@ def _fetch_intraday_bars_chunked(
         for i in range(0, len(symbols), batch_size):
             chunk = symbols[i : i + batch_size]
             try:
-                got = get_bars_batch(chunk, str(TimeFrame.Minute), s_dt, e_dt, feed=feed)
+                got = get_bars_batch(chunk, str(_bars.TimeFrame.Minute), s_dt, e_dt, feed=feed)
             except (
                 FileNotFoundError,
                 PermissionError,
@@ -3914,7 +3901,7 @@ class DataFetcher:
             "DAILY_FETCH_REQUEST",
             extra={
                 "symbol": symbol,
-                "timeframe": str(TimeFrame.Day),
+                "timeframe": str(_bars.TimeFrame.Day),
                 "start": start_ts.isoformat(),
                 "end": end_ts.isoformat(),
             },
@@ -3942,7 +3929,7 @@ class DataFetcher:
                     "DAILY_FETCH_RESULT",
                     extra={
                         "symbol": symbol,
-                        "timeframe": str(TimeFrame.Day),
+                        "timeframe": str(_bars.TimeFrame.Day),
                         "start": start_ts.isoformat(),
                         "end": end_ts.isoformat(),
                         "rows": 0 if cached is None else len(cached),
@@ -3969,14 +3956,14 @@ class DataFetcher:
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
             try:
-                m_req = StockBarsRequest(
+                m_req = _bars.StockBarsRequest(
                     symbol_or_symbols=[symbol],
-                    timeframe=TimeFrame.Minute,
+                    timeframe=_bars.TimeFrame.Minute,
                     start=start_ts,
                     end=end_ts,
                     feed="iex",
                 )
-                mdf = safe_get_stock_bars(client, m_req, symbol, "FALLBACK MINUTE")
+                mdf = _bars.safe_get_stock_bars(client, m_req, symbol, "FALLBACK MINUTE")
                 if mdf is None or mdf.empty:
                     return None
                 if isinstance(mdf.columns, pd.MultiIndex):
@@ -3995,9 +3982,9 @@ class DataFetcher:
                 return None
 
         try:
-            req = StockBarsRequest(
+            req = _bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Day,
+                timeframe=_bars.TimeFrame.Day,
                 start=start_ts,
                 end=end_ts,
                 feed=_DEFAULT_FEED,
@@ -4032,7 +4019,7 @@ class DataFetcher:
 
             # AI-AGENT-REF: safety net retry with downgraded log level
             try:
-                bars = safe_get_stock_bars(client, req, symbol, "DAILY")
+                bars = _bars.safe_get_stock_bars(client, req, symbol, "DAILY")
             except TypeError as te:
                 msg = str(te)
                 if "datetime argument was callable" in msg:
@@ -4045,7 +4032,7 @@ class DataFetcher:
                     req.end = _sanitize_pre(
                         getattr(req, "end", end_ts), _default_end_u
                     )
-                    bars = safe_get_stock_bars(client, req, symbol, "DAILY")
+                    bars = _bars.safe_get_stock_bars(client, req, symbol, "DAILY")
                 else:
                     raise
             if bars is None or bars.empty:
@@ -4057,7 +4044,7 @@ class DataFetcher:
                         "response": None if bars is None else bars.to_dict(),
                     },
                 )
-                bars = safe_get_stock_bars(client, req, symbol, "DAILY_RETRY")
+                bars = _bars.safe_get_stock_bars(client, req, symbol, "DAILY_RETRY")
                 if bars is None or bars.empty:
                     bars = _minute_resample()
                     if bars is None or bars.empty:
@@ -4101,7 +4088,7 @@ class DataFetcher:
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
-                    df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
+                    df_iex = _bars.safe_get_stock_bars(client, req, symbol, "IEX DAILY")
                     if df_iex is None:
                         raise DataFetchError(f"no IEX data for {symbol}")
                     if isinstance(df_iex.columns, pd.MultiIndex):
@@ -4200,7 +4187,7 @@ class DataFetcher:
             "DAILY_FETCH_RESULT",
             extra={
                 "symbol": symbol,
-                "timeframe": str(TimeFrame.Day),
+                "timeframe": str(_bars.TimeFrame.Day),
                 "start": start_ts.isoformat(),
                 "end": end_ts.isoformat(),
                 "rows": 0 if df is None else len(df),
@@ -4271,14 +4258,14 @@ class DataFetcher:
         )
 
         try:
-            req = StockBarsRequest(
+            req = _bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Minute,
+                timeframe=_bars.TimeFrame.Minute,
                 start=start_minute,
                 end=last_closed_minute,
                 feed=_DEFAULT_FEED,
             )
-            bars = safe_get_stock_bars(client, req, symbol, "MINUTE")
+            bars = _bars.safe_get_stock_bars(client, req, symbol, "MINUTE")
             if bars is None:
                 return None
             if isinstance(bars.columns, pd.MultiIndex):
@@ -4316,7 +4303,7 @@ class DataFetcher:
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
-                    df_iex = safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
+                    df_iex = _bars.safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
                     if df_iex is None:
                         return None
                     if isinstance(df_iex.columns, pd.MultiIndex):
@@ -4409,16 +4396,16 @@ class DataFetcher:
                 _, day_end = day_end
 
             try:
-                bars_req = StockBarsRequest(
+                bars_req = _bars.StockBarsRequest(
                     symbol_or_symbols=[symbol],
-                    timeframe=TimeFrame.Minute,
+                    timeframe=_bars.TimeFrame.Minute,
                     start=day_start,
                     end=day_end,
                     limit=10000,
                     feed=_DEFAULT_FEED,
                 )
                 try:
-                    bars_day = safe_get_stock_bars(
+                    bars_day = _bars.safe_get_stock_bars(
                         ctx.data_client, bars_req, symbol, "INTRADAY"
                     )
                     if bars_day is None:
@@ -4439,7 +4426,7 @@ class DataFetcher:
                             e,
                         )
                         bars_req.feed = "iex"
-                        bars_day = safe_get_stock_bars(
+                        bars_day = _bars.safe_get_stock_bars(
                             ctx.data_client, bars_req, symbol, "IEX INTRADAY"
                         )
                         if bars_day is None:
@@ -4521,14 +4508,14 @@ def prefetch_daily_data(
     )
 
     try:
-        req = StockBarsRequest(
+        req = _bars.StockBarsRequest(
             symbol_or_symbols=symbols,
-            timeframe=TimeFrame.Day,
+            timeframe=_bars.TimeFrame.Day,
             start=start_date,
             end=end_date,
             feed=_DEFAULT_FEED,
         )
-        bars = safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
+        bars = _bars.safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
         if bars is None:
             return {}
         if isinstance(bars.columns, pd.MultiIndex):
@@ -4558,7 +4545,7 @@ def prefetch_daily_data(
             logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
-                bars_iex = safe_get_stock_bars(
+                bars_iex = _bars.safe_get_stock_bars(
                     client, req, str(symbols), "IEX BULK DAILY"
                 )
                 if bars_iex is None:
@@ -4599,14 +4586,14 @@ def prefetch_daily_data(
                 daily_dict = {}
                 for sym in symbols:
                     try:
-                        req_sym = StockBarsRequest(
+                        req_sym = _bars.StockBarsRequest(
                             symbol_or_symbols=[sym],
-                            timeframe=TimeFrame.Day,
+                            timeframe=_bars.TimeFrame.Day,
                             start=start_date,
                             end=end_date,
                             feed=_DEFAULT_FEED,
                         )
-                        df_sym = safe_get_stock_bars(
+                        df_sym = _bars.safe_get_stock_bars(
                             client, req_sym, sym, "FALLBACK DAILY"
                         )
                         if df_sym is None:
@@ -11497,7 +11484,7 @@ def get_stock_bars_safe(api, symbol, timeframe):
     import pandas as pd
 
     try:
-        req = StockBarsRequest(
+        req = _bars.StockBarsRequest(
             symbol_or_symbols=[symbol],
             timeframe=_parse_timeframe(timeframe),
         )

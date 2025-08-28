@@ -1,7 +1,7 @@
 import pytest
 pd = pytest.importorskip("pandas")
 def test_timeframe_has_basic_members():
-    from ai_trading.core.bot_engine import TimeFrame
+    from ai_trading.data.bars import TimeFrame
 
     assert hasattr(TimeFrame, "Day")
     assert hasattr(TimeFrame, "Minute")
