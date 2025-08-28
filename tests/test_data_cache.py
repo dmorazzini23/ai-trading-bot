@@ -20,10 +20,10 @@ def test_disk_cache_basic(tmp_path):
     df = pd.DataFrame({"timestamp":[1], "open":[2], "high":[3], "low":[1], "close":[2.5], "volume":[1000]})
 
     # Put data in disk cache
-    mcache.put_disk(cache_dir, "TSLA", "1H", "2024-01-01", "2024-01-02", df)
+    mcache.put_disk(cache_dir, "TSLA", "1h", "2024-01-01", "2024-01-02", df)
 
     # Retrieve from disk cache
-    retrieved = mcache.get_disk(cache_dir, "TSLA", "1H", "2024-01-01", "2024-01-02")
+    retrieved = mcache.get_disk(cache_dir, "TSLA", "1h", "2024-01-01", "2024-01-02")
     assert retrieved is not None
     assert list(retrieved.columns) == list(df.columns)
     assert len(retrieved) == len(df)
@@ -31,10 +31,10 @@ def test_disk_cache_basic(tmp_path):
 def test_cache_key_generation():
     """Test cache key generation with special characters"""
     key1 = mcache._key("SPY", "1D", "2024-01-01", "2024-01-31")
-    key2 = mcache._key("BTC/USD", "1H", "2024:01:01T10:30:00", "2024:01:01T11:30:00")
+    key2 = mcache._key("BTC/USD", "1h", "2024:01:01T10:30:00", "2024:01:01T11:30:00")
 
     assert key1 == "SPY|1D|2024-01-01|2024-01-31"
-    assert key2 == "BTC/USD|1H|2024:01:01T10:30:00|2024:01:01T11:30:00"
+    assert key2 == "BTC/USD|1h|2024:01:01T10:30:00|2024:01:01T11:30:00"
 
 def test_memory_cache_thread_safety():
     """Test that memory cache handles concurrent access safely"""
