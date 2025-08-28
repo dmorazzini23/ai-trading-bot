@@ -138,8 +138,8 @@ class RiskEngine:
         """Validate required environment variables unless running tests."""
         if get_env("PYTEST_RUNNING", "0", cast=bool):
             return
-        snapshot = validate_required_env()
-        logger.debug("ENV_VARS_MASKED", extra=snapshot)
+        env_count = len(validate_required_env())
+        logger.debug("Validated %d environment variables", env_count)
 
     def _dynamic_cap(self, asset_class: str, volatility: float | None=None, cash_ratio: float | None=None) -> float:
         """Return exposure cap for ``asset_class`` using adaptive rules."""
