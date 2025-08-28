@@ -14,6 +14,10 @@ Flask>=3,<4
 beautifulsoup4>=4.12,<5
 lxml>=5,<6
 aiohttp>=3.9,<4
+msgpack>=1.1.1
+pyyaml>=6.0.2
+urllib3>=2.5.0
+websockets>=15.0.1
 # Explicit Pydantic v2 + settings
 pydantic==2.8.2
 pydantic-settings>=2.2,<3

@@ -14,6 +14,8 @@ alpaca-py==0.42.0
     # via
     #   -r requirements-dev.txt
     #   -r requirements.txt
+alpaca-trade-api==0
+    # avoid deprecated package
 annotated-types==0.7.0
     # via pydantic
 attrs==25.3.0
@@ -173,6 +175,8 @@ pydantic-settings==2.10.1
     # via -r requirements.txt
 pyluach==2.2.0
     # via exchange-calendars
+pyyaml==6.0.2
+    # via -r requirements.txt
 pytest==8.3.2
     # via
     #   -r requirements-dev.txt
@@ -260,6 +264,8 @@ tzdata==2025.2
     #   pandas-market-calendars
     #   pytz-deprecation-shim
 tzlocal==4.3
+    # via -r requirements.txt
+urllib3==2.5.0
     # via -r requirements.txt
 websockets==15.0.1
     # via alpaca-py
