@@ -95,6 +95,10 @@ from ai_trading.data.bars import (
     _resample_minutes_to_daily,
 )
 
+# Deprecated legacy proxies; prefer ai_trading.data.bars
+StockBarsRequest = _bars.StockBarsRequest
+safe_get_stock_bars = _bars.safe_get_stock_bars
+
 def _parse_timeframe(tf: Any) -> _bars.TimeFrame:
     """Map configuration values to :class:`_bars.TimeFrame` enums."""
 
@@ -467,6 +471,31 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
     pipeline = None  # type: ignore  # AI-AGENT-REF: fallback when pipeline absent
 
 logger = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
+
+# Deprecated legacy logger alias
+_log = get_logger(__name__)
+
+
+def _current_position_qty(ctx: Any, symbol: str) -> int:
+    """Return current position quantity for *symbol*.
+
+    Deprecated legacy helper retained for compatibility. Falls back to ``0``
+    if the position is missing or an error occurs.
+    """
+
+    api = getattr(ctx, "api", None)
+    if api is None:
+        return 0
+    try:
+        position = api.get_position(symbol)
+    except Exception:  # pragma: no cover - legacy safety net
+        _log.debug("POSITION_LOOKUP_FAILED", exc_info=True, extra={"symbol": symbol})
+        return 0
+    qty = getattr(position, "qty", 0) if position is not None else 0
+    try:
+        return int(qty)
+    except (TypeError, ValueError):  # pragma: no cover - legacy safety net
+        return 0
 
 
 def _mask_env_name(name: str) -> str:
