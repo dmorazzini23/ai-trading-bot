@@ -325,6 +325,103 @@ def _ensure_requests():
     return requests
 
 
+def _parse_bars(symbol: str, content_type: str, body: bytes) -> pd.DataFrame:
+    """Parse raw bar data into a normalized DataFrame.
+
+    Supports a minimal subset of JSON or CSV payloads.  Raises
+    ``DataFetchError`` when parsing fails or when ``pandas`` is unavailable.
+    """
+    pd = _ensure_pandas()
+    if pd is None:
+        raise DataFetchError("pandas not available")
+    try:
+        if "json" in (content_type or "").lower():
+            import json
+
+            data = json.loads(body.decode() or "{}")
+            if isinstance(data, dict) and "bars" in data:
+                data = data["bars"]
+            df = pd.DataFrame(data)
+        else:
+            import io
+
+            df = pd.read_csv(io.BytesIO(body))
+    except Exception as exc:  # pragma: no cover - narrow parsing
+        raise DataFetchError(f"parse error: {exc}") from exc
+    return _flatten_and_normalize_ohlcv(df, symbol)
+
+
+def _alpaca_get_bars(
+    client: Any,
+    symbol: str,
+    start: Any,
+    end: Any,
+    timeframe: str = "1Day",
+) -> pd.DataFrame:
+    """Fetch bars from an Alpaca-style client."""
+    pd = _ensure_pandas()
+    if pd is None:
+        raise DataFetchError("pandas not available")
+    if client is None or not hasattr(client, "get_bars"):
+        raise DataFetchError("invalid client")
+    try:
+        bars = client.get_bars(symbol, start=start, end=end, timeframe=timeframe)
+    except Exception as exc:  # pragma: no cover - client variability
+        raise DataFetchError(str(exc)) from exc
+    if isinstance(bars, pd.DataFrame):
+        return _flatten_and_normalize_ohlcv(bars, symbol)
+    try:
+        return _flatten_and_normalize_ohlcv(pd.DataFrame(bars), symbol)
+    except Exception as exc:  # pragma: no cover - conversion failure
+        raise DataFetchError(f"invalid bars: {exc}") from exc
+
+
+def get_daily(symbol: str, start: Any, end: Any) -> pd.DataFrame:
+    """Fetch daily bars for ``symbol`` using a Yahoo-style endpoint."""
+    pd = _ensure_pandas()
+    _ensure_requests()
+    if pd is None or getattr(requests, "get", None) is None:
+        raise DataFetchError("requests not available")
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    url = _build_daily_url(symbol, start_dt, end_dt)
+    try:
+        resp = requests.get(url, timeout=10)
+    except Exception as exc:  # pragma: no cover - network variance
+        raise DataFetchError(str(exc)) from exc
+    if getattr(resp, "status_code", 0) != 200:
+        raise DataFetchError(f"http {getattr(resp, 'status_code', 'unknown')}")
+    ctype = resp.headers.get("Content-Type", "") if getattr(resp, "headers", None) else ""
+    return _parse_bars(symbol, ctype, resp.content)
+
+
+def fetch_daily_data_async(
+    symbols: list[str],
+    start: Any,
+    end: Any,
+    *,
+    timeout: float | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Fetch daily bars for multiple symbols concurrently."""
+    pd = _ensure_pandas()
+    if pd is None:
+        raise DataFetchError("pandas not available")
+    http = _ensure_http_client()
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    urls = [_build_daily_url(sym, start_dt, end_dt) for sym in symbols]
+    results = http.map_get(urls, timeout=timeout)
+    out: dict[str, pd.DataFrame] = {}
+    for sym, (res, err) in zip(symbols, results):
+        if err or res is None:
+            raise DataFetchError(str(err))
+        _, status, body = res
+        if status != 200:
+            raise DataFetchError(f"http {status}")
+        out[sym] = _parse_bars(sym, "application/json", body)
+    return out
+
+
 # Singleton holder for DataFetcher instances
 _FETCHER_SINGLETON: Any | None = None
 
@@ -638,6 +735,10 @@ __all__ = [
     '_VALID_FEEDS',
     '_SIP_UNAUTHORIZED',
     'ensure_datetime',
+    '_parse_bars',
+    '_alpaca_get_bars',
+    'get_daily',
+    'fetch_daily_data_async',
     '_yahoo_get_bars',
     '_fetch_bars',
     'get_bars',
