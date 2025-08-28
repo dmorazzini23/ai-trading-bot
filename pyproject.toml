@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "numpy==1.26.4",  # AI-AGENT-REF: pin NumPy to 1.x for pandas-ta compatibility
-  "tzlocal==4.3",
   "requests>=2.31,<3",
   "urllib3==2.5.0",  # AI-AGENT-REF: align with Alpaca SDK
   "certifi>=2023.7.22",
@@ -23,7 +22,7 @@ dependencies = [
   "pydantic==2.8.2",
   "pydantic-settings>=2.2,<3",
   "tzdata>=2024.1",  # AI-AGENT-REF: ensure timezone data
-  "pandas-market-calendars>=4.4,<6",  # AI-AGENT-REF: exchange calendars
+  "pandas-market-calendars>=5.1,<6",  # AI-AGENT-REF: exchange calendars
   "schedule==1.2.2",
   "prometheus-client==0.20.0",
   "cachetools==5.3.3",
