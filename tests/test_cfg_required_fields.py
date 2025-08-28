@@ -9,3 +9,5 @@ def test_cfg_required_fields_exist():
     assert hasattr(cfg, "shadow_mode")
     assert hasattr(cfg, "healthcheck_port")
     assert hasattr(cfg, "min_health_rows")
+    assert hasattr(cfg, "WEBHOOK_SECRET")
+    assert hasattr(cfg, "ENABLE_PORTFOLIO_FEATURES")

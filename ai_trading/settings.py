@@ -75,7 +75,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices('ALPACA_API_URL', 'ALPACA_BASE_URL'),
     )
     trading_mode: str = Field(default='balanced', alias='TRADING_MODE')
-    webhook_secret: str | None = Field(default=None, alias='WEBHOOK_SECRET')
+    WEBHOOK_SECRET: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices('WEBHOOK_SECRET', 'AI_TRADING_WEBHOOK_SECRET'),
+    )
+    ENABLE_PORTFOLIO_FEATURES: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            'ENABLE_PORTFOLIO_FEATURES', 'AI_TRADING_ENABLE_PORTFOLIO_FEATURES'
+        ),
+    )
     testing: bool = Field(False, alias='TESTING')
     shadow_mode: bool = Field(False, alias='SHADOW_MODE')
     disable_daily_retrain: bool = Field(False, alias='DISABLE_DAILY_RETRAIN')
