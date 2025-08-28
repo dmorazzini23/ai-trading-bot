@@ -107,6 +107,45 @@ class BaseStrategy(ABC):
             List of trading signals
         """
 
+    def generate_signal(
+        self,
+        symbol: str,
+        side: OrderSide = OrderSide.BUY,
+        strength: float = 0.0,
+        confidence: float = 0.0,
+        **kwargs: Any,
+    ) -> StrategySignal:
+        """Generate a placeholder single trading signal.
+
+        This base implementation returns a neutral :class:`StrategySignal` and
+        is intended to be overridden by concrete strategy implementations.
+
+        Parameters
+        ----------
+        symbol:
+            Asset ticker symbol.
+        side:
+            Trade direction, defaults to ``OrderSide.BUY``.
+        strength:
+            Raw signal strength in ``[0, 1]``; defaults to ``0.0``.
+        confidence:
+            Confidence weight in ``[0, 1]``; defaults to ``0.0``.
+        **kwargs:
+            Additional metadata forwarded to :class:`StrategySignal`.
+
+        Returns
+        -------
+        StrategySignal
+            Placeholder signal object.
+        """
+        return StrategySignal(
+            symbol=symbol,
+            side=side,
+            strength=strength,
+            confidence=confidence,
+            **kwargs,
+        )
+
     def generate(self, ctx: Any) -> list[StrategySignal]:
         """Return list of signals from market context (dict-compat)."""
         if isinstance(ctx, dict):
@@ -119,19 +158,33 @@ class BaseStrategy(ABC):
                 market_data = {'symbols': getattr(ctx, 'symbols', []), 'data_by_symbol': getattr(ctx, 'data_by_symbol', {})}
         return self.generate_signals(market_data)
 
-    @abstractmethod
-    def calculate_position_size(self, signal: StrategySignal, portfolio_value: float, current_position: float=0) -> int:
-        """
-        Calculate optimal position size for signal.
+    def calculate_position_size(
+        self,
+        signal: StrategySignal,
+        portfolio_value: float,
+        current_position: float = 0,
+    ) -> int:
+        """Calculate position size for a signal.
 
-        Args:
-            signal: Trading signal
-            portfolio_value: Current portfolio value
-            current_position: Current position size
+        The base implementation returns ``0`` as a placeholder and should be
+        overridden by subclasses that implement concrete risk management
+        logic.
 
-        Returns:
-            Recommended position size
+        Parameters
+        ----------
+        signal:
+            Trading signal for which to determine size.
+        portfolio_value:
+            Current portfolio value in dollars.
+        current_position:
+            Existing position size, if any. Defaults to ``0``.
+
+        Returns
+        -------
+        int
+            Placeholder position size ``0``.
         """
+        return 0
 
     def validate_signal(self, signal: StrategySignal) -> bool:
         """
