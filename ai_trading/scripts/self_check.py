@@ -60,6 +60,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     if not get_env("PYTEST_RUNNING", "0", cast=bool):
-        snapshot = validate_required_env()
-        logger.debug("ENV_VARS_MASKED", extra=snapshot)
+        env_count = len(validate_required_env())
+        logger.debug("Validated %d environment variables", env_count)
     main()

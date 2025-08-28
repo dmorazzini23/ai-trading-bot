@@ -16,8 +16,8 @@ from ai_trading.logging import _get_metrics_logger
 from ai_trading.utils.base import get_phase_logger
 logger = get_phase_logger(__name__, 'RISK_CHECK')
 if not get_env('PYTEST_RUNNING', '0', cast=bool):
-    _ENV_SNAPSHOT = validate_required_env()
-    logger.debug('ENV_VARS_MASKED', extra=_ENV_SNAPSHOT)
+    env_count = len(validate_required_env())
+    logger.debug('Validated %d environment variables', env_count)
 
 random.seed(SEED)
 np.random.seed(SEED)
