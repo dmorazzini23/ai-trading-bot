@@ -28,9 +28,7 @@ def test_initialize_skips_in_shadow_mode(monkeypatch):
     monkeypatch.setenv("SHADOW_MODE", "true")
     monkeypatch.setenv("PYTEST_RUNNING", "true")
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
 
     import ai_trading.core.bot_engine as eng
     # Reset the client to None
@@ -51,9 +49,7 @@ def test_initialize_raises_when_missing_creds_and_not_shadow(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     monkeypatch.setenv("PYTEST_RUNNING", "true")
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
 
     import ai_trading.core.bot_engine as eng
     # Reset the client to None
@@ -91,9 +87,7 @@ def test_ensure_alpaca_attached_raises_without_creds(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     monkeypatch.setenv("PYTEST_RUNNING", "true")
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
 
     import ai_trading.core.bot_engine as eng
     eng.trading_client = None
