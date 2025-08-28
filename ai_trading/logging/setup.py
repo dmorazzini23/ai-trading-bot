@@ -17,9 +17,9 @@ def get_logger_paths() -> list[str]:
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
     """Configure logging and track any file handlers created.
 
-    This is a thin wrapper around :func:`ai_trading.logging.setup_logging` that
-    records the ``log_file`` argument whenever a ``RotatingFileHandler`` is
-    requested.  Paths are tracked in ``_logger_paths`` which can be retrieved via
+    The ``debug`` flag is kept for compatibility but the effective log level is
+    now driven by configuration or the ``LOG_LEVEL`` environment variable.
+    Paths are tracked in ``_logger_paths`` which can be retrieved via
     :func:`get_logger_paths`.
     """
     from . import setup_logging as _setup_logging
@@ -31,4 +31,5 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     if log_file and log_file not in _logger_paths:
         _logger_paths.append(log_file)
 
-    return _setup_logging(debug=debug, log_file=log_file)
+    # ``debug`` is intentionally ignored; callers should set ``LOG_LEVEL``.
+    return _setup_logging(log_file=log_file)

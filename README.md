@@ -908,8 +908,10 @@ The system uses a **centralized logging architecture** to prevent duplicate log 
 # Correct way - use centralized logging
 from ai_trading.logging import get_logger, setup_logging
 
-# Initialize logging (only needed once at application startup)
-setup_logging(debug=True, log_file="logs/bot.log")
+# Initialize logging (only needed once at application startup).
+# Control verbosity with the LOG_LEVEL environment variable, e.g.
+# `export LOG_LEVEL=DEBUG` for debug output.
+setup_logging(log_file="logs/bot.log")
 
 # Get named logger for your module
 logger = get_logger(__name__)

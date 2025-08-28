@@ -14,10 +14,8 @@ ensure_dotenv_loaded()
 
 import ai_trading.logging as _logging
 
-# Determine log file and level from environment
+# Determine log file from environment
 LOG_FILE = os.getenv("BOT_LOG_FILE", "logs/bot.log")
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-_numeric_level = getattr(logging, LOG_LEVEL, logging.INFO)
 
 # Reset any prior logging configuration to apply new settings
 if getattr(_logging, "_listener", None):
@@ -30,14 +28,8 @@ _logging._configured = False
 _logging._LOGGING_CONFIGURED = False
 logging.getLogger().handlers.clear()
 
-# Configure logging with the desired file and level
-root_logger = _logging.setup_logging(debug=_numeric_level <= logging.DEBUG, log_file=LOG_FILE)
-root_logger.setLevel(_numeric_level)
-for handler in root_logger.handlers:
-    handler.setLevel(_numeric_level)
-if _logging._listener is not None:
-    for _h in _logging._listener.handlers:
-        _h.setLevel(_numeric_level)
+# Configure logging with the desired file
+_logging.setup_logging(log_file=LOG_FILE)
 
 # Module logger
 logger = _logging.get_logger(__name__)

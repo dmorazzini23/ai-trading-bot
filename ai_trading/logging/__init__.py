@@ -301,8 +301,17 @@ def get_rotating_handler(path: str, max_bytes: int=5000000, backup_count: int=5)
     return handler
 
 def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logger:
-    """Configure the root logger in an idempotent way."""
+    """Configure the root logger in an idempotent way.
+
+    The ``debug`` flag is retained for backward compatibility but the log
+    level should now be controlled via settings or the ``LOG_LEVEL``
+    environment variable.
+    """
     global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
+    if debug:
+        # Deprecated: retain for callers that still pass ``debug=True``.
+        # The effective log level is derived from configuration instead.
+        pass
     with _LOGGING_LOCK:
         if _listener is not None:
             thread = getattr(_listener, '_thread', None)
@@ -319,16 +328,19 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         _configured = True
         _ensure_single_handler(logger)
         logger.handlers.clear()
-        logger.setLevel(logging.DEBUG)
         try:
             from ai_trading.config import get_settings
             S = get_settings()
+            level_name = getattr(S, 'log_level', 'INFO')
             if S.log_compact_json:
                 formatter = CompactJsonFormatter('%Y-%m-%dT%H:%M:%SZ')
             else:
                 formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
         except COMMON_EXC:
+            level_name = os.getenv('LOG_LEVEL', 'INFO')
             formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
+        level = getattr(logging, str(level_name).upper(), logging.INFO)
+        logger.setLevel(level)
 
         class _PhaseFilter(logging.Filter):
 
@@ -339,7 +351,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         handlers: list[logging.Handler] = []
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(formatter)
-        stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        stream_handler.setLevel(level)
         stream_handler.addFilter(_PhaseFilter())
         from ai_trading.logging_filters import SecretFilter
         secret_filter = SecretFilter()
@@ -357,7 +369,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             handlers.append(rotating_handler)
         _log_queue = queue.Queue(-1)
         queue_handler = QueueHandler(_log_queue)
-        queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        queue_handler.setLevel(level)
         queue_handler.addFilter(_PhaseFilter())
         queue_handler.addFilter(secret_filter)
         queue_handler.addFilter(extra_filter)

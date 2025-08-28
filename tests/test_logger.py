@@ -31,18 +31,21 @@ def test_setup_logging_idempotent(monkeypatch, tmp_path):
         return logging.StreamHandler()
 
     monkeypatch.setattr(mod, "get_rotating_handler", fake_get_rotating)
-    lg = mod.setup_logging(debug=True, log_file=str(tmp_path / "f.log"))
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    lg = mod.setup_logging(log_file=str(tmp_path / "f.log"))
     assert lg.level in (logging.DEBUG, logging.INFO)
     assert created, f"No rotating handler paths created. Captured: {created}"
     created.clear()
-    lg2 = mod.setup_logging(debug=False)
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    lg2 = mod.setup_logging()
     assert lg2 is lg
     assert created == []
 
 
-def test_get_logger():
+def test_get_logger(monkeypatch):
     mod = reload_module(logger)
-    root = mod.setup_logging(debug=True)
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    root = mod.setup_logging()
     lg = mod.get_logger("test")
     assert lg is mod._loggers["test"]
     assert len(lg.handlers) == len(root.handlers)
