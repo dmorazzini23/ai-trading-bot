@@ -4,7 +4,7 @@ Tests for model registry functionality.
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from ai_trading.model_registry import ModelRegistry
@@ -128,27 +128,48 @@ class TestModelRegistry:
                 registry.load_model("nonexistent_id")
 
     def test_model_not_picklable(self):
-        """Test that non-picklable models raise RuntimeError."""
+        """Test that non-picklable models raise RuntimeError when all picklers fail."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
 
-            # Create a mock object that raises an exception when pickled
             mock_model = Mock()
+            _ = pytest.importorskip("cloudpickle")
+            dill_mod = pytest.importorskip("dill")
 
-            def pickle_side_effect(*args, **kwargs):
+            def fail(*_a, **_k):  # pragma: no cover - trivial
                 raise Exception("Cannot pickle this object")
 
             with pytest.raises(RuntimeError, match="Model not picklable"):
-                with tempfile.NamedTemporaryFile():
-                    # Patch pickle.dumps to raise an exception
-                    import pickle as pickle_module
-                    original_dumps = pickle_module.dumps
-                    pickle_module.dumps = pickle_side_effect
-                    try:
-                        registry.register_model(
-                            model=mock_model,
-                            strategy="test_strategy",
-                            model_type="test_type"
-                        )
-                    finally:
-                        pickle_module.dumps = original_dumps
+                with patch("pickle.dumps", side_effect=fail), patch(
+                    "cloudpickle.dumps", side_effect=fail
+                ), patch.object(dill_mod, "dumps", side_effect=fail):
+                    registry.register_model(
+                        model=mock_model,
+                        strategy="test_strategy",
+                        model_type="test_type",
+                    )
+
+    def test_pickle_fallback(self):
+        """pickle failure should fall back to cloudpickle or dill."""
+        _ = pytest.importorskip("cloudpickle")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            model = Mock()
+
+            with patch("pickle.dumps", side_effect=Exception("boom")):
+                model_id = registry.register_model(model, "s", "t")
+            assert model_id in registry.model_index
+
+    def test_metadata_class_path_conversion(self):
+        """Metadata containing classes should be stored as dotted path."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            model = {"a": 1}
+            model_id = registry.register_model(
+                model=model,
+                strategy="strat",
+                model_type="dict",
+                metadata={"cls": Mock},
+            )
+            _model, meta = registry.load_model(model_id)
+            assert meta["cls"] == "unittest.mock.Mock"
