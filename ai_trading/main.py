@@ -276,8 +276,8 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
     """Start API server and signal readiness/errors."""
     try:
         start_api(api_ready)
-    except (OSError, RuntimeError) as e:
-        logger.error("Failed to start API: %s", str(e))
+    except Exception:  # noqa: BLE001
+        logger.error("Failed to start API", exc_info=True)
         api_error.set()
 
 
