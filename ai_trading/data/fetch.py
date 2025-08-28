@@ -22,6 +22,7 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
+from ai_trading.data.metrics import metrics
 
 
 # Optional dependency placeholders
@@ -245,6 +246,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             group_by='column',
         )
     if df is None or df.empty:
+        metrics.empty_payload += 1
         idx = pd.DatetimeIndex([], tz='UTC', name='timestamp')
         cols = ['open', 'high', 'low', 'close', 'volume']
         return pd.DataFrame(columns=cols, index=idx).reset_index()
@@ -379,6 +381,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
 
     if _feed == 'sip' and _SIP_UNAUTHORIZED:
         _incr('data.fetch.unauthorized', value=1.0, tags=_tags())
+        metrics.unauthorized += 1
         logger.warning(
             'UNAUTHORIZED_SIP',
             extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}),
@@ -401,6 +404,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
         except Timeout as e:
             logger.warning('DATA_SOURCE_HTTP_ERROR', extra=_norm_extra({'provider': 'alpaca', 'feed': _feed, 'timeframe': _interval, 'error': str(e)}))
             _incr('data.fetch.timeout', value=1.0, tags=_tags())
+            metrics.timeout += 1
             if fallback:
                 _interval, _feed, _start, _end = fallback
                 _incr('data.fetch.fallback_attempt', value=1.0, tags=_tags())
@@ -447,6 +451,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
             raise ValueError('Invalid feed or bad request')
         if status in (401, 403):
             _incr('data.fetch.unauthorized', value=1.0, tags=_tags())
+            metrics.unauthorized += 1
             logger.warning(
                 'UNAUTHORIZED_SIP' if _feed == 'sip' else 'DATA_SOURCE_UNAUTHORIZED',
                 extra=_norm_extra({'provider': 'alpaca', 'status': 'unauthorized', 'feed': _feed, 'timeframe': _interval}),
@@ -464,6 +469,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
             raise ValueError('unauthorized')
         if status == 429:
             _incr('data.fetch.rate_limited', value=1.0, tags=_tags())
+            metrics.rate_limit += 1
             logger.warning('DATA_SOURCE_RATE_LIMITED', extra=_norm_extra({'provider': 'alpaca', 'status': 'rate_limited', 'feed': _feed, 'timeframe': _interval}))
             if fallback:
                 _interval, _feed, _start, _end = fallback
@@ -474,6 +480,7 @@ def _fetch_bars(symbol: str, start: Any, end: Any, timeframe: str, *, feed: str=
             raise ValueError('rate_limited')
         df = pd.DataFrame(data)
         if df.empty:
+            metrics.empty_payload += 1
             if fallback:
                 _incr('data.fetch.empty', value=1.0, tags=_tags())
             if _interval.lower() in {'1day', 'day', '1d'}:
@@ -640,6 +647,7 @@ __all__ = [
     'get_last_available_bar',
     'fh_fetcher',
     'get_minute_df',
+    'metrics',
     'build_fetcher',
     'DataFetchError',
     'DataFetchException',
