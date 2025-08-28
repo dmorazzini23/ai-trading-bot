@@ -1,12 +1,22 @@
 name: smoke
 on: [push, pull_request]
+
+permissions:
+  contents: read
+
 jobs:
   smoke:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            requirements/*.txt
       - run: pip install -U pip
       - run: pip install .[base] || pip install .
       - run: python -c "import ai_trading; import ai_trading.core.bot_engine; print('IMPORT_OK')"
