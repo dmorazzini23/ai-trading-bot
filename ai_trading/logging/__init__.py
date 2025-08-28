@@ -427,7 +427,7 @@ def get_logger(name: str) -> SanitizingLoggerAdapter:
         base.setLevel(logging.NOTSET)
         _loggers[name] = SanitizingLoggerAdapter(base, {})
     return _loggers[name]
-logger = get_logger(__name__)
+logger = SanitizingLoggerAdapter(logging.getLogger(__name__), {})
 logger_once = EmitOnceLogger(logger)
 
 def get_phase_logger(name: str, phase: str | None=None) -> logging.Logger:
