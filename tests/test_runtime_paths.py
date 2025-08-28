@@ -38,6 +38,34 @@ def test_runtime_paths_writable():
         pytest.fail(f"CACHE_DIR {paths.CACHE_DIR} is not writable")
 
 
+def test_cache_dir_falls_back(monkeypatch, tmp_path):
+    """Cache dir falls back to a temp path if configured location is read-only."""
+    import errno
+    import importlib
+    import tempfile
+    from pathlib import Path
+
+    monkeypatch.setenv('AI_TRADING_DATA_DIR', str(tmp_path / 'data'))
+    monkeypatch.setenv('AI_TRADING_LOG_DIR', str(tmp_path / 'log'))
+    unwritable = tmp_path / 'readonly' / 'cache'
+    monkeypatch.setenv('AI_TRADING_CACHE_DIR', str(unwritable))
+
+    orig_mkdir = Path.mkdir
+
+    def fake_mkdir(self, parents=True, exist_ok=False):
+        if self == unwritable:
+            raise OSError(errno.EROFS, 'Read-only file system')
+        return orig_mkdir(self, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, 'mkdir', fake_mkdir)
+    import ai_trading.paths as paths
+    importlib.reload(paths)
+
+    fallback = Path(tempfile.gettempdir()) / paths.APP_NAME
+    assert paths.CACHE_DIR == fallback
+    assert fallback.exists()
+
+
 def test_paths_module_imports():
     """Test that paths module can be imported."""
     from ai_trading import paths

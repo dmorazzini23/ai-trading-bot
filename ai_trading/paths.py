@@ -1,11 +1,12 @@
-"""
-Runtime paths for AI Trading Bot.
+"""Runtime paths for AI Trading Bot.
 
 Defines writable data, log, and cache directories with environment overrides.
 Creates directories at import time.
 """
 from ai_trading.logging import get_logger
+import errno
 import os
+import tempfile
 from pathlib import Path
 logger = get_logger(__name__)
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -14,9 +15,17 @@ APP_NAME = 'ai-trading-bot'
 def _ensure_dir(path: Path) -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
+        return path
     except OSError as e:
-        logger.debug('Directory creation failed for %s: %s', path, e)
-    return path
+        if e.errno == errno.EROFS:
+            fallback = Path(tempfile.gettempdir()) / APP_NAME
+            fallback.mkdir(parents=True, exist_ok=True)
+            logger.warning(
+                "Falling back to writable temp dir %s for %s: %s", fallback, path, e
+            )
+            return fallback
+        logger.debug("Directory creation failed for %s: %s", path, e)
+        return path
 
 def _first_env_path(*names: str) -> Path | None:
     for n in names:

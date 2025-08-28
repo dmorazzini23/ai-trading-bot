@@ -47,6 +47,14 @@ python ai_trading/scripts/self_check.py
 The script fetches a small sample of SPY bars using `alpaca-py` and exits with status **0** on success.
 
 
+## Runtime paths
+
+`ai_trading.paths` creates writable data, log, and cache directories on import.
+If a target directory is on a read-only filesystem, it falls back to
+`tempfile.gettempdir() / APP_NAME` and logs a warning so the application
+continues with a writable location.
+
+
 ## Config
 
 ```py
