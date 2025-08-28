@@ -4,10 +4,15 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+
 logger = get_logger(__name__)
+
+# pandas and its optional parquet engines are heavy and may not be present in
+# minimal environments.  Import pandas if available and degrade gracefully
+# otherwise.
 try:
-    import pandas as pd
-except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
+    import pandas as pd  # type: ignore
+except Exception:  # pragma: no cover - import guard
     pd = None
 _lock = threading.RLock()
 _mem: dict[str, tuple[float, Any]] = {}
@@ -45,12 +50,29 @@ def get_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str) -> Any 
     if pd is None:
         return None
     p = disk_path(cache_dir, symbol, tf, start, end)
-    if not p.exists():
+    if p.exists():
+        try:
+            return pd.read_parquet(p)
+        except ImportError as e:
+            logger.debug('Parquet engine missing for %s: %s', p, e)
+        except (
+            pd.errors.EmptyDataError,
+            KeyError,
+            ValueError,
+            TypeError,
+            OSError,
+            PermissionError,
+        ) as e:
+            logger.debug('Failed to read cache file %s: %s', p, e)
+            return None
+    # Fallback to CSV when parquet read is unavailable
+    p_csv = p.with_suffix('.csv')
+    if not p_csv.exists():
         return None
     try:
-        return pd.read_parquet(p)
-    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, PermissionError) as e:
-        logger.debug('Failed to read cache file %s: %s', p, e)
+        return pd.read_csv(p_csv)
+    except Exception as e:
+        logger.debug('Failed to read CSV cache file %s: %s', p_csv, e)
         return None
 
 def put_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str, df: Any) -> None:
@@ -60,5 +82,22 @@ def put_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str, df: Any
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
         df.to_parquet(p, index=False)
-    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError, PermissionError) as e:
+        return
+    except ImportError as e:
+        logger.debug('Parquet engine missing for %s: %s', p, e)
+    except (
+        pd.errors.EmptyDataError,
+        KeyError,
+        ValueError,
+        TypeError,
+        OSError,
+        PermissionError,
+    ) as e:
         logger.debug('Failed to write cache file %s: %s', p, e)
+        return
+    # Fallback to CSV when parquet write is unavailable
+    p_csv = p.with_suffix('.csv')
+    try:
+        df.to_csv(p_csv, index=False)
+    except Exception as e:
+        logger.debug('Failed to write CSV cache file %s: %s', p_csv, e)
