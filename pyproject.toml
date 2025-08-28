@@ -43,7 +43,7 @@ pandas = [
   "pandas>=2.0"
 ]
 plot = [
-  "matplotlib>=3.7"
+  "matplotlib==3.10.5"
 ]
 ml = [
   "scikit-learn>=1.4",

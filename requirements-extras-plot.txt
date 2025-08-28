@@ -1,0 +1,4 @@
+# Optional plotting extras for Ubuntu 24.04 / CPython 3.12
+# AI-AGENT-REF: install only when WITH_PLOT=1
+# Install via: WITH_PLOT=1 pip install -r requirements-extras-plot.txt -c constraints.txt
+matplotlib==3.10.5
