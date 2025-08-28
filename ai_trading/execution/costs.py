@@ -5,13 +5,28 @@ Maintains per-symbol cost parameters (half_spread_bps, slip_k) and applies
 them in both backtesting and live position sizing.
 """
 import json
-from ai_trading.logging import get_logger
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
+from functools import lru_cache
+from importlib.util import find_spec
 from pathlib import Path
-import numpy as np
-import pandas as pd
+from types import ModuleType
+
+from ai_trading.logging import get_logger
+from ai_trading.utils.lazy_imports import load_pandas
+
+pd = load_pandas()
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=None)
+def _load_numpy() -> ModuleType:
+    """Return :mod:`numpy` if available."""
+    if find_spec("numpy") is None:
+        raise ModuleNotFoundError("numpy is required for cost calculations")
+    import numpy as np  # type: ignore
+
+    return np
 
 @dataclass
 class SymbolCosts:
@@ -46,6 +61,7 @@ class SymbolCosts:
         Returns:
             Slippage cost in basis points
         """
+        np = _load_numpy()
         return self.slip_k * np.sqrt(max(volume_ratio, 0.1))
 
     def total_execution_cost_bps(self, volume_ratio: float=1.0) -> float:
@@ -185,6 +201,7 @@ class SymbolCostModel:
         expected_cost_bps = current_costs.total_execution_cost_bps(volume_ratio)
         cost_error = realized_cost_bps - expected_cost_bps
         if volume_ratio > 1.0:
+            np = _load_numpy()
             slippage_update = cost_error * learning_rate / np.sqrt(volume_ratio)
             new_slip_k = max(0.1, current_costs.slip_k + slippage_update)
         else:
@@ -276,9 +293,18 @@ class SymbolCostModel:
         """Get summary statistics for all symbols."""
         if not self._costs:
             return {}
+        np = _load_numpy()
         spreads = [c.half_spread_bps * 2 for c in self._costs.values()]
         slippages = [c.slip_k for c in self._costs.values()]
-        return {'num_symbols': len(self._costs), 'avg_spread_bps': np.mean(spreads), 'median_spread_bps': np.median(spreads), 'avg_slip_k': np.mean(slippages), 'median_slip_k': np.median(slippages), 'max_spread_bps': np.max(spreads), 'min_spread_bps': np.min(spreads)}
+        return {
+            'num_symbols': len(self._costs),
+            'avg_spread_bps': np.mean(spreads),
+            'median_spread_bps': np.median(spreads),
+            'avg_slip_k': np.mean(slippages),
+            'median_slip_k': np.median(slippages),
+            'max_spread_bps': np.max(spreads),
+            'min_spread_bps': np.min(spreads),
+        }
 
     def check_short_availability(self, symbol: str) -> tuple[bool, str]:
         """
