@@ -3,6 +3,7 @@ import argparse
 import os
 import threading
 import time
+import logging
 from threading import Thread
 import signal
 from datetime import datetime, UTC
@@ -374,18 +375,21 @@ def main(argv: list[str] | None = None) -> None:
             "Warm-up run_cycle failed during trading initialization; shutting down",
             exc_info=e,
         )
+        logging.shutdown()
         raise SystemExit(1) from e
     except SystemExit as e:
         logger.error(
             "Warm-up run_cycle triggered SystemExit; shutting down",
             exc_info=e,
         )
+        logging.shutdown()
         raise
     except Exception as e:  # noqa: BLE001
         logger.exception(
             "Warm-up run_cycle failed unexpectedly; shutting down",
             exc_info=e,
         )
+        logging.shutdown()
         raise SystemExit(1) from e
     logger.info("Warm-up run_cycle completed")
     api_ready = threading.Event()
