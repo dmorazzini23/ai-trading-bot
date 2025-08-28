@@ -187,7 +187,7 @@ def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     end = now - dt.timedelta(minutes=1)
     unit = getattr(getattr(timeframe, 'unit', None), 'name', None)
     if unit == 'Day':
-        days = int(os.getenv('DATA_LOOKBACK_DAYS_DAILY', 200))
+        days = int(os.getenv('DATA_LOOKBACK_DAYS_DAILY', 10))
     else:
         days = int(os.getenv('DATA_LOOKBACK_DAYS_MINUTE', 5))
     start = end - dt.timedelta(days=days)

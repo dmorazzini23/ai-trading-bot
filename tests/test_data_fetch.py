@@ -31,4 +31,4 @@ def test_bars_time_window_day():
     s_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
     e_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
     assert e_dt <= datetime.now(UTC)
-    assert (e_dt - s_dt).days >= 10
+    assert (e_dt - s_dt).days == 10
