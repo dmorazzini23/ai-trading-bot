@@ -20,8 +20,20 @@ class StrategySignal:
     and metadata for institutional decision making.
     """
 
-    def __init__(self, symbol: str, side: OrderSide, strength: float, confidence: float=1.0, **kwargs):
-        """Initialize trading signal."""
+    def __init__(self, symbol: str, side: OrderSide, strength: float=1.0, confidence: float=1.0, **kwargs):
+        """Initialize trading signal.
+
+        Parameters
+        ----------
+        symbol : str
+            Asset ticker symbol.
+        side : OrderSide
+            Direction of the trade (``OrderSide.BUY`` or ``OrderSide.SELL``).
+        strength : float, optional
+            Raw signal strength in the ``[0, 1]`` range. Defaults to ``1.0``.
+        confidence : float, optional
+            Confidence weight in the ``[0, 1]`` range. Defaults to ``1.0``.
+        """
         self.id = str(uuid.uuid4())
         self.symbol = symbol
         self.side = side

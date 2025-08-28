@@ -46,4 +46,4 @@ class MovingAverageCrossoverStrategy:
         action = self._latest_cross(short, long)
         if not action:
             return []
-        return [StrategySignal(symbol=sym, side=action, strength=1.0)]
+        return [StrategySignal(symbol=sym, side=action)]
