@@ -4,10 +4,10 @@ from datetime import UTC, datetime, timedelta
 from math import floor
 from typing import Any
 import os
-import requests
 from ai_trading.logging import get_logger
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
+from ai_trading.exc import HTTPError, RequestException
 _log = get_logger(__name__)
 
 @dataclass
@@ -123,10 +123,10 @@ def _get_equity_from_alpaca(cfg) -> float:
         data = resp.json()
         eq = _coerce_float(data.get('equity'), 0.0)
         return eq
-    except requests.HTTPError as e:
+    except HTTPError as e:
         _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": getattr(e.response, "status_code", None)})
         return 0.0
-    except requests.RequestException as e:
+    except RequestException as e:
         _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
         return 0.0
     except ValueError as e:

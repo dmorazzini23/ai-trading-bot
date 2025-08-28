@@ -1,7 +1,7 @@
 from argparse import Namespace
 
 import pytest
-import requests
+from ai_trading.exc import HTTPError
 
 from ai_trading.__main__ import _run_loop
 
@@ -19,7 +19,7 @@ def test_run_loop_swallow_value_error():
 
 def test_run_loop_swallow_http_error():
     def fn():
-        raise requests.HTTPError("oops")
+        raise HTTPError("oops")
 
     _run_loop(fn, _args(), "Test")
 

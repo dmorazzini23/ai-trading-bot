@@ -1,6 +1,8 @@
 from __future__ import annotations
 from functools import lru_cache
 from ai_trading.features import prepare as feature_prepare
+from ai_trading.net.http import HTTPSession
+from ai_trading.exc import RequestException
 
 try:
     from cachetools import TTLCache
@@ -10,6 +12,8 @@ try:
 except Exception:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
+
+_HTTP = HTTPSession()
 
 @lru_cache(maxsize=1024)
 def predict(path: str):
@@ -34,12 +38,11 @@ def fetch_sentiment(symbol: str) -> float:
         return _sentiment_cache[symbol]
     score = 0.0
     try:
-        import requests
-        resp = requests.get(f'https://example.com/{symbol}', timeout=10)
+        resp = _HTTP.get(f"https://example.com/{symbol}", timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        score = float(data.get('score', 0.0))
-    except (requests.RequestException, TimeoutError):
+        score = float(data.get("score", 0.0))
+    except (RequestException, TimeoutError):
         score = 0.0
     if _CACHETOOLS_AVAILABLE:
         _sentiment_cache[symbol] = score

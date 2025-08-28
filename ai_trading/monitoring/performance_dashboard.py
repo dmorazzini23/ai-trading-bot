@@ -11,13 +11,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from ai_trading.logging import logger
 from json import JSONDecodeError
-try:
-    import requests
-    RequestException = requests.exceptions.RequestException
-except ImportError:
+from ai_trading.exc import RequestException
 
-    class RequestException(Exception):
-        pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 from ..core.constants import DATA_PARAMETERS, PERFORMANCE_THRESHOLDS
 from .alerting import AlertManager, AlertSeverity

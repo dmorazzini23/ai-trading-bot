@@ -9,13 +9,8 @@ from typing import Any
 from ai_trading.logging import logger
 from ai_trading.logging.emit_once import emit_once
 from json import JSONDecodeError
-try:
-    import requests
-    RequestException = requests.exceptions.RequestException
-except ImportError:
+from ai_trading.exc import RequestException
 
-    class RequestException(Exception):
-        pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 from ..core.constants import PERFORMANCE_THRESHOLDS
 
