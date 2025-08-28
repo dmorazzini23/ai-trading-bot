@@ -486,6 +486,7 @@ from ai_trading.utils.timing import (
     clamp_timeout,
 )  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.utils.prof import StageTimer
+from ai_trading.guards.staleness import _ensure_data_fresh
 
 # AI-AGENT-REF: optional pipeline import
 try:
@@ -2349,7 +2350,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     # Check data freshness before proceeding with trading logic
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
-        _ensure_data_fresh(symbols=[symbol], max_age_seconds=600)
+        _ensure_data_fresh(df, 600, symbol=symbol)
     except RuntimeError as e:
         logger.warning(f"Data staleness check failed for {symbol}: {e}")
         # Still return the data but log the staleness issue
@@ -6255,35 +6256,6 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
             "DATA_SOURCE_HEALTH_CHECK: missing daily data for %s",
             ", ".join(missing),
         )
-
-
-def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
-    """
-    Validate that the cached minute data for each symbol is recent enough.
-    Logs UTC timestamps and fails fast if any symbol is stale.
-    """
-    try:
-        from ai_trading.data.fetch import last_minute_bar_age_seconds
-    except (ValueError, TypeError) as e:  # AI-AGENT-REF: soft-fail if import missing
-        logger.warning("Data freshness check unavailable; skipping", exc_info=e)
-        return
-    now_utc = utc_now_iso()
-    stale = []
-    for sym in symbols:
-        age_secs = last_minute_bar_age_seconds(sym)
-        if age_secs is None:
-            stale.append((sym, "no_cache"))
-        else:
-            last_bar_age = as_int(age_secs, 0)
-            if last_bar_age > max_age_seconds:
-                stale.append((sym, f"age={last_bar_age}s"))
-    if stale:
-        details = ", ".join([f"{s}({r})" for s, r in stale])
-        logger.warning("Data staleness detected [UTC now=%s]: %s", now_utc, details)
-        raise RuntimeError(f"Stale minute-cache for symbols: {details}")
-    logger.debug("Data freshness OK [UTC now=%s]", now_utc)
-
-
 # AI-AGENT-REF: Module-level health check removed to prevent NameError: ctx
 # Health check now happens safely in _initialize_bot_context_post_setup() after context creation
 
