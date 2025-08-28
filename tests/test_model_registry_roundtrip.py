@@ -6,6 +6,7 @@ np = pytest.importorskip("numpy")
 sklearn = pytest.importorskip("sklearn")
 from ai_trading.model_registry import ModelRegistry
 from sklearn.linear_model import LinearRegression
+from unittest.mock import patch
 
 
 def test_model_registry_roundtrip():
@@ -122,8 +123,18 @@ def test_model_registry_errors():
         result = registry.latest_for("nonexistent", "strategy")
         assert result is None
 
-        # Test non-picklable model
+        # Test non-picklable model when all picklers fail
         def non_picklable(x):
-            return x  # lambda is not picklable
+            return x  # lambda normally picklable via cloudpickle
+
+        _ = pytest.importorskip("cloudpickle")
+        dill_mod = pytest.importorskip("dill")
+
+        def fail(*_a, **_k):  # pragma: no cover - trivial
+            raise Exception("fail")
+
         with pytest.raises(RuntimeError, match="Model not picklable"):
-            registry.register_model(non_picklable, "test", "lambda")
+            with patch("pickle.dumps", side_effect=fail), patch(
+                "cloudpickle.dumps", side_effect=fail
+            ), patch.object(dill_mod, "dumps", side_effect=fail):
+                registry.register_model(non_picklable, "test", "lambda")

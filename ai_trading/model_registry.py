@@ -1,12 +1,14 @@
 """Clean model registry for storage, versioning, and retrieval.
 
-This module persists arbitrary model objects using ``pickle``. Paths are
-validated before loading to guard against unsafe deserialization.
+This module persists arbitrary model objects using ``pickle`` and falls back
+to :mod:`cloudpickle` or :mod:`dill` when needed. Paths are validated before
+loading to guard against unsafe deserialization.
 """
 from __future__ import annotations
 
 from ai_trading.logging import get_logger
 import hashlib
+import importlib
 import json
 import os
 import pickle
@@ -48,12 +50,33 @@ class ModelRegistry:
     def _hash_bytes(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()[:16]
 
-    def register_model(self, model: Any, strategy: str, model_type: str, metadata: dict[str, Any] | None=None, dataset_fingerprint: str | None=None, tags: list[str] | None=None) -> str:
+    def register_model(
+        self,
+        model: Any,
+        strategy: str,
+        model_type: str,
+        metadata: dict[str, Any] | None = None,
+        dataset_fingerprint: str | None = None,
+        tags: list[str] | None = None,
+    ) -> str:
         """Store model + metadata and return deterministic ID."""
         try:
             blob = pickle.dumps(model)
-        except (ValueError, TypeError) as e:
-            raise RuntimeError(f'Model not picklable: {e}') from e
+        except Exception as e:  # pragma: no cover - exercised via tests
+            blob = None
+            for mod_name in ("cloudpickle", "dill"):
+                try:
+                    mod = importlib.import_module(mod_name)
+                except Exception:
+                    continue
+                try:
+                    blob = mod.dumps(model)
+                    logger.info("Serialized model using %s", mod_name)
+                    break
+                except Exception:
+                    continue
+            if blob is None:
+                raise RuntimeError(f"Model not picklable: {e}") from e
         content_hash = self._hash_bytes(blob)
         id_components = [strategy, model_type, content_hash]
         if dataset_fingerprint:
@@ -64,10 +87,18 @@ class ModelRegistry:
             raise RuntimeError(f"Model path escapes base directory: {model_dir}")
         model_dir.mkdir(parents=True, exist_ok=True)
         (model_dir / "model.pkl").write_bytes(blob)
-        meta = {'strategy': strategy, 'model_type': model_type, 'registration_time': datetime.now(UTC).isoformat(), 'dataset_fingerprint': dataset_fingerprint, 'tags': tags or []}
+        meta = {
+            "strategy": strategy,
+            "model_type": model_type,
+            "registration_time": datetime.now(UTC).isoformat(),
+            "dataset_fingerprint": dataset_fingerprint,
+            "tags": tags or [],
+        }
         if metadata:
-            meta.update(metadata)
-        (model_dir / 'meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
+            meta.update(self._json_safe(metadata))
+        (model_dir / "meta.json").write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
         self.model_index[model_id] = meta
         self._save_index()
         logger.info('Registered model %s', model_id)
@@ -96,3 +127,20 @@ class ModelRegistry:
         if not candidates:
             return None
         return sorted(candidates, key=lambda t: t[1])[-1][0]
+
+    @staticmethod
+    def _json_safe(data: dict[str, Any]) -> dict[str, Any]:
+        """Convert non-JSON-serializable objects to string paths."""
+
+        def convert(obj: Any) -> Any:
+            if isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
+            if isinstance(obj, dict):
+                return {k: convert(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple, set)):
+                return [convert(v) for v in obj]
+            if hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
+                return f"{obj.__module__}.{obj.__qualname__}"
+            return repr(obj)
+
+        return {k: convert(v) for k, v in data.items()}
