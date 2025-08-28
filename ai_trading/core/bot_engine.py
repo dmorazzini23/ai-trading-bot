@@ -514,6 +514,13 @@ class BotEngine:
 
     def __init__(self) -> None:
         self.logger = get_logger(__name__)
+        # Expose the lazily-initialized global context through this engine
+        self._ctx = get_ctx()
+
+    @property
+    def ctx(self):
+        """Return the lazily-initialized bot context."""
+        return self._ctx
 
     @cached_property
     def trading_client(self):
