@@ -9,6 +9,7 @@ idna>=3.4,<4
 psutil>=5.9,<6
 portalocker==2.7.0
 alpaca-py==0.42.0  # AI-AGENT-REF: include Alpaca SDK
+finnhub-python>=2.4,<3  # AI-AGENT-REF: optional Finnhub provider
 joblib>=1.3,<2
 Flask>=3,<4
 beautifulsoup4>=4.12,<5
