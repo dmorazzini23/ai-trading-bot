@@ -36,7 +36,7 @@ def test_logging_formatter_imports():
     """Test that logging module imports and JSONFormatter can be accessed."""
     try:
         import ai_trading.logging as logger_module
-        formatter = logger_module.JSONFormatter('%(asctime)sZ')
+        formatter = logger_module.JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
         rec = logging.LogRecord(name='test', level=logging.INFO, pathname=__file__, lineno=1, msg='Test message with Unicode — characters', args=None, exc_info=None)
         output = formatter.format(rec)
         data = json.loads(output)

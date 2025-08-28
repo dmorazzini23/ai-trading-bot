@@ -324,11 +324,11 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             from ai_trading.config import get_settings
             S = get_settings()
             if S.log_compact_json:
-                formatter = CompactJsonFormatter('%(asctime)sZ')
+                formatter = CompactJsonFormatter('%Y-%m-%dT%H:%M:%SZ')
             else:
-                formatter = JSONFormatter('%(asctime)sZ')
+                formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
         except COMMON_EXC:
-            formatter = JSONFormatter('%(asctime)sZ')
+            formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
 
         class _PhaseFilter(logging.Filter):
 

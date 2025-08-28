@@ -22,7 +22,7 @@ def _make_record(**extra):
 
 
 def test_json_formatter_custom_fields_and_masking():
-    fmt = logger.JSONFormatter("%(asctime)sZ")
+    fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
     rec = _make_record(symbol="AAPL", api_key="abcdef1234", pathname="skip")
     out = fmt.format(rec)
     data = json.loads(out)
@@ -33,7 +33,7 @@ def test_json_formatter_custom_fields_and_masking():
 
 def test_json_formatter_extra_fields_and_mask_keys():
     fmt = logger.JSONFormatter(
-        "%(asctime)sZ",
+        "%Y-%m-%dT%H:%M:%SZ",
         extra_fields={"service": "trade", "secret": "top"},
         mask_keys=["secret", "symbol"],
     )
@@ -46,7 +46,7 @@ def test_json_formatter_extra_fields_and_mask_keys():
 
 
 def test_json_formatter_exc_info():
-    fmt = logger.JSONFormatter("%(asctime)sZ")
+    fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
     rec = _make_record()
     rec.exc_info = (ValueError, ValueError("boom"), None)
     out = fmt.format(rec)
@@ -56,7 +56,7 @@ def test_json_formatter_exc_info():
 
 
 def test_json_formatter_serializes_nonstandard_types():
-    fmt = logger.JSONFormatter("%(asctime)sZ")
+    fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
     from datetime import date, datetime
 
     import numpy as np
