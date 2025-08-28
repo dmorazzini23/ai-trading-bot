@@ -387,6 +387,7 @@ def main(argv: list[str] | None = None) -> None:
             exc_info=e,
         )
         raise SystemExit(1) from e
+    logger.info("Warm-up run_cycle completed")
     api_ready = threading.Event()
     api_error = threading.Event()
     t = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
