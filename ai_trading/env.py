@@ -24,11 +24,13 @@ def ensure_dotenv_loaded() -> None:
         loaded_from = '<default>'
     _ENV_LOADED = True
     try:
-        from ai_trading.logging import get_logger, logger_once
-        get_logger(__name__)
-        if loaded_from == '<default>':
-            logger_once.info('ENV_LOADED_DEFAULT override=True', key='env_loaded:default')
-        else:
-            logger_once.info('ENV_LOADED_FROM override=True', key=f'env_loaded:{loaded_from}', extra={'dotenv_path': loaded_from})
+        import logging as _logging
+        if _logging.getLogger().handlers:
+            from ai_trading.logging import get_logger, logger_once
+            get_logger(__name__)
+            if loaded_from == '<default>':
+                logger_once.info('ENV_LOADED_DEFAULT override=True', key='env_loaded:default')
+            else:
+                logger_once.info('ENV_LOADED_FROM override=True', key=f'env_loaded:{loaded_from}', extra={'dotenv_path': loaded_from})
     except (KeyError, ValueError, TypeError):
         pass

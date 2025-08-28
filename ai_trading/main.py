@@ -29,6 +29,8 @@ _logging._LOGGING_CONFIGURED = False
 logging.getLogger().handlers.clear()
 
 # Configure logging with the desired file
+# Logging must be initialized once here before importing heavy modules like
+# ``ai_trading.core.bot_engine``.
 _logging.setup_logging(log_file=LOG_FILE)
 
 # Module logger

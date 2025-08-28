@@ -1017,14 +1017,8 @@ else:
 # AI-AGENT-REF: numpy is a hard dependency - import directly
 import numpy as np
 
-LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
-# Set up logging only once
+# AI-AGENT-REF: logger configuration is handled upstream in ``ai_trading.main``
 logger = get_logger(__name__)  # AI-AGENT-REF: define logger before use
-# AI-AGENT-REF: lazy logger setup to avoid expensive imports during test
-if not logging.getLogger().handlers and not os.getenv("PYTEST_RUNNING"):
-    from ai_trading.logging import setup_logging  # AI-AGENT-REF: lazy logger import
-
-    setup_logging(log_file=LOG_PATH)
 
 # AI-AGENT-REF: import sanity signal for CI/ops
 info_kv(
