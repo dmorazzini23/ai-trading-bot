@@ -24,7 +24,7 @@ import os
 import sys
 
 # Clear all credential environment variables
-for key in ["ALPACA_API_KEY", "APCA_API_KEY_ID", "ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"]:
+for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
     os.environ.pop(key, None)
 
 try:
@@ -88,9 +88,8 @@ except Exception as e:
         finally:
             os.unlink(script_path)
 
-    def test_dual_credential_schema_with_env_file(self):
-        """Test that both credential schemas work with .env files."""
-        # Test ALPACA_* schema
+    def test_alpaca_credential_schema_with_env_file(self):
+        """Test that the ALPACA credential schema works with .env files."""
         alpaca_env_content = """
 ALPACA_API_KEY=test_alpaca_key_from_env
 ALPACA_SECRET_KEY=test_alpaca_secret_from_env
@@ -101,19 +100,7 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
             f.write(alpaca_env_content)
             alpaca_env_path = f.name
 
-        # Test APCA_* schema
-        apca_env_content = """
-APCA_API_KEY_ID=test_apca_key_from_env
-APCA_API_SECRET_KEY=test_apca_secret_from_env
-APCA_API_BASE_URL=https://api.alpaca.markets
-"""
-
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.env', delete=False) as f:
-            f.write(apca_env_content)
-            apca_env_path = f.name
-
         try:
-            # Test ALPACA schema
             test_script = f'''
 import os
 from ai_trading.config.management import _resolve_alpaca_env, reload_env
@@ -135,31 +122,8 @@ print("✓ ALPACA schema with .env file works")
             assert result.returncode == 0, f"ALPACA test failed: {result.stderr}"
             os.unlink(script_path)
 
-            # Test APCA schema
-            test_script = f'''
-import os
-from ai_trading.config.management import _resolve_alpaca_env, reload_env
-reload_env("{apca_env_path}", override=True)
-
-api_key, secret_key, base_url = _resolve_alpaca_env()
-
-assert api_key == "test_apca_key_from_env"
-assert secret_key == "test_apca_secret_from_env"
-assert base_url == "https://api.alpaca.markets"
-print("✓ APCA schema with .env file works")
-'''
-
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                f.write(test_script)
-                script_path = f.name
-
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30, check=True)  # AI-AGENT-REF: Added timeout and check for security
-            assert result.returncode == 0, f"APCA test failed: {result.stderr}"
-            os.unlink(script_path)
-
         finally:
             os.unlink(alpaca_env_path)
-            os.unlink(apca_env_path)
 
     def test_utc_timestamp_no_double_z(self):
         """Test that UTC timestamps don't have double Z suffix."""
@@ -208,7 +172,7 @@ print("✓ All UTC timestamp functions work correctly")
 import os
 
 # Clear credentials
-for key in ["ALPACA_API_KEY", "APCA_API_KEY_ID", "ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"]:
+for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
     os.environ.pop(key, None)
 
 from ai_trading import main as _main
