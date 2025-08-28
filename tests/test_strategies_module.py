@@ -26,10 +26,6 @@ sys.modules["alpaca.data.requests"] = req_mod
 data_mod.TimeFrame = tf_mod.TimeFrame
 data_mod.StockBarsRequest = req_mod.StockBarsRequest
 
-tzlocal_mod = types.ModuleType("tzlocal")
-tzlocal_mod.get_localzone = lambda: None
-sys.modules["tzlocal"] = tzlocal_mod
-
 # Stub internal modules pulled in by bot_engine imports we don't exercise
 df_stub = types.ModuleType("ai_trading.data.fetch")
 df_stub.get_bars = df_stub.get_bars_batch = lambda *a, **k: []

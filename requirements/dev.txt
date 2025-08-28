@@ -1,7 +1,8 @@
 # AI-AGENT-REF: minimal dev/test dependencies for reliable raw pytest runs
 numpy>=1.26
 pandas>=2.2
-pandas-market-calendars>=4.4
+pandas-market-calendars>=5.1
+tzdata>=2024.1  # AI-AGENT-REF: ensure timezone data
 alpaca-py==0.42.0
 pytest>=7.4
 pytest-xdist>=3.6

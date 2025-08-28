@@ -14,8 +14,6 @@ alpaca-py==0.42.0
     # via
     #   -r requirements-dev.txt
     #   -r requirements.txt
-alpaca-trade-api==0
-    # avoid deprecated package
 annotated-types==0.7.0
     # via pydantic
 attrs==25.3.0
@@ -23,7 +21,9 @@ attrs==25.3.0
     #   aiohttp
     #   hypothesis
 beautifulsoup4==4.13.5
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   yfinance
 black==24.8.0
     # via -r requirements-dev.txt
 blinker==1.9.0
@@ -33,7 +33,12 @@ cachetools==5.3.3
 certifi==2025.8.3
     # via
     #   -r requirements.txt
+    #   curl-cffi
     #   requests
+cffi==1.17.1
+    # via
+    #   cryptography
+    #   curl-cffi
 charset-normalizer==3.4.3
     # via
     #   -r requirements.txt
@@ -46,20 +51,46 @@ coverage==7.6.1
     # via
     #   -r requirements-dev.txt
     #   pytest-cov
+cryptography==45.0.6
+    # via -r requirements.txt
+curl-cffi==0.13.0
+    # via yfinance
 exchange-calendars==4.11.1
     # via pandas-market-calendars
 execnet==2.1.1
     # via
     #   -r requirements-dev.txt
     #   pytest-xdist
+filelock==3.19.1
+    # via
+    #   huggingface-hub
+    #   torch
+    #   transformers
+    #   triton
+finnhub-python==2.4.24
+    # via -r requirements.txt
 flask==3.1.2
     # via -r requirements.txt
 freezegun==1.5.1
     # via -r requirements-dev.txt
+frozendict==2.4.6
+    # via yfinance
 frozenlist==1.7.0
     # via
     #   aiohttp
     #   aiosignal
+fsspec==2025.7.0
+    # via
+    #   huggingface-hub
+    #   torch
+hf-xet==1.1.9
+    # via huggingface-hub
+hmmlearn==0.3.2
+    # via -r requirements.txt
+huggingface-hub==0.34.4
+    # via
+    #   tokenizers
+    #   transformers
 hypothesis==6.138.6
     # via -r requirements-dev.txt
 idna==3.10
@@ -74,7 +105,9 @@ iniconfig==2.0.0
 itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
-    # via flask
+    # via
+    #   flask
+    #   torch
 joblib==1.5.1
     # via
     #   -r requirements.txt
@@ -83,6 +116,8 @@ korean-lunar-calendar==0.3.1
     # via exchange-calendars
 libcst==1.4.0
     # via -r requirements-dev.txt
+llvmlite==0.44.0
+    # via numba
 lxml==5.4.0
     # via -r requirements.txt
 markupsafe==3.0.2
@@ -90,27 +125,46 @@ markupsafe==3.0.2
     #   flask
     #   jinja2
     #   werkzeug
+mpmath==1.3.0
+    # via sympy
 msgpack==1.1.1
-    # via alpaca-py
+    # via
+    #   -r requirements.txt
+    #   alpaca-py
 multidict==6.6.4
     # via
     #   aiohttp
     #   yarl
+multitasking==0.0.12
+    # via yfinance
 mypy==1.11.1
     # via -r requirements-dev.txt
 mypy-extensions==1.1.0
     # via
     #   black
     #   mypy
+networkx==3.5
+    # via torch
+numba==0.61.2
+    # via -r requirements.txt
 numpy==1.26.4
     # via
     #   -r requirements.txt
     #   exchange-calendars
+    #   hmmlearn
+    #   numba
     #   pandas
+    #   patsy
     #   scikit-learn
     #   scipy
+    #   statsmodels
+    #   transformers
+    #   yfinance
 nvidia-cublas-cu12==12.1.3.1
-    # via torch
+    # via
+    #   nvidia-cudnn-cu12
+    #   nvidia-cusolver-cu12
+    #   torch
 nvidia-cuda-cupti-cu12==12.1.105
     # via torch
 nvidia-cuda-nvrtc-cu12==12.1.105
@@ -126,30 +180,45 @@ nvidia-curand-cu12==10.3.2.106
 nvidia-cusolver-cu12==11.4.5.107
     # via torch
 nvidia-cusparse-cu12==12.1.0.106
-    # via torch
+    # via
+    #   nvidia-cusolver-cu12
+    #   torch
 nvidia-nccl-cu12==2.20.5
     # via torch
 nvidia-nvjitlink-cu12==12.9.86
-    # via nvidia-cusolver-cu12
+    # via
+    #   nvidia-cusolver-cu12
+    #   nvidia-cusparse-cu12
 nvidia-nvtx-cu12==12.1.105
     # via torch
 packaging==24.1
     # via
     #   -r requirements-dev.txt
     #   black
+    #   huggingface-hub
     #   pytest
+    #   statsmodels
+    #   transformers
 pandas==2.2.2
     # via
     #   -r requirements.txt
     #   alpaca-py
     #   exchange-calendars
     #   pandas-market-calendars
+    #   statsmodels
+    #   yfinance
 pandas-market-calendars==5.1.1
     # via -r requirements.txt
 pathspec==0.12.1
     # via black
+patsy==1.0.1
+    # via statsmodels
+peewee==3.18.2
+    # via yfinance
 platformdirs==4.4.0
-    # via black
+    # via
+    #   black
+    #   yfinance
 pluggy==1.5.0
     # via
     #   -r requirements-dev.txt
@@ -162,8 +231,14 @@ propcache==0.3.2
     # via
     #   aiohttp
     #   yarl
+protobuf==6.32.0
+    # via yfinance
 psutil==5.9.8
     # via -r requirements.txt
+pybreaker==1.4.0
+    # via -r requirements.txt
+pycparser==2.22
+    # via cffi
 pydantic==2.8.2
     # via
     #   -r requirements.txt
@@ -175,8 +250,6 @@ pydantic-settings==2.10.1
     # via -r requirements.txt
 pyluach==2.2.0
     # via exchange-calendars
-pyyaml==6.0.2
-    # via -r requirements.txt
 pytest==8.3.2
     # via
     #   -r requirements-dev.txt
@@ -203,29 +276,43 @@ python-dotenv==1.1.1
     # via
     #   -r requirements.txt
     #   pydantic-settings
-pytz==2025.2
-    # via pandas
-pytz-deprecation-shim==0.1.0.post0
-    # via tzlocal
+pyyaml==6.0.2
+    # via
+    #   -r requirements.txt
+    #   huggingface-hub
+    #   libcst
+    #   transformers
 ratelimit==2.2.1
     # via -r requirements.txt
+regex==2025.7.34
+    # via transformers
 requests==2.32.5
     # via
     #   -r requirements.txt
     #   alpaca-py
+    #   finnhub-python
+    #   huggingface-hub
     #   requests-mock
+    #   transformers
+    #   yfinance
 requests-mock==1.12.1
     # via -r requirements-dev.txt
 ruff==0.5.6
     # via -r requirements-dev.txt
+safetensors==0.6.2
+    # via transformers
 schedule==1.2.2
     # via -r requirements.txt
 scikit-learn==1.5.1
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   hmmlearn
 scipy==1.13.1
     # via
     #   -r requirements.txt
+    #   hmmlearn
     #   scikit-learn
+    #   statsmodels
 six==1.17.0
     # via python-dateutil
 sortedcontainers==2.4.0
@@ -236,23 +323,41 @@ soupsieve==2.8
     # via beautifulsoup4
 sseclient-py==1.8.0
     # via alpaca-py
+statsmodels==0.14.5
+    # via -r requirements.txt
+sympy==1.14.0
+    # via torch
 tenacity==9.1.2
     # via -r requirements.txt
 threadpoolctl==3.5.0
     # via
     #   -r requirements.txt
     #   scikit-learn
+tokenizers==0.21.4
+    # via transformers
 toolz==1.0.0
     # via exchange-calendars
+torch==2.3.1
+    # via -r requirements.txt
+tqdm==4.67.1
+    # via
+    #   huggingface-hub
+    #   transformers
+transformers==4.55.4
+    # via -r requirements.txt
+triton==2.3.1
+    # via torch
 types-setuptools==70.3.0.20240710
     # via -r requirements-dev.txt
 typing-extensions==4.15.0
     # via
     #   aiosignal
     #   beautifulsoup4
+    #   huggingface-hub
     #   mypy
     #   pydantic
     #   pydantic-core
+    #   torch
     #   typing-inspection
 typing-inspection==0.4.1
     # via pydantic-settings
@@ -262,14 +367,18 @@ tzdata==2025.2
     #   exchange-calendars
     #   pandas
     #   pandas-market-calendars
-    #   pytz-deprecation-shim
-tzlocal==4.3
-    # via -r requirements.txt
 urllib3==2.5.0
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   requests
 websockets==15.0.1
-    # via alpaca-py
+    # via
+    #   -r requirements.txt
+    #   alpaca-py
+    #   yfinance
 werkzeug==3.1.3
     # via flask
 yarl==1.20.1
     # via aiohttp
+yfinance==0.2.65
+    # via -r requirements.txt
