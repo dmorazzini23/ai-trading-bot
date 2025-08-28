@@ -139,21 +139,8 @@ NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
 
-try:
-    import sklearn  # noqa: F401
-
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-
-# AI-AGENT-REF: optional finnhub dependency
-try:  # pragma: no cover - optional dependency
-    from finnhub import FinnhubAPIException  # type: ignore
-
-    FINNHUB_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional dependency
-    FinnhubAPIException = Exception  # type: ignore
-    FINNHUB_AVAILABLE = False
+SKLEARN_AVAILABLE = bool(importlib.util.find_spec("sklearn") or "sklearn" in sys.modules)
+FINNHUB_AVAILABLE = bool(importlib.util.find_spec("finnhub") or "finnhub" in sys.modules)
 
 
 
@@ -161,25 +148,22 @@ except ImportError:  # pragma: no cover - optional dependency
 def _rf_class():
     if not SKLEARN_AVAILABLE:
         raise RuntimeError("sklearn not available")
-    from sklearn.ensemble import RandomForestClassifier
-
-    return RandomForestClassifier
+    sklearn_ensemble = importlib.import_module("sklearn.ensemble")
+    return sklearn_ensemble.RandomForestClassifier
 
 
 def _bayesian_ridge():
     if not SKLEARN_AVAILABLE:
         raise RuntimeError("sklearn not available")
-    from sklearn.linear_model import BayesianRidge
-
-    return BayesianRidge
+    sklearn_linear = importlib.import_module("sklearn.linear_model")
+    return sklearn_linear.BayesianRidge
 
 
 def _ridge():
     if not SKLEARN_AVAILABLE:
         raise RuntimeError("sklearn not available")
-    from sklearn.linear_model import Ridge
-
-    return Ridge
+    sklearn_linear = importlib.import_module("sklearn.linear_model")
+    return sklearn_linear.Ridge
 
 
 trading_client = None
@@ -9887,6 +9871,14 @@ def fetch_data(
     if not os.getenv("FINNHUB_API_KEY"):
         logger.debug("Skipping Finnhub fetch; FINNHUB_API_KEY not set")
         return None
+    if not FINNHUB_AVAILABLE:
+        logger.debug("Skipping Finnhub fetch; finnhub-python not installed")
+        return None
+
+    finnhub = importlib.import_module("finnhub")
+    global finnhub_client
+    if finnhub_client is None:
+        finnhub_client = finnhub.Client(os.getenv("FINNHUB_API_KEY"))
 
     frames: list[pd.DataFrame] = []
     now = datetime.now(UTC)
@@ -9907,7 +9899,7 @@ def fetch_data(
                 ohlc = finnhub_client.stock_candle(
                     sym, resolution=interval, _from=unix_from, to=unix_to
                 )
-            except FinnhubAPIException as e:
+            except finnhub.FinnhubAPIException as e:
                 logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": sym, "err": str(e)})
                 continue
 
