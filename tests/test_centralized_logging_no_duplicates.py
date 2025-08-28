@@ -33,7 +33,8 @@ def test_centralized_logging_prevents_duplicates():
         with patch.dict(os.environ, {
             'ALPACA_API_KEY': 'test',
             'ALPACA_SECRET_KEY': 'test',
-            'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
+            'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+            'LOG_LEVEL': 'DEBUG',
         }):
             # Reset global state
             import ai_trading.logging as logging_module
@@ -42,15 +43,15 @@ def test_centralized_logging_prevents_duplicates():
                 logging_module._configured = False
 
             # First setup
-            logger1 = setup_logging(debug=True)
+            logger1 = setup_logging()
             handlers_after_first = len(root_logger.handlers)
 
             # Second setup (should not add more handlers)
-            logger2 = setup_logging(debug=True)
+            logger2 = setup_logging()
             handlers_after_second = len(root_logger.handlers)
 
             # Third setup with different params (should still not add handlers)
-            logger3 = setup_logging(debug=False)
+            logger3 = setup_logging()
             handlers_after_third = len(root_logger.handlers)
 
             # Validate results
@@ -86,9 +87,10 @@ def test_centralized_logging_thread_safety():
             with patch.dict(os.environ, {
                 'ALPACA_API_KEY': 'test',
                 'ALPACA_SECRET_KEY': 'test',
-                'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets'
+                'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
+                'LOG_LEVEL': 'DEBUG',
             }):
-                setup_logging(debug=True)
+                setup_logging()
                 results.append(len(logging.getLogger().handlers))
         except (RuntimeError, OSError, ValueError) as e:
             exceptions.append(e)
