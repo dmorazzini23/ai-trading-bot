@@ -24,7 +24,7 @@ def create_mock_price_data(days=100, start_price=100):
     # AI-AGENT-REF: Use timezone-aware datetime instead of naive
     start_date = datetime.now(UTC) - timedelta(days=days)
     end_date = datetime.now(UTC)
-    dates = pd.date_range(start=start_date, end=end_date, freq='1H')  # Hourly data for reasonable size
+    dates = pd.date_range(start=start_date, end=end_date, freq='1h')  # Hourly data for reasonable size
 
     # Generate realistic price movements
     np.random.seed(42)  # For reproducible tests
