@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-22.04
@@ -12,6 +15,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            requirements*.txt
+            requirements/*.txt
       - name: Bootstrap deps
         run: bash scripts/bootstrap.sh
       - name: Compile
