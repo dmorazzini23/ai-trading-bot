@@ -42,5 +42,25 @@ def test_backoff_caps(monkeypatch: pytest.MonkeyPatch) -> None:
     fn = Flaky(5)
     with pytest.raises(TimeoutError):
         retry_call(fn, exceptions=(TimeoutError,), retries=4, backoff=0.1, max_backoff=0.3, jitter=0)
+    assert len(sleeps) == 4
     assert sleeps[-1] <= 0.3
     assert sleeps == sorted(sleeps)
+
+
+def test_backoff_sequence_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", lambda s: sleeps.append(s))
+
+    def always_fail() -> None:
+        raise TimeoutError("boom")
+
+    with pytest.raises(TimeoutError):
+        retry_call(
+            always_fail,
+            exceptions=(TimeoutError,),
+            retries=5,
+            backoff=0.1,
+            max_backoff=0.4,
+            jitter=0,
+        )
+    assert sleeps == [0.1, 0.2, 0.4, 0.4, 0.4]
