@@ -72,7 +72,9 @@ test: smoke
 # Run full test suite; disables common auto-loaded plugins for determinism
 test-all:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	PYTEST_ADDOPTS="-p no:faulthandler -p no:randomly -p no:cov -m 'not integration and not slow and not requires_credentials'" \
+	PYTEST_ADDOPTS="-p no:faulthandler -p no:randomly -p no:cov \
+	-m 'not integration and not slow and not requires_credentials' \
+	$(if $(VERBOSE),-vv --durations=10 -s,)" \
 	python tools/run_pytest.py tests
 
 # Run everything, including slow/integration/credentials-marked tests, still without plugin autoload.
