@@ -38,11 +38,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
       - name: Compile
-        run: python - <<'PY'
-import subprocess, sys, pathlib
-files = [str(p) for p in pathlib.Path('.').rglob('*.py')]
-subprocess.check_call([sys.executable, '-m', 'py_compile', *files])
-PY
+        run: python -m compileall . -q
       - name: Lint + Format + Types
         run: |
           ruff --version
