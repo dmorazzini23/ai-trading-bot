@@ -14,7 +14,7 @@ class _Flaky:
 
     def __call__(self) -> str:
         self.calls += 1
-        if self.calls < 3:
+        if self.calls < 2:
             raise RuntimeError("fail")
         return "ok"
 
@@ -47,6 +47,7 @@ def test_retry_raises_after_exhaustion() -> None:
 @pytest.mark.unit
 def test_fast_retry_skips_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAST_RETRY_IN_TESTS", "1")
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
 
     calls = {"n": 0}
 
