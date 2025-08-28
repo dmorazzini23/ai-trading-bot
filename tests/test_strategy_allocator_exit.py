@@ -33,8 +33,10 @@ def test_exit_confirmation(ensure_real_strategy_allocator):
     strategy_allocator = ensure_real_strategy_allocator
     alloc = strategy_allocator.StrategyAllocator()
     # Explicitly set configuration to ensure test isolation
-    alloc.config.delta_threshold = 0.0  # Allow repeated signals with same confidence
-    alloc.config.signal_confirmation_bars = 2  # Ensure we have expected confirmation bars
+    alloc.replace_config(
+        delta_threshold=0.0,  # Allow repeated signals with same confidence
+        signal_confirmation_bars=2,  # Ensure we have expected confirmation bars
+    )
 
     buy = TradeSignal(symbol="A", side="buy", confidence=1.0, strategy="s")
     sell = TradeSignal(symbol="A", side="sell", confidence=1.0, strategy="s")

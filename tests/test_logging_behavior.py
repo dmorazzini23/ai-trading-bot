@@ -56,7 +56,7 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     from ai_trading import strategy_allocator  # AI-AGENT-REF: normalized import
     strategy_allocator = importlib.reload(strategy_allocator)
     alloc = strategy_allocator.StrategyAllocator()
-    alloc.config.signal_confirmation_bars = 1  # Allow single confirmation
+    alloc.replace_config(signal_confirmation_bars=1)  # Allow single confirmation
     alloc.hold_protect = {"AAPL": 1}
     # Use a sell signal to test hold_protect functionality
     sig = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s")

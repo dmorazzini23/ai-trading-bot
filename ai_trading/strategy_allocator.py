@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 import logging
 from typing import Any
 
@@ -31,6 +32,13 @@ class StrategyAllocator:
         self.last_direction: dict[str, str] = {}
         self.last_confidence: dict[str, float] = {}
         self.hold_protect: dict[str, int] = {}
+
+    def replace_config(self, **changes: Any) -> TradingConfig:
+        """Return new TradingConfig with ``changes`` applied and set it."""
+        new_cfg = replace(self.config, **changes) if changes else replace(self.config)
+        self.config = copy.deepcopy(new_cfg)
+        self._ensure_config_attributes()
+        return self.config
 
     def _ensure_config_attributes(self) -> None:
         """Ensure config has required attributes with sensible defaults."""
