@@ -32,7 +32,7 @@ class TestEllipsisFix(unittest.TestCase):
 
     def test_json_formatter_unicode_ensure_ascii_false(self):
         """Test that JSON formatter preserves Unicode characters without escaping."""
-        fmt = logger_module.JSONFormatter("%(asctime)sZ")
+        fmt = logger_module.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
 
         # Create a record with Unicode ellipsis character
         rec = _make_record()
