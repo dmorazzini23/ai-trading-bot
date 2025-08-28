@@ -1136,12 +1136,12 @@ from ai_trading import utils
 # AI-AGENT-REF: lazy import heavy feature computation modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.features.indicators import (
-        compute_atr,
         compute_macd,
         compute_macds,
         compute_vwap,
         ensure_columns,
     )
+    from ai_trading.indicators import compute_atr
 else:
     # AI-AGENT-REF: mock feature functions for test environments to avoid slow imports
     def compute_macd(*args, **kwargs):
