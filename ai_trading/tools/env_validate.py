@@ -1,15 +1,25 @@
 from __future__ import annotations
 import os
 import sys
+import importlib.util
 from collections.abc import Iterable, Mapping
 from ai_trading.logging import get_logger
 logger = get_logger(__name__)
-REQUIRED_KEYS: tuple[str, ...] = ('ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL')
+REQUIRED_KEYS: tuple[str, ...] = (
+    'ALPACA_API_KEY',
+    'ALPACA_SECRET_KEY',
+    'ALPACA_BASE_URL',
+)
+REQUIRED_PACKAGES: tuple[str, ...] = ('hmmlearn',)
 
 def validate_env(env: Mapping[str, str] | None=None) -> list[str]:
-    """Return list of missing required environment keys."""
+    """Return list of missing required environment keys or packages."""
     env = env or os.environ
-    return [k for k in REQUIRED_KEYS if not env.get(k)]
+    missing = [k for k in REQUIRED_KEYS if not env.get(k)]
+    for pkg in REQUIRED_PACKAGES:
+        if importlib.util.find_spec(pkg) is None:
+            missing.append(pkg)
+    return missing
 
 def main(argv: Iterable[str] | None=None) -> int:
     """CLI entry point returning process exit code."""
