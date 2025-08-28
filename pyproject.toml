@@ -49,6 +49,10 @@ ml = [
   "scikit-learn>=1.4",
   "torch>=2.2 ; platform_system != 'Windows'"
 ]
+nlp = [
+  "transformers>=4.55",
+  "torch>=2.2 ; platform_system != 'Windows'",
+]
 ta = [
   "ta>=0.11.0",
   "TA-Lib>=0.4.26"
@@ -59,7 +63,7 @@ train = [
   "optuna==4.5.0",
 ]
 all = [
-  "ai-trading-bot[pandas,plot,ml,ta,train]"
+  "ai-trading-bot[pandas,plot,ml,ta,train,nlp]"
 ]
 test = ["pytest>=7.4", "pytest-cov>=4.1"]
 
