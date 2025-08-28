@@ -36,7 +36,7 @@ exceptions = type(
 )
 
 
-from .sessions import Session, Response
+from .sessions import Response as Response, Session as Session
 
 
 __all__ = [
