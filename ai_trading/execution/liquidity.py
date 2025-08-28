@@ -9,13 +9,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from json import JSONDecodeError
 from typing import Any
-try:
-    import requests
-    RequestException = requests.exceptions.RequestException
-except ImportError:
+from ai_trading.exc import RequestException
 
-    class RequestException(Exception):
-        pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 from ai_trading.logging import logger
 from ..core.enums import OrderType

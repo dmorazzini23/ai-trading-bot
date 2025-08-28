@@ -1,10 +1,8 @@
 import types
 from unittest.mock import Mock, patch
 
-from unittest.mock import Mock, patch
-
 import pytest
-import requests
+from ai_trading.exc import HTTPError, RequestException
 
 from ai_trading.position_sizing import _get_equity_from_alpaca
 
@@ -22,7 +20,7 @@ def _cfg():
 def test_get_equity_http_error_returns_zero():
     cfg = _cfg()
     resp = Mock()
-    resp.raise_for_status.side_effect = requests.HTTPError(response=Mock(status_code=500))
+    resp.raise_for_status.side_effect = HTTPError(response=Mock(status_code=500))
     session = Mock(get=Mock(return_value=resp))
     with patch("ai_trading.position_sizing.get_global_session", return_value=session):
         assert _get_equity_from_alpaca(cfg) == 0.0
@@ -31,7 +29,7 @@ def test_get_equity_http_error_returns_zero():
 def test_get_equity_request_exception_returns_zero():
     cfg = _cfg()
     session = Mock()
-    session.get.side_effect = requests.ConnectionError("boom")
+    session.get.side_effect = RequestException("boom")
     with patch("ai_trading.position_sizing.get_global_session", return_value=session):
         assert _get_equity_from_alpaca(cfg) == 0.0
 

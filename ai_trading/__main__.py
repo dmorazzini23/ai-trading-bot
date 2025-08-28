@@ -5,7 +5,7 @@ import sys
 from collections.abc import Callable
 from typing import Any, Literal
 
-import requests
+from ai_trading.exc import HTTPError
 from pydantic import BaseModel, ValidationError, field_validator
 
 from ai_trading.logging import get_logger
@@ -43,7 +43,7 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
         while True:
             try:
                 fn()
-            except (ValueError, requests.HTTPError) as e:
+            except (ValueError, HTTPError) as e:
                 logger.warning("%s recoverable error: %s", label, e, exc_info=True)
             except Exception as e:
                 logger.error("%s failed: %s", label, e, exc_info=True)
@@ -220,7 +220,7 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except (ValueError, requests.HTTPError) as e:
+    except (ValueError, HTTPError) as e:
         logger.error("startup error: %s", e, exc_info=True)
         if "--dry-run" in sys.argv:
             logger.warning("dry-run: ignoring startup exception: %s", e)

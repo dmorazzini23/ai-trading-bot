@@ -14,10 +14,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import Enum
 from typing import Any
-import requests
 from ai_trading.logging import logger
 from ai_trading.utils import http
 from ai_trading.utils.timing import HTTP_TIMEOUT
+from ai_trading.exc import RequestException
 
 class AlertSeverity(Enum):
     """Alert severity levels."""
@@ -157,7 +157,7 @@ class SlackAlerter:
             response.raise_for_status()
             logger.info(f'Slack alert sent: {alert.title}')
             return True
-        except (requests.exceptions.RequestException, ValueError, KeyError, TimeoutError, OSError) as e:
+        except (RequestException, ValueError, KeyError, TimeoutError, OSError) as e:
             logger.error(f'Error sending Slack alert: {e}')
             return False
 
@@ -336,7 +336,7 @@ class AlertManager:
             else:
                 logger.warning(f'Unknown alert channel: {channel}')
                 return False
-        except (ValueError, RuntimeError, OSError, requests.exceptions.RequestException, smtplib.SMTPException) as e:
+        except (ValueError, RuntimeError, OSError, RequestException, smtplib.SMTPException) as e:
             logger.error(f'Error sending to channel {channel}: {e}')
             return False
 

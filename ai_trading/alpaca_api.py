@@ -8,7 +8,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
 
-import requests
+from ai_trading.net.http import HTTPSession
+from ai_trading.exc import RequestException
 import importlib.util
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
@@ -20,6 +21,7 @@ _log = get_logger(__name__)
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
+_HTTP = HTTPSession()
 
 
 from zoneinfo import ZoneInfo
@@ -374,8 +376,8 @@ def _http_submit(
         payload["stop_price"] = str(stop_price)
 
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout or 10)
-    except requests.RequestException as e:  # pragma: no cover - network error path
+        resp = _HTTP.post(url, headers=headers, json=payload, timeout=timeout or 10)
+    except RequestException as e:  # pragma: no cover - network error path
         raise AlpacaOrderNetworkError(f"Network error calling {url}: {e}") from e
 
     try:

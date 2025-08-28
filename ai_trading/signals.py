@@ -18,6 +18,7 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
 from alpaca.common.exceptions import APIError
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout
+from ai_trading.exc import RequestException
 logger = get_logger(__name__)
 _log = logger
 
@@ -52,14 +53,6 @@ def _get_pandas():
         import pandas as pd  # type: ignore
         return pd
     except ImportError:
-        return None
-
-
-def _get_requests():
-    try:  # pragma: no cover - import is tested indirectly
-        import requests  # type: ignore
-        return requests
-    except Exception:
         return None
 
 
@@ -114,14 +107,12 @@ def load_module(name):
 
 def _fetch_api(url: str, retries: int=3, delay: float=1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
-    requests = _get_requests()
-    req_exc = requests.exceptions.RequestException if requests else Exception
     for attempt in range(1, retries + 1):
         try:
             resp = http.get(url, timeout=_clamp_timeout(5))
             resp.raise_for_status()
             return resp.json()
-        except req_exc as exc:
+        except RequestException as exc:
             logger.warning('API request failed (%s/%s): %s', attempt, retries, exc)
             psleep(delay * attempt)
     return {}

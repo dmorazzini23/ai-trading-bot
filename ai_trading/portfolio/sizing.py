@@ -12,13 +12,8 @@ import numpy as np
 from json import JSONDecodeError
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
-try:
-    import requests
-    RequestException = requests.exceptions.RequestException
-except ImportError:
+from ai_trading.exc import RequestException
 
-    class RequestException(Exception):
-        pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

@@ -7,7 +7,7 @@ extracted from bot_engine.py to enable standalone imports and testing.
 import time as pytime
 from datetime import datetime
 from threading import Lock
-import requests
+from ai_trading.net.http import HTTPSession
 from ai_trading.utils.retry import (
     retry,
     retry_if_exception_type,
@@ -21,8 +21,10 @@ from ai_trading.config import get_settings
 from ai_trading.utils.timing import HTTP_TIMEOUT
 from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.utils.device import get_device, tensors_to_device  # AI-AGENT-REF: guard torch import
+from ai_trading.exc import RequestException, HTTPError
 
 SENTIMENT_API_KEY = get_env("SENTIMENT_API_KEY", "")
+_HTTP = HTTPSession()
 DEVICE = None
 _SENTIMENT_INITIALIZED = False
 
@@ -156,7 +158,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             return 0.0
     try:
         url = f'{settings.sentiment_api_url}?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={api_key}'
-        resp = requests.get(url, timeout=HTTP_TIMEOUT)
+        resp = _HTTP.get(url, timeout=HTTP_TIMEOUT)
         if resp.status_code == 429:
             logger.warning(f'fetch_sentiment({ticker}) rate-limited (429) → using enhanced fallback strategies')
             return _handle_rate_limit_with_enhanced_strategies(ticker)
@@ -186,7 +188,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             for filing in form4:
                 if filing['type'] == 'buy' and filing['dollar_amount'] > 50000:
                     form4_score += 0.1
-        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+        except (RequestException, HTTPError) as e:
             logger.debug('Form4 fetch failed for %s - network error: %s', ticker, e)
         except (KeyError, ValueError, TypeError) as e:
             logger.debug('Form4 fetch failed for %s - data parsing error: %s', ticker, e)
@@ -257,11 +259,11 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     try:
         primary_url_full = f'{primary_url}?symbol={ticker}&apikey={primary_key}'
         timeout_v = HTTP_TIMEOUT
-        primary_resp = requests.get(primary_url_full, timeout=timeout_v)
+        primary_resp = _HTTP.get(primary_url_full, timeout=timeout_v)
         if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
             pytime.sleep(0.5)
             alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
-            alt_resp = requests.get(alt_url, timeout=timeout_v)
+            alt_resp = _HTTP.get(alt_url, timeout=timeout_v)
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
                 sentiment_score = data.get('sentiment_score', 0.0)
@@ -360,7 +362,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         headers = {'User-Agent': 'AI Trading Bot'}
         backoff = 0.5
         for attempt in range(3):
-            r = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT)
+            r = _HTTP.get(url, headers=headers, timeout=HTTP_TIMEOUT)
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                 pytime.sleep(backoff)
                 backoff *= 2

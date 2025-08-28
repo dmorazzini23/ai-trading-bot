@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import types
 
-import requests
-from ai_trading.net.http import TimeoutSession, build_retrying_session
+from ai_trading.net import http
+from ai_trading.net.http import HTTPSession, build_retrying_session
 
 
 def test_timeoutsession_injects_default_timeout(monkeypatch):
@@ -13,9 +13,9 @@ def test_timeoutsession_injects_default_timeout(monkeypatch):
         captured.update(kwargs)
         return types.SimpleNamespace(ok=True)
 
-    monkeypatch.setattr(requests.Session, "request", fake_request, raising=True)
+    monkeypatch.setattr(http.requests.Session, "request", fake_request, raising=True)
 
-    s = TimeoutSession(default_timeout=(5.0, 10.0))
+    s = HTTPSession(default_timeout=(5.0, 10.0))
     s.request("GET", "http://unit.test")
     assert captured["timeout"] == (5.0, 10.0)
 
@@ -31,7 +31,7 @@ def test_build_retrying_session_defaults(monkeypatch):
         captured.update(kwargs)
         return types.SimpleNamespace(ok=True)
 
-    monkeypatch.setattr(requests.Session, "request", fake_request, raising=True)
+    monkeypatch.setattr(http.requests.Session, "request", fake_request, raising=True)
 
     s = build_retrying_session(connect_timeout=2.0, read_timeout=3.0)
     s.request("GET", "http://unit.test")
