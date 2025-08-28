@@ -1,0 +1,5 @@
+# Optional NLP extras for Ubuntu 24.04 / CPython 3.12
+# AI-AGENT-REF: install only when WITH_NLP=1
+# Install via: WITH_NLP=1 pip install -r requirements-extras-nlp.txt -c constraints.txt
+torch==2.3.1
+transformers==4.55.4
