@@ -1,5 +1,4 @@
-"""
-Technical Signal Analyzer for advanced position management.
+"""Technical Signal Analyzer for advanced position management.
 
 Analyzes technical indicators to inform position holding decisions:
 - Momentum divergence detection (price vs momentum)
@@ -9,12 +8,20 @@ Analyzes technical indicators to inform position holding decisions:
 
 AI-AGENT-REF: Technical signal analysis for intelligent position exits
 """
+
+from __future__ import annotations
+
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
-import pandas as pd
+from typing import Any, TYPE_CHECKING
+
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:  # pragma: no cover - used for type hints only
+    import pandas as pd
+
 logger = get_logger(__name__)
 
 class SignalStrength(Enum):
@@ -103,6 +110,7 @@ class TechnicalSignalAnalyzer:
 
     def _analyze_momentum(self, data: pd.DataFrame) -> dict[str, Any]:
         """Analyze momentum indicators (RSI, MACD, price momentum)."""
+        pd = load_pandas()
         try:
             if 'close' not in data.columns or len(data) < self.momentum_period + 10:
                 return {'score': 0.5, 'rsi': 50.0, 'macd': 0.0}
@@ -128,6 +136,7 @@ class TechnicalSignalAnalyzer:
 
     def _analyze_divergence(self, data: pd.DataFrame) -> dict[str, Any]:
         """Detect momentum divergences between price and indicators."""
+        pd = load_pandas()
         try:
             if len(data) < self.divergence_lookback + self.momentum_period:
                 return {'type': DivergenceType.NONE, 'strength': 0.0}
@@ -158,6 +167,7 @@ class TechnicalSignalAnalyzer:
 
     def _analyze_volume(self, data: pd.DataFrame) -> dict[str, Any]:
         """Analyze volume patterns for trend confirmation."""
+        pd = load_pandas()
         try:
             if 'volume' not in data.columns or len(data) < self.volume_period:
                 return {'strength': 0.5, 'trend': 'neutral'}
@@ -328,6 +338,7 @@ class TechnicalSignalAnalyzer:
 
     def _calculate_rsi(self, prices: pd.Series, period: int=14) -> float:
         """Calculate RSI indicator."""
+        pd = load_pandas()
         try:
             if len(prices) < period + 1:
                 return 50.0
