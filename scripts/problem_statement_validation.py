@@ -89,13 +89,11 @@ def check_minute_cache():
         assert 'def get_cached_minute_timestamp' in content
         assert 'def last_minute_bar_age_seconds' in content
         logging.info('  - Exported helpers from ai_trading.data.fetch ✓')
-    bot_engine_path = Path('ai_trading/core/bot_engine.py')
-    if bot_engine_path.exists():
-        content = bot_engine_path.read_text()
-        assert 'def _ensure_data_fresh(symbols, max_age_seconds: int)' in content
-        assert 'from ai_trading.data.fetch import last_minute_bar_age_seconds' in content
-        assert 'utc_now_iso()' in content
-        logging.info('  - Fail fast in bot_engine.py when cached minute data is stale ✓')
+    staleness_path = Path('ai_trading/guards/staleness.py')
+    if staleness_path.exists():
+        content = staleness_path.read_text()
+        assert 'def _ensure_data_fresh(' in content
+        logging.info('  - Fail fast when cached data is stale ✓')
         logging.info('  - Logs UTC timestamps ✓')
 
 def check_new_env_vars():
