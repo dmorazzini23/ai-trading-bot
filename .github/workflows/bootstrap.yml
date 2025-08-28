@@ -29,7 +29,7 @@ jobs:
       - name: Bootstrap deps
         run: bash scripts/bootstrap.sh
       - name: Compile
-        run: python -m compileall ai_trading
+        run: python -m compileall ai_trading tests -q
       - name: Test
         run: pytest -q
       - name: Runner import
