@@ -8,9 +8,40 @@ from threading import Thread
 import signal
 from datetime import datetime, UTC
 from ai_trading.env import ensure_dotenv_loaded
-from ai_trading.logging import get_logger
 
-logger = get_logger(__name__)
+# Ensure environment variables are loaded before any logging configuration
+ensure_dotenv_loaded()
+
+import ai_trading.logging as _logging
+
+# Determine log file and level from environment
+LOG_FILE = os.getenv("BOT_LOG_FILE", "logs/bot.log")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+_numeric_level = getattr(logging, LOG_LEVEL, logging.INFO)
+
+# Reset any prior logging configuration to apply new settings
+if getattr(_logging, "_listener", None):
+    try:
+        _logging._listener.stop()
+    except Exception:  # pragma: no cover - best effort cleanup
+        pass
+    _logging._listener = None
+_logging._configured = False
+_logging._LOGGING_CONFIGURED = False
+logging.getLogger().handlers.clear()
+
+# Configure logging with the desired file and level
+root_logger = _logging.setup_logging(debug=_numeric_level <= logging.DEBUG, log_file=LOG_FILE)
+root_logger.setLevel(_numeric_level)
+for handler in root_logger.handlers:
+    handler.setLevel(_numeric_level)
+if _logging._listener is not None:
+    for _h in _logging._listener.handlers:
+        _h.setLevel(_numeric_level)
+
+# Module logger
+logger = _logging.get_logger(__name__)
+
 from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
@@ -219,9 +250,8 @@ def run_bot(*_a, **_k) -> int:
     """
     ensure_dotenv_loaded()
     global config
-    from ai_trading.logging import setup_logging, validate_logging_setup
+    from ai_trading.logging import validate_logging_setup
 
-    logger = setup_logging(log_file="logs/bot.log", debug=False)
     validation_result = validate_logging_setup()
     if not validation_result["validation_passed"]:
         logger.error("Logging validation failed: %s", validation_result["issues"])
