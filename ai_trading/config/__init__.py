@@ -6,6 +6,7 @@ from typing import Any
 from .locks import LockWithTimeout
 # AI-AGENT-REF: re-export config management helpers without triggering optional deps
 from .management import TradingConfig, derive_cap_from_settings
+from ai_trading.validation.require_env import _require_env_vars, require_env_vars
 logger = get_logger(__name__)
 _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
@@ -65,12 +66,6 @@ def get_env(name: str, default: Any=None, *, reload: bool=False, required: bool=
         raise RuntimeError(f'Missing required env var: {name}')
     return val
 
-def _require_env_vars(*names: str) -> None:
-    missing = [n for n in names if not os.getenv(n)]
-    if missing:
-        msg = f"Missing required environment variables: {', '.join(missing)}"
-        logger.critical(msg)
-        raise RuntimeError(msg)
 
 def _perform_env_validation() -> None:
     from .management import validate_required_env
@@ -121,4 +116,4 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
             if key in conf:
                 conf[key] = '***'
     return conf
-__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PARAMETERS', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']
+__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PARAMETERS', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']

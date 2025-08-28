@@ -7,10 +7,22 @@ from pathlib import Path
 from typing import Any
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.data.fetch import get_bars
+from ai_trading.validation.require_env import should_halt_trading
 
 # Lazy pandas proxy for on-demand import
 pd = load_pandas()
-__all__ = ['check_data_freshness', 'get_stale_symbols', 'validate_trading_data', 'emergency_data_check', 'is_valid_ohlcv', 'validate_trade_log_integrity', 'monitor_real_time_data_quality', 'MarketDataValidator', 'ValidationSeverity']
+__all__ = [
+    "check_data_freshness",
+    "get_stale_symbols",
+    "validate_trading_data",
+    "emergency_data_check",
+    "is_valid_ohlcv",
+    "validate_trade_log_integrity",
+    "monitor_real_time_data_quality",
+    "MarketDataValidator",
+    "ValidationSeverity",
+    "should_halt_trading",
+]
 REQUIRED_PRICE_COLS = ('open', 'high', 'low', 'close', 'volume')
 
 def is_valid_ohlcv(df: pd.DataFrame, min_rows: int=50) -> bool:
