@@ -221,7 +221,7 @@ def run_bot(*_a, **_k) -> int:
     global config
     from ai_trading.logging import setup_logging, validate_logging_setup
 
-    logger = setup_logging(log_file="logs/bot.log", debug=False)
+    logger = setup_logging(log_file="logs/bot.log")
     validation_result = validate_logging_setup()
     if not validation_result["validation_passed"]:
         logger.error("Logging validation failed: %s", validation_result["issues"])

@@ -320,6 +320,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         _ensure_single_handler(logger)
         logger.handlers.clear()
         logger.setLevel(logging.DEBUG)
+        level_name = os.getenv('LOG_LEVEL', 'INFO')
         try:
             from ai_trading.config import get_settings
             S = get_settings()
@@ -327,8 +328,10 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
                 formatter = CompactJsonFormatter('%Y-%m-%dT%H:%M:%SZ')
             else:
                 formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
+            level_name = getattr(S, 'log_level', level_name)
         except COMMON_EXC:
             formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
+        level = getattr(logging, str(level_name).upper(), logging.INFO)
 
         class _PhaseFilter(logging.Filter):
 
@@ -339,7 +342,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         handlers: list[logging.Handler] = []
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(formatter)
-        stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        stream_handler.setLevel(level)
         stream_handler.addFilter(_PhaseFilter())
         from ai_trading.logging_filters import SecretFilter
         secret_filter = SecretFilter()
@@ -357,7 +360,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             handlers.append(rotating_handler)
         _log_queue = queue.Queue(-1)
         queue_handler = QueueHandler(_log_queue)
-        queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        queue_handler.setLevel(level)
         queue_handler.addFilter(_PhaseFilter())
         queue_handler.addFilter(secret_filter)
         queue_handler.addFilter(extra_filter)
