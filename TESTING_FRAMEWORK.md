@@ -9,6 +9,8 @@ ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ```
 
+With plugin autoload disabled, `tools/run_pytest.py` explicitly enables asyncio support by adding the `pytest_asyncio` plugin so asynchronous tests have an event loop available.
+
 ## Table of Contents
 
 - [Testing Philosophy](#testing-philosophy)

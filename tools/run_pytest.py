@@ -62,8 +62,10 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
         # AI-AGENT-REF: suppress warnings for stable smoke output
         cmd += ["-W", "ignore"]
     if os.environ.get("PYTEST_DISABLE_PLUGIN_AUTOLOAD") == "1":
-        # Under autoload-off, inject xdist only if available and not already present via addopts
         addopts = os.environ.get("PYTEST_ADDOPTS", "")
+        if ("-p pytest_asyncio" not in addopts) and (iu.find_spec("pytest_asyncio") is not None):
+            cmd += ["-p", "pytest_asyncio.plugin"]
+        # Under autoload-off, inject xdist only if available and not already present via addopts
         no_xdist = os.environ.get("NO_XDIST") == "1"
         if ("-p xdist.plugin" not in addopts) and (iu.find_spec("xdist") is not None) and not no_xdist:
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
