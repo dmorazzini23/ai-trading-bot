@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
 from ai_trading.exc import COMMON_EXC
+from .json_formatter import JSONFormatter
 
 def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
@@ -216,41 +217,6 @@ logging.Formatter.converter = time.gmtime
 class UTCFormatter(logging.Formatter):
     """Formatter with UTC timestamps and structured phase tags."""
     converter = time.gmtime
-
-class JSONFormatter(logging.Formatter):
-    """JSON log formatter with secret masking."""
-    converter = time.gmtime
-
-    def _json_default(self, obj):
-        """Fallback serialization for unsupported types."""
-        if isinstance(obj, datetime | date):
-            return obj.isoformat()
-        if hasattr(obj, 'tolist'):
-            return obj.tolist()
-        return str(obj)
-
-    def format(self, record: logging.LogRecord) -> str:
-        payload = {'ts': self.formatTime(record, self.datefmt), 'level': record.levelname, 'name': record.name, 'msg': record.getMessage()}
-        omit = {'msg', 'message', 'args', 'levelname', 'levelno', 'name', 'created', 'msecs', 'relativeCreated', 'asctime', 'pathname', 'filename', 'module', 'exc_info', 'exc_text', 'stack_info', 'lineno', 'funcName', 'thread', 'threadName', 'processName', 'process', 'taskName'}
-
-        def _should_mask_secret(field: str, value: object) -> bool:
-            lk = field.lower()
-            if lk.startswith('has_'):
-                return False
-            if not isinstance(value, str | bytes):
-                return False
-            sensitive_tokens = ('api_key', 'secret_key', 'apca_api_key_id', 'apca_api_secret_key', 'token', 'password', 'bearer', 'private', 'access_key')
-            return any((tok in lk for tok in sensitive_tokens))
-        for k, v in record.__dict__.items():
-            if k in omit:
-                continue
-            if _should_mask_secret(k, v):
-                v = _mask_secret(v)
-            payload[k] = v
-        if record.exc_info:
-            exc_type, exc_value, _exc_tb = record.exc_info
-            payload['exc'] = ''.join(traceback.format_exception_only(exc_type, exc_value)).strip()
-        return json.dumps(payload, default=self._json_default, ensure_ascii=False)
 
 class CompactJsonFormatter(JSONFormatter):
     """Compact JSON log formatter that drops large extra payloads."""

@@ -31,6 +31,20 @@ def test_json_formatter_custom_fields_and_masking():
     assert "pathname" not in data
 
 
+def test_json_formatter_extra_fields_and_mask_keys():
+    fmt = logger.JSONFormatter(
+        "%(asctime)sZ",
+        extra_fields={"service": "trade", "secret": "top"},
+        mask_keys=["secret", "symbol"],
+    )
+    rec = _make_record(symbol="AAPL")
+    out = fmt.format(rec)
+    data = json.loads(out)
+    assert data["service"] == "trade"
+    assert data["secret"] == "***"
+    assert data["symbol"] == "***"
+
+
 def test_json_formatter_exc_info():
     fmt = logger.JSONFormatter("%(asctime)sZ")
     rec = _make_record()
