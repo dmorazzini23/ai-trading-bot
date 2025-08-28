@@ -67,6 +67,8 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
         no_xdist = os.environ.get("NO_XDIST") == "1"
         if ("-p xdist.plugin" not in addopts) and (iu.find_spec("xdist") is not None) and not no_xdist:
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
+        # Explicitly load plugins otherwise skipped by autoload
+        cmd += ["-p", "pytest_timeout", "-p", "pytest_asyncio"]
     if args.collect_only:
         cmd += ["--collect-only"]
 
@@ -134,8 +136,20 @@ def main(argv: list[str] | None = None) -> int:
     rc = subprocess.call(cmd)
     if rc != 0 and "-n" in cmd and os.environ.get("NO_XDIST") != "1":
         logger.info("[run_pytest] xdist run failed; retrying without xdist…")
-        xdist_args = {"-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")}
-        cmd_wo = [c for c in cmd if c not in xdist_args]
+        xdist_pairs = [
+            ("-p", "xdist.plugin"),
+            ("-n", os.environ.get("PYTEST_XDIST_N", "auto")),
+        ]
+        cmd_wo: list[str] = []
+        skip = False
+        for i, c in enumerate(cmd):
+            if skip:
+                skip = False
+                continue
+            if any(i + 1 < len(cmd) and c == a and cmd[i + 1] == b for a, b in xdist_pairs):
+                skip = True
+                continue
+            cmd_wo.append(c)
         logger.info("[run_pytest] %s", " ".join(cmd_wo))
         rc = subprocess.call(cmd_wo)
     return rc
