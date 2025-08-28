@@ -1,6 +1,8 @@
 from __future__ import annotations
 import pathlib, re
 
+from tests.helpers.constants import LEGACY_ENV_PREFIXES, LEGACY_ENV_WHITELIST
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FILES = [p for p in ROOT.rglob("*.py")
          if "tests" not in str(p)
@@ -11,9 +13,14 @@ PY = [p for p in ROOT.rglob("*.py") if "venv" not in str(p)]  # AI-AGENT-REF: in
 
 def _t(p): return p.read_text(encoding="utf-8", errors="ignore")
 
-def test_no_apca_env_anywhere_in_python():
-    offenders = [p for p in FILES if "APCA_" in _t(p)]
-    assert not offenders, f"Forbidden APCA_* in: {offenders}"
+
+def test_no_legacy_env_anywhere_in_python():
+    offenders = [
+        p for p in FILES
+        if any(k in _t(p) for k in LEGACY_ENV_PREFIXES)
+        and p.relative_to(ROOT).as_posix() not in LEGACY_ENV_WHITELIST
+    ]
+    assert not offenders, f"Forbidden legacy env vars in: {offenders}"
 
 def _find_bad_ctor(pattern, need_kw, unless_kw=None):
     rx = re.compile(pattern, re.DOTALL)
