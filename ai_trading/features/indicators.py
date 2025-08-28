@@ -1,7 +1,7 @@
 """
 Technical indicator calculations for AI trading platform.
 
-This module provides compute functions for MACD, ATR, VWAP and other
+This module provides compute functions for MACD, VWAP and other
 technical indicators used in trading strategies.
 
 Moved from root features.py for package-safe imports.
@@ -9,7 +9,7 @@ Moved from root features.py for package-safe imports.
 from __future__ import annotations
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.indicators import atr, ema
+from ai_trading.indicators import ema
 logger = get_logger(__name__)
 
 # Lazy pandas proxy
@@ -30,21 +30,6 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         return df
     except (KeyError, ValueError, TypeError):
         logger.error('MACD computation failed', exc_info=True)
-        return df
-
-def compute_atr(df: pd.DataFrame, period: int=14) -> pd.DataFrame:
-    """Compute Average True Range (ATR)."""
-    try:
-        if not all((col in df.columns for col in ['high', 'low', 'close'])):
-            logger.error('Missing required columns for ATR calculation')
-            return df
-        high = df['high']
-        low = df['low']
-        close = df['close']
-        df['atr'] = atr(high, low, close, period)
-        return df
-    except (KeyError, ValueError, TypeError):
-        logger.error('ATR computation failed', exc_info=True)
         return df
 
 def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
@@ -89,4 +74,5 @@ def ensure_columns(df: pd.DataFrame, required: list[str] | None=None, symbol: st
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
         logger.error('Column validation failed', exc_info=True)
         return df
-__all__ = ['compute_macd', 'compute_atr', 'compute_vwap', 'compute_macds', 'ensure_columns']
+
+__all__ = ['compute_macd', 'compute_vwap', 'compute_macds', 'ensure_columns']
