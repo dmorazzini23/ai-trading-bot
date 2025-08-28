@@ -384,8 +384,27 @@ class ExecutionEngine:
         self.broker_interface = broker_interface
         self.logger = logger
         self._open_orders: dict[str, OrderInfo] = {}
+        self._available_qty: float = 0
         self.execution_stats = {'total_orders': 0, 'filled_orders': 0, 'cancelled_orders': 0, 'rejected_orders': 0, 'total_volume': 0.0, 'average_fill_time': 0.0}
         emit_once(logger, 'EXECUTION_ENGINE_INIT', 'info', 'ExecutionEngine initialized')
+
+    @property
+    def available_qty(self) -> float:
+        """Get the currently available quantity for trading."""
+        return self._available_qty
+
+    @available_qty.setter
+    def available_qty(self, qty: float) -> None:
+        """Set the available quantity for trading."""
+        self._available_qty = qty
+
+    def set_available_qty(self, qty: float) -> None:
+        """Helper to set :attr:`available_qty`."""
+        self.available_qty = qty
+
+    def get_available_qty(self) -> float:
+        """Helper to get :attr:`available_qty`."""
+        return self.available_qty
 
     def _track_order(self, order: Order) -> None:
         """Track an order in the shared monitoring structure."""
