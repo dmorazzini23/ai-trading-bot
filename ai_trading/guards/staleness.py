@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Sequence
 from zoneinfo import ZoneInfo
 
@@ -45,26 +45,38 @@ def _ensure_data_fresh(
         tzinfo = ZoneInfo(tz)
     else:
         tzinfo = tz
-    now = now or datetime.now(tzinfo)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=tzinfo)
+    raw_now = now or datetime.now(tzinfo)
+    if raw_now.tzinfo is None:
+        logger.debug("Naive 'now' timestamp provided; assuming %s", tzinfo)
+        raw_now = raw_now.replace(tzinfo=tzinfo)
+    else:
+        logger.debug("Aware 'now' timestamp provided with tz %s", raw_now.tzinfo)
+    now = pd.to_datetime(raw_now, utc=True)
 
     # Extract timestamp from index or column
     if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
-        last_ts = df.index[-1]
+        last_ts_raw = df.index[-1]
     elif "timestamp" in df.columns and len(df) > 0:
-        last_ts = pd.to_datetime(df["timestamp"].iloc[-1])
+        last_ts_raw = df["timestamp"].iloc[-1]
     else:
         raise RuntimeError("no_timestamp")
 
-    if last_ts.tzinfo is None:
-        last_ts = last_ts.replace(tzinfo=UTC)
+    tzinfo_raw = getattr(last_ts_raw, "tzinfo", None)
+    last_ts = pd.to_datetime(last_ts_raw, utc=True)
+    if tzinfo_raw is None:
+        logger.debug("Naive data timestamp converted to UTC: %s", last_ts.isoformat())
+    else:
+        logger.debug(
+            "Aware data timestamp (%s) converted to UTC: %s",
+            tzinfo_raw,
+            last_ts.isoformat(),
+        )
 
-    age_secs = int((now - last_ts.astimezone(now.tzinfo)).total_seconds())
+    age_secs = int((now - last_ts).total_seconds())
     if age_secs > max_age_seconds:
         raise RuntimeError(f"age={age_secs}s")
 
-    logger.debug("Data freshness OK [UTC now=%s]", now.astimezone(UTC).isoformat())
+    logger.debug("Data freshness OK [UTC now=%s]", now.isoformat())
 
 
 def ensure_data_fresh(
@@ -85,8 +97,14 @@ def ensure_data_fresh(
         tzinfo = ZoneInfo(tz)
     else:
         tzinfo = tz
-    now = now or datetime.now(tzinfo)
-    start = now - timedelta(minutes=1)
+    raw_now = now or datetime.now(tzinfo)
+    if raw_now.tzinfo is None:
+        logger.debug("Naive 'now' timestamp provided; assuming %s", tzinfo)
+        raw_now = raw_now.replace(tzinfo=tzinfo)
+    else:
+        logger.debug("Aware 'now' timestamp provided with tz %s", raw_now.tzinfo)
+    now = pd.to_datetime(raw_now, utc=True)
+    start = now - pd.to_timedelta(1, unit="min")
     stale: list[str] = []
 
     for sym in symbols:
@@ -110,9 +128,9 @@ def ensure_data_fresh(
         details = ", ".join(stale)
         logger.warning(
             "Data staleness detected [UTC now=%s]: %s",
-            now.astimezone(UTC).isoformat(),
+            now.isoformat(),
             details,
         )
         raise RuntimeError(f"Stale data for symbols: {details}")
 
-    logger.debug("Data freshness OK [UTC now=%s]", now.astimezone(UTC).isoformat())
+    logger.debug("Data freshness OK [UTC now=%s]", now.isoformat())

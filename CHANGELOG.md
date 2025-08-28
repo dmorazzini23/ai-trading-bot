@@ -38,6 +38,8 @@ All notable changes to this project will be documented in this file.
   - Works both as package import and when executed from repo root
 - **Trading Loop**: guard missing Alpaca client and dedupe strategy logs
 - **Alpaca API**: fix submit/retry logic including 429 handling
+- **Staleness Guard**: convert timestamps to UTC with `pandas.to_datetime` and
+  log naive vs aware conversions
 - **Alpaca API**: validate `list_orders` availability and map alternative clients before trading loop
 - **Alpaca API**: fix `list_orders` wrapper to forward `status` without introducing unsupported `statuses`
 - **Config**: unify centralized defaults and add `from_optimization`
