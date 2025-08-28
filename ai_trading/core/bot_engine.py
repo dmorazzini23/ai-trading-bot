@@ -61,20 +61,20 @@ from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
+    get_trading_client_cls,
+    get_data_client_cls,
+    get_api_error_cls,
 )
 from ai_trading.utils.pickle_safe import safe_pickle_load
-try:  # pragma: no cover - optional dependency
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore
-except Exception:  # pragma: no cover - fallback when SDK missing
+else:
     class APIError(Exception):
         """Fallback APIError when alpaca-py is unavailable."""
 
         pass
-
-    class TradingClient:  # type: ignore
-        def __init__(self, *a, **k):
-            raise RuntimeError("alpaca-py is required")
 
 from ai_trading.config.management import (
     get_env,
@@ -240,6 +240,7 @@ def _validate_trading_api(api: Any) -> bool:
             if not is_shadow_mode():
                 raise RuntimeError("Alpaca client missing list_orders method")
             return False
+    TradingClient = get_trading_client_cls()
     if not isinstance(api, TradingClient):
         logger_once.warning(
             "ALPACA_API_ADAPTER", key="alpaca_api_adapter"
@@ -484,10 +485,20 @@ def _get_env_str(key: str) -> str:
 class BotEngine:
     """Minimal engine exposing memoized Alpaca clients."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        trading_client_cls: Any | None = None,
+        data_client_cls: Any | None = None,
+    ) -> None:
         self.logger = get_logger(__name__)
         # Expose the lazily-initialized global context through this engine
         self._ctx = get_ctx()
+        self._trading_client_cls = trading_client_cls or get_trading_client_cls()
+        self._data_client_cls = data_client_cls or get_data_client_cls()
+        global APIError
+        if getattr(APIError, "__module__", "") == __name__:
+            APIError = get_api_error_cls()
 
     @property
     def ctx(self):
@@ -504,7 +515,8 @@ class BotEngine:
         )
         api_key = _get_env_str("ALPACA_API_KEY")
         secret_key = _get_env_str("ALPACA_SECRET_KEY")
-        return TradingClient(
+        cls = self._trading_client_cls
+        return cls(
             api_key=api_key,
             secret_key=secret_key,
             paper="paper" in base_url.lower(),
@@ -514,11 +526,8 @@ class BotEngine:
     @cached_property
     def data_client(self):
         """Alpaca StockHistoricalDataClient for historical/market data."""
-        from alpaca.data.historical import (
-            StockHistoricalDataClient as _DataClient,  # type: ignore
-        )
-
-        return _DataClient(
+        cls = self._data_client_cls
+        return cls(
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
         )
@@ -5773,9 +5782,8 @@ def _initialize_alpaca_clients() -> bool:
             logger.info("ALPACA_DIAG", extra=_redact(diag))
             return False
         try:
-            from alpaca.trading.client import TradingClient as AlpacaREST
-            hist_mod = importlib.import_module("alpaca.data.historical")
-            stock_client_cls = getattr(hist_mod, "Stock" "HistoricalDataClient")
+            AlpacaREST = get_trading_client_cls()
+            stock_client_cls = get_data_client_cls()
 
             logger.debug("Successfully imported Alpaca SDK class")
         except COMMON_EXC as e:
