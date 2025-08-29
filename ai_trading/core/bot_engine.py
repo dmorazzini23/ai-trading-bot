@@ -12919,6 +12919,54 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
     logger.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
 
 
+def _ensure_execution_engine(runtime) -> None:
+    """Ensure an execution engine with check_stops is attached to runtime."""
+    from ai_trading.execution.engine import ExecutionEngine  # deferred import
+
+    global _exec_engine
+    exec_engine = getattr(runtime, "execution_engine", None) or getattr(
+        runtime, "exec_engine", None
+    )
+    if exec_engine is None:
+        try:
+            exec_engine = ExecutionEngine(runtime)
+            runtime.execution_engine = exec_engine
+            runtime.exec_engine = exec_engine
+            _exec_engine = exec_engine
+            logger.debug(
+                "Execution engine initialized and attached to runtime"
+            )
+        except Exception as e:  # pragma: no cover - initialization rarely fails
+            logger.warning(
+                "Execution engine initialization failed: %s", e
+            )
+            return
+    else:
+        runtime.execution_engine = exec_engine
+        runtime.exec_engine = exec_engine
+        _exec_engine = exec_engine
+    if not hasattr(exec_engine, "check_stops"):
+        logger.warning(
+            "Execution engine lacks check_stops(); risk-stop checks disabled"
+        )
+
+
+def _check_runtime_stops(runtime) -> None:
+    """Run post-cycle stop checks if supported."""
+    exec_engine = getattr(runtime, "exec_engine", None) or getattr(
+        runtime, "execution_engine", None
+    )
+    if exec_engine is not None and hasattr(exec_engine, "check_stops"):
+        try:
+            exec_engine.check_stops()
+        except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard check_stops
+            logger.info("check_stops raised but was suppressed: %s", e)
+    else:
+        logger.warning(
+            "Execution engine missing check_stops; risk-stop checks skipped"
+        )
+
+
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
 def run_all_trades_worker(state: BotState, runtime) -> None:
     """
@@ -13065,6 +13113,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 "RISK_EXPOSURE_UPDATE_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
+        _ensure_execution_engine(runtime)
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
@@ -13546,14 +13595,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state.last_loop_duration = time.monotonic() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
 
-            exec_engine = getattr(runtime, "exec_engine", None) or getattr(runtime, "execution_engine", None)
-            if exec_engine is not None and hasattr(exec_engine, "check_stops"):
-                try:
-                    exec_engine.check_stops()
-                except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard check_stops
-                    logger.info("check_stops raised but was suppressed: %s", e)
-            else:
-                logger.debug("Execution engine lacks check_stops(); skipping")
+            _check_runtime_stops(runtime)
 
             # AI-AGENT-REF: Perform memory cleanup after trading cycle
             if MEMORY_OPTIMIZATION_AVAILABLE:
