@@ -4955,30 +4955,58 @@ class TradeLogger:
             logger.debug("Meta-learning disabled, skipping conversion")
 
 
+def _read_trade_log(
+    path: str = TRADE_LOG_FILE,
+    usecols: list[str] | None = None,
+    dtype: dict | str | None = None,
+):
+    """Safely load the trade log CSV or return ``None`` if unavailable.
+
+    Emits a warning when the log file is missing or empty with guidance on
+    initializing the trade log via :func:`get_trade_logger`.
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        logger.warning(
+            "TRADE_LOG_MISSING_OR_EMPTY | path=%s | hint=call get_trade_logger() to initialize",
+            path,
+        )
+        return None
+    try:  # AI-AGENT-REF: gate heavy import
+        import pandas as pd  # type: ignore
+    except ImportError:
+        logger.warning("pandas not available; cannot load trade log at %s", path)
+        return None
+    try:
+        df = pd.read_csv(
+            path,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=usecols,
+            dtype=dtype,
+        )
+    except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+        logger.warning(
+            "Failed to parse trade log %s: %s | hint=call get_trade_logger() to initialize",
+            path,
+            e,
+        )
+        return None
+    if df.empty:
+        logger.warning(
+            "Trade log %s parsed but contains no rows | hint=call get_trade_logger() to initialize",
+            path,
+        )
+        return None
+    return df
+
+
 def _parse_local_positions() -> dict[str, int]:
     """Return current local open positions from the trade logger."""
     positions: dict[str, int] = {}
-    if not os.path.exists(TRADE_LOG_FILE):
-        return positions
-    try:
-        # AI-AGENT-REF: tolerate malformed CSV lines
-        df = pd.read_csv(
-            TRADE_LOG_FILE,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=["symbol", "qty", "side", "exit_time"],
-            dtype=str,
-        )
-        if df.empty:
-            logger.debug(
-                "Loaded DataFrame from %s is empty after parsing/fallback",
-                TRADE_LOG_FILE,
-            )
-    except pd.errors.ParserError as e:
-        get_logger(__name__).warning(
-            "Failed to parse TRADE_LOG_FILE (malformed row): %s; returning empty set",
-            e,
-        )
+    df = _read_trade_log(
+        TRADE_LOG_FILE, usecols=["symbol", "qty", "side", "exit_time"], dtype=str
+    )
+    if df is None:
         return positions
     for _, row in df.iterrows():
         if str(row.get("exit_time", "")) != "":
@@ -6953,25 +6981,13 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
 
 
 def count_day_trades() -> int:
-    if not os.path.exists(TRADE_LOG_FILE):
+    try:  # AI-AGENT-REF: gate heavy import
+        import pandas as pd  # type: ignore
+    except ImportError:
         return 0
-    df = pd.read_csv(
-        TRADE_LOG_FILE,
-        on_bad_lines="skip",
-        engine="python",
-        usecols=["entry_time", "exit_time"],
-    )
-    if df.empty:
-        if _is_market_open_now():
-            logger.debug(
-                "Loaded DataFrame from %s is empty after parsing/fallback",
-                TRADE_LOG_FILE,
-            )
-        else:
-            logger.debug(
-                "Loaded DataFrame from %s is empty (market closed)",
-                TRADE_LOG_FILE,
-            )
+    df = _read_trade_log(TRADE_LOG_FILE, usecols=["entry_time", "exit_time"])
+    if df is None:
+        return 0
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
     df = df.dropna(subset=["entry_time", "exit_time"])
@@ -7159,26 +7175,12 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
 
 
 def too_correlated(ctx: BotContext, sym: str) -> bool:
-    if not os.path.exists(TRADE_LOG_FILE):
+    try:  # AI-AGENT-REF: gate heavy import
+        import pandas as pd  # type: ignore
+    except ImportError:
         return False
-    df = pd.read_csv(
-        TRADE_LOG_FILE,
-        on_bad_lines="skip",
-        engine="python",
-        usecols=["symbol", "exit_time"],
-    )
-    if df.empty:
-        if _is_market_open_now():
-            logger.debug(
-                "Loaded DataFrame from %s is empty after parsing/fallback",
-                TRADE_LOG_FILE,
-            )
-        else:
-            logger.debug(
-                "Loaded DataFrame from %s is empty (market closed)",
-                TRADE_LOG_FILE,
-            )
-    if "exit_time" not in df.columns or "symbol" not in df.columns:
+    df = _read_trade_log(TRADE_LOG_FILE, usecols=["symbol", "exit_time"])
+    if df is None or "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
     rets: dict[str, pd.Series] = {}
@@ -10122,13 +10124,12 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
 
 def update_signal_weights() -> None:
     try:
-        if not os.path.exists(TRADE_LOG_FILE):
-            logger.warning("No trades log found; skipping weight update.")
-            return
-        df = pd.read_csv(
+        import pandas as pd  # type: ignore
+    except ImportError:
+        return
+    try:
+        df = _read_trade_log(
             TRADE_LOG_FILE,
-            on_bad_lines="skip",
-            engine="python",
             usecols=[
                 "entry_price",
                 "exit_price",
@@ -10137,12 +10138,11 @@ def update_signal_weights() -> None:
                 "confidence",
                 "exit_time",
             ],
-        ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
-        if df.empty:
-            logger.debug(
-                "Loaded DataFrame from %s is empty after parsing/fallback",
-                TRADE_LOG_FILE,
-            )
+        )
+        if df is None:
+            logger.warning("No trades log found; skipping weight update.")
+            return
+        df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
@@ -10263,21 +10263,15 @@ def run_meta_learning_weight_optimizer(
         logger.warning("METALEARN_SKIPPED_LOCKED")
         return
     try:
-        if not os.path.exists(trade_log_path):
+        df = _read_trade_log(
+            trade_log_path,
+            usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
+        )
+        if df is None:
             logger.warning("METALEARN_NO_TRADES")
             return
-
-        df = pd.read_csv(
-            trade_log_path,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
-        ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.warning(
-                "Loaded DataFrame from %s is empty after parsing/fallback",
-                trade_log_path,
-            )
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -10335,21 +10329,15 @@ def run_bayesian_meta_learning_optimizer(
         logger.warning("METALEARN_SKIPPED_LOCKED")
         return
     try:
-        if not os.path.exists(trade_log_path):
+        df = _read_trade_log(
+            trade_log_path,
+            usecols=["entry_price", "exit_price", "signal_tags", "side"],
+        )
+        if df is None:
             logger.warning("METALEARN_NO_TRADES")
             return
-
-        df = pd.read_csv(
-            trade_log_path,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=["entry_price", "exit_price", "signal_tags", "side"],
-        ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.warning(
-                "Loaded DataFrame from %s is empty after parsing/fallback",
-                trade_log_path,
-            )
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -10408,24 +10396,22 @@ def load_global_signal_performance(
         threshold = float(
             os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.3")
         )  # Reduced from 0.4 to 0.3
-
-    if not os.path.exists(TRADE_LOG_FILE):
-        logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
-        return None
-
     try:
-        df = pd.read_csv(
+        df = _read_trade_log(
             TRADE_LOG_FILE,
-            on_bad_lines="skip",
-            engine="python",
             usecols=["exit_price", "entry_price", "signal_tags", "side"],
-        ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
+        )
+        if df is None:
+            logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
+            return None
+        df = df.dropna(subset=["exit_price", "entry_price", "signal_tags"])
 
         if df.empty:
             logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
             return {}
 
         # Enhanced data validation and cleaning
+        import pandas as pd  # type: ignore
         df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
         df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
         df["signal_tags"] = df["signal_tags"].astype(str)
@@ -11650,26 +11636,17 @@ def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
 
 def daily_summary() -> None:
     try:
-        if not os.path.exists(TRADE_LOG_FILE):
+        import pandas as pd  # type: ignore
+    except ImportError:
+        return
+    try:
+        df = _read_trade_log(
+            TRADE_LOG_FILE, usecols=["entry_price", "exit_price", "side"]
+        )
+        if df is None:
             logger.info("DAILY_SUMMARY_NO_TRADES")
             return
-        df = pd.read_csv(
-            TRADE_LOG_FILE,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=["entry_price", "exit_price", "side"],
-        ).dropna(subset=["entry_price", "exit_price"])
-        if df.empty:
-            if _is_market_open_now():
-                logger.debug(
-                    "Loaded DataFrame from %s is empty after parsing/fallback",
-                    TRADE_LOG_FILE,
-                )
-            else:
-                logger.debug(
-                    "Loaded DataFrame from %s is empty (market closed)",
-                    TRADE_LOG_FILE,
-                )
+        df = df.dropna(subset=["entry_price", "exit_price"])
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df.exit_price - df.entry_price) * direction
         total_trades = len(df)
