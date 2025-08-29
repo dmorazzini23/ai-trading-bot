@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     )
     testing: bool = Field(False, alias='TESTING')
     shadow_mode: bool = Field(False, alias='SHADOW_MODE')
+    force_trades: bool = Field(False, alias='FORCE_TRADES')
     disable_daily_retrain: bool = Field(False, alias='DISABLE_DAILY_RETRAIN')
     log_market_fetch: bool = Field(True, alias='LOG_MARKET_FETCH')
     healthcheck_port: int = Field(9001, alias='HEALTHCHECK_PORT')
@@ -198,6 +199,11 @@ class Settings(BaseSettings):
         if v is not None and float(v) <= 0.0:
             raise ValueError('max_position_size must be positive')
         return v
+
+    @field_validator('force_trades', mode='before')
+    @classmethod
+    def _force_trades_cast(cls, v):
+        return _to_bool(v, False)
 
     @computed_field
     @property

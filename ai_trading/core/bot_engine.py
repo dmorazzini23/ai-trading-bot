@@ -9016,7 +9016,7 @@ def signal_and_confirm(
 def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
-    if CFG.force_trades:
+    if getattr(CFG, "force_trades", False):
         logger.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
         return True
     # Streak kill-switch check
