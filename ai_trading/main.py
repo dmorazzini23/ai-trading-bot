@@ -273,7 +273,15 @@ def run_bot(*_a, **_k) -> int:
         logger.error("Logging validation failed: %s", validation_result["issues"])
     logger.info("Application startup - logging configured once")
     try:
+        try:
+            reload_env()
+        except Exception as exc:  # noqa: BLE001
+            logger.critical("ENV_LOAD_FAILED", extra={"error": str(exc)})
+            return 1
         config = get_settings()
+        if config is None:
+            logger.critical("SETTINGS_UNAVAILABLE")
+            return 1
         validate_environment()
         memory_optimizer = get_memory_optimizer()
         if memory_optimizer:
@@ -283,7 +291,7 @@ def run_bot(*_a, **_k) -> int:
         preflight_import_health()
         run_cycle()
         return 0
-    except (ValueError, TypeError) as e:
+    except (ValueError, TypeError, RuntimeError) as e:
         logger.error("Bot startup failed: %s", e, exc_info=True)
         return 1
 
