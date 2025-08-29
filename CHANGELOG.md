@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
   - Updated README/CHANGELOG to document package-only policy
 
 ### Changed
+- **Python**: restrict supported version to >=3.12,<3.13
 - **Package Structure**: Root modules previously moved into `ai_trading/` package
   - **Migration Required**: Use `from ai_trading.signals import ...` instead of `from signals import ...`
   - **Breaking**: Root imports are no longer supported as of this version

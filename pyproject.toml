@@ -3,7 +3,7 @@ name = "ai-trading-bot"
 version = "0.0.0"
 description = "AI trading bot (lightweight testable build)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy==1.26.4",  # AI-AGENT-REF: pin NumPy to 1.x for pandas-ta compatibility
   "requests>=2.31,<3",
