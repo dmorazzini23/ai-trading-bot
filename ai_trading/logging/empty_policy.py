@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 class _State:
     count: int = 0
     last: datetime = datetime.min.replace(tzinfo=UTC)
+
 _TTL_SECONDS = 60
 _store: dict[tuple[str, str, str, str, str], _State] = defaultdict(_State)
 
@@ -15,12 +16,10 @@ def classify(is_market_open: bool) -> int:
     """Return logging level for empty bars."""
     return logging.WARNING if is_market_open else logging.INFO
 
-def should_emit(key: tuple[str, str, str, str, str], now: datetime) -> bool:
-    """Determine if the event should be logged."""
+def should_emit(key: tuple[str, str, str, str, str], now: datetime, ttl: int = _TTL_SECONDS) -> bool:
+    """Return True when the throttle window has passed."""
     st = _store[key]
-    if now - st.last >= timedelta(seconds=_TTL_SECONDS):
-        return True
-    return False
+    return now - st.last >= timedelta(seconds=ttl)
 
 def record(key: tuple[str, str, str, str, str], now: datetime) -> int:
     """Record an occurrence and update state."""
@@ -28,3 +27,5 @@ def record(key: tuple[str, str, str, str, str], now: datetime) -> int:
     st.count += 1
     st.last = now
     return st.count
+
+__all__ = ["classify", "should_emit", "record"]
