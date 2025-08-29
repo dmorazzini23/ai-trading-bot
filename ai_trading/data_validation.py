@@ -6,7 +6,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.data.fetch import get_bars
 from ai_trading.validation.require_env import should_halt_trading
 
 # Lazy pandas proxy for on-demand import
@@ -87,7 +86,10 @@ def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symb
         to_check = list(symbols_or_df)
     else:
         to_check = [str(symbols_or_df)]
-    fetch = fetcher or get_bars
+    if fetcher is None:
+        from ai_trading.data.fetch import get_bars as fetch
+    else:
+        fetch = fetcher
     end = datetime.now(UTC)
     start = end - timedelta(minutes=1)
     for sym in to_check:
