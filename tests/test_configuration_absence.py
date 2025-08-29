@@ -1,29 +1,16 @@
-import pandas as pd
 import pytest
 from datetime import datetime, timedelta, UTC
 
 
-def test_get_bars_falls_back_when_settings_missing(monkeypatch, caplog):
+def test_get_bars_raises_when_settings_missing(monkeypatch):
     from ai_trading.data import fetch
 
     monkeypatch.setattr(fetch, "get_settings", lambda: None)
 
-    called = {}
-
-    def fake_fetch(symbol, start, end, timeframe, *, feed=None, adjustment=None):
-        called["feed"] = feed
-        called["adjustment"] = adjustment
-        return pd.DataFrame()
-
-    monkeypatch.setattr(fetch, "_fetch_bars", fake_fetch)
-
     start = datetime.now(UTC) - timedelta(minutes=1)
     end = datetime.now(UTC)
-    with caplog.at_level("WARNING"):
-        df = fetch.get_bars("AAPL", "1Min", start, end)
-    assert df.empty
-    assert called["feed"] == fetch._DEFAULT_FEED
-    assert called["adjustment"] == "raw"
+    with pytest.raises(RuntimeError):
+        fetch.get_bars("AAPL", "1Min", start, end)
 
 
 def test_main_exits_when_env_invalid(monkeypatch):
