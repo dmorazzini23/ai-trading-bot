@@ -11,6 +11,8 @@ from ai_trading.config.management import TradingConfig
 
 CONFIG = TradingConfig()
 logger = logging.getLogger(__name__)
+_missing_attr_warned: set[str] = set()
+_invalid_value_warned: set[str] = set()
 
 
 def _resolve_conf_threshold(cfg) -> float:
@@ -49,7 +51,9 @@ class StrategyAllocator:
         }
         for attr, default in required.items():
             if not hasattr(self.config, attr) or getattr(self.config, attr, None) is None:
-                logger.warning("Config missing attribute %s, setting default: %s", attr, default)
+                if attr not in _missing_attr_warned:
+                    logger.warning("Config missing attribute %s, setting default: %s", attr, default)
+                    _missing_attr_warned.add(attr)
                 # TradingConfig is frozen; bypass immutability for defaults
                 object.__setattr__(self.config, attr, default)
 
@@ -166,7 +170,11 @@ class StrategyAllocator:
 
                 bars = getattr(self.config, "signal_confirmation_bars", 2)
                 if bars is None or not isinstance(bars, int) or bars < 1:
-                    logger.warning("Invalid signal_confirmation_bars: %s, using default 2", bars)
+                    if "signal_confirmation_bars" not in _invalid_value_warned:
+                        logger.warning(
+                            "Invalid signal_confirmation_bars: %s, using default 2", bars
+                        )
+                        _invalid_value_warned.add("signal_confirmation_bars")
                     bars = 2
                 self.signal_history[key] = self.signal_history[key][-bars:]
 
@@ -186,9 +194,12 @@ class StrategyAllocator:
 
                     threshold = getattr(self.config, "min_confidence", 0.6)
                     if threshold is None or not isinstance(threshold, (int, float)):
-                        logger.warning(
-                            "Invalid min_confidence threshold: %s, using default 0.6", threshold
-                        )
+                        if "min_confidence" not in _invalid_value_warned:
+                            logger.warning(
+                                "Invalid min_confidence threshold: %s, using default 0.6",
+                                threshold,
+                            )
+                            _invalid_value_warned.add("min_confidence")
                         threshold = 0.6
 
                     logger.debug(
