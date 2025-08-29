@@ -75,10 +75,10 @@ def check_timeouts():
     bot_engine_path = Path('ai_trading/core/bot_engine.py')
     if bot_engine_path.exists():
         content = bot_engine_path.read_text()
-        timeout_pattern = r'requests\.get\([^)]*timeout\s*=\s*'
+        timeout_pattern = r'_HTTP[_A-Z]*\.get\([^)]*timeout\s*=\s*'
         matches = re.findall(timeout_pattern, content)
-        assert len(matches) >= 1, 'Should find requests.get calls with timeout'
-        logging.info('  - Added explicit timeouts to blocking requests.get calls ✓')
+        assert len(matches) >= 1, 'Should find HTTP session calls with timeout'
+        logging.info('  - Added explicit timeouts to HTTP session calls ✓')
 
 def check_minute_cache():
     """Check minute-cache freshness helpers and validation."""

@@ -83,7 +83,13 @@ SENTIMENT_RECOVERY_TIMEOUT = 1800
 SENTIMENT_MAX_RETRIES = 5
 SENTIMENT_BASE_DELAY = 5
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
-_SENTIMENT_CIRCUIT_BREAKER = {'failures': 0, 'last_failure': 0, 'state': 'closed'}
+# track failures and progressive retry scheduling
+_SENTIMENT_CIRCUIT_BREAKER = {
+    'failures': 0,
+    'last_failure': 0,
+    'state': 'closed',
+    'next_retry': 0,
+}
 sentiment_lock = Lock()
 __all__ = ['fetch_sentiment', 'analyze_text', 'sentiment_lock', '_SENTIMENT_CACHE', 'SENTIMENT_FAILURE_THRESHOLD', 'SENTIMENT_API_KEY']
 
@@ -98,12 +104,18 @@ def _check_sentiment_circuit_breaker() -> bool:
             logger.info('Sentiment circuit breaker moved to half-open state')
             return True
         return False
+    if now < cb.get('next_retry', 0):
+        logger.debug(
+            'Sentiment retry delayed %.1fs', cb['next_retry'] - now
+        )
+        return False
     return True
 
 def _record_sentiment_success():
     """Record successful sentiment API call."""
     global _SENTIMENT_CIRCUIT_BREAKER
     _SENTIMENT_CIRCUIT_BREAKER['failures'] = 0
+    _SENTIMENT_CIRCUIT_BREAKER['next_retry'] = 0
     if _SENTIMENT_CIRCUIT_BREAKER['state'] == 'half-open':
         _SENTIMENT_CIRCUIT_BREAKER['state'] = 'closed'
         logger.info('Sentiment circuit breaker closed - service recovered')
@@ -114,9 +126,20 @@ def _record_sentiment_failure():
     cb = _SENTIMENT_CIRCUIT_BREAKER
     cb['failures'] += 1
     cb['last_failure'] = pytime.time()
+    delay = min(
+        SENTIMENT_BASE_DELAY * (2 ** (cb['failures'] - 1)),
+        SENTIMENT_RECOVERY_TIMEOUT,
+    )
+    cb['next_retry'] = cb['last_failure'] + delay
     if cb['failures'] >= SENTIMENT_FAILURE_THRESHOLD:
         cb['state'] = 'open'
-        logger.warning(f"Sentiment circuit breaker opened after {cb['failures']} failures")
+        logger.warning(
+            f"Sentiment circuit breaker opened after {cb['failures']} failures"
+        )
+    else:
+        logger.debug(
+            'Sentiment failure %s; next retry in %.1fs', cb['failures'], delay
+        )
 
 @retry(stop=stop_after_attempt(SENTIMENT_MAX_RETRIES), wait=wait_exponential(multiplier=SENTIMENT_BASE_DELAY, min=SENTIMENT_BASE_DELAY, max=180) + wait_random(0, 5), retry=retry_if_exception_type((Exception,)))
 def fetch_sentiment(ctx, ticker: str) -> float:

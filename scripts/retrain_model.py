@@ -10,9 +10,11 @@ from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 from ai_trading.features.prepare import prepare_indicators
 CONFIG = TradingConfig()
+from ai_trading.net.http import HTTPSession
 from ai_trading.utils.base import safe_to_datetime
 logger = logging.getLogger(__name__)
 config.reload_env()
+_HTTP = HTTPSession()
 SEED = config.SEED
 random.seed(SEED)
 np.random.seed(SEED)
@@ -22,7 +24,6 @@ try:
 except ImportError:
     pass
 from datetime import UTC, date, datetime, time, timedelta
-import requests
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
@@ -94,7 +95,7 @@ def fetch_sentiment(symbol: str) -> float:
     try:
         url = 'https://newsapi.org/v2/everything'
         params = {'q': symbol, 'apiKey': NEWS_API_KEY, 'pageSize': 10, 'sortBy': 'publishedAt', 'language': 'en'}
-        response = requests.get(url, params=params, timeout=30)
+        response = _HTTP.get(url, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         articles = data.get('articles', [])
