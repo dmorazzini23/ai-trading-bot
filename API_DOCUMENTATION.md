@@ -133,6 +133,11 @@ class DataProvider:
         """Fetch data from provider."""
 ```
 
+`get_bars()` will automatically attempt to reload environment variables via
+`ai_trading.config.management.reload_env()` if configuration is unavailable and
+retry once before raising an error. This permits runtime `.env` edits during
+tests or scripts without restarting the process.
+
 ### Signal Generation API
 
 #### `signals.py` - Trading Signals
