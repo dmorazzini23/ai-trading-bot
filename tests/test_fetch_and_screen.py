@@ -6,6 +6,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 from ai_trading.data import fetch as data_fetcher
+from ai_trading import alpaca_api as bars
 from ai_trading.utils.base import health_check
 
 
@@ -23,7 +24,7 @@ def _stub_df():
 def test_fetch_fallback_to_daily(monkeypatch):
     df = _stub_df()
     monkeypatch.setattr(data_fetcher, "get_minute_df", lambda *a, **k: None)
-    monkeypatch.setattr(data_fetcher, "get_daily_df", lambda *a, **k: df)
+    monkeypatch.setattr(bars, "get_bars_df", lambda *a, **k: df)
 
     # Properly mocked module for pandas_ta
     mock_module = types.ModuleType("pandas_ta")

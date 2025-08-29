@@ -702,6 +702,29 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None=None) -> p
         pass
     return _post_process(df)
 
+
+def get_daily_df(
+    symbol: str,
+    start: Any | None = None,
+    end: Any | None = None,
+    *,
+    feed: str | None = None,
+    adjustment: str | None = None,
+) -> pd.DataFrame:
+    """Thin wrapper around :func:`bars.get_bars_df` for daily bars."""
+
+    from ai_trading.alpaca_api import get_bars_df as _get_bars_df
+
+    return _get_bars_df(
+        symbol,
+        timeframe="1Day",
+        start=start,
+        end=end,
+        feed=feed,
+        adjustment=adjustment,
+    )
+
+
 def get_bars(symbol: str, timeframe: str, start: Any, end: Any, *, feed: str | None=None, adjustment: str | None=None) -> pd.DataFrame:
     """Compatibility wrapper delegating to _fetch_bars."""
     S = get_settings()
@@ -748,6 +771,7 @@ __all__ = [
     'get_last_available_bar',
     'fh_fetcher',
     'get_minute_df',
+    'get_daily_df',
     'metrics',
     'build_fetcher',
     'DataFetchError',
