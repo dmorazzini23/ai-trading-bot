@@ -21,6 +21,8 @@ ORDER_STALE_CLEANUP_INTERVAL = 60
 ORDER_FILL_RATE_TARGET = 0.8
 MAX_DRAWDOWN_THRESHOLD = 0.08
 MODE_PARAMETERS = {'conservative': 0.85, 'balanced': 0.75, 'aggressive': 0.65}
+SENTIMENT_API_KEY = os.getenv('SENTIMENT_API_KEY')
+SENTIMENT_API_URL = os.getenv('SENTIMENT_API_URL')
 SENTIMENT_ENHANCED_CACHING = True
 SENTIMENT_RECOVERY_TIMEOUT_SECS = 3600
 SENTIMENT_FALLBACK_SOURCES = []
@@ -116,4 +118,4 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
             if key in conf:
                 conf[key] = '***'
     return conf
-__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PARAMETERS', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']
+__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PARAMETERS', 'SENTIMENT_API_KEY', 'SENTIMENT_API_URL', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']

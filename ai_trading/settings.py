@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     health_tick_seconds: int = Field(default=300, env='AI_TRADING_HEALTH_TICK_SECONDS')
     cpu_only: bool = Field(default=False, validation_alias='CPU_ONLY')
     news_api_key: str | None = None
+    sentiment_api_key: str | None = Field(
+        default=None,
+        alias='SENTIMENT_API_KEY',
+        validation_alias=AliasChoices('SENTIMENT_API_KEY', 'NEWS_API_KEY'),
+    )
+    sentiment_api_url: str | None = Field(default=None, alias='SENTIMENT_API_URL')
     rebalance_interval_min: int = Field(60, ge=1, description='Minutes between portfolio rebalances', alias='REBALANCE_INTERVAL_MIN')
 
     @field_validator('model_path', 'halt_flag_path', 'rl_model_path', mode='before')
