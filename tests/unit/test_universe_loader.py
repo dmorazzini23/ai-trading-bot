@@ -24,6 +24,16 @@ class Flask:  # minimal stub
 
 flask_stub.Flask = Flask
 sys.modules.setdefault("flask", flask_stub)
+
+bs4_stub = types.ModuleType("bs4")
+
+
+class BeautifulSoup:  # minimal stub
+    pass
+
+
+bs4_stub.BeautifulSoup = BeautifulSoup
+sys.modules.setdefault("bs4", bs4_stub)
 sklearn_stub = types.ModuleType("sklearn")
 ensemble_stub = types.ModuleType("sklearn.ensemble")
 metrics_stub = types.ModuleType("sklearn.metrics")
@@ -74,6 +84,24 @@ validation_stub.require_env_vars = require_env_vars
 validation_stub.should_halt_trading = should_halt_trading
 sys.modules.setdefault("ai_trading.validation", validation_stub)
 sys.modules.setdefault("ai_trading.validation.require_env", require_env_stub)
+
+metrics_stub = types.ModuleType("ai_trading.metrics")
+
+
+class _Metric:  # minimal stub classes
+    def __init__(self, *a, **k):
+        pass
+
+
+metrics_stub.Counter = _Metric
+metrics_stub.Gauge = _Metric
+metrics_stub.Histogram = _Metric
+metrics_stub.Summary = _Metric
+metrics_stub.CollectorRegistry = _Metric
+metrics_stub.REGISTRY = _Metric()
+metrics_stub.PROMETHEUS_AVAILABLE = False
+metrics_stub.start_http_server = lambda *a, **k: None
+sys.modules.setdefault("ai_trading.metrics", metrics_stub)
 
 from ai_trading.core import bot_engine
 
@@ -161,6 +189,46 @@ def test_screen_candidates_empty_watchlist_returns_fallback():
     """screen_candidates returns fallback symbols when watchlist is empty."""
     runtime = types.SimpleNamespace()
     assert bot_engine.screen_candidates(runtime, []) == bot_engine.FALLBACK_SYMBOLS
+
+
+def test_load_candidate_universe_loads_when_none(monkeypatch: pytest.MonkeyPatch):
+    """load_candidate_universe loads tickers when input is None."""
+
+    runtime = types.SimpleNamespace()
+
+    called: list[bool] = []
+
+    def fake_load() -> list[str]:
+        called.append(True)
+        return ["AAPL"]
+
+    monkeypatch.setattr(bot_engine, "load_tickers", fake_load)
+
+    symbols = bot_engine.load_candidate_universe(runtime)
+
+    assert symbols == ["AAPL"]
+    assert runtime.tickers == ["AAPL"]
+    assert called
+
+
+def test_load_candidate_universe_loads_when_empty_list(monkeypatch: pytest.MonkeyPatch):
+    """load_candidate_universe loads tickers when input list is empty."""
+
+    runtime = types.SimpleNamespace()
+
+    called: list[bool] = []
+
+    def fake_load() -> list[str]:
+        called.append(True)
+        return ["MSFT"]
+
+    monkeypatch.setattr(bot_engine, "load_tickers", fake_load)
+
+    symbols = bot_engine.load_candidate_universe(runtime, [])
+
+    assert symbols == ["MSFT"]
+    assert runtime.tickers == ["MSFT"]
+    assert called
 
 
 def test_load_candidate_universe_raises_when_csv_missing(

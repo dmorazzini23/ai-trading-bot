@@ -11674,7 +11674,7 @@ def load_candidate_universe(runtime, tickers: list[str] | None = None) -> list[s
     if tickers is not None:
         setattr(runtime, "tickers", tickers)
     tickers = getattr(runtime, "tickers", None)
-    if tickers is None:
+    if not tickers:
         tickers = load_tickers()
         setattr(runtime, "tickers", tickers)
     if not tickers:
@@ -12621,7 +12621,9 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     return fetcher
 
 
-def _prepare_run(runtime, state: BotState, tickers: list[str]) -> tuple[float, bool, list[str]]:
+def _prepare_run(
+    runtime, state: BotState, tickers: list[str] | None
+) -> tuple[float, bool, list[str]]:
     from ai_trading import portfolio
     from ai_trading.utils import portfolio_lock
 
@@ -13241,7 +13243,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             for attempt in range(3):
                 try:
                     current_cash, regime_ok, symbols = _prepare_run(
-                        runtime, state, getattr(runtime, "tickers", [])
+                        runtime, state, getattr(runtime, "tickers", None)
                     )
                     break
                 except DataFetchError as e:
