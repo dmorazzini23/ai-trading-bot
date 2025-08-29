@@ -52,7 +52,7 @@ def test_sip_unauthorized_returns_empty(monkeypatch: pytest.MonkeyPatch, status_
         calls["count"] += 1
         return _Resp(status_first, payload={"message": "auth required"})
 
-    monkeypatch.setattr(df, "requests", type("R", (), {"get": staticmethod(fake_get)}))
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
 
     start, end = _dt_range(2)
     out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="sip", adjustment="raw")
@@ -69,7 +69,7 @@ def test_sip_fallback_skipped_when_marked_unauthorized(monkeypatch: pytest.Monke
         calls["count"] += 1
         return _Resp(429, payload={"message": "rate limit"})
 
-    monkeypatch.setattr(df, "requests", type("R", (), {"get": staticmethod(fake_get)}))
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
 
     start, end = _dt_range(2)
     with pytest.raises(ValueError, match="rate_limited"):
@@ -92,7 +92,7 @@ def test_timeout_triggers_fallback(monkeypatch: pytest.MonkeyPatch):
         ts_iso = datetime.now(UTC).isoformat()
         return _Resp(200, payload=_bars_payload(ts_iso))
 
-    monkeypatch.setattr(df, "requests", type("R", (), {"get": staticmethod(fake_get)}))
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
 
     start, end = _dt_range(2)
     out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="sip", adjustment="raw")
@@ -112,7 +112,7 @@ def test_429_rate_limit_triggers_fallback(monkeypatch: pytest.MonkeyPatch):
             return _Resp(429, payload={"message": "rate limit"})
         return _Resp(200, payload=_bars_payload(ts_iso))
 
-    monkeypatch.setattr(df, "requests", type("R", (), {"get": staticmethod(fake_get)}))
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
 
     start, end = _dt_range(2)
     out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="sip", adjustment="raw")
@@ -131,7 +131,7 @@ def test_empty_bars_fallback(monkeypatch: pytest.MonkeyPatch):
             return _Resp(200, payload={"bars": []})
         return _Resp(200, payload=_bars_payload(ts_iso))
 
-    monkeypatch.setattr(df, "requests", type("R", (), {"get": staticmethod(fake_get)}))
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
 
     start, end = _dt_range(2)
     out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="iex", adjustment="raw")

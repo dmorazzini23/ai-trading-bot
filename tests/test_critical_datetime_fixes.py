@@ -31,9 +31,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
 
         # Test various input formats
         test_inputs = [
-            datetime.now(UTC).replace(
-                tzinfo=None
-            ),  # AI-AGENT-REF: Fixed naive datetime by creating from UTC
+            datetime.now(UTC).replace(tzinfo=None),  # AI-AGENT-REF: Fixed naive datetime by creating from UTC
             "2025-01-01 12:00:00",  # string format
             datetime.now(UTC),  # already timezone-aware
         ]
@@ -43,9 +41,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
                 result = ensure_datetime(input_dt)
 
                 # Should be timezone-aware
-                self.assertIsNotNone(
-                    result.tzinfo, f"Input {input_dt} should produce timezone-aware result"
-                )
+                self.assertIsNotNone(result.tzinfo, f"Input {input_dt} should produce timezone-aware result")
 
                 # Should be able to format as RFC3339 for Alpaca API
                 rfc3339_str = result.isoformat()
@@ -87,9 +83,7 @@ class TestMetaLearningDataFetching(unittest.TestCase):
 
                 # Should return signal performance data, not None/empty due to invalid prices
                 if result is None:
-                    self.fail(
-                        "load_global_signal_performance returned None - possible METALEARN_INVALID_PRICES issue"
-                    )
+                    self.fail("load_global_signal_performance returned None - possible METALEARN_INVALID_PRICES issue")
                 if isinstance(result, dict) and len(result) == 0:
                     # Check if it's empty due to invalid prices vs other reasons
                     # This test validates the function can process valid data
@@ -118,13 +112,11 @@ class TestSentimentCaching(unittest.TestCase):
             with patch("ai_trading.core.bot_engine.SENTIMENT_API_KEY", "test_key"):
                 with patch("ai_trading.core.bot_engine.NEWS_API_KEY", "test_key"):
                     # Mock the requests to simulate rate limiting
-                    with patch("requests.get") as mock_get:
+                    with patch("ai_trading.core.bot_engine._HTTP_SESSION.get") as mock_get:
                         # First call - simulate rate limit (429)
                         mock_response = MagicMock()
                         mock_response.status_code = 429
-                        mock_response.raise_for_status.side_effect = HTTPError(
-                            "429 Too Many Requests"
-                        )
+                        mock_response.raise_for_status.side_effect = HTTPError("429 Too Many Requests")
                         mock_get.return_value = mock_response
 
                         # Mock context for fetch_sentiment
@@ -134,14 +126,10 @@ class TestSentimentCaching(unittest.TestCase):
                         score = fetch_sentiment(mock_ctx, "AAPL")
 
                         # Should return neutral score (0.0) when rate limited
-                        self.assertEqual(
-                            score, 0.0, "Should return neutral score when rate limited"
-                        )
+                        self.assertEqual(score, 0.0, "Should return neutral score when rate limited")
 
                         # Should cache the neutral score
-                        self.assertIn(
-                            "AAPL", _SENTIMENT_CACHE, "Should cache the rate-limited result"
-                        )
+                        self.assertIn("AAPL", _SENTIMENT_CACHE, "Should cache the rate-limited result")
 
                         # Verify the cached value is correct
                         cached_entry = _SENTIMENT_CACHE["AAPL"]
