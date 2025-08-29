@@ -58,12 +58,16 @@ startup the validation result is cached and `/healthz` reuses it, returning
 
 ### Persistent directories
 
-The service writes state, cache, and logs to paths governed by the environment variables `AI_TRADING_DATA_DIR`, `AI_TRADING_CACHE_DIR`, and `AI_TRADING_LOG_DIR`.
+The service writes state, cache, logs, models, and run outputs to paths governed by the environment variables `AI_TRADING_DATA_DIR`, `AI_TRADING_CACHE_DIR`, `AI_TRADING_LOG_DIR`, `AI_TRADING_MODELS_DIR`, and `AI_TRADING_OUTPUT_DIR`.
 Each directory must exist and be writable by the service user with **0700** permissions.
 
 ```bash
 sudo install -d -m 700 -o aiuser -g aiuser \
-  /var/lib/ai-trading-bot /var/cache/ai-trading-bot /var/log/ai-trading-bot
+  /var/lib/ai-trading-bot \
+  /var/lib/ai-trading-bot/models \
+  /var/lib/ai-trading-bot/output \
+  /var/cache/ai-trading-bot \
+  /var/log/ai-trading-bot
 ```
 
 Mount these locations or set the variables above so data persists across restarts.

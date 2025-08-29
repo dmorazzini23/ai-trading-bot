@@ -39,6 +39,24 @@ def test_runtime_paths_writable():
         pytest.fail(f"CACHE_DIR {paths.CACHE_DIR} is not writable")
     assert stat.S_IMODE(paths.CACHE_DIR.stat().st_mode) == 0o700
 
+    # Test MODELS_DIR is writable
+    test_file = paths.MODELS_DIR / "test_write.tmp"
+    try:
+        test_file.write_text("test")
+        assert test_file.exists()
+        test_file.unlink()
+    except PermissionError:
+        pytest.fail(f"MODELS_DIR {paths.MODELS_DIR} is not writable")
+
+    # Test OUTPUT_DIR is writable
+    test_file = paths.OUTPUT_DIR / "test_write.tmp"
+    try:
+        test_file.write_text("test")
+        assert test_file.exists()
+        test_file.unlink()
+    except PermissionError:
+        pytest.fail(f"OUTPUT_DIR {paths.OUTPUT_DIR} is not writable")
+
 
 def test_cache_dir_falls_back(monkeypatch, tmp_path):
     """Cache dir falls back to a temp path if configured location is read-only."""
@@ -76,11 +94,15 @@ def test_paths_module_imports():
     assert hasattr(paths, 'DATA_DIR')
     assert hasattr(paths, 'LOG_DIR')
     assert hasattr(paths, 'CACHE_DIR')
+    assert hasattr(paths, 'MODELS_DIR')
+    assert hasattr(paths, 'OUTPUT_DIR')
 
     # Ensure directories exist
     assert paths.DATA_DIR.exists()
     assert paths.LOG_DIR.exists()
     assert paths.CACHE_DIR.exists()
+    assert paths.MODELS_DIR.exists()
+    assert paths.OUTPUT_DIR.exists()
 
 
 def test_http_utilities_available():
