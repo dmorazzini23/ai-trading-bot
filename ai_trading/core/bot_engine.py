@@ -11486,29 +11486,54 @@ def screen_universe(
                     time.sleep(0.25)
                     continue
 
-                series = None
-                ta_available = hasattr(ta, "atr") and not getattr(ta, "_failed", False)
-                if ta_available:
-                    try:
-                        series = ta.atr(
-                            df["high"], df["low"], df["close"], length=ATR_LENGTH
-                        )
-                    except Exception:  # pragma: no cover - fall back below
-                        series = None
-                if series is None or not hasattr(series, "empty") or series.empty:
-                    try:
-                        from ai_trading.indicators import atr as _atr
+                def _calc_atr(df_in: pd.DataFrame) -> pd.Series:
+                    ser: pd.Series | None = None
+                    ta_available = hasattr(ta, "atr") and not getattr(ta, "_failed", False)
+                    if ta_available:
+                        try:
+                            ser = ta.atr(
+                                df_in["high"], df_in["low"], df_in["close"], length=ATR_LENGTH
+                            )
+                        except Exception:  # pragma: no cover - fall back below
+                            ser = None
+                    if ser is None or not hasattr(ser, "empty") or ser.empty:
+                        try:
+                            from ai_trading.indicators import atr as _atr
 
-                        series = _atr(
-                            df["high"], df["low"], df["close"], period=ATR_LENGTH
-                        )
+                            ser = _atr(
+                                df_in["high"], df_in["low"], df_in["close"], period=ATR_LENGTH
+                            )
+                        except Exception:
+                            ser = pd.Series()
+                    return ser if isinstance(ser, pd.Series) else pd.Series()
+
+                series = _calc_atr(df)
+                if series.empty or series.dropna().empty:
+                    try:
+                        from datetime import UTC, datetime, timedelta
+                        from ai_trading.data.fetch import get_daily_df as _fetch_daily_df
+
+                        end = datetime.now(UTC)
+                        start = end - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS * 2)
+                        df2 = _fetch_daily_df(sym, start, end)
+                        df2 = df2[df2["volume"] > 100_000]
+                        series = _calc_atr(df2)
+                        if series.empty or series.dropna().empty:
+                            filtered_out[sym] = "atr_insufficient_data"
+                            logger.warning(
+                                f"[SCREEN_UNIVERSE] {sym}: ATR unavailable after extended fetch"
+                            )
+                            time.sleep(0.25)
+                            continue
+                        df = df2
                     except Exception:
-                        series = pd.Series()
-                if series is None or not hasattr(series, "empty") or series.empty:
-                    filtered_out[sym] = "atr_unavailable"
-                    logger.warning(f"[SCREEN_UNIVERSE] {sym}: ATR unavailable")
-                    time.sleep(0.25)
-                    continue
+                        filtered_out[sym] = "atr_fetch_failed"
+                        logger.warning(
+                            f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
+                        )
+                        time.sleep(0.25)
+                        continue
+
                 atr_val = series.iloc[-1]
                 if not pd.isna(atr_val):
                     _SCREEN_CACHE[sym] = float(atr_val)
