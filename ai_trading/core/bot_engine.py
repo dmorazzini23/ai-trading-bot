@@ -11627,9 +11627,10 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     return load_universe_from_path(path)
 
 
-def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
+def load_candidate_universe(runtime, tickers: list[str] | None = None) -> list[str]:
     """Load tickers for screening from cached runtime list."""  # AI-AGENT-REF: use packaged universe loader
-    del fallback_symbols
+    if tickers is not None:
+        setattr(runtime, "tickers", tickers)
     tickers = getattr(runtime, "tickers", None)
     if tickers is None:
         tickers = load_universe()
@@ -12611,7 +12612,7 @@ def _prepare_run(runtime, state: BotState, tickers: list[str]) -> tuple[float, b
     params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.04)
     compute_spy_vol_stats(runtime)
 
-    full_watchlist = load_candidate_universe(runtime, tickers=tickers)
+    full_watchlist = load_candidate_universe(runtime, tickers)
     try:
         pretrade_data_health(runtime, full_watchlist)
     except DataFetchError:
