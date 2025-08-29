@@ -13,6 +13,7 @@ from ai_trading.logging.empty_policy import record as _empty_record
 from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.logging.normalize import canon_feed as _canon_feed
+from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
@@ -153,6 +154,15 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     """
     TimeFrame = get_timeframe_cls()
     StockBarsRequest = get_stock_bars_request_cls()
+    symbol = _canon_symbol(symbol)
+    sym_attr = getattr(request, 'symbol_or_symbols', None)
+    try:
+        if isinstance(sym_attr, list):
+            request.symbol_or_symbols = [_canon_symbol(sym_attr[0])]
+        elif isinstance(sym_attr, str):
+            request.symbol_or_symbols = _canon_symbol(sym_attr)
+    except Exception:
+        pass
     now = now_utc()
     prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
     end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)
@@ -261,6 +271,7 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
         return _ensure_df(df)
 
 def _fetch_daily_bars(client, symbol, start, end, **kwargs):
+    symbol = _canon_symbol(symbol)
     start = ensure_utc_datetime(start)
     end = ensure_utc_datetime(end)
     get_bars_fn = getattr(client, 'get_bars', None)
@@ -273,6 +284,7 @@ def _fetch_daily_bars(client, symbol, start, end, **kwargs):
         raise
 
 def _get_minute_bars(symbol: str, start_dt: datetime, end_dt: datetime, feed: str) -> pd.DataFrame:
+    symbol = _canon_symbol(symbol)
     try:
         df = get_bars(symbol=symbol, timeframe='1Min', start=start_dt, end=end_dt, feed=feed)
     except (ValueError, TypeError):
@@ -306,6 +318,7 @@ def _resample_minutes_to_daily(df, tz='America/New_York'):
 
 def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: str | None=None):
     """Fetch daily bars; fallback to alternate feed then resampled minutes."""
+    symbol = _canon_symbol(symbol)
     S = get_settings()
     if feed is None:
         feed = S.alpaca_data_feed
@@ -341,6 +354,7 @@ def _minute_fallback_window(now_utc: datetime) -> tuple[datetime, datetime]:
     return (start_u, end_u)
 
 def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
+    symbol = _canon_symbol(symbol)
     now_utc = ensure_utc_datetime(now_utc)
     start_u, end_u = _minute_fallback_window(now_utc)
     day_et = start_u.astimezone(ZoneInfo('America/New_York')).date()
