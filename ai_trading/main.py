@@ -40,7 +40,7 @@ from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
-from ai_trading.logging.redact import redact as _redact
+from ai_trading.logging.redact import redact as _redact, redact_env
 from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca
@@ -186,7 +186,7 @@ def _fail_fast_env() -> None:
     except RuntimeError as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
-    logger.info("ENV_CONFIG_LOADED", extra={"dotenv_path": loaded, **snapshot})
+    logger.info("ENV_CONFIG_LOADED", extra={"dotenv_path": loaded, **redact_env(snapshot)})
 
 
 def _validate_runtime_config(cfg, tcfg) -> None:
