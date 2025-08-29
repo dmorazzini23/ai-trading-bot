@@ -1,7 +1,12 @@
 from __future__ import annotations
+
 import os
+from datetime import UTC, datetime
+from typing import Any, Dict
+
 from pydantic import BaseModel, Field, field_validator
-from ai_trading.logging.redact import redact_env
+
+from ai_trading.logging.redact import redact, redact_env
 
 class Settings(BaseModel):
     ALPACA_API_KEY: str = Field(...)
@@ -45,13 +50,64 @@ class Settings(BaseModel):
             v = v.lower() in {'1', 'true', 'yes', 'on'}
         return bool(v)
 
-def debug_environment() -> dict:
-    """Return a tiny dump used by tests without side effects."""
-    return {'pythonpath': os.environ.get('PYTHONPATH', ''), 'env': redact_env(os.environ)}
+def debug_environment() -> dict[str, Any]:
+    """Return structured snapshot of environment configuration.
 
-def validate_specific_env_var(name: str, required: bool=False) -> str | None:
-    val = os.environ.get(name)
-    if required and (not val):
-        raise RuntimeError(f'Missing required env var: {name}')
-    return val
-__all__ = ['Settings', 'debug_environment', 'validate_specific_env_var']
+    The report masks sensitive values and provides metadata for each
+    environment variable to aid debugging without leaking secrets.
+    """
+
+    raw_env = dict(os.environ)
+    masked_env = redact(redact_env(raw_env))
+
+    env_vars: Dict[str, Dict[str, Any]] = {}
+    for key, original_value in raw_env.items():
+        masked_value = masked_env.get(key)
+        env_vars[key] = {
+            "status": "set" if original_value else "missing",
+            "value": masked_value if original_value else None,
+            "length": len(original_value) if original_value else 0,
+        }
+
+    report: Dict[str, Any] = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "validation_status": "passed",
+        "critical_issues": [],
+        "warnings": [],
+        "environment_vars": env_vars,
+        "recommendations": [],
+    }
+    if report["critical_issues"]:
+        report["validation_status"] = "issues"
+    return report
+
+
+def validate_specific_env_var(name: str) -> dict[str, Any]:
+    """Validate presence of a specific environment variable.
+
+    Parameters
+    ----------
+    name:
+        Name of the environment variable to check.
+    """
+
+    value = os.environ.get(name)
+    if value is None:
+        return {
+            "variable": name,
+            "status": "missing",
+            "value": None,
+            "issues": [f"{name} is not set"],
+        }
+
+    masked_value = redact({name: value})[name]
+    return {
+        "variable": name,
+        "status": "set",
+        "value": masked_value,
+        "issues": [],
+    }
+
+
+__all__ = ["Settings", "debug_environment", "validate_specific_env_var"]
+
