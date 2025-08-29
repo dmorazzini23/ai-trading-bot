@@ -13,7 +13,7 @@ returns that complicate caller logic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, replace, fields
 from datetime import UTC, datetime
 import time
 from typing import Any
@@ -216,14 +216,24 @@ class OrderRequest:
             }
         return self.to_dict()
 
+    def __repr__(self) -> str:  # pragma: no cover - simple formatting
+        field_parts = []
+        for f in fields(self):
+            if not f.repr:
+                continue
+            value = getattr(self, f.name)
+            if isinstance(value, (OrderSide, OrderType)):
+                value = value.value
+            field_parts.append(f"{f.name}={value!r}")
+        joined = ", ".join(field_parts)
+        return f"{self.__class__.__name__}({joined})"
+
+    __str__ = __repr__
+
     def copy(self, **updates: Any) -> "OrderRequest":
-        base = self.to_dict()
-        base.pop("notional_value", None)
-        base.pop("is_valid", None)
-        base.update(updates)
         if "client_order_id" not in updates:
-            base["client_order_id"] = f"req_{int(time.time() * 1000)}"
-        return OrderRequest(**base)
+            updates["client_order_id"] = f"req_{int(time.time() * 1000)}"
+        return replace(self, **updates)
 
     def as_validated(self) -> "OrderRequest":
         self._is_valid = self._validate()

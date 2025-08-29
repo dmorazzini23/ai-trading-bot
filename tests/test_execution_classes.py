@@ -263,27 +263,30 @@ class TestOrderRequest:
         copy = original.copy(quantity=200, strategy="new_strategy")
 
         assert copy.symbol == original.symbol
-        assert copy.side == original.side
-        assert copy.order_type == original.order_type
+        assert copy.side is original.side
+        assert isinstance(copy.side, OrderSide)
+        assert copy.order_type is original.order_type
+        assert isinstance(copy.order_type, OrderType)
         assert copy.quantity == 200  # Updated
         assert copy.strategy == "new_strategy"  # Updated
         assert copy.client_order_id != original.client_order_id  # Should be different
+
+        # Round-trip copy to ensure enums survive further copies
+        copy2 = copy.copy()
+        assert copy2.side is original.side
+        assert copy2.order_type is original.order_type
 
     def test_order_request_string_representation(self):
         """Test OrderRequest string representations."""
         request = OrderRequest("AAPL", OrderSide.BUY, 100, OrderType.MARKET)
 
         str_repr = str(request)
+        assert str_repr == repr(request)
         assert "OrderRequest" in str_repr
-        assert "buy" in str_repr
-        assert "100" in str_repr
-        assert "AAPL" in str_repr
-        assert "market" in str_repr
-
-        repr_str = repr(request)
-        assert "OrderRequest" in repr_str
-        assert "symbol='AAPL'" in repr_str
-        assert "valid=True" in repr_str
+        assert "side='buy'" in str_repr
+        assert "order_type='market'" in str_repr
+        assert "<OrderSide" not in str_repr
+        assert "<OrderType" not in str_repr
 
 
 class TestExecutionIntegration:
