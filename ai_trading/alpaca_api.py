@@ -39,12 +39,20 @@ def _is_intraday_unit(unit_tok: str) -> bool:
     """Return True for minute or hour-based timeframes."""
     return unit_tok in ('Min', 'Hour')
 
-def _unit_from_norm(tf_norm: str) -> str:
-    """Extract the unit token (e.g. 'Min', 'Day') from a normalized timeframe."""
-    for u in ('Min', 'Hour', 'Day', 'Week', 'Month'):
-        if tf_norm.endswith(u):
-            return u
-    return 'Day'
+def _unit_from_norm(tf_norm: str) -> tuple[str, str]:
+    """Return (unit_name, suffix) from a normalized timeframe string."""
+    mapping = {
+        "Min": "Minute",
+        "Minute": "Minute",
+        "Hour": "Hour",
+        "Day": "Day",
+        "Week": "Week",
+        "Month": "Month",
+    }
+    for suffix, name in mapping.items():
+        if tf_norm.endswith(suffix):
+            return name, suffix
+    return "Day", "Day"
 def _module_exists(name: str) -> bool:
     try:
         return importlib.util.find_spec(name) is not None
@@ -226,18 +234,24 @@ def get_bars_df(
     feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
     adjustment = adjustment or os.getenv('ALPACA_ADJUSTMENT', 'all')
     tf_raw = timeframe
-    tf = _normalize_timeframe_for_tradeapi(tf_raw)
+    tf_norm = _normalize_timeframe_for_tradeapi(tf_raw)
+    unit_name, suffix = _unit_from_norm(tf_norm)
+    try:
+        amount = int(tf_norm[: len(tf_norm) - len(suffix)])
+    except ValueError:
+        amount = 1
+    try:
+        unit_enum = getattr(TimeFrameUnit, unit_name)
+    except AttributeError:
+        unit_enum = TimeFrameUnit.Day
+    tf_obj = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(amount, unit_enum)
     if start is None or end is None:
-        try:
-            base_tf = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(1, TimeFrameUnit.Day)
-        except (ValueError, TypeError):
-            base_tf = TimeFrame(1, TimeFrameUnit.Day)
-        start, end = _bars_time_window(base_tf)
-    start_s, end_s = _format_start_end_for_tradeapi(tf, start, end)
+        start, end = _bars_time_window(tf_obj)
+    start_s, end_s = _format_start_end_for_tradeapi(tf_norm, start, end)
     try:
         req = StockBarsRequest(
             symbol_or_symbols=[symbol],
-            timeframe=tf,
+            timeframe=tf_obj,
             start=start_s,
             end=end_s,
             adjustment=adjustment,
@@ -250,7 +264,7 @@ def get_bars_df(
     except APIError as e:
         req = {
             "timeframe_raw": str(tf_raw),
-            "timeframe_norm": tf,
+            "timeframe_norm": tf_norm,
             "feed": feed,
             "start": start_s,
             "end": end_s,
@@ -265,7 +279,7 @@ def get_bars_df(
             "ALPACA_FAIL",
             extra={
                 "symbol": symbol,
-                "timeframe": tf,
+                "timeframe": tf_norm,
                 "feed": feed,
                 "start": start_s,
                 "end": end_s,
