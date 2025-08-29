@@ -13154,9 +13154,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     _ensure_alpaca_classes()
     if _ALPACA_IMPORT_ERROR is not None:
         raise RuntimeError("Alpaca SDK is required") from _ALPACA_IMPORT_ERROR
-    if getattr(runtime, "risk_engine", None) is None:
-        from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: gate heavy import
-        runtime.risk_engine = RiskEngine()
+    risk_engine = getattr(runtime, "risk_engine", None)
+    if risk_engine is None:
+        logger.error("RISK_ENGINE_MISSING")
+        return
     _init_metrics()
     import uuid
 
@@ -13167,7 +13168,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         return
     try:  # AI-AGENT-REF: ensure lock released on every exit
         try:
-            runtime.risk_engine.wait_for_exposure_update(0.5)
+            risk_engine.wait_for_exposure_update(0.5)
         except (
             TimeoutError,
             ConnectionError,
@@ -13509,7 +13510,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
             run_multi_strategy(runtime)
             try:
-                runtime.risk_engine.refresh_positions(runtime.api)
+                risk_engine.refresh_positions(runtime.api)
                 pos_list = runtime.api.list_positions()
                 state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
                 state.long_positions = {
@@ -13588,7 +13589,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     },
                 )
                 try:
-                    adaptive_cap = runtime.risk_engine._adaptive_global_cap()
+                    adaptive_cap = risk_engine._adaptive_global_cap()
                 except (
                     ZeroDivisionError,
                     ValueError,

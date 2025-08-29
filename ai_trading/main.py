@@ -88,6 +88,7 @@ def run_cycle() -> None:
     from ai_trading.core.runtime import (
         build_runtime,
         REQUIRED_PARAM_DEFAULTS,
+        enhance_runtime_with_context,
     )
     from ai_trading.config.management import TradingConfig
 
@@ -98,6 +99,7 @@ def run_cycle() -> None:
     lazy_ctx = get_ctx()
     if hasattr(state, "ctx") and state.ctx is None:
         state.ctx = lazy_ctx
+    runtime = enhance_runtime_with_context(runtime, lazy_ctx)
 
     missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
     if missing:
