@@ -33,12 +33,13 @@ def test_packaged_exists_without_env(monkeypatch):
     assert len(uni) > 3  # S&P-100 default
 
 
-def test_missing_returns_fallback(monkeypatch):
+def test_missing_raises_runtime_error(monkeypatch):
     monkeypatch.setenv("AI_TRADING_TICKERS_CSV", "/nonexistent.csv")
     import ai_trading.data.universe as U
     orig = U.locate_tickers_csv
     U.locate_tickers_csv = lambda: None
     try:
-        assert load_universe() == ["SPY", "AAPL", "MSFT", "AMZN", "GOOGL"]
+        with pytest.raises(RuntimeError):
+            load_universe()
     finally:
         U.locate_tickers_csv = orig
