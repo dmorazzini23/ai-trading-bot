@@ -230,8 +230,8 @@ class TestIntegration(unittest.TestCase):
     def test_all_modules_importable(self):
         """Test that all modified modules can be imported without errors."""
         modules_to_test = [
-            'ai_trading.data_validation',
-            'validate_env',
+            'data_validation',
+            'ai_trading.tools.env_validate',
         ]
 
         for module_name in modules_to_test:
