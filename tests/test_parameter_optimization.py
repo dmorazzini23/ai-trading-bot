@@ -126,6 +126,15 @@ def test_execution_algorithm_optimization():
         pytest.skip(f"Execution algorithm test skipped due to import error: {e}")
 
 
+def test_kelly_fraction_capped_by_max():
+    """Regression test ensuring Kelly fraction respects optimized cap."""
+    from ai_trading.risk.kelly import KellyCriterion
+
+    kelly = KellyCriterion()
+    # Raw Kelly calculation would yield 0.4; capped at 0.15
+    assert kelly.calculate_kelly_fraction(0.6, 0.02, 0.01) == 0.15
+
+
 def test_constants_backward_compatibility():
     """Test that TRADING_CONSTANTS dictionary maintains backward compatibility."""
     from ai_trading.core.constants import TRADING_CONSTANTS

@@ -7,7 +7,7 @@ from ai_trading.config.management import TradingConfig
 
 def test_defaults_present():
     cfg = TradingConfig()
-    assert cfg.kelly_fraction_max == 0.25
+    assert cfg.kelly_fraction_max == 0.15
     assert cfg.min_sample_size == 10
     assert cfg.confidence_level == 0.90
 
