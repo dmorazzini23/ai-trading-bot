@@ -7,6 +7,11 @@ from ai_trading.utils.universe import normalize_symbol
 # Lazy pandas proxy
 pd = load_pandas()
 
+# Last-resort tickers if no CSV can be located
+FALLBACK_TICKERS = [
+    normalize_symbol(s) for s in ["SPY", "AAPL", "MSFT", "AMZN", "GOOGL"]
+]
+
 def locate_tickers_csv() -> str | None:
     env = os.getenv('AI_TRADING_TICKERS_CSV')
     if env and os.path.isfile(env):
@@ -17,13 +22,19 @@ def locate_tickers_csv() -> str | None:
             return str(p)
     except ModuleNotFoundError:
         pass
+    cwd = os.path.join(os.getcwd(), "tickers.csv")
+    if os.path.isfile(cwd):
+        return cwd
     return None
 
 def load_universe() -> list[str]:
     path = locate_tickers_csv()
     if not path:
-        logger.error('TICKERS_FILE_MISSING', extra={'path': 'ai_trading/data/tickers.csv', 'fallback': 'none'})
-        return []
+        logger.error(
+            'TICKERS_FILE_MISSING',
+            extra={'path': 'tickers.csv', 'fallback': 'default_list'},
+        )
+        return FALLBACK_TICKERS.copy()
     try:
         df = pd.read_csv(path)
     except (OSError, pd.errors.EmptyDataError, ValueError) as e:

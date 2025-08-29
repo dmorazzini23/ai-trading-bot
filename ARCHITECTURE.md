@@ -33,7 +33,7 @@
 - No `try/except ImportError` in prod—dependencies are explicit.
 
 ## Data & Models
-- Candidate tickers: `tickers.csv` if present, else defaults.
+- Candidate tickers: `tickers.csv` if present, else built-in fallback `[SPY, AAPL, MSFT, AMZN, GOOGL]`.
 - Model loader tries: `cfg.ml_model_path` / `cfg.model_path` (joblib/pickle), or `cfg.ml_model_module` / `cfg.model_module` (import module, `get_model(cfg)` or `Model(cfg)`).
 - Cache on `runtime.model`.
 

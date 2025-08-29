@@ -1464,6 +1464,7 @@ emitted when `AI_TRADING_MODEL_PATH` points to a missing file.
 - Optional: `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv`
 - Default: packaged `ai_trading/data/tickers.csv` (S&P-100)
 - Symbols are uppercased and mapped for provider quirks (e.g., `BRK.B` → `BRK-B` for Yahoo Finance).
+- Missing file: logs an error and falls back to `['SPY', 'AAPL', 'MSFT', 'AMZN', 'GOOGL']`.
 
 ## Agent & Dev Quickstart
 
@@ -1485,7 +1486,7 @@ Conventions (must follow)
 • Models: configure via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE; cached at runtime.model.
 
 Common Pitfalls
-• tickers.csv missing → a single warning per process (defaults are used).
+• tickers.csv missing → a single warning per process (fallback list is used: SPY, AAPL, MSFT, AMZN, GOOGL).
 • Off-hours data empties are expected; don’t escalate severity.
 
 *(If `README.md` is long, add this as a new section without removing existing content.)*
