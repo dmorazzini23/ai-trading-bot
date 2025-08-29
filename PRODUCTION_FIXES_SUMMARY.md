@@ -59,7 +59,7 @@ This document summarizes the implementation of critical production fixes for the
 - **Weekends**: 4320 minutes / 72 hours (lenient)
 
 **Files Modified**:
-- `data_validation.py` - Complete staleness detection overhaul
+- `ai_trading.data_validation` - Complete staleness detection overhaul
 
 **Expected Outcome**: Data staleness alerts will be reduced to actionable items only, with appropriate thresholds based on market conditions.
 
@@ -150,7 +150,7 @@ If issues arise, the changes can be safely rolled back:
 | `bot_engine.py` | Updated sentiment logic | Better configuration handling |
 | `config.py` | Added new env vars | Extended configuration |
 | `performance_monitor.py` | Improved process detection | Reduced false alerts |
-| `data_validation.py` | Market-aware thresholds | Smarter staleness detection |
+| `ai_trading.data_validation` | Market-aware thresholds | Smarter staleness detection |
 | `ai_trading.tools.env_validate` | Enhanced debugging | Better troubleshooting |
 | `test_production_fixes.py` | Comprehensive test suite | Quality assurance |
 
