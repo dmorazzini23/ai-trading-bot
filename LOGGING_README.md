@@ -8,6 +8,8 @@
 
 - **`LOG_MARKET_FETCH`** (default: `false`): When enabled, logs periodic market fetch heartbeats at INFO level. When disabled, these messages are demoted to DEBUG level to reduce noise.
 
+- **`LOG_LEVEL_YFINANCE`** (default: `WARNING`): Controls the log level for the `yfinance` package. Set to `INFO` or another level to troubleshoot provider interactions.
+
 ### Features
 
 #### Emit-Once Logging

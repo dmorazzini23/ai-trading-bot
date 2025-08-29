@@ -329,18 +329,25 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         _ensure_single_handler(logger)
         logger.handlers.clear()
         try:
-            from ai_trading.config import get_settings
+            from ai_trading.config import get_settings, management as config
             S = get_settings()
             level_name = getattr(S, 'log_level', 'INFO')
+            yf_level_name = getattr(
+                S, 'log_level_yfinance', config.get_env('LOG_LEVEL_YFINANCE', 'WARNING')
+            )
             if S.log_compact_json:
                 formatter = CompactJsonFormatter('%Y-%m-%dT%H:%M:%SZ')
             else:
                 formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
         except COMMON_EXC:
+            from ai_trading.config import management as config
             level_name = os.getenv('LOG_LEVEL', 'INFO')
+            yf_level_name = config.get_env('LOG_LEVEL_YFINANCE', 'WARNING')
             formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
         level = getattr(logging, str(level_name).upper(), logging.INFO)
         logger.setLevel(level)
+        yf_level = getattr(logging, str(yf_level_name).upper(), logging.WARNING)
+        logging.getLogger('yfinance').setLevel(yf_level)
 
         class _PhaseFilter(logging.Filter):
 
