@@ -30,7 +30,8 @@ def get_mem(symbol: str, tf: str, start: str, end: str, ttl: int) -> Any | None:
         if not v:
             return None
         ts, obj = v
-        if _now() - ts > ttl:
+        # Use `>=` so a TTL of 0 expires immediately
+        if _now() - ts >= ttl:
             _mem.pop(k, None)
             return None
         if pd is not None and hasattr(obj, 'copy'):
