@@ -672,22 +672,27 @@ def _fetch_bars(
                             return rdf
             _now = datetime.now(UTC)
             _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
-            if _empty_should_emit(_key, _now):
-                lvl = _empty_classify(is_market_open=False)
-                cnt = _empty_record(_key, _now)
-                logger.log(
-                    lvl,
-                    "EMPTY_DATA",
-                    extra=_norm_extra(
-                        {
-                            "provider": "alpaca",
-                            "status": "empty",
-                            "feed": _feed,
-                            "timeframe": _interval,
-                            "occurrences": cnt,
-                        }
-                    ),
-                )
+            try:
+                _open = is_market_open()
+            except Exception:  # pragma: no cover - defensive
+                _open = False
+            if _open:
+                if _empty_should_emit(_key, _now):
+                    lvl = _empty_classify(is_market_open=True)
+                    cnt = _empty_record(_key, _now)
+                    logger.log(
+                        lvl,
+                        "EMPTY_DATA",
+                        extra=_norm_extra(
+                            {
+                                "provider": "alpaca",
+                                "status": "empty",
+                                "feed": _feed,
+                                "timeframe": _interval,
+                                "occurrences": cnt,
+                            }
+                        ),
+                    )
             if fallback:
                 _interval, _feed, _start, _end = fallback
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
