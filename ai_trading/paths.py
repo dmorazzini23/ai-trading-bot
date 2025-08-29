@@ -13,13 +13,22 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 APP_NAME = 'ai-trading-bot'
 
 def _ensure_dir(path: Path) -> Path:
+    """Create *path* with 0700 perms, falling back on read-only errors."""
     try:
         path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.chmod(0o700)
+        except OSError as perm_err:  # best effort permission fix
+            logger.debug("chmod failed for %s: %s", path, perm_err)
         return path
     except OSError as e:
         if e.errno == errno.EROFS:
             fallback = Path(tempfile.gettempdir()) / APP_NAME
             fallback.mkdir(parents=True, exist_ok=True)
+            try:
+                fallback.chmod(0o700)
+            except OSError as perm_err:  # pragma: no cover - unlikely
+                logger.debug("chmod failed for %s: %s", fallback, perm_err)
             logger.warning(
                 "Falling back to writable temp dir %s for %s: %s", fallback, path, e
             )
@@ -49,9 +58,21 @@ def _default_log_dir() -> Path:
     if os.geteuid() == 0:
         return Path('/var/log') / APP_NAME
     return _default_state_dir() / 'logs'
-DATA_DIR = _ensure_dir(_first_env_path('AI_TRADING_DATA_DIR', 'STATE_DIRECTORY') or _default_state_dir())
-CACHE_DIR = _ensure_dir(_first_env_path('AI_TRADING_CACHE_DIR', 'CACHE_DIRECTORY') or _default_cache_dir())
-LOG_DIR = _ensure_dir(_first_env_path('AI_TRADING_LOG_DIR', 'LOGS_DIRECTORY') or _default_log_dir())
+
+
+def _resolve_cache_dir() -> Path:
+    """Return cache directory from env or defaults."""
+    env_path = _first_env_path('AI_TRADING_CACHE_DIR', 'CACHE_DIRECTORY')
+    return _ensure_dir(env_path or _default_cache_dir())
+
+
+DATA_DIR = _ensure_dir(
+    _first_env_path('AI_TRADING_DATA_DIR', 'STATE_DIRECTORY') or _default_state_dir()
+)
+CACHE_DIR = _resolve_cache_dir()
+LOG_DIR = _ensure_dir(
+    _first_env_path('AI_TRADING_LOG_DIR', 'LOGS_DIRECTORY') or _default_log_dir()
+)
 MODELS_DIR = _ensure_dir(Path(os.getenv('AI_TRADING_MODELS_DIR', DATA_DIR / 'models')))
 OUTPUT_DIR = _ensure_dir(Path(os.getenv('AI_TRADING_OUTPUT_DIR', DATA_DIR / 'output')))
 DB_PATH = Path(os.getenv('AI_TRADING_DB_PATH', DATA_DIR / 'trades.db'))

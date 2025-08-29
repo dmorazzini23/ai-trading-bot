@@ -54,6 +54,11 @@ If a target directory is on a read-only filesystem, it falls back to
 `tempfile.gettempdir() / APP_NAME` and logs a warning so the application
 continues with a writable location.
 
+Set `AI_TRADING_CACHE_DIR` to point to a custom writable cache directory when
+the default `~/.cache/ai-trading-bot` is unavailable (for example, if the home
+directory is mounted read-only). The directory is created with `0700`
+permissions during startup.
+
 
 ## Config
 
