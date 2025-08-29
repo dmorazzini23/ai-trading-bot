@@ -23,6 +23,9 @@ mods = [
     "sklearn.ensemble",
     "sklearn.linear_model",
     "sklearn.decomposition",
+    "sklearn.metrics",
+    "sklearn.model_selection",
+    "sklearn.preprocessing",
     "pipeline",
     "metrics_logger",
     "prometheus_client",
@@ -34,6 +37,7 @@ mods = [
 for name in mods:
     if name not in sys.modules:
         sys.modules[name] = types.ModuleType(name)
+        sys.modules[name].__spec__ = types.SimpleNamespace()
 sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
 
 class _Flask:
@@ -64,9 +68,16 @@ sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules["alpaca"].TradingClient = object
 sys.modules["alpaca"].APIError = Exception
 sys.modules["sklearn.ensemble"].RandomForestClassifier = object
+sys.modules["sklearn.ensemble"].GradientBoostingClassifier = object
 sys.modules["sklearn.linear_model"].Ridge = object
 sys.modules["sklearn.linear_model"].BayesianRidge = object
 sys.modules["sklearn.decomposition"].PCA = object
+sys.modules["sklearn.metrics"].accuracy_score = lambda *a, **k: 0
+sys.modules["sklearn.model_selection"].train_test_split = lambda *a, **k: ([], [])
+sys.modules["sklearn.preprocessing"].StandardScaler = object
+sys.modules["prometheus_client"].REGISTRY = object()
+sys.modules["prometheus_client"].CollectorRegistry = object
+sys.modules["prometheus_client"].Summary = object
 
 
 class _FakeREST:
@@ -169,3 +180,44 @@ def test_screen_candidates_empty(monkeypatch):
     mock_runtime = Mock()
 
     assert bot.screen_candidates(mock_runtime) == []
+
+
+def test_screen_universe_atr_fallback(monkeypatch):
+    """screen_universe falls back to internal ATR when pandas_ta is missing."""
+    import ai_trading.indicators as indicators
+
+    monkeypatch.setattr(bot, "ta", types.SimpleNamespace(_failed=True))
+    monkeypatch.setattr(bot, "_SCREEN_CACHE", {})
+    monkeypatch.setattr(bot.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot, "is_valid_ohlcv", lambda df: True)
+    monkeypatch.setattr(bot, "_validate_market_data_quality", lambda df, s: {"valid": True})
+
+    called = {}
+
+    def fake_atr(h, l, c, period=14):
+        called["used"] = True
+        return pd.Series([1.0] * len(h))
+
+    monkeypatch.setattr(indicators, "atr", fake_atr)
+
+    rows = bot.ATR_LENGTH + 1
+    df = pd.DataFrame(
+        {
+            "high": range(2, 2 + rows),
+            "low": range(1, 1 + rows),
+            "close": [x + 0.5 for x in range(1, 1 + rows)],
+            "volume": [200_000] * rows,
+        }
+    )
+
+    class DummyFetcher:
+        def get_daily_df(self, runtime, sym):
+            return df
+
+    runtime = types.SimpleNamespace(data_fetcher=DummyFetcher())
+
+    result = bot.screen_universe(["AAA"], runtime)
+
+    assert result == ["AAA"]
+    assert called.get("used") is True

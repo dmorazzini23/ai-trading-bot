@@ -11486,10 +11486,27 @@ def screen_universe(
                     time.sleep(0.25)
                     continue
 
-                series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
+                series = None
+                ta_available = hasattr(ta, "atr") and not getattr(ta, "_failed", False)
+                if ta_available:
+                    try:
+                        series = ta.atr(
+                            df["high"], df["low"], df["close"], length=ATR_LENGTH
+                        )
+                    except Exception:  # pragma: no cover - fall back below
+                        series = None
                 if series is None or not hasattr(series, "empty") or series.empty:
-                    filtered_out[sym] = "atr_calculation_failed"
-                    logger.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
+                    try:
+                        from ai_trading.indicators import atr as _atr
+
+                        series = _atr(
+                            df["high"], df["low"], df["close"], period=ATR_LENGTH
+                        )
+                    except Exception:
+                        series = pd.Series()
+                if series is None or not hasattr(series, "empty") or series.empty:
+                    filtered_out[sym] = "atr_unavailable"
+                    logger.warning(f"[SCREEN_UNIVERSE] {sym}: ATR unavailable")
                     time.sleep(0.25)
                     continue
                 atr_val = series.iloc[-1]
