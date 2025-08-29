@@ -87,15 +87,22 @@ extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifact
 
 # Focus on safe mechanical families only.
 [tool.ruff.lint]
-select = ["E", "F", "UP", "DTZ", "T201"]  # AI-AGENT-REF: safe lint families
+select = ["E", "F", "UP", "DTZ", "T201", "TID"]  # AI-AGENT-REF: safe lint families
 ignore = ["E501"]
 
 # Allow prints in tests/tools; allow re-export F401 in package __init__ files.
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["T201"]
-"tools/**" = ["T201", "E402"]
-"scripts/**" = ["T201", "E402"]
+"tests/**" = ["T201", "TID251"]
+"tools/**" = ["T201", "E402", "TID251"]
+"scripts/**" = ["T201", "E402", "TID251"]
 "**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"requests.get" = "use ai_trading.utils.http.get"
+"requests.post" = "use ai_trading.utils.http.post"
+"requests.put" = "use ai_trading.utils.http.put"
+"requests.delete" = "use ai_trading.utils.http.delete"
+"requests.request" = "use ai_trading.utils.http.request"
 
 [tool.pytest.ini_options]
 minversion = "7.0"

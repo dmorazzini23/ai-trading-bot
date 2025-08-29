@@ -42,6 +42,7 @@ from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact
 from ai_trading.net.http import build_retrying_session, set_global_session
+from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca
 from ai_trading.config.management import get_env
 
@@ -310,12 +311,18 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
     """Initialize the global HTTP client session with retry logic."""
     for attempt in range(1, retries + 1):
         try:
+            connect_timeout = clamp_request_timeout(
+                float(getattr(cfg, "http_connect_timeout", 5.0))
+            )
+            read_timeout = clamp_request_timeout(
+                float(getattr(cfg, "http_read_timeout", 10.0))
+            )
             session = build_retrying_session(
                 pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)),
                 total_retries=int(getattr(cfg, "http_total_retries", 3)),
                 backoff_factor=float(getattr(cfg, "http_backoff_factor", 0.3)),
-                connect_timeout=float(getattr(cfg, "http_connect_timeout", 5.0)),
-                read_timeout=float(getattr(cfg, "http_read_timeout", 10.0)),
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
             )
             set_global_session(session)
             logger.info(
@@ -325,8 +332,8 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
                     "pool_maxsize": getattr(cfg, "http_pool_maxsize", 32),
                     "retries": getattr(cfg, "http_total_retries", 3),
                     "backoff_factor": getattr(cfg, "http_backoff_factor", 0.3),
-                    "connect_timeout": getattr(cfg, "http_connect_timeout", 5.0),
-                    "read_timeout": getattr(cfg, "http_read_timeout", 10.0),
+                    "connect_timeout": connect_timeout,
+                    "read_timeout": read_timeout,
                 },
             )
             return True

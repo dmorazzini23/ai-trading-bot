@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import requests
+from typing import cast
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from ai_trading.utils import clamp_request_timeout
 
 
 class TimeoutSession(requests.Session):
@@ -10,11 +12,13 @@ class TimeoutSession(requests.Session):
 
     def __init__(self, default_timeout: tuple[float, float] = (5.0, 10.0)) -> None:
         super().__init__()
-        self._default_timeout = default_timeout
+        self._default_timeout = cast(tuple[float, float], clamp_request_timeout(default_timeout))
 
     def request(self, method, url, **kwargs):  # type: ignore[override]
         if "timeout" not in kwargs or kwargs["timeout"] is None:
             kwargs["timeout"] = self._default_timeout
+        else:
+            kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
         return super().request(method, url, **kwargs)
 
 
@@ -35,7 +39,9 @@ def build_retrying_session(
 ) -> TimeoutSession:
     """Create a session with urllib3 ``Retry`` and default timeout."""
 
-    s = TimeoutSession(default_timeout=(connect_timeout, read_timeout))
+    connect_timeout_f = cast(float, clamp_request_timeout(connect_timeout))
+    read_timeout_f = cast(float, clamp_request_timeout(read_timeout))
+    s = TimeoutSession(default_timeout=(connect_timeout_f, read_timeout_f))
     retry = Retry(
         total=total_retries,
         connect=total_retries,

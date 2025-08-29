@@ -471,8 +471,8 @@ from ai_trading.logging.redact import redact as _redact  # AI-AGENT-REF: mask se
 from ai_trading.utils import http
 from ai_trading.utils.timing import (
     HTTP_TIMEOUT,
-    clamp_timeout,
 )  # AI-AGENT-REF: enforce request timeouts
+from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.prof import StageTimer
 from ai_trading.guards.staleness import _ensure_data_fresh
 
@@ -738,7 +738,9 @@ def fetch_sentiment(
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
     try:
         # fmt: off
-        resp = _HTTP_SESSION.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT)
+        resp = _HTTP_SESSION.get(
+            SENTIMENT_API_URL, params=params, timeout=clamp_request_timeout(HTTP_TIMEOUT)
+        )
         # fmt: on
         if resp.status_code in {429, 500, 502, 503, 504}:
             _SENTIMENT_FAILURES += 1
@@ -6422,7 +6424,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
-            timeout=HTTP_TIMEOUT,  # AI-AGENT-REF: explicit timeout
+            timeout=clamp_request_timeout(HTTP_TIMEOUT),  # AI-AGENT-REF: explicit timeout
         )
         r.raise_for_status()
 
@@ -6559,7 +6561,7 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = http.get(url, timeout=HTTP_TIMEOUT)  # AI-AGENT-REF: explicit timeout
+        resp = http.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))  # AI-AGENT-REF: explicit timeout
 
         if resp.status_code == 429:
             # AI-AGENT-REF: Enhanced rate limiting handling
@@ -6715,7 +6717,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     r = http.get(
         url,
         headers={"User-Agent": "AI Trading Bot"},
-        timeout=HTTP_TIMEOUT,  # AI-AGENT-REF: explicit timeout
+        timeout=clamp_request_timeout(HTTP_TIMEOUT),  # AI-AGENT-REF: explicit timeout
     )
     r.raise_for_status()
     soup = BeautifulSoup(r.content, "lxml")
@@ -12149,7 +12151,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 resp = http.get(
                     f"http://localhost:{default_port}",
-                    timeout=clamp_timeout(2),
+                    timeout=clamp_request_timeout(2),
                 )
                 if resp.ok:
                     logger.info("Metrics port %d already serving; reusing", default_port)

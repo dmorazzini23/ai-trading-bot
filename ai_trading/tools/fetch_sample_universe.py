@@ -6,10 +6,11 @@ from ai_trading.logging import get_logger
 from ai_trading.utils import http
 from ai_trading.utils.prof import StageTimer
 from ai_trading.utils.timing import HTTP_TIMEOUT
+from ai_trading.utils.http import clamp_request_timeout
 logger = get_logger(__name__)
 __all__ = ['run', 'parse_cli_and_run']
 
-def run(symbols: list[str], timeout: float | None=None) -> int:
+def run(symbols: list[str], timeout: float | None = None) -> int:
     """Fetch daily data for ``symbols`` using the pooled HTTP client."""
     if not symbols:
         return 0
@@ -18,6 +19,7 @@ def run(symbols: list[str], timeout: float | None=None) -> int:
     start = end - timedelta(days=7)
     urls = [_build_daily_url(sym, start, end) for sym in symbols]
     failures = 0
+    timeout = clamp_request_timeout(timeout)
     with StageTimer(logger, 'UNIVERSE_FETCH', universe_size=len(symbols)):
         results = http.map_get(urls, timeout=timeout)
     logger.info('HTTP_POOL_STATS', extra=http.pool_stats())
@@ -40,7 +42,7 @@ def parse_cli_and_run() -> int:
     timeout = args.timeout
     if timeout is None:
         timeout = HTTP_TIMEOUT
-    return run(symbols, timeout=timeout)
+    return run(symbols, timeout=clamp_request_timeout(timeout))
 if __name__ == '__main__':
     import sys
     sys.exit(parse_cli_and_run())

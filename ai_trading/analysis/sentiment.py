@@ -8,6 +8,7 @@ import time as pytime
 from datetime import datetime
 from threading import Lock
 from ai_trading.net.http import HTTPSession
+from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.retry import (
     retry,
     retry_if_exception_type,
@@ -158,7 +159,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             return 0.0
     try:
         url = f'{settings.sentiment_api_url}?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={api_key}'
-        resp = _HTTP.get(url, timeout=HTTP_TIMEOUT)
+        resp = _HTTP.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))
         if resp.status_code == 429:
             logger.warning(f'fetch_sentiment({ticker}) rate-limited (429) → using enhanced fallback strategies')
             return _handle_rate_limit_with_enhanced_strategies(ticker)
@@ -259,11 +260,11 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     try:
         primary_url_full = f'{primary_url}?symbol={ticker}&apikey={primary_key}'
         timeout_v = HTTP_TIMEOUT
-        primary_resp = _HTTP.get(primary_url_full, timeout=timeout_v)
+        primary_resp = _HTTP.get(primary_url_full, timeout=clamp_request_timeout(timeout_v))
         if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
             pytime.sleep(0.5)
             alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
-            alt_resp = _HTTP.get(alt_url, timeout=timeout_v)
+            alt_resp = _HTTP.get(alt_url, timeout=clamp_request_timeout(timeout_v))
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
                 sentiment_score = data.get('sentiment_score', 0.0)
@@ -362,7 +363,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         headers = {'User-Agent': 'AI Trading Bot'}
         backoff = 0.5
         for attempt in range(3):
-            r = _HTTP.get(url, headers=headers, timeout=HTTP_TIMEOUT)
+            r = _HTTP.get(url, headers=headers, timeout=clamp_request_timeout(HTTP_TIMEOUT))
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                 pytime.sleep(backoff)
                 backoff *= 2
