@@ -11,19 +11,34 @@ class DummyFetcher:
     def get_daily_df(self, ctx, symbol):
         return pd.DataFrame({"close": [100]})
 
-class DummyAPI:
+class DummyAPIList:
     def __init__(self):
         self.positions = {}
         self.orders = []
+
     def get_account(self):
         return types.SimpleNamespace(cash=1000.0, equity=1000.0, buying_power=1000.0)
+
+    def list_positions(self):
+        return [types.SimpleNamespace(symbol=s, qty=q) for s, q in self.positions.items()]
+
+
+class DummyAPIAll:
+    def __init__(self):
+        self.positions = {}
+        self.orders = []
+
+    def get_account(self):
+        return types.SimpleNamespace(cash=1000.0, equity=1000.0, buying_power=1000.0)
+
     def get_all_positions(self):
         return [types.SimpleNamespace(symbol=s, qty=q) for s, q in self.positions.items()]
 
 
-def test_partial_initial_rebalance_fill(monkeypatch):
+@pytest.mark.parametrize("api_cls", [DummyAPIList, DummyAPIAll])
+def test_partial_initial_rebalance_fill(monkeypatch, api_cls):
     ctx = types.SimpleNamespace(
-        api=DummyAPI(),
+        api=api_cls(),
         data_fetcher=DummyFetcher(),
         rebalance_ids={},
         rebalance_attempts={},

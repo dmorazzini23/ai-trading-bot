@@ -2208,7 +2208,12 @@ def load_portfolio_snapshot() -> dict[str, int]:
 
 def compute_current_positions(ctx: BotContext) -> dict[str, int]:
     try:
-        positions = ctx.api.list_positions()
+        if hasattr(ctx.api, "list_positions"):
+            positions = ctx.api.list_positions()
+        elif hasattr(ctx.api, "get_all_positions"):
+            positions = ctx.api.get_all_positions()
+        else:
+            return {}
         logger.debug("Raw Alpaca positions: %s", positions)
         return {p.symbol: int(p.qty) for p in positions}
     except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
@@ -13626,7 +13631,13 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
             total_capital = cash
             weight_per = 1.0 / len(valid_symbols)
 
-            positions = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
+            if hasattr(ctx.api, "list_positions"):
+                raw_positions = ctx.api.list_positions()
+            elif hasattr(ctx.api, "get_all_positions"):
+                raw_positions = ctx.api.get_all_positions()
+            else:
+                raw_positions = []
+            positions = {p.symbol: int(p.qty) for p in raw_positions}
 
             for sym in valid_symbols:
                 price = valid_prices[sym]
@@ -13689,7 +13700,12 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
     ctx.initial_rebalance_done = True
     try:
-        pos_list = ctx.api.list_positions()
+        if hasattr(ctx.api, "list_positions"):
+            pos_list = ctx.api.list_positions()
+        elif hasattr(ctx.api, "get_all_positions"):
+            pos_list = ctx.api.get_all_positions()
+        else:
+            pos_list = []
         state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
         state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
         state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
