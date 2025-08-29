@@ -5627,10 +5627,39 @@ _TRADE_LOGGER_SINGLETON = None
 
 
 def get_trade_logger() -> TradeLogger:
-    """Get trade logger singleton."""  # AI-AGENT-REF: ensure default path resolution
+    """Get trade logger singleton and ensure CSV headers exist."""  # AI-AGENT-REF: ensure default path resolution
+
     global _TRADE_LOGGER_SINGLETON
     if _TRADE_LOGGER_SINGLETON is None:
-        _TRADE_LOGGER_SINGLETON = TradeLogger(None)
+        # AI-AGENT-REF: respect configured trade log path
+        _TRADE_LOGGER_SINGLETON = TradeLogger(TRADE_LOG_FILE)
+
+    path = _TRADE_LOGGER_SINGLETON.path
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        try:
+            with open(path, "w", newline="") as f:
+                portalocker.lock(f, portalocker.LOCK_EX)
+                try:
+                    csv.writer(f).writerow(
+                        [
+                            "symbol",
+                            "entry_time",
+                            "entry_price",
+                            "exit_time",
+                            "exit_price",
+                            "qty",
+                            "side",
+                            "strategy",
+                            "classification",
+                            "signal_tags",
+                            "confidence",
+                            "reward",
+                        ]
+                    )
+                finally:
+                    portalocker.unlock(f)
+        except PermissionError:
+            logger.debug("TradeLogger init path not writable: %s", path)
     return _TRADE_LOGGER_SINGLETON
 
 
