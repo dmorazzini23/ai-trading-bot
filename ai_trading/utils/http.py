@@ -61,6 +61,23 @@ _pool_stats = {
 }
 
 
+def clamp_request_timeout(
+    timeout: float | int | tuple[float | int, float | int] | None,
+) -> float | tuple[float, float] | None:
+    """Normalize ``requests``-style timeout values using :func:`clamp_timeout`.
+
+    Accepts either a single timeout (applied to both connect/read) or a
+    ``(connect, read)`` tuple. ``None`` is propagated so caller defaults can
+    take effect.
+    """
+
+    if timeout is None:
+        return None
+    if isinstance(timeout, tuple):
+        return tuple(clamp_timeout(t) for t in timeout)
+    return clamp_timeout(timeout)
+
+
 if REQUESTS_AVAILABLE:
     class HTTPSession(requests.Session):
         """Session with sane connection pooling and timeout defaults.
@@ -75,7 +92,7 @@ if REQUESTS_AVAILABLE:
 
         def __init__(self, timeout: float | int | None = HTTP_TIMEOUT) -> None:
             super().__init__()
-            self._timeout = clamp_timeout(timeout)
+            self._timeout = clamp_request_timeout(timeout)
             _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
             _pool_stats["workers"] = int(
                 os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", str(_pool_stats["workers"])))
@@ -99,7 +116,7 @@ if REQUESTS_AVAILABLE:
             timeout = kwargs.get("timeout")
             if timeout is None:
                 timeout = self._timeout
-            kwargs["timeout"] = clamp_timeout(timeout)
+            kwargs["timeout"] = clamp_request_timeout(timeout)
             return super().request(method, url, **kwargs)
 else:  # pragma: no cover - exercised in tests
     class HTTPSession(requests.Session):
@@ -124,8 +141,8 @@ def _get_session() -> HTTPSession:
 
 def _with_timeout(kwargs: dict) -> dict:
     """Clamp provided timeout while allowing session defaults."""
-    if "timeout" in kwargs and kwargs["timeout"] is not None:
-        kwargs["timeout"] = clamp_timeout(kwargs["timeout"])
+    if "timeout" in kwargs:
+        kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
     return kwargs
 
 
@@ -194,19 +211,11 @@ def request_json(
     if not REQUESTS_AVAILABLE:
         raise RuntimeError("requests library is required for HTTP operations")
     status_forcelist = status_forcelist or {429, 500, 502, 503, 504}
-    if isinstance(timeout, tuple):
-        to = (
-            clamp_timeout(timeout[0]),
-            clamp_timeout(timeout[1]),
-        )
-    else:
-        t = clamp_timeout(timeout)
-        to = (t, t)
-
+    timeout = clamp_request_timeout(timeout)
     sess = _get_session()
 
     def _fetch() -> requests.Response:
-        return sess.request(method, url, headers=headers, params=params, timeout=to)
+        return sess.request(method, url, headers=headers, params=params, timeout=timeout)
 
     for attempt in range(1, retries + 1):
         try:
@@ -255,6 +264,7 @@ def map_get(
     """Concurrent GET for a list of URLs."""
     if not urls:
         return []
+    timeout = clamp_request_timeout(timeout)
     workers = _pool_stats["workers"]
     SAFE_EXC = TRANSIENT_HTTP_EXC + (ValueError, TypeError, JSONDecodeError)
     results: list[tuple[tuple[str, int, bytes] | None, Exception | None]] = [(None, None)] * len(urls)
@@ -278,4 +288,5 @@ __all__ = [
     "put",
     "pool_stats",
     "map_get",
+    "clamp_request_timeout",
 ]

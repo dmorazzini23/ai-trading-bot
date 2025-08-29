@@ -32,6 +32,7 @@ _BASE_EXPORTS = {
 __all__ = tuple(sorted({
     "HTTP_TIMEOUT",
     "clamp_timeout",
+    "clamp_request_timeout",
     "sleep",
     "OptionalDependencyError",
     "module_ok",
@@ -48,6 +49,7 @@ __all__ = tuple(sorted({
 
 _LAZY_MAP = {
     "http": ("ai_trading.utils.http", None),
+    "clamp_request_timeout": ("ai_trading.utils.http", "clamp_request_timeout"),
     "retry": ("ai_trading.utils.retry", None),
     "timing": ("ai_trading.utils.timing", None),
     "device": ("ai_trading.utils.device", None),
@@ -74,6 +76,7 @@ _LAZY_MAP = {
 
 if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
     from . import http as http  # type: ignore
+    from .http import clamp_request_timeout as clamp_request_timeout  # type: ignore
     from . import retry as retry  # type: ignore
     from . import timing as timing  # type: ignore
     from . import device as device  # type: ignore

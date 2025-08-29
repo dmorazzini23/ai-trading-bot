@@ -10,6 +10,7 @@ from typing import Any, Optional, TYPE_CHECKING
 
 from ai_trading.net.http import HTTPSession
 from ai_trading.exc import RequestException
+from ai_trading.utils.http import clamp_request_timeout
 import importlib.util
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
@@ -421,7 +422,8 @@ def _http_submit(
         payload["stop_price"] = str(stop_price)
 
     try:
-        resp = _HTTP.post(url, headers=headers, json=payload, timeout=timeout or 10)
+        timeout_v = clamp_request_timeout(timeout or 10)
+        resp = _HTTP.post(url, headers=headers, json=payload, timeout=timeout_v)
     except RequestException as e:  # pragma: no cover - network error path
         raise AlpacaOrderNetworkError(f"Network error calling {url}: {e}") from e
 
@@ -461,6 +463,7 @@ def submit_order(
     cfg = _AlpacaConfig.from_env()
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
     q_int = _as_int(qty)
+    timeout = clamp_request_timeout(timeout)
 
     if do_shadow:
         oid = f"shadow-{uuid.uuid4().hex[:16]}"

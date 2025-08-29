@@ -26,6 +26,7 @@ from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
 from ai_trading.data.metrics import metrics
 from ai_trading.net.http import HTTPSession
+from ai_trading.utils.http import clamp_request_timeout
 
 # Module-level session reused across requests
 _HTTP_SESSION = HTTPSession()
@@ -418,7 +419,7 @@ def get_daily(symbol: str, start: Any, end: Any) -> pd.DataFrame:
     end_dt = ensure_datetime(end)
     url = _build_daily_url(symbol, start_dt, end_dt)
     try:
-        resp = _HTTP_SESSION.get(url, timeout=10)
+        resp = _HTTP_SESSION.get(url, timeout=clamp_request_timeout(10))
     except Exception as exc:  # pragma: no cover - network variance
         raise DataFetchError(str(exc)) from exc
     if getattr(resp, "status_code", 0) != 200:
@@ -442,6 +443,7 @@ def fetch_daily_data_async(
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     urls = [_build_daily_url(sym, start_dt, end_dt) for sym in symbols]
+    timeout = clamp_request_timeout(timeout)
     results = http.map_get(urls, timeout=timeout)
     out: dict[str, pd.DataFrame] = {}
     for sym, (res, err) in zip(symbols, results):
@@ -539,7 +541,7 @@ def _fetch_bars(
             "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
         }
         try:
-            resp = _HTTP_SESSION.get(url, params=params, headers=headers, timeout=10)
+            resp = _HTTP_SESSION.get(url, params=params, headers=headers, timeout=clamp_request_timeout(10))
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()

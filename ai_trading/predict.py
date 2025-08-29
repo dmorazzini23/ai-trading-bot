@@ -3,6 +3,7 @@ from functools import lru_cache
 from ai_trading.features import prepare as feature_prepare
 from ai_trading.net.http import HTTPSession
 from ai_trading.exc import RequestException
+from ai_trading.utils.http import clamp_request_timeout
 
 try:
     from cachetools import TTLCache
@@ -38,7 +39,9 @@ def fetch_sentiment(symbol: str) -> float:
         return _sentiment_cache[symbol]
     score = 0.0
     try:
-        resp = _HTTP.get(f"https://example.com/{symbol}", timeout=10)
+        resp = _HTTP.get(
+            f"https://example.com/{symbol}", timeout=clamp_request_timeout(10)
+        )
         resp.raise_for_status()
         data = resp.json()
         score = float(data.get("score", 0.0))

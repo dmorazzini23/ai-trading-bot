@@ -17,7 +17,7 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
 
 from alpaca.common.exceptions import APIError
 from ai_trading.logging import get_logger
-from ai_trading.utils import clamp_timeout as _clamp_timeout
+from ai_trading.utils import clamp_timeout as _clamp_timeout, clamp_request_timeout
 from ai_trading.exc import RequestException
 logger = get_logger(__name__)
 _log = logger
@@ -109,7 +109,7 @@ def _fetch_api(url: str, retries: int=3, delay: float=1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
     for attempt in range(1, retries + 1):
         try:
-            resp = http.get(url, timeout=_clamp_timeout(5))
+            resp = http.get(url, timeout=clamp_request_timeout(5))
             resp.raise_for_status()
             return resp.json()
         except RequestException as exc:

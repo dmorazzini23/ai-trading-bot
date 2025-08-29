@@ -17,6 +17,7 @@ from typing import Any
 from ai_trading.logging import logger
 from ai_trading.utils import http
 from ai_trading.utils.timing import HTTP_TIMEOUT
+from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.exc import RequestException
 
 class AlertSeverity(Enum):
@@ -153,7 +154,9 @@ class SlackAlerter:
             if alert.metadata:
                 for key, value in alert.metadata.items():
                     payload['attachments'][0]['fields'].append({'title': key, 'value': str(value), 'short': True})
-            response = http.post(self.webhook_url, json=payload, timeout=HTTP_TIMEOUT)
+            response = http.post(
+                self.webhook_url, json=payload, timeout=clamp_request_timeout(HTTP_TIMEOUT)
+            )
             response.raise_for_status()
             logger.info(f'Slack alert sent: {alert.title}')
             return True
