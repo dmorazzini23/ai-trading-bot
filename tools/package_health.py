@@ -29,16 +29,15 @@ def _probe_strategy_allocator() -> bool:
         return False
 
 def _probe_async_testing() -> bool:
-    ok = True
     try:
-        import pytest_asyncio
-    except (KeyError, ValueError, TypeError):
-        ok = False
+        import anyio  # noqa: F401
+    except ModuleNotFoundError:
+        return True
     try:
-        import anyio
-    except (KeyError, ValueError, TypeError):
-        ok = False
-    return ok
+        import pytest_asyncio  # noqa: F401
+    except (KeyError, ValueError, TypeError, ModuleNotFoundError):
+        return False
+    return True
 
 def _probe_model_and_universe():
     import os
