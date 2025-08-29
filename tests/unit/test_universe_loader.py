@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import types
 
 from ai_trading.data import universe
+from ai_trading.core import bot_engine
 
 
 def test_env_override_path_preferred(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
@@ -82,4 +84,10 @@ def test_brk_dot_b_normalized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     finally:
         monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
     assert symbols == ["BRK-B"]
+
+
+def test_screen_candidates_empty_watchlist_returns_fallback():
+    """screen_candidates returns fallback symbols when watchlist is empty."""
+    runtime = types.SimpleNamespace()
+    assert bot_engine.screen_candidates(runtime, []) == bot_engine.FALLBACK_SYMBOLS
 

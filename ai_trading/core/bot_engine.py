@@ -11430,6 +11430,9 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
 _screen_lock = Lock()
 _screening_in_progress = False
 
+# Hard-coded fallback symbols when no watchlist is provided
+FALLBACK_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
+
 
 def screen_universe(
     candidates: Sequence[str],
@@ -11601,10 +11604,14 @@ def screen_universe(
 
 def screen_candidates(runtime, candidates, *, fallback_symbols=None) -> list[str]:
     """Run screening on provided candidate tickers using runtime."""
-    del fallback_symbols
     try:
         if not candidates:
-            return []
+            symbols = list(fallback_symbols or FALLBACK_SYMBOLS)
+            logger.info(
+                "SCREEN_FALLBACK_USED",
+                extra={"tickers": symbols},
+            )
+            return symbols
         return screen_universe(candidates, runtime)
     except (KeyError, ValueError, TypeError) as e:
         logger.error(
@@ -12655,6 +12662,8 @@ def _prepare_run(runtime, state: BotState, tickers: list[str]) -> tuple[float, b
         logger.warning(
             "No candidates found after filtering, using top 5 tickers fallback."
         )
+        if not full_watchlist:
+            full_watchlist = load_universe() or FALLBACK_SYMBOLS
         symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
