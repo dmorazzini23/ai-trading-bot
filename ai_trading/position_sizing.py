@@ -119,7 +119,14 @@ def _get_equity_from_alpaca(cfg) -> float:
             return 0.0
         s = get_global_session()
         resp = s.get(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret})
-        resp.raise_for_status()
+        if hasattr(resp, "raise_for_status"):
+            resp.raise_for_status()
+        else:
+            status = getattr(resp, "status_code", None)
+            if status != 200:
+                err = HTTPError(f"HTTP {status}")
+                setattr(err, "response", resp)
+                raise err
         data = resp.json()
         eq = _coerce_float(data.get('equity'), 0.0)
         return eq
