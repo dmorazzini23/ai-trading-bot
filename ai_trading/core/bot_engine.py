@@ -13239,6 +13239,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 logger.info("MARKET_FETCH")
             else:
                 logger.debug("MARKET_FETCH")
+            ctx = _get_runtime_context_or_none()
+            if ctx and getattr(runtime, "data_fetcher", None) is None:
+                runtime.data_fetcher = getattr(ctx, "data_fetcher", None)
+            ensure_data_fetcher(runtime)
 
             for attempt in range(3):
                 try:
