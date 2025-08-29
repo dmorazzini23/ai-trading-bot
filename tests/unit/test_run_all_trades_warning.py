@@ -112,3 +112,73 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     assert api.called_with is not None
     assert "filter" in api.called_with
     assert api.called_with["filter"].statuses == [OrderStatus.OPEN]
+
+
+def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
+    """Launching the bot should create the trade log with CSV headers."""
+
+    enums_mod = types.ModuleType("alpaca.trading.enums")
+    requests_mod = types.ModuleType("alpaca.trading.requests")
+
+    class OrderStatus:
+        OPEN = "open"
+
+    class GetOrdersRequest:
+        def __init__(self, *, statuses=None):
+            self.statuses = statuses
+
+    enums_mod.OrderStatus = OrderStatus
+    requests_mod.GetOrdersRequest = GetOrdersRequest
+    monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
+    monkeypatch.setitem(sys.modules, "alpaca.trading.enums", enums_mod)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.requests", requests_mod)
+
+    class DummyAPI:
+        def get_orders(self, *args, **kwargs):
+            return []
+
+    class DummyRiskEngine:
+        def wait_for_exposure_update(self, timeout: float) -> None:
+            pass
+
+    state = eng.BotState()
+    runtime = types.SimpleNamespace(api=DummyAPI(), risk_engine=DummyRiskEngine())
+
+    monkeypatch.setattr(eng, "_ensure_alpaca_classes", lambda: None)
+    monkeypatch.setattr(eng, "_init_metrics", lambda: None)
+    monkeypatch.setattr(eng, "is_market_open", lambda: True)
+    monkeypatch.setattr(eng, "ensure_alpaca_attached", lambda _rt: None)
+    monkeypatch.setattr(eng, "check_pdt_rule", lambda _rt: False)
+    monkeypatch.setattr(eng, "get_strategies", lambda: [])
+    monkeypatch.setattr(eng, "get_verbose_logging", lambda: False)
+    monkeypatch.setattr(eng.CFG, "log_market_fetch", False, raising=False)
+
+    class DummyLock:
+        def acquire(self, blocking: bool = False) -> bool:
+            return True
+
+        def release(self) -> None:
+            pass
+
+    monkeypatch.setattr(eng, "run_lock", DummyLock())
+
+    def _raise_df(*_a, **_k):
+        raise eng.DataFetchError("boom")
+
+    monkeypatch.setattr(eng, "_prepare_run", _raise_df)
+
+    trade_log = tmp_path / "trades.csv"
+    reward_log = tmp_path / "reward.csv"
+    monkeypatch.setattr(eng, "TRADE_LOG_FILE", str(trade_log))
+    monkeypatch.setattr(eng, "REWARD_LOG_FILE", str(reward_log))
+    monkeypatch.setattr(eng, "_TRADE_LOGGER_SINGLETON", None)
+    monkeypatch.setattr(eng, "_global_ctx", None)
+
+    eng.run_all_trades_worker(state, runtime)
+
+    assert trade_log.exists()
+    assert (
+        trade_log.read_text().splitlines()[0]
+        == "symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward"
+    )
