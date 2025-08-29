@@ -94,7 +94,7 @@ from ai_trading.config.management import (
     TradingConfig,
 )
 from ai_trading.position_sizing import get_max_position_size
-from ai_trading.settings import get_alpaca_secret_key_plain
+from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 
 
 def _alpaca_available() -> bool:
@@ -110,6 +110,15 @@ from ai_trading.data.bars import (
 # Deprecated legacy proxies; prefer ai_trading.data.bars
 StockBarsRequest = _bars.StockBarsRequest
 safe_get_stock_bars = _bars.safe_get_stock_bars
+
+try:  # pragma: no cover
+    from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
+except Exception:  # pragma: no cover
+    class StockHistoricalDataClient:  # type: ignore[no-redef]
+        """Fallback when alpaca-py is unavailable."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401, ARG002
+            raise ImportError("alpaca-py not installed")
 
 def _parse_timeframe(tf: Any) -> _bars.TimeFrame:
     """Map configuration values to :class:`_bars.TimeFrame` enums."""
@@ -365,6 +374,8 @@ __all__ = [
     "DataFetchError",
     "MockSignal",
     "MockContext",
+    "StockHistoricalDataClient",
+    "safe_get_stock_bars",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -3998,32 +4009,29 @@ class DataFetcher:
                 )
                 return cached
 
-        api_key = get_settings().alpaca_api_key
-        api_secret = get_alpaca_secret_key_plain()
+        settings = get_settings()
+        api_key = settings.alpaca_api_key
+        api_secret = settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
         # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
 
-        from alpaca.data.historical import (
-            StockHistoricalDataClient as _DataClient,  # type: ignore
-        )
-
-        client = _DataClient(
+        client = StockHistoricalDataClient(
             api_key=api_key,
             secret_key=api_secret,
         )
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
             try:
-                m_req = _bars.StockBarsRequest(
+                m_req = StockBarsRequest(
                     symbol_or_symbols=[symbol],
                     timeframe=_bars.TimeFrame.Minute,
                     start=start_ts,
                     end=end_ts,
                     feed="iex",
                 )
-                mdf = _bars.safe_get_stock_bars(client, m_req, symbol, "FALLBACK MINUTE")
+                mdf = safe_get_stock_bars(client, m_req, symbol, "FALLBACK MINUTE")
                 if mdf is None or mdf.empty:
                     return None
                 if isinstance(mdf.columns, pd.MultiIndex):
@@ -4042,7 +4050,7 @@ class DataFetcher:
                 return None
 
         try:
-            req = _bars.StockBarsRequest(
+            req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=_bars.TimeFrame.Day,
                 start=start_ts,
@@ -4079,7 +4087,7 @@ class DataFetcher:
 
             # AI-AGENT-REF: safety net retry with downgraded log level
             try:
-                bars = _bars.safe_get_stock_bars(client, req, symbol, "DAILY")
+                bars = safe_get_stock_bars(client, req, symbol, "DAILY")
             except TypeError as te:
                 msg = str(te)
                 if "datetime argument was callable" in msg:
@@ -4092,7 +4100,7 @@ class DataFetcher:
                     req.end = _sanitize_pre(
                         getattr(req, "end", end_ts), _default_end_u
                     )
-                    bars = _bars.safe_get_stock_bars(client, req, symbol, "DAILY")
+                    bars = safe_get_stock_bars(client, req, symbol, "DAILY")
                 else:
                     raise
             if bars is None or bars.empty:
@@ -4104,7 +4112,7 @@ class DataFetcher:
                         "response": None if bars is None else bars.to_dict(),
                     },
                 )
-                bars = _bars.safe_get_stock_bars(client, req, symbol, "DAILY_RETRY")
+                bars = safe_get_stock_bars(client, req, symbol, "DAILY_RETRY")
                 if bars is None or bars.empty:
                     bars = _minute_resample()
                     if bars is None or bars.empty:
@@ -4148,7 +4156,7 @@ class DataFetcher:
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
-                    df_iex = _bars.safe_get_stock_bars(client, req, symbol, "IEX DAILY")
+                    df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
                     if df_iex is None:
                         raise DataFetchError(f"no IEX data for {symbol}")
                     if isinstance(df_iex.columns, pd.MultiIndex):
@@ -4301,18 +4309,16 @@ class DataFetcher:
             ) as exc:  # AI-AGENT-REF: narrow exception
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
-        api_key = get_settings().alpaca_api_key
-        api_secret = get_alpaca_secret_key_plain()
+        settings = get_settings()
+        api_key = settings.alpaca_api_key
+        api_secret = settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
         # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
             )
-        from alpaca.data.historical import (
-            StockHistoricalDataClient as _DataClient,  # type: ignore
-        )
 
-        client = _DataClient(
+        client = StockHistoricalDataClient(
             api_key=api_key,
             secret_key=api_secret,
         )
@@ -4551,18 +4557,16 @@ class DataFetcher:
 def prefetch_daily_data(
     symbols: list[str], start_date: date, end_date: date
 ) -> dict[str, pd.DataFrame]:
-    alpaca_key = get_settings().alpaca_api_key
-    alpaca_secret = get_alpaca_secret_key_plain()
+    settings = get_settings()
+    alpaca_key = settings.alpaca_api_key
+    alpaca_secret = settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
     # AI-AGENT-REF: use plain secret string
     if not alpaca_key or not alpaca_secret:
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
         )
-    from alpaca.data.historical import (
-        StockHistoricalDataClient as _DataClient,  # type: ignore
-    )
 
-    client = _DataClient(
+    client = StockHistoricalDataClient(
         api_key=alpaca_key,
         secret_key=alpaca_secret,
     )
