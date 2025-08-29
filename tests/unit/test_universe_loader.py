@@ -4,8 +4,77 @@ from pathlib import Path
 
 import pytest
 import types
+import sys
+import importlib.machinery
 
 from ai_trading.data import universe
+
+validation_stub = types.ModuleType("ai_trading.validation")
+require_env_stub = types.ModuleType("ai_trading.validation.require_env")
+flask_stub = types.ModuleType("flask")
+class Flask:  # minimal stub
+    def __init__(self, *args, **kwargs):  # noqa: D401, ANN001, ANN002
+        pass
+
+    def route(self, *args, **kwargs):  # noqa: D401, ANN001, ANN002
+        def decorator(func):
+            return func
+
+        return decorator
+
+flask_stub.Flask = Flask
+sys.modules.setdefault("flask", flask_stub)
+sklearn_stub = types.ModuleType("sklearn")
+ensemble_stub = types.ModuleType("sklearn.ensemble")
+metrics_stub = types.ModuleType("sklearn.metrics")
+model_selection_stub = types.ModuleType("sklearn.model_selection")
+preprocessing_stub = types.ModuleType("sklearn.preprocessing")
+sklearn_stub.__spec__ = importlib.machinery.ModuleSpec("sklearn", loader=None)
+ensemble_stub.__spec__ = importlib.machinery.ModuleSpec(
+    "sklearn.ensemble", loader=None
+)
+
+class _Dummy:
+    pass
+
+ensemble_stub.GradientBoostingClassifier = _Dummy
+ensemble_stub.RandomForestClassifier = _Dummy
+sklearn_stub.ensemble = ensemble_stub
+metrics_stub.accuracy_score = _Dummy
+sklearn_stub.metrics = metrics_stub
+model_selection_stub.train_test_split = _Dummy
+sklearn_stub.model_selection = model_selection_stub
+preprocessing_stub.StandardScaler = _Dummy
+sklearn_stub.preprocessing = preprocessing_stub
+sys.modules.setdefault("sklearn", sklearn_stub)
+sys.modules.setdefault("sklearn.ensemble", ensemble_stub)
+sys.modules.setdefault("sklearn.metrics", metrics_stub)
+sys.modules.setdefault("sklearn.model_selection", model_selection_stub)
+sys.modules.setdefault("sklearn.preprocessing", preprocessing_stub)
+
+
+def _require_env_vars(*_a, **_k):
+    return None
+
+
+def require_env_vars(*_a, **_k):  # noqa: D401
+    return True
+
+
+def should_halt_trading(*_a, **_k):
+    return False
+
+
+require_env_stub._require_env_vars = _require_env_vars
+require_env_stub.require_env_vars = require_env_vars
+require_env_stub.should_halt_trading = should_halt_trading
+validation_stub.require_env = require_env_stub
+validation_stub._require_env_vars = _require_env_vars
+validation_stub.require_env_vars = require_env_vars
+validation_stub.should_halt_trading = should_halt_trading
+sys.modules.setdefault("ai_trading.validation", validation_stub)
+sys.modules.setdefault("ai_trading.validation.require_env", require_env_stub)
+
 from ai_trading.core import bot_engine
 
 
@@ -25,16 +94,18 @@ def test_env_override_path_preferred(tmp_path: Path, monkeypatch: pytest.MonkeyP
         monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
 
 
-def test_package_fallback_loads_packaged_csv():
-    """Fallback uses packaged CSV when env not set."""  # AI-AGENT-REF: ensure fallback works
+def test_packaged_loads_packaged_csv():
+    """Uses packaged CSV when env not set."""  # AI-AGENT-REF: ensure packaged loader
     path = universe.locate_tickers_csv()
     assert path is not None and path.endswith("ai_trading/data/tickers.csv")
     symbols = universe.load_universe()
     assert isinstance(symbols, list) and len(symbols) > 0
 
 
-def test_missing_package_returns_fallback_and_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Missing package should log and return fallback list"""  # AI-AGENT-REF: test missing pkg case
+def test_missing_package_raises_runtime_error_and_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Missing package should log and raise error."""  # AI-AGENT-REF: test missing pkg case
 
     def boom(_name: str):
         raise ModuleNotFoundError("ai_trading.data not importable")
@@ -49,8 +120,8 @@ def test_missing_package_returns_fallback_and_logs(tmp_path: Path, monkeypatch: 
         called.append((msg, extra))
 
     monkeypatch.setattr(universe.logger, "error", fake_error)
-    syms = universe.load_universe()
-    assert syms == ["SPY", "AAPL", "MSFT", "AMZN", "GOOGL"]
+    with pytest.raises(RuntimeError):
+        universe.load_universe()
     assert called and called[0][0] == "TICKERS_FILE_MISSING"
 
 
@@ -90,4 +161,18 @@ def test_screen_candidates_empty_watchlist_returns_fallback():
     """screen_candidates returns fallback symbols when watchlist is empty."""
     runtime = types.SimpleNamespace()
     assert bot_engine.screen_candidates(runtime, []) == bot_engine.FALLBACK_SYMBOLS
+
+
+def test_load_candidate_universe_raises_when_csv_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """load_candidate_universe propagates missing CSV errors."""
+
+    def boom(path: str = bot_engine.TICKERS_FILE) -> list[str]:  # noqa: ARG001
+        raise RuntimeError("tickers missing")
+
+    monkeypatch.setattr(bot_engine, "load_tickers", boom)
+    runtime = types.SimpleNamespace()
+    with pytest.raises(RuntimeError):
+        bot_engine.load_candidate_universe(runtime)
 

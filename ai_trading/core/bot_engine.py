@@ -11664,16 +11664,21 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
 
 
 def load_candidate_universe(runtime, tickers: list[str] | None = None) -> list[str]:
-    """Load tickers for screening from cached runtime list."""  # AI-AGENT-REF: use packaged universe loader
+    """Load tickers for screening from cached runtime list.
+
+    Raises
+    ------
+    RuntimeError
+        If no tickers are available after loading.
+    """  # AI-AGENT-REF: use packaged universe loader
     if tickers is not None:
         setattr(runtime, "tickers", tickers)
     tickers = getattr(runtime, "tickers", None)
     if tickers is None:
-        tickers = load_universe()
+        tickers = load_tickers()
         setattr(runtime, "tickers", tickers)
     if not tickers:
-        logger.error("UNIVERSE_EMPTY_ABORT", extra={"reason": "no_tickers_csv"})
-        return []
+        raise RuntimeError("No tickers available")
     logger.debug(
         "CANDIDATE_UNIVERSE_LOADED",
         extra={"count": len(tickers)},
