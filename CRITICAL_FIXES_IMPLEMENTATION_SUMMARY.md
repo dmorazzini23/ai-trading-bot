@@ -38,13 +38,13 @@ def alpaca_client(self):
 
 ### 4. ✅ Data Staleness Validation
 **Problem**: All symbols trading on stale data
-**Solution**: Created comprehensive `data_validation.py` module:
+**Solution**: Created comprehensive `ai_trading.data_validation` module:
 - `check_data_freshness()` - Validates data age (default: 15 minutes max)
 - `validate_trading_data()` - Batch validation for multiple symbols
 - `emergency_data_check()` - Fast validation for critical trades
 - `should_halt_trading()` - Automatic trading halt on data quality issues
 
-**File**: `data_validation.py` (complete new module)
+**File**: `ai_trading.data_validation` (complete new module)
 
 ### 5. ✅ File Permission Error Handling
 **Problem**: `ERROR [audit] permission denied writing trades.csv`
@@ -134,7 +134,7 @@ def alpaca_client(self):
 3. **ai_trading/process_manager.py**: Enhanced with locking and instance detection (73 lines)
 4. **main.py**: Integrated process management (29 lines)
 5. **audit.py**: Enhanced permission error handling (35 lines)
-6. **data_validation.py**: Complete new module for data validation (217 lines)
+6. **ai_trading.data_validation**: Complete new module for data validation (217 lines)
 
 ## Success Metrics
 
