@@ -73,8 +73,10 @@ bb_width = talib.BBANDWIDTH(close_prices, timeperiod=20)
 
 ### Direct TA Library Interface (Advanced)
 ```python
-from ai_trading.strategies.imports import ta
+from ai_trading.strategies.imports import get_ta
 import pandas as pd
+
+ta = get_ta()
 
 # Convert to pandas Series for optimal performance
 close_series = pd.Series(close_prices)
@@ -118,7 +120,9 @@ bullish = (rsi_short[-1] > 50 and
 ### Pandas Series Input (Recommended)
 ```python
 import pandas as pd
-from ai_trading.strategies.imports import ta
+from ai_trading.strategies.imports import get_ta
+
+ta = get_ta()
 
 # Convert once for multiple calculations
 df = pd.DataFrame({

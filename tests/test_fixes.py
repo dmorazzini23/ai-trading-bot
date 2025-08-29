@@ -50,34 +50,27 @@ def test_talib_imports():
         os.environ.setdefault('WEBHOOK_SECRET', 'dummy')
         os.environ.setdefault('FLASK_PORT', '5000')
 
-        from ai_trading.strategies.imports import TA_AVAILABLE, ta
+        from ai_trading.strategies import imports as strategy_imports
+
+        ta = strategy_imports.get_ta()
 
         # Test that ta object is always available (real or mock)
-        if hasattr(ta, 'trend'):
-            pass
-        else:
+        if not hasattr(ta, "trend"):
             return False
-
-        if hasattr(ta, 'momentum'):
-            pass
-        else:
+        if not hasattr(ta, "momentum"):
             return False
-
-        if hasattr(ta, 'volatility'):
-            pass
-        else:
+        if not hasattr(ta, "volatility"):
             return False
 
         # Test basic functionality with small dataset
         test_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 3  # 30 data points
         try:
             import pytest
+
             pd = pytest.importorskip("pandas")
             test_series = pd.Series(test_data)
             sma_result = ta.trend.sma_indicator(test_series, window=10)
             if sma_result is not None and len(sma_result) == len(test_data):
-                pass
-            else:
                 pass
         except (AttributeError, ValueError):
             pass
