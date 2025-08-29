@@ -258,7 +258,7 @@ class TradingConfig:
     min_sharpe_ratio: Optional[float] = None
     min_win_rate: Optional[float] = None
     kelly_fraction: Optional[float] = None
-    kelly_fraction_max: float = 0.25
+    kelly_fraction_max: float = 0.15
     min_sample_size: int = 10
     confidence_level: float = 0.90
     lookback_periods: Optional[int] = None
