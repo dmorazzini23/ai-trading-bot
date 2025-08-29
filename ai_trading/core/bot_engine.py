@@ -540,6 +540,9 @@ class BotEngine:
         global APIError
         if getattr(APIError, "__module__", "") == __name__:
             APIError = get_api_error_cls()
+        # Load universe tickers once and store on both engine and runtime
+        self._tickers = load_universe()
+        setattr(self._ctx, "tickers", self._tickers)
 
     @property
     def ctx(self):
@@ -572,6 +575,11 @@ class BotEngine:
             api_key=_get_env_str("ALPACA_API_KEY"),
             secret_key=_get_env_str("ALPACA_SECRET_KEY"),
         )
+
+    @property
+    def tickers(self) -> list[str]:
+        """Return cached universe tickers."""
+        return self._tickers
 
 # AI-AGENT-REF: ensure FinBERT disabled message logged once
 _finbert_logged = False
@@ -11562,11 +11570,10 @@ def screen_universe(
         _screen_lock.release()
 
 
-def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
-    """Build candidate universe and run screening using runtime."""
-    # AI-AGENT-REF: explicit runtime for screening
+def screen_candidates(runtime, candidates, *, fallback_symbols=None) -> list[str]:
+    """Run screening on provided candidate tickers using runtime."""
+    del fallback_symbols
     try:
-        candidates = load_candidate_universe(runtime, fallback_symbols=fallback_symbols)
         if not candidates:
             return []
         return screen_universe(candidates, runtime)
@@ -11621,17 +11628,20 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
 
 
 def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
-    """Load tickers for screening."""  # AI-AGENT-REF: use packaged universe loader
+    """Load tickers for screening from cached runtime list."""  # AI-AGENT-REF: use packaged universe loader
     del fallback_symbols
-    candidates = load_universe()
-    if not candidates:
+    tickers = getattr(runtime, "tickers", None)
+    if tickers is None:
+        tickers = load_universe()
+        setattr(runtime, "tickers", tickers)
+    if not tickers:
         logger.error("UNIVERSE_EMPTY_ABORT", extra={"reason": "no_tickers_csv"})
         return []
     logger.debug(
         "CANDIDATE_UNIVERSE_LOADED",
-        extra={"count": len(candidates)},
+        extra={"count": len(tickers)},
     )
-    return candidates
+    return tickers
 
 
 def daily_summary() -> None:
@@ -12569,7 +12579,7 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     return fetcher
 
 
-def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
+def _prepare_run(runtime, state: BotState, tickers: list[str]) -> tuple[float, bool, list[str]]:
     from ai_trading import portfolio
     from ai_trading.utils import portfolio_lock
 
@@ -12601,13 +12611,13 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.04)
     compute_spy_vol_stats(runtime)
 
-    full_watchlist = load_candidate_universe(runtime)
+    full_watchlist = load_candidate_universe(runtime, tickers=tickers)
     try:
         pretrade_data_health(runtime, full_watchlist)
     except DataFetchError:
         time.sleep(1.0)
         return 0.0, False, []
-    symbols = screen_candidates(runtime)
+    symbols = screen_candidates(runtime, full_watchlist)
     logger.info(
         "Number of screened candidates: %s", len(symbols)
     )  # AI-AGENT-REF: log candidate count
@@ -13186,7 +13196,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
             for attempt in range(3):
                 try:
-                    current_cash, regime_ok, symbols = _prepare_run(runtime, state)
+                    current_cash, regime_ok, symbols = _prepare_run(
+                        runtime, state, getattr(runtime, "tickers", [])
+                    )
                     break
                 except DataFetchError as e:
                     logger.warning(
