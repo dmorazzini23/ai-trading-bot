@@ -62,6 +62,8 @@ SENTIMENT_FAILURE_THRESHOLD = 15  # Increased from 5 to 15
 SENTIMENT_RECOVERY_TIMEOUT = 1800  # Extended from 600s to 1800s
 ```
 
+- Circuit breaker tracks consecutive failures and schedules progressive retry delays before opening.
+
 #### bot_engine.py
 ```python
 # Lines 3034-3035: Updated circuit breaker thresholds for consistency

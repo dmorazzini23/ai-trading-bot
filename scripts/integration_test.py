@@ -146,9 +146,9 @@ def test_http_timeouts():
         if bot_engine_path.exists():
             content = bot_engine_path.read_text()
             import re
-            timeout_pattern = 'requests\\.get\\([^)]*timeout\\s*=\\s*\\d+'
+            timeout_pattern = r'_HTTP[_A-Z]*\\.get\\([^)]*timeout\\s*=\\s*\\d+'
             matches = re.findall(timeout_pattern, content)
-            assert len(matches) >= 1, 'Should find at least one requests.get call with timeout'
+            assert len(matches) >= 1, 'Should find at least one HTTP session get call with timeout'
             assert 'timeout=2' in content, 'Should have health probe timeout=2'
             assert 'timeout=10' in content, 'Should have API timeout=10'
         return True
