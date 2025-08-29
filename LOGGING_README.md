@@ -44,6 +44,8 @@ Daily price requests now log their parameters and outcome:
 - `DAILY_FETCH_REQUEST` records the symbol, timeframe, and date range
 - `DAILY_FETCH_RESULT` reports the number of rows returned and whether the
   response came from cache
+- Empty bar responses log a warning only when the market is open; otherwise,
+  fallback attempts proceed without additional noise
 
 ### Example Usage
 
