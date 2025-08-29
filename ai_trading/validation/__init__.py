@@ -1,4 +1,5 @@
 """Validation utilities and facades."""
+
 from ai_trading.data_validation import check_data_freshness
 from .require_env import (
     _require_env_vars,
@@ -15,3 +16,4 @@ __all__ = [
     "debug_environment",
     "validate_specific_env_var",
 ]
+
