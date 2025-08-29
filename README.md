@@ -76,7 +76,8 @@ seed = config.SEED  # defaults to 42
 config.reload_env()
 ```
 
-`.env` at the repo root is loaded at startup with `override=True`.
+`.env` at the repo root is reloaded at startup with `override=True`; if configuration
+cannot be loaded, the bot exits early with a critical log.
 Rebalance frequency defaults to 60 minutes; override with `AI_TRADING_REBALANCE_INTERVAL_MIN`
 (minutes) or `AI_TRADING_REBALANCE_INTERVAL_HOURS` (hours). The smallest positive value
 is used when multiple sources are set.
