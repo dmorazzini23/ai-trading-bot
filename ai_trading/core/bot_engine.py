@@ -35,9 +35,9 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
 
 # Reusable HTTP session
 try:  # pragma: no cover
-    from ai_trading.net.http import HTTPSession
+    from ai_trading.net.http import HTTPSession, get_http_session
 
-    _HTTP_SESSION = HTTPSession()
+    _HTTP_SESSION: HTTPSession = get_http_session()
 except Exception:  # pragma: no cover - fallback when requests missing
     class _HTTPStub:
         def get(self, *a, **k):  # type: ignore[no-untyped-def]

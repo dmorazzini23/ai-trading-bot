@@ -1,7 +1,7 @@
 from __future__ import annotations
 from functools import lru_cache
 from ai_trading.features import prepare as feature_prepare
-from ai_trading.net.http import HTTPSession
+from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 
@@ -14,7 +14,7 @@ except Exception:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
 
-_HTTP = HTTPSession()
+_HTTP: HTTPSession = get_http_session()
 
 @lru_cache(maxsize=1024)
 def predict(path: str):

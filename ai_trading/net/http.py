@@ -76,11 +76,18 @@ def get_global_session() -> TimeoutSession:
     return _GLOBAL_SESSION
 
 
+def get_http_session() -> HTTPSession:
+    """Return process-wide HTTP session singleton."""
+
+    return get_global_session()
+
+
 __all__ = [
     "HTTPSession",
     "TimeoutSession",
     "build_retrying_session",
     "set_global_session",
     "get_global_session",
+    "get_http_session",
 ]
 

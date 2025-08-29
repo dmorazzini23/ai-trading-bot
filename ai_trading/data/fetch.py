@@ -25,11 +25,11 @@ from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import logger
 from ai_trading.data.metrics import metrics
-from ai_trading.net.http import HTTPSession
+from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 
 # Module-level session reused across requests
-_HTTP_SESSION = HTTPSession()
+_HTTP_SESSION: HTTPSession = get_http_session()
 
 
 # Optional dependency placeholders

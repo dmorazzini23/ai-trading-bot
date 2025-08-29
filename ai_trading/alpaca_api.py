@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
 
-from ai_trading.net.http import HTTPSession
+from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib.util
@@ -22,7 +22,7 @@ _log = get_logger(__name__)
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
-_HTTP = HTTPSession()
+_HTTP: HTTPSession = get_http_session()
 
 
 from zoneinfo import ZoneInfo
