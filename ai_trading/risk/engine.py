@@ -57,6 +57,7 @@ class RiskEngine:
     def __init__(self, cfg: TradingConfig | None=None) -> None:
         """Initialize the engine with an optional trading config."""
         self._validate_env()
+        logger.info("Risk engine initialized")
         self.config = cfg if cfg is not None else TradingConfig()
         self._lock = threading.Lock()
         self.hard_stop = False
