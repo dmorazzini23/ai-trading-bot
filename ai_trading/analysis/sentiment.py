@@ -7,7 +7,7 @@ extracted from bot_engine.py to enable standalone imports and testing.
 import time as pytime
 from datetime import datetime
 from threading import Lock
-from ai_trading.net.http import HTTPSession
+from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.retry import (
     retry,
@@ -25,7 +25,7 @@ from ai_trading.utils.device import get_device, tensors_to_device  # AI-AGENT-RE
 from ai_trading.exc import RequestException, HTTPError
 
 SENTIMENT_API_KEY = get_env("SENTIMENT_API_KEY", "")
-_HTTP = HTTPSession()
+_HTTP: HTTPSession = get_http_session()
 DEVICE = None
 _SENTIMENT_INITIALIZED = False
 
