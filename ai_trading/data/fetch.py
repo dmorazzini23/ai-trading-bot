@@ -10,7 +10,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 
 try:
     from ai_trading.config import get_settings
-except Exception:
+except ImportError:
 
     def get_settings():
         return None
@@ -817,6 +817,8 @@ def get_bars(
 ) -> pd.DataFrame:
     """Compatibility wrapper delegating to _fetch_bars."""
     S = get_settings()
+    if S is None:
+        raise RuntimeError("Configuration is unavailable; cannot fetch bars")
     feed = feed or S.alpaca_data_feed
     adjustment = adjustment or S.alpaca_adjustment
     return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
