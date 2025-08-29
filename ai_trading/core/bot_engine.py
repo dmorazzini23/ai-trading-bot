@@ -8064,12 +8064,19 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
         raise
 
 
-def safe_submit_order(api: Any, req) -> Order | None:
-    if not market_is_open():
-        logger.warning(
-            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
-        )
-        return None
+def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Order | None:
+    """Submit an order while guarding against closed-market submissions.
+
+    The market status check is skipped when running in testing mode or when
+    ``bypass_market_check`` is explicitly set to ``True``.
+    """
+
+    if not (CFG.testing or bypass_market_check):
+        if not market_is_open():
+            logger.warning(
+                "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
+            )
+            return None
 
     def _req_to_args(r):
         side = getattr(r, "side", "")
