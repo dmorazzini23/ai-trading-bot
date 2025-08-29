@@ -8,13 +8,6 @@ from zoneinfo import ZoneInfo
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas
 
-try:
-    from ai_trading.config import get_settings
-except ImportError:
-
-    def get_settings():
-        return None
-
 
 from ai_trading.data.timeutils import ensure_utc_datetime
 from ai_trading.logging.empty_policy import classify as _empty_classify
@@ -836,11 +829,18 @@ def get_bars(
     symbol: str, timeframe: str, start: Any, end: Any, *, feed: str | None = None, adjustment: str | None = None
 ) -> pd.DataFrame:
     """Compatibility wrapper delegating to _fetch_bars."""
+    from ai_trading.config.settings import get_settings  # local import to avoid circular
+
     S = get_settings()
     if S is None:
-        raise RuntimeError(
-            "SETTINGS_UNAVAILABLE: configuration not loaded; call ai_trading.config.management.reload_env()",
-        )
+        from ai_trading.config import management as _cfg
+
+        _cfg.reload_env()
+        S = get_settings()
+        if S is None:
+            raise RuntimeError(
+                "SETTINGS_UNAVAILABLE: configuration not loaded; call ai_trading.config.management.reload_env()",
+            )
     feed = feed or S.alpaca_data_feed
     adjustment = adjustment or S.alpaca_adjustment
     return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
