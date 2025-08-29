@@ -14,6 +14,7 @@ from ai_trading.utils.http import clamp_request_timeout
 import importlib.util
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
+from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -224,6 +225,7 @@ def get_bars_df(
     feed: str | None = None,
 ) -> "pd.DataFrame":
     """Fetch bars for ``symbol`` and return a normalized DataFrame."""
+    symbol = _canon_symbol(symbol)
     APIError = get_api_error_cls()
     StockBarsRequest = get_stock_bars_request_cls()
     TimeFrame = get_timeframe_cls()

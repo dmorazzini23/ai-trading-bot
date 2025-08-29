@@ -34,6 +34,24 @@ def canon_feed(value: Any) -> str:
         return 'sip'
     return 'sip'
 
+def canon_symbol(value: Any) -> str:
+    """Return canonical stock symbol for Alpaca REST calls.
+
+    Alpaca expects class share separators to use dots rather than dashes
+    (e.g., ``BRK.B``).  This helper normalizes incoming symbols by
+    uppercasing and replacing a single dash with a dot when present.  Any
+    non-string input results in an empty string.
+    """
+    try:
+        sym = str(value).strip().upper()
+    except (KeyError, ValueError, TypeError):
+        return ''
+    if '-' in sym:
+        parts = sym.split('-')
+        if len(parts) == 2 and all(parts):
+            sym = '.'.join(parts)
+    return sym
+
 def normalize_extra(extra: Mapping[str, Any] | None) -> dict:
     """Return a copy of `extra` with canonical feed/timeframe if present."""
     if extra is None:
