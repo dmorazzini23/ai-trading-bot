@@ -180,6 +180,12 @@ _SIP_UNAUTHORIZED = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower() in 
     "true",
     "yes",
 }
+_ALLOW_SIP = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
+_SIP_DISALLOWED_WARNED = False
 
 
 class _FinnhubFetcherStub:
@@ -510,6 +516,15 @@ def _fetch_bars(
     _end = ensure_datetime(end)
     _interval = _canon_tf(timeframe)
     _feed = _canon_feed(feed or _DEFAULT_FEED)
+    global _SIP_DISALLOWED_WARNED
+    if _feed == "sip" and not _ALLOW_SIP:
+        if not _SIP_DISALLOWED_WARNED:
+            logger.warning(
+                "SIP_DISABLED",
+                extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
+            )
+            _SIP_DISALLOWED_WARNED = True
+        _feed = _DEFAULT_FEED
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -719,9 +734,9 @@ def _fetch_bars(
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
-    alt_feed = "iex" if _feed != "iex" else "sip"
+    alt_feed = "iex" if _feed != "iex" else ("sip" if _ALLOW_SIP else None)
     fallback = None
-    if not (alt_feed == "sip" and _SIP_UNAUTHORIZED):
+    if alt_feed and not (alt_feed == "sip" and _SIP_UNAUTHORIZED):
         fallback = (_interval, alt_feed, _start, _end)
     return _req(session, fallback, headers=headers, timeout=timeout_v)
 
@@ -860,6 +875,7 @@ def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
 __all__ = [
     "_DEFAULT_FEED",
     "_VALID_FEEDS",
+    "_ALLOW_SIP",
     "_SIP_UNAUTHORIZED",
     "ensure_datetime",
     "_parse_bars",
