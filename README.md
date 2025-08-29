@@ -1461,10 +1461,20 @@ quietly falls back to the baseline model (`USE_ML=False`). A warning is only
 emitted when `AI_TRADING_MODEL_PATH` points to a missing file.
 
 ### Universe CSV
-- Optional: `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv`
-- Default: packaged `ai_trading/data/tickers.csv` (S&P-100)
+- `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv` — explicit override, highest priority.
+- `TICKERS_FILE_PATH=/abs/path/to/tickers.csv` — used when the above is unset; defaults to `$AI_TRADING_DATA_DIR/tickers.csv`.
+- Default: packaged `ai_trading/data/tickers.csv` (S&P-100).
 - Symbols are uppercased and mapped for provider quirks (e.g., `BRK.B` → `BRK-B` for Yahoo Finance).
 - Missing file: logs an error and falls back to `['SPY', 'AAPL', 'MSFT', 'AMZN', 'GOOGL']`.
+
+Example systemd unit override:
+
+```ini
+[Service]
+Environment="TICKERS_FILE_PATH=/var/lib/ai-trading-bot/tickers.csv"
+# or
+Environment="AI_TRADING_TICKERS_CSV=/etc/ai-trading-bot/tickers.csv"
+```
 
 ## Agent & Dev Quickstart
 

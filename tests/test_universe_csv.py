@@ -1,3 +1,4 @@
+import os
 import pytest
 pd = pytest.importorskip("pandas")
 from ai_trading.data.universe import load_universe, locate_tickers_csv
@@ -11,6 +12,17 @@ def test_env_overrides_packaged(monkeypatch, tmp_path):
     assert path == str(csv)
     uni = load_universe()
     assert set(uni) == {"MSFT", "NVDA", "META"}
+
+
+def test_tickers_file_path(monkeypatch, tmp_path):
+    csv = tmp_path / "tick.csv"
+    pd.DataFrame({"symbol": ["TSLA", "IBM"]}).to_csv(csv, index=False)
+    monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
+    monkeypatch.setattr("ai_trading.data.universe.TICKERS_FILE_PATH", csv)
+    path = locate_tickers_csv()
+    assert path == os.path.abspath(str(csv))
+    uni = load_universe()
+    assert set(uni) == {"TSLA", "IBM"}
 
 
 def test_packaged_exists_without_env(monkeypatch):
