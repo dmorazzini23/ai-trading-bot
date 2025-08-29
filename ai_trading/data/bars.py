@@ -19,6 +19,7 @@ from ai_trading.alpaca_api import (
     get_timeframe_cls,
     get_stock_bars_request_cls,
 )
+from ai_trading.market.symbol_map import to_alpaca_symbol
 
 # Export dynamic Alpaca request classes at module import time
 TimeFrame = get_timeframe_cls()
@@ -113,6 +114,12 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     """
     TimeFrame = get_timeframe_cls()
     StockBarsRequest = get_stock_bars_request_cls()
+    symbol = to_alpaca_symbol(symbol)
+    sym_field = getattr(request, 'symbol_or_symbols', None)
+    if isinstance(sym_field, str):
+        request.symbol_or_symbols = to_alpaca_symbol(sym_field)
+    elif isinstance(sym_field, (list, tuple, set)):
+        request.symbol_or_symbols = [to_alpaca_symbol(s) for s in sym_field]
     now = now_utc()
     prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
     end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)

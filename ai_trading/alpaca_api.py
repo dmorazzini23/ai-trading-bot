@@ -11,6 +11,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.market.symbol_map import to_alpaca_symbol
 import importlib.util
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
@@ -233,6 +234,7 @@ def get_bars_df(
     rest = _get_rest(bars=True)
     feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
     adjustment = adjustment or os.getenv('ALPACA_ADJUSTMENT', 'all')
+    symbol = to_alpaca_symbol(symbol)
     tf_raw = timeframe
     tf_norm = _normalize_timeframe_for_tradeapi(tf_raw)
     unit_name, suffix = _unit_from_norm(tf_norm)

@@ -23,6 +23,7 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
+from ai_trading.market.symbol_map import to_alpaca_symbol
 from ai_trading.logging import logger
 from ai_trading.data.metrics import metrics
 from ai_trading.net.http import HTTPSession, get_http_session
@@ -502,6 +503,7 @@ def _fetch_bars(
     symbol: str, start: Any, end: Any, timeframe: str, *, feed: str = _DEFAULT_FEED, adjustment: str = "raw"
 ) -> pd.DataFrame:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
+    symbol = to_alpaca_symbol(symbol)
     pd = _ensure_pandas()
     _ensure_requests()
     if pd is None:
