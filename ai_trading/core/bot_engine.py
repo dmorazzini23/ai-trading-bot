@@ -2708,11 +2708,28 @@ def _fetch_universe_bars(
     except COMMON_EXC:
         pass
     out: Dict[str, pd.DataFrame] = {}
-    for s in symbols:
+
+    # Fallback to per-symbol requests with bounded concurrency.
+    settings = get_settings()
+    max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
+
+    def _pull(sym: str) -> tuple[str, pd.DataFrame | None]:
         try:
-            out[s] = get_bars(s, timeframe, start, end, feed=feed)
+            return sym, get_bars(sym, timeframe, start, end, feed=feed)
         except COMMON_EXC:
-            pass
+            return sym, None
+
+    results: list[tuple[str, pd.DataFrame | None]] = []
+    with ThreadPoolExecutor(
+        max_workers=max_workers, thread_name_prefix="fallback-bars"
+    ) as ex:
+        futures = [ex.submit(_pull, s) for s in symbols]
+        for fut in as_completed(futures):
+            results.append(fut.result())
+
+    for sym, df in results:
+        if df is not None and not getattr(df, "empty", False):
+            out[sym] = df
     return out
 
 
