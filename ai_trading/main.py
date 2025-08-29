@@ -44,7 +44,7 @@ from ai_trading.logging.redact import redact as _redact
 from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca
-from ai_trading.config.management import get_env, validate_required_env
+from ai_trading.config.management import get_env, validate_required_env, reload_env
 
 
 def preflight_import_health() -> None:
@@ -169,12 +169,24 @@ def _install_signal_handlers() -> None:
 
 
 def _fail_fast_env() -> None:
-    """Validate mandatory environment variables early."""
+    """Reload and validate mandatory environment variables early."""
     try:
-        validate_required_env()
+        loaded = reload_env()
+        snapshot = validate_required_env(
+            (
+                "ALPACA_API_KEY",
+                "ALPACA_SECRET_KEY",
+                "ALPACA_API_URL",
+                "ALPACA_DATA_FEED",
+                "WEBHOOK_SECRET",
+                "CAPITAL_CAP",
+                "DOLLAR_RISK_LIMIT",
+            )
+        )
     except RuntimeError as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
+    logger.info("ENV_CONFIG_LOADED", extra={"dotenv_path": loaded, **snapshot})
 
 
 def _validate_runtime_config(cfg, tcfg) -> None:
