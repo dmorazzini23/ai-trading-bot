@@ -63,10 +63,19 @@ _pool_stats = {
 
 if REQUESTS_AVAILABLE:
     class HTTPSession(requests.Session):
-        """Session with sane connection pooling and timeout defaults."""
+        """Session with sane connection pooling and timeout defaults.
 
-        def __init__(self) -> None:
+        Parameters
+        ----------
+        timeout:
+            Default timeout (in seconds) applied to requests that do not
+            provide a ``timeout``. The value is normalized via
+            :func:`ai_trading.utils.timing.clamp_timeout`.
+        """
+
+        def __init__(self, timeout: float | int | None = HTTP_TIMEOUT) -> None:
             super().__init__()
+            self._timeout = clamp_timeout(timeout)
             _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
             _pool_stats["workers"] = int(
                 os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", str(_pool_stats["workers"])))
@@ -88,6 +97,8 @@ if REQUESTS_AVAILABLE:
 
         def request(self, method: str, url: str, **kwargs) -> requests.Response:  # type: ignore[override]
             timeout = kwargs.get("timeout")
+            if timeout is None:
+                timeout = self._timeout
             kwargs["timeout"] = clamp_timeout(timeout)
             return super().request(method, url, **kwargs)
 else:  # pragma: no cover - exercised in tests
@@ -112,8 +123,9 @@ def _get_session() -> HTTPSession:
 
 
 def _with_timeout(kwargs: dict) -> dict:
-    """Ensure a clamped timeout is always provided."""
-    kwargs["timeout"] = clamp_timeout(kwargs.get("timeout"))
+    """Clamp provided timeout while allowing session defaults."""
+    if "timeout" in kwargs and kwargs["timeout"] is not None:
+        kwargs["timeout"] = clamp_timeout(kwargs["timeout"])
     return kwargs
 
 

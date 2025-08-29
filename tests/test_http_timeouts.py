@@ -25,18 +25,37 @@ def _get_session_type():
 def test_httpsession_sets_default_timeout(monkeypatch):
     s = http.HTTPSession(timeout=7)
     if http.REQUESTS_AVAILABLE:
-        calls = {}
+        captured: dict[str, float] = {}
 
-        def fake_get(url, **kw):
-            calls["timeout"] = kw.get("timeout")
+        def fake_request(self, method, url, **kw):  # type: ignore[override]
+            captured.update(kw)
             return MagicMock(status_code=200, text="ok")
 
-        monkeypatch.setattr(s, "get", fake_get)
+        monkeypatch.setattr(http.requests.Session, "request", fake_request, raising=True)
         s.get("http://localhost/test")
-        assert calls["timeout"] == 7, "HTTPSession.get must propagate default timeout"
+        assert captured["timeout"] == 7, "HTTPSession.get must propagate default timeout"
     else:
         with pytest.raises(RuntimeError):
             s.get("http://localhost/test")
+
+
+@pytest.mark.skipif(not http.REQUESTS_AVAILABLE, reason="requests not installed")
+def test_request_uses_session_default(monkeypatch):
+    captured: dict[str, float] = {}
+
+    def fake_request(self, method, url, **kwargs):  # type: ignore[override]
+        captured.update(kwargs)
+        return MagicMock(status_code=200)
+
+    monkeypatch.setattr(http.requests.Session, "request", fake_request, raising=True)
+    sess = http.HTTPSession(timeout=5)
+    monkeypatch.setattr(http, "_get_session", lambda: sess)
+    http.request("GET", "http://unit.test")
+    assert captured["timeout"] == 5
+
+    captured.clear()
+    http.request("GET", "http://unit.test", timeout=1.23)
+    assert captured["timeout"] == 1.23
 
 
 def test_request_function_errors_without_requests():
