@@ -33,6 +33,18 @@ except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
 
     requests = _RequestsStub()  # type: ignore
 
+# Reusable HTTP session
+try:  # pragma: no cover
+    from ai_trading.net.http import HTTPSession
+
+    _HTTP_SESSION = HTTPSession()
+except Exception:  # pragma: no cover - fallback when requests missing
+    class _HTTPStub:
+        def get(self, *a, **k):  # type: ignore[no-untyped-def]
+            raise RequestException("HTTPSession unavailable")
+
+    _HTTP_SESSION = _HTTPStub()  # type: ignore
+
 from threading import Lock
 import warnings
 
@@ -726,7 +738,7 @@ def fetch_sentiment(
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
     try:
         # fmt: off
-        resp = requests.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT)
+        resp = _HTTP_SESSION.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT)
         # fmt: on
         if resp.status_code in {429, 500, 502, 503, 504}:
             _SENTIMENT_FAILURES += 1
