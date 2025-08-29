@@ -1462,6 +1462,7 @@ emitted when `AI_TRADING_MODEL_PATH` points to a missing file.
 ### Universe CSV
 - Optional: `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv`
 - Default: packaged `ai_trading/data/tickers.csv` (S&P-100)
+- Symbols are uppercased and mapped for provider quirks (e.g., `BRK.B` → `BRK-B` for Yahoo Finance).
 
 ## Agent & Dev Quickstart
 

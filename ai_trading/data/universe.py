@@ -2,6 +2,7 @@ import os
 from importlib.resources import files as pkg_files
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
+from ai_trading.utils.universe import normalize_symbol
 
 # Lazy pandas proxy
 pd = load_pandas()
@@ -28,6 +29,7 @@ def load_universe() -> list[str]:
     except (OSError, pd.errors.EmptyDataError, ValueError) as e:
         logger.error('TICKERS_FILE_READ_FAILED', extra={'path': path, 'error': str(e)})
         return []
-    symbols = [str(s).strip().upper() for s in df.iloc[:, 0].tolist() if str(s).strip()]
+    # Normalize symbols so downstream modules see provider-ready tickers
+    symbols = [normalize_symbol(str(s)) for s in df.iloc[:, 0].tolist() if str(s).strip()]
     logger.info('TICKERS_SOURCE', extra={'path': path, 'count': len(symbols)})
     return symbols
