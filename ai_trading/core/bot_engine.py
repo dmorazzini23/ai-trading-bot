@@ -7286,7 +7286,7 @@ def get_sector(symbol: str) -> str:
         "C": "Financial Services",
         "V": "Financial Services",
         "MA": "Financial Services",
-        "BRK.B": "Financial Services",
+        "BRK-B": "Financial Services",
         "AXP": "Financial Services",
         # Healthcare
         "JNJ": "Healthcare",
