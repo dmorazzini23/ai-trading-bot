@@ -20,8 +20,16 @@ from ai_trading.alpaca_api import (
     get_stock_bars_request_cls,
 )
 
+# Export dynamic Alpaca request classes at module import time
+TimeFrame = get_timeframe_cls()
+StockBarsRequest = get_stock_bars_request_cls()
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from alpaca.data import TimeFrame, StockBarsRequest
+    from alpaca.data import TimeFrame as _TimeFrame, StockBarsRequest as _StockBarsRequest
+    TimeFrame = _TimeFrame
+    StockBarsRequest = _StockBarsRequest
+
+__all__ = ["TimeFrame", "StockBarsRequest"]
 
 # Lazy pandas proxy; only imported on first use
 pd = load_pandas()
