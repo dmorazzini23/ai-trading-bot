@@ -195,11 +195,24 @@ def _get_rest(*, bars: bool = False) -> Any:
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
     end = now - dt.timedelta(minutes=1)
-    unit = getattr(getattr(timeframe, 'unit', None), 'name', None)
-    if unit == 'Day':
-        days = int(os.getenv('DATA_LOOKBACK_DAYS_DAILY', 10))
+
+    try:  # pragma: no cover - imported lazily
+        TimeFrame = get_timeframe_cls()
+    except Exception:  # pragma: no cover - optional dependency missing
+        TimeFrame = None
+
+    is_daily = False
+    if TimeFrame is not None and isinstance(timeframe, TimeFrame):
+        unit = getattr(getattr(timeframe, "unit", None), "name", "")
+        is_daily = unit == "Day"
     else:
-        days = int(os.getenv('DATA_LOOKBACK_DAYS_MINUTE', 5))
+        tf_str = str(timeframe).strip().lower()
+        is_daily = tf_str.endswith("day") or tf_str == "day"
+
+    if is_daily:
+        days = int(os.getenv("DATA_LOOKBACK_DAYS_DAILY", 10))
+    else:
+        days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
     start = end - dt.timedelta(days=days)
     return (_fmt_rfc3339_z(start), _fmt_rfc3339_z(end))
 
