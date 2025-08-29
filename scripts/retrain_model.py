@@ -5,13 +5,17 @@ import os
 import random
 import joblib
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 from ai_trading.features.prepare import prepare_indicators
 CONFIG = TradingConfig()
 from ai_trading.net.http import HTTPSession
 from ai_trading.utils.base import safe_to_datetime
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = logging.getLogger(__name__)
 config.reload_env()
 _HTTP = HTTPSession()
@@ -79,6 +83,7 @@ def load_reward_by_band(n: int=200) -> dict:
     if not os.path.exists(REWARD_LOG_FILE):
         return {}
     try:
+        pd = load_pandas()
         df = pd.read_csv(REWARD_LOG_FILE).tail(n)
     except (ValueError, TypeError) as e:
         logger.exception('Failed to read reward log: %s', e)
@@ -115,6 +120,7 @@ def fetch_sentiment(symbol: str) -> float:
 
 def detect_regime(df: pd.DataFrame) -> str:
     """Simple SMA-based regime detection used by bot and predict scripts."""
+    pd = load_pandas()
     if df is None or df.empty or 'close' not in df:
         return 'chop'
     try:
@@ -171,6 +177,7 @@ def build_feature_label_df(raw_store: dict[str, pd.DataFrame], Δ_minutes: int=3
     0.05% sell slippage. If a symbol has fewer than Δ_minutes+1 rows, it is
     skipped with a notice.
     """
+    pd = load_pandas()
     rows = []
     for sym, raw in raw_store.items():
         try:
@@ -313,6 +320,7 @@ def optuna_search(X, y, base_params: dict, param_space: dict, n_trials: int=20, 
     return {**base_params, **study.best_params}
 
 def retrain_meta_learner(ctx, symbols, lookback_days: int=5, Δ_minutes: int=30, threshold_pct: float=0.002, force: bool=False) -> bool:
+    pd = load_pandas()
     now = datetime.now(UTC)
     if not force:
         if now.weekday() >= 5:

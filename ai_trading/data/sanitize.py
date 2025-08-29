@@ -7,9 +7,12 @@ and stale data detection to guard against poor quality market data.
 import logging
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = get_logger(__name__)
 
 @dataclass
@@ -60,6 +63,7 @@ class DataSanitizer:
         Returns:
             Tuple of (cleaned_bars, sanitization_report)
         """
+        pd = load_pandas()
         if bars.empty:
             return (bars, {'status': 'empty', 'rejections': {}})
         original_count = len(bars)
@@ -92,6 +96,7 @@ class DataSanitizer:
 
     def _validate_prices(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Validate price data for basic sanity checks."""
+        pd = load_pandas()
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
         price_cols = self._get_price_columns(bars)
@@ -118,6 +123,7 @@ class DataSanitizer:
 
     def _detect_outliers(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Detect outliers using MAD and Z-score methods."""
+        pd = load_pandas()
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
         price_cols = self._get_price_columns(bars)
@@ -147,6 +153,7 @@ class DataSanitizer:
 
     def _filter_low_volume(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Filter bars with low volume."""
+        pd = load_pandas()
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
         volume_cols = self._get_volume_columns(bars)
@@ -172,6 +179,7 @@ class DataSanitizer:
 
     def _detect_stale_data(self, bars: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Detect stale or suspicious data patterns."""
+        pd = load_pandas()
         rejection_mask = pd.Series(False, index=bars.index)
         rejection_reasons = pd.Series('', index=bars.index)
         if isinstance(bars.index, pd.DatetimeIndex):
@@ -247,6 +255,7 @@ class DataSanitizer:
 
     def _get_time_range(self, bars: pd.DataFrame) -> dict[str, str] | None:
         """Get time range of bars for reporting."""
+        pd = load_pandas()
         if bars.empty or not isinstance(bars.index, pd.DatetimeIndex):
             return None
         return {'start': bars.index.min().isoformat(), 'end': bars.index.max().isoformat()}
@@ -264,6 +273,7 @@ class DataSanitizer:
         """
         if limits is None:
             limits = self.config.winsorize_limits
+        pd = load_pandas()
         if len(series.dropna()) < 10:
             return series
         lower_percentile, upper_percentile = limits

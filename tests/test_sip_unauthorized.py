@@ -1,6 +1,11 @@
 from datetime import datetime, UTC
 
-import pandas as pd
+from typing import TYPE_CHECKING
+
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 import ai_trading.data.fetch as data_fetcher
 from ai_trading.core import bot_engine
@@ -25,6 +30,7 @@ def test_get_bars_unauthorized_sip_returns_empty(monkeypatch):
     monkeypatch.setattr(data_fetcher.requests, "get", fake_get)
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = datetime(2024, 1, 2, tzinfo=UTC)
+    pd = load_pandas()
     df = data_fetcher.get_bars("AAPL", "1Min", start, end, feed="sip")
     assert isinstance(df, pd.DataFrame)
     assert df.empty

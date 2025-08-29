@@ -5,11 +5,16 @@ via Settings flags rather than import guards.
 """
 from ai_trading.logging import get_logger
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from sklearn import metrics
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+if TYPE_CHECKING:
+    import pandas as pd
+
 logger = get_logger(__name__)
+pd = load_pandas()
 NUMPY_AVAILABLE = True
 PANDAS_AVAILABLE = True
 SKLEARN_AVAILABLE = True

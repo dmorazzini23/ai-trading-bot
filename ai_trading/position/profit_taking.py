@@ -13,9 +13,12 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
-import pandas as pd
+from typing import Any, TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.exc import COMMON_EXC
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = get_logger(__name__)
 
 class ProfitTakingStrategy(Enum):
@@ -285,6 +288,7 @@ class ProfitTakingEngine:
 
     def _create_rsi_overbought_target(self, symbol: str, data: pd.DataFrame, position_size: int) -> ProfitTarget | None:
         """Create RSI overbought profit target."""
+        pd = load_pandas()
         try:
             if 'close' not in data.columns or len(data) < 20:
                 return None
@@ -328,6 +332,7 @@ class ProfitTakingEngine:
 
     def _calculate_rsi(self, prices: pd.Series, period: int=14) -> float:
         """Calculate RSI indicator."""
+        pd = load_pandas()
         try:
             if len(prices) < period + 1:
                 return 50.0

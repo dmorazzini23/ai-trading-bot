@@ -2,9 +2,11 @@ import logging
 import random
 from collections.abc import Sequence
 from datetime import UTC
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
+if TYPE_CHECKING:
+    import pandas as pd
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
@@ -830,6 +832,7 @@ def check_exposure_caps(portfolio, exposure, cap):
 
 def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float, *, ctx: Any | None=None, symbol: str='SYMBOL', qty: int | None=None) -> None:
     """Exit ``qty`` at market if the trailing stop is triggered."""
+    pd = load_pandas()
     try:
         if entry_price <= 0:
             logger.warning('apply_trailing_atr_stop invalid entry price: %.2f', entry_price)
@@ -906,6 +909,7 @@ def compute_stop_levels(entry_price: float, atr: float, take_mult: float=2.0) ->
 
 def correlation_position_weights(corr: pd.DataFrame, base: dict[str, float]) -> dict[str, float]:
     """Scale weights inversely proportional to asset correlations."""
+    pd = load_pandas()
     weights = {}
     for sym, w in base.items():
         if sym in corr.columns:

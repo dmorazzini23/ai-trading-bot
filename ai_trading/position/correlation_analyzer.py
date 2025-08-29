@@ -14,10 +14,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.exc import COMMON_EXC
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = get_logger(__name__)
 
 class ConcentrationLevel(Enum):
@@ -223,6 +226,7 @@ class PortfolioCorrelationAnalyzer:
 
     def _calculate_pair_correlation(self, symbol1: str, symbol2: str) -> PositionCorrelation | None:
         """Calculate correlation between two symbols."""
+        pd = load_pandas()
         try:
             data1 = self._get_price_data(symbol1)
             data2 = self._get_price_data(symbol2)

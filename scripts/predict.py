@@ -7,10 +7,16 @@ import os
 from threading import Lock
 import time
 import joblib
-import pandas as pd
 from ai_trading.config.management import TradingConfig, reload_env
 from ai_trading.utils.http import http, HTTP_TIMEOUT
 from ai_trading.features.prepare import prepare_indicators
+
+from typing import TYPE_CHECKING
+
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 config = TradingConfig.from_env()
 _sentiment_lock = Lock()
@@ -92,6 +98,7 @@ def fetch_sentiment(symbol: str) -> float:
 
 def detect_regime(df: pd.DataFrame) -> str:
     """Classify a market regime based on moving average crossovers."""
+    pd = load_pandas()
     if df is None or df.empty or 'close' not in df:
         return 'chop'
     close = df['close'].astype(float)
@@ -113,6 +120,7 @@ def load_model(regime: str):
 
 def predict(csv_path: str, freq: str='intraday') -> tuple[int | None, float | None]:
     """Return the predicted class and probability for the data in ``csv_path``."""
+    pd = load_pandas()
     df = pd.read_csv(csv_path)
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
     try:

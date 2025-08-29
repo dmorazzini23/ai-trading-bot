@@ -1,10 +1,16 @@
 """Small diagnostic to verify market data fetch."""
 from types import SimpleNamespace
-import pandas as pd
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: use stdlib zoneinfo
 from ai_trading.core.runtime import build_runtime
 from ai_trading.data.bars import safe_get_stock_bars
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
+
 if __name__ == '__main__':
+    pd = load_pandas()
     rt = build_runtime(SimpleNamespace())
     now = pd.Timestamp.now(tz=ZoneInfo("UTC"))
     start = now - pd.Timedelta(days=120)

@@ -5,8 +5,12 @@ Provides explicit labelers for future returns, triple barrier labels,
 and other trading-specific target variables.
 """
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import logger
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 def fixed_horizon_return(prices: pd.Series | pd.DataFrame, horizon_bars: int, fee_bps: float=0.0) -> pd.Series:
     """
@@ -20,6 +24,7 @@ def fixed_horizon_return(prices: pd.Series | pd.DataFrame, horizon_bars: int, fe
     Returns:
         Series of future log returns net of fees
     """
+    pd = load_pandas()
     try:
         if isinstance(prices, pd.DataFrame):
             if 'close' in prices.columns:
@@ -58,6 +63,7 @@ def triple_barrier_labels(prices: pd.Series | pd.DataFrame, events: pd.DataFrame
     Returns:
         DataFrame with labels: t1 (end time), ret (return), bin (label)
     """
+    pd = load_pandas()
     try:
         if isinstance(prices, pd.DataFrame):
             if 'close' in prices.columns:
@@ -142,6 +148,7 @@ def get_daily_vol(prices: pd.Series, span0: int=100) -> pd.Series:
     Returns:
         Daily volatility series
     """
+    pd = load_pandas()
     try:
         daily_ret = prices.resample('1D').last().pct_change().dropna()
         vol = daily_ret.ewm(span=span0).std()

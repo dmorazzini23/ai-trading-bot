@@ -9,7 +9,12 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import pandas as pd
+from typing import TYPE_CHECKING
+
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -19,6 +24,7 @@ from ai_trading.config.management import get_env
 
 def main() -> None:
     """Fetch bars for each symbol and save to ``data`` directory."""
+    pd = load_pandas()
     ensure_dotenv_loaded()
     api_key = get_env("ALPACA_API_KEY")
     secret_key = get_env("ALPACA_SECRET_KEY")

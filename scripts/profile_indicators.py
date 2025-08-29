@@ -3,12 +3,17 @@ logger = logging.getLogger(__name__)
 import inspect
 import time
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading import indicators, signals
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 def profile(func, *args, **kwargs):
     start = time.perf_counter()
     try:
+        pd = load_pandas()
         result = func(*args, **kwargs)
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError) as e:
         logger.error('%s failed: %s', func.__name__, e)
@@ -19,6 +24,7 @@ def profile(func, *args, **kwargs):
 
 def run_profiles():
     timings = []
+    pd = load_pandas()
     df = pd.DataFrame({'open': np.random.random(100000) * 100, 'high': np.random.random(100000) * 100, 'low': np.random.random(100000) * 100, 'close': np.random.random(100000) * 100, 'volume': np.random.randint(1000, 10000, size=100000)})
     modules = [signals, indicators]
     for module in modules:

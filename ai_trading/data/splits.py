@@ -7,9 +7,13 @@ including purged group time series splits and walk-forward analysis.
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from sklearn.model_selection import BaseCrossValidator
 from ai_trading.logging import logger
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
     """
@@ -47,6 +51,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
         Yields:
             Tuple of (train_indices, test_indices)
         """
+        pd = load_pandas()
         try:
             if hasattr(X, 'index'):
                 indices = X.index
@@ -104,6 +109,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
         Returns:
             Purged training indices
         """
+        pd = load_pandas()
         try:
             if len(test_indices) == 0:
                 return train_indices
@@ -148,6 +154,7 @@ def walkforward_splits(dates: pd.DatetimeIndex | list[datetime], mode: str='roll
     Returns:
         List of split dictionaries with train/test periods
     """
+    pd = load_pandas()
     try:
         if not isinstance(dates, pd.DatetimeIndex):
             dates = pd.DatetimeIndex(dates)
@@ -194,6 +201,7 @@ def validate_no_leakage(train_indices: np.ndarray, test_indices: np.ndarray, tim
     Returns:
         True if no leakage detected, False otherwise
     """
+    pd = load_pandas()
     try:
         overlap = np.intersect1d(train_indices, test_indices)
         if len(overlap) > 0:

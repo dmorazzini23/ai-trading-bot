@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta, UTC
+from typing import TYPE_CHECKING
 
-import pandas as pd
-
+from ai_trading.utils.lazy_imports import load_pandas
 import ai_trading.config.settings as settings_mod
 from ai_trading.data import fetch
 from ai_trading.config import management
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def test_get_bars_recovers_after_env_reload(monkeypatch, tmp_path):
@@ -42,6 +45,7 @@ DOLLAR_RISK_LIMIT=0.05
         return real_get_settings()
 
     monkeypatch.setattr(settings_mod, "get_settings", fake_get_settings)
+    pd = load_pandas()
     monkeypatch.setattr(fetch, "_fetch_bars", lambda *a, **k: pd.DataFrame())
 
     start = datetime.now(UTC) - timedelta(minutes=1)

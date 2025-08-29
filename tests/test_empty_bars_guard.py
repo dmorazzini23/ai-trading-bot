@@ -1,6 +1,11 @@
-import pandas as pd
+from typing import TYPE_CHECKING
 import pytest
 from types import SimpleNamespace
+
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from ai_trading.core import bot_engine
 
@@ -23,6 +28,7 @@ def test_get_daily_df_empty_bars_raises(monkeypatch):
     fetcher = bot_engine.DataFetcher()
     ctx = SimpleNamespace()
     monkeypatch.setattr(bot_engine, "get_alpaca_secret_key_plain", lambda: "secret")
+    pd = load_pandas()
     monkeypatch.setattr(bot_engine, "safe_get_stock_bars", lambda *a, **k: pd.DataFrame())
     with pytest.raises(bot_engine.DataFetchError):
         fetcher.get_daily_df(ctx, "AAPL")
@@ -46,6 +52,7 @@ def test_compute_spy_vol_stats_handles_failure(monkeypatch):
 
 def test_fetch_feature_data_halts_on_empty(monkeypatch):
     calls: list[str] = []
+    pd = load_pandas()
     ctx = SimpleNamespace(
         data_fetcher=SimpleNamespace(get_daily_df=lambda *a, **k: pd.DataFrame()),
         halt_manager=SimpleNamespace(manual_halt_trading=lambda r: calls.append(r)),

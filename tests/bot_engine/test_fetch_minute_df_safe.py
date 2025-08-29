@@ -1,15 +1,21 @@
-import pandas as pd
+from typing import TYPE_CHECKING
 import pytest
 
 from ai_trading.core import bot_engine
 from ai_trading.guards import staleness
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def _sample_df():
+    pd = load_pandas()
     return pd.DataFrame({"close": [1.0]}, index=[pd.Timestamp("2024-01-01", tz="UTC")])
 
 
 def test_fetch_minute_df_safe_returns_dataframe(monkeypatch):
+    pd = load_pandas()
     monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: _sample_df())
     monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None)
     result = bot_engine.fetch_minute_df_safe("AAPL")
@@ -18,6 +24,7 @@ def test_fetch_minute_df_safe_returns_dataframe(monkeypatch):
 
 
 def test_fetch_minute_df_safe_raises_on_empty(monkeypatch):
+    pd = load_pandas()
     monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: pd.DataFrame())
     monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None)
     with pytest.raises(bot_engine.DataFetchError):

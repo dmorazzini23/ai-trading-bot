@@ -13,8 +13,12 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
-import pandas as pd
+from typing import Any, TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
+
 logger = get_logger(__name__)
 
 class TrailingStopType(Enum):
@@ -179,6 +183,7 @@ class TrailingStopManager:
 
     def _calculate_atr_stop_distance(self, data: pd.DataFrame) -> float:
         """Calculate ATR-based stop distance."""
+        pd = load_pandas()
         try:
             if 'high' not in data.columns or 'low' not in data.columns or 'close' not in data.columns or (len(data) < self.atr_period):
                 return self.base_trail_percent
@@ -202,6 +207,7 @@ class TrailingStopManager:
 
     def _calculate_momentum_multiplier(self, symbol: str, data: pd.DataFrame | None) -> float:
         """Calculate momentum-based multiplier for stop distance."""
+        pd = load_pandas()
         try:
             if data is None or 'close' not in data.columns or len(data) < self.momentum_period:
                 return 1.0
@@ -304,6 +310,7 @@ class TrailingStopManager:
 
     def _calculate_rsi(self, prices: pd.Series, period: int=14) -> float:
         """Calculate RSI indicator."""
+        pd = load_pandas()
         try:
             if len(prices) < period + 1:
                 return 50.0

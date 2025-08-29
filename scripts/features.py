@@ -1,9 +1,14 @@
 import logging
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.indicators import atr, ema
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    import pandas as pd
+
 def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
+    pd = load_pandas()
     try:
         if 'close' not in df.columns:
             logger.error("Missing 'close' column for MACD calculation")
@@ -17,14 +22,17 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
+    pd = load_pandas()
     df['macds'] = ema(tuple(df['macd'].astype(float)), 9)
     return df
 
 def compute_atr(df: pd.DataFrame, period: int=14) -> pd.DataFrame:
+    pd = load_pandas()
     df['atr'] = atr(df['high'], df['low'], df['close'], period)
     return df
 
 def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
+    pd = load_pandas()
     q = df['volume']
     p = (df['high'] + df['low'] + df['close']) / 3
     df['cum_vol'] = q.cumsum()
@@ -44,6 +52,7 @@ def ensure_columns(df: pd.DataFrame, columns: list[str], symbol: str | None=None
     return df
 
 def build_features_pipeline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    pd = load_pandas()
     try:
         logger.debug(f'Starting feature pipeline for {symbol}. Initial shape: {df.shape}')
         df = compute_macd(df)
