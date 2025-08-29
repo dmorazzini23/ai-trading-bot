@@ -11599,10 +11599,9 @@ def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
     if not candidates:
         logger.error("UNIVERSE_EMPTY_ABORT", extra={"reason": "no_tickers_csv"})
         return []
-    logger.info(
-        "[SCREEN_UNIVERSE] Starting screening of %d candidates: %s",
-        len(candidates),
-        candidates[:10],
+    logger.debug(
+        "CANDIDATE_UNIVERSE_LOADED",
+        extra={"count": len(candidates)},
     )
     return candidates
 
