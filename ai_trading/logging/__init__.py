@@ -612,9 +612,25 @@ def _get_system_context() -> dict[str, any]:
     except COMMON_EXC as e:
         return {'context_error': f'psutil missing: {e}'}
     try:
-        context = {'memory_usage_mb': round(psutil.virtual_memory().used / 1024 / 1024, 1), 'memory_percent': psutil.virtual_memory().percent, 'cpu_percent': psutil.cpu_percent(interval=None), 'disk_usage_percent': psutil.disk_usage('/').percent}
+        context = {
+            'memory_usage_mb': round(psutil.virtual_memory().used / 1024 / 1024, 1),
+            'memory_percent': psutil.virtual_memory().percent,
+            'cpu_percent': psutil.cpu_percent(interval=None),
+            'disk_usage_percent': psutil.disk_usage('/').percent,
+        }
         root = logging.getLogger()
-        context.update({'python_version': sys.version.split()[0], 'log_level': root.level, 'handlers_count': len(root.handlers)})
+        handlers = getattr(root, 'handlers', [])
+        try:
+            handler_count = len(handlers)
+        except TypeError:
+            handler_count = 0
+        context.update(
+            {
+                'python_version': sys.version.split()[0],
+                'log_level': root.level,
+                'handlers_count': handler_count,
+            }
+        )
         return context
     except COMMON_EXC as e:
         return {'context_error': str(e)}
