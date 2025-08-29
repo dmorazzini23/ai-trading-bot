@@ -4,9 +4,10 @@ import time
 
 import pytest
 
-pytest.importorskip("stable_baselines3")
 pytest.importorskip("gymnasium")
 pytest.importorskip("torch")
+pytest.importorskip("torch.optim")
+pytest.importorskip("stable_baselines3")
 
 MODULES = [
     "ai_trading.rl_trading",
@@ -17,7 +18,7 @@ MODULES = [
 
 @pytest.mark.parametrize("module", MODULES)
 def test_rl_import_is_fast(module):
-    for mod in MODULES + ["stable_baselines3", "gymnasium", "torch"]:
+    for mod in MODULES + ["stable_baselines3", "gymnasium", "torch", "torch.optim"]:
         sys.modules.pop(mod, None)
     start = time.perf_counter()
     importlib.import_module(module)
@@ -25,4 +26,5 @@ def test_rl_import_is_fast(module):
     assert duration < 0.25
     assert "stable_baselines3" not in sys.modules
     assert "torch" not in sys.modules
+    assert "torch.optim" not in sys.modules
     assert "gymnasium" not in sys.modules
