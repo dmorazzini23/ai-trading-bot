@@ -5010,6 +5010,12 @@ def _read_trade_log(
 
 def _parse_local_positions() -> dict[str, int]:
     """Return current local open positions from the trade logger."""
+    # Ensure the trade log file exists with headers before attempting to read
+    # from it.  ``get_trade_logger`` will create the file and write the header
+    # row on first use, which prevents later reads from failing due to a missing
+    # or empty file.
+    get_trade_logger()
+
     positions: dict[str, int] = {}
     df = _read_trade_log(
         TRADE_LOG_FILE, usecols=["symbol", "qty", "side", "exit_time"], dtype=str
