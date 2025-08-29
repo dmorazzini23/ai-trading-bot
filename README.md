@@ -69,6 +69,9 @@ config.reload_env()
 ```
 
 `.env` at the repo root is loaded at startup with `override=True`.
+Rebalance frequency defaults to 60 minutes; override with `AI_TRADING_REBALANCE_INTERVAL_MIN`
+(minutes) or `AI_TRADING_REBALANCE_INTERVAL_HOURS` (hours). The smallest positive value
+is used when multiple sources are set.
 Production code paths must avoid shim helpers like `optional_import(...)`; use direct `try`/`except ImportError` blocks or `importlib.util.find_spec` to guard optional dependencies and gate heavy imports inside function scope when possible.
 
 ## Timezones
