@@ -766,6 +766,7 @@ connectivity.
 | `MAX_POSITION_PCT` | `0.05` | Maximum position size (% of equity) | `0.01-0.20` |
 | `MAX_PORTFOLIO_HEAT` | `0.15` | Maximum total portfolio risk | `0.05-0.30` |
 | `SIGNAL_THRESHOLD` | `0.7` | Minimum signal strength for trades | `0.1-1.0` |
+| `FORCE_TRADES` | `false` | Skip pre-trade halts (debug override) | `true`, `false` |
 
 #### Data and Market Configuration
 
