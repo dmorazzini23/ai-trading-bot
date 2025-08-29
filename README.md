@@ -36,6 +36,8 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 
 Use **one** Alpaca SDK in production (recommended: `alpaca-py`).
 Remove legacy `alpaca-trade-api` if present (`pip uninstall -y alpaca-trade-api`).
+Startup validates required environment variables at launch and exits early with
+clear remediation hints if configuration is missing.
 ### Self-check
 
 Verify Alpaca connectivity and data access:

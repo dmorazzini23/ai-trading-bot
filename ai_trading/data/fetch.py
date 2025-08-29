@@ -818,9 +818,19 @@ def get_bars(
     """Compatibility wrapper delegating to _fetch_bars."""
     S = get_settings()
     if S is None:
-        raise RuntimeError("Configuration is unavailable; cannot fetch bars")
-    feed = feed or S.alpaca_data_feed
-    adjustment = adjustment or S.alpaca_adjustment
+        feed = feed or os.getenv("ALPACA_DATA_FEED", _DEFAULT_FEED)
+        adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "raw")
+        logger.warning(
+            "SETTINGS_MISSING_DEFAULTS",  # AI-AGENT-REF: clearer remediation
+            extra={
+                "feed": feed,
+                "adjustment": adjustment,
+                "hint": "ensure configuration is loaded or run ai_trading.config.management.reload_env",
+            },
+        )
+    else:
+        feed = feed or S.alpaca_data_feed
+        adjustment = adjustment or S.alpaca_adjustment
     return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
 
 
