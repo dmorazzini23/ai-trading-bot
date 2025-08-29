@@ -9,6 +9,9 @@ Group=aiuser
 WorkingDirectory=/home/aiuser/ai-trading-bot
 Environment=PATH=/home/aiuser/ai-trading-bot/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Environment=AI_TRADING_MODEL_MODULE=ai_trading.models.baseline
+Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
+Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
+Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.main
 Restart=always

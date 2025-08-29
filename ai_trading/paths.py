@@ -35,8 +35,11 @@ def _ensure_dir(path: Path) -> Path:
                     logger.debug("Skipping chmod for non-writable path %s", fallback)
             except OSError as perm_err:  # pragma: no cover - unlikely
                 logger.debug("chmod failed for %s: %s", fallback, perm_err)
-            logger.warning(
-                "Falling back to writable temp dir %s for %s: %s", fallback, path, e
+            logger.error(
+                "Persistent directory %s is not writable (%s); using temp dir %s. Set AI_TRADING_*_DIR env vars to a writable location.",
+                path,
+                e,
+                fallback,
             )
             return fallback
         logger.debug("Directory creation failed for %s: %s", path, e)
