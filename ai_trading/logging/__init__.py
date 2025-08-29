@@ -26,25 +26,31 @@ def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
 
     seen_types: set[type[logging.Handler]] = set()
-    unique: list[logging.Handler] = []
+    handlers = getattr(log, "handlers", [])
 
-    for h in log.handlers:
+    try:
+        unique: list[logging.Handler] = list(handlers)
+    except TypeError:  # AI-AGENT-REF: allow mocks without iterable handlers
+        unique = []
+
+    filtered: list[logging.Handler] = []
+    for h in unique:
         h_type = type(h)
         if h_type in seen_types:
             continue
         seen_types.add(h_type)
         if not any(isinstance(f, ExtraSanitizerFilter) for f in h.filters):
             h.addFilter(ExtraSanitizerFilter())
-        unique.append(h)
+        filtered.append(h)
 
-    if not unique:
+    if not filtered:
         h = logging.StreamHandler()
         fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
         h.setFormatter(fmt)
         h.addFilter(ExtraSanitizerFilter())
-        unique.append(h)
+        filtered.append(h)
 
-    log.handlers = unique
+    log.handlers = filtered
 
     if level is not None:
         log.setLevel(level)
@@ -567,7 +573,8 @@ def log_trading_event(event_type: str, symbol: str, details: dict[str, any], lev
     except (TypeError, ValueError) as e:
         logger.error('Failed to serialize log entry: %s', e)
         json_message = f'SERIALIZATION_ERROR: {event_type} {symbol}'
-    log_method = getattr(logger, level.lower(), logger.info)
+    base_logger = getattr(logger, "logger", logger)
+    log_method = getattr(base_logger, level.lower(), base_logger.info)
     log_method('TRADING_EVENT: %s', json_message)
 
 def _sanitize_log_data(data: dict[str, any]) -> dict[str, any]:

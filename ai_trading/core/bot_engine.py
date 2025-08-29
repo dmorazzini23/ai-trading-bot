@@ -6229,17 +6229,8 @@ def _get_runtime_context_or_none():
         lbc = get_ctx()
         lbc._ensure_initialized()
         return lbc._context
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.debug("Runtime context unavailable for risk exposure update: %s", e)
+    except Exception as e:  # AI-AGENT-REF: generic catch for safety
+        _log.warning("Runtime context unavailable for risk exposure update: %s", e)
         return None
 
 
@@ -6287,47 +6278,20 @@ def _update_risk_engine_exposure():
 
     AI-AGENT-REF: Enhanced with readiness gate to prevent early context access warnings.
     """
-    if not is_runtime_ready():
-        logger.debug("Skipping exposure update: runtime not ready")
-        return
-
     runtime = _get_runtime_context_or_none()
     if runtime is None:
         return
 
-    try:
-        re = getattr(runtime, "risk_engine", None)
-        if not re:
-            logger.debug("No risk_engine on runtime context; skipping exposure update.")
-            return
+    risk_engine = getattr(runtime, "risk_engine", None)
+    if not risk_engine:
+        _log.debug("No risk_engine on runtime context; skipping exposure update.")
+        return
 
-        try:
-            re.update_exposure(context=runtime)
-            re.wait_for_exposure_update(timeout=0.5)
-        except RuntimeError as e:
-            logger.warning("Risk engine exposure update failed (context): %s", e)
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning("Risk engine exposure update failed: %s", e)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Risk engine exposure update failed: %s", e)
+    try:
+        risk_engine.update_exposure(runtime)
+        risk_engine.wait_for_exposure_update(timeout=0.5)
+    except Exception as e:  # AI-AGENT-REF: generic catch for safety
+        _log.warning("Risk engine exposure update failed: %s", e)
 
 
 def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
