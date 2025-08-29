@@ -31,14 +31,15 @@ def test_package_fallback_loads_packaged_csv():
     assert isinstance(symbols, list) and len(symbols) > 0
 
 
-def test_missing_package_returns_empty_and_logs(monkeypatch: pytest.MonkeyPatch):
-    """Missing package should log and return []"""  # AI-AGENT-REF: test missing pkg case
+def test_missing_package_returns_fallback_and_logs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Missing package should log and return fallback list"""  # AI-AGENT-REF: test missing pkg case
 
     def boom(_name: str):
         raise ModuleNotFoundError("ai_trading.data not importable")
 
     monkeypatch.setattr(universe, "pkg_files", boom, raising=True)
     monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
+    monkeypatch.chdir(tmp_path)
 
     called: list[tuple[str, dict]] = []
 
@@ -47,7 +48,7 @@ def test_missing_package_returns_empty_and_logs(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(universe.logger, "error", fake_error)
     syms = universe.load_universe()
-    assert syms == []
+    assert syms == ["SPY", "AAPL", "MSFT", "AMZN", "GOOGL"]
     assert called and called[0][0] == "TICKERS_FILE_MISSING"
 
 
