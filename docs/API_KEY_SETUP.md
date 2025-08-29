@@ -24,6 +24,7 @@ This trading bot requires API keys from Alpaca Markets to function. This guide e
 ### Optional
 - `FINNHUB_API_KEY`: For additional market data
 - `NEWS_API_KEY`: For news sentiment analysis
+- `SENTIMENT_API_KEY`/`SENTIMENT_API_URL`: For external sentiment service
 - `FUNDAMENTAL_API_KEY`: For fundamental analysis data
 
 ## 🚀 Quick Setup
@@ -60,6 +61,8 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets
 # Optional API keys - replace with your real keys or leave commented out
 FINNHUB_API_KEY=YOUR_FINNHUB_API_KEY
 NEWS_API_KEY=YOUR_NEWS_API_KEY
+SENTIMENT_API_KEY=YOUR_SENTIMENT_API_KEY
+SENTIMENT_API_URL=https://api.sentiment.example.com
 WEBHOOK_SECRET=YOUR_STRONG_WEBHOOK_SECRET
 ```
 
