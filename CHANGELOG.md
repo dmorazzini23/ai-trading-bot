@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - **Utils**: remove legacy `pathlib_shim` re-export; use `ai_trading.utils.paths` instead
 
 ### Fixed
+- **Data Fetch**: raise error when configuration unavailable instead of repeated warnings.
 - Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
 - **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,
