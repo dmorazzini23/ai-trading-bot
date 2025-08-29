@@ -39,8 +39,11 @@ present before the service starts:
 | --- | --- |
 | `ALPACA_API_KEY` | Alpaca API authentication |
 | `ALPACA_SECRET_KEY` | Alpaca API authentication |
-| `ALPACA_BASE_URL` | Broker endpoint URL |
+| `ALPACA_API_URL` | Broker endpoint URL |
+| `ALPACA_DATA_FEED` | Market data feed selection |
 | `WEBHOOK_SECRET` | Protects inbound webhooks |
+| `CAPITAL_CAP` | Maximum portfolio allocation |
+| `DOLLAR_RISK_LIMIT` | Maximum per-trade dollar risk |
 
 If any are missing or empty the process exits with a `RuntimeError` listing the
 missing keys; values are masked in logs and exceptions. During health server
