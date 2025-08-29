@@ -27,7 +27,8 @@ id_rsa*
 
 # Runtime & artifacts
 var/
-data/
+data/*
+!data/last_equity.txt
 logs/
 *.backup.*
 *.corrupted.*
