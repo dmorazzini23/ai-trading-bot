@@ -309,7 +309,8 @@ sma = ta_lib.SMA(close_prices, timeperiod=20)
 rsi = ta_lib.RSI(close_prices, timeperiod=14)
 
 # Direct ta library interface for advanced usage
-from ai_trading.strategies.imports import ta
+from ai_trading.strategies.imports import get_ta
+ta = get_ta()
 sma_direct = ta.trend.sma_indicator(close_series, window=20)
 ```
 
@@ -376,7 +377,7 @@ docker logs ai-trading-bot
    python -c "import ta; print('ta library version:', ta.__version__ if hasattr(ta, '__version__') else 'installed')"
 
    # Check bot's technical analysis status
-   python -c "from ai_trading.strategies.imports import TA_AVAILABLE; print(f'TA available: {TA_AVAILABLE}')"
+   python -c "from ai_trading.strategies import imports; imports.get_ta(); print(f'TA available: {imports.TA_AVAILABLE}')"
 
    # Reinstall if needed
    pip install --upgrade ta==0.11.0
