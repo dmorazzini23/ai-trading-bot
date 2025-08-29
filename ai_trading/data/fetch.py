@@ -523,7 +523,20 @@ def _fetch_bars(
         )
         return pd.DataFrame()
 
-    def _req(fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None) -> pd.DataFrame:
+    headers = {
+        "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
+        "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
+    }
+    timeout_v = clamp_request_timeout(10)
+    session = _HTTP_SESSION
+
+    def _req(
+        session: HTTPSession,
+        fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None,
+        *,
+        headers: dict[str, str],
+        timeout: float | tuple[float, float],
+    ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
         global _SIP_UNAUTHORIZED
         params = {
@@ -536,12 +549,8 @@ def _fetch_bars(
             "adjustment": adjustment,
         }
         url = "https://data.alpaca.markets/v2/stocks/bars"
-        headers = {
-            "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
-            "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
-        }
         try:
-            resp = _HTTP_SESSION.get(url, params=params, headers=headers, timeout=clamp_request_timeout(10))
+            resp = session.get(url, params=params, headers=headers, timeout=timeout)
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -557,7 +566,7 @@ def _fetch_bars(
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(None)
+                return _req(session, None, headers=headers, timeout=timeout)
             raise
         except ConnectionError as e:
             logger.warning(
@@ -570,7 +579,7 @@ def _fetch_bars(
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(None)
+                return _req(session, None, headers=headers, timeout=timeout)
             raise
         except (HTTPError, RequestException, ValueError, KeyError) as e:
             logger.warning(
@@ -583,7 +592,7 @@ def _fetch_bars(
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(None)
+                return _req(session, None, headers=headers, timeout=timeout)
             raise
         payload: dict[str, Any] | list[Any] = {}
         if status != 400 and text:
@@ -620,7 +629,7 @@ def _fetch_bars(
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(None)
+                return _req(session, None, headers=headers, timeout=timeout)
             raise ValueError("unauthorized")
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
@@ -636,7 +645,7 @@ def _fetch_bars(
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(None)
+                return _req(session, None, headers=headers, timeout=timeout)
             raise ValueError("rate_limited")
         df = pd.DataFrame(data)
         if df.empty:
@@ -684,7 +693,7 @@ def _fetch_bars(
                 _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(None)
+                return _req(session, None, headers=headers, timeout=timeout)
             raise ValueError("empty_bars")
         ts_col = None
         for c in df.columns:
@@ -709,7 +718,7 @@ def _fetch_bars(
     fallback = None
     if not (alt_feed == "sip" and _SIP_UNAUTHORIZED):
         fallback = (_interval, alt_feed, _start, _end)
-    return _req(fallback)
+    return _req(session, fallback, headers=headers, timeout=timeout_v)
 
 
 def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) -> pd.DataFrame:
