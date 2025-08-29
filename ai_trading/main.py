@@ -44,7 +44,7 @@ from ai_trading.logging.redact import redact as _redact
 from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca
-from ai_trading.config.management import get_env
+from ai_trading.config.management import get_env, validate_required_env
 
 
 def preflight_import_health() -> None:
@@ -166,6 +166,15 @@ def _install_signal_handlers() -> None:
 
     signal.signal(signal.SIGINT, _handler)
     signal.signal(signal.SIGTERM, _handler)
+
+
+def _fail_fast_env() -> None:
+    """Validate mandatory environment variables early."""
+    try:
+        validate_required_env()
+    except RuntimeError as e:
+        logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
+        raise SystemExit(1) from e
 
 
 def _validate_runtime_config(cfg, tcfg) -> None:
@@ -360,10 +369,18 @@ def parse_cli(argv: list[str] | None = None):
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
     ensure_dotenv_loaded()
+    _fail_fast_env()
     args = parse_cli(argv)
     global config
-    config = get_settings()
-    S = get_settings()
+    config = S = get_settings()
+    if config is None:
+        logger.critical(
+            "SETTINGS_UNAVAILABLE",  # AI-AGENT-REF: clearer startup failure
+            extra={
+                "hint": "ensure configuration is accessible or run ai_trading.config.management.reload_env",
+            },
+        )
+        raise SystemExit(1)
     logger.info(
         "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca", S.alpaca_data_feed, S.alpaca_adjustment
     )
