@@ -229,23 +229,33 @@ def get_news_api_key() -> str | None:
 
 def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval.
-    Prefers Settings.rebalance_interval_min, else env AI_TRADING_REBALANCE_INTERVAL_MIN, else 60.
+
+    Considers Settings.rebalance_interval_min (minutes) and env overrides
+    AI_TRADING_REBALANCE_INTERVAL_MIN (minutes) or
+    AI_TRADING_REBALANCE_INTERVAL_HOURS (hours). Hours are normalized to minutes
+    and all candidates must be positive integers. Returns the smallest valid
+    value or ``60`` if none are provided.
     """
+
+    def _parse_pos_int(val: Any) -> int | None:
+        try:
+            iv = int(val)
+        except (TypeError, ValueError):
+            return None
+        return iv if iv > 0 else None
+
+    env_vals: list[int] = []
+    if (m := _parse_pos_int(os.getenv("AI_TRADING_REBALANCE_INTERVAL_MIN"))) is not None:
+        env_vals.append(m)
+    if (h := _parse_pos_int(os.getenv("AI_TRADING_REBALANCE_INTERVAL_HOURS"))) is not None:
+        env_vals.append(h * 60)
+    if env_vals:
+        return min(env_vals)
+
     s = get_settings()
-    val = getattr(s, 'rebalance_interval_min', 60)
-    try:
-        v = int(val)
-    except (ValueError, TypeError):
-        v = 60
-    if v == 60:
-        import os
-        alt = os.getenv('AI_TRADING_REBALANCE_INTERVAL_MIN')
-        if alt is not None:
-            try:
-                return int(alt)
-            except (ValueError, TypeError):
-                pass
-    return v
+    if (m := _parse_pos_int(getattr(s, "rebalance_interval_min", None))) is not None:
+        return m
+    return 60
 
 def get_disaster_dd_limit() -> float:
     return _to_float(getattr(get_settings(), 'disaster_dd_limit', 0.25), 0.25)

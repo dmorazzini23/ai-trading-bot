@@ -30,6 +30,20 @@ def test_rebalance_interval_env(monkeypatch):
     assert settings.get_rebalance_interval_min() == 7
 
 
+def test_rebalance_interval_env_hours(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_REBALANCE_INTERVAL_MIN", raising=False)
+    monkeypatch.setenv("AI_TRADING_REBALANCE_INTERVAL_HOURS", "2")
+    importlib.reload(settings)
+    assert settings.get_rebalance_interval_min() == 120
+
+
+def test_rebalance_interval_env_smallest(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_REBALANCE_INTERVAL_MIN", "45")
+    monkeypatch.setenv("AI_TRADING_REBALANCE_INTERVAL_HOURS", "2")
+    importlib.reload(settings)
+    assert settings.get_rebalance_interval_min() == 45
+
+
 def test_risk_engine_trade_slots(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     eng = RiskEngine()
