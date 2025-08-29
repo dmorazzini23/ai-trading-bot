@@ -10,15 +10,6 @@ ps_stub = types.ModuleType("pydantic_settings")
 ps_stub.BaseSettings = object
 ps_stub.SettingsConfigDict = dict
 sys.modules.setdefault("pydantic_settings", ps_stub)
-validate_stub = types.ModuleType("validate_env")
-validate_stub.settings = types.SimpleNamespace(
-    # AI-AGENT-REF: These are fake test credentials only - never use real secrets in tests
-    ALPACA_API_KEY="fake_test_api_key_not_real",  # Guard: test-only fake value
-    ALPACA_SECRET_KEY="fake_test_secret_not_real",  # Guard: test-only fake value
-    ALPACA_BASE_URL="http://example.com",
-    WEBHOOK_SECRET="fake_test_webhook_not_real",  # Guard: test-only fake value
-)
-sys.modules.setdefault("validate_env", validate_stub)
 
 pytestmark = pytest.mark.usefixtures("default_env", "features_env")
 

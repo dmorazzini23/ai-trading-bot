@@ -28,7 +28,7 @@ Run this checklist before diving into detailed troubleshooting:
 sudo systemctl status ai-trading.service
 
 # 2. Verify configuration
-python validate_env.py
+python -m ai_trading.tools.env_validate
 python verify_config.py
 
 # 3. Test API connectivity

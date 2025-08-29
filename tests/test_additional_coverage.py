@@ -340,8 +340,8 @@ def test_validate_env_main(monkeypatch):
     # AI-AGENT-REF: Clear sys.argv to prevent pytest args from interfering with validate_env argument parsing
     original_argv = sys.argv[:]
     try:
-        sys.argv = ["validate_env"]  # Simulate clean module execution
-        runpy.run_module("validate_env", run_name="__main__")
+        sys.argv = ["ai_trading.tools.env_validate"]  # Simulate clean module execution
+        runpy.run_module("ai_trading.tools.env_validate", run_name="__main__")
     except SystemExit as e:
         # AI-AGENT-REF: Expect exit code 0 (success) or 1 (validation issues) - both are valid test outcomes
         assert e.code in (0, 1), f"Unexpected exit code: {e.code}"

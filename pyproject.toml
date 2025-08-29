@@ -66,6 +66,9 @@ all = [
 ]
 test = ["pytest>=7.4", "pytest-cov>=4.1"]
 
+[project.scripts]
+validate-env = "ai_trading.tools.env_validate:main"
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"

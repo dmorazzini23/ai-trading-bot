@@ -231,7 +231,7 @@ class TestIntegration(unittest.TestCase):
         """Test that all modified modules can be imported without errors."""
         modules_to_test = [
             'data_validation',
-            'validate_env',
+            'ai_trading.tools.env_validate',
         ]
 
         for module_name in modules_to_test:
