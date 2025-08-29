@@ -12,7 +12,15 @@ Environment=AI_TRADING_MODEL_MODULE=ai_trading.models.baseline
 Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
 Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
 Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
+Environment=AI_TRADING_MODELS_DIR=/var/lib/ai-trading-bot/models
+Environment=AI_TRADING_OUTPUT_DIR=/var/lib/ai-trading-bot/output
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
+ExecStartPre=/usr/bin/install -d -m 700 -o aiuser -g aiuser \
+    /var/lib/ai-trading-bot \
+    /var/lib/ai-trading-bot/models \
+    /var/lib/ai-trading-bot/output \
+    /var/cache/ai-trading-bot \
+    /var/log/ai-trading-bot
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.main
 Restart=always
 RestartSec=10
