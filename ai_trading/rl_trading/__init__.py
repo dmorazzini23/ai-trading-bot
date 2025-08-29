@@ -26,12 +26,15 @@ def _load_rl_stack() -> dict[str, Any] | None:
         sb3 = importlib.import_module("stable_baselines3")
         gym = importlib.import_module("gymnasium")
         importlib.import_module("torch")
-    except Exception as exc:  # noqa: BLE001 - best-effort import
+    except ImportError as exc:
         logger.debug("RL stack unavailable: %s", exc)
         return None
     global PPO, DummyVecEnv
-    PPO = sb3.PPO
-    DummyVecEnv = sb3.common.vec_env.DummyVecEnv
+    try:
+        PPO = sb3.PPO
+        DummyVecEnv = sb3.common.vec_env.DummyVecEnv
+    except AttributeError as exc:  # pragma: no cover - sanity guard
+        raise ImportError("stable-baselines3 missing PPO or DummyVecEnv") from exc
     return {"sb3": sb3, "gym": gym}
 
 
