@@ -11,6 +11,7 @@ from ai_trading.logging import get_logger
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
 from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
+from ai_trading.logging.emit_once import emit_once
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
@@ -19,6 +20,7 @@ from ai_trading.alpaca_api import (
     get_timeframe_cls,
     get_stock_bars_request_cls,
 )
+import time
 
 # Export dynamic Alpaca request classes at module import time
 TimeFrame = get_timeframe_cls()
@@ -86,6 +88,44 @@ def _is_minute_timeframe(tf) -> bool:
         return False
 
 
+_ENTITLE_CACHE: dict[int, tuple[float, set[str]]] = {}
+_ENTITLE_TTL = 300
+
+def _get_entitled_feeds(client: Any) -> set[str]:
+    """Return set of feeds the account is entitled to."""
+    now = time.time()
+    key = id(client)
+    cached = _ENTITLE_CACHE.get(key)
+    if cached and (now - cached[0] < _ENTITLE_TTL):
+        return cached[1]
+    feeds: set[str] = {"iex"}
+    get_acct = getattr(client, "get_account", None)
+    if callable(get_acct):
+        try:
+            acct = get_acct()
+            sub = getattr(acct, "market_data_subscription", None) or getattr(acct, "data_feed", None)
+            if isinstance(sub, str):
+                feeds = {sub.lower()}
+            elif isinstance(sub, (set, list, tuple)):
+                feeds = {str(x).lower() for x in sub}
+        except Exception as e:  # pragma: no cover - network
+            _log.debug('FEED_ENTITLE_CHECK_FAIL', extra={'error': str(e)})
+    _ENTITLE_CACHE[key] = (now, feeds)
+    return feeds
+
+def _ensure_entitled_feed(client: Any, requested: str) -> str:
+    """Return a feed we are entitled to, falling back when necessary."""
+    feeds = _get_entitled_feeds(client)
+    req = str(requested or '').lower()
+    if req in feeds:
+        return req
+    alt = next(iter(feeds), None)
+    if alt:
+        _log.warning('ALPACA_FEED_UNENTITLED_SWITCH', extra={'requested': req, 'using': alt})
+        return alt
+    emit_once(_log, f'no_feed:{req}', 'error', 'ALPACA_FEED_UNENTITLED', requested=req)
+    return req
+
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""
     get_stock_bars_fn = getattr(client, "get_stock_bars", None)
@@ -119,54 +159,84 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     start_dt = ensure_utc_datetime(getattr(request, 'start', None) or prev_open, default=prev_open, clamp_to='bod', allow_callables=False)
     request.start = start_dt.isoformat()
     request.end = end_dt.isoformat()
+    feed_req = _canon_feed(getattr(request, 'feed', None))
+    if feed_req:
+        request.feed = _ensure_entitled_feed(client, feed_req)
     try:
         try:
             response = _client_fetch_stock_bars(client, request)
         except (ValueError, TypeError) as e:
             status = getattr(e, 'status_code', None)
             if status in (401, 403):
-                _log.error('ALPACA_BARS_UNAUTHORIZED', extra={'symbol': symbol, 'context': context, 'feed': _canon_feed(getattr(request, 'feed', None))})
+                feed_str = _canon_feed(getattr(request, 'feed', None))
+                alt = _ensure_entitled_feed(client, feed_str)
+                if alt != feed_str:
+                    request.feed = alt
+                    time.sleep(0.25)
+                    response = _client_fetch_stock_bars(client, request)
+                else:
+                    emit_once(_log, f'{symbol}:{feed_str}', 'error', 'ALPACA_BARS_UNAUTHORIZED', symbol=symbol, context=context, feed=feed_str)
+                    raise
+            else:
                 raise
-            raise
         df = _ensure_df(getattr(response, 'df', response))
         if df.empty:
-            _log.warning('ALPACA_BARS_EMPTY', extra={'symbol': symbol, 'context': context})
-            tf_str = _canon_tf(getattr(request, 'timeframe', ''))
-            feed_str = _canon_feed(getattr(request, 'feed', None))
-            if tf_str.lower() in {'1day', 'day'}:
-                mdf = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
-                if mdf is not None and (not mdf.empty):
-                    rdf = _resample_minutes_to_daily(mdf)
-                    if rdf is not None and (not rdf.empty):
-                        df = rdf
+            now_ts = datetime.now(UTC)
+            key = (
+                symbol,
+                str(context),
+                _canon_feed(getattr(request, 'feed', None)),
+                _canon_tf(getattr(request, 'timeframe', '')),
+                now_ts.date().isoformat(),
+            )
+            if _empty_should_emit(key, now_ts):
+                lvl = _empty_classify(is_market_open=False)
+                cnt = _empty_record(key, now_ts)
+                _log.log(lvl, 'ALPACA_BARS_EMPTY', extra={'symbol': symbol, 'context': context, 'occurrences': cnt})
+            time.sleep(0.25)
+            try:
+                response = _client_fetch_stock_bars(client, request)
+                df = _ensure_df(getattr(response, 'df', response))
+            except COMMON_EXC:
+                df = pd.DataFrame()
+            if df.empty:
+                tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+                feed_str = _canon_feed(getattr(request, 'feed', None))
+                if tf_str.lower() in {'1day', 'day'}:
+                    mdf = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
+                    if mdf is not None and (not mdf.empty):
+                        rdf = _resample_minutes_to_daily(mdf)
+                        if rdf is not None and (not rdf.empty):
+                            df = rdf
+                        else:
+                            df = pd.DataFrame()
                     else:
                         df = pd.DataFrame()
+                    if df.empty:
+                        try:
+                            alt_req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=2, feed=feed_str)
+                            alt_resp = _client_fetch_stock_bars(client, alt_req)
+                            df2 = _ensure_df(getattr(alt_resp, 'df', alt_resp))
+                            if isinstance(df2.index, pd.MultiIndex):
+                                df2 = df2.xs(symbol, level=0, drop_level=False).droplevel(0)
+                            df2 = df2.sort_index()
+                            if not df2.empty:
+                                last = df2.index[-1]
+                                if last.date() == start_dt.date():
+                                    df = df2.loc[[last]]
+                        except (ValueError, TypeError) as e:
+                            status = getattr(e, 'status_code', None)
+                            if status in (401, 403):
+                                feed_str = _ensure_entitled_feed(client, feed_str)
+                                emit_once(_log, f'{symbol}:{feed_str}', 'error', 'ALPACA_BARS_UNAUTHORIZED', symbol=symbol, context=context, feed=feed_str)
+                                raise
+                            _log.warning('ALPACA_LIMIT_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
+                elif _is_minute_timeframe(tf_str):
+                    df = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
                 else:
-                    df = pd.DataFrame()
-                if df.empty:
-                    try:
-                        alt_req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=2, feed=feed_str)
-                        alt_resp = _client_fetch_stock_bars(client, alt_req)
-                        df2 = _ensure_df(getattr(alt_resp, 'df', alt_resp))
-                        if isinstance(df2.index, pd.MultiIndex):
-                            df2 = df2.xs(symbol, level=0, drop_level=False).droplevel(0)
-                        df2 = df2.sort_index()
-                        if not df2.empty:
-                            last = df2.index[-1]
-                            if last.date() == start_dt.date():
-                                df = df2.loc[[last]]
-                    except (ValueError, TypeError) as e:
-                        status = getattr(e, 'status_code', None)
-                        if status in (401, 403):
-                            _log.error('ALPACA_BARS_UNAUTHORIZED', extra={'symbol': symbol, 'context': context, 'feed': feed_str})
-                            raise
-                        _log.warning('ALPACA_LIMIT_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
-            elif _is_minute_timeframe(tf_str):
-                df = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
-            else:
-                df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
-            if df is None or df.empty:
-                return _create_empty_bars_dataframe()
+                    df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
+                if df is None or df.empty:
+                    return _create_empty_bars_dataframe()
         if isinstance(df.index, pd.MultiIndex):
             try:
                 df = df.xs(symbol, level=0, drop_level=False).droplevel(0)

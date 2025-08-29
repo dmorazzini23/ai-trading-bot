@@ -44,8 +44,11 @@ Daily price requests now log their parameters and outcome:
 - `DAILY_FETCH_REQUEST` records the symbol, timeframe, and date range
 - `DAILY_FETCH_RESULT` reports the number of rows returned and whether the
   response came from cache
-- Empty bar responses log a warning only when the market is open; otherwise,
-  fallback attempts proceed without additional noise
+- Unauthorized feed responses trigger a quick entitlement check and switch to a
+  permitted feed when available. If no alternative exists, operators are
+  notified once.
+- Empty bar responses are retried with a short backoff and warnings are
+  throttled to once per minute to reduce log noise.
 
 ### Example Usage
 
