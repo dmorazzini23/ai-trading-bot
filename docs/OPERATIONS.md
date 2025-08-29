@@ -19,6 +19,9 @@ Set `RUN_HEALTHCHECK=1` in the environment to enable the Flask endpoints.
 ### Paths & default files
 - Trade log file defaults to `<repo>/logs/trades.jsonl` when `TRADE_LOG_PATH` is not set. The directory is auto-created.
 - Empty model path disables ML quietly. Set `MODEL_PATH` to enable.
+- Override cache location with `AI_TRADING_CACHE_DIR` when the default `~/.cache/ai-trading-bot`
+  path is not writable (for example, on read-only home directories). The application
+  creates this directory with `0700` permissions during startup.
 
 ### Position sizing environment variables
 Set the following to control position sizing:

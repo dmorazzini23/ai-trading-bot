@@ -4,6 +4,7 @@ Test startup permissions and runtime paths.
 Validates that the application has write permissions to required directories.
 """
 import pytest
+import stat
 
 
 def test_runtime_paths_writable():
@@ -36,6 +37,7 @@ def test_runtime_paths_writable():
         test_file.unlink()
     except PermissionError:
         pytest.fail(f"CACHE_DIR {paths.CACHE_DIR} is not writable")
+    assert stat.S_IMODE(paths.CACHE_DIR.stat().st_mode) == 0o700
 
 
 def test_cache_dir_falls_back(monkeypatch, tmp_path):
@@ -64,6 +66,7 @@ def test_cache_dir_falls_back(monkeypatch, tmp_path):
     fallback = Path(tempfile.gettempdir()) / paths.APP_NAME
     assert paths.CACHE_DIR == fallback
     assert fallback.exists()
+    assert stat.S_IMODE(fallback.stat().st_mode) == 0o700
 
 
 def test_paths_module_imports():
