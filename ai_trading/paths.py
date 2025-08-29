@@ -17,7 +17,10 @@ def _ensure_dir(path: Path) -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
         try:
-            path.chmod(0o700)
+            if os.access(path, os.W_OK):
+                path.chmod(0o700)
+            else:
+                logger.debug("Skipping chmod for non-writable path %s", path)
         except OSError as perm_err:  # best effort permission fix
             logger.debug("chmod failed for %s: %s", path, perm_err)
         return path
@@ -26,7 +29,10 @@ def _ensure_dir(path: Path) -> Path:
             fallback = Path(tempfile.gettempdir()) / APP_NAME
             fallback.mkdir(parents=True, exist_ok=True)
             try:
-                fallback.chmod(0o700)
+                if os.access(fallback, os.W_OK):
+                    fallback.chmod(0o700)
+                else:
+                    logger.debug("Skipping chmod for non-writable path %s", fallback)
             except OSError as perm_err:  # pragma: no cover - unlikely
                 logger.debug("chmod failed for %s: %s", fallback, perm_err)
             logger.warning(
