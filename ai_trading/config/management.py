@@ -264,6 +264,9 @@ class TradingConfig:
     lookback_periods: Optional[int] = None
     market_calendar: Optional[str] = None
     score_confidence_min: Optional[float] = None
+    signal_confirmation_bars: int = 2
+    delta_threshold: float = 0.02
+    min_confidence: float = 0.6
     extras: Optional[dict[str, Any]] = None
     max_position_mode: str = "STATIC"
     paper: bool = True
@@ -279,6 +282,12 @@ class TradingConfig:
             0.0 <= self.score_confidence_min <= 1.0
         ):
             raise ValueError("score_confidence_min must be between 0 and 1")
+        if self.signal_confirmation_bars <= 0:
+            raise ValueError("signal_confirmation_bars must be positive")
+        if self.delta_threshold < 0:
+            raise ValueError("delta_threshold must be non-negative")
+        if not (0.0 <= self.min_confidence <= 1.0):
+            raise ValueError("min_confidence must be between 0 and 1")
 
     # --- Ergonomics: safe update & dict view ---
     def update(self, **kwargs) -> None:
@@ -315,6 +324,9 @@ class TradingConfig:
             "extras",
             "market_calendar",
             "score_confidence_min",
+            "signal_confirmation_bars",
+            "delta_threshold",
+            "min_confidence",
             "max_position_mode",
             "paper",
             "data_feed",
@@ -406,6 +418,9 @@ class TradingConfig:
             lookback_periods=_get("LOOKBACK_PERIODS", int),
             market_calendar=_get("MARKET_CALENDAR", str),
             score_confidence_min=_get("SCORE_CONFIDENCE_MIN", float),
+            signal_confirmation_bars=_get("SIGNAL_CONFIRMATION_BARS", int, default=2),
+            delta_threshold=_get("DELTA_THRESHOLD", float, default=0.02),
+            min_confidence=_get("MIN_CONFIDENCE", float, default=0.6),
             extras=extras,
             max_position_mode=_get("MAX_POSITION_MODE", str, default="STATIC"),
             paper=_get("PAPER", _to_bool, default=paper_default),

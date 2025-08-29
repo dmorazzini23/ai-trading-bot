@@ -66,6 +66,8 @@ trailing_factor: 1.2-2.0 (mode-dependent)
 ### Signal Processing Parameters
 ```python
 signal_confirmation_bars: 2
+delta_threshold: 0.02
+min_confidence: 0.6
 signal_period: 9
 fast_period: 5
 slow_period: 20

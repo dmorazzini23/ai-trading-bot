@@ -10,16 +10,25 @@ def test_defaults_present():
     assert cfg.kelly_fraction_max == 0.15
     assert cfg.min_sample_size == 10
     assert cfg.confidence_level == 0.90
+    assert cfg.signal_confirmation_bars == 2
+    assert cfg.delta_threshold == 0.02
+    assert cfg.min_confidence == 0.6
 
 
 def test_env_overrides_and_defaults(monkeypatch):
     monkeypatch.setenv('AI_TRADING_KELLY_FRACTION_MAX', '0.20')
     monkeypatch.setenv('AI_TRADING_MIN_SAMPLE_SIZE', '12')
     monkeypatch.setenv('AI_TRADING_CONFIDENCE_LEVEL', '0.85')
+    monkeypatch.setenv('SIGNAL_CONFIRMATION_BARS', '3')
+    monkeypatch.setenv('DELTA_THRESHOLD', '0.05')
+    monkeypatch.setenv('MIN_CONFIDENCE', '0.75')
     cfg = TradingConfig.from_env()
     assert cfg.kelly_fraction_max == 0.20
     assert cfg.min_sample_size == 12
     assert cfg.confidence_level == 0.85
+    assert cfg.signal_confirmation_bars == 3
+    assert cfg.delta_threshold == 0.05
+    assert cfg.min_confidence == 0.75
 
 
 def test_update_and_to_dict():
@@ -31,6 +40,9 @@ def test_update_and_to_dict():
     assert snap["kelly_fraction_max"] == 0.5
     assert snap["min_sample_size"] == 20
     assert snap["seed"] == cfg.seed
+    assert "signal_confirmation_bars" in snap
+    assert "delta_threshold" in snap
+    assert "min_confidence" in snap
 
 
 def test_update_unknown_key():
