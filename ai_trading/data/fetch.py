@@ -128,6 +128,21 @@ def _format_fallback_payload_df(tf_str: str, feed_str: str, start_dt: _dt.dateti
     return [tf_str, feed_str, s, e]
 
 
+def bars_time_window_day(days: int = 10, *, end: _dt.datetime | None = None) -> tuple[_dt.datetime, _dt.datetime]:
+    """Return start/end datetimes covering ``days`` full days inclusively.
+
+    ``end`` defaults to the current UTC time. The ``start`` is normalized to
+    midnight UTC ``days`` days before ``end`` so that the entire first day is
+    included in the range. The returned ``start`` and ``end`` are timezone-aware
+    in UTC and satisfy ``(end - start).days == days``.
+    """
+
+    end_dt = ensure_datetime(end or _dt.datetime.now(tz=UTC))
+    start_dt = (end_dt - _dt.timedelta(days=days)).astimezone(UTC)
+    start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_dt, end_dt
+
+
 _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 
 
@@ -878,6 +893,7 @@ __all__ = [
     "_ALLOW_SIP",
     "_SIP_UNAUTHORIZED",
     "ensure_datetime",
+    "bars_time_window_day",
     "_parse_bars",
     "_alpaca_get_bars",
     "get_daily",
