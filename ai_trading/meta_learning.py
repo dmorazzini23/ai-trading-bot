@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 
 try:
     from ai_trading.portfolio_rl import PortfolioReinforcementLearner
-except Exception:  # pragma: no cover - optional dependency
+except (ImportError, OSError):  # pragma: no cover - optional dependency
     PortfolioReinforcementLearner = None  # type: ignore[assignment]
 
 

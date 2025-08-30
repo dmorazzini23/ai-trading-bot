@@ -8,24 +8,25 @@ clear :class:`ImportError` is raised when functionality requires PyTorch.
 from __future__ import annotations
 
 import numpy as np
+from functools import lru_cache
 
-torch = nn = optim = None  # type: ignore[assignment]
 
-
+@lru_cache(maxsize=1)
 def _lazy_import_torch():
-    """Import torch and related modules on demand."""
+    """Import :mod:`torch` and return its submodules.
 
-    global torch, nn, optim
-    if torch is None:
-        try:  # pragma: no cover - heavy optional dependency
-            import torch as t
-            from torch import nn as _nn, optim as _optim
-        except (ImportError, OSError) as exc:  # pragma: no cover - import guard
-            raise ImportError(
-                "PyTorch is required for ai_trading.portfolio_rl"
-            ) from exc
-        torch, nn, optim = t, _nn, _optim
-    return torch, nn, optim
+    Lazily imports the heavy dependency to keep module import light. The
+    result is cached so subsequent calls are inexpensive.
+    """
+
+    try:  # pragma: no cover - heavy optional dependency
+        import torch as t
+        from torch import nn as _nn, optim as _optim
+    except (ImportError, OSError) as exc:  # pragma: no cover - import guard
+        raise ImportError(
+            "PyTorch is required for ai_trading.portfolio_rl"
+        ) from exc
+    return t, _nn, _optim
 
 
 class Actor:
