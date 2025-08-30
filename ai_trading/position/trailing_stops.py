@@ -13,8 +13,11 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
-import pandas as pd
+from typing import Any, TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = get_logger(__name__)
 
 class TrailingStopType(Enum):
@@ -177,8 +180,9 @@ class TrailingStopManager:
         except (KeyError, ValueError, TypeError, IndexError):
             return self.base_trail_percent
 
-    def _calculate_atr_stop_distance(self, data: pd.DataFrame) -> float:
+    def _calculate_atr_stop_distance(self, data: "pd.DataFrame") -> float:
         """Calculate ATR-based stop distance."""
+        pd = load_pandas()
         try:
             if 'high' not in data.columns or 'low' not in data.columns or 'close' not in data.columns or (len(data) < self.atr_period):
                 return self.base_trail_percent
@@ -200,13 +204,14 @@ class TrailingStopManager:
         except (KeyError, ValueError, TypeError, IndexError, ZeroDivisionError):
             return self.base_trail_percent
 
-    def _calculate_momentum_multiplier(self, symbol: str, data: pd.DataFrame | None) -> float:
+    def _calculate_momentum_multiplier(self, symbol: str, data: "pd.DataFrame" | None) -> float:
         """Calculate momentum-based multiplier for stop distance."""
         try:
             if data is None or 'close' not in data.columns or len(data) < self.momentum_period:
                 return 1.0
             closes = data['close']
             rsi = self._calculate_rsi(closes, self.momentum_period)
+            pd = load_pandas()
             if pd.isna(rsi):
                 return 1.0
             momentum_score = rsi / 100.0
@@ -288,7 +293,7 @@ class TrailingStopManager:
         except (ValueError, TypeError) as exc:
             self.logger.warning('_check_stop_trigger failed: %s', exc)
 
-    def _get_market_data(self, symbol: str) -> pd.DataFrame | None:
+    def _get_market_data(self, symbol: str) -> "pd.DataFrame" | None:
         """Get market data for stop calculations."""
         try:
             if self.ctx and hasattr(self.ctx, 'data_fetcher'):
@@ -302,8 +307,9 @@ class TrailingStopManager:
         except (AttributeError, ValueError, KeyError):
             return None
 
-    def _calculate_rsi(self, prices: pd.Series, period: int=14) -> float:
+    def _calculate_rsi(self, prices: "pd.Series", period: int = 14) -> float:
         """Calculate RSI indicator."""
+        pd = load_pandas()
         try:
             if len(prices) < period + 1:
                 return 50.0

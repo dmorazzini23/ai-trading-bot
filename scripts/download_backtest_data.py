@@ -9,12 +9,16 @@ from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from ai_trading.env import ensure_dotenv_loaded
 from ai_trading.config.management import get_env
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def main() -> None:
@@ -43,6 +47,7 @@ def main() -> None:
             end=end,
             adjustment="raw",
         )
+        pd = load_pandas()
         try:
             bars = client.get_stock_bars(req).df
         except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError):
@@ -73,3 +78,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

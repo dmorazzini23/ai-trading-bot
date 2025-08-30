@@ -5,8 +5,12 @@ import gc
 import weakref
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import pytest
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 class TradingBotValidator:
 
@@ -33,6 +37,7 @@ class TradingBotValidator:
         if cache_key in self._test_data_cache:
             data = self._test_data_cache[cache_key]
         else:
+            pd = load_pandas()
             data = pd.read_csv(historical_data_path)
             self._test_data_cache[cache_key] = data
         total_pnl = 0
@@ -87,6 +92,6 @@ class TradingBotValidator:
         """Ensure cleanup on garbage collection."""
         try:
             self.cleanup()
-        except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+        except (load_pandas().errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
             pass
 __all__ = ['TradingBotValidator']

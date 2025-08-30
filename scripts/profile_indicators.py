@@ -3,10 +3,15 @@ logger = logging.getLogger(__name__)
 import inspect
 import time
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
 from ai_trading import indicators, signals
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 def profile(func, *args, **kwargs):
+    pd = load_pandas()
     start = time.perf_counter()
     try:
         result = func(*args, **kwargs)
@@ -18,8 +23,17 @@ def profile(func, *args, **kwargs):
     return (result, elapsed)
 
 def run_profiles():
+    pd = load_pandas()
     timings = []
-    df = pd.DataFrame({'open': np.random.random(100000) * 100, 'high': np.random.random(100000) * 100, 'low': np.random.random(100000) * 100, 'close': np.random.random(100000) * 100, 'volume': np.random.randint(1000, 10000, size=100000)})
+    df = pd.DataFrame(
+        {
+            'open': np.random.random(100000) * 100,
+            'high': np.random.random(100000) * 100,
+            'low': np.random.random(100000) * 100,
+            'close': np.random.random(100000) * 100,
+            'volume': np.random.randint(1000, 10000, size=100000),
+        }
+    )
     modules = [signals, indicators]
     for module in modules:
         for name, func in inspect.getmembers(module, inspect.isfunction):

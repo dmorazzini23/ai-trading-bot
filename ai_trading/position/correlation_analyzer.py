@@ -14,10 +14,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
 from ai_trading.exc import COMMON_EXC
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = get_logger(__name__)
 
 class ConcentrationLevel(Enum):
@@ -238,6 +241,7 @@ class PortfolioCorrelationAnalyzer:
                 return None
             corr_matrix = np.corrcoef(returns1, returns2)
             correlation = corr_matrix[0, 1] if len(corr_matrix) == 2 else 0.0
+            pd = load_pandas()
             if pd.isna(correlation):
                 correlation = 0.0
             strength = self._classify_correlation_strength(abs(correlation))

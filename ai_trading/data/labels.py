@@ -5,10 +5,15 @@ Provides explicit labelers for future returns, triple barrier labels,
 and other trading-specific target variables.
 """
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
 from ai_trading.logging import logger
+from ai_trading.utils.lazy_imports import load_pandas
 
-def fixed_horizon_return(prices: pd.Series | pd.DataFrame, horizon_bars: int, fee_bps: float=0.0) -> pd.Series:
+if TYPE_CHECKING:
+    import pandas as pd
+
+def fixed_horizon_return(prices: "pd.Series" | "pd.DataFrame", horizon_bars: int, fee_bps: float = 0.0) -> "pd.Series":
+    pd = load_pandas()
     """
     Calculate fixed horizon future returns net of fees.
     
@@ -39,7 +44,16 @@ def fixed_horizon_return(prices: pd.Series | pd.DataFrame, horizon_bars: int, fe
         logger.error(f'Error calculating fixed horizon returns: {e}')
         return pd.Series(dtype=float)
 
-def triple_barrier_labels(prices: pd.Series | pd.DataFrame, events: pd.DataFrame | None=None, pt_sl: tuple | None=None, t1: pd.Series | None=None, min_ret: float=0.0, num_threads: int=1, vertical_barrier_times: pd.Series | None=None) -> pd.DataFrame:
+def triple_barrier_labels(
+    prices: "pd.Series" | "pd.DataFrame",
+    events: "pd.DataFrame" | None = None,
+    pt_sl: tuple | None = None,
+    t1: "pd.Series" | None = None,
+    min_ret: float = 0.0,
+    num_threads: int = 1,
+    vertical_barrier_times: "pd.Series" | None = None,
+) -> "pd.DataFrame":
+    pd = load_pandas()
     """
     Triple barrier labeling method.
     
@@ -131,7 +145,8 @@ def triple_barrier_labels(prices: pd.Series | pd.DataFrame, events: pd.DataFrame
         logger.error(f'Error in triple barrier labeling: {e}')
         return pd.DataFrame(columns=['t1', 'ret', 'bin'])
 
-def get_daily_vol(prices: pd.Series, span0: int=100) -> pd.Series:
+def get_daily_vol(prices: "pd.Series", span0: int = 100) -> "pd.Series":
+    pd = load_pandas()
     """
     Calculate daily volatility for barrier calibration.
     

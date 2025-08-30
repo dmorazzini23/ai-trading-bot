@@ -1,5 +1,5 @@
-import pandas as pd
 import pytest
+from ai_trading.utils.lazy_imports import load_pandas
 from types import SimpleNamespace
 
 from ai_trading.core import bot_engine
@@ -17,6 +17,7 @@ def _dummy_cfg():
 
 
 def test_get_daily_df_empty_bars_raises(monkeypatch):
+    pd = load_pandas()
     cfg = _dummy_cfg()
     monkeypatch.setattr(bot_engine, "CFG", cfg)
     monkeypatch.setattr(bot_engine, "get_settings", lambda: cfg)
@@ -45,6 +46,7 @@ def test_compute_spy_vol_stats_handles_failure(monkeypatch):
 
 
 def test_fetch_feature_data_halts_on_empty(monkeypatch):
+    pd = load_pandas()
     calls: list[str] = []
     ctx = SimpleNamespace(
         data_fetcher=SimpleNamespace(get_daily_df=lambda *a, **k: pd.DataFrame()),
@@ -59,3 +61,4 @@ def test_fetch_feature_data_halts_on_empty(monkeypatch):
     raw, feat, skip = bot_engine._fetch_feature_data(ctx, state, "AAPL")
     assert raw is None and feat is None and skip is False
     assert calls, "halt manager should be invoked on empty data"
+

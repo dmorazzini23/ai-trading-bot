@@ -19,9 +19,12 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import numpy as np
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 class MarketRegime(Enum):
     """Market regime classification."""
@@ -101,11 +104,17 @@ class AlgorithmOptimizer:
         self.optimization_frequency = timedelta(hours=24)
         self.logger.info('Algorithm optimizer initialized')
 
-    def detect_market_regime(self, price_data: pd.DataFrame, volume_data: pd.DataFrame | None=None, market_data: pd.DataFrame | None=None) -> MarketConditions:
+    def detect_market_regime(
+        self,
+        price_data: "pd.DataFrame",
+        volume_data: "pd.DataFrame" | None = None,
+        market_data: "pd.DataFrame" | None = None,
+    ) -> MarketConditions:
         """Detect current market regime and conditions."""
         try:
             if len(price_data) < 20:
                 return MarketConditions(regime=MarketRegime.SIDEWAYS, volatility=0.02, trend_strength=0.0, volume_profile=1.0, correlation_to_market=0.5, sector_rotation=0.0, vix_level=20.0, time_of_day=self._get_trading_phase())
+            pd = load_pandas()
             returns = price_data['close'].pct_change().dropna()
             volatility = returns.std() * np.sqrt(252)
             high_low = price_data['high'] - price_data['low']
@@ -136,7 +145,7 @@ class AlgorithmOptimizer:
             self.logger.error(f'Error detecting market regime: {e}')
             return MarketConditions(regime=MarketRegime.SIDEWAYS, volatility=0.02, trend_strength=0.0, volume_profile=1.0, correlation_to_market=0.5, sector_rotation=0.0, vix_level=20.0, time_of_day=self._get_trading_phase())
 
-    def _classify_regime(self, volatility: float, trend_strength: float, returns: pd.Series) -> MarketRegime:
+    def _classify_regime(self, volatility: float, trend_strength: float, returns: "pd.Series") -> MarketRegime:
         """Classify market regime based on indicators."""
         if volatility > 0.3:
             return MarketRegime.VOLATILE

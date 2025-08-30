@@ -7,9 +7,13 @@ including purged group time series splits and walk-forward analysis.
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
 from sklearn.model_selection import BaseCrossValidator
 from ai_trading.logging import logger
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
     """
@@ -34,7 +38,13 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
         self.embargo_pct = embargo_pct
         self.purge_pct = purge_pct
 
-    def split(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None=None, groups: pd.Series | np.ndarray | None=None, t1: pd.Series | None=None) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+    def split(
+        self,
+        X: "pd.DataFrame" | np.ndarray,
+        y: "pd.Series" | np.ndarray | None = None,
+        groups: "pd.Series" | np.ndarray | None = None,
+        t1: "pd.Series" | None = None,
+    ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
         """
         Generate indices for train/test splits.
         
@@ -47,6 +57,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
         Yields:
             Tuple of (train_indices, test_indices)
         """
+        pd = load_pandas()
         try:
             if hasattr(X, 'index'):
                 indices = X.index
@@ -91,7 +102,13 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
             logger.error(f'Error in split generation: {e}')
             return
 
-    def _purge_overlapping(self, train_indices: np.ndarray, test_indices: np.ndarray, t1: pd.Series, full_index: pd.Index | np.ndarray) -> np.ndarray:
+    def _purge_overlapping(
+        self,
+        train_indices: np.ndarray,
+        test_indices: np.ndarray,
+        t1: "pd.Series",
+        full_index: pd.Index | np.ndarray,
+    ) -> np.ndarray:
         """
         Purge training observations that overlap with test period.
         
@@ -104,6 +121,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
         Returns:
             Purged training indices
         """
+        pd = load_pandas()
         try:
             if len(test_indices) == 0:
                 return train_indices
@@ -130,11 +148,22 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
             logger.error(f'Error in purging overlapping observations: {e}')
             return train_indices
 
-    def get_n_splits(self, X: pd.DataFrame | np.ndarray | None=None, y: pd.Series | np.ndarray | None=None, groups: pd.Series | np.ndarray | None=None) -> int:
+    def get_n_splits(
+        self,
+        X: "pd.DataFrame" | np.ndarray | None = None,
+        y: "pd.Series" | np.ndarray | None = None,
+        groups: "pd.Series" | np.ndarray | None = None,
+    ) -> int:
         """Return the number of splitting iterations."""
         return self.n_splits
 
-def walkforward_splits(dates: pd.DatetimeIndex | list[datetime], mode: str='rolling', train_span: int | timedelta=252, test_span: int | timedelta=21, embargo_pct: float=0.01) -> list[dict[str, datetime | list[datetime]]]:
+def walkforward_splits(
+    dates: "pd.DatetimeIndex" | list[datetime],
+    mode: str = 'rolling',
+    train_span: int | timedelta = 252,
+    test_span: int | timedelta = 21,
+    embargo_pct: float = 0.01,
+) -> list[dict[str, datetime | list[datetime]]]:
     """
     Generate walk-forward analysis splits.
     
@@ -148,6 +177,7 @@ def walkforward_splits(dates: pd.DatetimeIndex | list[datetime], mode: str='roll
     Returns:
         List of split dictionaries with train/test periods
     """
+    pd = load_pandas()
     try:
         if not isinstance(dates, pd.DatetimeIndex):
             dates = pd.DatetimeIndex(dates)

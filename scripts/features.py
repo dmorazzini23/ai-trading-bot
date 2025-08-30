@@ -1,9 +1,14 @@
 import logging
-import pandas as pd
+from typing import TYPE_CHECKING
 from ai_trading.indicators import atr, ema
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = logging.getLogger(__name__)
 
-def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
+def compute_macd(df: "pd.DataFrame") -> "pd.DataFrame":
+    pd = load_pandas()
     try:
         if 'close' not in df.columns:
             logger.error("Missing 'close' column for MACD calculation")
@@ -16,15 +21,18 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         logger.error('MACD calculation failed: %s', e)
     return df
 
-def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
+def compute_macds(df: "pd.DataFrame") -> "pd.DataFrame":
+    pd = load_pandas()
     df['macds'] = ema(tuple(df['macd'].astype(float)), 9)
     return df
 
-def compute_atr(df: pd.DataFrame, period: int=14) -> pd.DataFrame:
+def compute_atr(df: "pd.DataFrame", period: int = 14) -> "pd.DataFrame":
+    pd = load_pandas()
     df['atr'] = atr(df['high'], df['low'], df['close'], period)
     return df
 
-def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
+def compute_vwap(df: "pd.DataFrame") -> "pd.DataFrame":
+    pd = load_pandas()
     q = df['volume']
     p = (df['high'] + df['low'] + df['close']) / 3
     df['cum_vol'] = q.cumsum()
@@ -32,8 +40,9 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
     df['vwap'] = df['cum_pv'] / df['cum_vol']
     return df
 
-def ensure_columns(df: pd.DataFrame, columns: list[str], symbol: str | None=None) -> pd.DataFrame:
+def ensure_columns(df: "pd.DataFrame", columns: list[str], symbol: str | None = None) -> "pd.DataFrame":
     """Ensure required indicator columns exist, filling with 0.0 if missing."""
+    pd = load_pandas()
     for col in columns:
         if col not in df.columns:
             df[col] = 0.0
@@ -43,7 +52,8 @@ def ensure_columns(df: pd.DataFrame, columns: list[str], symbol: str | None=None
                 logger.warning(f'Column {col} was missing, filled with 0.0.')
     return df
 
-def build_features_pipeline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def build_features_pipeline(df: "pd.DataFrame", symbol: str) -> "pd.DataFrame":
+    pd = load_pandas()
     try:
         logger.debug(f'Starting feature pipeline for {symbol}. Initial shape: {df.shape}')
         df = compute_macd(df)
@@ -60,3 +70,13 @@ def build_features_pipeline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError) as e:
         logger.exception(f'Feature pipeline failed for {symbol}: {e}')
     return df
+
+
+__all__ = [
+    "compute_macd",
+    "compute_macds",
+    "compute_atr",
+    "compute_vwap",
+    "ensure_columns",
+    "build_features_pipeline",
+]
