@@ -1,7 +1,5 @@
 """Validate timeout behavior via the centralized HTTP abstraction."""
 
-import re
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -63,13 +61,6 @@ def test_request_function_errors_without_requests():
         pytest.skip("requires requests missing")
     with pytest.raises(RuntimeError):
         http.request("GET", "http://example.com")
-
-
-def test_bot_engine_uses_http_abstraction():
-    source = Path("ai_trading/core/bot_engine.py").read_text()
-    assert "from ai_trading.utils import http" in source or re.search(
-        r"HTTPSession\(", source
-    ), "bot_engine should use ai_trading.utils.http (centralized timeouts/retries)."
 
 
 @pytest.mark.skipif(not http.REQUESTS_AVAILABLE, reason="requests not installed")

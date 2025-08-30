@@ -57,11 +57,13 @@ Unit Tests (70%)
 
 ### Behavior-Focused Coverage
 
-Historical "fix" tests that searched for specific code strings have been
-removed. The suite now emphasizes observable behavior—tests should exercise
-public APIs and validate side effects rather than inspect source text. This
-streamlining keeps the test suite maintainable while still guarding critical
-runtime paths.
+Historical "fix" tests that scanned source files for patterns (for example
+`os.getenv`, raw `requests.*` calls, or leftover shims) have been removed.
+The suite now emphasizes observable behavior—tests should exercise public
+APIs and validate side effects rather than inspect source text. Existing
+coverage around configuration helpers and the centralized HTTP client
+continues to guard those critical runtime paths without brittle string
+assertions.
 
 ## Deterministic Testing
 
