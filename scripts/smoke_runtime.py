@@ -14,7 +14,7 @@ os.environ['TESTING'] = '1'
 
 try:
     import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     class _PDErrors:
         class EmptyDataError(Exception):
             pass

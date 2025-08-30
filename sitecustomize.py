@@ -13,7 +13,7 @@ try:
         sys.path.append(str(third_party_stubs))
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-except Exception:
+except (OSError, RuntimeError):
     pass
 
 os.environ.setdefault("AI_TRADING_FORCE_LOCAL_SLEEP", "1")
