@@ -26,7 +26,7 @@ try:  # pragma: no cover - exercised via HAS_TENACITY flag in tests
     retry_if_exception_type = _retry_if_exception_type
     RetryError = _RetryError
     HAS_TENACITY = True
-except Exception:  # pragma: no cover - fallback path when tenacity missing
+except (ImportError, TypeError):  # pragma: no cover - fallback path when tenacity missing
     HAS_TENACITY = False
 
     class RetryError(Exception):
@@ -91,7 +91,7 @@ except Exception:  # pragma: no cover - fallback path when tenacity missing
                 while True:
                     try:
                         return fn(*args, **kwargs)
-                    except Exception as exc:  # pragma: no cover - used in fallback
+                    except Exception as exc:  # catch-all: re-raised via RetryError
                         attempt += 1
                         if retry and not retry(exc):
                             raise

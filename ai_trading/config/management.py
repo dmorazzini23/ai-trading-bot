@@ -93,7 +93,7 @@ def get_env(
         return _to_bool(str(raw))  # type: ignore[return-value]
     try:
         return cast(raw)  # type: ignore[misc]
-    except Exception as e:  # noqa: BLE001
+    except (ValueError, TypeError) as e:
         raise RuntimeError(
             f"Failed to cast env var {key!r}={raw!r} via {cast}: {e}"
         ) from e
@@ -214,7 +214,7 @@ def reload_env(path: str | None = None, *, override: bool = True) -> str | None:
     """
     try:
         from dotenv import load_dotenv, find_dotenv  # type: ignore
-    except Exception:
+    except ImportError:
         return None
 
     # Explicit path first
@@ -370,7 +370,7 @@ class TradingConfig:
         if extras_raw is not None:
             try:
                 extras = json.loads(extras_raw)
-            except Exception as exc:  # pragma: no cover - defensive
+            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
                 raise ValueError(
                     "TRADING_CONFIG_EXTRAS must be valid JSON"
                 ) from exc

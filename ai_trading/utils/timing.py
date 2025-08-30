@@ -16,7 +16,7 @@ def clamp_timeout(value: Optional[float]) -> float:
             return HTTP_TIMEOUT
         v = float(value)
         return v if v > 0 else HTTP_TIMEOUT
-    except Exception:
+    except (TypeError, ValueError):
         return HTTP_TIMEOUT
 
 
@@ -25,7 +25,7 @@ def _robust_sleep(seconds: Union[int, float]) -> None:
 
     try:
         s = float(seconds)
-    except Exception:
+    except (TypeError, ValueError):
         s = 0.0
     _real_sleep(max(s, 0.01))
 

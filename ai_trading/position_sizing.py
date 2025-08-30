@@ -139,7 +139,7 @@ def _get_equity_from_alpaca(cfg) -> float:
     except ValueError as e:
         _log.warning("ALPACA_INVALID_RESPONSE", extra={"url": url, "error": str(e)})
         return 0.0
-    except Exception:
+    except Exception:  # log and propagate unexpected errors
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
 

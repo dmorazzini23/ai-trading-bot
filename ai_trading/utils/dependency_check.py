@@ -21,7 +21,7 @@ def assert_core_dependencies() -> None:
     for mod in _CORE:
         try:
             importlib.import_module(mod)
-        except Exception:
+        except ImportError:
             missing.append(mod)
     if missing:
         raise RuntimeError(

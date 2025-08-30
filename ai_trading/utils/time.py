@@ -29,7 +29,7 @@ def last_market_session(now: pd.Timestamp) -> SessionWindow | None:
         return None
     try:
         from ai_trading.market.calendars import get_calendar_registry
-    except Exception:  # ImportError: calendars package missing
+    except ImportError:  # calendars package missing
         return None
     cal = get_calendar_registry()
     current = now.tz_convert('UTC').date()
