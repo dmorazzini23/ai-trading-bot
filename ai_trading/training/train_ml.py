@@ -18,20 +18,14 @@ from ai_trading.utils.pickle_safe import safe_pickle_load
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ALLOWED_DIRS = [BASE_DIR, Path(gettempdir()).resolve()]
-try:
-    import lightgbm as lgb  # type: ignore
 
-    lgb_available = True
-except ImportError as exc:  # pragma: no cover - optional dep
-    lgb = None  # type: ignore[assignment]
-    lgb_available = False
-    _lgb_import_error = exc
-import xgboost as xgb
+try:  # pragma: no cover - optional dep
+    import optuna
 
-xgb_available = True
-import optuna
-
-optuna_available = True
+    optuna_available = True
+except ImportError:  # pragma: no cover
+    optuna = None  # type: ignore
+    optuna_available = False
 from ..data.splits import PurgedGroupTimeSeriesSplit
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only
@@ -79,16 +73,22 @@ class MLTrainer:
 
     def _validate_dependencies(self) -> None:
         """Validate required dependencies are available."""
-        if self.model_type == "lightgbm" and (not lgb_available):
-            raise ImportError(
-                "lightgbm is required for model_type 'lightgbm'. Install via `pip install lightgbm`."
-            ) from _lgb_import_error
-        elif self.model_type == "xgboost" and (not xgb_available):
-            raise ImportError("XGBoost required for xgboost model type")
+        if self.model_type == "lightgbm":
+            try:
+                import lightgbm  # noqa: F401
+            except ImportError as exc:
+                raise ImportError(
+                    "lightgbm is required for model_type 'lightgbm'. Install via `pip install lightgbm`.",
+                ) from exc
+        elif self.model_type == "xgboost":
+            try:
+                import xgboost  # noqa: F401
+            except ImportError as exc:
+                raise ImportError("XGBoost required for model_type 'xgboost'") from exc
         elif self.model_type == "ridge":
             try:
                 import sklearn  # noqa: F401
-            except Exception as exc:
+            except ImportError as exc:
                 raise ImportError("scikit-learn required for ridge model type") from exc
 
     def train(
@@ -253,8 +253,12 @@ class MLTrainer:
     def _create_model(self, params: dict[str, Any]) -> Any:
         """Create model instance with given parameters."""
         if self.model_type == "lightgbm":
-            return lgb.LGBMRegressor(**params)
+            from lightgbm import LGBMRegressor
+
+            return LGBMRegressor(**params)
         elif self.model_type == "xgboost":
+            import xgboost as xgb
+
             return xgb.XGBRegressor(**params)
         elif self.model_type == "ridge":
             from sklearn.linear_model import Ridge
