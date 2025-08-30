@@ -9,6 +9,7 @@ Implements sophisticated trailing stop strategies:
 
 AI-AGENT-REF: Advanced trailing stop management with multiple algorithms
 """
+from __future__ import annotations
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
