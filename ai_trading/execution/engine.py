@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+from types import SimpleNamespace
 from alpaca.common.exceptions import APIError
 from ai_trading.logging.emit_once import emit_once
 
@@ -201,31 +202,38 @@ class OrderManager:
                 raise
         return self._idempotency_cache
 
-    def submit_order(self, order: Order) -> bool:
+    def submit_order(self, order: Order) -> object | None:
         """
         Submit order for execution.
 
-        Args:
-            order: Order to submit
+        Parameters
+        ----------
+        order:
+            The :class:`Order` to submit.
 
-        Returns:
-            True if order was successfully submitted
+        Returns
+        -------
+        object | None
+            ``SimpleNamespace`` mirroring a broker response with fields like
+            ``id`` and ``filled_qty`` when accepted, ``None`` if rejected.
+            Returning an object keeps behaviour consistent with external
+            broker APIs and provides useful metadata even in dry‑run tests.
         """
         try:
             if not self._validate_order(order):
-                return False
+                return None
             cache = self._ensure_idempotency_cache()
             key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(UTC))
             if cache.is_duplicate(key):
                 logger.warning(f'ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}')
                 order.status = OrderStatus.REJECTED
                 order.notes += ' | Rejected: Duplicate order detected'
-                return False
+                return None
             if len(self.active_orders) >= self.max_concurrent_orders:
                 logger.error(f'Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})')
                 order.status = OrderStatus.REJECTED
                 order.notes += ' | Rejected: Max concurrent orders reached'
-                return False
+                return None
             self.orders[order.id] = order
             self.active_orders[order.id] = order
             cache.mark_submitted(key, order.id)
@@ -233,12 +241,24 @@ class OrderManager:
                 self.start_monitoring()
             logger.info(f'Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}')
             self._notify_callbacks(order, 'submitted')
-            return True
+
+            # Mimic a broker-style response object even when running without a
+            # real broker (dry‑run).  ``filled_qty`` mirrors Alpaca's string
+            # field for compatibility with existing call sites.
+            return SimpleNamespace(
+                id=order.id,
+                status='pending_new',
+                symbol=order.symbol,
+                side=getattr(order.side, 'value', order.side),
+                qty=order.quantity,
+                filled_qty='0',
+                filled_avg_price=None,
+            )
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'submit', 'symbol': order.symbol, 'qty': order.quantity, 'side': getattr(order.side, 'value', order.side), 'type': getattr(order.order_type, 'value', order.order_type)})
             order.status = OrderStatus.REJECTED
             order.notes += f' | Error: {e}'
-            return False
+            return None
 
     def cancel_order(self, order_id: str, reason: str='User request') -> bool:
         """Cancel an active order."""
