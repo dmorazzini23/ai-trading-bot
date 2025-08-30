@@ -91,9 +91,23 @@ def run_cycle() -> None:
         enhance_runtime_with_context,
     )
     from ai_trading.config.management import TradingConfig
+    from ai_trading.config import get_settings
 
     state = BotState()
     cfg = TradingConfig.from_env()
+
+    # Carry through a pre-resolved max position size if available on Settings.
+    S = get_settings()
+    mps = getattr(S, "max_position_size", None)
+    if mps is not None:
+        try:
+            object.__setattr__(cfg, "max_position_size", float(mps))
+        except Exception:
+            try:
+                setattr(cfg, "max_position_size", float(mps))
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     runtime = build_runtime(cfg)
 
     lazy_ctx = get_ctx()
