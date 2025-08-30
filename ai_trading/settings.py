@@ -195,9 +195,9 @@ class Settings(BaseSettings):
 
     @field_validator('max_position_size')
     @classmethod
-    def _max_pos_positive(cls, v):
+    def _max_pos_positive(cls, v, info):
         if v is not None and float(v) <= 0.0:
-            raise ValueError('max_position_size must be positive')
+            raise ValueError(f"{info.field_name} must be positive")
         return v
 
     @field_validator('force_trades', mode='before')
