@@ -322,6 +322,12 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
         quality_report['issues'].append(f'Error accessing file: {e}')
     return quality_report
 
+
+def has_mixed_format(trade_log_path: str | os.PathLike) -> bool:
+    """Return ``True`` if trade log contains both audit and meta-learning rows."""
+    report = validate_trade_data_quality(trade_log_path)
+    return bool(report.get('audit_format_rows')) and bool(report.get('meta_format_rows'))
+
 def normalize_score(score: float, cap: float=1.2) -> float:
     """Clip ``score`` to ``cap`` preserving sign."""
     try:

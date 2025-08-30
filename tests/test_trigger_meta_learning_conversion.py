@@ -74,7 +74,7 @@ def test_trigger_meta_learning_conversion_pure_meta_format():
 
         # Verify quality report shows pure meta format
         quality_report = meta_learning.validate_trade_data_quality(test_file)
-        assert quality_report['mixed_format_detected'] is False
+        assert meta_learning.has_mixed_format(test_file) is False
         assert quality_report['audit_format_rows'] == 0
         assert quality_report['meta_format_rows'] > 0
 
@@ -114,7 +114,7 @@ def test_trigger_meta_learning_conversion_pure_audit_format():
 
         # Verify quality report shows pure audit format
         quality_report = meta_learning.validate_trade_data_quality(test_file)
-        assert quality_report['mixed_format_detected'] is False
+        assert meta_learning.has_mixed_format(test_file) is False
         assert quality_report['audit_format_rows'] > 0
         assert quality_report['meta_format_rows'] == 0
 
@@ -153,7 +153,7 @@ def test_trigger_meta_learning_conversion_mixed_format():
 
         # Verify quality report shows mixed format
         quality_report = meta_learning.validate_trade_data_quality(test_file)
-        assert quality_report['mixed_format_detected'] is True
+        assert meta_learning.has_mixed_format(test_file) is True
 
         # Test the trigger function - should attempt conversion and return True if successful
         result = meta_learning.trigger_meta_learning_conversion(test_trade)
@@ -187,7 +187,7 @@ def test_trigger_meta_learning_conversion_missing_file():
 def test_trigger_meta_learning_conversion_problem_statement_exact():
     """Test the exact scenario from the problem statement."""
     with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
-        # Create exactly the scenario: mixed_format_detected=False, audit_format_rows=0, meta_format_rows=4
+        # Create exactly the scenario: no mixed formats (audit_format_rows=0, meta_format_rows=4)
         f.write("symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward\n")
         f.write("TEST,2025-08-05T23:17:35Z,100.0,2025-08-05T23:18:35Z,105.0,10,buy,test_strategy,test,signal1+signal2,0.8,5.0\n")
         f.write("AAPL,2025-08-05T23:19:35Z,150.0,2025-08-05T23:20:35Z,155.0,5,buy,test_strategy,test,signal3,0.7,25.0\n")
@@ -210,7 +210,7 @@ def test_trigger_meta_learning_conversion_problem_statement_exact():
 
         # Verify we have the exact scenario from problem statement
         quality_report = meta_learning.validate_trade_data_quality(test_file)
-        assert quality_report['mixed_format_detected'] is False
+        assert meta_learning.has_mixed_format(test_file) is False
         assert quality_report['audit_format_rows'] == 0
         assert quality_report['meta_format_rows'] > 0  # Should be 5 (4 data + 1 header)
 

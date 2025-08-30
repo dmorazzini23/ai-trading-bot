@@ -16,14 +16,14 @@ from unittest.mock import Mock
 os.environ["TESTING"] = "1"
 os.environ["PYTEST_CURRENT_TEST"] = "test_performance_fixes"
 
+from ai_trading.meta_learning import (
+    retrain_meta_learner,
+    validate_trade_data_quality,
+    has_mixed_format,
+)
 
 def test_meta_learning_mixed_format():
     """Test that meta-learning can handle mixed audit/meta-learning log formats."""
-
-    from ai_trading.meta_learning import (
-        retrain_meta_learner,
-        validate_trade_data_quality,
-    )
 
     # Test with the actual trades.csv file
     quality_report = validate_trade_data_quality("trades.csv")
@@ -31,7 +31,7 @@ def test_meta_learning_mixed_format():
     # Verify mixed format detection
     assert quality_report["file_exists"], "Trade log file should exist"
     assert quality_report["has_valid_format"], "Should have valid format"
-    assert quality_report["mixed_format_detected"], "Should detect mixed formats"
+    assert has_mixed_format("trades.csv"), "Should detect mixed formats"
     assert quality_report["audit_format_rows"] > 0, "Should find audit format rows"
     assert quality_report["meta_format_rows"] > 0, "Should find meta-learning format rows"
     assert quality_report["valid_price_rows"] > 0, "Should find valid price rows"
@@ -40,7 +40,6 @@ def test_meta_learning_mixed_format():
     # Test that retrain_meta_learner works
     result = retrain_meta_learner("trades.csv", min_samples=10)
     assert result, "Meta-learning retraining should succeed"
-
 
 def test_position_size_reporting():
     """Test that position size reporting is consistent."""
