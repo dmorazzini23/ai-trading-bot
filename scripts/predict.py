@@ -7,10 +7,14 @@ import os
 from threading import Lock
 import time
 import joblib
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config.management import TradingConfig, reload_env
 from ai_trading.utils.http import http, HTTP_TIMEOUT
 from ai_trading.features.prepare import prepare_indicators
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 config = TradingConfig.from_env()
 _sentiment_lock = Lock()
@@ -90,7 +94,8 @@ def fetch_sentiment(symbol: str) -> float:
                 return _sentiment_cache[symbol][0]
         return 0.0
 
-def detect_regime(df: pd.DataFrame) -> str:
+def detect_regime(df: "pd.DataFrame") -> str:
+    pd = load_pandas()
     """Classify a market regime based on moving average crossovers."""
     if df is None or df.empty or 'close' not in df:
         return 'chop'
@@ -111,8 +116,9 @@ def load_model(regime: str):
         raise FileNotFoundError(f"Model for regime '{regime}' not found: {path}")
     return joblib.load(path)
 
-def predict(csv_path: str, freq: str='intraday') -> tuple[int | None, float | None]:
+def predict(csv_path: str, freq: str = 'intraday') -> tuple[int | None, float | None]:
     """Return the predicted class and probability for the data in ``csv_path``."""
+    pd = load_pandas()
     df = pd.read_csv(csv_path)
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
     try:
@@ -149,7 +155,13 @@ def predict(csv_path: str, freq: str='intraday') -> tuple[int | None, float | No
         return (None, None)
     logger.info('Regime: %s, Prediction: %s, Probability: %.4f', regime, pred, proba)
     from ai_trading.logging import _get_metrics_logger
-    _get_metrics_logger().log_metrics({'timestamp': pd.Timestamp.now(tz='UTC').isoformat(), 'symbol': symbol, 'regime': regime, 'prediction': int(pred), 'probability': float(proba)}, filename='metrics/predictions.csv')
+    _get_metrics_logger().log_metrics({
+        'timestamp': pd.Timestamp.now(tz='UTC').isoformat(),
+        'symbol': symbol,
+        'regime': regime,
+        'prediction': int(pred),
+        'probability': float(proba),
+    }, filename='metrics/predictions.csv')
     return (pred, proba)
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Predict trade signal')

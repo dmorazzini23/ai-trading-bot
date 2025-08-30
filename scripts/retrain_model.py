@@ -5,13 +5,17 @@ import os
 import random
 import joblib
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
+from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 from ai_trading.features.prepare import prepare_indicators
 CONFIG = TradingConfig()
 from ai_trading.net.http import HTTPSession
 from ai_trading.utils.base import safe_to_datetime
+
+if TYPE_CHECKING:
+    import pandas as pd
 logger = logging.getLogger(__name__)
 config.reload_env()
 _HTTP = HTTPSession()
@@ -74,8 +78,9 @@ MODELS_DIR = abspath('models')
 os.makedirs(MODELS_DIR, exist_ok=True)
 REWARD_LOG_FILE = abspath('reward_log.csv')
 
-def load_reward_by_band(n: int=200) -> dict:
+def load_reward_by_band(n: int = 200) -> dict:
     """Return average reward by band from recent history."""
+    pd = load_pandas()
     if not os.path.exists(REWARD_LOG_FILE):
         return {}
     try:
@@ -113,8 +118,9 @@ def fetch_sentiment(symbol: str) -> float:
         logger.warning('Failed to fetch sentiment for %s: %s', symbol, e)
         return 0.0
 
-def detect_regime(df: pd.DataFrame) -> str:
+def detect_regime(df: "pd.DataFrame") -> str:
     """Simple SMA-based regime detection used by bot and predict scripts."""
+    pd = load_pandas()
     if df is None or df.empty or 'close' not in df:
         return 'chop'
     try:
@@ -138,12 +144,13 @@ def detect_regime(df: pd.DataFrame) -> str:
 MODEL_FILES = {'bull': os.path.join(MODELS_DIR, 'model_bull.pkl'), 'bear': os.path.join(MODELS_DIR, 'model_bear.pkl'), 'chop': os.path.join(MODELS_DIR, 'model_chop.pkl')}
 
 
-def gather_minute_data(ctx, symbols, lookback_days: int=5) -> dict[str, pd.DataFrame]:
+def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, "pd.DataFrame"]:
     """
     For each symbol, fetch minute bars from Alpaca day‐by‐day over the last `lookback_days`.
     Prints per‐symbol row‐counts, and only stores those with ≥ 1 row.
     """
-    raw_store: dict[str, pd.DataFrame] = {}
+    pd = load_pandas()
+    raw_store: dict[str, "pd.DataFrame"] = {}
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
     logger.info('[gather_minute_data] start=%s, end=%s, symbols=%s', start_dt, end_dt, symbols)
@@ -164,13 +171,18 @@ def gather_minute_data(ctx, symbols, lookback_days: int=5) -> dict[str, pd.DataF
         logger.critical('No symbols returned valid data for the day. Cannot trade or retrain. Check your data subscription.')
     return raw_store
 
-def build_feature_label_df(raw_store: dict[str, pd.DataFrame], Δ_minutes: int=30, threshold_pct: float=0.002) -> pd.DataFrame:
+def build_feature_label_df(
+    raw_store: dict[str, "pd.DataFrame"],
+    Δ_minutes: int = 30,
+    threshold_pct: float = 0.002,
+) -> "pd.DataFrame":
     """
     Build a combined DataFrame of (feature_vector, label) for each minute-slice.
     Labels are generated using a simulated trade with 0.05% buy slippage and
     0.05% sell slippage. If a symbol has fewer than Δ_minutes+1 rows, it is
     skipped with a notice.
     """
+    pd = load_pandas()
     rows = []
     for sym, raw in raw_store.items():
         try:
@@ -312,7 +324,14 @@ def optuna_search(X, y, base_params: dict, param_space: dict, n_trials: int=20, 
     study.optimize(objective, n_trials=n_trials)
     return {**base_params, **study.best_params}
 
-def retrain_meta_learner(ctx, symbols, lookback_days: int=5, Δ_minutes: int=30, threshold_pct: float=0.002, force: bool=False) -> bool:
+def retrain_meta_learner(
+    ctx,
+    symbols,
+    lookback_days: int = 5,
+    Δ_minutes: int = 30,
+    threshold_pct: float = 0.002,
+    force: bool = False,
+) -> bool:
     now = datetime.now(UTC)
     if not force:
         if now.weekday() >= 5:
@@ -323,6 +342,7 @@ def retrain_meta_learner(ctx, symbols, lookback_days: int=5, Δ_minutes: int=30,
         if not market_open <= now.time() <= market_close:
             logger.info('[retrain_meta_learner] Outside market hours; skipping', extra={'time': now.time().strftime('%H:%M')})
             return False
+    pd = load_pandas()
     logger.info('Starting meta-learner retraining')
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:

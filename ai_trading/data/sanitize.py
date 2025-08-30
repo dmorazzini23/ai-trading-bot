@@ -9,7 +9,9 @@ from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from typing import Any
 import numpy as np
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
+
+pd = load_pandas()
 logger = get_logger(__name__)
 
 @dataclass

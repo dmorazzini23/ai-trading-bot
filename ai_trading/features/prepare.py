@@ -1,13 +1,18 @@
 import logging
 import importlib
 import numpy as np
-import pandas as pd
+from typing import TYPE_CHECKING
 from ai_trading.utils.base import safe_to_datetime
+from ai_trading.utils.lazy_imports import load_pandas
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 MFI_PERIOD = 14
 
-def prepare_indicators(df: pd.DataFrame, freq: str='daily') -> pd.DataFrame:
+def prepare_indicators(df: "pd.DataFrame", freq: str = 'daily') -> "pd.DataFrame":
+    pd = load_pandas()
     try:
         ta = importlib.import_module('pandas_ta')
     except ImportError as exc:  # pragma: no cover - optional dependency

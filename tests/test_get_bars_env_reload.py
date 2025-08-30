@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, UTC
 
-import pandas as pd
+from ai_trading.utils.lazy_imports import load_pandas
 
 import ai_trading.config.settings as settings_mod
 from ai_trading.data import fetch
 from ai_trading.config import management
+
+pd = load_pandas()
 
 
 def test_get_bars_recovers_after_env_reload(monkeypatch, tmp_path):
@@ -50,3 +52,4 @@ DOLLAR_RISK_LIMIT=0.05
     df = fetch.get_bars("AAPL", "1Min", start, end)
     assert isinstance(df, pd.DataFrame)
     assert calls["n"] == 2
+

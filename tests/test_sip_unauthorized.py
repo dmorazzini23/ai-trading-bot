@@ -1,10 +1,11 @@
 from datetime import datetime, UTC
 
-import pandas as pd
-
 import ai_trading.data.fetch as data_fetcher
 from ai_trading.core import bot_engine
+from ai_trading.utils.lazy_imports import load_pandas
 
+
+pd = load_pandas()
 
 class _RespForbidden:
     status_code = 403
@@ -55,3 +56,4 @@ def test_data_check_skips_unauthorized_symbols(monkeypatch):
     result = bot_engine.data_check(symbols, feed="sip")
     assert "AAPL" in result
     assert "MSFT" not in result
+
