@@ -1,6 +1,9 @@
 import os
+import sys
 import pytest
 
+sys.modules.pop("tenacity", None)
+pytest.importorskip("tenacity")
 os.environ.setdefault("PYTEST_RUNNING", "1")
 from ai_trading.analysis import sentiment
 
