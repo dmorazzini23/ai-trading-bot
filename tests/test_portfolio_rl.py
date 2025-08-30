@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
+from ai_trading.utils.device import TORCH_AVAILABLE
+if not TORCH_AVAILABLE:
+    pytest.skip("torch not installed", allow_module_level=True)
+import torch
 
 
 def test_rebalance_portfolio_normalizes_weights():

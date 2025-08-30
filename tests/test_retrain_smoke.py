@@ -4,9 +4,11 @@ import types
 from pathlib import Path
 
 import pytest
+from ai_trading.training.train_ml import LIGHTGBM_AVAILABLE
 
 pd = pytest.importorskip("pandas")
-pytest.importorskip("lightgbm")
+if not LIGHTGBM_AVAILABLE:
+    pytest.skip("lightgbm not installed", allow_module_level=True)
 
 
 def _import_retrain(monkeypatch):

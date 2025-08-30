@@ -5,7 +5,9 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("requests")
-pytest.importorskip("torch")
+from ai_trading.utils.device import TORCH_AVAILABLE
+if not TORCH_AVAILABLE:
+    pytest.skip("torch not installed", allow_module_level=True)
 # Minimal stubs so importing bot_engine succeeds without optional deps
 mods = [
     "sklearn",

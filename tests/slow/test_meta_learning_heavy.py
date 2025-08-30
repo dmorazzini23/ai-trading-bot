@@ -6,7 +6,10 @@ import pytest
 pd = pytest.importorskip("pandas")
 sklearn = pytest.importorskip("sklearn")
 import sklearn.linear_model
-torch = pytest.importorskip("torch")
+from ai_trading.utils.device import TORCH_AVAILABLE
+if not TORCH_AVAILABLE:
+    pytest.skip("torch not installed", allow_module_level=True)
+import torch
 try:
     import pydantic_settings  # noqa: F401
     from ai_trading import meta_learning

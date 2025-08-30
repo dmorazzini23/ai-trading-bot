@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pytest
+from ai_trading.training.train_ml import LIGHTGBM_AVAILABLE
 
 
 # Test idempotency
@@ -196,7 +197,8 @@ def test_adaptive_risk_controls():
 def test_determinism():
     """Test deterministic training setup."""
     pd = pytest.importorskip("pandas")
-    pytest.importorskip("lightgbm")
+    if not LIGHTGBM_AVAILABLE:
+        pytest.skip("lightgbm not installed")
     from ai_trading.utils.determinism import hash_data, set_random_seeds
 
     # Test seed setting
