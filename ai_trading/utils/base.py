@@ -66,6 +66,7 @@ def ensure_utc_index(df: DataFrame) -> DataFrame:
 logger = get_logger(__name__)
 _LAST_MARKET_HOURS_LOG = 0.0
 _LAST_MARKET_STATE = ""
+_LAST_MARKET_CLOSED_DATE: date | None = None
 _LAST_HEALTH_ROW_LOG = 0.0
 _LAST_HEALTH_ROWS_COUNT = -1
 _LAST_HEALTH_STATUS: bool | None = None
@@ -320,9 +321,14 @@ def health_rows_passed(rows):
 
 def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
+    global _LAST_MARKET_CLOSED_DATE
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
         logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
         return True
+    check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
+    current_date = check_time.date()
+    if _LAST_MARKET_CLOSED_DATE == current_date:
+        return False
     try:
         import pandas_market_calendars as mcal  # pylint: disable=import-error
     except ImportError as exc:  # pragma: no cover - dependency missing
@@ -330,23 +336,23 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             "pandas-market-calendars is required for is_market_open. Install with `pip install ai-trading-bot[pandas-market-calendars]`."
         ) from exc
     try:
-        check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
             return False
         cal = cal("NYSE")
-        sched = cal.schedule(start_date=check_time.date(), end_date=check_time.date())
+        sched = cal.schedule(start_date=current_date, end_date=current_date)
         if sched.empty:
             is_weekend = check_time.weekday() >= 5
-            is_future = check_time.date() > dt.date.today()
+            is_future = current_date > dt.date.today()
             if is_weekend:
-                logger.debug("No market schedule for %s (weekend); returning False.", check_time.date())
+                logger.debug("No market schedule for %s (weekend); returning False.", current_date)
             elif is_future:
-                logger.debug("No market schedule for %s (future date); returning False.", check_time.date())
+                logger.debug("No market schedule for %s (future date); returning False.", current_date)
             else:
                 logger.warning(
-                    "No market schedule for %s in is_market_open (likely holiday); returning False.", check_time.date()
+                    "No market schedule for %s in is_market_open (likely holiday); returning False.", current_date
                 )
+            _LAST_MARKET_CLOSED_DATE = current_date
             _log_market_hours("Detected Market Hours today: CLOSED")
             return False
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
@@ -360,11 +366,13 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             )
         )
         current = check_time.time()
+        _LAST_MARKET_CLOSED_DATE = None
         return market_open <= current <= market_close
     except COMMON_EXC as exc:
         logger.debug("market calendar unavailable: %s", exc)
-        now_et = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
+        now_et = check_time
         if now_et.weekday() >= 5:
+            _LAST_MARKET_CLOSED_DATE = now_et.date()
             _log_market_hours("Detected Market Hours today: CLOSED")
             return False
         current = now_et.time()
@@ -373,6 +381,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 MARKET_OPEN_TIME.strftime("%H:%M"), MARKET_CLOSE_TIME.strftime("%H:%M")
             )
         )
+        _LAST_MARKET_CLOSED_DATE = None
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
