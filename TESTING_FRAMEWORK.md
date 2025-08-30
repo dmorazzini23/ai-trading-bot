@@ -55,6 +55,14 @@ Unit Tests (70%)
 4. **Comprehensive**: High test coverage (>80%)
 5. **Realistic**: Use realistic test data and scenarios
 
+### Behavior-Focused Coverage
+
+Historical "fix" tests that searched for specific code strings have been
+removed. The suite now emphasizes observable behavior—tests should exercise
+public APIs and validate side effects rather than inspect source text. This
+streamlining keeps the test suite maintainable while still guarding critical
+runtime paths.
+
 ## Deterministic Testing
 
 To keep results reproducible, all tests start with a fixed random seed. The `tools/run_pytest.py` helper sets `PYTHONHASHSEED=0` before invoking pytest to ensure consistent hash randomization. An autouse fixture in `tests/conftest.py` then seeds Python's `random` module and NumPy and calls `torch.manual_seed(0)` when PyTorch is available. Tests should avoid introducing additional sources of nondeterminism.
