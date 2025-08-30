@@ -55,6 +55,13 @@ class TestKellyCriterion:
         assert kelly_fraction <= self.kelly.max_fraction
         assert kelly_fraction == self.kelly.max_fraction
 
+    def test_fractional_kelly_cap(self):
+        """Fractional Kelly should respect the maximum fraction."""
+        base_fraction = 0.2
+        # Use a multiplier that would exceed max_fraction if uncapped
+        capped_fraction = self.kelly.fractional_kelly(base_fraction, fraction=2.0)
+        assert capped_fraction == self.kelly.max_fraction
+
     def test_kelly_negative_expectancy(self):
         """Test Kelly returns zero for negative expectancy."""
         # Losing strategy: 30% win rate, small wins, large losses
