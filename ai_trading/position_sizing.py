@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import floor
 from typing import Any
+from types import SimpleNamespace
 import os
 from json import JSONDecodeError
 from ai_trading.logging import get_logger, logger_once
@@ -279,15 +280,37 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     return (val, {'mode': mode, 'source': 'alpaca', 'equity': eq, 'capital_cap': cap, 'computed': computed, 'clamp_min': vmin, 'clamp_max': vmax, 'refreshed_at': _CACHE.ts.isoformat()})
 
 
-def get_max_position_size(cfg, tcfg, *, force_refresh: bool = False) -> float:
+def get_max_position_size(
+    cfg: Any | None = None,
+    tcfg: Any | None = None,
+    *,
+    auto: bool = False,
+    force_refresh: bool = False,
+) -> float:
     """Return only the resolved ``max_position_size`` value.
 
-    This is a thin convenience wrapper around :func:`resolve_max_position_size`
-    used by modules that only care about the numeric size and not the
-    accompanying metadata. Set ``force_refresh`` to ``True`` to bypass any
-    cached values.
+    Parameters
+    ----------
+    cfg, tcfg:
+        Optional configuration objects. When ``tcfg`` is ``None`` it defaults
+        to ``cfg``. If both are ``None`` simple namespaces are used so the
+        resolver can still apply fallback logic.
+    auto:
+        When ``True`` the function overrides any ``max_position_mode`` on the
+        trading config and forces :func:`resolve_max_position_size` to operate
+        in automatic mode where the current equity is multiplied by
+        ``capital_cap``. If equity retrieval or ``capital_cap`` resolution
+        fails, the resolver falls back to default sizing.
+    force_refresh:
+        When ``True`` cached values are ignored.
     """
 
+    cfg = cfg or SimpleNamespace()
+    tcfg = tcfg or cfg
+    if auto:
+        data = vars(tcfg).copy()
+        data["max_position_mode"] = "AUTO"
+        tcfg = SimpleNamespace(**data)
     val, _ = resolve_max_position_size(cfg, tcfg, force_refresh=force_refresh)
     return val
 
