@@ -61,7 +61,7 @@ except (ImportError, TypeError):  # pragma: no cover - fallback path when tenaci
             return delay
         return _Wait(fn)
 
-    def wait_random(*, min: float = 0.0, max: float = 1.0) -> _Wait:
+    def wait_random(min: float = 0.0, max: float = 1.0) -> _Wait:
         def fn(_attempt: int) -> float:
             return random.uniform(min, max)
         return _Wait(fn)
