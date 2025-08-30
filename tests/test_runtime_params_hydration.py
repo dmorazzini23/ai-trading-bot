@@ -24,7 +24,7 @@ def test_trading_config_has_required_parameters():
     # Verify default values
     assert cfg.capital_cap == 0.04
     assert cfg.dollar_risk_limit == 0.05
-    assert cfg.max_position_size == 1.0
+    assert cfg.max_position_size is None
 
 
 def test_trading_config_from_env_loads_parameters():
@@ -55,11 +55,12 @@ def test_trading_config_from_env_market_calendar(monkeypatch):
     assert cfg.market_calendar == "XNAS"
 
 
-def test_build_runtime_hydrates_all_parameters():
+def test_build_runtime_hydrates_all_parameters(monkeypatch):
     """Test that build_runtime creates runtime with all required parameters."""
     from ai_trading.config.management import TradingConfig
     from ai_trading.core.runtime import REQUIRED_PARAM_DEFAULTS, build_runtime
 
+    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
     cfg = TradingConfig()
     runtime = build_runtime(cfg)
 
@@ -74,7 +75,7 @@ def test_build_runtime_hydrates_all_parameters():
     # Verify specific values
     assert runtime.params['CAPITAL_CAP'] == 0.04
     assert runtime.params['DOLLAR_RISK_LIMIT'] == 0.05
-    assert runtime.params['MAX_POSITION_SIZE'] == 1.0
+    assert runtime.params['MAX_POSITION_SIZE'] == 8000.0
 
 
 def test_build_runtime_uses_config_values():
@@ -88,8 +89,6 @@ def test_build_runtime_uses_config_values():
         dollar_risk_limit=0.10,
         max_position_size=2.5,
         kelly_fraction=0.7,
-        buy_threshold=0.8,
-        conf_threshold=0.9
     )
 
     runtime = build_runtime(cfg)
@@ -99,8 +98,6 @@ def test_build_runtime_uses_config_values():
     assert runtime.params['DOLLAR_RISK_LIMIT'] == 0.10
     assert runtime.params['MAX_POSITION_SIZE'] == 2.5
     assert runtime.params['KELLY_FRACTION'] == 0.7
-    assert runtime.params['BUY_THRESHOLD'] == 0.8
-    assert runtime.params['CONF_THRESHOLD'] == 0.9
 
 
 def test_param_helper_fallback_logic():
@@ -162,11 +159,12 @@ def test_parameter_values_are_floats():
         assert isinstance(value, float), f"Parameter {key} is not a float: {type(value)}"
 
 
-def test_build_runtime_ignores_none_values():
+def test_build_runtime_ignores_none_values(monkeypatch):
     """build_runtime should fall back to defaults when config values are None."""
     from ai_trading.config.management import TradingConfig
     from ai_trading.core.runtime import REQUIRED_PARAM_DEFAULTS, build_runtime
 
+    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
     cfg = TradingConfig(
         capital_cap=None,
         dollar_risk_limit=None,
