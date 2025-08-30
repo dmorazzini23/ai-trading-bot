@@ -1,6 +1,7 @@
 import logging
 from ai_trading.logging import get_logger
 from ai_trading.logging_filters import SecretFilter
+from ai_trading.logging.redact import _ENV_MASK
 
 
 class _CaptureHandler(logging.Handler):
@@ -23,5 +24,5 @@ def test_secret_filter_masks_extra():
         log.info("msg", extra={"api_key": "supersecret", "value": 1})
     finally:
         log.logger.removeHandler(handler)
-    assert handler.last.api_key == "***REDACTED***"
+    assert handler.last.api_key == _ENV_MASK
     assert handler.last.value == 1
