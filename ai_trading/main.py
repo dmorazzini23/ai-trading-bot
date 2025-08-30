@@ -204,7 +204,7 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
     eq = _get_equity_from_alpaca(cfg)
-    targets = {cfg, tcfg}
+    targets = (cfg,) if cfg is tcfg else (cfg, tcfg)
     if eq > 0:
         for obj in targets:
             try:
