@@ -16,6 +16,14 @@ import numpy as np
 from ai_trading.logging import logger
 from ai_trading.utils.pickle_safe import safe_pickle_load
 
+# Optional dependencies
+try:  # pragma: no cover - optional lightgbm dependency
+    import lightgbm  # type: ignore  # noqa: F401
+    LIGHTGBM_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    lightgbm = None  # type: ignore
+    LIGHTGBM_AVAILABLE = False
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 ALLOWED_DIRS = [BASE_DIR, Path(gettempdir()).resolve()]
 
@@ -74,12 +82,10 @@ class MLTrainer:
     def _validate_dependencies(self) -> None:
         """Validate required dependencies are available."""
         if self.model_type == "lightgbm":
-            try:
-                import lightgbm  # noqa: F401
-            except ImportError as exc:
+            if not LIGHTGBM_AVAILABLE:
                 raise ImportError(
                     "lightgbm is required for model_type 'lightgbm'. Install via `pip install lightgbm`.",
-                ) from exc
+                )
         elif self.model_type == "xgboost":
             try:
                 import xgboost  # noqa: F401

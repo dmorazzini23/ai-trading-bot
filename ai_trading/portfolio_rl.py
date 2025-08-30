@@ -10,21 +10,20 @@ from __future__ import annotations
 import numpy as np
 from functools import lru_cache
 
+from ai_trading.utils.device import TORCH_AVAILABLE
+
 
 @lru_cache(maxsize=1)
 def _lazy_import_torch():
-    """Import :mod:`torch` and return its submodules.
-
-    Lazily imports the heavy dependency to keep module import light. The
-    result is cached so subsequent calls are inexpensive.
-    """
-
+    """Import :mod:`torch` and return its submodules."""
+    if not TORCH_AVAILABLE:
+        raise ImportError("PyTorch is required for ai_trading.portfolio_rl")
     try:  # pragma: no cover - heavy optional dependency
         import torch as t
         from torch import nn as _nn, optim as _optim
     except (ImportError, OSError) as exc:  # pragma: no cover - import guard
         raise ImportError(
-            "PyTorch is required for ai_trading.portfolio_rl"
+            "PyTorch is required for ai_trading.portfolio_rl",
         ) from exc
     return t, _nn, _optim
 

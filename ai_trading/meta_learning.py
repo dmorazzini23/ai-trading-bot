@@ -8,6 +8,8 @@ resolved and constrained before deserialization. Prefer :mod:`joblib` or
 from importlib.util import find_spec
 from ai_trading.config import get_settings
 
+from ai_trading.utils.device import TORCH_AVAILABLE
+
 config = None
 SKLEARN_AVAILABLE = bool(find_spec("sklearn"))
 import csv
@@ -43,7 +45,6 @@ class RequestException(Exception):
 
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 sys.modules.setdefault("meta_learning", sys.modules[__name__])
-TORCH_AVAILABLE = False
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
     import numpy as _np  # noqa: F401
@@ -88,8 +89,10 @@ def _import_pandas(optional: bool = False):
 
 def _import_torch():
     """Import :mod:`torch` lazily."""
-    global torch, nn, DataLoader, TensorDataset, TORCH_AVAILABLE
+    global torch, nn, DataLoader, TensorDataset
     if torch is None:
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch is required for this operation")
         try:
             import torch as t
             from torch import nn as _nn
@@ -97,7 +100,6 @@ def _import_torch():
         except (ImportError, OSError) as exc:  # pragma: no cover - import guard
             raise ImportError("PyTorch is required for this operation") from exc
         torch, nn, DataLoader, TensorDataset = t, _nn, _DL, _TD
-        TORCH_AVAILABLE = True
     return torch
 
 def get_device() -> str:

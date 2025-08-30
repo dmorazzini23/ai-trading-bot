@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from ai_trading.logging import get_logger
 
+import importlib.util
+
+# Sentinel indicating whether torch is available without importing it
+TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+
 # torch is optional and heavy; import lazily inside functions
 # Cache references for repeated calls
 torch = None  # type: ignore[assignment]

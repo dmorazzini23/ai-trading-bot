@@ -2,7 +2,10 @@ import types
 
 import pytest
 np = pytest.importorskip("numpy")
-torch = pytest.importorskip("torch")
+from ai_trading.utils.device import TORCH_AVAILABLE
+if not TORCH_AVAILABLE:
+    pytest.skip("torch not installed", allow_module_level=True)
+import torch
 from torch import nn
 
 np.random.seed(0)

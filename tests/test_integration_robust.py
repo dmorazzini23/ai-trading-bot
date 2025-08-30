@@ -7,7 +7,9 @@ from ai_trading.config import management as config
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("requests")
-pytest.importorskip("torch")
+from ai_trading.utils.device import TORCH_AVAILABLE
+if not TORCH_AVAILABLE:
+    pytest.skip("torch not installed", allow_module_level=True)
 
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:
