@@ -43,7 +43,7 @@ from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact, redact_env
 from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.utils.http import clamp_request_timeout
-from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca
+from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import get_env, validate_required_env, reload_env
 
 
@@ -203,6 +203,7 @@ def _validate_runtime_config(cfg, tcfg) -> None:
         errors.append(f"CAPITAL_CAP out of range: {cap}")
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
+    prev_eq = _CACHE.equity
     eq = _get_equity_from_alpaca(cfg)
     targets = (cfg,) if cfg is tcfg else (cfg, tcfg)
     if eq > 0:
@@ -225,7 +226,8 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                 except Exception:  # pragma: no cover - defensive
                     pass
     try:
-        resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
+        force = (_CACHE.value is None) or (eq != prev_eq)
+        resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=force)
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
@@ -423,7 +425,7 @@ def main(argv: list[str] | None = None) -> None:
     if not _init_http_session(config):
         return
     try:
-        resolved_size, sizing_meta = resolve_max_position_size(config, S, force_refresh=True)
+        resolved_size, sizing_meta = resolve_max_position_size(config, S)
         try:
             setattr(S, "max_position_size", float(resolved_size))
         except (AttributeError, TypeError):

@@ -80,3 +80,24 @@ def test_failed_equity_fetch_warns_once_and_caches(monkeypatch, caplog):
     assert meta2["source"] == "cache"
     assert calls["n"] == 1
     assert [r.msg for r in caplog.records].count("EQUITY_MISSING") == 1
+
+
+def test_equity_recovered_emits_warning_once(monkeypatch, caplog):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    logger_once._emitted_keys.clear()
+
+    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg: 0.0)
+
+    cfg = SimpleNamespace(alpaca_api_key="k", alpaca_secret_key_plain="s", alpaca_base_url="https://paper-api.alpaca.markets")
+    tcfg = SimpleNamespace(capital_cap=0.02, max_position_mode="STATIC")
+
+    with caplog.at_level(logging.INFO):
+        ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
+        ps._CACHE.equity = 1000.0  # simulate later successful fetch
+        ps.resolve_max_position_size(cfg, tcfg)
+        ps.resolve_max_position_size(cfg, tcfg)
+
+    equity_warns = [r.msg for r in caplog.records if r.msg == "EQUITY_MISSING"]
+    sizing_msgs = [r.msg for r in caplog.records if r.name == "ai_trading.position_sizing"]
+    assert equity_warns.count("EQUITY_MISSING") == 1
+    assert sizing_msgs.count("CONFIG_AUTOFIX") == 1
