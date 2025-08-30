@@ -1,6 +1,10 @@
 from __future__ import annotations
+
 import os
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
+
 from ai_trading.logging.redact import redact_env
 
 class Settings(BaseModel):
@@ -46,12 +50,52 @@ class Settings(BaseModel):
         return bool(v)
 
 def debug_environment() -> dict:
-    """Return a tiny dump used by tests without side effects."""
-    return {'pythonpath': os.environ.get('PYTHONPATH', ''), 'env': redact_env(os.environ)}
+    """Return a structured dump of the current environment.
 
-def validate_specific_env_var(name: str, required: bool=False) -> str | None:
+    The output is intentionally small and side-effect free so tests can
+    inspect it safely.  Environment variable values are passed through
+    :func:`redact_env` to avoid leaking secrets.
+    """
+
+    masked = redact_env(os.environ)
+    env_vars = {
+        name: {
+            "status": "set",
+            "value": masked[name],
+            "length": len(str(os.environ[name])),
+        }
+        for name in os.environ
+    }
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "validation_status": "unknown",
+        "critical_issues": [],
+        "warnings": [],
+        "environment_vars": env_vars,
+        "recommendations": [],
+    }
+
+
+def validate_specific_env_var(name: str, required: bool = False) -> dict:
+    """Validate and report on a specific environment variable."""
+
     val = os.environ.get(name)
-    if required and (not val):
-        raise RuntimeError(f'Missing required env var: {name}')
-    return val
+    if val is None:
+        result = {
+            "variable": name,
+            "status": "missing",
+            "value": None,
+            "issues": [f"{name} is not set"],
+        }
+        if required:
+            raise RuntimeError(f"Missing required env var: {name}")
+        return result
+
+    return {
+        "variable": name,
+        "status": "set",
+        "value": val,
+        "issues": [],
+    }
 __all__ = ['Settings', 'debug_environment', 'validate_specific_env_var']
