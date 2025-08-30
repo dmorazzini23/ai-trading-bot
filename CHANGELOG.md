@@ -38,6 +38,7 @@ All notable changes to this project will be documented in this file.
 - **Import Hardening**: Made `model_pipeline` imports robust in `ai_trading/core/bot_engine.py`
   - Package-first import with graceful fallback to legacy root import
   - Works both as package import and when executed from repo root
+- **Market hours**: cache closed-state logging to emit at most once per date.
 - **Trading Loop**: guard missing Alpaca client and dedupe strategy logs
 - **Alpaca API**: fix submit/retry logic including 429 handling
 - **Staleness Guard**: convert timestamps to UTC with `pandas.to_datetime` and
