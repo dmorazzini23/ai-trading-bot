@@ -130,7 +130,13 @@ def _get_equity_from_alpaca(cfg, *, force_refresh: bool = False) -> float:
     try:  # Prefer alpaca-py when available
         from alpaca.trading.client import TradingClient  # type: ignore
 
-        client = TradingClient(api_key=key, secret_key=secret, url_override=base)
+        is_paper = "paper" in base.lower()
+        client = TradingClient(
+            api_key=key,
+            secret_key=secret,
+            paper=is_paper,
+            url_override=base,
+        )
         acct = client.get_account()
         eq = _coerce_float(getattr(acct, "equity", None), 0.0)
         _CACHE.equity = eq
