@@ -5,6 +5,30 @@ import ai_trading.core.runtime as rt
 from ai_trading.logging import logger_once
 
 
+def test_get_equity_from_alpaca_sets_paper(monkeypatch):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+
+    calls: dict[str, bool] = {}
+
+    class Dummy:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+        def get_account(self):  # pragma: no cover - simple stub
+            return SimpleNamespace(equity=0.0)
+
+    monkeypatch.setattr("alpaca.trading.client.TradingClient", Dummy)
+
+    cfg = SimpleNamespace(
+        alpaca_api_key="k",
+        alpaca_secret_key_plain="s",
+        alpaca_base_url="https://paper-api.alpaca.markets",
+    )
+
+    ps._get_equity_from_alpaca(cfg, force_refresh=True)
+
+    assert calls.get("paper") is True
+
 def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
     # Ensure cache is clear
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
