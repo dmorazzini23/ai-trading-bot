@@ -36,7 +36,10 @@ Risk exposure update failures are demoted to DEBUG level when the trading contex
 #### Automatic Secret Redaction
 Any `extra` fields such as API keys, secrets, or URLs are sanitized before
 being emitted to handlers, ensuring sensitive values are replaced with
-`***REDACTED***`.
+`***REDACTED***`.  The :func:`ai_trading.logging.redact.redact_env` helper now
+accepts ``drop=True`` to **remove** known sensitive keys instead of masking
+them.  The early environment validation step uses this mode so that logs do
+not contain secret key names or placeholder values.
 
 #### Data Fetch Diagnostics
 Daily price requests now log their parameters and outcome:
