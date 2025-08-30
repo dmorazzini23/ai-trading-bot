@@ -50,3 +50,41 @@ def load_pandas_ta() -> ModuleType | None:
         return None
 
 
+@lru_cache(maxsize=None)
+def _load_sklearn_submodule(name: str) -> ModuleType | None:
+    """Return a proxy for a :mod:`sklearn` submodule if available."""
+    if find_spec(f"sklearn.{name}") is None:
+        return None
+    return _LazyModule(f"sklearn.{name}")
+
+
+def load_sklearn_linear_model() -> ModuleType | None:
+    """Return :mod:`sklearn.linear_model` lazily."""
+    return _load_sklearn_submodule("linear_model")
+
+
+def load_sklearn_pipeline() -> ModuleType | None:
+    """Return :mod:`sklearn.pipeline` lazily."""
+    return _load_sklearn_submodule("pipeline")
+
+
+def load_sklearn_preprocessing() -> ModuleType | None:
+    """Return :mod:`sklearn.preprocessing` lazily."""
+    return _load_sklearn_submodule("preprocessing")
+
+
+def load_sklearn_model_selection() -> ModuleType | None:
+    """Return :mod:`sklearn.model_selection` lazily."""
+    return _load_sklearn_submodule("model_selection")
+
+
+def load_sklearn_ensemble() -> ModuleType | None:
+    """Return :mod:`sklearn.ensemble` lazily."""
+    return _load_sklearn_submodule("ensemble")
+
+
+def load_sklearn_metrics() -> ModuleType | None:
+    """Return :mod:`sklearn.metrics` lazily."""
+    return _load_sklearn_submodule("metrics")
+
+

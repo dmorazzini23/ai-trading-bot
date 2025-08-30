@@ -1231,30 +1231,12 @@ else:
         return args[0] if args else {}  # Mock column ensurer
 
 
-try:
-    from sklearn.exceptions import InconsistentVersionWarning
-except (
-    FileNotFoundError,
-    PermissionError,
-    IsADirectoryError,
-    JSONDecodeError,
-    ValueError,
-    KeyError,
-    TypeError,
-    OSError,
-    ImportError,
-):  # pragma: no cover - sklearn optional  # AI-AGENT-REF: narrow exception
-
-    class InconsistentVersionWarning(UserWarning):
-        pass
-
-
 warnings.filterwarnings(
     "ignore",
     message="pkg_resources is deprecated as an API.*",
     category=UserWarning,
 )
-warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
+warnings.filterwarnings("ignore", message=".*InconsistentVersionWarning.*")
 warnings.filterwarnings(
     "ignore",
     message="Converting to PeriodArray/Index representation will drop timezone information.*",

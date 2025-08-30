@@ -8,17 +8,19 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 import numpy as np
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import RobustScaler, StandardScaler
-from ai_trading.utils.lazy_imports import load_pandas
-sklearn_available = True
+from ai_trading.utils.lazy_imports import (
+    load_pandas,
+    load_sklearn_pipeline,
+    load_sklearn_preprocessing,
+)
+from importlib.util import find_spec
+sklearn_available = bool(find_spec("sklearn"))
 from ai_trading.logging import logger
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
 
-class BuildFeatures(BaseEstimator, TransformerMixin):
+class BuildFeatures:
     """
     Feature builder that creates technical indicators and regime features.
 
@@ -205,7 +207,10 @@ class BuildFeatures(BaseEstimator, TransformerMixin):
             logger.error(f'Error adding regime features: {e}')
             return features
 
-def create_feature_pipeline(scaler_type: str='standard', build_features_params: dict[str, Any] | None=None) -> Pipeline:
+def create_feature_pipeline(
+    scaler_type: str = 'standard',
+    build_features_params: dict[str, Any] | None = None,
+):
     """
     Create a complete feature engineering pipeline.
 
@@ -220,29 +225,43 @@ def create_feature_pipeline(scaler_type: str='standard', build_features_params: 
     try:
         if not sklearn_available:
             logger.warning('sklearn not available, returning simple pipeline')
-            return Pipeline([('features', BuildFeatures(**build_features_params or {}))])
+            skl_pipe = load_sklearn_pipeline()
+            if skl_pipe is None:
+                raise RuntimeError('sklearn.pipeline not available')
+            return skl_pipe.Pipeline(
+                [('features', BuildFeatures(**(build_features_params or {})))]
+            )
         build_features_params = build_features_params or {}
+        preproc = load_sklearn_preprocessing()
+        skl_pipe = load_sklearn_pipeline()
+        if not all([preproc, skl_pipe]):
+            raise RuntimeError('Required sklearn modules not available')
         feature_builder = BuildFeatures(**build_features_params)
         if scaler_type == 'standard':
-            scaler = StandardScaler()
+            scaler = preproc.StandardScaler()
         elif scaler_type == 'robust':
-            scaler = RobustScaler()
+            scaler = preproc.RobustScaler()
         elif scaler_type == 'none':
             scaler = None
         else:
             logger.warning(f'Unknown scaler type: {scaler_type}, using standard')
-            scaler = StandardScaler()
+            scaler = preproc.StandardScaler()
         pipeline_steps = [('features', feature_builder)]
         if scaler is not None:
             pipeline_steps.append(('scaler', scaler))
-        pipeline = Pipeline(pipeline_steps)
+        pipeline = skl_pipe.Pipeline(pipeline_steps)
         logger.info(f'Created feature pipeline with {len(pipeline_steps)} steps')
         return pipeline
     except (KeyError, ValueError, TypeError, pd.errors.EmptyDataError) as e:
         logger.error(f'Error creating feature pipeline: {e}')
         raise
 
-def validate_pipeline_no_leakage(pipeline: Pipeline, X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series | None=None) -> bool:
+def validate_pipeline_no_leakage(
+    pipeline: Any,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series | None = None,
+) -> bool:
     """
     Validate that pipeline doesn't leak information from test to train.
 
