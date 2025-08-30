@@ -4,6 +4,9 @@ import types
 from pathlib import Path
 
 import pytest
+
+sys.modules.pop("lightgbm", None)
+pytest.importorskip("lightgbm")
 from ai_trading.training.train_ml import LIGHTGBM_AVAILABLE
 
 pd = pytest.importorskip("pandas")
