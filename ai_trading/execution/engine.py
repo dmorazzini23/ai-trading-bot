@@ -448,7 +448,8 @@ class ExecutionEngine:
             if getattr(ord_obj, 'status', '').lower() == 'new':
                 self.broker_interface.cancel_order(order_id)
             return True
-        except Exception:
+        except Exception as exc:  # pragma: no cover - broker interface may vary
+            logger.debug('Failed to cancel stale order %s: %s', order_id, exc)
             return False
 
     def _assess_liquidity(self, symbol: str, quantity: int) -> tuple[int, bool]:

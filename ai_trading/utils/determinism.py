@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 try:
     import numpy as np  # type: ignore
     HAS_NUMPY = True
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     HAS_NUMPY = False
     np = None  # type: ignore
 

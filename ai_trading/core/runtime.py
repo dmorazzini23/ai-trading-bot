@@ -88,7 +88,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             from ai_trading.config.management import get_env
 
             env_val = get_env("MAX_POSITION_SIZE", cast=float)
-        except Exception:
+        except (ImportError, RuntimeError):
             env_val = None
         if env_val is not None:
             val = env_val
@@ -98,7 +98,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             from ai_trading.config.management import get_env
 
             env_override = get_env("AI_TRADING_MAX_POSITION_SIZE", cast=float)
-        except Exception:
+        except (ImportError, RuntimeError):
             env_override = None
         if env_override is not None:
             val = env_override

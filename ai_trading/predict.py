@@ -10,7 +10,7 @@ try:
 
     _CACHETOOLS_AVAILABLE = True
     _sentiment_cache = TTLCache(maxsize=1000, ttl=3600)
-except Exception:
+except ImportError:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
 

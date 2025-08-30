@@ -4,6 +4,9 @@ from ai_trading.logging import get_logger
 import os
 from flask import Flask, jsonify
 
+_log = get_logger(__name__)
+
+
 def create_app():
     app = Flask(__name__)
     get_logger('werkzeug').setLevel(logging.ERROR)
@@ -14,7 +17,8 @@ def create_app():
         validate_required_env()
         app.config["_ENV_VALID"] = True
         app.config["_ENV_ERR"] = None
-    except Exception as e:  # noqa: BLE001
+    except (ImportError, RuntimeError) as e:
+        _log.exception("ENV_VALIDATION_FAILED")
         app.config["_ENV_VALID"] = False
         app.config["_ENV_ERR"] = str(e)
 
@@ -50,7 +54,8 @@ def create_app():
                     shadow_mode=shadow,
                 )
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # /health must not raise
+            _log.exception("HEALTH_CHECK_FAILED")
             return jsonify(ok=False, error=str(e))
 
     @app.route('/healthz')
@@ -74,7 +79,7 @@ def create_app():
         """Expose Prometheus metrics if available."""
         try:
             from ai_trading.metrics import PROMETHEUS_AVAILABLE, REGISTRY
-        except Exception:
+        except ImportError:
             PROMETHEUS_AVAILABLE, REGISTRY = False, None
         if not PROMETHEUS_AVAILABLE:
             return ('metrics unavailable', 501)

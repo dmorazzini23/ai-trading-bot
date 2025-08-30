@@ -7,7 +7,7 @@ try:  # requests is optional
     from requests.adapters import HTTPAdapter  # type: ignore
     from requests.exceptions import RequestException as RequestsRequestException  # type: ignore
     REQUESTS_AVAILABLE = True
-except Exception:  # pragma: no cover - requests missing
+except ImportError:  # pragma: no cover - requests missing
     requests = None  # type: ignore
     HTTPAdapter = None  # type: ignore
     class RequestsRequestException(Exception):  # type: ignore
@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover - requests missing
 
 try:  # urllib3 is only needed when requests is available
     from urllib3.util.retry import Retry  # type: ignore
-except Exception:  # pragma: no cover - fallback when urllib3 missing
+except ImportError:  # pragma: no cover - fallback when urllib3 missing
     class Retry:  # type: ignore
         def __init__(self, *a, **k):
             pass

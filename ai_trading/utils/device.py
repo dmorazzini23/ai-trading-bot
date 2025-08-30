@@ -20,7 +20,7 @@ def get_device() -> str:
     try:
         import torch as _torch  # type: ignore[assignment]
         torch = _torch
-    except Exception:  # noqa: BLE001
+    except ImportError:
         _device = "cpu"
     else:
         try:
@@ -28,7 +28,7 @@ def get_device() -> str:
                 _device = "cuda"
             else:
                 _device = "cpu"
-        except Exception:  # defensive: do not let CUDA probing blow up
+        except (RuntimeError, AssertionError):  # defensive: do not let CUDA probing blow up
             _device = "cpu"
 
     logger.info("ML_DEVICE_DETECTED", extra={"device": _device})  # AI-AGENT-REF: default CPU / optional CUDA
@@ -42,12 +42,12 @@ def tensors_to_device(batch: dict, device: str):
         try:
             import torch as _torch  # type: ignore[assignment]
             torch = _torch
-        except Exception:  # noqa: BLE001
+        except ImportError:
             return batch
     if _torch_tensor is None:
         try:
             from torch import Tensor as _Tensor
             _torch_tensor = _Tensor
-        except Exception:  # noqa: BLE001
+        except ImportError:
             return batch
     return {k: v.to(device) if isinstance(v, _torch_tensor) else v for k, v in batch.items()}

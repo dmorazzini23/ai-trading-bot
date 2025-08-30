@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 # otherwise.
 try:
     import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover - import guard
+except ImportError:  # pragma: no cover - import guard
     pd = None
 _lock = threading.RLock()
 _mem: dict[str, tuple[float, Any]] = {}
@@ -72,7 +72,14 @@ def get_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str) -> Any 
         return None
     try:
         return pd.read_csv(p_csv)
-    except Exception as e:
+    except (
+        pd.errors.EmptyDataError,
+        KeyError,
+        ValueError,
+        TypeError,
+        OSError,
+        PermissionError,
+    ) as e:
         logger.debug('Failed to read CSV cache file %s: %s', p_csv, e)
         return None
 
@@ -100,5 +107,12 @@ def put_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str, df: Any
     p_csv = p.with_suffix('.csv')
     try:
         df.to_csv(p_csv, index=False)
-    except Exception as e:
+    except (
+        pd.errors.EmptyDataError,
+        KeyError,
+        ValueError,
+        TypeError,
+        OSError,
+        PermissionError,
+    ) as e:
         logger.debug('Failed to write CSV cache file %s: %s', p_csv, e)

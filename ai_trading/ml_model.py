@@ -22,7 +22,7 @@ class _DummyPipe:
             raise AttributeError('not fitted')
         try:
             from pandas.errors import EmptyDataError  # type: ignore
-        except Exception:  # pragma: no cover - pandas optional
+        except ImportError:  # pragma: no cover - pandas optional
             class EmptyDataError(Exception):
                 pass
         try:
