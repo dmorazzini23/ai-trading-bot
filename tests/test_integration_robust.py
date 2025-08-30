@@ -6,6 +6,8 @@ import pytest
 from ai_trading.config import management as config
 
 pd = pytest.importorskip("pandas")
+pytest.importorskip("requests")
+pytest.importorskip("torch")
 
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:
@@ -49,8 +51,6 @@ if not hasattr(sys.modules["pandas_market_calendars"], "get_calendar"):
     sys.modules["pandas_market_calendars"].get_calendar = MagicMock()
 
 mods = [
-    "requests",
-    "urllib3",
     "bs4",
     "flask",
     "schedule",
@@ -72,34 +72,9 @@ mods = [
     "ratelimit",
     "ai_trading.capital_scaling",
     "strategy_allocator",
-    "torch",
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
-
-if "torch" in sys.modules:
-    sys.modules["torch"].manual_seed = lambda *a, **k: None
-    sys.modules["torch"].Tensor = object
-    torch_nn = types.ModuleType("torch.nn")
-    torch_nn.Module = object
-    torch_nn.Sequential = lambda *a, **k: None
-    torch_nn.Linear = lambda *a, **k: None
-    torch_nn.ReLU = lambda *a, **k: None
-    torch_nn.Softmax = lambda *a, **k: None
-    sys.modules["torch.nn"] = torch_nn
-
-req_mod = types.ModuleType("requests")
-sys.modules["requests"] = req_mod
-exc_mod = types.ModuleType("requests.exceptions")
-exc_mod.RequestException = Exception
-exc_mod.HTTPError = Exception
-req_mod.exceptions = exc_mod
-req_mod.get = lambda *a, **k: None
-req_mod.post = lambda *a, **k: None
-req_mod.RequestException = Exception
-sys.modules["requests.exceptions"] = exc_mod
-sys.modules["urllib3"] = types.ModuleType("urllib3")
-sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules["alpaca"].TradingClient = object
 sys.modules["alpaca"].APIError = Exception
 sys.modules["alpaca.trading.client"] = types.ModuleType("alpaca.trading.client")
