@@ -1059,6 +1059,9 @@ from ai_trading.settings import (
     get_seed_int,
 )  # AI-AGENT-REF: runtime env settings
 
+# Refresh environment variables on startup for reliability
+_reload_env()
+
 # Initialize settings once for global use
 CFG = get_settings()
 # Backward-compat constants for risk thresholds used throughout this module
@@ -1245,10 +1248,6 @@ warnings.filterwarnings(
 )
 
 import os
-
-
-# Refresh environment variables on startup for reliability
-_reload_env()
 
 
 # TRADING_MODE must be defined before any classes that reference it

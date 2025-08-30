@@ -12,6 +12,7 @@ def test_config_loaded_logs_once_and_on_reload(caplog):
 
     caplog.clear()
     with caplog.at_level(logging.INFO):
+        _ = bot_engine.state.mode_obj  # access lazy state
         bot_engine.BotMode()
         bot_engine.BotMode()
     assert "Config settings loaded, validation deferred to runtime" not in caplog.text
