@@ -227,14 +227,23 @@ class SymbolCostModel:
             Dict with cost breakdown
         """
         costs = self.get_costs(symbol)
-        total_cost_bps = costs.total_execution_cost_bps(volume_ratio)
-        cost_dollars = position_value * (total_cost_bps / 10000)
-        if cost_dollars < costs.min_commission:
-            cost_dollars = costs.min_commission
-            effective_bps = cost_dollars / position_value * 10000
+        total_cost_bps = float(costs.total_execution_cost_bps(volume_ratio))
+        position_value_f = float(position_value)
+        cost_dollars = position_value_f * (total_cost_bps / 10000)
+        min_commission = float(costs.min_commission)
+        if cost_dollars < min_commission:
+            cost_dollars = min_commission
+            effective_bps = cost_dollars / position_value_f * 10000
         else:
             effective_bps = total_cost_bps
-        return {'cost_bps': total_cost_bps, 'cost_dollars': cost_dollars, 'effective_bps': effective_bps, 'spread_bps': costs.half_spread_bps * 2, 'slippage_bps': costs.slippage_cost_bps(volume_ratio), 'commission_bps': costs.commission_bps}
+        return {
+            'cost_bps': total_cost_bps,
+            'cost_dollars': cost_dollars,
+            'effective_bps': effective_bps,
+            'spread_bps': costs.half_spread_bps * 2,
+            'slippage_bps': costs.slippage_cost_bps(volume_ratio),
+            'commission_bps': costs.commission_bps,
+        }
 
     def adjust_position_size(self, symbol: str, target_size: float, max_cost_bps: float=20.0, volume_ratio: float=1.0) -> tuple[float, dict[str, float]]:
         """
@@ -249,19 +258,24 @@ class SymbolCostModel:
         Returns:
             Tuple of (adjusted_size, cost_info)
         """
-        if target_size == 0:
+        target_size_f = float(target_size)
+        volume_ratio_f = float(volume_ratio)
+        if target_size_f == 0:
             return (0.0, {})
         costs = self.get_costs(symbol)
-        total_cost_bps = costs.total_execution_cost_bps(volume_ratio)
-        if total_cost_bps <= max_cost_bps:
-            cost_info = self.calculate_position_impact(symbol, abs(target_size), volume_ratio)
-            return (target_size, cost_info)
-        cost_ratio = max_cost_bps / total_cost_bps
-        adjusted_size = target_size * cost_ratio
-        cost_info = self.calculate_position_impact(symbol, abs(adjusted_size), volume_ratio)
-        cost_info['original_size'] = target_size
+        total_cost_bps = float(costs.total_execution_cost_bps(volume_ratio_f))
+        max_cost_bps_f = float(max_cost_bps)
+        if total_cost_bps <= max_cost_bps_f:
+            cost_info = self.calculate_position_impact(symbol, abs(target_size_f), volume_ratio_f)
+            return (target_size_f, cost_info)
+        cost_ratio = max_cost_bps_f / total_cost_bps
+        adjusted_size = target_size_f * cost_ratio
+        cost_info = self.calculate_position_impact(symbol, abs(adjusted_size), volume_ratio_f)
+        cost_info['original_size'] = target_size_f
         cost_info['scaling_factor'] = cost_ratio
-        self.logger.warning(f'Scaled down position for {symbol} by {cost_ratio:.2%} due to high costs ({total_cost_bps:.1f}bps > {max_cost_bps}bps)')
+        self.logger.warning(
+            f'Scaled down position for {symbol} by {cost_ratio:.2%} due to high costs ({total_cost_bps:.1f}bps > {max_cost_bps_f}bps)'
+        )
         return (adjusted_size, cost_info)
 
     def save_daily_snapshot(self, trading_date: date | None=None) -> str:
@@ -318,9 +332,10 @@ class SymbolCostModel:
         """
         costs = self.get_costs(symbol)
         if costs.locate_required:
-            if costs.borrow_fee_bps > 50.0:
+            borrow_fee_bps = float(costs.borrow_fee_bps)
+            if borrow_fee_bps > 50.0:
                 return (False, 'Hard to borrow - high fee')
-            elif costs.borrow_fee_bps > 20.0:
+            elif borrow_fee_bps > 20.0:
                 return (True, 'Available but expensive')
         return (True, 'Available')
 
@@ -338,14 +353,15 @@ class SymbolCostModel:
             Dict with holding cost breakdown
         """
         costs = self.get_costs(symbol)
-        overnight_cost_bps = costs.overnight_cost_bps(days_held)
-        overnight_cost_dollars = position_value * (overnight_cost_bps / 10000)
+        position_value_f = float(position_value)
+        overnight_cost_bps = float(costs.overnight_cost_bps(days_held))
+        overnight_cost_dollars = position_value_f * (overnight_cost_bps / 10000)
         borrow_cost_bps = 0.0
         borrow_cost_dollars = 0.0
         if is_short:
-            borrow_cost_bps = costs.borrow_cost_bps(days_held)
-            borrow_cost_dollars = position_value * (borrow_cost_bps / 10000)
-        total_cost_bps = overnight_cost_bps + borrow_cost_bps
+            borrow_cost_bps = float(costs.borrow_cost_bps(days_held))
+            borrow_cost_dollars = position_value_f * (borrow_cost_bps / 10000)
+        total_cost_bps = float(overnight_cost_bps + borrow_cost_bps)
         total_cost_dollars = overnight_cost_dollars + borrow_cost_dollars
         return {'overnight_cost_bps': overnight_cost_bps, 'overnight_cost_dollars': overnight_cost_dollars, 'borrow_cost_bps': borrow_cost_bps, 'borrow_cost_dollars': borrow_cost_dollars, 'total_holding_cost_bps': total_cost_bps, 'total_holding_cost_dollars': total_cost_dollars, 'days_held': days_held, 'is_short': is_short}
 
@@ -366,21 +382,24 @@ class SymbolCostModel:
         if target_size == 0:
             return (0.0, {})
         costs = self.get_costs(symbol)
-        holding_cost_bps = costs.total_holding_cost_bps(expected_holding_days, is_short)
+        holding_cost_bps = float(costs.total_holding_cost_bps(expected_holding_days, is_short))
+        max_holding_cost_bps_f = float(max_holding_cost_bps)
         if is_short:
             available, reason = self.check_short_availability(symbol)
             if not available:
                 self.logger.warning(f'Cannot short {symbol}: {reason}')
                 return (0.0, {'rejected': True, 'reason': reason})
-        if holding_cost_bps <= max_holding_cost_bps:
+        if holding_cost_bps <= max_holding_cost_bps_f:
             cost_info = self.calculate_holding_cost(symbol, abs(target_size), expected_holding_days, is_short)
             return (target_size, cost_info)
-        cost_ratio = max_holding_cost_bps / holding_cost_bps
+        cost_ratio = max_holding_cost_bps_f / holding_cost_bps
         adjusted_size = target_size * cost_ratio
         cost_info = self.calculate_holding_cost(symbol, abs(adjusted_size), expected_holding_days, is_short)
         cost_info['original_size'] = target_size
         cost_info['scaling_factor'] = cost_ratio
-        self.logger.warning(f"Scaled down {('short' if is_short else 'long')} position for {symbol} by {cost_ratio:.2%} due to high holding costs ({holding_cost_bps:.1f}bps > {max_holding_cost_bps}bps)")
+        self.logger.warning(
+            f"Scaled down {('short' if is_short else 'long')} position for {symbol} by {cost_ratio:.2%} due to high holding costs ({holding_cost_bps:.1f}bps > {max_holding_cost_bps_f}bps)"
+        )
         return (adjusted_size, cost_info)
 _global_cost_model: SymbolCostModel | None = None
 
