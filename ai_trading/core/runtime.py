@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from .protocols import AllocatorProtocol
-from ai_trading.position_sizing import get_max_position_size
+from ai_trading.position_sizing import get_max_position_size, _get_equity_from_alpaca
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
 REQUIRED_PARAM_DEFAULTS = {
@@ -90,6 +90,19 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             object.__setattr__(cfg, "capital_cap", params["CAPITAL_CAP"])
         except Exception:
             pass
+
+    # Ensure equity is populated so downstream sizing uses a cached value.
+    eq = getattr(cfg, "equity", None)
+    if eq in (None, 0.0):
+        fetched = _get_equity_from_alpaca(cfg)
+        eq = fetched if fetched > 0 else None
+        try:
+            object.__setattr__(cfg, "equity", eq)
+        except Exception:
+            try:
+                setattr(cfg, "equity", eq)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     # Resolve max_position_size consistently with position_sizing helper.
     val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)

@@ -204,17 +204,26 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
     eq = _get_equity_from_alpaca(cfg)
+    targets = {cfg, tcfg}
     if eq > 0:
-        try:
-            setattr(tcfg, "equity", eq)
-        except Exception:
-            object.__setattr__(tcfg, "equity", eq)
+        for obj in targets:
+            try:
+                setattr(obj, "equity", eq)
+            except Exception:
+                try:
+                    object.__setattr__(obj, "equity", eq)
+                except Exception:  # pragma: no cover - defensive
+                    pass
     else:
         logger.warning("ACCOUNT_EQUITY_MISSING", extra={"equity": eq})
-        try:
-            setattr(tcfg, "equity", None)
-        except Exception:
-            object.__setattr__(tcfg, "equity", None)
+        for obj in targets:
+            try:
+                setattr(obj, "equity", None)
+            except Exception:
+                try:
+                    object.__setattr__(obj, "equity", None)
+                except Exception:  # pragma: no cover - defensive
+                    pass
     try:
         resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
         if hasattr(tcfg, "max_position_size"):
