@@ -11,3 +11,4 @@ hypothesis>=6.92
 coverage>=7.6
 requests>=2.31,<3
 alpaca-py==0.42.0
+lightgbm==4.6.0

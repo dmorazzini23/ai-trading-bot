@@ -45,4 +45,5 @@ statsmodels==0.14.5
 cryptography>=41
 torch==2.3.1
 transformers==4.55.4
+lightgbm==4.6.0
 hmmlearn==0.3.2

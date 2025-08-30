@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 pd = pytest.importorskip("pandas")
+pytest.importorskip("lightgbm")
 
 
 def _import_retrain(monkeypatch):
@@ -40,25 +41,6 @@ def _import_retrain(monkeypatch):
     )
     pta.stochrsi = lambda *a, **k: pd.DataFrame({"STOCHRSIk_14_14_3_3": [1.0]})
     monkeypatch.setitem(sys.modules, "pandas_ta", pta)
-
-    lg = types.ModuleType("lightgbm")
-
-    class LGBMClassifier:
-        def __init__(self, **k):
-            pass
-
-        def fit(self, X, y):
-            pass
-
-        def predict_proba(self, X):
-            return [[0.5, 0.5]]
-
-        @property
-        def feature_importances_(self):
-            return [1]
-
-    lg.LGBMClassifier = LGBMClassifier
-    monkeypatch.setitem(sys.modules, "lightgbm", lg)
 
     monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
     sys.modules["torch"].manual_seed = lambda *a, **k: None
