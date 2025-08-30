@@ -466,7 +466,7 @@ The bot automatically uses optimized parameters when available:
 cat best_hyperparams.json
 
 # Manual optimization
-python algorithm_optimizer.py --symbols SPY --iterations 100
+python -m ai_trading.algorithm_optimizer --symbols SPY --iterations 100
 ```
 
 ### 🎛️ Trading Modes
