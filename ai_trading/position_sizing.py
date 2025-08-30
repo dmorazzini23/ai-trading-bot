@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from math import floor
 from typing import Any
 import os
+from json import JSONDecodeError
 from ai_trading.logging import get_logger, logger_once
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
@@ -163,7 +164,7 @@ def _get_equity_from_alpaca(cfg, *, force_refresh: bool = False) -> float:
             _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": status})
     except RequestException as e:
         _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
-    except ValueError as e:
+    except JSONDecodeError as e:
         _log.warning("ALPACA_INVALID_RESPONSE", extra={"url": url, "error": str(e)})
     except Exception:  # log and propagate unexpected errors
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
@@ -172,7 +173,10 @@ def _get_equity_from_alpaca(cfg, *, force_refresh: bool = False) -> float:
     return 0.0
 
 def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[float, dict[str, Any]]:
-    """Resolve max_position_size according to mode and settings."""
+    """Resolve max_position_size according to mode and settings.
+
+    Set ``force_refresh`` to ``True`` to bypass cached values.
+    """
     mode = str(getattr(tcfg, 'max_position_mode', getattr(cfg, 'max_position_mode', 'STATIC'))).upper()
     ttl = float(getattr(tcfg, 'dynamic_size_refresh_secs', getattr(cfg, 'dynamic_size_refresh_secs', 3600.0)))
     cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)
@@ -201,7 +205,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 raise ValueError('max_position_size must be positive')
             eq = getattr(tcfg, 'equity', getattr(cfg, 'equity', None))
             if eq in (None, 0.0):
-                fetched = _get_equity_from_alpaca(cfg)
+                fetched = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
                 if fetched > 0:
                     eq = fetched
                     for obj in (cfg, tcfg):
@@ -228,7 +232,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         )
     if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
-    eq = _get_equity_from_alpaca(cfg)
+    eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
     _CACHE.equity = eq
     if eq <= 0.0 or cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
@@ -274,8 +278,8 @@ def get_max_position_size(cfg, tcfg, *, force_refresh: bool = False) -> float:
 
     This is a thin convenience wrapper around :func:`resolve_max_position_size`
     used by modules that only care about the numeric size and not the
-    accompanying metadata. Both the bot engine and external callers should use
-    this helper to ensure consistent sizing logic across the codebase.
+    accompanying metadata. Set ``force_refresh`` to ``True`` to bypass any
+    cached values.
     """
 
     val, _ = resolve_max_position_size(cfg, tcfg, force_refresh=force_refresh)
