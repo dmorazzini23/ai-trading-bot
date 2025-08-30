@@ -1520,8 +1520,9 @@ def get_market_schedule():
     cal = get_market_calendar()
     if _MARKET_SCHEDULE is None:
         if hasattr(cal, "schedule"):
+            today = date.today()
             _MARKET_SCHEDULE = cal.schedule(
-                start_date="2020-01-01", end_date="2030-12-31"
+                start_date="2020-01-01", end_date=today
             )
         else:
             _MARKET_SCHEDULE = pd.DataFrame()
@@ -3947,7 +3948,14 @@ class DataFetcher:
                         if ref_date.weekday() < 5:
                             break
 
-        end_ts = datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC) + timedelta(days=1)
+        end_ts = datetime.combine(ref_date, dt_time.max, tzinfo=UTC)
+        today = date.today()
+        if end_ts.date() > today:
+            self._warn_once(
+                "daily_end_future",
+                f"[get_daily_df] end {end_ts.date().isoformat()} exceeds today {today.isoformat()}",
+            )
+            end_ts = datetime.combine(today, dt_time.max, tzinfo=UTC)
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
 
         logger.info(
