@@ -65,8 +65,7 @@ def test_pipeline_basic(monkeypatch):
     monkeypatch.setitem(sys.modules, "sklearn.linear_model", skl_lin)
 
     monkeypatch.syspath_prepend(".")
-    sys.modules.pop("pipeline", None)
-    pipeline = importlib.import_module("pipeline")
+    pipeline = importlib.import_module("ai_trading.pipeline")
 
     df = pd.DataFrame({"close": np.arange(10, dtype=float)})
     arr = pipeline.FeatureBuilder().transform(df)
