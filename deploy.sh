@@ -14,6 +14,7 @@ if [ -z "${AI_TRADING_MAX_POSITION_SIZE:-}" ]; then
 fi
 
 ssh "$SERVER" << EOF
+  export AI_TRADING_MODEL_MODULE=ai_trading.model_loader
   cd "$APP_DIR"
   git fetch origin "$BRANCH"
   git reset --hard "origin/$BRANCH"

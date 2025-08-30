@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
-ENV AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot \
+ENV AI_TRADING_MODEL_MODULE=ai_trading.model_loader \
+    AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot \
     AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot \
     AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 COPY . .

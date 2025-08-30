@@ -8,6 +8,7 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
+export AI_TRADING_MODEL_MODULE="${AI_TRADING_MODEL_MODULE:-ai_trading.model_loader}"
 
 # Ensure position sizing limit is defined before launching
 if [ -z "${AI_TRADING_MAX_POSITION_SIZE:-}" ]; then
