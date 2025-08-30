@@ -8,7 +8,7 @@ bar finality before signal generation.
 from ai_trading.logging import get_logger
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from types import ModuleType
 import importlib
 
@@ -68,23 +68,28 @@ class AlignedClock:
         self.calendar = _get_calendar(exchange)
         self._bar_close_cache: dict[str, datetime] = {}
 
-    def get_exchange_time(self) -> datetime:
-        """
-        Get current exchange time (EST/EDT for NYSE).
+    def get_exchange_time(self, tz: tzinfo | None = None) -> datetime:
+        """Get current exchange time.
+
+        Args:
+            tz: Optional timezone to convert the exchange time into.
 
         Returns:
-            Current time in exchange timezone
+            Current time in exchange timezone (or provided tz)
         """
         utc_now = datetime.now(UTC)
+        current = utc_now
         if self.calendar:
             try:
                 exchange_tz = self.calendar.tz
-                return utc_now.astimezone(exchange_tz)
+                current = utc_now.astimezone(exchange_tz)
             except (ValueError, TypeError) as e:
                 self.logger.warning(f"Failed to get exchange time: {e.__class__.__name__}: {e}")
-        return utc_now
+        if tz is not None:
+            current = current.astimezone(tz)
+        return current
 
-    def next_bar_close(self, symbol: str, timeframe: str = "1m") -> datetime:
+    def next_bar_close(self, symbol: str, timeframe: str = "1m", tz: tzinfo | None = None) -> datetime:
         """
         Calculate next bar close time for symbol and timeframe.
 
@@ -95,12 +100,12 @@ class AlignedClock:
         Returns:
             Next bar close time in exchange timezone
         """
-        cache_key = f"{symbol}_{timeframe}"
+        cache_key = f"{symbol}_{timeframe}_{str(tz) if tz else 'default'}"
         if cache_key in self._bar_close_cache:
             cached_close = self._bar_close_cache[cache_key]
-            if cached_close > self.get_exchange_time():
+            if cached_close > self.get_exchange_time(tz):
                 return cached_close
-        current_time = self.get_exchange_time()
+        current_time = self.get_exchange_time(tz)
         interval_minutes = self._parse_timeframe_minutes(timeframe)
         if interval_minutes >= 1440:
             next_close = current_time.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -123,8 +128,11 @@ class AlignedClock:
                 if len(trading_days) > 0:
                     next_trading_day = trading_days[0].date()
                     if next_close.date() != next_trading_day:
-                        next_close = datetime.combine(next_trading_day, next_close.time())
-                        next_close = next_close.replace(tzinfo=next_close.tzinfo)
+                        next_close = datetime.combine(
+                            next_trading_day,
+                            next_close.time(),
+                            tzinfo=current_time.tzinfo,
+                        )
             except (ValueError, TypeError) as e:
                 self.logger.warning(f"Calendar check failed: {e.__class__.__name__}: {e}")
         self._bar_close_cache[cache_key] = next_close
@@ -142,7 +150,7 @@ class AlignedClock:
         else:
             return 1
 
-    def check_skew(self, reference_time: datetime | None = None) -> float:
+    def check_skew(self, reference_time: datetime | None = None, tz: tzinfo | None = None) -> float:
         """
         Check time skew against reference time.
 
@@ -153,17 +161,17 @@ class AlignedClock:
             Skew in milliseconds (positive if local is ahead)
         """
         if reference_time is None:
-            reference_time = datetime.now(UTC)
-        exchange_time = self.get_exchange_time()
-        local_utc = datetime.now(UTC)
-        exchange_utc = exchange_time.astimezone(UTC)
+            local_utc = datetime.now(UTC)
+        else:
+            local_utc = reference_time.astimezone(UTC)
+        exchange_utc = self.get_exchange_time(tz).astimezone(UTC)
         skew_seconds = (local_utc - exchange_utc).total_seconds()
         skew_ms = skew_seconds * 1000
         if abs(skew_ms) > self.max_skew_ms:
             self.logger.warning(f"Time skew detected: {skew_ms:.1f}ms (max allowed: {self.max_skew_ms}ms)")
         return skew_ms
 
-    def ensure_final_bar(self, symbol: str, timeframe: str = "1m") -> BarValidation:
+    def ensure_final_bar(self, symbol: str, timeframe: str = "1m", tz: tzinfo | None = None) -> BarValidation:
         """
         Validate that the current bar is final before generating signals.
 
@@ -174,10 +182,10 @@ class AlignedClock:
         Returns:
             BarValidation result with finality status
         """
-        current_time = self.get_exchange_time()
-        next_close = self.next_bar_close(symbol, timeframe)
+        current_time = self.get_exchange_time(tz)
+        next_close = self.next_bar_close(symbol, timeframe, tz)
         time_to_close = (next_close - current_time).total_seconds()
-        skew_ms = self.check_skew()
+        skew_ms = self.check_skew(tz=tz)
         buffer_seconds = (self.max_skew_ms + 100) / 1000
         is_final = time_to_close > buffer_seconds
         validation = BarValidation(
@@ -195,7 +203,9 @@ class AlignedClock:
             self.logger.warning(f"Bar not final for {symbol} {timeframe}: {validation.reason}")
         return validation
 
-    def is_market_open(self, symbol: str, timestamp: datetime | None = None) -> bool:
+    def is_market_open(
+        self, symbol: str, timestamp: datetime | None = None, tz: tzinfo | None = None
+    ) -> bool:
         """
         Check if market is open for trading.
 
@@ -207,9 +217,9 @@ class AlignedClock:
             True if market is open
         """
         if timestamp is None:
-            timestamp = self.get_exchange_time()
+            timestamp = self.get_exchange_time(tz)
         elif timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=UTC)
+            timestamp = timestamp.replace(tzinfo=tz or UTC)
         if not self.calendar:
             if timestamp.weekday() >= 5:
                 return False
@@ -229,7 +239,9 @@ class AlignedClock:
             self.logger.warning(f"Market hours check failed: {e.__class__.__name__}: {e}")
             return False
 
-    def wait_for_aligned_tick(self, symbol: str, timeframe: str = "1m") -> BarValidation:
+    def wait_for_aligned_tick(
+        self, symbol: str, timeframe: str = "1m", tz: tzinfo | None = None
+    ) -> BarValidation:
         """
         Wait until we're properly aligned for the next trading tick.
 
@@ -243,7 +255,7 @@ class AlignedClock:
         max_wait_seconds = 60
         start_time = time.time()
         while time.time() - start_time < max_wait_seconds:
-            validation = self.ensure_final_bar(symbol, timeframe)
+            validation = self.ensure_final_bar(symbol, timeframe, tz)
             if validation.is_final:
                 return validation
             time.sleep(0.1)
@@ -262,31 +274,17 @@ def get_aligned_clock() -> AlignedClock:
     return _global_clock
 
 
-def ensure_final_bar(symbol: str, timeframe: str = "1m") -> BarValidation:
-    """
-    Convenience function to validate bar finality.
-
-    Args:
-        symbol: Trading symbol
-        timeframe: Timeframe to validate
-
-    Returns:
-        BarValidation result
-    """
+def ensure_final_bar(
+    symbol: str, timeframe: str = "1m", tz: tzinfo | None = None
+) -> BarValidation:
+    """Convenience function to validate bar finality."""
     clock = get_aligned_clock()
-    return clock.ensure_final_bar(symbol, timeframe)
+    return clock.ensure_final_bar(symbol, timeframe, tz)
 
 
-def is_market_open(symbol: str, timestamp: datetime | None = None) -> bool:
-    """
-    Convenience function to check if market is open.
-
-    Args:
-        symbol: Trading symbol
-        timestamp: Time to check (defaults to now)
-
-    Returns:
-        True if market is open
-    """
+def is_market_open(
+    symbol: str, timestamp: datetime | None = None, tz: tzinfo | None = None
+) -> bool:
+    """Convenience function to check if market is open."""
     clock = get_aligned_clock()
-    return clock.is_market_open(symbol, timestamp)
+    return clock.is_market_open(symbol, timestamp, tz)

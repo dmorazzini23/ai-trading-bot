@@ -57,7 +57,7 @@ def test_json_formatter_exc_info():
 
 def test_json_formatter_serializes_nonstandard_types():
     fmt = logger.JSONFormatter("%Y-%m-%dT%H:%M:%SZ")
-    from datetime import date, datetime
+    from datetime import UTC, date, datetime
 
     import numpy as np
 
@@ -67,7 +67,7 @@ def test_json_formatter_serializes_nonstandard_types():
 
     rec = _make_record(
         arr=np.array([1, 2, 3]),
-        dt=datetime(2024, 1, 2, 3, 4, 5),
+        dt=datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
         d=date(2024, 1, 3),
         foo=Foo(),
     )
