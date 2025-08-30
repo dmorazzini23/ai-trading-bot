@@ -188,7 +188,10 @@ def _fail_fast_env() -> None:
     except RuntimeError as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
-    logger.info("ENV_CONFIG_LOADED", extra={"dotenv_path": loaded, **redact_env(snapshot)})
+    logger.info(
+        "ENV_CONFIG_LOADED",
+        extra={"dotenv_path": loaded, **redact_env(snapshot, drop=True)},
+    )
 
 
 def _validate_runtime_config(cfg, tcfg) -> None:

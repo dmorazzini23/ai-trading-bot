@@ -54,13 +54,26 @@ def redact(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return _redact_inplace(dup)
 
 
-def redact_env(env: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return copy of *env* with known sensitive keys masked."""
+def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, Any]:
+    """Return copy of *env* with known sensitive keys masked or dropped.
+
+    Parameters
+    ----------
+    env:
+        Mapping of environment variables to sanitize.
+    drop:
+        When ``True`` remove sensitive keys entirely instead of masking their
+        values.  Defaults to ``False`` which keeps the keys but masks the
+        values with :data:`_ENV_MASK`.
+    """
 
     dup: MutableMapping[str, Any] = dict(env)
-    for key in _SENSITIVE_ENV:
-        if key in dup and dup[key]:
-            dup[key] = _ENV_MASK
+    for key in list(dup):
+        if key in _SENSITIVE_ENV and dup[key]:
+            if drop:
+                dup.pop(key)
+            else:
+                dup[key] = _ENV_MASK
     return dup
 
 
