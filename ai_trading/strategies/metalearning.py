@@ -13,14 +13,17 @@ import numpy as np
 from ai_trading.logging import logger
 NUMPY_AVAILABLE = True
 PANDAS_AVAILABLE = True
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+from importlib.util import find_spec
+from ai_trading.utils.lazy_imports import (
+    load_sklearn_ensemble,
+    load_sklearn_metrics,
+    load_sklearn_model_selection,
+    load_sklearn_preprocessing,
+)
 from ai_trading.data.fetch import get_minute_df
 from ..core.enums import OrderSide, RiskLevel
 from .base import BaseStrategy, StrategySignal
-ML_AVAILABLE = True
+ML_AVAILABLE = bool(find_spec("sklearn"))
 
 class MetaLearning(BaseStrategy):
     """
@@ -40,7 +43,7 @@ class MetaLearning(BaseStrategy):
         self.parameters = {'lookback_period': 60, 'feature_window': 20, 'prediction_horizon': 5, 'min_confidence': 0.6, 'ensemble_weight_rf': 0.6, 'ensemble_weight_gb': 0.4, 'retrain_frequency': 7, 'min_data_points': 50}
         self.rf_model = None
         self.gb_model = None
-        self.scaler = StandardScaler()
+        self.scaler = None
         self.is_trained = False
         self.last_training_date = None
         self.feature_columns = []
@@ -170,7 +173,21 @@ class MetaLearning(BaseStrategy):
                 logger.warning('Pandas not available, using fallback mode')
                 self.is_trained = True
                 return True
+            model_sel = load_sklearn_model_selection()
+            preproc = load_sklearn_preprocessing()
+            ensemble = load_sklearn_ensemble()
+            metrics = load_sklearn_metrics()
+            if not all([model_sel, preproc, ensemble, metrics]):
+                logger.warning('Required sklearn components missing, using fallback mode')
+                self.is_trained = True
+                return True
+            train_test_split = model_sel.train_test_split
+            StandardScaler = preproc.StandardScaler
+            GradientBoostingClassifier = ensemble.GradientBoostingClassifier
+            RandomForestClassifier = ensemble.RandomForestClassifier
+            accuracy_score = metrics.accuracy_score
             logger.info('Training MetaLearning models')
+            self.scaler = StandardScaler()
             features_df = self.extract_features(data)
             if features_df is None or len(features_df) < self.parameters['min_data_points']:
                 logger.error(f"Insufficient features for training: {(len(features_df) if features_df is not None else 0)} < {self.parameters['min_data_points']}")

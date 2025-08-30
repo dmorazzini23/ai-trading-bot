@@ -9,10 +9,11 @@ import statistics
 from datetime import UTC, datetime
 from typing import Any
 import numpy as np
-from sklearn.linear_model import Ridge
+from importlib.util import find_spec
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import logger
-sklearn_available = True
+from ai_trading.utils.lazy_imports import load_sklearn_linear_model
+sklearn_available = bool(find_spec("sklearn"))
 from .base import StrategySignal
 
 class SignalAggregator:
@@ -299,6 +300,9 @@ class SignalAggregator:
                 return
             X, y = self._prepare_training_data()
             if len(X) < 5:
+                return
+            Ridge = load_sklearn_linear_model().Ridge if sklearn_available else None
+            if Ridge is None:
                 return
             self.meta_model = Ridge(alpha=1.0, random_state=42)
             self.meta_model.fit(X, y)

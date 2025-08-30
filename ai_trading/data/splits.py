@@ -4,18 +4,19 @@ Time series cross-validation splits with purging and embargo.
 Provides leak-proof data splitting for financial time series,
 including purged group time series splits and walk-forward analysis.
 """
+from __future__ import annotations
+
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 import numpy as np
 from typing import TYPE_CHECKING
-from sklearn.model_selection import BaseCrossValidator
 from ai_trading.logging import logger
 from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:
     import pandas as pd
 
-class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
+class PurgedGroupTimeSeriesSplit:
     """
     Time series cross-validation with purging and embargo.
     
