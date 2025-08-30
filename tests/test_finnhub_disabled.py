@@ -17,5 +17,9 @@ def test_get_minute_df_returns_empty_when_finnhub_disabled(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: pd.DataFrame())
     monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", lambda *a, **k: pd.DataFrame())
 
-    df = data_fetcher.get_minute_df("AAPL", dt.datetime(2023, 1, 1), dt.datetime(2023, 1, 2))
+    df = data_fetcher.get_minute_df(
+        "AAPL",
+        dt.datetime(2023, 1, 1, tzinfo=dt.UTC),
+        dt.datetime(2023, 1, 2, tzinfo=dt.UTC),
+    )
     assert df.empty

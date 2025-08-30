@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -8,9 +8,17 @@ from ai_trading.utils.lazy_imports import load_pandas
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     import pandas as pd
 
-def utcnow() -> datetime:
-    """Repository-standard UTC now (timezone-aware)."""
-    return datetime.now(UTC)
+def utcnow(tz: tzinfo | None = UTC) -> datetime:
+    """Repository-standard aware now with optional timezone.
+
+    Args:
+        tz: Desired timezone. Defaults to UTC.
+
+    Returns:
+        timezone-aware ``datetime`` in the requested zone.
+    """
+    now = datetime.now(UTC)
+    return now if tz in (UTC, None) else now.astimezone(tz)
 
 now_utc = utcnow
 

@@ -113,9 +113,11 @@ def test_aligned_clock():
     assert abs(skew) < 5000  # Should be reasonable
 
     # Test bar validation
-    validation = clock.ensure_final_bar("TEST", "1m")
+    validation = clock.ensure_final_bar("TEST", "1m", tzinfo=UTC)
     assert hasattr(validation, "is_final")
     assert hasattr(validation, "skew_ms")
+    assert validation.current_time.tzinfo == UTC
+    assert validation.bar_close_time.tzinfo == UTC
 
     # Test market hours (basic check)
     test_time = datetime(2023, 6, 15, 14, 30, tzinfo=UTC)  # Weekday 2:30 PM UTC

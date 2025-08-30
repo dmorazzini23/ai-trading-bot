@@ -54,8 +54,8 @@ def test_yahoo_minute_split_long_range(monkeypatch, caplog):
 
     monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", fake_yahoo)
 
-    start = dt.datetime(2024, 1, 1)
-    end = dt.datetime(2024, 1, 20)
+    start = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
+    end = dt.datetime(2024, 1, 20, tzinfo=dt.UTC)
     with caplog.at_level("WARNING"):
         df = data_fetcher.get_minute_df("AAPL", start, end)
 
