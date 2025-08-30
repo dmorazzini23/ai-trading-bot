@@ -9,6 +9,12 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
+# Ensure position sizing limit is defined before launching
+if [ -z "${AI_TRADING_MAX_POSITION_SIZE:-}" ]; then
+  echo "AI_TRADING_MAX_POSITION_SIZE is required" >&2
+  exit 1
+fi
+
 VENV_PATH="${VENV_PATH:-venv}"
 # shellcheck disable=SC1090
 source "${VENV_PATH}/bin/activate"

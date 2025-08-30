@@ -29,4 +29,5 @@ Set the following to control position sizing:
 - `CAPITAL_CAP`: fraction of equity usable per cycle.
 - `DOLLAR_RISK_LIMIT`: fraction of equity at risk per position.
 - `MAX_POSITION_SIZE`: absolute USD cap per position. Must be >0 (typically 1-10000). Values ≤0 raise a configuration error. If unset, the bot derives a value from `CAPITAL_CAP` and equity.
+- `AI_TRADING_MAX_POSITION_SIZE`: explicit override for deployments; must be positive and is required by startup scripts.
 - `MAX_POSITION_EQUITY_FALLBACK`: equity assumed when deriving `MAX_POSITION_SIZE` but the real account equity cannot be fetched. Defaults to `200000`.
