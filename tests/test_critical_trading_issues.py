@@ -179,7 +179,7 @@ class TestMetaLearningLogFormat(unittest.TestCase):
             quality_report = meta_learning.validate_trade_data_quality(self.trade_log_path)
 
             # Should detect mixed format
-            self.assertTrue(quality_report.get('mixed_format_detected', False))
+            self.assertTrue(meta_learning.has_mixed_format(self.trade_log_path))
             self.assertGreater(quality_report.get('audit_format_rows', 0), 0)
             self.assertGreater(quality_report.get('meta_format_rows', 0), 0)
 
