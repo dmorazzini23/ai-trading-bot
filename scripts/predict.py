@@ -12,6 +12,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config.management import TradingConfig, reload_env
 from ai_trading.utils.http import http, HTTP_TIMEOUT
 from ai_trading.features.prepare import prepare_indicators
+from ai_trading.exc import RequestException
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -28,7 +29,7 @@ try:
     from cachetools import TTLCache
     _CACHETOOLS_AVAILABLE = True
     _sentiment_cache = TTLCache(maxsize=1000, ttl=300)
-except Exception:
+except ImportError:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, tuple[float, float]] | dict[str, float] = {}
 _min_request_interval = 1.0
@@ -85,7 +86,7 @@ def fetch_sentiment(symbol: str) -> float:
                 _sentiment_cache[symbol] = (score, current_time)
         logger.debug('Fetched fresh sentiment for %s: %.2f', symbol, score)
         return score
-    except (Exception, ValueError) as exc:
+    except (RequestException, ValueError, json.JSONDecodeError) as exc:
         logger.error('fetch_sentiment failed for %s: %s', symbol, exc)
         with _sentiment_lock:
             if _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
