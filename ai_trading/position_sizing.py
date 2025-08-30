@@ -162,6 +162,20 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             if raw_val is not None:
                 raise ValueError('max_position_size must be positive')
             eq = getattr(tcfg, 'equity', getattr(cfg, 'equity', None))
+            if eq in (None, 0.0):
+                fetched = _get_equity_from_alpaca(cfg)
+                if fetched > 0:
+                    eq = fetched
+                    for obj in {cfg, tcfg}:
+                        try:
+                            setattr(obj, 'equity', eq)
+                        except Exception:
+                            try:
+                                object.__setattr__(obj, 'equity', eq)
+                            except Exception:  # pragma: no cover - defensive
+                                pass
+                else:
+                    eq = None
             cur, source = _resolve_max_position_size(cur, cap, eq, default_equity=default_eq)
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
         return (
