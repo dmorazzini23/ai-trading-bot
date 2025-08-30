@@ -11,7 +11,6 @@ from .protocols import AllocatorProtocol
 from ai_trading.position_sizing import (
     get_max_position_size,
     _get_equity_from_alpaca,
-    _CACHE as _MPS_CACHE,
 )
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
@@ -119,15 +118,12 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             env_val = None
         if env_val is not None:
             val = env_val
-    if val is not None:
-        # TradingConfig is frozen; mutate via object.__setattr__
-        try:
-            object.__setattr__(cfg, "max_position_size", float(val))
-        except Exception:
-            pass
-    # Ensure position sizing cache is clear so startup logs capture resolution.
-    _MPS_CACHE.value = _MPS_CACHE.ts = _MPS_CACHE.equity = None
-    resolved = get_max_position_size(cfg, cfg, force_refresh=True)
+
+    if val is None:
+        resolved = get_max_position_size(cfg, cfg, force_refresh=True)
+    else:
+        resolved = float(val)
+
     if getattr(cfg, "max_position_size", None) != resolved:
         try:
             object.__setattr__(cfg, "max_position_size", float(resolved))
@@ -139,7 +135,8 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     try:
         import ai_trading.core.bot_engine as be
 
-        be.MAX_POSITION_SIZE = float(resolved)
+        if getattr(be, "MAX_POSITION_SIZE", None) != float(resolved):
+            be.MAX_POSITION_SIZE = float(resolved)
     except Exception:
         pass
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
