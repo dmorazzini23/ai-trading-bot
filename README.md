@@ -243,6 +243,7 @@ pip install "ai-trading-bot[all]"
 > - **TA-Lib** may require system libraries/headers. See the TA-Lib docs for platform-specific instructions before installing `ai-trading-bot[ta]`.
 > - **PyTorch** wheels vary by CUDA/CPU and OS. If the default marker doesn’t suit your platform, follow the official instructions at [pytorch.org](https://pytorch.org) and/or install `torch` first, then `ai-trading-bot[ml]`.
 > - `rl` uses a separate extras file: `WITH_RL=1 pip install -r requirements-extras-rl.txt -c constraints-dev.txt`.
+> - Real `requests`, `torch`, and other libraries are required; the project no longer bundles local stubs. Tests skip automatically when optional packages are missing.
 
 When a feature is used without its optional dependency, the code raises a helpful error like:
 

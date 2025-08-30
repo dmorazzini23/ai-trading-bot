@@ -5,15 +5,9 @@ import os
 import socket
 import sys
 import time
-import contextlib
-import faulthandler
-import os
-try:
-    import requests  # type: ignore
-except Exception:  # pragma: no cover
-    requests = None
 
 import pytest
+import requests
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -40,18 +34,14 @@ def _short_sleep(monkeypatch):
 
 def _resolve_requests_session():
     """Locate requests.Session in a robust way."""  # AI-AGENT-REF: fallback lookup
-    try:
-        import requests  # noqa: F401
-    except (requests.RequestException, TimeoutError):
-        return None, None
-    Session = getattr(sys.modules["requests"], "Session", None)
+    Session = getattr(requests, "Session", None)
     if Session is None:
         try:
             sess_mod = importlib.import_module("requests.sessions")
             Session = getattr(sess_mod, "Session", None)
         except (requests.RequestException, TimeoutError):  # pragma: no cover - defensive
             Session = None
-    return Session, sys.modules.get("requests")
+    return Session, requests
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -4,15 +4,13 @@ import types
 import pytest
 
 pd = pytest.importorskip("pandas")
+pytest.importorskip("requests")
+pytest.importorskip("torch")
 # Minimal stubs so importing bot_engine succeeds without optional deps
 mods = [
     "sklearn",
     "pandas_ta",
     "pandas_market_calendars",
-    "requests",
-    "urllib3",
-    "bs4",
-    "flask",
     "schedule",
     "portalocker",
     "alpaca",
@@ -31,7 +29,6 @@ mods = [
     "ai_trading.execution",
     "ai_trading.capital_scaling",
     # "strategy_allocator",  # AI-AGENT-REF: Don't mock this, it interferes with other tests
-    "torch",
 ]
 for name in mods:
     if name not in sys.modules:
@@ -76,36 +73,6 @@ class _DummyStream:
     def subscribe_trade_updates(self, *a, **k):
         pass
 
-sys.modules.setdefault("requests", types.ModuleType("requests"))
-sys.modules.setdefault("urllib3", types.ModuleType("urllib3"))
-sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
-sys.modules.setdefault("bs4", types.ModuleType("bs4"))
-sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
-sys.modules.setdefault("flask", types.ModuleType("flask"))
-
-class _Flask:
-    def __init__(self, *a, **k):
-        pass
-
-    def route(self, *a, **k):
-        def decorator(func):
-            return func
-
-        return decorator
-
-    def run(self, *a, **k):
-        pass
-
-sys.modules["flask"].Flask = _Flask
-sys.modules["flask"].jsonify = lambda *a, **k: None
-sys.modules["flask"].Response = object
-exc_mod = types.ModuleType("requests.exceptions")
-exc_mod.HTTPError = Exception
-exc_mod.RequestException = Exception
-sys.modules["requests"].exceptions = exc_mod
-sys.modules["requests"].get = lambda *a, **k: None
-sys.modules["requests.exceptions"] = exc_mod
-sys.modules["requests"].RequestException = Exception
 sys.modules["alpaca"].TradingClient = object
 sys.modules["alpaca"].APIError = Exception
 sys.modules.setdefault("alpaca.trading", types.ModuleType("alpaca.trading"))
@@ -144,8 +111,6 @@ class _PCA:
         pass
 
 sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["bs4"] = types.ModuleType("bs4")
-sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
 sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
 sys.modules["prometheus_client"].Counter = lambda *a, **k: None
 sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
@@ -167,25 +132,6 @@ class _DummyBreaker:
         return func
 
 sys.modules["pybreaker"].CircuitBreaker = _DummyBreaker
-
-# Minimal torch stub for bot_engine imports
-sys.modules["torch"] = types.ModuleType("torch")
-sys.modules["torch"].manual_seed = lambda *a, **k: None
-sys.modules["torch"].Tensor = object
-sys.modules["torch"].tensor = lambda *a, **k: types.SimpleNamespace(detach=lambda: types.SimpleNamespace(numpy=lambda: [0.0]))
-torch_nn = types.ModuleType("torch.nn")
-torch_nn.Module = object
-torch_nn.Sequential = lambda *a, **k: None
-torch_nn.Linear = lambda *a, **k: None
-torch_nn.ReLU = lambda *a, **k: None
-torch_nn.Softmax = lambda *a, **k: None
-torch_nn.Parameter = object  # AI-AGENT-REF: add missing Parameter for meta_learning.py
-sys.modules["torch.nn"] = torch_nn
-# AI-AGENT-REF: ensure torch.nn is accessible from torch module for meta_learning.py
-sys.modules["torch"].nn = torch_nn
-torch_optim = types.ModuleType("torch.optim")
-torch_optim.Adam = lambda *a, **k: None
-sys.modules["torch.optim"] = torch_optim
 
 # AI-AGENT-REF: Remove ai_trading.main import that causes deep torch dependency chain
 # from ai_trading.main import main  # Not used in this test, causes torch import issues
