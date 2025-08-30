@@ -78,6 +78,7 @@ from ai_trading.alpaca_api import (
     get_api_error_cls,
 )
 from ai_trading.utils.pickle_safe import safe_pickle_load
+from ai_trading.utils.base import is_market_open as _is_market_open_base
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -2148,17 +2149,10 @@ def log_skip_cooldown(
 
 
 def market_is_open(now: datetime | None = None) -> bool:
-    from ai_trading.utils import is_market_open as utils_market_open
-
     """Return True if the market is currently open."""
     try:
         with timeout_protection(10):
-            if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
-                logger.info(
-                    "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
-                )
-                return True
-            return utils_market_open(now)
+            return _is_market_open_base(now)
     except TimeoutError:
         logger.error("Market status check timed out, assuming market closed")
         return False
@@ -12996,6 +12990,18 @@ def _check_runtime_stops(runtime) -> None:
         )
 
 
+_LAST_MARKET_CLOSED_LOG = 0.0
+
+
+def _log_market_closed(msg: str) -> None:
+    """Log a market-closed message with basic throttling."""
+    global _LAST_MARKET_CLOSED_LOG
+    now = time.monotonic()
+    if now - _LAST_MARKET_CLOSED_LOG >= 60:
+        logger.info(msg)
+        _LAST_MARKET_CLOSED_LOG = now
+
+
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
 def run_all_trades_worker(state: BotState, runtime) -> None:
     """
@@ -13164,9 +13170,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         ):
             logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
             return
-        if not is_market_open():
-            logger.info("MARKET_CLOSED_NO_FETCH")
-            return  # FIXED: skip work when market closed
+        if not _is_market_open_base():
+            _log_market_closed("MARKET_CLOSED_NO_FETCH")
+            return  # skip work when market closed
         ensure_alpaca_attached(runtime)
         api = getattr(runtime, "api", None)
         if not _validate_trading_api(api):
@@ -13656,22 +13662,21 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
 
 def schedule_run_all_trades(runtime):
-    """Spawn run_all_trades_worker if market is open."""  # FIXED
+    """Spawn run_all_trades_worker if market is open."""
+    if not _is_market_open_base():
+        _log_market_closed("Market closed—skipping run_all_trades.")
+        return
+    global _LAST_MARKET_CLOSED_LOG
+    _LAST_MARKET_CLOSED_LOG = 0.0
     ensure_alpaca_attached(runtime)
     if not _validate_trading_api(getattr(runtime, "api", None)):
         return
-    if is_market_open():
-        t = threading.Thread(
-            target=run_all_trades_worker,
-            args=(
-                state,
-                runtime,
-            ),
-            daemon=True,
-        )
-        t.start()
-    else:
-        logger.info("Market closed—skipping run_all_trades.")
+    t = threading.Thread(
+        target=run_all_trades_worker,
+        args=(state, runtime),
+        daemon=True,
+    )
+    t.start()
 
 
 def schedule_run_all_trades_with_delay(runtime):
