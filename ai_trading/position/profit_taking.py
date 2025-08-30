@@ -9,6 +9,8 @@ Implements sophisticated profit taking strategies:
 
 AI-AGENT-REF: Advanced profit taking with multi-tiered scale-out strategies
 """
+from __future__ import annotations
+
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -267,7 +269,7 @@ class ProfitTakingEngine:
             self.logger.warning('_check_correlation_adjustments failed for %s: %s', symbol, exc)
         return triggered_targets
 
-    def _find_resistance_levels(self, data: "pd.DataFrame", current_price: float) -> list[float]:
+    def _find_resistance_levels(self, data: pd.DataFrame, current_price: float) -> list[float]:
         """Find resistance levels from price data."""
         pd = load_pandas()
         try:
@@ -287,7 +289,7 @@ class ProfitTakingEngine:
         except COMMON_EXC:
             return []
 
-    def _create_rsi_overbought_target(self, symbol: str, data: "pd.DataFrame", position_size: int) -> ProfitTarget | None:
+    def _create_rsi_overbought_target(self, symbol: str, data: pd.DataFrame, position_size: int) -> ProfitTarget | None:
         """Create RSI overbought profit target."""
         try:
             if 'close' not in data.columns or len(data) < 20:
@@ -331,7 +333,7 @@ class ProfitTakingEngine:
         except COMMON_EXC:
             return None
 
-    def _calculate_rsi(self, prices: "pd.Series", period: int = 14) -> float:
+    def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
         """Calculate RSI indicator."""
         pd = load_pandas()
         try:
