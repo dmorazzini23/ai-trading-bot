@@ -5,6 +5,8 @@ deserialization. Consider safer formats like :mod:`joblib` or JSON for simpler
 objects.
 """
 
+from __future__ import annotations
+
 import json
 import pickle
 from datetime import UTC, datetime
@@ -104,7 +106,7 @@ class MLTrainer:
         optimize_hyperparams: bool = True,
         optimization_trials: int = 100,
         feature_pipeline: Any | None = None,
-        t1: "pd.Series" | None = None,
+        t1: pd.Series | None = None,
     ) -> dict[str, Any]:
         """
         Train model with optional hyperparameter optimization.
