@@ -130,15 +130,6 @@ def _parse_timeframe(tf: Any) -> bars.TimeFrame:
     if key in tf_map:
         return tf_map[key]
     raise ValueError(f"Unsupported timeframe: {tf}")
-
-if os.getenv("BOT_SHOW_DEPRECATIONS", "").lower() in {"1", "true", "yes"}:
-    warnings.filterwarnings("default", category=DeprecationWarning)
-    warnings.warn(
-        "bot_engine.py is deprecated",
-        DeprecationWarning,
-    )  # AI-AGENT-REF: deprecation notice
-
-
 # One place to define the common exception family (module-scoped)
 COMMON_EXC = (
     TypeError,
