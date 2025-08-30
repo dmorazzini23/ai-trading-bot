@@ -14,9 +14,15 @@ def _tf_day():
     return TimeFrame(1, TimeFrameUnit.Day)
 
 
-def test_stock_bars_request_positional_args():
+def test_stock_bars_request_keyword_args():
     start = datetime(2024, 1, 1, tzinfo=UTC)
-    req = StockBarsRequest("SPY", _tf_day(), start=start, limit=10, feed="sip")
+    req = StockBarsRequest(
+        symbol_or_symbols="SPY",
+        timeframe=_tf_day(),
+        start=start,
+        limit=10,
+        feed="sip",
+    )
 
     assert req.symbol_or_symbols == "SPY"
     assert req.timeframe == _tf_day()
@@ -25,7 +31,7 @@ def test_stock_bars_request_positional_args():
     assert req.feed == "sip"
 
 
-def test_stock_bars_request_keyword_args():
+def test_stock_bars_request_additional_fields():
     start = datetime(2024, 2, 1, tzinfo=UTC)
     req = StockBarsRequest(
         symbol_or_symbols="SPY",

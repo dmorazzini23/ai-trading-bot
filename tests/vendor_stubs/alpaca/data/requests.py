@@ -20,16 +20,20 @@ class BaseTimeseriesDataRequest:
         self,
         symbol_or_symbols: Union[str, Iterable[str]],
         *,
-        start: Optional[datetime] = None,
-        end: Optional[datetime] = None,
+        start: Optional[datetime | str] = None,
+        end: Optional[datetime | str] = None,
         limit: Optional[int] = None,
         currency: Optional[str] = None,
         sort: Optional[str] = None,
         **extra: Any,
     ) -> None:
-        if start and start.tzinfo is not None:
+        # ``alpaca-py`` accepts ``datetime`` or ISO strings.  The real
+        # models normalise any timezone-aware datetimes to UTC.  The stub
+        # mirrors that behaviour but remains resilient when callers supply
+        # plain strings (as some tests do).
+        if isinstance(start, datetime) and start.tzinfo is not None:
             start = start.astimezone(UTC).replace(tzinfo=None)
-        if end and end.tzinfo is not None:
+        if isinstance(end, datetime) and end.tzinfo is not None:
             end = end.astimezone(UTC).replace(tzinfo=None)
 
         self.symbol_or_symbols = symbol_or_symbols
