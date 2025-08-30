@@ -37,17 +37,21 @@ def test_validate_errors():
         model.predict(df)
 
 
-def test_fit_and_predict(tmp_path):
+def test_fit_and_predict():
     model = MLModel(DummyPipe())
     df = make_df()
     mse = model.fit(df, np.array([0, 1]))
     assert mse >= 0
     preds = model.predict(df)
     assert len(preds) == len(df)
-    save_path = model.save(tmp_path / "m.pkl")
+    model_dir = Path(ml_model.__file__).resolve().parent / "models"
+    if ml_model.joblib is None:
+        pytest.skip("joblib not available")
+    save_path = model.save(model_dir / "m.pkl")
     assert Path(save_path).exists()
     loaded = MLModel.load(save_path)
     assert isinstance(loaded.pipeline, DummyPipe)
+    Path(save_path).unlink()
 
 
 def test_train_model_invalid_algorithm():
@@ -78,14 +82,19 @@ def test_predict_model_invalid_input():
     assert result == []
 
 
-def test_load_model_missing_file(tmp_path):
+def test_load_model_missing_file():
+    model_dir = Path(ml_model.__file__).resolve().parent / "models"
     with pytest.raises(FileNotFoundError):
-        ml_model.load_model(str(tmp_path / "nonexistent.pkl"))
+        ml_model.load_model(str(model_dir / "nonexistent.pkl"))
 
 
-def test_save_and_load_model(tmp_path):
+def test_save_and_load_model():
+    if ml_model.joblib is None:
+        pytest.skip("joblib not available")
     dummy_model = {"foo": "bar"}
-    model_path = tmp_path / "test_model.pkl"
+    model_dir = Path(ml_model.__file__).resolve().parent / "models"
+    model_path = model_dir / "test_model.pkl"
     ml_model.save_model(dummy_model, str(model_path))
     loaded = ml_model.load_model(str(model_path))
     assert loaded == dummy_model
+    model_path.unlink()

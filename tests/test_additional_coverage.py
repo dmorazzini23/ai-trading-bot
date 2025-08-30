@@ -218,21 +218,28 @@ def test_mlmodel_fit_predict_exceptions(monkeypatch):
         m.predict(df)
 
 
-def test_mlmodel_save_load_fail(monkeypatch, tmp_path):
+def test_mlmodel_save_load_fail(monkeypatch):
     """Errors in save and load surface as exceptions."""
+    from pathlib import Path
+
+    if ml_model.joblib is None:  # pragma: no cover - optional dependency
+        pytest.skip("joblib not available")
+
     m = ml_model.MLModel(types.SimpleNamespace())
+    model_dir = Path(ml_model.__file__).resolve().parent / "models"
+    path = model_dir / "m.pkl"
     monkeypatch.setattr(
         ml_model.joblib, "dump", lambda *a, **k: (_ for _ in ()).throw(OSError("fail"))
     )
-    with pytest.raises(IOError):
-        m.save(str(tmp_path / "m.pkl"))
+    with pytest.raises(OSError):
+        m.save(str(path))
 
     def bad_open(*a, **k):
         raise FileNotFoundError
 
     monkeypatch.setattr(builtins, "open", bad_open)
     with pytest.raises(FileNotFoundError):
-        ml_model.MLModel.load(str(tmp_path / "m.pkl"))
+        ml_model.MLModel.load(str(path))
 
 
 def test_train_and_predict_helpers():
