@@ -6,6 +6,7 @@ import importlib
 from functools import lru_cache
 from importlib.util import find_spec
 from types import ModuleType
+import sys
 
 from ai_trading.logging import get_logger
 
@@ -53,9 +54,12 @@ def load_pandas_ta() -> ModuleType | None:
 @lru_cache(maxsize=None)
 def _load_sklearn_submodule(name: str) -> ModuleType | None:
     """Return a proxy for a :mod:`sklearn` submodule if available."""
-    if find_spec(f"sklearn.{name}") is None:
+    mod_name = f"sklearn.{name}"
+    if mod_name in sys.modules:
+        return sys.modules[mod_name]
+    if find_spec(mod_name) is None:
         return None
-    return _LazyModule(f"sklearn.{name}")
+    return _LazyModule(mod_name)
 
 
 def load_sklearn_linear_model() -> ModuleType | None:
