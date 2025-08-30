@@ -111,3 +111,20 @@ def preload_models(symbols: list[str] | None = None) -> None:
     for sym in symbols or getattr(config, "SYMBOLS", []):
         ML_MODELS[sym] = load_model(sym)
 
+
+def get_model(symbol: str | None = None) -> object:
+    """Return a model instance via :func:`load_model`.
+
+    This provides a ``get_model`` hook so the module can be referenced via
+    ``AI_TRADING_MODEL_MODULE``. When ``symbol`` is ``None``, the first entry in
+    ``config.SYMBOLS`` is used, defaulting to ``"SPY"`` if no symbols are
+    configured.
+    """
+    from ai_trading.config import management as config
+
+    if symbol is None:
+        symbols = getattr(config, "SYMBOLS", ["SPY"])
+        symbol = symbols[0] if symbols else "SPY"
+
+    return load_model(symbol)
+
