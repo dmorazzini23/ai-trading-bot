@@ -59,7 +59,7 @@ from ai_trading.data.fetch import (
 )
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
-    from ai_trading.data.bars import TimeFrame, StockBarsRequest
+    from ai_trading.data.bars import TimeFrame
 from ai_trading.utils.time import last_market_session
 from ai_trading.capital_scaling import capital_scale, update_if_present
 from ai_trading.utils.datetime import ensure_datetime
@@ -103,13 +103,11 @@ def _alpaca_available() -> bool:
     return ALPACA_AVAILABLE
 import ai_trading.data.bars as _bars
 from ai_trading.data.bars import (
+    StockBarsRequest,
+    safe_get_stock_bars,
     _create_empty_bars_dataframe,
     _resample_minutes_to_daily,
 )
-
-# Deprecated legacy proxies; prefer ai_trading.data.bars
-StockBarsRequest = _bars.StockBarsRequest
-safe_get_stock_bars = _bars.safe_get_stock_bars
 
 try:  # pragma: no cover
     from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
@@ -375,7 +373,6 @@ __all__ = [
     "MockSignal",
     "MockContext",
     "StockHistoricalDataClient",
-    "safe_get_stock_bars",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -495,9 +492,6 @@ except ImportError:  # pragma: no cover - optional (import resolution only)
 
 logger = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
-# Deprecated legacy logger alias
-_log = get_logger(__name__)
-
 
 def _current_position_qty(ctx: Any, symbol: str) -> int:
     """Return current position quantity for *symbol*.
@@ -512,7 +506,7 @@ def _current_position_qty(ctx: Any, symbol: str) -> int:
     try:
         position = api.get_position(symbol)
     except Exception:  # pragma: no cover - legacy safety net
-        _log.debug("POSITION_LOOKUP_FAILED", exc_info=True, extra={"symbol": symbol})
+        logger.debug("POSITION_LOOKUP_FAILED", exc_info=True, extra={"symbol": symbol})
         return 0
     qty = getattr(position, "qty", 0) if position is not None else 0
     try:
@@ -4307,14 +4301,14 @@ class DataFetcher:
         )
 
         try:
-            req = _bars.StockBarsRequest(
+            req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=_bars.TimeFrame.Minute,
                 start=start_minute,
                 end=last_closed_minute,
                 feed=_DEFAULT_FEED,
             )
-            bars = _bars.safe_get_stock_bars(client, req, symbol, "MINUTE")
+            bars = safe_get_stock_bars(client, req, symbol, "MINUTE")
             if bars is None:
                 return None
             if isinstance(bars.columns, pd.MultiIndex):
@@ -4352,7 +4346,7 @@ class DataFetcher:
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
-                    df_iex = _bars.safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
+                    df_iex = safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
                     if df_iex is None:
                         return None
                     if isinstance(df_iex.columns, pd.MultiIndex):
@@ -4445,7 +4439,7 @@ class DataFetcher:
                 _, day_end = day_end
 
             try:
-                bars_req = _bars.StockBarsRequest(
+                bars_req = StockBarsRequest(
                     symbol_or_symbols=[symbol],
                     timeframe=_bars.TimeFrame.Minute,
                     start=day_start,
@@ -4454,7 +4448,7 @@ class DataFetcher:
                     feed=_DEFAULT_FEED,
                 )
                 try:
-                    bars_day = _bars.safe_get_stock_bars(
+                    bars_day = safe_get_stock_bars(
                         ctx.data_client, bars_req, symbol, "INTRADAY"
                     )
                     if bars_day is None:
@@ -4475,7 +4469,7 @@ class DataFetcher:
                             e,
                         )
                         bars_req.feed = "iex"
-                        bars_day = _bars.safe_get_stock_bars(
+                        bars_day = safe_get_stock_bars(
                             ctx.data_client, bars_req, symbol, "IEX INTRADAY"
                         )
                         if bars_day is None:
@@ -4555,14 +4549,14 @@ def prefetch_daily_data(
     )
 
     try:
-        req = _bars.StockBarsRequest(
+        req = StockBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=_bars.TimeFrame.Day,
             start=start_date,
             end=end_date,
             feed=_DEFAULT_FEED,
         )
-        bars = _bars.safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
+        bars = safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
         if bars is None:
             return {}
         if isinstance(bars.columns, pd.MultiIndex):
@@ -4592,7 +4586,7 @@ def prefetch_daily_data(
             logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
-                bars_iex = _bars.safe_get_stock_bars(
+                bars_iex = safe_get_stock_bars(
                     client, req, str(symbols), "IEX BULK DAILY"
                 )
                 if bars_iex is None:
@@ -4633,14 +4627,14 @@ def prefetch_daily_data(
                 daily_dict = {}
                 for sym in symbols:
                     try:
-                        req_sym = _bars.StockBarsRequest(
+                        req_sym = StockBarsRequest(
                             symbol_or_symbols=[sym],
                             timeframe=_bars.TimeFrame.Day,
                             start=start_date,
                             end=end_date,
                             feed=_DEFAULT_FEED,
                         )
-                        df_sym = _bars.safe_get_stock_bars(
+                        df_sym = safe_get_stock_bars(
                             client, req_sym, sym, "FALLBACK DAILY"
                         )
                         if df_sym is None:
@@ -6213,7 +6207,7 @@ def _get_runtime_context_or_none():
         lbc._ensure_initialized()
         return lbc._context
     except Exception as e:  # AI-AGENT-REF: generic catch for safety
-        _log.warning("Runtime context unavailable for risk exposure update: %s", e)
+        logger.warning("Runtime context unavailable for risk exposure update: %s", e)
         return None
 
 
@@ -6267,14 +6261,14 @@ def _update_risk_engine_exposure():
 
     risk_engine = getattr(runtime, "risk_engine", None)
     if not risk_engine:
-        _log.debug("No risk_engine on runtime context; skipping exposure update.")
+        logger.debug("No risk_engine on runtime context; skipping exposure update.")
         return
 
     try:
         risk_engine.update_exposure(runtime)
         risk_engine.wait_for_exposure_update(timeout=0.5)
     except Exception as e:  # AI-AGENT-REF: generic catch for safety
-        _log.warning("Risk engine exposure update failed: %s", e)
+        logger.warning("Risk engine exposure update failed: %s", e)
 
 
 def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
@@ -11592,7 +11586,7 @@ def get_stock_bars_safe(api, symbol, timeframe):
     import pandas as pd
 
     try:
-        req = _bars.StockBarsRequest(
+        req = StockBarsRequest(
             symbol_or_symbols=[symbol],
             timeframe=_parse_timeframe(timeframe),
         )
