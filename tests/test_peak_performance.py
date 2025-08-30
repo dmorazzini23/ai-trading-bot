@@ -133,7 +133,7 @@ def test_symbol_costs():
     from ai_trading.execution.costs import SymbolCostModel, SymbolCosts
 
     # Test cost calculation
-    costs = SymbolCosts(symbol="TEST", half_spread_bps=2.0, slip_k=1.5, commission_bps=0.5)
+    costs = SymbolCosts(symbol="TEST", half_spread_bps=2.0, slip_k=1.5, commission_bps=0.5, min_commission=np.float32(2.0))
 
     # Test slippage calculation
     slippage = costs.slippage_cost_bps(volume_ratio=2.0)
@@ -154,7 +154,7 @@ def test_symbol_costs():
     assert symbol_costs.half_spread_bps > 0
 
     # Test cost impact calculation
-    impact = model.calculate_position_impact("NEWTEST", position_value=10000, volume_ratio=1.0)
+    impact = model.calculate_position_impact("NEWTEST", position_value=np.int64(10000), volume_ratio=np.float32(1.0))
     assert "cost_bps" in impact
     assert "cost_dollars" in impact
     assert impact["cost_dollars"] > 0
@@ -352,17 +352,20 @@ def test_backtest_cost_enforcement():
 
     # Test cost adjustment
     adjusted_size, cost_info = model.adjust_position_size(
-        symbol="TEST", target_size=10000, max_cost_bps=15.0, volume_ratio=1.0
+        symbol="TEST",
+        target_size=np.int64(10000),
+        max_cost_bps=np.float32(15.0),
+        volume_ratio=np.int64(1),
     )
 
-    assert isinstance(adjusted_size, (int, float))
+    assert isinstance(adjusted_size, (int, float, np.floating))
     assert isinstance(cost_info, dict)
 
     # If costs are within limit, size should be unchanged
-    if cost_info.get("cost_bps", 0) <= 15.0:
-        assert adjusted_size == 10000
+    if float(cost_info.get("cost_bps", 0)) <= 15.0:
+        assert adjusted_size == 10000.0
     else:
-        assert adjusted_size < 10000  # Should be scaled down
+        assert adjusted_size < 10000.0  # Should be scaled down
 
 
 if __name__ == "__main__":
