@@ -4,6 +4,7 @@
 
 # Ensure Alpaca SDK available for tests
 alpaca-py==0.42.0
+lightgbm==4.6.0
 
 # Lint & format
 ruff==0.5.6

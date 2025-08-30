@@ -4,6 +4,7 @@ Pickle is used for model checkpoints; paths are resolved and validated before
 deserialization. Consider safer formats like :mod:`joblib` or JSON for simpler
 objects.
 """
+
 import json
 import pickle
 from datetime import UTC, datetime
@@ -18,15 +19,18 @@ from ai_trading.utils.pickle_safe import safe_pickle_load
 BASE_DIR = Path(__file__).resolve().parents[2]
 ALLOWED_DIRS = [BASE_DIR, Path(gettempdir()).resolve()]
 try:
-    import importlib
-    lgb = importlib.import_module('lightgbm')
+    import lightgbm as lgb  # type: ignore
+
     lgb_available = True
-except (ValueError, TypeError):
-    from ai_trading.thirdparty import lightgbm_compat as lgb
+except ImportError as exc:  # pragma: no cover - optional dep
+    lgb = None  # type: ignore[assignment]
     lgb_available = False
+    _lgb_import_error = exc
 import xgboost as xgb
+
 xgb_available = True
 import optuna
+
 optuna_available = True
 from ..data.splits import PurgedGroupTimeSeriesSplit
 
@@ -34,6 +38,7 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only
     import pandas as pd
     from sklearn.linear_model import Ridge
     from sklearn.metrics import mean_squared_error
+
 
 class MLTrainer:
     """
@@ -43,7 +48,14 @@ class MLTrainer:
     and proper financial time series validation.
     """
 
-    def __init__(self, model_type: str='lightgbm', cv_splits: int=5, embargo_pct: float=0.01, purge_pct: float=0.02, random_state: int=42):
+    def __init__(
+        self,
+        model_type: str = "lightgbm",
+        cv_splits: int = 5,
+        embargo_pct: float = 0.01,
+        purge_pct: float = 0.02,
+        random_state: int = 42,
+    ):
         """
         Initialize ML trainer.
 
@@ -67,17 +79,27 @@ class MLTrainer:
 
     def _validate_dependencies(self) -> None:
         """Validate required dependencies are available."""
-        if self.model_type == 'lightgbm' and (not lgb_available):
-            raise ImportError('LightGBM required for lightgbm model type')
-        elif self.model_type == 'xgboost' and (not xgb_available):
-            raise ImportError('XGBoost required for xgboost model type')
-        elif self.model_type == 'ridge':
+        if self.model_type == "lightgbm" and (not lgb_available):
+            raise ImportError(
+                "lightgbm is required for model_type 'lightgbm'. Install via `pip install lightgbm`."
+            ) from _lgb_import_error
+        elif self.model_type == "xgboost" and (not xgb_available):
+            raise ImportError("XGBoost required for xgboost model type")
+        elif self.model_type == "ridge":
             try:
                 import sklearn  # noqa: F401
             except Exception as exc:
-                raise ImportError('scikit-learn required for ridge model type') from exc
+                raise ImportError("scikit-learn required for ridge model type") from exc
 
-    def train(self, X: 'pd.DataFrame', y: 'pd.Series', optimize_hyperparams: bool=True, optimization_trials: int=100, feature_pipeline: Any | None=None, t1: 'pd.Series' | None=None) -> dict[str, Any]:
+    def train(
+        self,
+        X: "pd.DataFrame",
+        y: "pd.Series",
+        optimize_hyperparams: bool = True,
+        optimization_trials: int = 100,
+        feature_pipeline: Any | None = None,
+        t1: "pd.Series" | None = None,
+    ) -> dict[str, Any]:
         """
         Train model with optional hyperparameter optimization.
 
@@ -95,12 +117,14 @@ class MLTrainer:
         try:
             import pandas as pd
 
-            logger.info(f'Starting {self.model_type} training with {len(X)} samples')
+            logger.info(f"Starting {self.model_type} training with {len(X)} samples")
             if feature_pipeline is not None:
                 X_processed = feature_pipeline.fit_transform(X, y)
             else:
                 X_processed = X.copy()
-            cv_splitter = PurgedGroupTimeSeriesSplit(n_splits=self.cv_splits, embargo_pct=self.embargo_pct, purge_pct=self.purge_pct)
+            cv_splitter = PurgedGroupTimeSeriesSplit(
+                n_splits=self.cv_splits, embargo_pct=self.embargo_pct, purge_pct=self.purge_pct
+            )
             if optimize_hyperparams and optuna_available:
                 self.best_params = self._optimize_hyperparams(X_processed, y, cv_splitter, optimization_trials, t1)
             else:
@@ -108,14 +132,29 @@ class MLTrainer:
             self.model = self._create_model(self.best_params)
             self.cv_results = self._evaluate_cv(X_processed, y, cv_splitter, self.best_params, t1)
             self._fit_final_model(X_processed, y)
-            results = {'model_type': self.model_type, 'best_params': self.best_params, 'cv_metrics': self.cv_results, 'feature_importance': self.feature_importance, 'train_samples': len(X), 'feature_count': X_processed.shape[1], 'training_time': datetime.now(UTC).isoformat()}
+            results = {
+                "model_type": self.model_type,
+                "best_params": self.best_params,
+                "cv_metrics": self.cv_results,
+                "feature_importance": self.feature_importance,
+                "train_samples": len(X),
+                "feature_count": X_processed.shape[1],
+                "training_time": datetime.now(UTC).isoformat(),
+            }
             logger.info(f"Training completed. CV score: {self.cv_results.get('mean_score', 'N/A')}")
             return results
         except (ValueError, TypeError) as e:
-            logger.error(f'Error in model training: {e}')
+            logger.error(f"Error in model training: {e}")
             raise
 
-    def _optimize_hyperparams(self, X: 'pd.DataFrame', y: 'pd.Series', cv_splitter: PurgedGroupTimeSeriesSplit, n_trials: int, t1: 'pd.Series' | None=None) -> dict[str, Any]:
+    def _optimize_hyperparams(
+        self,
+        X: "pd.DataFrame",
+        y: "pd.Series",
+        cv_splitter: PurgedGroupTimeSeriesSplit,
+        n_trials: int,
+        t1: "pd.Series" | None = None,
+    ) -> dict[str, Any]:
         """Optimize hyperparameters using Optuna."""
         try:
 
@@ -133,50 +172,98 @@ class MLTrainer:
                     score = self._calculate_score(y_test, predictions)
                     scores.append(score)
                 return np.mean(scores)
-            study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=self.random_state))
+
+            study = optuna.create_study(
+                direction="maximize", sampler=optuna.samplers.TPESampler(seed=self.random_state)
+            )
             study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
-            logger.info(f'Hyperparameter optimization completed. Best score: {study.best_value:.4f}')
+            logger.info(f"Hyperparameter optimization completed. Best score: {study.best_value:.4f}")
             return study.best_params
         except (ValueError, TypeError) as e:
-            logger.error(f'Error in hyperparameter optimization: {e}')
+            logger.error(f"Error in hyperparameter optimization: {e}")
             return self._get_default_params()
 
     def _suggest_params(self, trial) -> dict[str, Any]:
         """Suggest hyperparameters for different model types."""
-        if self.model_type == 'lightgbm':
-            return {'n_estimators': trial.suggest_int('n_estimators', 100, 1000), 'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3), 'max_depth': trial.suggest_int('max_depth', 3, 15), 'num_leaves': trial.suggest_int('num_leaves', 10, 100), 'min_child_samples': trial.suggest_int('min_child_samples', 5, 100), 'subsample': trial.suggest_float('subsample', 0.5, 1.0), 'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0), 'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 10.0), 'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 10.0)}
-        elif self.model_type == 'xgboost':
-            return {'n_estimators': trial.suggest_int('n_estimators', 100, 1000), 'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3), 'max_depth': trial.suggest_int('max_depth', 3, 15), 'min_child_weight': trial.suggest_int('min_child_weight', 1, 10), 'subsample': trial.suggest_float('subsample', 0.5, 1.0), 'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0), 'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 10.0), 'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 10.0)}
-        elif self.model_type == 'ridge':
-            return {'alpha': trial.suggest_float('alpha', 0.001, 100.0, log=True), 'fit_intercept': trial.suggest_categorical('fit_intercept', [True, False]), 'solver': trial.suggest_categorical('solver', ['auto', 'svd', 'cholesky', 'lsqr'])}
+        if self.model_type == "lightgbm":
+            return {
+                "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+                "max_depth": trial.suggest_int("max_depth", 3, 15),
+                "num_leaves": trial.suggest_int("num_leaves", 10, 100),
+                "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
+                "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+                "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 10.0),
+                "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 10.0),
+            }
+        elif self.model_type == "xgboost":
+            return {
+                "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3),
+                "max_depth": trial.suggest_int("max_depth", 3, 15),
+                "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+                "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+                "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 10.0),
+                "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 10.0),
+            }
+        elif self.model_type == "ridge":
+            return {
+                "alpha": trial.suggest_float("alpha", 0.001, 100.0, log=True),
+                "fit_intercept": trial.suggest_categorical("fit_intercept", [True, False]),
+                "solver": trial.suggest_categorical("solver", ["auto", "svd", "cholesky", "lsqr"]),
+            }
         else:
             return {}
 
     def _get_default_params(self) -> dict[str, Any]:
         """Get default parameters for different model types."""
-        if self.model_type == 'lightgbm':
-            return {'n_estimators': 500, 'learning_rate': 0.1, 'max_depth': 6, 'num_leaves': 31, 'min_child_samples': 20, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_alpha': 0.1, 'reg_lambda': 0.1, 'random_state': self.random_state, 'verbosity': -1}
-        elif self.model_type == 'xgboost':
-            return {'n_estimators': 500, 'learning_rate': 0.1, 'max_depth': 6, 'min_child_weight': 1, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_alpha': 0.1, 'reg_lambda': 0.1, 'random_state': self.random_state}
-        elif self.model_type == 'ridge':
-            return {'alpha': 1.0, 'fit_intercept': True, 'solver': 'auto', 'random_state': self.random_state}
+        if self.model_type == "lightgbm":
+            return {
+                "n_estimators": 500,
+                "learning_rate": 0.1,
+                "max_depth": 6,
+                "num_leaves": 31,
+                "min_child_samples": 20,
+                "subsample": 0.8,
+                "colsample_bytree": 0.8,
+                "reg_alpha": 0.1,
+                "reg_lambda": 0.1,
+                "random_state": self.random_state,
+                "verbosity": -1,
+            }
+        elif self.model_type == "xgboost":
+            return {
+                "n_estimators": 500,
+                "learning_rate": 0.1,
+                "max_depth": 6,
+                "min_child_weight": 1,
+                "subsample": 0.8,
+                "colsample_bytree": 0.8,
+                "reg_alpha": 0.1,
+                "reg_lambda": 0.1,
+                "random_state": self.random_state,
+            }
+        elif self.model_type == "ridge":
+            return {"alpha": 1.0, "fit_intercept": True, "solver": "auto", "random_state": self.random_state}
         else:
             return {}
 
     def _create_model(self, params: dict[str, Any]) -> Any:
         """Create model instance with given parameters."""
-        if self.model_type == 'lightgbm':
+        if self.model_type == "lightgbm":
             return lgb.LGBMRegressor(**params)
-        elif self.model_type == 'xgboost':
+        elif self.model_type == "xgboost":
             return xgb.XGBRegressor(**params)
-        elif self.model_type == 'ridge':
+        elif self.model_type == "ridge":
             from sklearn.linear_model import Ridge
 
             return Ridge(**params)
         else:
-            raise ValueError(f'Unknown model type: {self.model_type}')
+            raise ValueError(f"Unknown model type: {self.model_type}")
 
-    def _calculate_score(self, y_true: 'pd.Series', y_pred: np.ndarray) -> float:
+    def _calculate_score(self, y_true: "pd.Series", y_pred: np.ndarray) -> float:
         """
         Calculate model score (Sharpe-like metric for trading).
 
@@ -196,10 +283,17 @@ class MLTrainer:
             score = 0.6 * directional_accuracy + 0.4 * abs(correlation)
             return score
         except (ValueError, TypeError) as e:
-            logger.error(f'Error calculating score: {e}')
+            logger.error(f"Error calculating score: {e}")
             return 0.0
 
-    def _evaluate_cv(self, X: 'pd.DataFrame', y: 'pd.Series', cv_splitter: PurgedGroupTimeSeriesSplit, params: dict[str, Any], t1: 'pd.Series' | None=None) -> dict[str, Any]:
+    def _evaluate_cv(
+        self,
+        X: "pd.DataFrame",
+        y: "pd.Series",
+        cv_splitter: PurgedGroupTimeSeriesSplit,
+        params: dict[str, Any],
+        t1: "pd.Series" | None = None,
+    ) -> dict[str, Any]:
         """Evaluate model using cross-validation."""
         try:
             import pandas as pd
@@ -217,27 +311,42 @@ class MLTrainer:
                 scores.append(score)
                 mse = mean_squared_error(y_test, predictions)
                 correlation = np.corrcoef(y_test, predictions)[0, 1] if len(predictions) > 1 else 0.0
-                fold_results.append({'fold': fold, 'score': score, 'mse': mse, 'correlation': correlation, 'train_samples': len(train_idx), 'test_samples': len(test_idx)})
-            cv_results = {'mean_score': np.mean(scores), 'std_score': np.std(scores), 'fold_scores': scores, 'fold_details': fold_results, 'n_splits': len(scores)}
+                fold_results.append(
+                    {
+                        "fold": fold,
+                        "score": score,
+                        "mse": mse,
+                        "correlation": correlation,
+                        "train_samples": len(train_idx),
+                        "test_samples": len(test_idx),
+                    }
+                )
+            cv_results = {
+                "mean_score": np.mean(scores),
+                "std_score": np.std(scores),
+                "fold_scores": scores,
+                "fold_details": fold_results,
+                "n_splits": len(scores),
+            }
             return cv_results
         except (ValueError, TypeError) as e:
-            logger.error(f'Error in CV evaluation: {e}')
-            return {'mean_score': 0.0, 'std_score': 0.0, 'fold_scores': []}
+            logger.error(f"Error in CV evaluation: {e}")
+            return {"mean_score": 0.0, "std_score": 0.0, "fold_scores": []}
 
-    def _fit_final_model(self, X: 'pd.DataFrame', y: 'pd.Series') -> None:
+    def _fit_final_model(self, X: "pd.DataFrame", y: "pd.Series") -> None:
         """Fit final model on full dataset."""
         try:
             self.model.fit(X, y)
-            if hasattr(self.model, 'feature_importances_'):
+            if hasattr(self.model, "feature_importances_"):
                 self.feature_importance = dict(zip(X.columns, self.model.feature_importances_, strict=False))
-            elif hasattr(self.model, 'coef_'):
+            elif hasattr(self.model, "coef_"):
                 self.feature_importance = dict(zip(X.columns, np.abs(self.model.coef_), strict=False))
-            logger.debug('Final model fitted successfully')
+            logger.debug("Final model fitted successfully")
         except (ValueError, TypeError) as e:
-            logger.error(f'Error fitting final model: {e}')
+            logger.error(f"Error fitting final model: {e}")
             raise
 
-    def save_model(self, model_path: str, metadata: dict[str, Any] | None=None) -> None:
+    def save_model(self, model_path: str, metadata: dict[str, Any] | None = None) -> None:
         """
         Save trained model with metadata.
 
@@ -249,24 +358,24 @@ class MLTrainer:
             model_file = Path(f"{model_path}.pkl").resolve()
             if not any(model_file.is_relative_to(d) for d in ALLOWED_DIRS):
                 raise RuntimeError(f"Model path not allowed: {model_file}")
-            with model_file.open('wb') as f:
+            with model_file.open("wb") as f:
                 pickle.dump(self.model, f)
             meta_data = {
-                'model_type': self.model_type,
-                'best_params': self.best_params,
-                'cv_results': self.cv_results,
-                'feature_importance': self.feature_importance,
-                'training_timestamp': datetime.now(UTC).isoformat(),
-                'random_state': self.random_state,
+                "model_type": self.model_type,
+                "best_params": self.best_params,
+                "cv_results": self.cv_results,
+                "feature_importance": self.feature_importance,
+                "training_timestamp": datetime.now(UTC).isoformat(),
+                "random_state": self.random_state,
             }
             if metadata:
                 meta_data.update(metadata)
-            meta_file = model_file.with_name(model_file.stem + '_meta.json')
-            with meta_file.open('w') as f:
+            meta_file = model_file.with_name(model_file.stem + "_meta.json")
+            with meta_file.open("w") as f:
                 json.dump(meta_data, f, indent=2, default=str)
-            logger.info(f'Model saved to {model_file}')
+            logger.info(f"Model saved to {model_file}")
         except (OSError, ValueError, TypeError, RuntimeError) as e:
-            logger.error(f'Error saving model: {e}')
+            logger.error(f"Error saving model: {e}")
             raise
 
     @classmethod
@@ -285,15 +394,18 @@ class MLTrainer:
             if not any(model_file.is_relative_to(d) for d in ALLOWED_DIRS):
                 raise RuntimeError(f"Model path not allowed: {model_file}")
             model = safe_pickle_load(model_file, ALLOWED_DIRS)
-            meta_file = model_file.with_name(model_file.stem + '_meta.json')
+            meta_file = model_file.with_name(model_file.stem + "_meta.json")
             metadata = json.loads(meta_file.read_text())
-            logger.info(f'Model loaded from {model_file}')
+            logger.info(f"Model loaded from {model_file}")
             return (model, metadata)
         except (OSError, ValueError, TypeError, RuntimeError) as e:
-            logger.error(f'Error loading model: {e}')
+            logger.error(f"Error loading model: {e}")
             raise
 
-def train_model_cli(symbol_list: list[str], model_type: str='lightgbm', dry_run: bool=False, wf_smoke: bool=False) -> None:
+
+def train_model_cli(
+    symbol_list: list[str], model_type: str = "lightgbm", dry_run: bool = False, wf_smoke: bool = False
+) -> None:
     """
     CLI interface for model training.
 
@@ -304,32 +416,39 @@ def train_model_cli(symbol_list: list[str], model_type: str='lightgbm', dry_run:
         wf_smoke: Whether to run walk-forward smoke test
     """
     try:
-        logger.info(f'CLI training started: symbols={symbol_list}, model={model_type}')
+        logger.info(f"CLI training started: symbols={symbol_list}, model={model_type}")
         if dry_run:
-            logger.info('DRY RUN MODE - No actual training performed')
+            logger.info("DRY RUN MODE - No actual training performed")
             return
         if wf_smoke:
-            logger.info('Walk-forward smoke test - minimal training')
+            logger.info("Walk-forward smoke test - minimal training")
             trainer = MLTrainer(model_type=model_type, cv_splits=2)
             import pandas as pd
 
             np.random.seed(42)
-            X = pd.DataFrame(np.random.randn(100, 5), columns=[f'feature_{i}' for i in range(5)])
+            X = pd.DataFrame(np.random.randn(100, 5), columns=[f"feature_{i}" for i in range(5)])
             y = pd.Series(np.random.randn(100))
             results = trainer.train(X, y, optimize_hyperparams=False)
             logger.info(f"Smoke test completed: {results['cv_metrics']['mean_score']:.4f}")
         else:
-            logger.info('Full training mode would require actual market data')
-            logger.info('Placeholder for full training implementation')
+            logger.info("Full training mode would require actual market data")
+            logger.info("Placeholder for full training implementation")
     except (ValueError, TypeError) as e:
-        logger.error(f'Error in CLI training: {e}')
+        logger.error(f"Error in CLI training: {e}")
         raise
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description='Train ML models for trading')
-    parser.add_argument('--symbol-list', nargs='+', default=['AAPL', 'MSFT'], help='List of symbols to train on')
-    parser.add_argument('--model-type', default='lightgbm', choices=['lightgbm', 'xgboost', 'ridge'], help='Model type to train')
-    parser.add_argument('--dry-run', action='store_true', help='Run in dry-run mode')
-    parser.add_argument('--wf-smoke', action='store_true', help='Run walk-forward smoke test')
+
+    parser = argparse.ArgumentParser(description="Train ML models for trading")
+    parser.add_argument("--symbol-list", nargs="+", default=["AAPL", "MSFT"], help="List of symbols to train on")
+    parser.add_argument(
+        "--model-type", default="lightgbm", choices=["lightgbm", "xgboost", "ridge"], help="Model type to train"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Run in dry-run mode")
+    parser.add_argument("--wf-smoke", action="store_true", help="Run walk-forward smoke test")
     args = parser.parse_args()
-    train_model_cli(symbol_list=args.symbol_list, model_type=args.model_type, dry_run=args.dry_run, wf_smoke=args.wf_smoke)
+    train_model_cli(
+        symbol_list=args.symbol_list, model_type=args.model_type, dry_run=args.dry_run, wf_smoke=args.wf_smoke
+    )
