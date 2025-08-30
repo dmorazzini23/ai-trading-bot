@@ -8,6 +8,11 @@ BRANCH="main"
 
 echo "Deploying branch '$BRANCH' to $SERVER:$APP_DIR …"
 
+if [ -z "${AI_TRADING_MAX_POSITION_SIZE:-}" ]; then
+  echo "AI_TRADING_MAX_POSITION_SIZE is required" >&2
+  exit 1
+fi
+
 ssh "$SERVER" << EOF
   cd "$APP_DIR"
   git fetch origin "$BRANCH"

@@ -246,7 +246,7 @@ class TradingConfig:
     disable_daily_retrain: bool = False
     capital_cap: Optional[float] = 0.04
     dollar_risk_limit: Optional[float] = 0.05
-    max_position_size: Optional[float] = None
+    max_position_size: Optional[float] = 8000.0
     max_position_equity_fallback: float = 200000.0
     sector_exposure_cap: Optional[float] = None
     max_drawdown_threshold: Optional[float] = None
@@ -361,7 +361,12 @@ class TradingConfig:
         app_env = _get("APP_ENV", str, default="test") or "test"
         paper_default = "paper" in str(base_url).lower() or app_env.lower() != "prod"
 
-        mps = _get("MAX_POSITION_SIZE", float)
+        mps = _get(
+            "MAX_POSITION_SIZE",
+            float,
+            default=8000.0,
+            aliases=("AI_TRADING_MAX_POSITION_SIZE",),
+        )
         if mps is not None and mps <= 0:
             raise ValueError("MAX_POSITION_SIZE must be positive")
 
