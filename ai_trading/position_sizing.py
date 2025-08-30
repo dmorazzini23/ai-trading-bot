@@ -107,22 +107,33 @@ def _fallback_max_size(cfg, tcfg) -> float:
         return _coerce_float(v, 8000.0)
     return 8000.0
 
-def _get_equity_from_alpaca(cfg) -> float:
+
+def _get_equity_from_alpaca(cfg, *, force_refresh: bool = False) -> float:
     """Fetch account equity using Alpaca SDK or HTTP fallback.
+
+    The result is cached to avoid repeated network calls. When ``force_refresh``
+    is ``True`` the cache is bypassed.
 
     Returns ``0.0`` on any error (caller will fallback).
     """
-    base = str(getattr(cfg, 'alpaca_base_url', '')).rstrip('/')
-    key = getattr(cfg, 'alpaca_api_key', None)
-    secret = getattr(cfg, 'alpaca_secret_key_plain', None) or get_alpaca_secret_key_plain()
+    if not force_refresh and _CACHE.equity is not None:
+        return _CACHE.equity
+
+    base = str(getattr(cfg, "alpaca_base_url", "")).rstrip("/")
+    key = getattr(cfg, "alpaca_api_key", None)
+    secret = getattr(cfg, "alpaca_secret_key_plain", None) or get_alpaca_secret_key_plain()
     if not key or not secret or not base:
+        _CACHE.equity = 0.0
         return 0.0
+
     try:  # Prefer alpaca-py when available
         from alpaca.trading.client import TradingClient  # type: ignore
 
         client = TradingClient(api_key=key, secret_key=secret, url_override=base)
         acct = client.get_account()
-        return _coerce_float(getattr(acct, 'equity', None), 0.0)
+        eq = _coerce_float(getattr(acct, "equity", None), 0.0)
+        _CACHE.equity = eq
+        return eq
     except ModuleNotFoundError:
         pass
     except Exception as e:  # noqa: BLE001 - log and fallback to HTTP
@@ -131,7 +142,7 @@ def _get_equity_from_alpaca(cfg) -> float:
     url = f"{base}/v2/account"
     try:
         s = get_global_session()
-        resp = s.get(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret})
+        resp = s.get(url, headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
         if hasattr(resp, "raise_for_status"):
             resp.raise_for_status()
         else:
@@ -141,19 +152,24 @@ def _get_equity_from_alpaca(cfg) -> float:
                 setattr(err, "response", resp)
                 raise err
         data = resp.json()
-        return _coerce_float(data.get('equity'), 0.0)
+        eq = _coerce_float(data.get("equity"), 0.0)
+        _CACHE.equity = eq
+        return eq
     except HTTPError as e:
-        _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": getattr(e.response, 'status_code', None)})
-        return 0.0
+        status = getattr(e.response, "status_code", None)
+        if status in {401, 403}:
+            _log.warning("ALPACA_AUTH_FAILED", extra={"url": url, "status": status})
+        else:
+            _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": status})
     except RequestException as e:
         _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
-        return 0.0
     except ValueError as e:
         _log.warning("ALPACA_INVALID_RESPONSE", extra={"url": url, "error": str(e)})
-        return 0.0
     except Exception:  # log and propagate unexpected errors
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
+    _CACHE.equity = 0.0
+    return 0.0
 
 def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[float, dict[str, Any]]:
     """Resolve max_position_size according to mode and settings."""
