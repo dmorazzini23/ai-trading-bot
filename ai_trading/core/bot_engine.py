@@ -94,7 +94,6 @@ from ai_trading.config.management import (
     is_shadow_mode,
     TradingConfig,
 )
-from ai_trading.position_sizing import get_max_position_size
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 
 
@@ -3210,7 +3209,8 @@ LIMIT_ORDER_SLIPPAGE = params.get(
         getattr(state.mode_obj.config, "limit_order_slippage", 0.001),
     ),
 )
-MAX_POSITION_SIZE = get_max_position_size(S, state.mode_obj.config)
+# Resolved during runtime build to avoid premature network calls.
+MAX_POSITION_SIZE = 8000.0
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get(
     "POV_SLICE_PCT",
