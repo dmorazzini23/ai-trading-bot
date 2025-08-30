@@ -8,7 +8,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from .protocols import AllocatorProtocol
-from ai_trading.position_sizing import get_max_position_size, _get_equity_from_alpaca
+from ai_trading.position_sizing import (
+    get_max_position_size,
+    _get_equity_from_alpaca,
+    _CACHE as _MPS_CACHE,
+)
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
 REQUIRED_PARAM_DEFAULTS = {
@@ -94,7 +98,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     # Ensure equity is populated so downstream sizing uses a cached value.
     eq = getattr(cfg, "equity", None)
     if eq in (None, 0.0):
-        fetched = _get_equity_from_alpaca(cfg)
+        fetched = _get_equity_from_alpaca(cfg, force_refresh=True)
         eq = fetched if fetched > 0 else None
         try:
             object.__setattr__(cfg, "equity", eq)
@@ -121,6 +125,8 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             object.__setattr__(cfg, "max_position_size", float(val))
         except Exception:
             pass
+    # Ensure position sizing cache is clear so startup logs capture resolution.
+    _MPS_CACHE.value = _MPS_CACHE.ts = _MPS_CACHE.equity = None
     resolved = get_max_position_size(cfg, cfg, force_refresh=True)
     if getattr(cfg, "max_position_size", None) != resolved:
         try:
@@ -130,6 +136,12 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     if resolved <= 0:
         raise ValueError("MAX_POSITION_SIZE must be positive")
     params["MAX_POSITION_SIZE"] = float(resolved)
+    try:
+        import ai_trading.core.bot_engine as be
+
+        be.MAX_POSITION_SIZE = float(resolved)
+    except Exception:
+        pass
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     runtime.model = NullAlphaModel()
     return runtime
