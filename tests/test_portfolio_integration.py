@@ -148,6 +148,7 @@ class TestPortfolioRebalancingIntegration:
         """Test that portfolio optimization integrates with rebalancing logic."""
         from ai_trading.rebalancer import (
             _get_current_positions_for_rebalancing,
+            init_rebalancer,
             portfolio_first_rebalance,
         )
 
@@ -157,6 +158,7 @@ class TestPortfolioRebalancingIntegration:
 
         # Test portfolio-first rebalancing (should not crash)
         try:
+            init_rebalancer()
             portfolio_first_rebalance(self.ctx)
             # If it doesn't crash, that's a success in this test environment
             assert True

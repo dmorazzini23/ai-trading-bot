@@ -31,13 +31,21 @@ from ai_trading.core.constants import RISK_PARAMETERS
 from ai_trading.portfolio import create_portfolio_optimizer
 from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
 from ai_trading.strategies.regime_detector import create_regime_detector
-logger.info('Portfolio-first trading capabilities loaded')
 
 def rebalance_interval_min() -> int:
     return get_rebalance_interval_min()
+
 _last_rebalance = datetime.now(UTC)
-_portfolio_optimizer = None
-_regime_detector = None
+_rebalancer: "TaxAwareRebalancer | None" = None
+
+
+def init_rebalancer() -> "TaxAwareRebalancer":
+    """Initialize the global tax-aware rebalancer."""
+    global _rebalancer
+    if _rebalancer is None:
+        _rebalancer = TaxAwareRebalancer()
+        logger.info('Portfolio-first trading capabilities loaded')
+    return _rebalancer
 
 class TaxAwareRebalancer:
     """
@@ -57,7 +65,23 @@ class TaxAwareRebalancer:
             self.adaptive_sizer = AdaptivePositionSizer()
             self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.holding_period_long = 365
-        logger.info(f'TaxAwareRebalancer initialized with tax rates: short={tax_rate_short:.1%}, long={tax_rate_long:.1%}')
+        self._portfolio_optimizer = None
+        self._regime_detector = None
+        logger.info(
+            f'TaxAwareRebalancer initialized with tax rates: short={tax_rate_short:.1%}, long={tax_rate_long:.1%}'
+        )
+
+    @property
+    def portfolio_optimizer(self):
+        if self._portfolio_optimizer is None:
+            self._portfolio_optimizer = create_portfolio_optimizer()
+        return self._portfolio_optimizer
+
+    @property
+    def regime_detector(self):
+        if self._regime_detector is None:
+            self._regime_detector = create_regime_detector()
+        return self._regime_detector
 
     def calculate_tax_impact(self, position: dict[str, Any], current_price: float) -> dict[str, float]:
         """
@@ -328,6 +352,7 @@ def enhanced_maybe_rebalance(ctx) -> None:
         try:
             portfolio = getattr(ctx, 'portfolio_weights', {})
             if not portfolio:
+                init_rebalancer()
                 portfolio_first_rebalance(ctx)
                 _last_rebalance = now
                 return
@@ -336,6 +361,7 @@ def enhanced_maybe_rebalance(ctx) -> None:
             settings = get_settings()
             drift_threshold = settings.portfolio_drift_threshold
             if settings.ENABLE_PORTFOLIO_FEATURES:
+                init_rebalancer()
                 should_rebalance, reason = _check_portfolio_first_rebalancing(ctx, drift, drift_threshold)
                 if should_rebalance:
                     portfolio_first_rebalance(ctx)
@@ -359,17 +385,15 @@ def portfolio_first_rebalance(ctx) -> None:
     This function serves as the primary trading mechanism, implementing
     quarterly tax-optimized rebalancing with intelligent decision making.
     """
-    global _portfolio_optimizer, _regime_detector
+    global _rebalancer
+    if _rebalancer is None:
+        raise RuntimeError('init_rebalancer() must be called before portfolio_first_rebalance')
     try:
         settings = get_settings()
         if not settings.ENABLE_PORTFOLIO_FEATURES:
             logger.info('Portfolio-first not enabled, using standard rebalancing')
             rebalance_portfolio(ctx)
             return
-        if _portfolio_optimizer is None:
-            _portfolio_optimizer = create_portfolio_optimizer()
-            _regime_detector = create_regime_detector()
-            logger.info('Portfolio-first rebalancing components initialized')
         current_positions = _get_current_positions_for_rebalancing(ctx)
         target_weights = _get_target_weights_for_rebalancing(ctx)
         market_data = _prepare_rebalancing_market_data(ctx)
@@ -377,27 +401,40 @@ def portfolio_first_rebalance(ctx) -> None:
             logger.warning('Insufficient data for portfolio-first rebalancing, using fallback')
             rebalance_portfolio(ctx)
             return
-        regime, regime_metrics = _regime_detector.detect_current_regime(market_data)
-        dynamic_thresholds = _regime_detector.calculate_dynamic_thresholds(regime, regime_metrics)
-        _portfolio_optimizer.improvement_threshold = dynamic_thresholds.minimum_improvement_threshold
-        _portfolio_optimizer.rebalance_drift_threshold = dynamic_thresholds.rebalance_drift_threshold
+        regime, regime_metrics = _rebalancer.regime_detector.detect_current_regime(market_data)
+        dynamic_thresholds = _rebalancer.regime_detector.calculate_dynamic_thresholds(regime, regime_metrics)
+        _rebalancer.portfolio_optimizer.improvement_threshold = dynamic_thresholds.minimum_improvement_threshold
+        _rebalancer.portfolio_optimizer.rebalance_drift_threshold = dynamic_thresholds.rebalance_drift_threshold
         current_prices = market_data.get('prices', {})
-        should_rebalance, rebalance_reason = _portfolio_optimizer.should_trigger_rebalance(current_positions, target_weights, current_prices)
+        should_rebalance, rebalance_reason = _rebalancer.portfolio_optimizer.should_trigger_rebalance(
+            current_positions, target_weights, current_prices
+        )
         if should_rebalance:
-            if settings.ENABLE_PORTFOLIO_FEATURES:
-                tax_rebalancer = TaxAwareRebalancer()
-                account_equity = sum((abs(pos) * current_prices.get(symbol, 100.0) for symbol, pos in current_positions.items()))
-                formatted_positions = {}
-                for symbol, quantity in current_positions.items():
-                    if quantity != 0:
-                        formatted_positions[symbol] = {'quantity': abs(quantity), 'purchase_price': current_prices.get(symbol, 100.0), 'purchase_date': datetime.now(UTC) - timedelta(days=100)}
-                rebalance_plan = tax_rebalancer.calculate_optimal_rebalance(formatted_positions, target_weights, current_prices, account_equity)
-                logger.info('PORTFOLIO_FIRST_REBALANCING_COMPLETE', extra={'reason': rebalance_reason, 'market_regime': regime.value, 'portfolio_drift': rebalance_plan.get('portfolio_drift', 0), 'total_tax_impact': rebalance_plan.get('total_tax_impact', 0), 'rebalance_trades': len(rebalance_plan.get('rebalance_trades', [])), 'tax_efficiency': rebalance_plan.get('tax_efficiency', 0)})
-                ctx.rebalance_plan = rebalance_plan
-                ctx.last_portfolio_rebalance = datetime.now(UTC)
-            else:
-                logger.info('Using basic rebalancing due to limited features')
-                rebalance_portfolio(ctx)
+            account_equity = sum((abs(pos) * current_prices.get(symbol, 100.0) for symbol, pos in current_positions.items()))
+            formatted_positions = {}
+            for symbol, quantity in current_positions.items():
+                if quantity != 0:
+                    formatted_positions[symbol] = {
+                        'quantity': abs(quantity),
+                        'purchase_price': current_prices.get(symbol, 100.0),
+                        'purchase_date': datetime.now(UTC) - timedelta(days=100),
+                    }
+            rebalance_plan = _rebalancer.calculate_optimal_rebalance(
+                formatted_positions, target_weights, current_prices, account_equity
+            )
+            logger.info(
+                'PORTFOLIO_FIRST_REBALANCING_COMPLETE',
+                extra={
+                    'reason': rebalance_reason,
+                    'market_regime': regime.value,
+                    'portfolio_drift': rebalance_plan.get('portfolio_drift', 0),
+                    'total_tax_impact': rebalance_plan.get('total_tax_impact', 0),
+                    'rebalance_trades': len(rebalance_plan.get('rebalance_trades', [])),
+                    'tax_efficiency': rebalance_plan.get('tax_efficiency', 0),
+                },
+            )
+            ctx.rebalance_plan = rebalance_plan
+            ctx.last_portfolio_rebalance = datetime.now(UTC)
         else:
             logger.info(f'PORTFOLIO_FIRST_REBALANCING_SKIPPED | {rebalance_reason}')
     except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
@@ -405,7 +442,10 @@ def portfolio_first_rebalance(ctx) -> None:
         try:
             rebalance_portfolio(ctx)
         except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as fallback_error:
-            logger.error('PORTFOLIO_FIRST_FALLBACK_FAILED', extra={'cause': fallback_error.__class__.__name__, 'detail': str(fallback_error)})
+            logger.error(
+                'PORTFOLIO_FIRST_FALLBACK_FAILED',
+                extra={'cause': fallback_error.__class__.__name__, 'detail': str(fallback_error)},
+            )
 
 def _check_portfolio_first_rebalancing(ctx, current_drift: float, drift_threshold: float) -> tuple:
     """Check if portfolio-first rebalancing should be triggered."""
@@ -418,17 +458,23 @@ def _check_portfolio_first_rebalancing(ctx, current_drift: float, drift_threshol
         days_since_rebalance = (datetime.now(UTC) - last_rebalance).days
         if days_since_rebalance >= 90:
             return (True, f'Quarterly rebalance due ({days_since_rebalance} days since last)')
-        if _regime_detector is not None:
+        if _rebalancer is not None:
             try:
                 market_data = _prepare_rebalancing_market_data(ctx)
                 if market_data:
-                    regime, metrics = _regime_detector.detect_current_regime(market_data)
+                    regime, metrics = _rebalancer.regime_detector.detect_current_regime(market_data)
                     if regime.value == 'crisis':
                         return (True, 'Crisis regime detected - protective rebalancing')
-                    if metrics.volatility_regime.value in ['extremely_high', 'extremely_low'] and metrics.regime_confidence > 0.8:
+                    if (
+                        metrics.volatility_regime.value in ['extremely_high', 'extremely_low']
+                        and metrics.regime_confidence > 0.8
+                    ):
                         return (True, f'Extreme volatility regime: {metrics.volatility_regime.value}')
             except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
-                logger.debug('REGIME_REBALANCE_CHECK_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+                logger.debug(
+                    'REGIME_REBALANCE_CHECK_FAILED',
+                    extra={'cause': e.__class__.__name__, 'detail': str(e)},
+                )
         return (False, f'No rebalancing needed (drift={current_drift:.3f}, days={days_since_rebalance})')
     except (KeyError, ValueError, TypeError, APIError, TimeoutError, ConnectionError, OSError) as e:
         logger.error('CHECK_PORTFOLIO_REBALANCE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
