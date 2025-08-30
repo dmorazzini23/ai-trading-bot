@@ -85,11 +85,14 @@ class KellyCriterion:
             b = avg_win / avg_loss
             p = win_rate
             q = 1 - win_rate
-            kelly_fraction = (b * p - q) / b
-            kelly_fraction = max(0.0, kelly_fraction)
-            kelly_fraction = min(kelly_fraction, self.max_fraction)
-            logger.debug(f'Kelly calculation: win_rate={win_rate:.3f}, avg_win={avg_win:.3f}, avg_loss={avg_loss:.3f}, kelly_fraction={kelly_fraction:.3f}')
-            return kelly_fraction
+            raw_fraction = (b * p - q) / b
+            bounded_fraction = max(0.0, raw_fraction)
+            capped_fraction = min(bounded_fraction, self.max_fraction)
+            logger.debug(
+                f'Kelly calculation: win_rate={win_rate:.3f}, avg_win={avg_win:.3f}, avg_loss={avg_loss:.3f}, '
+                f'kelly_fraction={capped_fraction:.3f}'
+            )
+            return capped_fraction
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating Kelly fraction: {e}')
             return 0.0
@@ -134,7 +137,9 @@ class KellyCriterion:
         Returns:
             Fractional Kelly position size
         """
-        return kelly_fraction * fraction
+        fractional = kelly_fraction * fraction
+        fractional = max(0.0, fractional)
+        return min(fractional, self.max_fraction)
 
     def kelly_with_confidence(self, returns: list[float], confidence: float=None) -> tuple[float, float]:
         """
@@ -158,6 +163,7 @@ class KellyCriterion:
             z_score = z_scores.get(confidence, 1.96)
             confidence_interval = z_score * std_error
             adjusted_kelly = max(0.0, kelly_fraction - confidence_interval)
+            adjusted_kelly = min(adjusted_kelly, self.max_fraction)
             return (adjusted_kelly, confidence_interval)
         except (ValueError, TypeError) as e:
             logger.error(f'Error calculating Kelly with confidence: {e}')
