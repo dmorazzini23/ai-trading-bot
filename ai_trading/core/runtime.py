@@ -8,9 +8,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from .protocols import AllocatorProtocol
+from ai_trading.position_sizing import get_max_position_size
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
-REQUIRED_PARAM_DEFAULTS = {'CAPITAL_CAP': 0.04, 'DOLLAR_RISK_LIMIT': 0.05, 'MAX_POSITION_SIZE': 1.0, 'KELLY_FRACTION': 0.6, 'BUY_THRESHOLD': 0.2, 'CONF_THRESHOLD': 0.75}
+REQUIRED_PARAM_DEFAULTS = {
+    'CAPITAL_CAP': 0.04,
+    'DOLLAR_RISK_LIMIT': 0.05,
+    'MAX_POSITION_SIZE': 8000.0,
+    'KELLY_FRACTION': 0.6,
+    'BUY_THRESHOLD': 0.2,
+    'CONF_THRESHOLD': 0.75,
+}
 
 def _cfg_coalesce(cfg, key, default):
     """
@@ -77,11 +85,13 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             continue
         params[k] = float(_cfg_coalesce(cfg, k, dflt))
 
-    # Resolve max_position_size with precedence:
-    #   1. explicit cfg attribute
-    #   2. environment variable MAX_POSITION_SIZE
-    #   3. derived from capital_cap via position_sizing helper
-    #   4. fallback to default
+    if getattr(cfg, "capital_cap", None) is None:
+        try:
+            object.__setattr__(cfg, "capital_cap", params["CAPITAL_CAP"])
+        except Exception:
+            pass
+
+    # Resolve max_position_size consistently with position_sizing helper.
     val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)
     if val is None:
         try:
@@ -92,27 +102,21 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             env_val = None
         if env_val is not None:
             val = env_val
-
-    if val is None:
+    if val is not None:
+        # TradingConfig is frozen; mutate via object.__setattr__
         try:
-            from ai_trading.config.management import get_env
-
-            env_override = get_env("AI_TRADING_MAX_POSITION_SIZE", cast=float)
-        except (ImportError, RuntimeError):
-            env_override = None
-        if env_override is not None:
-            val = env_override
-
-    if val is None:
-        cap = params.get("CAPITAL_CAP", REQUIRED_PARAM_DEFAULTS["CAPITAL_CAP"])
-        equity = getattr(cfg, "equity", None)
-        basis = equity if equity and equity > 0 else 200000.0
-        val = float(round(cap * basis, 2))
-
-    if val is None or float(val) <= 0:
+            object.__setattr__(cfg, "max_position_size", float(val))
+        except Exception:
+            pass
+    resolved = get_max_position_size(cfg, cfg, force_refresh=True)
+    if getattr(cfg, "max_position_size", None) != resolved:
+        try:
+            object.__setattr__(cfg, "max_position_size", float(resolved))
+        except Exception:
+            pass
+    if resolved <= 0:
         raise ValueError("MAX_POSITION_SIZE must be positive")
-
-    params["MAX_POSITION_SIZE"] = float(val)
+    params["MAX_POSITION_SIZE"] = float(resolved)
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     runtime.model = NullAlphaModel()
     return runtime
