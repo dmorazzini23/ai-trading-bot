@@ -114,6 +114,8 @@ are imported directly.
 - **Machine Learning Models**: LightGBM, scikit-learn, and reinforcement learning
 - **Signal Generation**: Momentum, mean reversion, moving averages, regime detection
 - **Meta-learning**: Adaptive strategy selection based on market conditions
+- **Algorithm Optimizer**: Market-aware parameter tuning with risk controls
+- **ML Model Utilities**: Safe model serialization and training helpers
 
 ### 📊 Technical Analysis Engine
 - **50+ Technical Indicators**: RSI, MACD, Bollinger Bands, ATR, and custom indicators

@@ -1,207 +1,26 @@
-"""Machine learning utilities for model training and inference.
+"""CLI wrapper for :mod:`ai_trading.ml_model`.
 
-Models are serialized with :mod:`joblib` and paths are validated to reside
-within the local ``models`` directory.
+Legacy entrypoint that re-exports the package machine learning utilities.
 """
-from __future__ import annotations
-import hashlib
-import importlib.util
-import io
-import logging
-import pickle
-import time
-from collections.abc import Sequence
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Sequence
 
-try:
-    import pandas as pd  # type: ignore
-except Exception:  # pragma: no cover
-    class _Series: ...  # ok: ellipsis
-    class _DataFrame: ...  # ok: ellipsis
-    class _PD:
-        Series = _Series
-        DataFrame = _DataFrame
-    pd = _PD()  # type: ignore
-import joblib
-logger = logging.getLogger(__name__)
-if importlib.util.find_spec('sklearn') is not None:
-    from sklearn.base import BaseEstimator
-    from sklearn.metrics import mean_squared_error
-else:
+from ai_trading.ml_model import (  # noqa: F401
+    MLModel,
+    load_model,
+    predict_model,
+    save_model,
+    train_model,
+    train_xgboost_with_optuna,
+)
 
-    class BaseEstimator:
+__all__ = [
+    "MLModel",
+    "load_model",
+    "predict_model",
+    "save_model",
+    "train_model",
+    "train_xgboost_with_optuna",
+]
 
-        def __init__(self, *args, **kwargs) -> None:
-            logger.error('scikit-learn is required')
-            raise ImportError('scikit-learn is required')
+if __name__ == "__main__":  # pragma: no cover - simple CLI hint
+    print("Use ai_trading.ml_model instead")
 
-    def mean_squared_error(y_true, y_pred):
-        return 0.0
-    logger.warning('scikit-learn not available; using fallback implementations')
-from joblib import parallel_backend
-with parallel_backend('loky', n_jobs=1):
-    pass
-if importlib.util.find_spec('sklearn') is not None and importlib.util.find_spec('sklearn.linear_model') is not None:
-    from sklearn.linear_model import LinearRegression
-else:
-
-    class LinearRegression:
-
-        def fit(self, X, y):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X)
-    logger.warning('sklearn.linear_model not available; using fallback LinearRegression')
-
-class MLModel:
-    """Wrapper around an sklearn Pipeline with extra safety checks."""
-
-    def __init__(self, pipeline: BaseEstimator) -> None:
-        self.pipeline: BaseEstimator = pipeline
-        self.logger = logger
-
-    def _validate_inputs(self, X: pd.DataFrame) -> None:
-        import pandas as pd
-        if not isinstance(X, pd.DataFrame):
-            raise TypeError('X must be a DataFrame')
-        if X.empty:
-            raise ValueError('Input DataFrame is empty')
-        if X.isna().any().any():
-            self.logger.error('NaN values detected in input')
-            raise ValueError('Input contains NaN values')
-        if not all((pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes)):
-            raise TypeError('All input columns must be numeric')
-
-    def fit(self, X: pd.DataFrame, y: Sequence[float] | pd.Series) -> float:
-        self._validate_inputs(X)
-        start = time.time()
-        self.logger.info('MODEL_TRAIN_START', extra={'rows': len(X)})
-        try:
-            self.pipeline.fit(X, y)
-            dur = time.time() - start
-            preds = self.pipeline.predict(X)
-            mse = float(mean_squared_error(y, preds))
-            self.logger.info('MODEL_TRAIN_END', extra={'duration': round(dur, 2), 'mse': mse})
-            return mse
-        except (ValueError, RuntimeError) as exc:
-            self.logger.exception('MODEL_TRAIN_FAILED: %s', exc)
-            raise
-
-    def predict(self, X: pd.DataFrame) -> Any:
-        self._validate_inputs(X)
-        try:
-            preds = self.pipeline.predict(X)
-        except (ValueError, RuntimeError, AttributeError) as exc:
-            self.logger.exception('MODEL_PREDICT_FAILED: %s', exc)
-            raise
-        self.logger.info('MODEL_PREDICT', extra={'rows': len(X)})
-        return preds
-
-    def save(self, path: str | None=None) -> str:
-        ts = datetime.now(UTC).strftime('%Y%m%d_%H%M%S')
-        model_dir = (Path(__file__).parent / 'models').resolve()
-        path = Path(path) if path else model_dir / f'model_{ts}.pkl'
-        abs_path = path.resolve()
-        if not abs_path.is_relative_to(model_dir):
-            raise RuntimeError(f'Model path outside allowed directory: {abs_path}')
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            joblib.dump(self.pipeline, abs_path)
-            self.logger.info('MODEL_SAVED', extra={'path': str(abs_path)})
-        except (OSError, ValueError) as exc:
-            self.logger.exception('MODEL_SAVE_FAILED: %s', exc)
-            raise
-        return str(abs_path)
-
-    @classmethod
-    def load(cls, path: str) -> MLModel:
-        """Deserialize a saved model from ``path`` and return an ``MLModel``."""
-        import joblib
-        model_dir = (Path(__file__).parent / 'models').resolve()
-        abs_path = Path(path).resolve()
-        if not abs_path.is_relative_to(model_dir):
-            raise RuntimeError(f'Model path outside allowed directory: {abs_path}')
-        try:
-            with abs_path.open('rb') as f:
-                data = f.read()
-            digest = hashlib.sha256(data).hexdigest()
-            pipeline = joblib.load(io.BytesIO(data))
-            logger.info('MODEL_LOADED', extra={'path': str(abs_path), 'sha256': digest, 'version': getattr(pipeline, 'version', 'n/a')})
-        except (OSError, ValueError, pickle.UnpicklingError) as exc:
-            logger.exception('MODEL_LOAD_FAILED: %s', exc)
-            raise
-        return cls(pipeline)
-
-def train_model(X: Sequence[float] | pd.Series | pd.DataFrame, y: Sequence[float] | pd.Series, algorithm: str='linear') -> BaseEstimator:
-    """Train a simple linear model and return the estimator."""
-    if X is None or y is None:
-        raise ValueError('Invalid training data')
-    if algorithm != 'linear':
-        raise ValueError('Unsupported algorithm')
-    model = LinearRegression()
-    model.fit([[v] for v in X], y)
-    return model
-
-def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
-    """Return predictions from a fitted model.
-
-    Parameters
-    ----------
-    model : Any
-        Trained model instance implementing ``predict``.
-    X : Sequence[Any] | pd.DataFrame
-        Input features for prediction.
-
-    Returns
-    -------
-    list[float]
-        Model predictions as a list of floats.
-    """
-    if model is None:
-        raise ValueError('Model cannot be None')
-    if X is None:
-        raise ValueError('Invalid input')
-    try:
-        return list(model.predict(X))
-    except (ValueError, TypeError) as exc:
-        logger.error('Model prediction failed: %s', exc)
-        raise
-
-def save_model(model: Any, path: str) -> None:
-    import joblib
-    'Persist ``model`` to ``path``.\n\n    Parameters\n    ----------\n    model : Any\n        Trained model object supporting ``joblib`` serialization.\n    path : str\n        Filesystem location to write the model to.\n    '
-    model_dir = (Path(__file__).parent / 'models').resolve()
-    p = Path(path).resolve()
-    if not p.is_relative_to(model_dir):
-        raise RuntimeError(f'Model path outside allowed directory: {p}')
-    p.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, p)
-
-def load_model(path: str) -> Any:
-    import joblib
-    'Load a model previously saved with ``save_model``.\n\n    Parameters\n    ----------\n    path : str\n        Filesystem path to the serialized model.\n\n    Returns\n    -------\n    Any\n        Deserialized model object.\n    '
-    model_dir = (Path(__file__).parent / 'models').resolve()
-    p = Path(path).resolve()
-    if not p.is_relative_to(model_dir):
-        raise RuntimeError(f'Model path outside allowed directory: {p}')
-    return joblib.load(p)
-
-def train_xgboost_with_optuna(X_train: Any, y_train: Any, X_val: Any, y_val: Any) -> Any:
-    """Hyperparameter search for an XGBoost model using Optuna."""
-    import optuna
-    import xgboost as xgb
-
-    def objective(trial: optuna.trial.Trial) -> float:
-        params = {'max_depth': trial.suggest_int('max_depth', 3, 10), 'eta': trial.suggest_float('eta', 0.01, 0.3), 'objective': 'binary:logistic'}
-        dtrain = xgb.DMatrix(X_train, label=y_train)
-        cv = xgb.cv(params, dtrain, num_boost_round=100, nfold=3, metrics='logloss')
-        return cv['test-logloss-mean'].iloc[-1]
-    study = optuna.create_study(direction='minimize')
-    study.optimize(objective, n_trials=50)
-    best_params = study.best_params
-    model = xgb.XGBClassifier(**best_params)
-    model.fit(X_train, y_train)
-    return model
