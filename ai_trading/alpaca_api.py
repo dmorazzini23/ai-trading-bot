@@ -260,6 +260,20 @@ def get_bars_df(
     except AttributeError:
         unit_enum = TimeFrameUnit.Day
     tf_obj = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(amount, unit_enum)
+    if end is not None:
+        from ai_trading.utils.datetime import ensure_datetime
+        try:
+            end_dt = ensure_datetime(end)
+            if end_dt.date() > dt.date.today():
+                _log.warning(
+                    "END_DATE_AFTER_TODAY",
+                    extra={
+                        "requested_end": end_dt.date().isoformat(),
+                        "today": dt.date.today().isoformat(),
+                    },
+                )
+        except (ValueError, TypeError):
+            pass
     if start is None or end is None:
         start, end = _bars_time_window(tf_obj)
     start_s, end_s = _format_start_end_for_tradeapi(tf_norm, start, end)
