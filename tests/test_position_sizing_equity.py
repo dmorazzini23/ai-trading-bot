@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+
 import ai_trading.position_sizing as ps
 import ai_trading.core.runtime as rt
 from ai_trading.logging import logger_once
@@ -30,10 +31,19 @@ def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
     cfg.max_position_size = None
     caplog.set_level(logging.WARNING)
     caplog.clear()
-    ps.get_max_position_size(cfg, cfg, force_refresh=True)
+    ps.get_max_position_size(cfg, force_refresh=True)
     assert not any(
         r.msg == "EQUITY_MISSING" for r in caplog.records if r.name == "ai_trading.position_sizing"
     )
+
+
+def test_get_max_position_size_auto_multiplies_equity(monkeypatch):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
+
+    cfg = SimpleNamespace(capital_cap=0.05)
+    val = ps.get_max_position_size(cfg, auto=True, force_refresh=True)
+    assert val == 50.0
 
 
 def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, caplog):

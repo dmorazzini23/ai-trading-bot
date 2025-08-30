@@ -10,5 +10,5 @@ def test_bot_engine_and_position_sizing_agree(monkeypatch):
     runtime = build_runtime(be.state.mode_obj.config)
     cfg = runtime.cfg
     assert be.MAX_POSITION_SIZE == runtime.params["MAX_POSITION_SIZE"]
-    assert be.MAX_POSITION_SIZE == get_max_position_size(cfg, cfg)
+    assert be.MAX_POSITION_SIZE == get_max_position_size(cfg)
 

@@ -23,5 +23,5 @@ def test_runtime_matches_position_sizing(monkeypatch):
     monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
     cfg = TradingConfig(capital_cap=0.04)
     runtime = build_runtime(cfg)
-    assert runtime.params["MAX_POSITION_SIZE"] == get_max_position_size(cfg, cfg)
+    assert runtime.params["MAX_POSITION_SIZE"] == get_max_position_size(cfg)
 
