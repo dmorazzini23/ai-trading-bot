@@ -24,15 +24,6 @@ except ImportError:  # pragma: no cover
     HAS_NUMPY = False
     np = None  # type: ignore
 
-try:
-    import lightgbm as lgb  # type: ignore
-
-    HAS_LIGHTGBM = True
-except ImportError as exc:  # pragma: no cover - optional dep
-    lgb = None  # type: ignore[assignment]
-    HAS_LIGHTGBM = False
-    _lgb_import_error = exc
-
 
 def set_random_seeds(seed: int = 42) -> None:
     """
@@ -44,10 +35,12 @@ def set_random_seeds(seed: int = 42) -> None:
     random.seed(seed)
     if HAS_NUMPY:
         np.random.seed(seed)
-    if not HAS_LIGHTGBM:
+    try:
+        import lightgbm as lgb  # type: ignore
+    except ImportError as exc:  # pragma: no cover - optional dep
         raise ImportError(
-            "lightgbm is required for deterministic training. Install via `pip install lightgbm`."
-        ) from _lgb_import_error
+            "lightgbm is required for deterministic training. Install via `pip install lightgbm`.",
+        ) from exc
     try:
         lgb.reset_parameter({"seed": seed})  # type: ignore[attr-defined]
     except Exception:  # pragma: no cover - best effort

@@ -195,10 +195,9 @@ def test_adaptive_risk_controls():
 
 def test_determinism():
     """Test deterministic training setup."""
-    from ai_trading.utils.determinism import hash_data, set_random_seeds
-
     pd = pytest.importorskip("pandas")
     pytest.importorskip("lightgbm")
+    from ai_trading.utils.determinism import hash_data, set_random_seeds
 
     # Test seed setting
     set_random_seeds(42)
