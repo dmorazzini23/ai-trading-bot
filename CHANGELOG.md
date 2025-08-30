@@ -51,6 +51,7 @@ All notable changes to this project will be documented in this file.
 - **Alpaca API**: provide lightweight fallback for `StockLatestQuoteRequest` to avoid startup ImportError when class is absent
 - **CLI dry-run**: log indicator import confirmation and exit with code 0 before heavy imports.
 - **Settings**: centralize value normalization and eliminate `FieldInfo` leaks
+- **Position sizing**: fetch real account equity via Alpaca once and cache it to avoid repeated `EQUITY_MISSING` warnings.
 
 ### Added
 - **Parallel Predictions**: Replaced single-threaded prediction executor with auto-sized thread pool

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from math import floor
 from typing import Any
 import os
-from ai_trading.logging import get_logger
+from ai_trading.logging import get_logger, logger_once
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
 from ai_trading.exc import HTTPError, RequestException
@@ -14,6 +14,7 @@ _log = get_logger(__name__)
 class _Cache:
     value: float | None = None
     ts: datetime | None = None
+    equity: float | None = None
 _CACHE = _Cache()
 
 def _now_utc() -> datetime:
@@ -68,8 +69,9 @@ def _resolve_max_position_size(
         return (float(provided), "provided")
 
     if equity is None:
-        _log.warning(
+        logger_once.warning(
             "EQUITY_MISSING",
+            key="equity_missing",
             extra={"field": "equity", "default_equity": default_equity, "capital_cap": capital_cap},
         )
     basis = equity if equity is not None and equity > 0 else default_equity
@@ -106,17 +108,28 @@ def _fallback_max_size(cfg, tcfg) -> float:
     return 8000.0
 
 def _get_equity_from_alpaca(cfg) -> float:
-    """Fetch account equity from Alpaca /v2/account.
+    """Fetch account equity using Alpaca SDK or HTTP fallback.
 
-    Returns 0.0 on any error (caller will fallback).
+    Returns ``0.0`` on any error (caller will fallback).
     """
+    base = str(getattr(cfg, 'alpaca_base_url', '')).rstrip('/')
+    key = getattr(cfg, 'alpaca_api_key', None)
+    secret = getattr(cfg, 'alpaca_secret_key_plain', None) or get_alpaca_secret_key_plain()
+    if not key or not secret or not base:
+        return 0.0
+    try:  # Prefer alpaca-py when available
+        from alpaca.trading.client import TradingClient  # type: ignore
+
+        client = TradingClient(api_key=key, secret_key=secret, url_override=base)
+        acct = client.get_account()
+        return _coerce_float(getattr(acct, 'equity', None), 0.0)
+    except ModuleNotFoundError:
+        pass
+    except Exception as e:  # noqa: BLE001 - log and fallback to HTTP
+        _log.warning("ALPACA_SDK_ACCOUNT_FAILED", extra={"error": str(e)})
+
+    url = f"{base}/v2/account"
     try:
-        base = str(getattr(cfg, 'alpaca_base_url', '')).rstrip('/')
-        url = f"{base}/v2/account"
-        key = getattr(cfg, 'alpaca_api_key', None)
-        secret = getattr(cfg, 'alpaca_secret_key_plain', None) or get_alpaca_secret_key_plain()
-        if not key or not secret or (not base):
-            return 0.0
         s = get_global_session()
         resp = s.get(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret})
         if hasattr(resp, "raise_for_status"):
@@ -128,10 +141,9 @@ def _get_equity_from_alpaca(cfg) -> float:
                 setattr(err, "response", resp)
                 raise err
         data = resp.json()
-        eq = _coerce_float(data.get('equity'), 0.0)
-        return eq
+        return _coerce_float(data.get('equity'), 0.0)
     except HTTPError as e:
-        _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": getattr(e.response, "status_code", None)})
+        _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": getattr(e.response, 'status_code', None)})
         return 0.0
     except RequestException as e:
         _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
@@ -155,6 +167,16 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         200000.0,
     )
     if mode != 'AUTO':
+        if not force_refresh and _CACHE.value is not None:
+            return (
+                _CACHE.value,
+                {
+                    'mode': mode,
+                    'source': 'cache',
+                    'capital_cap': cap,
+                    'refreshed_at': (_CACHE.ts or _now_utc()).isoformat(),
+                },
+            )
         raw_val = getattr(tcfg, 'max_position_size', None)
         cur = _coerce_float(raw_val, 0.0)
         source = 'static'
@@ -166,7 +188,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 fetched = _get_equity_from_alpaca(cfg)
                 if fetched > 0:
                     eq = fetched
-                    for obj in {cfg, tcfg}:
+                    for obj in (cfg, tcfg):
                         try:
                             setattr(obj, 'equity', eq)
                         except Exception:
@@ -177,6 +199,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 else:
                     eq = None
             cur, source = _resolve_max_position_size(cur, cap, eq, default_equity=default_eq)
+            _CACHE.equity = eq
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
         return (
             cur,
@@ -190,6 +213,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
     eq = _get_equity_from_alpaca(cfg)
+    _CACHE.equity = eq
     if eq <= 0.0 or cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
         _log.info(
