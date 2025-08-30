@@ -9,8 +9,25 @@ from typing import Any
 
 _RE_KEYS = re.compile("(key|secret|token|password)", re.IGNORECASE)
 _MASK = "***REDACTED***"
+_ENV_MASK = "***"
 
-_SENSITIVE_ENV = {"ALPACA_API_KEY", "ALPACA_SECRET_KEY", "WEBHOOK_SECRET"}
+_SENSITIVE_ENV = {
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_API_SECRET_KEY",
+    "ALPACA_API_KEY_ID",
+    "ALPACA_OAUTH",
+    "WEBHOOK_SECRET",
+    "NEWS_API_KEY",
+    "FINNHUB_API_KEY",
+    "SENTIMENT_API_KEY",
+    "ALTERNATIVE_SENTIMENT_API_KEY",
+    "FUNDAMENTAL_API_KEY",
+    "IEX_API_TOKEN",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "MASTER_ENCRYPTION_KEY",
+}
 
 
 def _redact_inplace(obj: Any) -> Any:
@@ -43,7 +60,7 @@ def redact_env(env: Mapping[str, Any]) -> Mapping[str, Any]:
     dup: MutableMapping[str, Any] = dict(env)
     for key in _SENSITIVE_ENV:
         if key in dup and dup[key]:
-            dup[key] = _MASK
+            dup[key] = _ENV_MASK
     return dup
 
 

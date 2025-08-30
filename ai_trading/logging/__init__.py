@@ -21,6 +21,7 @@ from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
+from ai_trading.logging.redact import _ENV_MASK
 
 def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
@@ -101,7 +102,7 @@ def sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in cleaned.items():
         if any(tok in k.lower() for tok in _SENSITIVE_EXTRA_KEYS):
-            out[k] = '***REDACTED***'
+            out[k] = _ENV_MASK
         else:
             out[k] = v
     return out

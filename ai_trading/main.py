@@ -172,19 +172,19 @@ def _install_signal_handlers() -> None:
 
 def _fail_fast_env() -> None:
     """Reload and validate mandatory environment variables early."""
+    required = (
+        "ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY",
+        "ALPACA_API_URL",
+        "ALPACA_DATA_FEED",
+        "WEBHOOK_SECRET",
+        "CAPITAL_CAP",
+        "DOLLAR_RISK_LIMIT",
+    )
     try:
         loaded = reload_env()
-        snapshot = validate_required_env(
-            (
-                "ALPACA_API_KEY",
-                "ALPACA_SECRET_KEY",
-                "ALPACA_API_URL",
-                "ALPACA_DATA_FEED",
-                "WEBHOOK_SECRET",
-                "CAPITAL_CAP",
-                "DOLLAR_RISK_LIMIT",
-            )
-        )
+        validate_required_env(required)
+        snapshot = {k: os.getenv(k, "") for k in required}
     except RuntimeError as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
