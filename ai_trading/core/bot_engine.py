@@ -89,6 +89,11 @@ else:
 
         pass
 
+    # Provide a placeholder TradingClient so tests can import the symbol when
+    # Alpaca SDK is not installed.
+    class TradingClient:  # type: ignore[empty-body]
+        ...
+
 from ai_trading.config.management import (
     get_env,
     is_shadow_mode,
@@ -180,94 +185,14 @@ data_client = None
 
 
 def _validate_trading_api(api: Any) -> bool:
-    """Ensure trading ``api`` exposes ``list_orders``.
-
-    Maps ``get_orders`` to ``list_orders`` when necessary and warns when the
-    client is not an instance of :class:`TradingClient`.
-    """  # AI-AGENT-REF: verify Alpaca client contract
-    if api is None:
-        logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
-        return False
-    if not hasattr(api, "list_orders"):
-        if hasattr(api, "get_orders"):
-            def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
-                """Proxy ``list_orders`` to ``get_orders`` with compatible kwargs."""
-
-                status = kwargs.pop("status", None)
-                if status is None:
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-                import inspect
-
-                params = inspect.signature(api.get_orders).parameters
-
-                enum_val: Any = status
-                try:  # pragma: no cover - optional import paths
-                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                        enums_mod, "OrderStatus", None
-                    )
-                    if enum_cls is not None:
-                        enum_val = getattr(enum_cls, str(status).upper(), status)
-                except Exception:  # pragma: no cover - optional import paths
-                    pass
-
-                if "status" in params:
-                    kwargs["status"] = enum_val
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-                req = None
-                try:  # pragma: no cover - optional import paths
-                    requests_mod = __import__("alpaca.trading.requests", fromlist=[""])
-                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                        enums_mod, "OrderStatus", None
-                    )
-                    if enum_cls is not None:
-                        enum_val = getattr(enum_cls, str(status).upper(), status)
-                    req_cls = getattr(requests_mod, "GetOrdersRequest")
-                    req = req_cls(statuses=[enum_val])
-                except Exception:
-                    pass
-                if req is not None:
-                    try:
-                        return api.get_orders(*args, filter=req, **kwargs)  # type: ignore[attr-defined]
-                    except TypeError:
-                        return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
-
-                kwargs["status"] = status
-                return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-            setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            logger_once.warning(
-                "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
-            )
-        else:
-            logger_once.error(
-                "ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing"
-            )
-            if not is_shadow_mode():
-                raise RuntimeError("Alpaca client missing list_orders method")
-            return False
-    TradingClient = get_trading_client_cls()
-    if not isinstance(api, TradingClient):
-        logger_once.warning(
-            "ALPACA_API_ADAPTER", key="alpaca_api_adapter"
-        )
-    return True
+    """Delegate to modular implementation (backwards-compatible façade)."""
+    from ai_trading.core.alpaca_client import _validate_trading_api as _impl
+    return _impl(api)
 
 
 def list_open_orders(api: Any):
-    """Return all open orders from ``api``.
-
-    ``_validate_trading_api`` shims ``list_orders`` so that passing
-    ``status="open"`` works across Alpaca SDK versions. Newer clients expect a
-    ``GetOrdersRequest`` with ``QueryOrderStatus.OPEN`` (or ``OrderStatus.OPEN``
-    on older SDKs) while legacy clients may accept the raw status string
-    directly.
-    """
-
-    return api.list_orders(status="open")
+    from ai_trading.core.alpaca_client import list_open_orders as _impl
+    return _impl(api)
 
 
 # -- New helper: ensure context has an attached Alpaca client -----------------
@@ -317,6 +242,14 @@ def ensure_alpaca_attached(ctx) -> None:
             raise RuntimeError("Failed to attach Alpaca client to context")
         return
     _validate_trading_api(api)
+
+# Rebind canonical Alpaca helpers to modular implementations (post-definition override)
+from ai_trading.core.alpaca_client import (  # noqa: E402
+    _validate_trading_api as _validate_trading_api,
+    list_open_orders as list_open_orders,
+    ensure_alpaca_attached as ensure_alpaca_attached,
+    _initialize_alpaca_clients as _initialize_alpaca_clients,
+)
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
@@ -467,6 +400,12 @@ from ai_trading.utils.timing import (
     HTTP_TIMEOUT,
 )  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.core.alpaca_client import (
+    _validate_trading_api,
+    list_open_orders,
+    ensure_alpaca_attached,
+    _initialize_alpaca_clients,
+)
 from ai_trading.utils.prof import StageTimer
 from ai_trading.guards.staleness import _ensure_data_fresh
 
@@ -3428,64 +3367,12 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     name="finnhub_api",
 )
 
-# AI-AGENT-REF: lazy executor init avoids import-time settings
-executor: ThreadPoolExecutor | None = None
-prediction_executor: ThreadPoolExecutor | None = None
+import ai_trading.core.executors as executors
 
+# Expose cleanup function on this module for tests/back-compat
+cleanup_executors = executors.cleanup_executors
 
-def _ensure_executors() -> None:
-    """Create thread pool executors on demand."""  # AI-AGENT-REF: deferred init
-    global executor, prediction_executor
-    if executor is not None and prediction_executor is not None:
-        return
-    from ai_trading.config.settings import get_settings
-
-    cpu = os.cpu_count() or 2
-    s = get_settings()
-    exec_fn = getattr(s, "effective_executor_workers", None)
-    exec_workers = exec_fn(cpu) if callable(exec_fn) else cpu
-    pred_fn = getattr(s, "effective_prediction_workers", None)
-    pred_workers = pred_fn(cpu) if callable(pred_fn) else cpu
-    executor = ThreadPoolExecutor(max_workers=exec_workers)
-    prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
-
-
-# AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
-def cleanup_executors():
-    """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
-    try:
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Main executor shutdown successfully")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Error shutting down main executor: %s", e)
-
-    try:
-        if prediction_executor is not None:
-            prediction_executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Prediction executor shutdown successfully")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Error shutting down prediction executor: %s", e)
-
-
+# Ensure executor cleanup is registered with the correct reference
 atexit.register(cleanup_executors)
 
 # EVENT cooldown
@@ -5857,7 +5744,7 @@ def _initialize_alpaca_clients() -> bool:
     for attempt in (1, 2):
         try:
             key, secret, base_url = _ensure_alpaca_env_or_raise()
-        except Exception as e:  # AI-AGENT-REF: surface env resolution failures
+        except COMMON_EXC as e:  # AI-AGENT-REF: surface env resolution failures
             logger.error(
                 "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
             )
@@ -5914,7 +5801,7 @@ def _initialize_alpaca_clients() -> bool:
                 api_key=key,
                 secret_key=secret,
             )
-        except Exception as e:  # AI-AGENT-REF: expose network or auth issues
+        except (APIError, TypeError, ValueError, OSError) as e:  # AI-AGENT-REF: expose network or auth issues
             logger.error(
                 "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
             )
@@ -8068,6 +7955,36 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         return args
 
     order_args = _req_to_args(req)
+    # Ensure client_order_id present for idempotency across retries
+    if not order_args.get("client_order_id"):
+        try:
+            from ai_trading.alpaca_api import generate_client_order_id as _gen_id
+            order_args["client_order_id"] = _gen_id("ai")
+        except Exception:
+            pass
+
+    # Deduplicate via idempotency cache before sending to broker
+    try:
+        from ai_trading.execution.idempotency import get_idempotency_cache
+        _idem_cache = get_idempotency_cache()
+        _idem_key = _idem_cache.generate_key(
+            order_args.get("symbol", ""),
+            order_args.get("side", ""),
+            float(order_args.get("qty", 0) or 0),
+        )
+        if _idem_cache.is_duplicate(_idem_key):
+            logger.warning(
+                "ORDER_DUPLICATE_SKIPPED",
+                extra={
+                    "symbol": order_args.get("symbol", ""),
+                    "side": order_args.get("side", ""),
+                    "qty": order_args.get("qty", 0),
+                },
+            )
+            return None
+    except Exception:
+        _idem_cache = None
+        _idem_key = None
 
     for attempt in range(2):
         try:
@@ -8165,6 +8082,11 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 logger.error(
                     f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
                 )
+            try:
+                if _idem_cache is not None and _idem_key is not None and getattr(order, "id", None):
+                    _idem_cache.mark_submitted(_idem_key, getattr(order, "id"))
+            except Exception:
+                pass
             return order
         except APIError as e:
             if "insufficient qty" in str(e).lower():
@@ -8201,8 +8123,13 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
-    """Poll Alpaca for order fill status until it is no longer open."""
+    """Poll Alpaca for order fill status until it is no longer open.
+
+    Honors the provided ``timeout`` by sleeping in short intervals instead of
+    a fixed 3s, so tests can set small timeouts without hanging.
+    """
     start = pytime.time()
+    interval = 0.2 if timeout <= 1 else 1.0
     while pytime.time() - start < timeout:
         try:
             od = ctx.api.get_order(order_id)
@@ -8230,7 +8157,10 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
-        pytime.sleep(3)
+        remaining = timeout - (pytime.time() - start)
+        if remaining <= 0:
+            break
+        pytime.sleep(min(interval, remaining))
 
 
 def send_exit_order(
@@ -8241,136 +8171,8 @@ def send_exit_order(
     reason: str,
     raw_positions: list | None = None,
 ) -> None:
-    logger.info(
-        f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
-    )
-    if raw_positions is not None and not any(
-        getattr(p, "symbol", "") == symbol for p in raw_positions
-    ):
-        logger.info("SKIP_NO_POSITION", extra={"symbol": symbol})
-        return
-    try:
-        pos = ctx.api.get_position(symbol)
-        held_qty = int(pos.qty)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        held_qty = 0
-
-    if held_qty < exit_qty:
-        logger.warning(
-            f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"
-        )
-        return
-
-    if price <= 0.0:
-        req = MarketOrderRequest(
-            symbol=symbol,
-            qty=exit_qty,
-            side=OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-        )
-        order = safe_submit_order(ctx.api, req)
-        if order is not None:
-            from ai_trading.strategies.base import StrategySignal as TradeSignal
-
-            try:
-                acct = ctx.api.get_account()
-                eq = float(getattr(acct, "equity", 0) or 0)
-                wt = (exit_qty * price) / eq if eq > 0 else 0.0
-                ctx.risk_engine.register_fill(
-                    TradeSignal(
-                        symbol=symbol,
-                        side="sell",
-                        confidence=1.0,
-                        strategy="exit",
-                        weight=abs(wt),
-                        asset_class="equity",
-                    )
-                )
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ):  # AI-AGENT-REF: narrow exception
-                logger.debug("register_fill exit failed", exc_info=True)
-        return
-
-    limit_order = safe_submit_order(
-        ctx.api,
-        LimitOrderRequest(
-            symbol=symbol,
-            qty=exit_qty,
-            side=OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            limit_price=price,
-        ),
-    )
-    if limit_order is not None:
-        from ai_trading.strategies.base import StrategySignal as TradeSignal
-
-        try:
-            acct = ctx.api.get_account()
-            eq = float(getattr(acct, "equity", 0) or 0)
-            wt = (exit_qty * price) / eq if eq > 0 else 0.0
-            ctx.risk_engine.register_fill(
-                TradeSignal(
-                    symbol=symbol,
-                    side="sell",
-                    confidence=1.0,
-                    strategy="exit",
-                    weight=abs(wt),
-                    asset_class="equity",
-                )
-            )
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):  # AI-AGENT-REF: narrow exception
-            logger.debug("register_fill exit failed", exc_info=True)
-    pytime.sleep(5)
-    try:
-        o2 = ctx.api.get_order(limit_order.id)
-        if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
-            ctx.api.cancel_order(limit_order.id)
-            safe_submit_order(
-                ctx.api,
-                MarketOrderRequest(
-                    symbol=symbol,
-                    qty=exit_qty,
-                    side=OrderSide.SELL,
-                    time_in_force=TimeInForce.DAY,
-                ),
-            )
-    except (APIError, TimeoutError, ConnectionError) as e:
-        logger.error(
-            "BROKER_OP_FAILED",
-            extra={
-                "cause": e.__class__.__name__,
-                "detail": str(e),
-                "op": "cancel",
-                "order_id": getattr(limit_order, "id", ""),
-            },
-        )
-        raise
+    from ai_trading.core.execution_flow import send_exit_order as _impl
+    return _impl(ctx, symbol, exit_qty, price, reason, raw_positions)
 
 
 def twap_submit(
@@ -8381,199 +8183,15 @@ def twap_submit(
     window_secs: int = 600,
     n_slices: int = 10,
 ) -> None:
-    slice_qty = total_qty // n_slices
-    wait_secs = window_secs / n_slices
-    for i in range(n_slices):
-        try:
-            submit_order(ctx, symbol, slice_qty, side)
-        except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "BROKER_OP_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-            raise
-        pytime.sleep(wait_secs)
+    from ai_trading.core.execution_flow import twap_submit as _impl
+    return _impl(ctx, symbol, total_qty, side, window_secs, n_slices)
 
 
 def vwap_pegged_submit(
     ctx: BotContext, symbol: str, total_qty: int, side: str, duration: int = 300
 ) -> None:
-    start_time = pytime.time()
-    placed = 0
-    while placed < total_qty and pytime.time() - start_time < duration:
-        try:
-            df = fetch_minute_df_safe(symbol)
-        except DataFetchError:
-            logger.error("[VWAP] no minute data for %s", symbol)
-            break
-        if df is None or df.empty:
-            logger.warning(
-                "[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol}
-            )
-            break
-        vwap_price = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).iloc[-1]
-        try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-            spread = (
-                (quote.ask_price - quote.bid_price)
-                if quote.ask_price and quote.bid_price
-                else 0.0
-            )
-        except APIError as e:
-            logger.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
-            spread = 0.0
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):  # AI-AGENT-REF: narrow exception
-            spread = 0.0
-        if spread > 0.05:
-            slice_qty = max(1, int((total_qty - placed) * 0.5))
-        else:
-            slice_qty = min(max(1, total_qty // 10), total_qty - placed)
-        order = None
-        for attempt in range(3):
-            try:
-                logger.info(
-                    "ORDER_SENT",
-                    extra={
-                        "timestamp": utc_now_iso(),
-                        "symbol": symbol,
-                        "side": side,
-                        "qty": slice_qty,
-                        "order_type": "limit",
-                    },
-                )
-                order = safe_submit_order(
-                    ctx.api,
-                    LimitOrderRequest(
-                        symbol=symbol,
-                        qty=slice_qty,
-                        side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-                        time_in_force=TimeInForce.IOC,
-                        limit_price=round(vwap_price, 2),
-                    ),
-                )
-                logger.info(
-                    "ORDER_ACK",
-                    extra={
-                        "symbol": symbol,
-                        "order_id": getattr(order, "id", ""),
-                        "status": getattr(order, "status", ""),
-                    },
-                )
-                Thread(
-                    target=poll_order_fill_status,
-                    args=(ctx, getattr(order, "id", "")),
-                    daemon=True,
-                ).start()
-                fill_price = float(getattr(order, "filled_avg_price", 0) or 0)
-                if fill_price > 0:
-                    slip = (fill_price - vwap_price) * 100
-                    if slippage_total:
-                        try:
-                            slippage_total.inc(abs(slip))
-                        except (
-                            FileNotFoundError,
-                            PermissionError,
-                            IsADirectoryError,
-                            JSONDecodeError,
-                            ValueError,
-                            KeyError,
-                            TypeError,
-                            OSError,
-                        ) as exc:  # AI-AGENT-REF: narrow exception
-                            logger.exception("bot.py unexpected", exc_info=exc)
-                            raise
-                    if slippage_count:
-                        try:
-                            slippage_count.inc()
-                        except (
-                            FileNotFoundError,
-                            PermissionError,
-                            IsADirectoryError,
-                            JSONDecodeError,
-                            ValueError,
-                            KeyError,
-                            TypeError,
-                            OSError,
-                        ) as exc:  # AI-AGENT-REF: narrow exception
-                            logger.exception("bot.py unexpected", exc_info=exc)
-                            raise
-                    _slippage_log.append(
-                        (
-                            symbol,
-                            vwap_price,
-                            fill_price,
-                            datetime.now(UTC),
-                        )
-                    )
-                    with slippage_lock:
-                        try:
-                            with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
-                                csv.writer(sf).writerow(
-                                    [
-                                        utc_now_iso(),
-                                        symbol,
-                                        vwap_price,
-                                        fill_price,
-                                        slip,
-                                    ]
-                                )
-                        except (
-                            FileNotFoundError,
-                            PermissionError,
-                            IsADirectoryError,
-                            JSONDecodeError,
-                            ValueError,
-                            KeyError,
-                            TypeError,
-                            OSError,
-                        ) as e:  # AI-AGENT-REF: narrow exception
-                            logger.warning(f"Failed to append slippage log: {e}")
-                if orders_total:
-                    try:
-                        orders_total.inc()
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ) as exc:  # AI-AGENT-REF: narrow exception
-                        logger.exception("bot.py unexpected", exc_info=exc)
-                        raise
-                break
-            except APIError as e:
-                logger.warning(f"[VWAP] APIError attempt {attempt + 1} for {symbol}: {e}")
-                pytime.sleep(attempt + 1)
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as e:  # AI-AGENT-REF: narrow exception
-                logger.exception(f"[VWAP] slice attempt {attempt + 1} failed: {e}")
-                pytime.sleep(attempt + 1)
-        if order is None:
-            break
-        placed += slice_qty
-        pytime.sleep(duration / 10)
-
+    from ai_trading.core.execution_flow import vwap_pegged_submit as _impl
+    return _impl(ctx, symbol, total_qty, side, duration)
 
 @dataclass(frozen=True)
 class SliceConfig:
@@ -8600,156 +8218,9 @@ def pov_submit(
     side: str,
     cfg: SliceConfig = DEFAULT_SLICE_CFG,
 ) -> bool:
-    placed = 0
-    retries = 0
-    interval = cfg.sleep_interval
-    while placed < total_qty:
-        try:
-            df = fetch_minute_df_safe(symbol)
-        except DataFetchError:
-            retries += 1
-            if retries > cfg.max_retries:
-                logger.warning(
-                    f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
-                    extra={"symbol": symbol},
-                )
-                return False
-            logger.warning(
-                f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
-                extra={"symbol": symbol},
-            )
-            sleep_time = interval * (0.8 + 0.4 * random.random())
-            pytime.sleep(sleep_time)
-            interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
-            continue
-        if df is None or df.empty:
-            retries += 1
-            if retries > cfg.max_retries:
-                logger.warning(
-                    f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
-                    extra={"symbol": symbol},
-                )
-                return False
-            logger.warning(
-                f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
-                extra={"symbol": symbol},
-            )
-            sleep_time = interval * (0.8 + 0.4 * random.random())
-            pytime.sleep(sleep_time)
-            interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
-            continue
-        retries = 0
-        interval = cfg.sleep_interval
+    from ai_trading.core.execution_flow import pov_submit as _impl
+    return _impl(ctx, symbol, total_qty, side, cfg)
 
-        try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-            spread = (
-                (quote.ask_price - quote.bid_price)
-                if quote.ask_price and quote.bid_price
-                else 0.0
-            )
-        except APIError as e:
-            logger.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
-            spread = 0.0
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ):  # AI-AGENT-REF: narrow exception
-            spread = 0.0
-
-        vol = df["volume"].iloc[-1]
-
-        # AI-AGENT-REF: Dynamic spread threshold based on market conditions
-        # Instead of fixed 0.05, use dynamic threshold based on symbol characteristics
-        dynamic_spread_threshold = min(0.10, max(0.02, vol / 1000000 * 0.05))
-
-        if spread > dynamic_spread_threshold:
-            # Less aggressive reduction - only 25% instead of 50%
-            slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
-            logger.debug(
-                "[pov_submit] High spread detected, reducing slice by 25%",
-                extra={
-                    "symbol": symbol,
-                    "spread": spread,
-                    "threshold": dynamic_spread_threshold,
-                    "reduced_slice_qty": slice_qty,
-                },
-            )
-        else:
-            slice_qty = min(int(vol * cfg.pct), total_qty - placed)
-
-        if slice_qty < 1:
-            logger.debug(
-                f"[pov_submit] slice_qty<1 (vol={vol}), waiting",
-                extra={"symbol": symbol},
-            )
-            pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
-            continue
-        try:
-            # AI-AGENT-REF: Fix order slicing to track actual filled quantities
-            order = submit_order(ctx, symbol, slice_qty, side)
-            if order is None:
-                logger.warning(
-                    "[pov_submit] submit_order returned None for slice, skipping",
-                    extra={"symbol": symbol, "slice_qty": slice_qty},
-                )
-                continue
-
-            # Track actual filled quantity, not intended quantity
-            actual_filled = int(getattr(order, "filled_qty", "0") or "0")
-
-            # For partially filled orders, the filled_qty might be less than slice_qty
-            if actual_filled < slice_qty:
-                logger.warning(
-                    "POV_SLICE_PARTIAL_FILL",
-                    extra={
-                        "symbol": symbol,
-                        "intended_qty": slice_qty,
-                        "actual_filled": actual_filled,
-                        "order_id": getattr(order, "id", ""),
-                        "status": getattr(order, "status", ""),
-                    },
-                )
-
-            placed += actual_filled  # Use actual filled, not intended
-
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.exception(
-                f"[pov_submit] submit_order failed on slice, aborting: {e}",
-                extra={"symbol": symbol},
-            )
-            return False
-
-        logger.info(
-            "POV_SLICE_PLACED",
-            extra={
-                "symbol": symbol,
-                "slice_qty": slice_qty,
-                "actual_filled": (
-                    actual_filled if "actual_filled" in locals() else slice_qty
-                ),
-                "total_placed": placed,
-            },
-        )
-        pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
-    logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
-    return True
 
 
 def maybe_pyramid(
@@ -8856,130 +8327,28 @@ def calculate_entry_size(
 
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    """Execute entry order."""
-
-    if ctx.api is None:
-        logger.warning("ctx.api is None - cannot execute entry")
-        return
-
-    try:
-        buying_pw = float(ctx.api.get_account().buying_power)
-        if buying_pw <= 0:
-            logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
-            return
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.warning("Failed to get buying power for %s: %s", symbol, exc)
-        return
-    if qty is None or qty <= 0 or not np.isfinite(qty):
-        logger.error(
-            f"Invalid order quantity for {symbol}: {qty}. Skipping order and logging input data."
-        )
-        # Optionally, log signal, price, and input features here for debug
-        return
-    if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
-        logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
-        pov_submit(ctx, symbol, qty, side)
-    elif qty > SLICE_THRESHOLD:
-        logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
-        vwap_pegged_submit(ctx, symbol, qty, side)
-    else:
-        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
-        submit_order(ctx, symbol, qty, side)
-
-    try:
-        raw = fetch_minute_df_safe(symbol)
-    except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
-        return
-    if raw is None or raw.empty:
-        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
-        return
-    try:
-        df_ind = prepare_indicators(raw)
-        if df_ind is None:
-            logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
-            return
-    except ValueError as exc:
-        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
-        return
-    if df_ind.empty:
-        logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
-        return
-    entry_price = get_latest_close(df_ind)
-    ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
-
-    now_pac = datetime.now(UTC).astimezone(PACIFIC)
-    mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-    mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-    tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
-    stop, take = scaled_atr_stop(
-        entry_price,
-        df_ind["atr"].iloc[-1],
-        now_pac,
-        mo,
-        mc,
-        max_factor=tp_factor,
-        min_factor=0.5,
-    )
-    with targets_lock:
-        ctx.stop_targets[symbol] = stop
-        ctx.take_profit_targets[symbol] = take
+    from ai_trading.core.execution_flow import execute_entry as _impl
+    return _impl(ctx, symbol, qty, side)
 
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
-    if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.warning(f"Skipping {symbol}: computed qty <= 0")
-        return
-    try:
-        raw = fetch_minute_df_safe(symbol)
-    except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
-        raw = pd.DataFrame()
-    exit_price = get_latest_close(raw) if raw is not None else 1.0
-    send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
-    ctx.trade_logger.log_exit(state, symbol, exit_price)
-    on_trade_exit_rebalance(ctx)
-    with targets_lock:
-        ctx.take_profit_targets.pop(symbol, None)
-        ctx.stop_targets.pop(symbol, None)
+    from ai_trading.core.execution_flow import execute_exit as _impl
+    return _impl(ctx, state, symbol, qty)
 
 
 def exit_all_positions(ctx: BotContext) -> None:
-    raw_positions = ctx.api.list_positions()
-    for pos in raw_positions:
-        qty = abs(int(pos.qty))
-        if qty:
-            send_exit_order(
-                ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions
-            )
-            logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
+    from ai_trading.core.execution_flow import exit_all_positions as _impl
+    return _impl(ctx)
 
 
 def _liquidate_all_positions(runtime: BotContext) -> None:
-    """Helper to liquidate every open position."""
-    # AI-AGENT-REF: existing exit_all_positions wrapper for emergency liquidation
-    exit_all_positions(runtime)
+    from ai_trading.core.execution_flow import _liquidate_all_positions as _impl
+    return _impl(runtime)
 
 
 def liquidate_positions_if_needed(runtime: BotContext) -> None:
-    """Liquidate all positions when certain risk conditions trigger."""
-    if check_halt_flag(runtime):
-        # Modified: DO NOT liquidate positions on halt flag.
-        logger.info(
-            "TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions, holding open positions."
-        )
-        return
-
-    # normal liquidation logic would go here (stub)
+    from ai_trading.core.execution_flow import liquidate_positions_if_needed as _impl
+    return _impl(runtime)
 
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
@@ -12762,7 +12131,7 @@ def _process_symbols(
 
     symbols = filtered  # replace with filtered list
 
-    _ensure_executors()  # AI-AGENT-REF: lazy executor creation
+    executors._ensure_executors()  # AI-AGENT-REF: lazy executor creation
 
     if cd_skipped:
         log_skip_cooldown(cd_skipped)
@@ -12811,7 +12180,7 @@ def _process_symbols(
                 exc_info=True,
             )
 
-    futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
+    futures = [executors.prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
         f.result()
     return processed, row_counts

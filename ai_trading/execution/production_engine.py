@@ -10,10 +10,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from alpaca.common.exceptions import APIError
+from ai_trading.config.settings import get_settings
 from ai_trading.logging import logger
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderType, RiskLevel
-from ..monitoring import AlertManager, AlertSeverity
+from ..monitoring.alerting import AlertManager, AlertSeverity
 from ..risk import DynamicPositionSizer, RiskManager, TradingHaltManager
 from .engine import ExecutionAlgorithm, Order, OrderStatus
 from .classes import ExecutionResult, OrderRequest
@@ -80,7 +81,27 @@ class ProductionExecutionCoordinator:
         """
         try:
             start_time = time.time()
-            order = Order(symbol=symbol, side=side, quantity=quantity, order_type=order_type, price=price, strategy_id=strategy, **metadata or {})
+            md = dict(metadata or {})
+            # Apply execution policy toggles (safe rollout)
+            try:
+                S = get_settings()
+                prefer_limit = bool(getattr(S, 'exec_prefer_limit', False))
+                part_cap = float(getattr(S, 'exec_max_participation_rate', 0.05))
+            except Exception:
+                prefer_limit, part_cap = (False, 0.05)
+            # Provide a default max_participation_rate if caller did not specify
+            if 'max_participation_rate' not in md and part_cap is not None:
+                try:
+                    md['max_participation_rate'] = max(0.0, min(1.0, float(part_cap)))
+                except Exception:
+                    pass
+            # Prefer limit orders when not urgent and a price/target is available
+            urgency = md.get('urgency_level')
+            price_hint = price if price is not None else md.get('target_price')
+            if prefer_limit and price_hint is not None and order_type == OrderType.MARKET and (urgency is None or float(urgency) <= 0.5):
+                order_type = OrderType.LIMIT
+                price = float(price_hint)
+            order = Order(symbol=symbol, side=side, quantity=quantity, order_type=order_type, price=price, strategy_id=strategy, **md)
             safety_result = await self._comprehensive_safety_check(order)
             if not safety_result['approved']:
                 await self._handle_order_rejection(order, safety_result['reason'])
@@ -248,6 +269,18 @@ class ProductionExecutionCoordinator:
                     self.execution_stats['average_execution_time_ms'] = alpha * execution_time_ms + (1 - alpha) * self.execution_stats['average_execution_time_ms']
                 slippage = execution_result.get('actual_slippage_bps', 0)
                 self.execution_stats['total_slippage_bps'] += slippage
+                try:
+                    S = get_settings()
+                    if bool(getattr(S, 'exec_log_slippage', False)):
+                        logger.info(
+                            'SLIPPAGE_METRIC',
+                            extra={
+                                'slippage_bps': slippage,
+                                'order_status': execution_result.get('status')
+                            },
+                        )
+                except Exception:
+                    pass
             else:
                 self.execution_stats['rejected_orders'] += 1
         except (APIError, TimeoutError, ConnectionError) as e:

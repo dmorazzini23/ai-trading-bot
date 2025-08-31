@@ -11,7 +11,8 @@ from ai_trading.exc import COMMON_EXC
 from ai_trading.execution.liquidity import LiquidityManager
 from ai_trading.execution.production_engine import ProductionExecutionCoordinator
 from ai_trading.logging import logger
-from ai_trading.monitoring import AlertManager, AlertSeverity, PerformanceDashboard
+from ai_trading.monitoring.alerting import AlertManager, AlertSeverity
+from ai_trading.monitoring.performance_dashboard import PerformanceDashboard
 from ai_trading.risk import DynamicPositionSizer, RiskManager, TradingHaltManager
 from ai_trading.strategies.multi_timeframe import MultiTimeframeAnalyzer
 from ai_trading.strategies.regime_detector import RegimeDetector

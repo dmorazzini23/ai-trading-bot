@@ -168,10 +168,10 @@ class TradingScenarioRunner:
         # Order execution latency test
         latencies = []
         for i in range(10):
-            start = time.time()
+            start = time.perf_counter()
             # Simulate order execution
             await asyncio.sleep(0.01)  # Mock execution delay
-            latency = (time.time() - start) * 1000  # Convert to ms
+            latency = (time.perf_counter() - start) * 1000  # Convert to ms
             latencies.append(latency)
 
         results["metrics"]["average_latency_ms"] = sum(latencies) / len(latencies)
@@ -179,7 +179,7 @@ class TradingScenarioRunner:
         results["metrics"]["min_latency_ms"] = min(latencies)
 
         # Throughput test
-        start_time = time.time()
+        start_time = time.perf_counter()
         orders_processed = 0
 
         for i in range(100):
@@ -187,7 +187,7 @@ class TradingScenarioRunner:
             await asyncio.sleep(0.001)
             orders_processed += 1
 
-        duration = time.time() - start_time
+        duration = time.perf_counter() - start_time
         results["metrics"]["orders_per_second"] = orders_processed / duration
 
         # Memory usage simulation

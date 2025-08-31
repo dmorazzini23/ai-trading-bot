@@ -17,9 +17,15 @@ from typing import Any
 from types import SimpleNamespace
 from alpaca.common.exceptions import APIError
 from ai_trading.logging.emit_once import emit_once
+from ai_trading.metrics import Counter
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
+
+# Lightweight Prometheus counters (no-op if client unavailable)
+_orders_submitted_total = Counter("orders_submitted_total", "Orders submitted")
+_orders_rejected_total = Counter("orders_rejected_total", "Orders rejected")
+_orders_duplicate_total = Counter("orders_duplicate_total", "Duplicate orders prevented")
 
 from ai_trading.monitoring.order_health_monitor import (
     OrderInfo,
@@ -221,6 +227,10 @@ class OrderManager:
         """
         try:
             if not self._validate_order(order):
+                try:
+                    _orders_rejected_total.inc()
+                except Exception:
+                    pass
                 return None
             cache = self._ensure_idempotency_cache()
             key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(UTC))
@@ -228,11 +238,20 @@ class OrderManager:
                 logger.warning(f'ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}')
                 order.status = OrderStatus.REJECTED
                 order.notes += ' | Rejected: Duplicate order detected'
+                try:
+                    _orders_duplicate_total.inc()
+                    _orders_rejected_total.inc()
+                except Exception:
+                    pass
                 return None
             if len(self.active_orders) >= self.max_concurrent_orders:
                 logger.error(f'Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})')
                 order.status = OrderStatus.REJECTED
                 order.notes += ' | Rejected: Max concurrent orders reached'
+                try:
+                    _orders_rejected_total.inc()
+                except Exception:
+                    pass
                 return None
             self.orders[order.id] = order
             self.active_orders[order.id] = order
@@ -245,6 +264,10 @@ class OrderManager:
             # Mimic a broker-style response object even when running without a
             # real broker (dry‑run).  ``filled_qty`` mirrors Alpaca's string
             # field for compatibility with existing call sites.
+            try:
+                _orders_submitted_total.inc()
+            except Exception:
+                pass
             return SimpleNamespace(
                 id=order.id,
                 status='pending_new',
@@ -258,6 +281,10 @@ class OrderManager:
             logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'submit', 'symbol': order.symbol, 'qty': order.quantity, 'side': getattr(order.side, 'value', order.side), 'type': getattr(order.order_type, 'value', order.order_type)})
             order.status = OrderStatus.REJECTED
             order.notes += f' | Error: {e}'
+            try:
+                _orders_rejected_total.inc()
+            except Exception:
+                pass
             return None
 
     def cancel_order(self, order_id: str, reason: str='User request') -> bool:

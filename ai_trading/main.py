@@ -45,6 +45,8 @@ from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import get_env, validate_required_env, reload_env
+from ai_trading.metrics import Histogram, Counter
+from time import monotonic as _mono
 
 
 def preflight_import_health() -> None:
@@ -244,7 +246,10 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                     pass
     try:
         force = (_CACHE.value is None) or (eq != prev_eq)
-        resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=force)
+        # Prefer TradingConfig for mode resolution (supports MAX_POSITION_MODE=AUTO)
+        from ai_trading.config.management import TradingConfig as _TC
+        _mode_cfg = _TC.from_env()
+        resolved, _meta = resolve_max_position_size(_mode_cfg, tcfg, force_refresh=force)
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
@@ -434,6 +439,11 @@ def main(argv: list[str] | None = None) -> None:
     logger.info(
         "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca", S.alpaca_data_feed, S.alpaca_adjustment
     )
+    # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
+    # Labeled stage timings: fetch/compute/execute
+    _cycle_stage_seconds = Histogram("cycle_stage_seconds", "Cycle stage duration seconds", ["stage"])  # type: ignore[arg-type]
+    _cycle_budget_over_total = Counter("cycle_budget_over_total", "Budget-over events", ["stage"])  # type: ignore[arg-type]
+
     try:
         _validate_runtime_config(config, S)
     except ValueError as e:
@@ -442,7 +452,10 @@ def main(argv: list[str] | None = None) -> None:
     if not _init_http_session(config):
         return
     try:
-        resolved_size, sizing_meta = resolve_max_position_size(config, S)
+        # Prefer TradingConfig for mode resolution so AUTO is honored
+        from ai_trading.config.management import TradingConfig as _TC
+        _mode_cfg = _TC.from_env()
+        resolved_size, sizing_meta = resolve_max_position_size(_mode_cfg, S)
         try:
             setattr(S, "max_position_size", float(resolved_size))
         except (AttributeError, TypeError):
@@ -552,18 +565,45 @@ def main(argv: list[str] | None = None) -> None:
                     gc_result = optimize_memory()
                     if gc_result.get("objects_collected", 0) > 100:
                         logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
+                _t0 = _mono()
                 with StageTimer(logger, "CYCLE_FETCH"):
+                    pass
+                try:
+                    _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
+                except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
+                    try:
+                        _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
+                    except Exception:
+                        pass
+                _t1 = _mono()
                 with StageTimer(logger, "CYCLE_COMPUTE"):
                     run_cycle()
+                try:
+                    _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, _mono() - _t1))  # type: ignore[call-arg]
+                except Exception:
+                    pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
+                    try:
+                        _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
+                    except Exception:
+                        pass
+                _t2 = _mono()
                 with StageTimer(logger, "CYCLE_EXECUTE"):
+                    pass
+                try:
+                    _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, _mono() - _t2))  # type: ignore[call-arg]
+                except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
+                    try:
+                        _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
+                    except Exception:
+                        pass
             except (ValueError, TypeError):
                 logger.exception("run_cycle failed")
             count += 1
@@ -573,7 +613,13 @@ def main(argv: list[str] | None = None) -> None:
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": interval})
                 last_health = now_mono
             try:
-                mode_now = str(getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))).upper()
+            # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
+            _mode_env = os.getenv("MAX_POSITION_MODE") or os.getenv("AI_TRADING_MAX_POSITION_MODE")
+            mode_now = str(
+                _mode_env
+                if _mode_env is not None
+                else getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))
+            ).upper()
                 if mode_now == "AUTO":
                     resolved_size, meta = resolve_max_position_size(config, S, force_refresh=False)
                     if float(getattr(S, "max_position_size", 0.0)) != resolved_size:
