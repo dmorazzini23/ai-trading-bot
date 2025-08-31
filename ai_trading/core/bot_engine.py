@@ -8206,8 +8206,13 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
-    """Poll Alpaca for order fill status until it is no longer open."""
+    """Poll Alpaca for order fill status until it is no longer open.
+
+    Honors the provided ``timeout`` by sleeping in short intervals instead of
+    a fixed 3s, so tests can set small timeouts without hanging.
+    """
     start = pytime.time()
+    interval = 0.2 if timeout <= 1 else 1.0
     while pytime.time() - start < timeout:
         try:
             od = ctx.api.get_order(order_id)
@@ -8235,7 +8240,10 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
-        pytime.sleep(3)
+        remaining = timeout - (pytime.time() - start)
+        if remaining <= 0:
+            break
+        pytime.sleep(min(interval, remaining))
 
 
 def send_exit_order(
