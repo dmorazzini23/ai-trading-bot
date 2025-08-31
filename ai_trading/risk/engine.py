@@ -11,7 +11,7 @@ import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 try:
     from alpaca.common.exceptions import APIError
-except Exception:  # pragma: no cover - allow import without alpaca for tests
+except ImportError:  # pragma: no cover - allow import without alpaca for tests
     class APIError(Exception):
         pass
 from ai_trading.config.management import (
@@ -30,7 +30,7 @@ if not hasattr(np, 'NaN'):
 pd = load_pandas()
 try:
     from alpaca.trading.client import TradingClient
-except Exception:  # pragma: no cover - allow import without alpaca for tests
+except ImportError:  # pragma: no cover - allow import without alpaca for tests
     TradingClient = object  # type: ignore[assignment]
 
 
