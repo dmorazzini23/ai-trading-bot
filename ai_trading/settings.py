@@ -154,6 +154,15 @@ class Settings(BaseSettings):
     )
     sentiment_api_url: str | None = Field(default=None, alias='SENTIMENT_API_URL')
     rebalance_interval_min: int = Field(60, ge=1, description='Minutes between portfolio rebalances', alias='REBALANCE_INTERVAL_MIN')
+    # HTTP client/session tuning (used by main._init_http_session)
+    http_pool_maxsize: int = Field(32, alias='HTTP_POOL_MAXSIZE')
+    http_total_retries: int = Field(3, alias='HTTP_TOTAL_RETRIES')
+    http_backoff_factor: float = Field(0.3, alias='HTTP_BACKOFF_FACTOR')
+    http_connect_timeout: float = Field(5.0, alias='HTTP_CONNECT_TIMEOUT')
+    http_read_timeout: float = Field(10.0, alias='HTTP_READ_TIMEOUT')
+    # Execution policy (safe rollout toggles)
+    exec_prefer_limit: bool = Field(False, alias='EXECUTION_PREFER_LIMIT')
+    exec_max_participation_rate: float = Field(0.05, alias='EXECUTION_MAX_PARTICIPATION_RATE', description='Cap per-order market participation rate [0,1] when available')
 
     @field_validator('model_path', 'halt_flag_path', 'rl_model_path', mode='before')
     @classmethod
@@ -192,6 +201,16 @@ class Settings(BaseSettings):
         if not 0.0 < float(v) <= 1.0:
             raise ValueError(f'{info.field_name} must be in (0, 1], got {v}')
         return float(v)
+
+    @field_validator('exec_max_participation_rate')
+    @classmethod
+    def _part_rate_range(cls, v):
+        v = float(v)
+        if v < 0.0:
+            return 0.0
+        if v > 1.0:
+            return 1.0
+        return v
 
     @field_validator('max_position_size')
     @classmethod
@@ -339,5 +358,3 @@ def get_seed_int(default: int=42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: stable default accessor
     s = get_settings()
     return _to_int(getattr(s, 'ai_trading_seed', default), default)
-
-
