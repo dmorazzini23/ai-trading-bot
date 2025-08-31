@@ -130,7 +130,10 @@ class Settings(BaseSettings):
     volume_threshold: float = Field(default=0.0, env='AI_TRADING_VOLUME_THRESHOLD')
     alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
-    capital_cap: float = Field(0.04, env='CAPITAL_CAP')
+    capital_cap: float = Field(
+        0.04,
+        validation_alias=AliasChoices('CAPITAL_CAP', 'AI_TRADING_CAPITAL_CAP'),
+    )
     dollar_risk_limit: float = Field(0.05, env='DOLLAR_RISK_LIMIT')
     max_position_size: float | None = Field(
         5000.0,
