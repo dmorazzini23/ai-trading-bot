@@ -246,7 +246,10 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                     pass
     try:
         force = (_CACHE.value is None) or (eq != prev_eq)
-        resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=force)
+        # Prefer TradingConfig for mode resolution (supports MAX_POSITION_MODE=AUTO)
+        from ai_trading.config.management import TradingConfig as _TC
+        _mode_cfg = _TC.from_env()
+        resolved, _meta = resolve_max_position_size(_mode_cfg, tcfg, force_refresh=force)
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
@@ -449,7 +452,10 @@ def main(argv: list[str] | None = None) -> None:
     if not _init_http_session(config):
         return
     try:
-        resolved_size, sizing_meta = resolve_max_position_size(config, S)
+        # Prefer TradingConfig for mode resolution so AUTO is honored
+        from ai_trading.config.management import TradingConfig as _TC
+        _mode_cfg = _TC.from_env()
+        resolved_size, sizing_meta = resolve_max_position_size(_mode_cfg, S)
         try:
             setattr(S, "max_position_size", float(resolved_size))
         except (AttributeError, TypeError):
@@ -607,7 +613,13 @@ def main(argv: list[str] | None = None) -> None:
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": interval})
                 last_health = now_mono
             try:
-                mode_now = str(getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))).upper()
+                # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
+                _mode_env = os.getenv("MAX_POSITION_MODE") or os.getenv("AI_TRADING_MAX_POSITION_MODE")
+                mode_now = str(
+                    _mode_env
+                    if _mode_env is not None
+                    else getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))
+                ).upper()
                 if mode_now == "AUTO":
                     resolved_size, meta = resolve_max_position_size(config, S, force_refresh=False)
                     if float(getattr(S, "max_position_size", 0.0)) != resolved_size:

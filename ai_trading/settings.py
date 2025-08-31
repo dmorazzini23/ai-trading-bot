@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     min_health_rows: int = Field(120, alias='MIN_HEALTH_ROWS')
     api_host: str = Field('0.0.0.0', alias='API_HOST')
     api_port: int = Field(9001, alias='API_PORT')
+    # Support AUTO sizing mode from either MAX_POSITION_MODE or AI_TRADING_MAX_POSITION_MODE
+    max_position_mode: str = Field(
+        'STATIC',
+        validation_alias=AliasChoices('MAX_POSITION_MODE', 'AI_TRADING_MAX_POSITION_MODE'),
+    )
     finnhub_rpm: int = Field(default=55, env='AI_TRADING_FINNHUB_RPM')
     max_trades_per_day: int = Field(default=200, env='AI_TRADING_MAX_TRADES_PER_DAY')
     max_trades_per_hour: int = Field(default=30, env='AI_TRADING_MAX_TRADES_PER_HOUR')
