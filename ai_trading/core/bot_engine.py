@@ -8308,26 +8308,15 @@ def twap_submit(
     window_secs: int = 600,
     n_slices: int = 10,
 ) -> None:
-    slice_qty = total_qty // n_slices
-    wait_secs = window_secs / n_slices
-    for i in range(n_slices):
-        try:
-            submit_order(ctx, symbol, slice_qty, side)
-        except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "BROKER_OP_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-            raise
-        pytime.sleep(wait_secs)
+    from ai_trading.core.execution_flow import twap_submit as _impl
+    return _impl(ctx, symbol, total_qty, side, window_secs, n_slices)
 
 
 def vwap_pegged_submit(
     ctx: BotContext, symbol: str, total_qty: int, side: str, duration: int = 300
 ) -> None:
-    start_time = pytime.time()
-    placed = 0
-    while placed < total_qty and pytime.time() - start_time < duration:
+    from ai_trading.core.execution_flow import vwap_pegged_submit as _impl
+    return _impl(ctx, symbol, total_qty, side, duration)
         try:
             df = fetch_minute_df_safe(symbol)
         except DataFetchError:
