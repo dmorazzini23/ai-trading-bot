@@ -24,9 +24,16 @@ except Exception as exc:  # pragma: no cover - optional
 def _load_prices_from_data_dir(symbol: str | None = None) -> pd.Series:
     data_dir = Path("data")
     if data_dir.exists():
-        # Look for a CSV with a close column
-        cands = list(data_dir.glob("*.csv"))
-        for p in cands:
+        # Prefer symbol-specific file if provided
+        if symbol:
+            p = data_dir / f"{symbol.upper()}.csv"
+            if p.exists():
+                df = pd.read_csv(p)
+                for col in ("close", "Close", "adj_close", "Adj Close"):
+                    if col in df.columns and len(df) > 50:
+                        return pd.to_numeric(df[col], errors="coerce").dropna().astype(float)
+        # Otherwise, pick the first viable CSV
+        for p in sorted(data_dir.glob("*.csv")):
             try:
                 df = pd.read_csv(p)
                 for col in ("close", "Close", "adj_close", "Adj Close"):
@@ -82,8 +89,8 @@ def _grid(values: Iterable) -> list:
     return list(values)
 
 
-def optimize(strategy: str) -> Tuple[dict, float]:
-    prices = _load_prices_from_data_dir()
+def optimize(strategy: str, symbol: str | None = None) -> Tuple[dict, float]:
+    prices = _load_prices_from_data_dir(symbol)
     best, best_score = {}, -math.inf
     if strategy == "momentum":
         for lookback in _grid(range(10, 61, 5)):
@@ -105,12 +112,15 @@ def optimize(strategy: str) -> Tuple[dict, float]:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Offline parameter optimizer")
     p.add_argument("strategy", choices=["momentum", "mean_reversion"], help="Strategy to optimize")
+    p.add_argument("--symbol", default=None, help="Optional symbol (expects data/<SYMBOL>.csv)")
     args = p.parse_args(argv)
-    params, score = optimize(args.strategy)
-    print({"strategy": args.strategy, "best_params": params, "score": round(score, 4)})
+    params, score = optimize(args.strategy, args.symbol)
+    out = {"strategy": args.strategy, "best_params": params, "score": round(score, 4)}
+    if args.symbol:
+        out["symbol"] = args.symbol.upper()
+    print(out)
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
