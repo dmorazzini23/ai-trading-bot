@@ -113,13 +113,14 @@ def retry_call(
     max_backoff: float = 2.0,
     jitter: float = 0.1,
     exceptions: tuple[type[BaseException], ...] = (),
-    sleep_fn: Callable[[float], None] = time.sleep,
+    sleep_fn: Callable[[float], None] | None = None,
     **kwargs,
 ) -> T:
     """Exponential backoff helper for direct function calls."""
 
     attempt = 0
     delay = max(0.0, backoff)
+    _sleep = sleep_fn or time.sleep  # resolve at call time to honor monkeypatches
     while True:
         try:
             return func(*args, **kwargs)
@@ -128,7 +129,7 @@ def retry_call(
             if attempt > retries:
                 raise
             delta = delay * jitter
-            sleep_fn(max(0.0, delay + random.uniform(-delta, delta)))
+            _sleep(max(0.0, delay + random.uniform(-delta, delta)))
             delay = min(max_backoff, delay * 2)
 
 

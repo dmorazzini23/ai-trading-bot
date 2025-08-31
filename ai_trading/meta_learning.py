@@ -401,6 +401,8 @@ def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray"
                     p.parent.mkdir(parents=True, exist_ok=True)
                     np_mod.savetxt(p, default, delimiter=",")
                     logger.info("Created default weights file: %s", path)
+                except (OSError, IOError) as e:
+                    logger.error('Failed initializing weights file %s: %s', path, e)
                 except COMMON_EXC as e:
                     logger.error('Failed initializing weights file %s: %s', path, e)
     except COMMON_EXC as e:

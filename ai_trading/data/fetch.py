@@ -722,6 +722,14 @@ def _fetch_bars(
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
                 return _req(session, None, headers=headers, timeout=timeout)
+            # Closed-market contract: degrade silently when no data
+            if not _open:
+                from ai_trading.utils.lazy_imports import load_pandas as _lp
+                pd_mod = _lp()
+                try:
+                    return pd_mod.DataFrame()
+                except Exception:
+                    return pd.DataFrame()
             raise ValueError("empty_bars")
         ts_col = None
         for c in df.columns:

@@ -327,6 +327,14 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
                     return logging.getLogger()
             _listener = None
         if _LOGGING_CONFIGURED:
+            # Allow callers to add a file handler even after initial configuration
+            if log_file:
+                try:
+                    h = get_rotating_handler(log_file)
+                    h.setLevel(logging.INFO)
+                    logging.getLogger().addHandler(h)
+                except COMMON_EXC:
+                    pass
             logging.getLogger(__name__).debug('Logging already configured, skipping duplicate setup')
             return logging.getLogger()
         logger = logging.getLogger()
