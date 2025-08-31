@@ -437,8 +437,9 @@ def main(argv: list[str] | None = None) -> None:
         "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca", S.alpaca_data_feed, S.alpaca_adjustment
     )
     # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
-    _cycle_stage_seconds = Histogram("cycle_stage_seconds", "Cycle stage duration seconds",)
-    _cycle_budget_over_total = Counter("cycle_budget_over_total", "Budget-over events")
+    # Labeled stage timings: fetch/compute/execute
+    _cycle_stage_seconds = Histogram("cycle_stage_seconds", "Cycle stage duration seconds", ["stage"])  # type: ignore[arg-type]
+    _cycle_budget_over_total = Counter("cycle_budget_over_total", "Budget-over events", ["stage"])  # type: ignore[arg-type]
 
     try:
         _validate_runtime_config(config, S)
@@ -562,39 +563,39 @@ def main(argv: list[str] | None = None) -> None:
                 with StageTimer(logger, "CYCLE_FETCH"):
                     pass
                 try:
-                    _cycle_stage_seconds.observe(max(0.0, _mono() - _t0))
+                    _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
                 except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
                     try:
-                        _cycle_budget_over_total.inc()
+                        _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
                     except Exception:
                         pass
                 _t1 = _mono()
                 with StageTimer(logger, "CYCLE_COMPUTE"):
                     run_cycle()
                 try:
-                    _cycle_stage_seconds.observe(max(0.0, _mono() - _t1))
+                    _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, _mono() - _t1))  # type: ignore[call-arg]
                 except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
                     try:
-                        _cycle_budget_over_total.inc()
+                        _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
                     except Exception:
                         pass
                 _t2 = _mono()
                 with StageTimer(logger, "CYCLE_EXECUTE"):
                     pass
                 try:
-                    _cycle_stage_seconds.observe(max(0.0, _mono() - _t2))
+                    _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, _mono() - _t2))  # type: ignore[call-arg]
                 except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
                     try:
-                        _cycle_budget_over_total.inc()
+                        _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
                     except Exception:
                         pass
             except (ValueError, TypeError):
