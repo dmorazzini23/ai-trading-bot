@@ -19,6 +19,7 @@ class MovingAverageCrossoverStrategy:
     short_window: int = 20
     long_window: int = 50
     min_history: int = 55
+    _last_ts: 'pd.Timestamp | None' = None  # type: ignore[name-defined]
 
     def _latest_cross(self, short: 'pd.Series', long: 'pd.Series') -> str | None:
         import pandas as pd  # heavy import; keep local
@@ -39,6 +40,14 @@ class MovingAverageCrossoverStrategy:
             return []
         sym = ctx.tickers[0]
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        try:
+            if getattr(df, 'index', None) is not None and len(df.index) > 0:
+                last_ts = df.index[-1]
+                if self._last_ts == last_ts:
+                    return []
+                self._last_ts = last_ts
+        except Exception:
+            pass
         if 'close' not in df.columns or len(df) < max(self.min_history, self.long_window + 2):
             return []
         short = df['close'].rolling(window=self.short_window, min_periods=self.short_window).mean()

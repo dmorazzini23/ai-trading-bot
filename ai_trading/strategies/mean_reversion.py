@@ -14,6 +14,7 @@ class MeanReversionStrategy:
             z_entry = z
         self.lookback = lookback
         self.z_entry = z_entry
+        self._last_ts = None
 
     def _latest_stats(self, series: 'pd.Series', window: int):
         import pandas as pd  # heavy import; keep local
@@ -33,6 +34,14 @@ class MeanReversionStrategy:
             return []
         sym = ctx.tickers[0]
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        try:
+            if getattr(df, 'index', None) is not None and len(df.index) > 0:
+                last_ts = df.index[-1]
+                if self._last_ts == last_ts:
+                    return []
+                self._last_ts = last_ts
+        except Exception:
+            pass
         if 'close' not in df.columns:
             return []
         # Optional profile overrides

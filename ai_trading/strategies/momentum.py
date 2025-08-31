@@ -23,6 +23,8 @@ class MomentumStrategy(BaseStrategy):
         super().__init__(strategy_id, name, risk_level)
         self.lookback = lookback
         self.threshold = threshold
+        # Lightweight guard: skip recomputation when input series lengths unchanged
+        self._last_len_by_symbol: dict[str, int] = {}
 
     def generate_signals(self, market_data: dict) -> list[StrategySignal]:
         import pandas as pd  # heavy import; keep local
@@ -53,6 +55,14 @@ class MomentumStrategy(BaseStrategy):
             prices = market_data.get('prices', {}).get(symbol)
             if prices is None:
                 continue
+            # Skip work if no new bars
+            try:
+                n = len(prices)
+                if self._last_len_by_symbol.get(symbol) == n:
+                    continue
+                self._last_len_by_symbol[symbol] = n
+            except Exception:
+                pass
             if len(prices) <= lookback + 1:
                 logger.warning('Insufficient data for %s', symbol)
                 continue

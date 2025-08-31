@@ -174,6 +174,8 @@ class Settings(BaseSettings):
     http_backoff_factor: float = Field(0.3, alias='HTTP_BACKOFF_FACTOR')
     http_connect_timeout: float = Field(5.0, alias='HTTP_CONNECT_TIMEOUT')
     http_read_timeout: float = Field(10.0, alias='HTTP_READ_TIMEOUT')
+    # Dynamic sizing refresh TTL (seconds) to limit equity polling in AUTO mode
+    dynamic_size_refresh_secs: float = Field(3600.0, alias='DYNAMIC_SIZE_REFRESH_SECS')
     # Execution policy (safe rollout toggles)
     exec_prefer_limit: bool = Field(False, alias='EXECUTION_PREFER_LIMIT')
     exec_max_participation_rate: float = Field(0.05, alias='EXECUTION_MAX_PARTICIPATION_RATE', description='Cap per-order market participation rate [0,1] when available')

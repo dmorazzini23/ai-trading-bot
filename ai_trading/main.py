@@ -566,9 +566,57 @@ def main(argv: list[str] | None = None) -> None:
     seed = get_seed_int()
     logger.info("Runtime defaults resolved", extra={"iterations": iterations, "interval": interval, "seed": seed})
     count = 0
+    # Track HTTP profile to reduce retries when market is closed
+    _http_closed_profile = None  # None=unknown, True=closed, False=open
     memory_check_interval = 10
     try:
         while iterations <= 0 or count < iterations:
+            try:
+                closed = not _is_market_open_base()
+            except Exception:
+                closed = False
+            # Toggle HTTP session profile only when state changes
+            if _http_closed_profile is None or closed != _http_closed_profile:
+                try:
+                    if closed:
+                        connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
+                        read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0)))
+                        session = build_retrying_session(
+                            pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
+                            total_retries=1,
+                            backoff_factor=0.1,
+                            connect_timeout=connect_timeout,
+                            read_timeout=read_timeout,
+                        )
+                        set_global_session(session)
+                        logger.info(
+                            "HTTP_PROFILE_CLOSED",
+                            extra={"retries": 1, "backoff_factor": 0.1, "connect_timeout": connect_timeout, "read_timeout": read_timeout},
+                        )
+                    else:
+                        # Restore configured profile
+                        connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
+                        read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0)))
+                        session = build_retrying_session(
+                            pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
+                            total_retries=int(getattr(S, "http_total_retries", 3)),
+                            backoff_factor=float(getattr(S, "http_backoff_factor", 0.3)),
+                            connect_timeout=connect_timeout,
+                            read_timeout=read_timeout,
+                        )
+                        set_global_session(session)
+                        logger.info(
+                            "HTTP_PROFILE_OPEN",
+                            extra={
+                                "retries": getattr(S, "http_total_retries", 3),
+                                "backoff_factor": getattr(S, "http_backoff_factor", 0.3),
+                                "connect_timeout": connect_timeout,
+                                "read_timeout": read_timeout,
+                            },
+                        )
+                    _http_closed_profile = closed
+                except Exception:
+                    pass
             raw_fraction = get_env("CYCLE_BUDGET_FRACTION", 0.8)
             try:
                 fraction = float(raw_fraction)
