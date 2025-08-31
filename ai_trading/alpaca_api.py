@@ -250,7 +250,7 @@ try:  # pragma: no cover - optional dependency wrapper
     from tenacity import (
         retry,
         stop_after_attempt,
-        wait_exponential_jitter,
+        wait_exponential,
         retry_if_exception_type,
     )
 
@@ -258,7 +258,7 @@ try:  # pragma: no cover - optional dependency wrapper
         return retry(
             reraise=True,
             stop=stop_after_attempt(3),
-            wait=wait_exponential_jitter(init=0.25, max=2.0),
+            wait=wait_exponential(multiplier=0.25, max=2.0),
             retry=retry_if_exception_type(Exception),
         )(callable_)
 

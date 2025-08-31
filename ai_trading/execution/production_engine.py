@@ -18,6 +18,9 @@ from ..monitoring.alerting import AlertManager, AlertSeverity
 from ..risk import DynamicPositionSizer, RiskManager, TradingHaltManager
 from .engine import ExecutionAlgorithm, Order, OrderStatus
 from .classes import ExecutionResult, OrderRequest
+from ai_trading.paths import LOG_DIR
+import os
+import csv
 
 
 class ProductionExecutionCoordinator:
@@ -41,6 +44,15 @@ class ProductionExecutionCoordinator:
         self.rejected_orders = {}
         self.execution_stats = {'total_orders': 0, 'successful_orders': 0, 'rejected_orders': 0, 'average_execution_time_ms': 0.0, 'total_slippage_bps': 0.0, 'last_reset': datetime.now(UTC)}
         self.current_positions = {}
+        # Ensure slippage log exists for monitoring/tests
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            sl_path = os.path.join(LOG_DIR, 'slippage.csv')
+            if not os.path.exists(sl_path):
+                with open(sl_path, 'w', newline='') as f:
+                    csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
+        except Exception:
+            pass
         logger.info(f'ProductionExecutionCoordinator initialized with equity=${account_equity:,.2f}')
 
     async def submit_order_request(self, order_request: OrderRequest) -> ExecutionResult:

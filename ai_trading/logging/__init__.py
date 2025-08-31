@@ -320,6 +320,14 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         # The effective log level is derived from configuration instead.
         pass
     with _LOGGING_LOCK:
+        # Ensure file handler can be added even if an early return path is taken below
+        if log_file and _LOGGING_CONFIGURED:
+            try:
+                h = get_rotating_handler(log_file)
+                h.setLevel(logging.INFO)
+                logging.getLogger().addHandler(h)
+            except COMMON_EXC:
+                pass
         if _listener is not None:
             thread = getattr(_listener, '_thread', None)
             if thread is not None and thread.is_alive():

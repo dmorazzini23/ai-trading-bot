@@ -722,8 +722,8 @@ def _fetch_bars(
                 payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
                 return _req(session, None, headers=headers, timeout=timeout)
-            # Closed-market contract: degrade silently when no data
-            if not _open:
+            # Closed-market contract: degrade silently when no daily data
+            if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
                 from ai_trading.utils.lazy_imports import load_pandas as _lp
                 pd_mod = _lp()
                 try:
