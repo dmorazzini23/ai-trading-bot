@@ -428,6 +428,27 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
+    _cap_env = os.getenv("CAPITAL_CAP")
+    if _cap_env:
+        try:
+            _cap_val = float(_cap_env)
+            try:
+                setattr(S, "capital_cap", _cap_val)
+            except Exception:
+                try:
+                    object.__setattr__(S, "capital_cap", _cap_val)
+                except Exception:
+                    pass
+            try:
+                setattr(config, "capital_cap", _cap_val)
+            except Exception:
+                try:
+                    object.__setattr__(config, "capital_cap", _cap_val)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     if config is None:
         logger.critical(
             "SETTINGS_UNAVAILABLE",  # AI-AGENT-REF: clearer startup failure
