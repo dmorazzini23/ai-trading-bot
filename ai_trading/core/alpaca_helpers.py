@@ -6,12 +6,12 @@ This module re-exports Alpaca-related helpers from ``core.bot_engine``.
 It allows gradual module decomposition while keeping the runtime stable.
 """
 
-from .bot_engine import (
-    _alpaca_available as alpaca_available,
+from ai_trading.core.alpaca_client import (
     list_open_orders,
     ensure_alpaca_attached,
-    init_alpaca_clients,
+    _initialize_alpaca_clients as init_alpaca_clients,
 )
+from ai_trading.core.bot_engine import _alpaca_available as alpaca_available
 
 __all__ = [
     "alpaca_available",
@@ -19,4 +19,3 @@ __all__ = [
     "ensure_alpaca_attached",
     "init_alpaca_clients",
 ]
-

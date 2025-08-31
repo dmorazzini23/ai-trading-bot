@@ -132,8 +132,8 @@ def _initialize_alpaca_clients() -> bool:
             logger.error("ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)})
             if attempt == 1:
                 try:
-                    from ai_trading import config as _cfg
-                    _cfg.management.reload_env(override=False)  # type: ignore[attr-defined]
+                    from ai_trading.config.management import reload_env
+                    reload_env(override=False)
                 except Exception:
                     pass
                 continue
@@ -180,4 +180,3 @@ def _initialize_alpaca_clients() -> bool:
             pass
         return True
     return False
-
