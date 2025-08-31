@@ -355,6 +355,14 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         logger.setLevel(level)
         yf_level = getattr(logging, str(yf_level_name).upper(), logging.WARNING)
         logging.getLogger('yfinance').setLevel(yf_level)
+        # Reduce noisy HTTP libraries unless explicitly requested
+        try:
+            http_level_name = getattr(S, 'log_level_http', config.get_env('LOG_LEVEL_HTTP', 'WARNING'))
+        except Exception:
+            http_level_name = os.getenv('LOG_LEVEL_HTTP', 'WARNING')
+        http_level = getattr(logging, str(http_level_name).upper(), logging.WARNING)
+        for _name in ('urllib3', 'requests'):
+            logging.getLogger(_name).setLevel(http_level)
 
         class _PhaseFilter(logging.Filter):
 
