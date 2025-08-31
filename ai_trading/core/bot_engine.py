@@ -3448,9 +3448,29 @@ def _ensure_executors() -> None:
     cpu = os.cpu_count() or 2
     s = get_settings()
     exec_fn = getattr(s, "effective_executor_workers", None)
-    exec_workers = exec_fn(cpu) if callable(exec_fn) else cpu
+    # Base default for 1 vCPU target machines is 1–2 workers to avoid oversubscription
+    default_workers = max(1, min(2, cpu))
+    # Allow env override for emergency tuning
+    try:
+        env_exec = int(os.getenv("AI_TRADING_EXEC_WORKERS", "0"))
+    except ValueError:
+        env_exec = 0
+    try:
+        env_pred = int(os.getenv("AI_TRADING_PRED_WORKERS", "0"))
+    except ValueError:
+        env_pred = 0
+    exec_workers = exec_fn(cpu) if callable(exec_fn) else (env_exec or default_workers)
     pred_fn = getattr(s, "effective_prediction_workers", None)
-    pred_workers = pred_fn(cpu) if callable(pred_fn) else cpu
+    pred_workers = pred_fn(cpu) if callable(pred_fn) else (env_pred or default_workers)
+    # Clamp to [1, cpu] to respect resource guardrails
+    try:
+        exec_workers = max(1, min(int(exec_workers), max(1, cpu)))
+    except Exception:
+        exec_workers = default_workers
+    try:
+        pred_workers = max(1, min(int(pred_workers), max(1, cpu)))
+    except Exception:
+        pred_workers = default_workers
     executor = ThreadPoolExecutor(max_workers=exec_workers)
     prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
 
@@ -5862,7 +5882,7 @@ def _initialize_alpaca_clients() -> bool:
     for attempt in (1, 2):
         try:
             key, secret, base_url = _ensure_alpaca_env_or_raise()
-        except Exception as e:  # AI-AGENT-REF: surface env resolution failures
+        except COMMON_EXC as e:  # AI-AGENT-REF: surface env resolution failures
             logger.error(
                 "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
             )
@@ -5919,7 +5939,7 @@ def _initialize_alpaca_clients() -> bool:
                 api_key=key,
                 secret_key=secret,
             )
-        except Exception as e:  # AI-AGENT-REF: expose network or auth issues
+        except (APIError, TypeError, ValueError, OSError) as e:  # AI-AGENT-REF: expose network or auth issues
             logger.error(
                 "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
             )
@@ -8073,6 +8093,36 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         return args
 
     order_args = _req_to_args(req)
+    # Ensure client_order_id present for idempotency across retries
+    if not order_args.get("client_order_id"):
+        try:
+            from ai_trading.alpaca_api import generate_client_order_id as _gen_id
+            order_args["client_order_id"] = _gen_id("ai")
+        except Exception:
+            pass
+
+    # Deduplicate via idempotency cache before sending to broker
+    try:
+        from ai_trading.execution.idempotency import get_idempotency_cache
+        _idem_cache = get_idempotency_cache()
+        _idem_key = _idem_cache.generate_key(
+            order_args.get("symbol", ""),
+            order_args.get("side", ""),
+            float(order_args.get("qty", 0) or 0),
+        )
+        if _idem_cache.is_duplicate(_idem_key):
+            logger.warning(
+                "ORDER_DUPLICATE_SKIPPED",
+                extra={
+                    "symbol": order_args.get("symbol", ""),
+                    "side": order_args.get("side", ""),
+                    "qty": order_args.get("qty", 0),
+                },
+            )
+            return None
+    except Exception:
+        _idem_cache = None
+        _idem_key = None
 
     for attempt in range(2):
         try:
@@ -8170,6 +8220,11 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 logger.error(
                     f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
                 )
+            try:
+                if _idem_cache is not None and _idem_key is not None and getattr(order, "id", None):
+                    _idem_cache.mark_submitted(_idem_key, getattr(order, "id"))
+            except Exception:
+                pass
             return order
         except APIError as e:
             if "insufficient qty" in str(e).lower():
