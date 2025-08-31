@@ -4,6 +4,7 @@ Data labeling functions for trading models.
 Provides explicit labelers for future returns, triple barrier labels,
 and other trading-specific target variables.
 """
+from __future__ import annotations
 import numpy as np
 from typing import TYPE_CHECKING
 from ai_trading.logging import logger

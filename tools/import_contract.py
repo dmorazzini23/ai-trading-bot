@@ -31,6 +31,8 @@ def main(argv: list[str] | None=None) -> int:
         try:
             cp = _run_import_in_subprocess(mod, args.timeout)
         except subprocess.TimeoutExpired:
+            # Emit a clear marker so tests can assert timeout behavior deterministically
+            sys.stderr.write("TIMEOUT: import took longer than %.2fs for %s\n" % (args.timeout, mod))
             if args.ci:
                 return 124
             overall_rc = overall_rc or 124

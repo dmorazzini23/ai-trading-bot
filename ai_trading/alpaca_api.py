@@ -61,7 +61,13 @@ def _module_exists(name: str) -> bool:
         return False
 
 
-ALPACA_AVAILABLE = True
+# Detect SDK availability without importing heavy modules at import time
+ALPACA_AVAILABLE = (
+    _module_exists("alpaca")
+    and _module_exists("alpaca.trading.client")
+    and _module_exists("alpaca.data.historical")
+    and _module_exists("alpaca.common.exceptions")
+)
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
 def _make_client_order_id(prefix: str='ai') -> str:
