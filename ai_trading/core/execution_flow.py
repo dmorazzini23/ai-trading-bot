@@ -318,3 +318,126 @@ def send_exit_order(
         raise
 
 __all__.append("send_exit_order")
+
+
+def pov_submit(
+    ctx: Any,
+    symbol: str,
+    total_qty: int,
+    side: str,
+    cfg: Any,
+) -> bool:
+    """Place POV (percentage of volume) slices with backoff on missing data."""
+    from ai_trading.core.bot_engine import (
+        fetch_minute_df_safe,
+        DataFetchError,
+        StockLatestQuoteRequest,
+        Quote,
+        APIError,
+        submit_order,
+    )
+    import random
+
+    placed = 0
+    retries = 0
+    interval = cfg.sleep_interval
+    while placed < total_qty:
+        try:
+            df = fetch_minute_df_safe(symbol)
+        except DataFetchError:
+            retries += 1
+            if retries > cfg.max_retries:
+                logger.warning(
+                    f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
+                    extra={"symbol": symbol},
+                )
+                return False
+            logger.warning(
+                f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
+                extra={"symbol": symbol},
+            )
+            sleep_time = interval * (0.8 + 0.4 * random.random())
+            pytime.sleep(sleep_time)
+            interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
+            continue
+        if df is None or df.empty:
+            retries += 1
+            if retries > cfg.max_retries:
+                logger.warning(
+                    f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
+                    extra={"symbol": symbol},
+                )
+                return False
+            logger.warning(
+                f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
+                extra={"symbol": symbol},
+            )
+            sleep_time = interval * (0.8 + 0.4 * random.random())
+            pytime.sleep(sleep_time)
+            interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
+            continue
+        retries = 0
+        interval = cfg.sleep_interval
+        try:
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            quote: Quote = ctx.data_client.get_stock_latest_quote(req)  # type: ignore[assignment]
+            spread = (
+                (quote.ask_price - quote.bid_price)
+                if getattr(quote, "ask_price", None) and getattr(quote, "bid_price", None)
+                else 0.0
+            )
+        except APIError as e:
+            logger.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
+            spread = 0.0
+        except Exception:
+            spread = 0.0
+
+        vol = float(df["volume"].iloc[-1])
+        dynamic_spread_threshold = min(0.10, max(0.02, vol / 1000000.0 * 0.05))
+        if spread > dynamic_spread_threshold:
+            slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
+        else:
+            slice_qty = min(int(vol * cfg.pct), total_qty - placed)
+        if slice_qty < 1:
+            logger.debug(
+                f"[pov_submit] slice_qty<1 (vol={vol}), waiting",
+                extra={"symbol": symbol},
+            )
+            pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
+            continue
+        try:
+            order = submit_order(ctx, symbol, slice_qty, side)
+            if order is None:
+                logger.warning(
+                    "[pov_submit] submit_order returned None for slice, skipping",
+                    extra={"symbol": symbol, "slice_qty": slice_qty},
+                )
+                continue
+            actual_filled = int(getattr(order, "filled_qty", "0") or "0")
+            if actual_filled < slice_qty:
+                logger.warning(
+                    "POV_SLICE_PARTIAL_FILL",
+                    extra={
+                        "symbol": symbol,
+                        "intended_qty": slice_qty,
+                        "actual_filled": actual_filled,
+                        "order_id": getattr(order, "id", ""),
+                        "status": getattr(order, "status", ""),
+                    },
+                )
+            placed += actual_filled
+        except Exception as e:
+            logger.exception(
+                f"[pov_submit] submit_order failed on slice, aborting: {e}",
+                extra={"symbol": symbol},
+            )
+            return False
+        logger.info(
+            "POV_SUBMIT_SLICE",
+            extra={"symbol": symbol, "slice_qty": slice_qty, "actual_filled": actual_filled, "total_placed": placed},
+        )
+        pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
+    logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
+    return True
+
+__all__.append("pov_submit")
