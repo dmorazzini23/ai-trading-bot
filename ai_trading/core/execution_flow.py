@@ -235,3 +235,86 @@ __all__ = [
     "twap_submit",
     "vwap_pegged_submit",
 ]
+
+
+def send_exit_order(
+    ctx: Any,
+    symbol: str,
+    exit_qty: int,
+    price: float,
+    reason: str,
+    raw_positions: list | None = None,
+) -> None:
+    """Submit an exit order (market or limit) with simple validations."""
+    from ai_trading.core.bot_engine import (
+        MarketOrderRequest,
+        LimitOrderRequest,
+        OrderSide,
+        TimeInForce,
+        safe_submit_order,
+    )
+
+    logger.info(
+        f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
+    )
+    if raw_positions is not None and not any(
+        getattr(p, "symbol", "") == symbol for p in raw_positions
+    ):
+        logger.info("SKIP_NO_POSITION", extra={"symbol": symbol})
+        return
+    try:
+        pos = ctx.api.get_position(symbol)
+        held_qty = int(pos.qty)
+    except Exception:
+        held_qty = 0
+    if held_qty < exit_qty:
+        logger.warning(
+            f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"
+        )
+        return
+    if price <= 0.0:
+        req = MarketOrderRequest(
+            symbol=symbol,
+            qty=exit_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+        )
+        safe_submit_order(ctx.api, req)
+        return
+    limit_order = safe_submit_order(
+        ctx.api,
+        LimitOrderRequest(
+            symbol=symbol,
+            qty=exit_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            limit_price=price,
+        ),
+    )
+    pytime.sleep(5)
+    try:
+        o2 = ctx.api.get_order(limit_order.id)
+        if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
+            ctx.api.cancel_order(limit_order.id)
+            safe_submit_order(
+                ctx.api,
+                MarketOrderRequest(
+                    symbol=symbol,
+                    qty=exit_qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                ),
+            )
+    except Exception as e:
+        logger.error(
+            "BROKER_OP_FAILED",
+            extra={
+                "cause": e.__class__.__name__,
+                "detail": str(e),
+                "op": "cancel",
+                "order_id": getattr(limit_order, "id", ""),
+            },
+        )
+        raise
+
+__all__.append("send_exit_order")
