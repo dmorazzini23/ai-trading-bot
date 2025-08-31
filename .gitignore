@@ -31,6 +31,7 @@ data/*
 !data/last_equity.txt
 logs/
 *.backup.*
+*.bak-*
 *.corrupted.*
 
 # Profiling data
