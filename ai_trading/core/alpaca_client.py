@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-"""Alpaca helper implementations decoupled from bot_engine.
+"""Alpaca helpers moved from core.bot_engine with façade re-export.
 
-Provides canonical implementations for client validation, attaching the
-client to a context, and lazy initialization. `bot_engine` delegates to
-these to reduce size and coupling.
+The canonical implementations live here. core.bot_engine imports these names
+so existing call sites continue to work. This reduces size and coupling of
+bot_engine while keeping runtime behavior identical.
 """
 
 from typing import Any
 
 from ai_trading.logging import get_logger, logger_once
 from ai_trading.alpaca_api import get_trading_client_cls, get_data_client_cls, get_api_error_cls
-from ai_trading.config.management import is_shadow_mode, reload_env
+from ai_trading.config.management import is_shadow_mode
 from ai_trading.exc import COMMON_EXC
 
 logger = get_logger(__name__)
@@ -31,7 +31,7 @@ def _validate_trading_api(api: Any) -> bool:
                 import inspect
                 params = inspect.signature(api.get_orders).parameters
                 enum_val: Any = status
-                try:
+                try:  # optional import paths for SDK enums
                     enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
                     enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(enums_mod, "OrderStatus", None)
                     if enum_cls is not None:
@@ -59,6 +59,7 @@ def _validate_trading_api(api: Any) -> bool:
                         return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
                 kwargs["status"] = status
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
             logger_once.warning("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped")
         else:
@@ -73,6 +74,7 @@ def _validate_trading_api(api: Any) -> bool:
 
 
 def list_open_orders(api: Any):
+    """Return open orders from api, compatible across SDK versions."""
     return api.list_orders(status="open")
 
 
@@ -82,7 +84,7 @@ def ensure_alpaca_attached(ctx) -> None:
         return
     if not _initialize_alpaca_clients():
         return
-    # Pull singleton from bot_engine to avoid duplication
+    # Mirror the global singleton in bot_engine for compatibility
     import ai_trading.core.bot_engine as be
     api = getattr(be, "trading_client", None)
     if api is None:
@@ -114,12 +116,14 @@ def ensure_alpaca_attached(ctx) -> None:
 
 
 def _initialize_alpaca_clients() -> bool:
-    """Initialize Alpaca trading clients lazily; return True on success."""
+    """Initialize Alpaca trading clients lazily to avoid import delays."""
+    # Defer imports to avoid cycles
     import time
     import ai_trading.core.bot_engine as be
-    APIError = get_api_error_cls()
+
     if getattr(be, "trading_client", None) is not None:
         return True
+    APIError = get_api_error_cls()
     for attempt in (1, 2):
         try:
             from ai_trading.core.bot_engine import _ensure_alpaca_env_or_raise
@@ -128,6 +132,7 @@ def _initialize_alpaca_clients() -> bool:
             logger.error("ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)})
             if attempt == 1:
                 try:
+                    from ai_trading.config.management import reload_env
                     reload_env(override=False)
                 except Exception:
                     pass
@@ -175,4 +180,3 @@ def _initialize_alpaca_clients() -> bool:
             pass
         return True
     return False
-

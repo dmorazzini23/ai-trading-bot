@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import types
 from datetime import UTC, datetime
 
 
@@ -22,6 +23,10 @@ def test_order_idempotency_duplicate_prevented():
 
 
 def test_http_submit_retries_once_then_succeeds(monkeypatch):
+    """Simulate transient network error on first call, success on second.
+
+    Verifies retry wrapper in HTTP submit path without real network.
+    """
     from ai_trading.alpaca_api import _http_submit, _AlpacaConfig
     from ai_trading.exc import RequestException
     from ai_trading.alpaca_api import _HTTP

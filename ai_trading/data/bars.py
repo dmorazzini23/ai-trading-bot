@@ -23,9 +23,13 @@ from ai_trading.alpaca_api import (
 )
 import time
 
-# Export dynamic Alpaca request classes at module import time
-TimeFrame = get_timeframe_cls()
-StockBarsRequest = get_stock_bars_request_cls()
+# Export dynamic Alpaca request classes at module import time; tolerate missing SDK
+try:
+    TimeFrame = get_timeframe_cls()
+    StockBarsRequest = get_stock_bars_request_cls()
+except Exception:  # pragma: no cover - optional Alpaca SDK unavailable during some tests
+    TimeFrame = object  # type: ignore[assignment]
+    StockBarsRequest = object  # type: ignore[assignment]
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.data import TimeFrame as _TimeFrame, StockBarsRequest as _StockBarsRequest

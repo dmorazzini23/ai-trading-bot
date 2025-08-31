@@ -83,6 +83,18 @@ Rebalance frequency defaults to 60 minutes; override with `AI_TRADING_REBALANCE_
 is used when multiple sources are set.
 Production code paths must avoid shim helpers like `optional_import(...)`; use direct `try`/`except ImportError` blocks or `importlib.util.find_spec` to guard optional dependencies and gate heavy imports inside function scope when possible.
 
+### HTTP client tuning (performance)
+
+The global HTTP session used for data/broker calls can be tuned via env to balance latency, throughput, and resiliency:
+
+- `HTTP_POOL_MAXSIZE` (default 32): Per-host connection pool.
+- `HTTP_TOTAL_RETRIES` (default 3): Idempotent retry attempts on 429/5xx.
+- `HTTP_BACKOFF_FACTOR` (default 0.3): Exponential backoff factor.
+- `HTTP_CONNECT_TIMEOUT` (default 5.0): Seconds to establish TCP/TLS.
+- `HTTP_READ_TIMEOUT` (default 10.0): Seconds to read response body.
+
+These map to `ai_trading.settings.Settings` and are applied at startup by `main._init_http_session`.
+
 ## Timezones
 
 Uses Python stdlib **zoneinfo**.

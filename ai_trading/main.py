@@ -436,7 +436,8 @@ def main(argv: list[str] | None = None) -> None:
     logger.info(
         "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca", S.alpaca_data_feed, S.alpaca_adjustment
     )
-    # Labeled stage timings and budget overruns
+    # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
+    # Labeled stage timings: fetch/compute/execute
     _cycle_stage_seconds = Histogram("cycle_stage_seconds", "Cycle stage duration seconds", ["stage"])  # type: ignore[arg-type]
     _cycle_budget_over_total = Counter("cycle_budget_over_total", "Budget-over events", ["stage"])  # type: ignore[arg-type]
 

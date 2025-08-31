@@ -83,3 +83,39 @@ def reload_module(mod):
     if isinstance(mod, str):
         return importlib.reload(importlib.import_module(mod))
     return importlib.reload(mod)
+
+# Compatibility fixtures expected by some tests
+@pytest.fixture(name="default_env")
+def _default_env(_env_defaults):  # reuse existing autouse env defaults
+    """Alias fixture: provides default env via autouse `_env_defaults`."""
+    yield
+
+@pytest.fixture
+def dummy_data_fetcher():
+    """Provide a minimal data_fetcher interface for unit tests.
+
+    Exposes `get_daily_df(ctx, sym)` and `get_minute_bars(sym)` returning
+    a simple 30-row OHLCV DataFrame for deterministic checks.
+    """
+    import pandas as pd
+
+    class _F:
+        def __init__(self):
+            n = 30
+            self._df = pd.DataFrame(
+                {
+                    "open": [1.0] * n,
+                    "high": [1.0] * n,
+                    "low": [1.0] * n,
+                    "close": [1.0] * n,
+                    "volume": [100] * n,
+                }
+            )
+
+        def get_daily_df(self, ctx, sym):  # noqa: ARG002 - ctx unused in tests
+            return self._df.copy()
+
+        def get_minute_bars(self, sym):  # noqa: ARG002
+            return self._df.copy()
+
+    return _F()

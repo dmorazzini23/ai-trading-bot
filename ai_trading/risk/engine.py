@@ -9,7 +9,11 @@ from typing import Any
 import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
-from alpaca.common.exceptions import APIError
+try:
+    from alpaca.common.exceptions import APIError
+except ImportError:  # pragma: no cover - allow import without alpaca for tests
+    class APIError(Exception):
+        pass
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
@@ -24,7 +28,10 @@ if not hasattr(np, 'NaN'):
 
 # Lazy pandas proxy
 pd = load_pandas()
-from alpaca.trading.client import TradingClient
+try:
+    from alpaca.trading.client import TradingClient
+except ImportError:  # pragma: no cover - allow import without alpaca for tests
+    TradingClient = object  # type: ignore[assignment]
 
 
 def _safe_call(fn, *a, **k):

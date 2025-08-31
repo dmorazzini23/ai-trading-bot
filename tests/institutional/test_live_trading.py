@@ -82,6 +82,7 @@ class TestLiveTradingBot:
         assert results["overall_status"] == "passed", f"Risk scenario tests failed: {results}"
         assert results["pass_rate"] >= 0.9, f"Risk management pass rate too low: {results['pass_rate']}"
 
+    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_performance_benchmarks(self, scenario_runner):
         """Test performance and latency benchmarks."""

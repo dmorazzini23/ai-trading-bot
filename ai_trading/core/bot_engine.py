@@ -89,6 +89,11 @@ else:
 
         pass
 
+    # Provide a placeholder TradingClient so tests can import the symbol when
+    # Alpaca SDK is not installed.
+    class TradingClient:  # type: ignore[empty-body]
+        ...
+
 from ai_trading.config.management import (
     get_env,
     is_shadow_mode,
@@ -192,8 +197,59 @@ def list_open_orders(api: Any):
 
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
-    from ai_trading.core.alpaca_client import ensure_alpaca_attached as _impl
-    return _impl(ctx)
+    """Attach global trading client to the context if it's missing."""
+    if getattr(ctx, "api", None) is not None:
+        return
+    try:
+        _initialize_alpaca_clients()
+    except COMMON_EXC as e:  # AI-AGENT-REF: surface init failure
+        logger_once.error(
+            "ALPACA_CLIENT_INIT_FAILED - %s",
+            e,
+            key="alpaca_client_init_failed",
+        )
+        if not is_shadow_mode():
+            raise RuntimeError("Alpaca client initialization failed") from e
+        return
+    global trading_client
+    if trading_client is None:
+        logger_once.error(
+            "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
+        )
+        if not is_shadow_mode():
+            raise RuntimeError("Alpaca client missing after initialization")
+        return
+    if hasattr(ctx, "_ensure_initialized"):
+        try:
+            ctx._ensure_initialized()  # type: ignore[attr-defined]
+        except COMMON_EXC:
+            pass
+    try:
+        setattr(ctx, "api", trading_client)
+    except COMMON_EXC:
+        inner = getattr(ctx, "_context", None)
+        if inner is not None and getattr(inner, "api", None) is None:
+            try:
+                setattr(inner, "api", trading_client)
+            except COMMON_EXC:
+                pass
+    api = getattr(ctx, "api", None)
+    if api is None:
+        logger_once.error(
+            "FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed"
+        )
+        if not is_shadow_mode():
+            raise RuntimeError("Failed to attach Alpaca client to context")
+        return
+    _validate_trading_api(api)
+
+# Rebind canonical Alpaca helpers to modular implementations (post-definition override)
+from ai_trading.core.alpaca_client import (  # noqa: E402
+    _validate_trading_api as _validate_trading_api,
+    list_open_orders as list_open_orders,
+    ensure_alpaca_attached as ensure_alpaca_attached,
+    _initialize_alpaca_clients as _initialize_alpaca_clients,
+)
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
@@ -344,6 +400,12 @@ from ai_trading.utils.timing import (
     HTTP_TIMEOUT,
 )  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.core.alpaca_client import (
+    _validate_trading_api,
+    list_open_orders,
+    ensure_alpaca_attached,
+    _initialize_alpaca_clients,
+)
 from ai_trading.utils.prof import StageTimer
 from ai_trading.guards.staleness import _ensure_data_fresh
 
@@ -3305,23 +3367,7 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     name="finnhub_api",
 )
 
-# AI-AGENT-REF: lazy executor init avoids import-time settings
-executor: ThreadPoolExecutor | None = None
-prediction_executor: ThreadPoolExecutor | None = None
-
-
-def _ensure_executors() -> None:
-    """Delegate to core.executors and sync local proxies."""
-    from ai_trading.core import executors as _ex
-    _ex._ensure_executors()
-    globals()["executor"] = _ex.executor
-    globals()["prediction_executor"] = _ex.prediction_executor
-
-
-# AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
-def cleanup_executors():
-    from ai_trading.core import executors as _ex
-    _ex.cleanup_executors()
+import ai_trading.core.executors as executors
 
 
 atexit.register(cleanup_executors)
@@ -5685,8 +5731,89 @@ stream = None
 
 
 def _initialize_alpaca_clients() -> bool:
-    from ai_trading.core.alpaca_client import _initialize_alpaca_clients as _impl
-    return _impl()
+    """Initialize Alpaca trading clients lazily to avoid import delays.
+
+    Returns ``True`` on success, ``False`` if initialization fails or is skipped.
+    """
+    global trading_client, data_client, stream
+    if trading_client is not None:
+        return True  # Already initialized
+    for attempt in (1, 2):
+        try:
+            key, secret, base_url = _ensure_alpaca_env_or_raise()
+        except COMMON_EXC as e:  # AI-AGENT-REF: surface env resolution failures
+            logger.error(
+                "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
+            )
+            if attempt == 1:
+                try:
+                    config.reload_env(override=False)
+                except COMMON_EXC:
+                    pass
+                continue
+            logger_once.error(
+                "ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed"
+            )
+            trading_client = None
+            data_client = None
+            raise
+        if not (key and secret):
+            # In SHADOW_MODE we may not have creds; skip client init
+            diag = _alpaca_diag_info()
+            # AI-AGENT-REF: surface skip reason for tests via standard logger
+            logger.info(
+                "Shadow mode or missing credentials: skipping Alpaca client initialization"
+            )
+            logger_once.warning(
+                "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
+                key="alpaca_init_skipped",
+            )
+            logger.info("ALPACA_DIAG", extra=_redact(diag))
+            return False
+        try:
+            AlpacaREST = get_trading_client_cls()
+            stock_client_cls = get_data_client_cls()
+
+            logger.debug("Successfully imported Alpaca SDK class")
+        except COMMON_EXC as e:
+            logger.error(
+                "ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)}
+            )
+            if attempt == 1:
+                time.sleep(1)
+                continue
+            logger_once.error(
+                "ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed"
+            )
+            trading_client = None
+            data_client = None
+            return False
+        try:
+            trading_client = AlpacaREST(
+                api_key=key,
+                secret_key=secret,
+                url_override=base_url,
+            )
+            data_client = stock_client_cls(
+                api_key=key,
+                secret_key=secret,
+            )
+        except (APIError, TypeError, ValueError, OSError) as e:  # AI-AGENT-REF: expose network or auth issues
+            logger.error(
+                "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
+            )
+            logger_once.error(
+                "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
+            )
+            trading_client = None
+            data_client = None
+            return False
+        logger.info(
+            "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
+        )
+        stream = None  # initialize stream lazily elsewhere if/when required
+        return True
+    return False
 
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
@@ -7825,6 +7952,36 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         return args
 
     order_args = _req_to_args(req)
+    # Ensure client_order_id present for idempotency across retries
+    if not order_args.get("client_order_id"):
+        try:
+            from ai_trading.alpaca_api import generate_client_order_id as _gen_id
+            order_args["client_order_id"] = _gen_id("ai")
+        except Exception:
+            pass
+
+    # Deduplicate via idempotency cache before sending to broker
+    try:
+        from ai_trading.execution.idempotency import get_idempotency_cache
+        _idem_cache = get_idempotency_cache()
+        _idem_key = _idem_cache.generate_key(
+            order_args.get("symbol", ""),
+            order_args.get("side", ""),
+            float(order_args.get("qty", 0) or 0),
+        )
+        if _idem_cache.is_duplicate(_idem_key):
+            logger.warning(
+                "ORDER_DUPLICATE_SKIPPED",
+                extra={
+                    "symbol": order_args.get("symbol", ""),
+                    "side": order_args.get("side", ""),
+                    "qty": order_args.get("qty", 0),
+                },
+            )
+            return None
+    except Exception:
+        _idem_cache = None
+        _idem_key = None
 
     for attempt in range(2):
         try:
@@ -7922,6 +8079,11 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 logger.error(
                     f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
                 )
+            try:
+                if _idem_cache is not None and _idem_key is not None and getattr(order, "id", None):
+                    _idem_cache.mark_submitted(_idem_key, getattr(order, "id"))
+            except Exception:
+                pass
             return order
         except APIError as e:
             if "insufficient qty" in str(e).lower():
@@ -7958,10 +8120,44 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
-    """Façade wrapper delegating to core.execution_flow implementation."""
-    from ai_trading.core.execution_flow import poll_order_fill_status as _impl
-    return _impl(ctx, order_id, timeout)
-        pytime.sleep(3)
+    """Poll Alpaca for order fill status until it is no longer open.
+
+    Honors the provided ``timeout`` by sleeping in short intervals instead of
+    a fixed 3s, so tests can set small timeouts without hanging.
+    """
+    start = pytime.time()
+    interval = 0.2 if timeout <= 1 else 1.0
+    while pytime.time() - start < timeout:
+        try:
+            od = ctx.api.get_order(order_id)
+            status = getattr(od, "status", "")
+            filled = getattr(od, "filled_qty", "0")
+            if status not in {"new", "accepted", "partially_filled"}:
+                logger.info(
+                    "ORDER_FINAL_STATUS",
+                    extra={
+                        "order_id": order_id,
+                        "status": status,
+                        "filled_qty": filled,
+                    },
+                )
+                return
+        except (
+            FileNotFoundError,
+            PermissionError,
+            IsADirectoryError,
+            JSONDecodeError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
+            logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
+            return
+        remaining = timeout - (pytime.time() - start)
+        if remaining <= 0:
+            break
+        pytime.sleep(min(interval, remaining))
 
 
 def send_exit_order(
@@ -12493,7 +12689,7 @@ def _process_symbols(
 
     symbols = filtered  # replace with filtered list
 
-    _ensure_executors()  # AI-AGENT-REF: lazy executor creation
+    executors._ensure_executors()  # AI-AGENT-REF: lazy executor creation
 
     if cd_skipped:
         log_skip_cooldown(cd_skipped)
@@ -12542,7 +12738,7 @@ def _process_symbols(
                 exc_info=True,
             )
 
-    futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
+    futures = [executors.prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
         f.result()
     return processed, row_counts

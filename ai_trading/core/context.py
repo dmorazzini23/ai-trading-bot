@@ -2,8 +2,10 @@ from __future__ import annotations
 
 """Context aliases for backwards-compatible imports.
 
-Re-exports selected context-related helpers from bot_engine to allow imports
-from a smaller, focused module without breaking existing code.
+This module re-exports context-related symbols from ``core.bot_engine`` so
+callers can begin importing from a smaller, focused module without breaking
+existing code. The underlying implementation continues to live in
+``bot_engine`` to avoid any runtime risk during market hours.
 """
 
 from .bot_engine import (
