@@ -8324,130 +8324,28 @@ def calculate_entry_size(
 
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    """Execute entry order."""
-
-    if ctx.api is None:
-        logger.warning("ctx.api is None - cannot execute entry")
-        return
-
-    try:
-        buying_pw = float(ctx.api.get_account().buying_power)
-        if buying_pw <= 0:
-            logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
-            return
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        logger.warning("Failed to get buying power for %s: %s", symbol, exc)
-        return
-    if qty is None or qty <= 0 or not np.isfinite(qty):
-        logger.error(
-            f"Invalid order quantity for {symbol}: {qty}. Skipping order and logging input data."
-        )
-        # Optionally, log signal, price, and input features here for debug
-        return
-    if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
-        logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
-        pov_submit(ctx, symbol, qty, side)
-    elif qty > SLICE_THRESHOLD:
-        logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
-        vwap_pegged_submit(ctx, symbol, qty, side)
-    else:
-        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
-        submit_order(ctx, symbol, qty, side)
-
-    try:
-        raw = fetch_minute_df_safe(symbol)
-    except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
-        return
-    if raw is None or raw.empty:
-        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
-        return
-    try:
-        df_ind = prepare_indicators(raw)
-        if df_ind is None:
-            logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
-            return
-    except ValueError as exc:
-        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
-        return
-    if df_ind.empty:
-        logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
-        return
-    entry_price = get_latest_close(df_ind)
-    ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
-
-    now_pac = datetime.now(UTC).astimezone(PACIFIC)
-    mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-    mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-    tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
-    stop, take = scaled_atr_stop(
-        entry_price,
-        df_ind["atr"].iloc[-1],
-        now_pac,
-        mo,
-        mc,
-        max_factor=tp_factor,
-        min_factor=0.5,
-    )
-    with targets_lock:
-        ctx.stop_targets[symbol] = stop
-        ctx.take_profit_targets[symbol] = take
+    from ai_trading.core.execution_flow import execute_entry as _impl
+    return _impl(ctx, symbol, qty, side)
 
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
-    if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.warning(f"Skipping {symbol}: computed qty <= 0")
-        return
-    try:
-        raw = fetch_minute_df_safe(symbol)
-    except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
-        raw = pd.DataFrame()
-    exit_price = get_latest_close(raw) if raw is not None else 1.0
-    send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
-    ctx.trade_logger.log_exit(state, symbol, exit_price)
-    on_trade_exit_rebalance(ctx)
-    with targets_lock:
-        ctx.take_profit_targets.pop(symbol, None)
-        ctx.stop_targets.pop(symbol, None)
+    from ai_trading.core.execution_flow import execute_exit as _impl
+    return _impl(ctx, state, symbol, qty)
 
 
 def exit_all_positions(ctx: BotContext) -> None:
-    raw_positions = ctx.api.list_positions()
-    for pos in raw_positions:
-        qty = abs(int(pos.qty))
-        if qty:
-            send_exit_order(
-                ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions
-            )
-            logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
+    from ai_trading.core.execution_flow import exit_all_positions as _impl
+    return _impl(ctx)
 
 
 def _liquidate_all_positions(runtime: BotContext) -> None:
-    """Helper to liquidate every open position."""
-    # AI-AGENT-REF: existing exit_all_positions wrapper for emergency liquidation
-    exit_all_positions(runtime)
+    from ai_trading.core.execution_flow import _liquidate_all_positions as _impl
+    return _impl(runtime)
 
 
 def liquidate_positions_if_needed(runtime: BotContext) -> None:
-    """Liquidate all positions when certain risk conditions trigger."""
-    if check_halt_flag(runtime):
-        # Modified: DO NOT liquidate positions on halt flag.
-        logger.info(
-            "TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions, holding open positions."
-        )
-        return
-
-    # normal liquidation logic would go here (stub)
+    from ai_trading.core.execution_flow import liquidate_positions_if_needed as _impl
+    return _impl(runtime)
 
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────

@@ -441,3 +441,137 @@ def pov_submit(
     return True
 
 __all__.append("pov_submit")
+
+
+def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
+    """Execute entry order with slicing policies and target initialization."""
+    from ai_trading.core.bot_engine import (
+        submit_order,
+        vwap_pegged_submit,
+        pov_submit,
+        SLICE_THRESHOLD,
+        POV_SLICE_PCT,
+        fetch_minute_df_safe,
+        DataFetchError,
+        prepare_indicators,
+        get_latest_close,
+        TAKE_PROFIT_FACTOR,
+        is_high_vol_regime,
+        scaled_atr_stop,
+        targets_lock,
+        BotState,
+    )
+    import numpy as np  # local import to avoid global cost
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    PACIFIC = ZoneInfo("America/Los_Angeles")
+
+    if getattr(ctx, "api", None) is None:
+        logger.warning("ctx.api is None - cannot execute entry")
+        return
+    try:
+        buying_pw = float(ctx.api.get_account().buying_power)
+        if buying_pw <= 0:
+            logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
+            return
+    except Exception as exc:
+        logger.warning("Failed to get buying power for %s: %s", symbol, exc)
+        return
+    if qty is None or qty <= 0 or not np.isfinite(qty):
+        logger.error(f"Invalid order quantity for {symbol}: {qty}. Skipping order.")
+        return
+    if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
+        logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
+        pov_submit(ctx, symbol, qty, side)
+    elif qty > SLICE_THRESHOLD:
+        logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
+        vwap_pegged_submit(ctx, symbol, qty, side)
+    else:
+        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
+        submit_order(ctx, symbol, qty, side)
+
+    try:
+        raw = fetch_minute_df_safe(symbol)
+    except DataFetchError:
+        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
+        return
+    if raw is None or getattr(raw, "empty", True):
+        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
+        return
+    try:
+        df_ind = prepare_indicators(raw)
+        if df_ind is None or getattr(df_ind, "empty", True):
+            logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
+            return
+    except ValueError as exc:
+        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+        return
+    entry_price = get_latest_close(df_ind)
+    ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
+
+    now_pac = datetime.now(UTC).astimezone(PACIFIC)
+    mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+    mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+    tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
+    stop, take = scaled_atr_stop(
+        entry_price,
+        df_ind["atr"].iloc[-1],
+        now_pac,
+        mo,
+        mc,
+        max_factor=tp_factor,
+        min_factor=0.5,
+    )
+    with targets_lock:
+        ctx.stop_targets[symbol] = stop
+        ctx.take_profit_targets[symbol] = take
+
+
+def execute_exit(ctx: Any, state: Any, symbol: str, qty: int) -> None:
+    from ai_trading.core.bot_engine import (
+        fetch_minute_df_safe,
+        DataFetchError,
+        get_latest_close,
+        send_exit_order,
+        targets_lock,
+    )
+    import numpy as np
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.warning(f"Skipping {symbol}: computed qty <= 0")
+        return
+    try:
+        raw = fetch_minute_df_safe(symbol)
+    except DataFetchError:
+        logger.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
+        raw = None
+    exit_price = get_latest_close(raw) if raw is not None else 1.0
+    send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
+    try:
+        ctx.trade_logger.log_exit(state, symbol, exit_price)
+    except Exception:
+        pass
+    with targets_lock:
+        ctx.take_profit_targets.pop(symbol, None)
+        ctx.stop_targets.pop(symbol, None)
+
+
+def exit_all_positions(ctx: Any) -> None:
+    raw_positions = ctx.api.list_positions()
+    for pos in raw_positions:
+        qty = abs(int(pos.qty))
+        if qty:
+            send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions)
+            logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
+
+
+def _liquidate_all_positions(runtime: Any) -> None:
+    exit_all_positions(runtime)
+
+
+def liquidate_positions_if_needed(runtime: Any) -> None:
+    from ai_trading.core.bot_engine import check_halt_flag
+    if check_halt_flag(runtime):
+        logger.info("TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions")
+        return
+    # normal liquidation logic would be implemented here (intentionally left as stub)
