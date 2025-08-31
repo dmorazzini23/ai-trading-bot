@@ -381,15 +381,20 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             rotating_handler.addFilter(secret_filter)
             rotating_handler.addFilter(extra_filter)
             handlers.append(rotating_handler)
-        _log_queue = queue.Queue(-1)
-        queue_handler = QueueHandler(_log_queue)
-        queue_handler.setLevel(level)
-        queue_handler.addFilter(_PhaseFilter())
-        queue_handler.addFilter(secret_filter)
-        queue_handler.addFilter(extra_filter)
-        logger.handlers = [queue_handler]
-        _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
-        _listener.start()
+        # In tests, avoid background queue threads to prevent timeout interference
+        if os.getenv('PYTEST_RUNNING') == '1' or os.getenv('LOG_DISABLE_QUEUE') == '1':
+            logger.handlers = handlers
+            _listener = None
+        else:
+            _log_queue = queue.Queue(-1)
+            queue_handler = QueueHandler(_log_queue)
+            queue_handler.setLevel(level)
+            queue_handler.addFilter(_PhaseFilter())
+            queue_handler.addFilter(secret_filter)
+            queue_handler.addFilter(extra_filter)
+            logger.handlers = [queue_handler]
+            _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
+            _listener.start()
         atexit.register(_safe_shutdown_logging)
         _LOGGING_CONFIGURED = True
         logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
