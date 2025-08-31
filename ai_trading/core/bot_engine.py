@@ -180,143 +180,20 @@ data_client = None
 
 
 def _validate_trading_api(api: Any) -> bool:
-    """Ensure trading ``api`` exposes ``list_orders``.
-
-    Maps ``get_orders`` to ``list_orders`` when necessary and warns when the
-    client is not an instance of :class:`TradingClient`.
-    """  # AI-AGENT-REF: verify Alpaca client contract
-    if api is None:
-        logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
-        return False
-    if not hasattr(api, "list_orders"):
-        if hasattr(api, "get_orders"):
-            def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
-                """Proxy ``list_orders`` to ``get_orders`` with compatible kwargs."""
-
-                status = kwargs.pop("status", None)
-                if status is None:
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-                import inspect
-
-                params = inspect.signature(api.get_orders).parameters
-
-                enum_val: Any = status
-                try:  # pragma: no cover - optional import paths
-                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                        enums_mod, "OrderStatus", None
-                    )
-                    if enum_cls is not None:
-                        enum_val = getattr(enum_cls, str(status).upper(), status)
-                except Exception:  # pragma: no cover - optional import paths
-                    pass
-
-                if "status" in params:
-                    kwargs["status"] = enum_val
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-                req = None
-                try:  # pragma: no cover - optional import paths
-                    requests_mod = __import__("alpaca.trading.requests", fromlist=[""])
-                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                        enums_mod, "OrderStatus", None
-                    )
-                    if enum_cls is not None:
-                        enum_val = getattr(enum_cls, str(status).upper(), status)
-                    req_cls = getattr(requests_mod, "GetOrdersRequest")
-                    req = req_cls(statuses=[enum_val])
-                except Exception:
-                    pass
-                if req is not None:
-                    try:
-                        return api.get_orders(*args, filter=req, **kwargs)  # type: ignore[attr-defined]
-                    except TypeError:
-                        return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
-
-                kwargs["status"] = status
-                return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-            setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            logger_once.warning(
-                "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
-            )
-        else:
-            logger_once.error(
-                "ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing"
-            )
-            if not is_shadow_mode():
-                raise RuntimeError("Alpaca client missing list_orders method")
-            return False
-    TradingClient = get_trading_client_cls()
-    if not isinstance(api, TradingClient):
-        logger_once.warning(
-            "ALPACA_API_ADAPTER", key="alpaca_api_adapter"
-        )
-    return True
+    """Delegate to modular implementation (backwards-compatible façade)."""
+    from ai_trading.core.alpaca_client import _validate_trading_api as _impl
+    return _impl(api)
 
 
 def list_open_orders(api: Any):
-    """Return all open orders from ``api``.
-
-    ``_validate_trading_api`` shims ``list_orders`` so that passing
-    ``status="open"`` works across Alpaca SDK versions. Newer clients expect a
-    ``GetOrdersRequest`` with ``QueryOrderStatus.OPEN`` (or ``OrderStatus.OPEN``
-    on older SDKs) while legacy clients may accept the raw status string
-    directly.
-    """
-
-    return api.list_orders(status="open")
+    from ai_trading.core.alpaca_client import list_open_orders as _impl
+    return _impl(api)
 
 
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
-    """Attach global trading client to the context if it's missing."""
-    if getattr(ctx, "api", None) is not None:
-        return
-    try:
-        _initialize_alpaca_clients()
-    except COMMON_EXC as e:  # AI-AGENT-REF: surface init failure
-        logger_once.error(
-            "ALPACA_CLIENT_INIT_FAILED - %s",
-            e,
-            key="alpaca_client_init_failed",
-        )
-        if not is_shadow_mode():
-            raise RuntimeError("Alpaca client initialization failed") from e
-        return
-    global trading_client
-    if trading_client is None:
-        logger_once.error(
-            "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
-        )
-        if not is_shadow_mode():
-            raise RuntimeError("Alpaca client missing after initialization")
-        return
-    if hasattr(ctx, "_ensure_initialized"):
-        try:
-            ctx._ensure_initialized()  # type: ignore[attr-defined]
-        except COMMON_EXC:
-            pass
-    try:
-        setattr(ctx, "api", trading_client)
-    except COMMON_EXC:
-        inner = getattr(ctx, "_context", None)
-        if inner is not None and getattr(inner, "api", None) is None:
-            try:
-                setattr(inner, "api", trading_client)
-            except COMMON_EXC:
-                pass
-    api = getattr(ctx, "api", None)
-    if api is None:
-        logger_once.error(
-            "FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed"
-        )
-        if not is_shadow_mode():
-            raise RuntimeError("Failed to attach Alpaca client to context")
-        return
-    _validate_trading_api(api)
+    from ai_trading.core.alpaca_client import ensure_alpaca_attached as _impl
+    return _impl(ctx)
 
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
@@ -3434,56 +3311,17 @@ prediction_executor: ThreadPoolExecutor | None = None
 
 
 def _ensure_executors() -> None:
-    """Create thread pool executors on demand."""  # AI-AGENT-REF: deferred init
-    global executor, prediction_executor
-    if executor is not None and prediction_executor is not None:
-        return
-    from ai_trading.config.settings import get_settings
-
-    cpu = os.cpu_count() or 2
-    s = get_settings()
-    exec_fn = getattr(s, "effective_executor_workers", None)
-    exec_workers = exec_fn(cpu) if callable(exec_fn) else cpu
-    pred_fn = getattr(s, "effective_prediction_workers", None)
-    pred_workers = pred_fn(cpu) if callable(pred_fn) else cpu
-    executor = ThreadPoolExecutor(max_workers=exec_workers)
-    prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
+    """Delegate to core.executors and sync local proxies."""
+    from ai_trading.core import executors as _ex
+    _ex._ensure_executors()
+    globals()["executor"] = _ex.executor
+    globals()["prediction_executor"] = _ex.prediction_executor
 
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():
-    """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
-    try:
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Main executor shutdown successfully")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Error shutting down main executor: %s", e)
-
-    try:
-        if prediction_executor is not None:
-            prediction_executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Prediction executor shutdown successfully")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Error shutting down prediction executor: %s", e)
+    from ai_trading.core import executors as _ex
+    _ex.cleanup_executors()
 
 
 atexit.register(cleanup_executors)
@@ -5847,89 +5685,8 @@ stream = None
 
 
 def _initialize_alpaca_clients() -> bool:
-    """Initialize Alpaca trading clients lazily to avoid import delays.
-
-    Returns ``True`` on success, ``False`` if initialization fails or is skipped.
-    """
-    global trading_client, data_client, stream
-    if trading_client is not None:
-        return True  # Already initialized
-    for attempt in (1, 2):
-        try:
-            key, secret, base_url = _ensure_alpaca_env_or_raise()
-        except Exception as e:  # AI-AGENT-REF: surface env resolution failures
-            logger.error(
-                "ALPACA_ENV_RESOLUTION_FAILED", extra={"error": str(e)}
-            )
-            if attempt == 1:
-                try:
-                    config.reload_env(override=False)
-                except COMMON_EXC:
-                    pass
-                continue
-            logger_once.error(
-                "ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed"
-            )
-            trading_client = None
-            data_client = None
-            raise
-        if not (key and secret):
-            # In SHADOW_MODE we may not have creds; skip client init
-            diag = _alpaca_diag_info()
-            # AI-AGENT-REF: surface skip reason for tests via standard logger
-            logger.info(
-                "Shadow mode or missing credentials: skipping Alpaca client initialization"
-            )
-            logger_once.warning(
-                "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
-                key="alpaca_init_skipped",
-            )
-            logger.info("ALPACA_DIAG", extra=_redact(diag))
-            return False
-        try:
-            AlpacaREST = get_trading_client_cls()
-            stock_client_cls = get_data_client_cls()
-
-            logger.debug("Successfully imported Alpaca SDK class")
-        except COMMON_EXC as e:
-            logger.error(
-                "ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)}
-            )
-            if attempt == 1:
-                time.sleep(1)
-                continue
-            logger_once.error(
-                "ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed"
-            )
-            trading_client = None
-            data_client = None
-            return False
-        try:
-            trading_client = AlpacaREST(
-                api_key=key,
-                secret_key=secret,
-                url_override=base_url,
-            )
-            data_client = stock_client_cls(
-                api_key=key,
-                secret_key=secret,
-            )
-        except Exception as e:  # AI-AGENT-REF: expose network or auth issues
-            logger.error(
-                "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
-            )
-            logger_once.error(
-                "ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed"
-            )
-            trading_client = None
-            data_client = None
-            return False
-        logger.info(
-            "ALPACA_DIAG", extra=_redact({"initialized": True, **_alpaca_diag_info()})
-        )
-        stream = None  # initialize stream lazily elsewhere if/when required
-        return True
-    return False
+    from ai_trading.core.alpaca_client import _initialize_alpaca_clients as _impl
+    return _impl()
 
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
@@ -8201,35 +7958,9 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
-    """Poll Alpaca for order fill status until it is no longer open."""
-    start = pytime.time()
-    while pytime.time() - start < timeout:
-        try:
-            od = ctx.api.get_order(order_id)
-            status = getattr(od, "status", "")
-            filled = getattr(od, "filled_qty", "0")
-            if status not in {"new", "accepted", "partially_filled"}:
-                logger.info(
-                    "ORDER_FINAL_STATUS",
-                    extra={
-                        "order_id": order_id,
-                        "status": status,
-                        "filled_qty": filled,
-                    },
-                )
-                return
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
-            return
+    """Façade wrapper delegating to core.execution_flow implementation."""
+    from ai_trading.core.execution_flow import poll_order_fill_status as _impl
+    return _impl(ctx, order_id, timeout)
         pytime.sleep(3)
 
 
