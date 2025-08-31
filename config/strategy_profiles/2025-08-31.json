@@ -1,0 +1,17 @@
+{
+  "symbols": {
+    "SPY": {
+      "momentum": { "lookback": 20, "threshold": 0.0 },
+      "mean_reversion": { "lookback": 5, "z_entry": 0.8 }
+    },
+    "QQQ": {
+      "momentum": { "lookback": 25, "threshold": 0.0 },
+      "mean_reversion": { "lookback": 5, "z_entry": 0.9 }
+    },
+    "AAPL": {
+      "momentum": { "lookback": 55, "threshold": 0.08 },
+      "mean_reversion": { "lookback": 30, "z_entry": 0.7 }
+    }
+  }
+}
+

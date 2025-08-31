@@ -269,6 +269,18 @@ class ProductionExecutionCoordinator:
                     self.execution_stats['average_execution_time_ms'] = alpha * execution_time_ms + (1 - alpha) * self.execution_stats['average_execution_time_ms']
                 slippage = execution_result.get('actual_slippage_bps', 0)
                 self.execution_stats['total_slippage_bps'] += slippage
+                try:
+                    S = get_settings()
+                    if bool(getattr(S, 'exec_log_slippage', False)):
+                        logger.info(
+                            'SLIPPAGE_METRIC',
+                            extra={
+                                'slippage_bps': slippage,
+                                'order_status': execution_result.get('status')
+                            },
+                        )
+                except Exception:
+                    pass
             else:
                 self.execution_stats['rejected_orders'] += 1
         except (APIError, TimeoutError, ConnectionError) as e:

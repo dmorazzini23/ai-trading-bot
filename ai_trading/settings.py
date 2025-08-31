@@ -163,6 +163,7 @@ class Settings(BaseSettings):
     # Execution policy (safe rollout toggles)
     exec_prefer_limit: bool = Field(False, alias='EXECUTION_PREFER_LIMIT')
     exec_max_participation_rate: float = Field(0.05, alias='EXECUTION_MAX_PARTICIPATION_RATE', description='Cap per-order market participation rate [0,1] when available')
+    exec_log_slippage: bool = Field(False, alias='EXECUTION_LOG_SLIPPAGE')
 
     @field_validator('model_path', 'halt_flag_path', 'rl_model_path', mode='before')
     @classmethod

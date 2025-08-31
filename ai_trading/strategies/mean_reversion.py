@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from ai_trading.logging import logger as log
 from .base import StrategySignal
+from ai_trading.config.profiles import load_strategy_profile, lookup_overrides
 
 if TYPE_CHECKING:  # pragma: no cover - heavy import only for typing
     import pandas as pd
@@ -34,13 +35,24 @@ class MeanReversionStrategy:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if 'close' not in df.columns:
             return []
-        mean, std = self._latest_stats(df['close'], self.lookback)
+        # Optional profile overrides
+        prof = load_strategy_profile()
+        lookback = int(getattr(self, 'lookback', 5))
+        z_entry = float(getattr(self, 'z_entry', self.z_entry)) if hasattr(self, 'z_entry') else float(getattr(self, 'z_entry', 1.0))
+        if prof:
+            ov = lookup_overrides(prof, sym, 'mean_reversion')
+            try:
+                lookback = int(ov.get('lookback', lookback))
+                z_entry = float(ov.get('z_entry', z_entry))
+            except Exception:
+                pass
+        mean, std = self._latest_stats(df['close'], lookback)
         if mean is None:
             return []
         px = float(df['close'].iloc[-1])
         z = (px - mean) / std
-        if z <= -self.z_entry:
+        if z <= -z_entry:
             return [StrategySignal(symbol=sym, side='buy', strength=abs(z))]
-        if z >= self.z_entry:
+        if z >= z_entry:
             return [StrategySignal(symbol=sym, side='sell', strength=abs(z))]
         return []

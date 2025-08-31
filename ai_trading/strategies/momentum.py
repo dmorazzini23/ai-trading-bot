@@ -10,6 +10,7 @@ import numpy as np
 from ai_trading.logging import logger
 from ..core.enums import RiskLevel
 from ..core.interfaces import OrderSide
+from ai_trading.config.profiles import load_strategy_profile, lookup_overrides
 from .base import BaseStrategy, StrategySignal
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -38,7 +39,17 @@ class MomentumStrategy(BaseStrategy):
         symbols = market_data.get('symbols') or list(market_data.get('prices', {}).keys())
         if not symbols:
             return signals
+        prof = load_strategy_profile()
         for symbol in symbols:
+            if prof:
+                ov = lookup_overrides(prof, symbol, 'momentum')
+                try:
+                    if 'lookback' in ov:
+                        lookback = int(ov['lookback'])
+                    if 'threshold' in ov:
+                        threshold = float(ov['threshold'])
+                except Exception:
+                    pass
             prices = market_data.get('prices', {}).get(symbol)
             if prices is None:
                 continue
