@@ -15,6 +15,8 @@ import importlib.util
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
+from ai_trading.metrics import Counter, Histogram
+from time import monotonic as _mono
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -24,6 +26,14 @@ RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
 _HTTP: HTTPSession = get_http_session()
+
+# Lightweight Prometheus metrics (no-op when client unavailable)
+_alpaca_calls_total = Counter("alpaca_calls_total", "Total Alpaca calls")
+_alpaca_errors_total = Counter("alpaca_errors_total", "Total Alpaca call errors")
+_alpaca_call_latency = Histogram(
+    "alpaca_call_latency_seconds",
+    "Latency of Alpaca calls",
+)
 
 
 from zoneinfo import ZoneInfo
@@ -235,6 +245,30 @@ def _require_pandas(consumer: str = "this function"):
     return pd
 
 
+# Optional retry/backoff support using tenacity
+try:  # pragma: no cover - optional dependency wrapper
+    from tenacity import (
+        retry,
+        stop_after_attempt,
+        wait_exponential_jitter,
+        retry_if_exception_type,
+    )
+
+    def _with_retry(callable_):
+        return retry(
+            reraise=True,
+            stop=stop_after_attempt(3),
+            wait=wait_exponential_jitter(init=0.25, max=2.0),
+            retry=retry_if_exception_type(Exception),
+        )(callable_)
+
+except Exception:  # pragma: no cover - absent tenacity
+    retry = None  # type: ignore
+
+    def _with_retry(callable_):  # type: ignore
+        return callable_
+
+
 def get_bars_df(
     symbol: str,
     timeframe: str | Any = "1Min",
@@ -292,7 +326,24 @@ def get_bars_df(
             adjustment=adjustment,
             feed=feed,
         )
-        df = rest.get_stock_bars(req).df
+        _start_t = _mono()
+        _err: Exception | None = None
+        try:
+            call = rest.get_stock_bars
+            if retry is not None:
+                call = _with_retry(call)
+            df = call(req).df
+        except Exception as e:
+            _err = e
+            raise
+        finally:
+            try:
+                _alpaca_calls_total.inc()
+                _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+                if _err is not None:
+                    _alpaca_errors_total.inc()
+            except Exception:
+                pass
         if isinstance(df, _pd.DataFrame) and (not df.empty):
             return df.reset_index(drop=False)
         return _pd.DataFrame()
@@ -417,7 +468,23 @@ def _sdk_submit(
     if idempotency_key:
         kwargs["client_order_id"] = idempotency_key
 
-    order = submit(**kwargs)
+    # Optional retry wrapper for SDK submit
+    call = submit if retry is None else _with_retry(submit)
+    _start_t = _mono()
+    _err: Exception | None = None
+    try:
+        order = call(**kwargs)
+    except Exception as e:
+        _err = e
+        raise
+    finally:
+        try:
+            _alpaca_calls_total.inc()
+            _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+            if _err is not None:
+                _alpaca_errors_total.inc()
+        except Exception:
+            pass
     if hasattr(order, "_raw"):
         data = dict(order._raw)  # type: ignore[attr-defined]
     elif hasattr(order, "__dict__"):
@@ -470,11 +537,25 @@ def _http_submit(
     if stop_price is not None:
         payload["stop_price"] = str(stop_price)
 
+    _start_t = _mono()
+    _err: Exception | None = None
     try:
         timeout_v = clamp_request_timeout(timeout or 10)
-        resp = _HTTP.post(url, headers=headers, json=payload, timeout=timeout_v)
+        call = _HTTP.post
+        if retry is not None:
+            call = _with_retry(call)
+        resp = call(url, headers=headers, json=payload, timeout=timeout_v)
     except RequestException as e:  # pragma: no cover - network error path
+        _err = e
         raise AlpacaOrderNetworkError(f"Network error calling {url}: {e}") from e
+    finally:
+        try:
+            _alpaca_calls_total.inc()
+            _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+            if _err is not None or resp.status_code >= 400:  # type: ignore[name-defined]
+                _alpaca_errors_total.inc()
+        except Exception:
+            pass
 
     try:
         content: dict[str, Any] | None = resp.json()
