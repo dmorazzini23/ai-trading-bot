@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from ai_trading.logging import logger
+from zoneinfo import ZoneInfo
+from ai_trading.utils.lazy_imports import load_pandas_market_calendars
 from ..core.constants import EXECUTION_PARAMETERS, MARKET_HOURS, RISK_PARAMETERS
 from ..core.enums import RiskLevel
 
@@ -63,6 +65,14 @@ class MarketHoursValidator:
     def __init__(self):
         """Initialize market hours validator."""
         self.market_hours = MARKET_HOURS
+        # Prefer exchange calendars for DST-safe hours if available
+        self._mcal = load_pandas_market_calendars()
+        self._calendar = None
+        if self._mcal is not None:
+            try:
+                self._calendar = self._mcal.get_calendar('XNYS')
+            except Exception:
+                self._calendar = None
         logger.debug('MarketHoursValidator initialized')
 
     def validate_market_hours(self, timestamp: datetime | None=None) -> ValidationResult:
@@ -77,6 +87,29 @@ class MarketHoursValidator:
         """
         try:
             check_time = timestamp or datetime.now(UTC)
+            # Prefer calendar-based hours for correctness across DST
+            if self._calendar is not None:
+                try:
+                    import pandas as pd  # heavy import inside function
+                except ImportError:
+                    pd = None  # type: ignore[assignment]
+                if pd is not None:
+                    sched = self._calendar.schedule(start_date=check_time.date(), end_date=check_time.date())
+                    if not getattr(sched, 'empty', True):
+                        open_ts = sched.iloc[0]["market_open"]
+                        close_ts = sched.iloc[0]["market_close"]
+                        try:
+                            # Normalize to UTC for comparison
+                            open_utc = open_ts.tz_convert('UTC') if getattr(open_ts, 'tz', None) else open_ts
+                            close_utc = close_ts.tz_convert('UTC') if getattr(close_ts, 'tz', None) else close_ts
+                        except Exception:
+                            # last-resort: compare as-is
+                            open_utc, close_utc = open_ts, close_ts
+                        now_utc = pd.Timestamp(check_time)
+                        if open_utc <= now_utc <= close_utc:
+                            return ValidationResult(category=ValidationCategory.MARKET_HOURS, status=ValidationStatus.APPROVED, message='Trading within regular market hours', details={'current_time': check_time.time(), 'market_status': 'open'}, score=1.0, recommendations=[])
+                        # Fall through to extended-hours evaluation below
+            # Conservative fallback using static windows
             current_time = check_time.time()
             market_open = self.market_hours['MARKET_OPEN']
             market_close = self.market_hours['MARKET_CLOSE']

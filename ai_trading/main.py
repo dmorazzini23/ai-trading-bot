@@ -45,6 +45,8 @@ from ai_trading.net.http import build_retrying_session, set_global_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import get_env, validate_required_env, reload_env
+from ai_trading.metrics import Histogram, Counter
+from time import monotonic as _mono
 
 
 def preflight_import_health() -> None:
@@ -434,6 +436,10 @@ def main(argv: list[str] | None = None) -> None:
     logger.info(
         "DATA_CONFIG feed=%s adjustment=%s timeframe=1Day/1Min provider=alpaca", S.alpaca_data_feed, S.alpaca_adjustment
     )
+    # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
+    _cycle_stage_seconds = Histogram("cycle_stage_seconds", "Cycle stage duration seconds",)
+    _cycle_budget_over_total = Counter("cycle_budget_over_total", "Budget-over events")
+
     try:
         _validate_runtime_config(config, S)
     except ValueError as e:
@@ -552,18 +558,45 @@ def main(argv: list[str] | None = None) -> None:
                     gc_result = optimize_memory()
                     if gc_result.get("objects_collected", 0) > 100:
                         logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
+                _t0 = _mono()
                 with StageTimer(logger, "CYCLE_FETCH"):
+                    pass
+                try:
+                    _cycle_stage_seconds.observe(max(0.0, _mono() - _t0))
+                except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
+                    try:
+                        _cycle_budget_over_total.inc()
+                    except Exception:
+                        pass
+                _t1 = _mono()
                 with StageTimer(logger, "CYCLE_COMPUTE"):
                     run_cycle()
+                try:
+                    _cycle_stage_seconds.observe(max(0.0, _mono() - _t1))
+                except Exception:
+                    pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
+                    try:
+                        _cycle_budget_over_total.inc()
+                    except Exception:
+                        pass
+                _t2 = _mono()
                 with StageTimer(logger, "CYCLE_EXECUTE"):
+                    pass
+                try:
+                    _cycle_stage_seconds.observe(max(0.0, _mono() - _t2))
+                except Exception:
                     pass
                 if budget.over():
                     logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
+                    try:
+                        _cycle_budget_over_total.inc()
+                    except Exception:
+                        pass
             except (ValueError, TypeError):
                 logger.exception("run_cycle failed")
             count += 1
