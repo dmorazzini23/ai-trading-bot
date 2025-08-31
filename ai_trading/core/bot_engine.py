@@ -3371,6 +3371,11 @@ import ai_trading.core.executors as executors
 
 # Expose cleanup function on this module for tests/back-compat
 cleanup_executors = executors.cleanup_executors
+<<<<<<< HEAD
+||||||| 9b1ea93a
+=======
+
+>>>>>>> feat/strategy-profile-metrics
 
 # Ensure executor cleanup is registered with the correct reference
 atexit.register(cleanup_executors)

@@ -428,6 +428,27 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
+    _cap_env = os.getenv("CAPITAL_CAP")
+    if _cap_env:
+        try:
+            _cap_val = float(_cap_env)
+            try:
+                setattr(S, "capital_cap", _cap_val)
+            except Exception:
+                try:
+                    object.__setattr__(S, "capital_cap", _cap_val)
+                except Exception:
+                    pass
+            try:
+                setattr(config, "capital_cap", _cap_val)
+            except Exception:
+                try:
+                    object.__setattr__(config, "capital_cap", _cap_val)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     if config is None:
         logger.critical(
             "SETTINGS_UNAVAILABLE",  # AI-AGENT-REF: clearer startup failure
@@ -517,8 +538,6 @@ def main(argv: list[str] | None = None) -> None:
     except (RuntimeError, TimeoutError, OSError) as e:
         logger.error("Failed to start API", exc_info=e)
         raise RuntimeError("API failed to start") from e
-    import os
-
     S = get_settings()
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
 
@@ -613,13 +632,13 @@ def main(argv: list[str] | None = None) -> None:
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": interval})
                 last_health = now_mono
             try:
-            # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
-            _mode_env = os.getenv("MAX_POSITION_MODE") or os.getenv("AI_TRADING_MAX_POSITION_MODE")
-            mode_now = str(
-                _mode_env
-                if _mode_env is not None
-                else getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))
-            ).upper()
+                # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
+                _mode_env = os.getenv("MAX_POSITION_MODE") or os.getenv("AI_TRADING_MAX_POSITION_MODE")
+                mode_now = str(
+                    _mode_env
+                    if _mode_env is not None
+                    else getattr(S, "max_position_mode", getattr(config, "max_position_mode", "STATIC"))
+                ).upper()
                 if mode_now == "AUTO":
                     resolved_size, meta = resolve_max_position_size(config, S, force_refresh=False)
                     if float(getattr(S, "max_position_size", 0.0)) != resolved_size:
