@@ -246,10 +246,8 @@ def _validate_runtime_config(cfg, tcfg) -> None:
                     pass
     try:
         force = (_CACHE.value is None) or (eq != prev_eq)
-        # Prefer TradingConfig for mode resolution (supports MAX_POSITION_MODE=AUTO)
-        from ai_trading.config.management import TradingConfig as _TC
-        _mode_cfg = _TC.from_env()
-        resolved, _meta = resolve_max_position_size(_mode_cfg, tcfg, force_refresh=force)
+        # Use full Settings for equity/credentials; mode is read from Settings
+        resolved, _meta = resolve_max_position_size(cfg, tcfg, force_refresh=force)
         if hasattr(tcfg, "max_position_size"):
             tcfg.max_position_size = float(resolved)
         else:
@@ -473,10 +471,8 @@ def main(argv: list[str] | None = None) -> None:
     if not _init_http_session(config):
         return
     try:
-        # Prefer TradingConfig for mode resolution so AUTO is honored
-        from ai_trading.config.management import TradingConfig as _TC
-        _mode_cfg = _TC.from_env()
-        resolved_size, sizing_meta = resolve_max_position_size(_mode_cfg, S)
+        # Use full Settings so equity resolves with credentials; AUTO comes from Settings
+        resolved_size, sizing_meta = resolve_max_position_size(config, S)
         try:
             setattr(S, "max_position_size", float(resolved_size))
         except (AttributeError, TypeError):
