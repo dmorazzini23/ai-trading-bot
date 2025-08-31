@@ -175,12 +175,17 @@ class Settings(BaseSettings):
     http_backoff_factor: float = Field(0.3, alias='HTTP_BACKOFF_FACTOR')
     http_connect_timeout: float = Field(5.0, alias='HTTP_CONNECT_TIMEOUT')
     http_read_timeout: float = Field(10.0, alias='HTTP_READ_TIMEOUT')
+    # Closed-hours HTTP overrides (optional)
+    http_connect_timeout_closed: float | None = Field(None, alias='HTTP_CONNECT_TIMEOUT_CLOSED')
+    http_read_timeout_closed: float | None = Field(None, alias='HTTP_READ_TIMEOUT_CLOSED')
     # Dynamic sizing refresh TTL (seconds) to limit equity polling in AUTO mode
     dynamic_size_refresh_secs: float = Field(3600.0, alias='DYNAMIC_SIZE_REFRESH_SECS')
     # Execution policy (safe rollout toggles)
     exec_prefer_limit: bool = Field(False, alias='EXECUTION_PREFER_LIMIT')
     exec_max_participation_rate: float = Field(0.05, alias='EXECUTION_MAX_PARTICIPATION_RATE', description='Cap per-order market participation rate [0,1] when available')
     exec_log_slippage: bool = Field(False, alias='EXECUTION_LOG_SLIPPAGE')
+    # Slow the main loop when market is closed
+    interval_when_closed: int = Field(300, alias='INTERVAL_WHEN_CLOSED')
 
     @field_validator('model_path', 'halt_flag_path', 'rl_model_path', mode='before')
     @classmethod

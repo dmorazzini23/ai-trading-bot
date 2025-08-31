@@ -15,6 +15,9 @@ class MeanReversionStrategy:
         self.lookback = lookback
         self.z_entry = z_entry
         self._last_ts = None
+        self._guard_skips = 0
+        self._guard_attempts = 0
+        self._guard_last_summary = 0.0
 
     def _latest_stats(self, series: 'pd.Series', window: int):
         import pandas as pd  # heavy import; keep local
@@ -39,8 +42,11 @@ class MeanReversionStrategy:
                 last_ts = df.index[-1]
                 if self._last_ts == last_ts:
                     log.debug('MEAN_REVERSION_GUARD_SKIP', extra={'symbol': sym, 'ts': str(last_ts)})
+                    self._guard_skips += 1
+                    self._guard_attempts += 1
                     return []
                 self._last_ts = last_ts
+                self._guard_attempts += 1
         except Exception:
             pass
         if 'close' not in df.columns:
@@ -65,4 +71,16 @@ class MeanReversionStrategy:
             return [StrategySignal(symbol=sym, side='buy', strength=abs(z))]
         if z >= z_entry:
             return [StrategySignal(symbol=sym, side='sell', strength=abs(z))]
+        try:
+            import time as _t
+            now = _t.monotonic()
+            if self._guard_last_summary == 0.0:
+                self._guard_last_summary = now
+            elif now - self._guard_last_summary >= 60.0:
+                log.info('STRATEGY_GUARD_SUMMARY', extra={'strategy': 'mean_reversion', 'skips': self._guard_skips, 'attempts': self._guard_attempts})
+                self._guard_skips = 0
+                self._guard_attempts = 0
+                self._guard_last_summary = now
+        except Exception:
+            pass
         return []

@@ -43,6 +43,7 @@ from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact, redact_env
 from ai_trading.net.http import build_retrying_session, set_global_session, mount_host_retry_profile
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import get_env, validate_required_env, reload_env
 from ai_trading.metrics import Histogram, Counter
@@ -578,6 +579,10 @@ def main(argv: list[str] | None = None) -> None:
         interval = int(raw_interval)
     except ValueError:
         interval = 60
+    try:
+        closed_interval = int(getattr(S, "interval_when_closed", 300))
+    except Exception:
+        closed_interval = 300
     seed = get_seed_int()
     logger.info("Runtime defaults resolved", extra={"iterations": iterations, "interval": interval, "seed": seed})
     count = 0
@@ -594,8 +599,16 @@ def main(argv: list[str] | None = None) -> None:
             if _http_closed_profile is None or closed != _http_closed_profile:
                 try:
                     if closed:
-                        connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
-                        read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0)))
+                        connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout_closed", getattr(S, "http_connect_timeout", 5.0)) or getattr(S, "http_connect_timeout", 5.0)))
+                        read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout_closed", getattr(S, "http_read_timeout", 10.0)) or getattr(S, "http_read_timeout", 10.0)))
+                        # Optional hint for executors to downsize when closed
+                        try:
+                            _ewc = os.getenv("EXEC_WORKERS_WHEN_CLOSED")
+                            if _ewc:
+                                os.environ["AI_TRADING_EXEC_WORKERS"] = _ewc
+                                os.environ["AI_TRADING_PRED_WORKERS"] = _ewc
+                        except Exception:
+                            pass
                         session = build_retrying_session(
                             pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
                             total_retries=1,
@@ -619,6 +632,13 @@ def main(argv: list[str] | None = None) -> None:
                         # Restore configured profile
                         connect_timeout = clamp_request_timeout(float(getattr(S, "http_connect_timeout", 5.0)))
                         read_timeout = clamp_request_timeout(float(getattr(S, "http_read_timeout", 10.0)))
+                        try:
+                            if "EXEC_WORKERS_WHEN_CLOSED" in os.environ:
+                                # Unset closed hint; do not remove explicit AI_TRADING_* overrides if user set them
+                                os.environ.pop("AI_TRADING_EXEC_WORKERS", None)
+                                os.environ.pop("AI_TRADING_PRED_WORKERS", None)
+                        except Exception:
+                            pass
                         session = build_retrying_session(
                             pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)),
                             total_retries=int(getattr(S, "http_total_retries", 3)),
@@ -653,7 +673,9 @@ def main(argv: list[str] | None = None) -> None:
                 fraction = float(raw_fraction)
             except (TypeError, ValueError):
                 fraction = 0.8
-            budget = SoftBudget(interval_sec=float(interval), fraction=fraction)
+            # Dynamic interval: slow down when closed
+            effective_interval = int(closed_interval if closed else interval)
+            budget = SoftBudget(interval_sec=float(effective_interval), fraction=fraction)
             try:
                 if count % memory_check_interval == 0:
                     gc_result = optimize_memory()
@@ -704,7 +726,7 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("CYCLE_TIMING", extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over()})
             now_mono = time.monotonic()
             if now_mono - last_health >= max(30, health_tick_seconds):
-                logger.info("HEALTH_TICK", extra={"iteration": count, "interval": interval})
+                logger.info("HEALTH_TICK", extra={"iteration": count, "interval": effective_interval, "closed": closed})
                 last_health = now_mono
             try:
                 # Resolve mode directly from env to honor MAX_POSITION_MODE without relying on Settings
@@ -724,7 +746,7 @@ def main(argv: list[str] | None = None) -> None:
                         logger.info("POSITION_SIZING_REFRESHED", extra={**meta, "resolved": resolved_size})
             except (ValueError, KeyError, TypeError) as e:
                 logger.warning("RUNTIME_SIZING_UPDATE_FAILED", exc_info=e)
-            _interruptible_sleep(int(max(1, interval)))
+            _interruptible_sleep(int(max(1, effective_interval)))
             if _SHUTDOWN.is_set():
                 logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})
                 break

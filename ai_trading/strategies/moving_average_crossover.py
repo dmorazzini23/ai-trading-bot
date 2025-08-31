@@ -20,6 +20,9 @@ class MovingAverageCrossoverStrategy:
     long_window: int = 50
     min_history: int = 55
     _last_ts: 'pd.Timestamp | None' = None  # type: ignore[name-defined]
+    _guard_skips: int = 0
+    _guard_attempts: int = 0
+    _guard_last_summary: float = 0.0
 
     def _latest_cross(self, short: 'pd.Series', long: 'pd.Series') -> str | None:
         import pandas as pd  # heavy import; keep local
@@ -45,8 +48,11 @@ class MovingAverageCrossoverStrategy:
                 last_ts = df.index[-1]
                 if self._last_ts == last_ts:
                     logger.debug('SMA_GUARD_SKIP', extra={'symbol': sym, 'ts': str(last_ts)})
+                    self._guard_skips += 1
+                    self._guard_attempts += 1
                     return []
                 self._last_ts = last_ts
+                self._guard_attempts += 1
         except Exception:
             pass
         if 'close' not in df.columns or len(df) < max(self.min_history, self.long_window + 2):
@@ -56,4 +62,16 @@ class MovingAverageCrossoverStrategy:
         action = self._latest_cross(short, long)
         if not action:
             return []
+        try:
+            import time as _t
+            now = _t.monotonic()
+            if self._guard_last_summary == 0.0:
+                self._guard_last_summary = now
+            elif now - self._guard_last_summary >= 60.0:
+                logger.info('STRATEGY_GUARD_SUMMARY', extra={'strategy': 'sma_crossover', 'skips': self._guard_skips, 'attempts': self._guard_attempts})
+                self._guard_skips = 0
+                self._guard_attempts = 0
+                self._guard_last_summary = now
+        except Exception:
+            pass
         return [StrategySignal(symbol=sym, side=action)]

@@ -381,6 +381,7 @@ import uuid
 import warnings
 from collections.abc import Callable  # AI-AGENT-REF: now_provider hooks
 from datetime import UTC, date, datetime, timedelta
+import time as _time
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 from pathlib import Path
 from typing import Any
@@ -3884,8 +3885,28 @@ class DataFetcher:
             secret_key=api_secret,
         )
 
+        # In-memory cache for resampled minute→daily frames
+        # Keyed by (symbol, YYYY-MM-DD end date)
+        try:
+            _RESAMPLED_DAILY_CACHE  # type: ignore[name-defined]
+        except NameError:
+            _RESAMPLED_DAILY_CACHE = {}  # type: ignore[var-annotated]
+        try:
+            import os as _os
+            _RESAMPLED_DAILY_CACHE_TTL = float(_os.getenv("RESAMPLED_DAILY_CACHE_TTL_SECS", "21600"))
+        except Exception:
+            _RESAMPLED_DAILY_CACHE_TTL = 21600.0
+
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
             try:
+                # Cache check
+                _key = (symbol, end_ts.date().isoformat())
+                _rec = _RESAMPLED_DAILY_CACHE.get(_key)
+                _now = _time.time()
+                if _rec is not None:
+                    _df_cached, _ts = _rec
+                    if _now - float(_ts) <= float(_RESAMPLED_DAILY_CACHE_TTL):
+                        return _df_cached
                 m_req = bars.StockBarsRequest(
                     symbol_or_symbols=[symbol],
                     timeframe=bars.TimeFrame.Minute,
@@ -3907,7 +3928,12 @@ class DataFetcher:
                     return None
                 mdf.index = idx
                 mdf = mdf.rename(columns=lambda c: c.lower())
-                return bars._resample_minutes_to_daily(mdf)
+                _rdf = bars._resample_minutes_to_daily(mdf)
+                try:
+                    _RESAMPLED_DAILY_CACHE[_key] = (_rdf, _now)
+                except Exception:
+                    pass
+                return _rdf
             except (ValueError, TypeError):  # noqa: BLE001
                 return None
 

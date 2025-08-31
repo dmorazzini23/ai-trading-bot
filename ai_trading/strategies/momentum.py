@@ -25,6 +25,9 @@ class MomentumStrategy(BaseStrategy):
         self.threshold = threshold
         # Lightweight guard: skip recomputation when input series lengths unchanged
         self._last_len_by_symbol: dict[str, int] = {}
+        self._guard_skips = 0
+        self._guard_attempts = 0
+        self._guard_last_summary = 0.0
 
     def generate_signals(self, market_data: dict) -> list[StrategySignal]:
         import pandas as pd  # heavy import; keep local
@@ -60,8 +63,11 @@ class MomentumStrategy(BaseStrategy):
                 n = len(prices)
                 if self._last_len_by_symbol.get(symbol) == n:
                     logger.debug("MOMENTUM_GUARD_SKIP", extra={"symbol": symbol, "n": n})
+                    self._guard_skips += 1
+                    self._guard_attempts += 1
                     continue
                 self._last_len_by_symbol[symbol] = n
+                self._guard_attempts += 1
             except Exception:
                 pass
             if len(prices) <= lookback + 1:
@@ -77,6 +83,22 @@ class MomentumStrategy(BaseStrategy):
             if mom > threshold:
                 strength = float(min(max(mom, 0.0), 1.0))
                 signals.append(StrategySignal(symbol=symbol, side=OrderSide.BUY, strength=strength, confidence=float(min(1.0, 0.5 + strength)), metadata={'lookback': lookback, 'momentum': float(mom)}))
+        # Periodic summary (once per ~60s)
+        try:
+            import time as _t
+            now = _t.monotonic()
+            if self._guard_last_summary == 0.0:
+                self._guard_last_summary = now
+            elif now - self._guard_last_summary >= 60.0:
+                logger.info(
+                    "STRATEGY_GUARD_SUMMARY",
+                    extra={"strategy": "momentum", "skips": self._guard_skips, "attempts": self._guard_attempts},
+                )
+                self._guard_skips = 0
+                self._guard_attempts = 0
+                self._guard_last_summary = now
+        except Exception:
+            pass
         return signals
 
     def generate(self, ctx) -> list[StrategySignal]:
