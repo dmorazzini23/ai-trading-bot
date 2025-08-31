@@ -90,10 +90,16 @@ class Settings(BaseSettings):
     force_trades: bool = Field(False, alias='FORCE_TRADES')
     disable_daily_retrain: bool = Field(False, alias='DISABLE_DAILY_RETRAIN')
     log_market_fetch: bool = Field(True, alias='LOG_MARKET_FETCH')
-    healthcheck_port: int = Field(9001, alias='HEALTHCHECK_PORT')
+    healthcheck_port: int = Field(
+        9001,
+        validation_alias=AliasChoices('HEALTHCHECK_PORT', 'AI_TRADING_HEALTHCHECK_PORT'),
+    )
     min_health_rows: int = Field(120, alias='MIN_HEALTH_ROWS')
     api_host: str = Field('0.0.0.0', alias='API_HOST')
-    api_port: int = Field(9001, alias='API_PORT')
+    api_port: int = Field(
+        9001,
+        validation_alias=AliasChoices('API_PORT', 'AI_TRADING_API_PORT'),
+    )
     # Support AUTO sizing mode from either MAX_POSITION_MODE or AI_TRADING_MAX_POSITION_MODE
     max_position_mode: str = Field(
         'STATIC',
