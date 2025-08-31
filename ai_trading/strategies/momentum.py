@@ -53,7 +53,7 @@ class MomentumStrategy(BaseStrategy):
                         lookback = int(ov['lookback'])
                     if 'threshold' in ov:
                         threshold = float(ov['threshold'])
-                except Exception:
+                except (ValueError, TypeError, KeyError):
                     pass
             prices = market_data.get('prices', {}).get(symbol)
             if prices is None:
@@ -68,7 +68,7 @@ class MomentumStrategy(BaseStrategy):
                     continue
                 self._last_len_by_symbol[symbol] = n
                 self._guard_attempts += 1
-            except Exception:
+            except (TypeError, AttributeError):
                 pass
             if len(prices) <= lookback + 1:
                 logger.warning('Insufficient data for %s', symbol)
@@ -97,7 +97,7 @@ class MomentumStrategy(BaseStrategy):
                 self._guard_skips = 0
                 self._guard_attempts = 0
                 self._guard_last_summary = now
-        except Exception:
+        except (ValueError, TypeError):
             pass
         return signals
 

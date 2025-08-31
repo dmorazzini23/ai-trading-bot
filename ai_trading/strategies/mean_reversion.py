@@ -47,7 +47,7 @@ class MeanReversionStrategy:
                     return []
                 self._last_ts = last_ts
                 self._guard_attempts += 1
-        except Exception:
+        except (AttributeError, IndexError, TypeError):
             pass
         if 'close' not in df.columns:
             return []
@@ -60,7 +60,7 @@ class MeanReversionStrategy:
             try:
                 lookback = int(ov.get('lookback', lookback))
                 z_entry = float(ov.get('z_entry', z_entry))
-            except Exception:
+            except (ValueError, TypeError, KeyError):
                 pass
         mean, std = self._latest_stats(df['close'], lookback)
         if mean is None:
@@ -81,6 +81,6 @@ class MeanReversionStrategy:
                 self._guard_skips = 0
                 self._guard_attempts = 0
                 self._guard_last_summary = now
-        except Exception:
+        except (ValueError, TypeError):
             pass
         return []

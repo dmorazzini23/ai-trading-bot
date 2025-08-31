@@ -53,7 +53,7 @@ class MovingAverageCrossoverStrategy:
                     return []
                 self._last_ts = last_ts
                 self._guard_attempts += 1
-        except Exception:
+        except (AttributeError, IndexError, TypeError):
             pass
         if 'close' not in df.columns or len(df) < max(self.min_history, self.long_window + 2):
             return []
@@ -72,6 +72,6 @@ class MovingAverageCrossoverStrategy:
                 self._guard_skips = 0
                 self._guard_attempts = 0
                 self._guard_last_summary = now
-        except Exception:
+        except (ValueError, TypeError):
             pass
         return [StrategySignal(symbol=sym, side=action)]
