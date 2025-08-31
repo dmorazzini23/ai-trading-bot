@@ -5,6 +5,7 @@ from typing import cast
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
+from urllib.parse import urlparse
 
 
 class TimeoutSession(requests.Session):
@@ -68,6 +69,41 @@ def set_global_session(s: TimeoutSession) -> None:
     _GLOBAL_SESSION = s
 
 
+def mount_host_retry_profile(
+    s: TimeoutSession,
+    host_or_url: str,
+    *,
+    total_retries: int,
+    backoff_factor: float,
+    status_forcelist: tuple[int, ...] = (429, 500, 502, 503, 504),
+    pool_maxsize: int | None = None,
+) -> None:
+    """Mount a host-specific retry profile on an existing session.
+
+    host_or_url may be a bare host (e.g. "paper-api.alpaca.markets") or a URL.
+    """
+    parsed = urlparse(host_or_url if "://" in host_or_url else f"https://{host_or_url}")
+    host = parsed.netloc or parsed.path
+    if not host:
+        return
+    retry = Retry(
+        total=total_retries,
+        connect=total_retries,
+        read=total_retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+        allowed_methods=frozenset({"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=pool_maxsize or 32,
+        pool_maxsize=pool_maxsize or 32,
+    )
+    s.mount(f"https://{host}/", adapter)
+    s.mount(f"http://{host}/", adapter)
+
+
 def get_global_session() -> TimeoutSession:
     """Return the global session, building a default if missing."""
 
@@ -89,5 +125,5 @@ __all__ = [
     "set_global_session",
     "get_global_session",
     "get_http_session",
+    "mount_host_retry_profile",
 ]
-

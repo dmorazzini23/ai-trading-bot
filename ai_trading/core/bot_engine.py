@@ -831,6 +831,18 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
     """
     global _HEALTH_CHECK_FAILURES
     try:
+        # Skip health check when market is closed and daily cache is already warm
+        try:
+            if (not is_market_open()) and hasattr(ctx, "data_fetcher"):
+                _dc = getattr(ctx.data_fetcher, "_daily_cache", {})
+                if isinstance(_dc, dict) and len(_dc) > 0:
+                    logger.info(
+                        "HEALTH_CHECK_SKIPPED_CLOSED_CACHE_WARM",
+                        extra={"cached_symbols": list(_dc.keys())[:5], "count": len(_dc)},
+                    )
+                    return
+        except Exception:
+            pass
         if "data_source_health_check" in globals() and "REGIME_SYMBOLS" in globals():
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):

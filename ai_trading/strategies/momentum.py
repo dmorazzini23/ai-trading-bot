@@ -59,6 +59,7 @@ class MomentumStrategy(BaseStrategy):
             try:
                 n = len(prices)
                 if self._last_len_by_symbol.get(symbol) == n:
+                    logger.debug("MOMENTUM_GUARD_SKIP", extra={"symbol": symbol, "n": n})
                     continue
                 self._last_len_by_symbol[symbol] = n
             except Exception:

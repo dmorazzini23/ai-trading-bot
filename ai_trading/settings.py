@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default='INFO', alias='LOG_LEVEL')
     enable_memory_optimization: bool = Field(default=True)
     log_compact_json: bool = Field(False, alias='LOG_COMPACT_JSON')
+    log_level_http: str = Field('WARNING', alias='LOG_LEVEL_HTTP')
     alpaca_api_key: str | None = Field(default=None, alias='ALPACA_API_KEY')
     alpaca_secret_key: SecretStr | None = Field(default=None, alias='ALPACA_SECRET_KEY')
     redis_url: str | None = Field(default=None, alias='REDIS_URL')

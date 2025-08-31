@@ -38,6 +38,7 @@ class MeanReversionStrategy:
             if getattr(df, 'index', None) is not None and len(df.index) > 0:
                 last_ts = df.index[-1]
                 if self._last_ts == last_ts:
+                    log.debug('MEAN_REVERSION_GUARD_SKIP', extra={'symbol': sym, 'ts': str(last_ts)})
                     return []
                 self._last_ts = last_ts
         except Exception:

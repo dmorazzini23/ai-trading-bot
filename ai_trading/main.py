@@ -41,7 +41,7 @@ from ai_trading.config import get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact, redact_env
-from ai_trading.net.http import build_retrying_session, set_global_session
+from ai_trading.net.http import build_retrying_session, set_global_session, mount_host_retry_profile
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import get_env, validate_required_env, reload_env
@@ -386,6 +386,21 @@ def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
                 connect_timeout=connect_timeout,
                 read_timeout=read_timeout,
             )
+            # Apply host-specific retry profile for Alpaca if configured
+            try:
+                from urllib.parse import urlparse as _urlparse
+
+                host = _urlparse(str(getattr(cfg, "alpaca_base_url", ""))).netloc
+                if host:
+                    # ENV override pattern: HTTP_RETRIES_<host> (dots → underscores), HTTP_BACKOFF_<host>
+                    key = host.replace(".", "_")
+                    import os as _os
+
+                    _retries = int(_os.getenv(f"HTTP_RETRIES_{key}", "2"))
+                    _bof = float(_os.getenv(f"HTTP_BACKOFF_{key}", "0.2"))
+                    mount_host_retry_profile(session, host, total_retries=_retries, backoff_factor=_bof, pool_maxsize=int(getattr(cfg, "http_pool_maxsize", 32)))
+            except Exception:
+                pass
             set_global_session(session)
             logger.info(
                 "REQUESTS_POOL_STATS",
@@ -588,6 +603,13 @@ def main(argv: list[str] | None = None) -> None:
                             connect_timeout=connect_timeout,
                             read_timeout=read_timeout,
                         )
+                        try:
+                            from urllib.parse import urlparse as _urlparse
+                            host = _urlparse(str(getattr(S, "alpaca_base_url", ""))).netloc
+                            if host:
+                                mount_host_retry_profile(session, host, total_retries=1, backoff_factor=0.1, pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
+                        except Exception:
+                            pass
                         set_global_session(session)
                         logger.info(
                             "HTTP_PROFILE_CLOSED",
@@ -604,6 +626,15 @@ def main(argv: list[str] | None = None) -> None:
                             connect_timeout=connect_timeout,
                             read_timeout=read_timeout,
                         )
+                        try:
+                            from urllib.parse import urlparse as _urlparse
+                            host = _urlparse(str(getattr(S, "alpaca_base_url", ""))).netloc
+                            if host:
+                                _retries = int(os.getenv(host.replace('.', '_').join(["HTTP_RETRIES_", ""])) or getattr(S, "http_total_retries", 3))
+                                _bof = float(os.getenv(host.replace('.', '_').join(["HTTP_BACKOFF_", ""])) or getattr(S, "http_backoff_factor", 0.3))
+                                mount_host_retry_profile(session, host, total_retries=int(_retries), backoff_factor=float(_bof), pool_maxsize=int(getattr(S, "http_pool_maxsize", 32)))
+                        except Exception:
+                            pass
                         set_global_session(session)
                         logger.info(
                             "HTTP_PROFILE_OPEN",
