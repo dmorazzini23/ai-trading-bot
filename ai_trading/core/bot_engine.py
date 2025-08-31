@@ -323,6 +323,14 @@ def ensure_alpaca_attached(ctx) -> None:
         return
     _validate_trading_api(api)
 
+# Rebind canonical Alpaca helpers to modular implementations (post-definition override)
+from ai_trading.core.alpaca_client import (  # noqa: E402
+    _validate_trading_api as _validate_trading_api,
+    list_open_orders as list_open_orders,
+    ensure_alpaca_attached as ensure_alpaca_attached,
+    _initialize_alpaca_clients as _initialize_alpaca_clients,
+)
+
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
 _SENTIMENT_FAILURES: int = 0
@@ -472,6 +480,12 @@ from ai_trading.utils.timing import (
     HTTP_TIMEOUT,
 )  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.core.alpaca_client import (
+    _validate_trading_api,
+    list_open_orders,
+    ensure_alpaca_attached,
+    _initialize_alpaca_clients,
+)
 from ai_trading.utils.prof import StageTimer
 from ai_trading.guards.staleness import _ensure_data_fresh
 
@@ -3433,82 +3447,7 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     name="finnhub_api",
 )
 
-# AI-AGENT-REF: lazy executor init avoids import-time settings
-executor: ThreadPoolExecutor | None = None
-prediction_executor: ThreadPoolExecutor | None = None
-
-
-def _ensure_executors() -> None:
-    """Create thread pool executors on demand."""  # AI-AGENT-REF: deferred init
-    global executor, prediction_executor
-    if executor is not None and prediction_executor is not None:
-        return
-    from ai_trading.config.settings import get_settings
-
-    cpu = os.cpu_count() or 2
-    s = get_settings()
-    exec_fn = getattr(s, "effective_executor_workers", None)
-    # Base default for 1 vCPU target machines is 1–2 workers to avoid oversubscription
-    default_workers = max(1, min(2, cpu))
-    # Allow env override for emergency tuning
-    try:
-        env_exec = int(os.getenv("AI_TRADING_EXEC_WORKERS", "0"))
-    except ValueError:
-        env_exec = 0
-    try:
-        env_pred = int(os.getenv("AI_TRADING_PRED_WORKERS", "0"))
-    except ValueError:
-        env_pred = 0
-    exec_workers = exec_fn(cpu) if callable(exec_fn) else (env_exec or default_workers)
-    pred_fn = getattr(s, "effective_prediction_workers", None)
-    pred_workers = pred_fn(cpu) if callable(pred_fn) else (env_pred or default_workers)
-    # Clamp to [1, cpu] to respect resource guardrails
-    try:
-        exec_workers = max(1, min(int(exec_workers), max(1, cpu)))
-    except Exception:
-        exec_workers = default_workers
-    try:
-        pred_workers = max(1, min(int(pred_workers), max(1, cpu)))
-    except Exception:
-        pred_workers = default_workers
-    executor = ThreadPoolExecutor(max_workers=exec_workers)
-    prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
-
-
-# AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
-def cleanup_executors():
-    """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
-    try:
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Main executor shutdown successfully")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Error shutting down main executor: %s", e)
-
-    try:
-        if prediction_executor is not None:
-            prediction_executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Prediction executor shutdown successfully")
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("Error shutting down prediction executor: %s", e)
+import ai_trading.core.executors as executors
 
 
 atexit.register(cleanup_executors)
@@ -12830,7 +12769,7 @@ def _process_symbols(
 
     symbols = filtered  # replace with filtered list
 
-    _ensure_executors()  # AI-AGENT-REF: lazy executor creation
+    executors._ensure_executors()  # AI-AGENT-REF: lazy executor creation
 
     if cd_skipped:
         log_skip_cooldown(cd_skipped)
@@ -12879,7 +12818,7 @@ def _process_symbols(
                 exc_info=True,
             )
 
-    futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
+    futures = [executors.prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
         f.result()
     return processed, row_counts
