@@ -538,8 +538,6 @@ def main(argv: list[str] | None = None) -> None:
     except (RuntimeError, TimeoutError, OSError) as e:
         logger.error("Failed to start API", exc_info=e)
         raise RuntimeError("API failed to start") from e
-    import os
-
     S = get_settings()
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
 
