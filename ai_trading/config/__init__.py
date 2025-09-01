@@ -94,8 +94,20 @@ def validate_environment() -> None:
 
 def validate_alpaca_credentials() -> None:
     from .management import validate_required_env
-
-    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL"))
+    # Respect module-level overrides used in tests; fall back to process env
+    env = dict(os.environ)
+    for k_mod, k_env in (
+        ("ALPACA_API_KEY", "ALPACA_API_KEY"),
+        ("ALPACA_SECRET_KEY", "ALPACA_SECRET_KEY"),
+        ("ALPACA_BASE_URL", "ALPACA_API_URL"),
+    ):
+        try:
+            val = globals().get(k_mod)
+        except Exception:
+            val = None
+        if val is not None:
+            env[k_env] = str(val)
+    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL"), env=env)
 
 def validate_env_vars() -> None:
     return validate_environment()
