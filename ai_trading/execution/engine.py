@@ -548,6 +548,8 @@ class ExecutionEngine:
         - For fill rate around 30%, emit a MODERATE_FILL_RATE_ALERT at WARNING; 50% should not trigger error alerts.
         """
         try:
+            if requested_qty is None:
+                requested_qty = _kwargs.get('submitted_qty')
             if requested_qty is None or remaining_qty is None:
                 return
             rq = float(requested_qty)
