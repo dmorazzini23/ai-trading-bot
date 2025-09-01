@@ -753,6 +753,15 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received — shutting down gracefully")
         return
+    # If a finite number of iterations was requested, keep the API thread alive
+    # so systemd health checks continue to work. Wait for shutdown signal.
+    if iterations > 0:
+        logger.info("SCHEDULER_COMPLETE", extra={"iterations": count})
+        try:
+            while not _SHUTDOWN.is_set():
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
