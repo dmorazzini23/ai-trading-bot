@@ -1,9 +1,9 @@
 from __future__ import annotations
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 NY = ZoneInfo('America/New_York')
-UTC = UTC
+UTC = ZoneInfo('UTC')
 
 def ensure_utc_datetime(value: Any, *, default: datetime | None=None, clamp_to: str | None=None, allow_callables: bool=False) -> datetime:
     """Normalize a variety of inputs to a timezone-aware UTC datetime.

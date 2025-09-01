@@ -288,7 +288,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             start=start_dt,
             end=end_dt,
             interval=interval,
-            auto_adjust=False,
+            auto_adjust=True,
             threads=False,
             progress=False,
             group_by="column",
@@ -594,6 +594,8 @@ def _fetch_bars(
                 resp = session.get(url, params=params, headers=headers, timeout=timeout)
             else:
                 resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+            if resp is None or not hasattr(resp, "status_code"):
+                raise ValueError("invalid_response")
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()
