@@ -180,8 +180,15 @@ class KellyCalculator:
     def __init__(self):
         """Initialize Kelly calculator."""
         self.kelly_criterion = KellyCriterion()
-        self.lookback_periods = _DEFAULT_CONFIG.lookback_periods
-        self.rebalance_frequency = _DEFAULT_CONFIG.rebalance_frequency
+        # Provide robust defaults if TradingConfig omits fields
+        try:
+            self.lookback_periods = getattr(_DEFAULT_CONFIG, 'lookback_periods', 252)
+        except Exception:
+            self.lookback_periods = 252
+        try:
+            self.rebalance_frequency = getattr(_DEFAULT_CONFIG, 'rebalance_frequency', 21)
+        except Exception:
+            self.rebalance_frequency = 21
         self.calculation_history = []
         logger.info('KellyCalculator initialized')
 
