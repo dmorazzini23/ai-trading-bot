@@ -89,7 +89,7 @@ def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
         for k, v in extra.items()
     }
 
-_SENSITIVE_EXTRA_KEYS = ('api_key', 'secret', 'url')
+_SENSITIVE_EXTRA_KEYS = ('api_key', 'secret')
 
 def sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
     """Sanitize ``extra`` mapping.

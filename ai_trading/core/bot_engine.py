@@ -108,6 +108,8 @@ from ai_trading.config.management import (
     TradingConfig,
 )
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
+from ai_trading import portfolio  # expose portfolio module for tests/monkeypatching
+from ai_trading.utils import portfolio_lock  # expose lock for tests/monkeypatching
 
 
 def _alpaca_available() -> bool:
@@ -8218,12 +8220,15 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
     """Poll Alpaca for order fill status until it is no longer open.
 
-    Honors the provided ``timeout`` by sleeping in short intervals instead of
-    a fixed 3s, so tests can set small timeouts without hanging.
+    Uses monotonic time to avoid interference from time-freezing utilities
+    (e.g., freezegun). Sleeps in short intervals so small timeouts work.
     """
-    start = pytime.time()
+    deadline = pytime.monotonic() + float(timeout)
     interval = 0.2 if timeout <= 1 else 1.0
-    while pytime.time() - start < timeout:
+    # Hard cap iterations to avoid hangs even if time is monkeypatched
+    max_iters = int(max(1, float(timeout) / float(interval))) + 2
+    _iter = 0
+    while pytime.monotonic() < deadline and _iter < max_iters:
         try:
             od = ctx.api.get_order(order_id)
             status = getattr(od, "status", "")
@@ -8250,10 +8255,11 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
-        remaining = timeout - (pytime.time() - start)
+        remaining = max(0.0, deadline - pytime.monotonic())
         if remaining <= 0:
             break
         pytime.sleep(min(interval, remaining))
+        _iter += 1
 
 
 def send_exit_order(
