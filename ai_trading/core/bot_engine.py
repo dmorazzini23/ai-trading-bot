@@ -38,7 +38,7 @@ try:  # pragma: no cover
     from ai_trading.net.http import HTTPSession, get_http_session
 
     _HTTP_SESSION: HTTPSession = get_http_session()
-except Exception:  # pragma: no cover - fallback when requests missing
+except (ImportError, AttributeError, RuntimeError):  # pragma: no cover - fallback when requests missing
     class _HTTPStub:
         def get(self, *a, **k):  # type: ignore[no-untyped-def]
             raise RequestException("HTTPSession unavailable")
@@ -63,7 +63,7 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only
 from ai_trading.utils.time import last_market_session
 try:
     from ai_trading.capital_scaling import capital_scale, update_if_present
-except Exception:
+except (ImportError, AttributeError):
     # Test harness may stub out module without these helpers; provide no-op fallbacks
     def capital_scale(_ctx):
         return 1.0
@@ -119,7 +119,7 @@ from ai_trading.data import bars
 
 try:  # pragma: no cover
     from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     class StockHistoricalDataClient:  # type: ignore[no-redef]
         """Fallback when alpaca-py is unavailable."""
 
@@ -446,7 +446,7 @@ def _current_position_qty(ctx: Any, symbol: str) -> int:
         return 0
     try:
         position = api.get_position(symbol)
-    except Exception:  # pragma: no cover - legacy safety net
+    except (RequestException, AttributeError, KeyError, ValueError, RuntimeError):  # pragma: no cover - legacy safety net
         logger.debug("POSITION_LOOKUP_FAILED", exc_info=True, extra={"symbol": symbol})
         return 0
     qty = getattr(position, "qty", 0) if position is not None else 0
@@ -857,7 +857,7 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                         extra={"cached_symbols": list(_dc.keys())[:5], "count": len(_dc)},
                     )
                     return
-        except Exception:
+        except (AttributeError, KeyError, TypeError):
             pass
         if "data_source_health_check" in globals() and "REGIME_SYMBOLS" in globals():
             max_attempts = 3
@@ -891,7 +891,7 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                     )
                     try:
                         ctx.data_fetcher = data_fetcher_module.build_fetcher(ctx)  # type: ignore[attr-defined]
-                    except Exception:
+                    except (AttributeError, TypeError):
                         pass
         else:
             logger.debug("Post-setup health check not available; skipping.")
@@ -1606,7 +1606,7 @@ def _ensure_alpaca_classes() -> None:
         return
     try:  # pragma: no cover - independent imports with fallbacks
         from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
-    except Exception:
+    except ImportError:
         from dataclasses import dataclass
 
         @dataclass
@@ -1617,7 +1617,7 @@ def _ensure_alpaca_classes() -> None:
             MarketOrderRequest as _MarketOrderRequest,
             LimitOrderRequest as _LimitOrderRequest,
         )
-    except Exception:
+    except ImportError:
         from dataclasses import dataclass
 
         @dataclass
@@ -1644,7 +1644,7 @@ def _ensure_alpaca_classes() -> None:
             OrderStatus as _OrderStatus,
             TimeInForce as _TimeInForce,
         )
-    except Exception:
+    except ImportError:
         from enum import Enum
 
         class _OrderSide(str, Enum):  # pragma: no cover - fallback enum
@@ -1664,7 +1664,7 @@ def _ensure_alpaca_classes() -> None:
             GTC = "gtc"
     try:
         from alpaca.data.models import Quote as _Quote  # type: ignore
-    except Exception:
+    except ImportError:
         from dataclasses import dataclass
 
         @dataclass
@@ -1673,7 +1673,7 @@ def _ensure_alpaca_classes() -> None:
             ask_price: float | None = None
     try:
         from alpaca.trading.models import Order as _Order  # type: ignore
-    except Exception:
+    except ImportError:
         from dataclasses import dataclass
 
         @dataclass
@@ -2980,13 +2980,13 @@ class BotMode:
         from ai_trading import settings as S
         try:
             params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
-        except Exception:
+        except (ValueError, TypeError):
             pass
         kf = getattr(S, "get_kelly_fraction", None)
         if callable(kf):
             try:
                 params["KELLY_FRACTION"] = float(kf())
-            except Exception:
+            except (ValueError, TypeError):
                 pass
         self.params = params
 
@@ -3004,13 +3004,13 @@ class BotMode:
         from ai_trading import settings as S  # AI-AGENT-REF: authoritative getters
         try:
             params["CONF_THRESHOLD"] = float(S.get_conf_threshold())
-        except Exception:
+        except (ValueError, TypeError):
             pass
         kf = getattr(S, "get_kelly_fraction", None)
         if callable(kf):
             try:
                 params["KELLY_FRACTION"] = float(kf())
-            except Exception:
+            except (ValueError, TypeError):
                 pass
         return params
 
@@ -3693,7 +3693,7 @@ def compute_spy_vol_stats(runtime) -> None:
                     if halt_mgr is not None:
                         try:
                             halt_mgr.manual_halt_trading("volatility data unavailable")
-                        except Exception as hm_exc:  # noqa: BLE001
+                        except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
                             logger.error(
                                 "HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)}
                             )
@@ -3909,7 +3909,7 @@ class DataFetcher:
         try:
             import os as _os
             _RESAMPLED_DAILY_CACHE_TTL = float(_os.getenv("RESAMPLED_DAILY_CACHE_TTL_SECS", "21600"))
-        except Exception:
+        except (ValueError, TypeError):
             _RESAMPLED_DAILY_CACHE_TTL = 21600.0
 
         def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
@@ -3946,7 +3946,7 @@ class DataFetcher:
                 _rdf = bars._resample_minutes_to_daily(mdf)
                 try:
                     _RESAMPLED_DAILY_CACHE[_key] = (_rdf, _now)
-                except Exception:
+                except (TypeError, ValueError, KeyError):
                     pass
                 return _rdf
             except (ValueError, TypeError):  # noqa: BLE001
@@ -6132,7 +6132,7 @@ def _get_runtime_context_or_none():
         lbc = get_ctx()
         lbc._ensure_initialized()
         return lbc._context
-    except Exception as e:  # AI-AGENT-REF: generic catch for safety
+    except (AttributeError, RuntimeError, ValueError, TimeoutError) as e:  # AI-AGENT-REF: narrowed catch for safety
         logger.warning("Runtime context unavailable for risk exposure update: %s", e)
         return None
 
@@ -6193,7 +6193,7 @@ def _update_risk_engine_exposure():
     try:
         risk_engine.update_exposure(runtime)
         risk_engine.wait_for_exposure_update(timeout=0.5)
-    except Exception as e:  # AI-AGENT-REF: generic catch for safety
+    except (AttributeError, RuntimeError, ValueError, TimeoutError) as e:  # AI-AGENT-REF: narrowed catch for safety
         logger.warning("Risk engine exposure update failed: %s", e)
 
 
@@ -6293,7 +6293,7 @@ def pre_trade_health_check(
             fetcher = getattr(ctx, "data_fetcher", None)
             if fetcher is not None and hasattr(fetcher, "get_daily_df"):
                 df = fetcher.get_daily_df(ctx, sym)
-        except Exception:
+        except (AttributeError, TypeError):
             df = None
         if df is None:
             if frames is None:
@@ -7721,7 +7721,7 @@ def fractional_kelly_size(
                 # Fall back to a conservative default if not provided
                 kf = 0.25
                 setattr(ctx, "kelly_fraction", kf)
-            except Exception:
+            except (AttributeError, TypeError):
                 pass
 
         mpd = getattr(ctx, "max_position_dollars", None)
@@ -7731,11 +7731,11 @@ def fractional_kelly_size(
 
                 S = get_settings()
                 mpd = float(getattr(S, "max_position_size", 5000.0) or 5000.0)
-            except Exception:
+            except (AttributeError, TypeError, ValueError, ImportError):
                 mpd = 5000.0
             try:
                 setattr(ctx, "max_position_dollars", mpd)
-            except Exception:
+            except (AttributeError, TypeError):
                 pass
 
         # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
@@ -8052,13 +8052,17 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         try:
             from ai_trading.alpaca_api import generate_client_order_id as _gen_id
             order_args["client_order_id"] = _gen_id("ai")
-        except Exception:
+        except (ImportError, AttributeError):
             pass
 
     # Deduplicate via idempotency cache before sending to broker
     try:
         from ai_trading.execution.idempotency import get_idempotency_cache
         _idem_cache = get_idempotency_cache()
+    except (ImportError, AttributeError):
+        _idem_cache = None
+        _idem_key = None
+    else:
         _idem_key = _idem_cache.generate_key(
             order_args.get("symbol", ""),
             order_args.get("side", ""),
@@ -8074,9 +8078,6 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 },
             )
             return None
-    except Exception:
-        _idem_cache = None
-        _idem_key = None
 
     for attempt in range(2):
         try:
@@ -8177,7 +8178,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             try:
                 if _idem_cache is not None and _idem_key is not None and getattr(order, "id", None):
                     _idem_cache.mark_submitted(_idem_key, getattr(order, "id"))
-            except Exception:
+            except (AttributeError, KeyError):
                 pass
             return order
         except APIError as e:
@@ -8625,7 +8626,7 @@ def _fetch_feature_data(
         if halt_mgr is not None:
             try:
                 halt_mgr.manual_halt_trading(f"{symbol}:{reason}")
-            except Exception as hm_exc:  # noqa: BLE001
+            except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
                 logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
 
     try:
@@ -10925,7 +10926,7 @@ def screen_universe(
                             ser = ta.atr(
                                 df_in["high"], df_in["low"], df_in["close"], length=ATR_LENGTH
                             )
-                        except Exception:  # pragma: no cover - fall back below
+                        except (ValueError, TypeError):  # pragma: no cover - fall back below
                             ser = None
                     if ser is None or not hasattr(ser, "empty") or ser.empty:
                         try:
@@ -10934,7 +10935,7 @@ def screen_universe(
                             ser = _atr(
                                 df_in["high"], df_in["low"], df_in["close"], period=ATR_LENGTH
                             )
-                        except Exception:
+                        except (ValueError, TypeError):
                             ser = pd.Series()
                     return ser if isinstance(ser, pd.Series) else pd.Series()
 
@@ -10957,7 +10958,7 @@ def screen_universe(
                             time.sleep(0.25)
                             continue
                         df = df2
-                    except Exception:
+                    except (ValueError, TypeError, OSError):
                         filtered_out[sym] = "atr_fetch_failed"
                         logger.warning(
                             f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
@@ -11037,7 +11038,7 @@ def get_stock_bars_safe(api, symbol, timeframe):
             symbol_or_symbols=[symbol],
             timeframe=_parse_timeframe(timeframe),
         )
-    except Exception as exc:  # noqa: BLE001
+    except (TypeError, ValueError) as exc:  # noqa: BLE001
         raise RuntimeError("Malformed StockBarsRequest") from exc
 
     get_stock_bars_fn = getattr(api, "get_stock_bars", None)
@@ -11058,7 +11059,7 @@ def get_stock_bars_safe(api, symbol, timeframe):
     if not isinstance(df, pd.DataFrame):
         try:
             df = pd.DataFrame(df)
-        except Exception as exc:  # noqa: BLE001
+        except (TypeError, ValueError) as exc:  # noqa: BLE001
             raise RuntimeError("Unexpected get_stock_bars response") from exc
     return df
 
@@ -12240,7 +12241,7 @@ def _process_symbols(
                 if halt_mgr is not None:
                     try:
                         halt_mgr.manual_halt_trading(f"{symbol}:{reason}")
-                    except Exception as hm_exc:  # noqa: BLE001
+                    except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
                         logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
             try:
                 price_df = fetch_minute_df_safe(symbol)
@@ -12399,7 +12400,7 @@ def _ensure_execution_engine(runtime) -> None:
             logger.debug(
                 "Execution engine initialized and attached to runtime"
             )
-        except Exception as e:  # pragma: no cover - initialization rarely fails
+        except (ImportError, AttributeError, RuntimeError, ValueError) as e:  # pragma: no cover - initialization rarely fails
             logger.warning(
                 "Execution engine initialization failed: %s", e
             )
