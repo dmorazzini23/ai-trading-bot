@@ -133,9 +133,12 @@ class Settings(BaseSettings):
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
     capital_cap: float = Field(
         0.04,
-        validation_alias=AliasChoices('CAPITAL_CAP', 'AI_TRADING_CAPITAL_CAP'),
+        validation_alias=AliasChoices('capital_cap', 'CAPITAL_CAP', 'AI_TRADING_CAPITAL_CAP'),
     )
-    dollar_risk_limit: float = Field(0.05, env='DOLLAR_RISK_LIMIT')
+    dollar_risk_limit: float = Field(
+        0.05,
+        validation_alias=AliasChoices('dollar_risk_limit', 'DOLLAR_RISK_LIMIT'),
+    )
     max_position_size: float | None = Field(
         5000.0,
         description=(
@@ -218,11 +221,21 @@ class Settings(BaseSettings):
     def _norm_adj(cls, v):
         return str(v).lower().strip()
 
-    @field_validator('capital_cap', 'dollar_risk_limit')
+    @field_validator('capital_cap', mode='before')
     @classmethod
-    def _risk_in_range(cls, v, info):
+    def _risk_in_range_cap(cls, v):
+        # Ensure explicit kwargs are validated even with validation_alias present
+        if v is None:
+            return v
         if not 0.0 < float(v) <= 1.0:
-            raise ValueError(f'{info.field_name} must be in (0, 1], got {v}')
+            raise ValueError(f'capital_cap must be in (0, 1], got {v}')
+        return float(v)
+
+    @field_validator('dollar_risk_limit')
+    @classmethod
+    def _risk_in_range(cls, v):
+        if not 0.0 < float(v) <= 1.0:
+            raise ValueError(f'dollar_risk_limit must be in (0, 1], got {v}')
         return float(v)
 
     @field_validator('exec_max_participation_rate')

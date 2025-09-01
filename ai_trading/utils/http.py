@@ -143,6 +143,9 @@ def _with_timeout(kwargs: dict) -> dict:
     """Clamp provided timeout while allowing session defaults."""
     if "timeout" in kwargs:
         kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
+    else:
+        # Ensure callers without explicit timeout still get a sane default (number)
+        kwargs["timeout"] = clamp_timeout(None)
     return kwargs
 
 

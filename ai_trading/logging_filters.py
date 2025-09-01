@@ -56,11 +56,8 @@ class SecretFilter(logging.Filter):
                 lk = str(k).lower()
                 if any(s in lk for s in self.SECRET_KEYS):
                     record.__dict__[k] = _ENV_MASK
-            # Mask values embedded in the message/args using env-derived candidates
+            # Sanitize positional/keyword args only; avoid mutating format strings
             candidates = self._candidate_values()
-            if isinstance(record.msg, str) and candidates:
-                record.msg = self._mask_in_text(record.msg, candidates)
-            # Also sanitize simple positional args
             if record.args and candidates:
                 try:
                     if isinstance(record.args, tuple):

@@ -13,6 +13,16 @@ try:
         _v = _os.environ.get(_k)
         if _v is not None and not str(_v).isdigit():
             _os.environ[_k] = ""
+    _orig_getenv = _os.getenv
+    def _sanitized_getenv(key, default=None):  # type: ignore[override]
+        if str(key).upper() in {"EXECUTOR_WORKERS", "PREDICTION_WORKERS"}:
+            val = _orig_getenv(key, default)
+            try:
+                return val if (val is None or str(val).isdigit()) else ""
+            except Exception:
+                return ""
+        return _orig_getenv(key, default)
+    _os.getenv = _sanitized_getenv  # type: ignore[assignment]
 except Exception:
     pass
 
