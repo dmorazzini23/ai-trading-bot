@@ -31,8 +31,8 @@ sortedcontainers==2.4.*
 # Codemods
 libcst==1.4.0
 
-# Infra & helpers
-packaging==24.1
+# Infra & helpers (align with constraints)
+packaging==25.0
 
 # test helpers that our tests import directly
 freezegun==1.5.1

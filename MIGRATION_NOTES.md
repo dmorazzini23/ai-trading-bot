@@ -142,7 +142,11 @@ The following new environment variables have been added to TradingConfig and can
 
 ### Model and Scheduler Configuration
 - `MODEL_PATH` (default: None) - Path to ML model files
-- `SCHEDULER_ITERATIONS` (default: 0) - Number of scheduler iterations (0 = infinite)
+- `SCHEDULER_ITERATIONS` (default: 0) - Number of scheduler iterations (0 = infinite).
+  When set to a finite value, the scheduler now exits promptly after completing
+  the requested iterations rather than keeping the API thread alive. This avoids
+  hanging in CI/tests and batch runs. Production deployments should continue to
+  run with infinite iterations.
 - `SCHEDULER_SLEEP_SECONDS` (default: 60) - Sleep interval between scheduler cycles
 - `WINDOW` (default: 20) - Rolling window size for calculations
 - `ENABLED` (default: True) - Global enable/disable flag

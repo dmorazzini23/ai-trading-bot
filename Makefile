@@ -1,4 +1,5 @@
 		# ==== knobs with safe defaults ====
+PYTHON ?= python3
 TOP_N ?= 5
 FAIL_ON_IMPORT_ERRORS ?= 0
 DISABLE_ENV_ASSERT ?= 0
@@ -12,20 +13,20 @@ $(shell mkdir -p artifacts >/dev/null 2>&1)
 
 ensure-runtime:
 ifeq ($(SKIP_INSTALL),0)
-	python -m pip install -r requirements.txt -c constraints.txt
-	python -m pip install -r requirements-dev.txt --no-deps -c constraints.txt
+	$(PYTHON) -m pip install -r requirements.txt -c constraints.txt
+	$(PYTHON) -m pip install -r requirements-dev.txt --no-deps -c constraints.txt
 endif
 
 # Collect only + harvest into artifact (always writes report)
 test-collect-report: ensure-runtime
 	@echo "[collect] running pytest --collect-only"
 	@PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	python tools/run_pytest.py --collect-only || true
+	$(PYTHON) tools/run_pytest.py --collect-only || true
 	@echo "[harvest] writing $(IMPORT_REPAIR_REPORT)"
 	@DISABLE_ENV_ASSERT=$(DISABLE_ENV_ASSERT) \
 	TOP_N=$(TOP_N) \
 	FAIL_ON_IMPORT_ERRORS=$(FAIL_ON_IMPORT_ERRORS) \
-	python tools/harvest_import_errors.py --report $(IMPORT_REPAIR_REPORT)
+	$(PYTHON) tools/harvest_import_errors.py --report $(IMPORT_REPAIR_REPORT)
 
 # Print head of artifact and propagate 0/101 from harvester
 ci-smoke: test-collect-report
@@ -53,12 +54,12 @@ lint-core:
 .PHONY: scan-extras
 scan-extras:
 	@echo "[make] strict scan for raw install hints"
-	@python tools/scan_extras_hints.py --strict
+	@$(PYTHON) tools/scan_extras_hints.py --strict
 
 .PHONY: audit-exceptions legacy-scan
 audit-exceptions:
 	@echo "== audit broad exceptions =="
-	@python tools/audit_exceptions.py --paths ai_trading > artifacts/audit-exceptions.json
+	@$(PYTHON) tools/audit_exceptions.py --paths ai_trading > artifacts/audit-exceptions.json
 
 legacy-scan:
 	@echo "== legacy import scan =="
@@ -75,12 +76,12 @@ test-all:
 	PYTEST_ADDOPTS="-p no:faulthandler -p no:randomly -p no:cov \
 	-m 'not integration and not slow and not requires_credentials' \
 	$(if $(VERBOSE),-vv --durations=10 -s,)" \
-	python tools/run_pytest.py tests
+	$(PYTHON) tools/run_pytest.py tests
 
 # Run everything, including slow/integration/credentials-marked tests, still without plugin autoload.
 test-all-heavy:
 	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-	python tools/run_pytest.py tests
+	$(PYTHON) tools/run_pytest.py tests
 
 lint:
 	@command -v ruff >/dev/null 2>&1 && ruff check . || \

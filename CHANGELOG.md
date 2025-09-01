@@ -12,6 +12,12 @@ All notable changes to this project will be documented in this file.
   - Updated README/CHANGELOG to document package-only policy
 
 ### Changed
+- Main: finite `SCHEDULER_ITERATIONS` now exits promptly after completing
+  the requested cycles instead of keeping the API thread alive. This
+  avoids test/CI hangs; production runs continue to use infinite iterations.
+- Makefile: add `PYTHON ?= python3` and route all invocations through
+  `$(PYTHON)` for compatibility on Debian/Ubuntu where `python` shim is
+  absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
 - **Python**: restrict supported version to >=3.12,<3.13
 - **Package Structure**: Root modules previously moved into `ai_trading/` package
   - **Migration Required**: Use `from ai_trading.signals import ...` instead of `from signals import ...`
@@ -19,6 +25,8 @@ All notable changes to this project will be documented in this file.
 - **Utils**: remove legacy `pathlib_shim` re-export; use `ai_trading.utils.paths` instead
 
 ### Fixed
+- Dev deps: align `packaging` version with `constraints.txt` (25.0) to
+  resolve resolver conflicts during `ensure-runtime` install.
 - **Data Fetch**: raise error when configuration unavailable instead of repeated warnings.
 - Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
