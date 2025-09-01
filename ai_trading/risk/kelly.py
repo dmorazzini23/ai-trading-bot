@@ -182,11 +182,13 @@ class KellyCalculator:
         self.kelly_criterion = KellyCriterion()
         # Provide robust defaults if TradingConfig omits fields
         try:
-            self.lookback_periods = getattr(_DEFAULT_CONFIG, 'lookback_periods', 252)
+            lb = getattr(_DEFAULT_CONFIG, 'lookback_periods', None)
+            self.lookback_periods = lb if isinstance(lb, int) and lb > 0 else 252
         except Exception:
             self.lookback_periods = 252
         try:
-            self.rebalance_frequency = getattr(_DEFAULT_CONFIG, 'rebalance_frequency', 21)
+            rf = getattr(_DEFAULT_CONFIG, 'rebalance_frequency', None)
+            self.rebalance_frequency = rf if isinstance(rf, int) and rf > 0 else 21
         except Exception:
             self.rebalance_frequency = 21
         self.calculation_history = []
