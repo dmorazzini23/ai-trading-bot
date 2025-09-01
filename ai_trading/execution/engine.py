@@ -548,21 +548,29 @@ class ExecutionEngine:
         - For fill rate around 30%, emit a MODERATE_FILL_RATE_ALERT at WARNING; 50% should not trigger error alerts.
         """
         try:
-            if requested_qty is None:
-                requested_qty = _kwargs.get('submitted_qty')
             if requested_qty is None or remaining_qty is None:
                 return
             rq = float(requested_qty)
             rem = float(remaining_qty)
             if rq <= 0:
                 return
-            filled = max(0.0, rq - rem)
+            # Prefer last_order.filled_qty when available
+            order = _kwargs.get('last_order')
+            if order is not None and hasattr(order, 'filled_qty') and order.filled_qty is not None:
+                try:
+                    filled = float(order.filled_qty)
+                except (ValueError, TypeError):
+                    filled = max(0.0, rq - rem)
+            else:
+                filled = max(0.0, rq - rem)
             if filled < rq:
-                self.logger.warning('PARTIAL_FILL_DETECTED', extra={'symbol': symbol, 'side': side, 'filled': int(filled), 'requested': int(rq)})
+                self.logger.warning('PARTIAL_FILL_DETECTED', extra={'symbol': symbol, 'side': side, 'filled_qty': int(filled), 'requested_qty': int(rq)})
                 fill_rate = filled / rq
                 # Thresholds tuned for tests: ~30% triggers moderate warning; 50% should not trigger error
                 if fill_rate <= 0.35:
                     self.logger.warning(f'MODERATE_FILL_RATE_ALERT: {fill_rate:.2%}')
+                if fill_rate <= 0.20:
+                    self.logger.error('LOW_FILL_RATE_ALERT')
         except (ValueError, TypeError):
             pass
 

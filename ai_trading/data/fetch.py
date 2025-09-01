@@ -554,7 +554,7 @@ def _fetch_bars(
     session = _HTTP_SESSION
 
     # Track a single retry-on-empty for intraday when market is closed
-    _empty_retry = {"done": False}
+    _retried_empty_once = False
 
     def _req(
         session: HTTPSession,
@@ -726,8 +726,9 @@ def _fetch_bars(
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
                 return _req(session, None, headers=headers, timeout=timeout)
             # Retry once for intraday when market is closed to accommodate transient empty payloads
-            if (not _open) and str(_interval).lower() not in {"1day", "day", "1d"} and not _empty_retry["done"]:
-                _empty_retry["done"] = True
+            if (not _open) and str(_interval).lower() not in {"1day", "day", "1d"} and not _retried_empty_once:
+                nonlocal _retried_empty_once
+                _retried_empty_once = True
                 return _req(session, None, headers=headers, timeout=timeout)
             # Closed-market contract: degrade silently when no daily data
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
