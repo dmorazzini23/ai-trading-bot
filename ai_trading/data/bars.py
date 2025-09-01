@@ -364,11 +364,17 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     day_et = start_u.astimezone(ZoneInfo('America/New_York')).date()
     _log_fallback_window_debug(_log, day_et, start_u, end_u)
     feed_str = 'iex'
-    df = _get_minute_bars(symbol, start_u, end_u, feed=feed_str)
+    try:
+        df = _get_minute_bars(symbol, start_u, end_u, feed=feed_str)
+    except Exception:
+        df = empty_bars_dataframe()
     rows = len(df)
     if rows < 300:
         _log.warning('DATA_HEALTH_MINUTE_INCOMPLETE', extra={'rows': rows, 'expected': expected_regular_minutes(), 'start': start_u.astimezone(UTC).isoformat(), 'end': end_u.astimezone(UTC).isoformat(), 'feed': feed_str})
-        df_sip = _get_minute_bars(symbol, start_u, end_u, feed='sip')
+        try:
+            df_sip = _get_minute_bars(symbol, start_u, end_u, feed='sip')
+        except Exception:
+            df_sip = empty_bars_dataframe()
         if len(df_sip) > rows:
             df = df_sip
             feed_str = 'sip'

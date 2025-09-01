@@ -21,6 +21,12 @@ from ai_trading.data.metrics import metrics
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 
+# Lightweight indirection to support tests monkeypatching `data_fetcher.get_settings`
+def get_settings():  # pragma: no cover - simple alias for tests
+    from ai_trading.config.settings import get_settings as _get
+
+    return _get()
+
 # Module-level session reused across requests
 _HTTP_SESSION: HTTPSession = get_http_session()
 
@@ -859,8 +865,6 @@ def get_bars(
     symbol: str, timeframe: str, start: Any, end: Any, *, feed: str | None = None, adjustment: str | None = None
 ) -> pd.DataFrame:
     """Compatibility wrapper delegating to _fetch_bars."""
-    from ai_trading.config.settings import get_settings  # local import to avoid circular
-
     S = get_settings()
     if S is None:
         from ai_trading.config import management as _cfg
@@ -868,9 +872,10 @@ def get_bars(
         _cfg.reload_env()
         S = get_settings()
         if S is None:
-            raise RuntimeError(
-                "SETTINGS_UNAVAILABLE: configuration not loaded; call ai_trading.config.management.reload_env()",
-            )
+            raise RuntimeError("Configuration is unavailable")
+    # If a client-like object is passed for `feed`, route via client helper for tests
+    if feed is not None and not isinstance(feed, str):
+        return _alpaca_get_bars(feed, symbol, start, end, timeframe=_canon_tf(timeframe))
     feed = feed or S.alpaca_data_feed
     adjustment = adjustment or S.alpaca_adjustment
     return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)

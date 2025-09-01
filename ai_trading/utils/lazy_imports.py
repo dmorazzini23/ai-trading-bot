@@ -34,7 +34,12 @@ def load_pandas() -> ModuleType:
 @lru_cache(maxsize=None)
 def load_pandas_market_calendars() -> ModuleType | None:
     """Return a proxy for :mod:`pandas_market_calendars` if available."""
-    if find_spec("pandas_market_calendars") is None:
+    try:
+        spec = find_spec("pandas_market_calendars")
+    except ValueError:
+        # Some test harnesses insert a stub with __spec__ None; treat as unavailable
+        return None
+    if spec is None:
         return None
     return _LazyModule("pandas_market_calendars")
 
@@ -90,5 +95,4 @@ def load_sklearn_ensemble() -> ModuleType | None:
 def load_sklearn_metrics() -> ModuleType | None:
     """Return :mod:`sklearn.metrics` lazily."""
     return _load_sklearn_submodule("metrics")
-
 

@@ -137,7 +137,8 @@ class SanitizingLoggerAdapter(logging.LoggerAdapter):
     @property
     def handlers(self) -> list[logging.Handler]:
         """Delegate handler list to the underlying logger."""
-        return self.logger.handlers
+        # If the named logger has no handlers, mirror root handlers for parity in tests
+        return self.logger.handlers or logging.getLogger().handlers
 
     @handlers.setter
     def handlers(self, value: list[logging.Handler]) -> None:

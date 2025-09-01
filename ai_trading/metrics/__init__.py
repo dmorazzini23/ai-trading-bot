@@ -23,7 +23,7 @@ try:
     Histogram = _Histogram
     Summary = _Summary
     start_http_server = _start_http_server
-except (KeyError, ValueError, TypeError):
+except (ImportError, KeyError, ValueError, TypeError):
 
     class _NoopRegistry:
 
