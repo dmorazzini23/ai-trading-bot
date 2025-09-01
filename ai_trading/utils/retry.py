@@ -10,16 +10,17 @@ T = TypeVar("T")
 
 try:  # pragma: no cover - exercised via HAS_TENACITY flag in tests
     from tenacity import (
-        retry as _retry,
         stop_after_attempt as _stop_after_attempt,
         wait_exponential as _wait_exponential,
         wait_random as _wait_random,
+        wait_fixed as _wait_fixed,
+        wait_incrementing as _wait_incrementing,
         retry_if_exception_type as _retry_if_exception_type,
+        retry as _tenacity_retry,
         RetryError as _RetryError,
     )
     if not isinstance(_RetryError, type) or not issubclass(_RetryError, BaseException):
         raise TypeError("Invalid RetryError type")
-    retry = _retry
     stop_after_attempt = _stop_after_attempt
     wait_exponential = _wait_exponential
     wait_random = _wait_random
@@ -77,33 +78,6 @@ except (ImportError, TypeError):  # pragma: no cover - fallback path when tenaci
 
         return predicate
 
-    def retry(
-        *,
-        retry: Callable[[BaseException], bool] | None = None,
-        stop: Callable[[int], bool] | None = None,
-        wait: Callable[[int], float] | None = None,
-        reraise: bool = False,
-    ) -> Callable[[Callable[..., T]], Callable[..., T]]:
-        def decorator(fn: Callable[..., T]) -> Callable[..., T]:
-            @functools.wraps(fn)
-            def wrapper(*args, **kwargs):
-                attempt = 0
-                while True:
-                    try:
-                        return fn(*args, **kwargs)
-                    except Exception as exc:  # catch-all: re-raised via RetryError
-                        attempt += 1
-                        if retry and not retry(exc):
-                            raise
-                        if stop and stop(attempt):
-                            if reraise:
-                                raise
-                            raise RetryError() from exc
-                        delay = wait(attempt) if wait else 0.0
-                        time.sleep(delay)
-            return wrapper
-        return decorator
-
 
 def retry_call(
     func: Callable[..., T],
@@ -131,6 +105,88 @@ def retry_call(
             delta = delay * jitter
             _sleep(max(0.0, delay + random.uniform(-delta, delta)))
             delay = min(max_backoff, delay * 2)
+
+
+def retry(
+    *,
+    retries: int = 3,
+    delay: float = 0.1,
+    backoff: float = 2.0,
+    mode: str = "exponential",
+    exceptions: tuple[type[BaseException], ...] = (Exception,),
+    reraise: bool = False,
+    # Tenacity-compatible kwargs (optional)
+    stop: object | None = None,
+    wait: object | None = None,
+    retry: object | None = None,
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """Lightweight retry decorator with consistent API across environments.
+
+    Parameters
+    - retries: number of attempts (total calls), e.g. 3 means up to 3 invocations
+    - delay: base delay seconds
+    - backoff: multiplier for linear/exponential modes
+    - mode: one of "fixed", "linear", "exponential"
+    - exceptions: tuple of exception types to catch
+    - reraise: when True, propagate the last exception instead of raising RetryError
+    """
+
+    attempts = max(0, int(retries))
+    base = max(0.0, float(delay))
+    factor = max(0.0, float(backoff))
+    mode_lc = str(mode or "exponential").lower()
+
+    # Tenacity-style API path if stop/wait/retry provided explicitly
+    if HAS_TENACITY and (stop is not None or wait is not None or retry is not None):
+        _stop = stop if stop is not None else stop_after_attempt(attempts)
+        _wait = wait
+        if _wait is None:
+            if mode_lc == "fixed":
+                _wait = _wait_fixed(base)
+            elif mode_lc == "linear":
+                _wait = _wait_incrementing(start=base, increment=max(0.0, factor))
+            else:
+                _wait = _wait_exponential(multiplier=base, min=base, max=None)
+        _retry = retry if retry is not None else retry_if_exception_type(exceptions)
+        return _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=True)
+
+    if HAS_TENACITY:
+        _stop = stop_after_attempt(attempts)
+        if mode_lc == "fixed":
+            _wait = _wait_fixed(base)
+        elif mode_lc == "linear":
+            _wait = _wait_incrementing(start=base, increment=max(0.0, factor))
+        else:  # exponential (default)
+            _wait = _wait_exponential(multiplier=base, min=base, max=None)
+        predicate = retry_if_exception_type(exceptions)
+        return _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=True)
+
+    # Fallback (no Tenacity installed)
+    def _calc_wait(n: int) -> float:
+        if mode_lc == "fixed":
+            return base
+        if mode_lc == "linear":
+            return base + (n - 1) * factor
+        # exponential
+        return base * (2 ** (n - 1)) if n > 0 else 0.0
+
+    def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            attempt = 0
+            while True:
+                try:
+                    return fn(*args, **kwargs)
+                except exceptions as exc:
+                    attempt += 1
+                    if attempt >= attempts:
+                        if reraise:
+                            raise
+                        raise RetryError() from exc
+                    time.sleep(max(0.0, _calc_wait(attempt)))
+        return wrapper
+
+    return decorator
 
 
 __all__ = [

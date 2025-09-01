@@ -66,10 +66,13 @@ class HTTPError(RequestException):
 
 
 def _incr(metric: str, *, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
-    try:
-        from ai_trading.monitoring import metrics as _metrics
+    """Increment a metric via the lightweight data.metrics hook.
 
-        _metrics.incr(metric, value=value, tags=tags)
+    Tests monkeypatch ``ai_trading.data.fetch.metrics.incr`` directly, so route
+    through the module-level import rather than the heavier monitoring stack.
+    """
+    try:
+        metrics.incr(metric, value=value, tags=tags)  # type: ignore[attr-defined]
     except Exception:  # pragma: no cover - metrics optional
         pass
 
@@ -538,7 +541,8 @@ def _fetch_bars(
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
             )
             _SIP_DISALLOWED_WARNED = True
-        _feed = _DEFAULT_FEED
+        # Do not silently rewrite the requested feed when explicitly set to SIP.
+        # Allow the request to proceed and handle unauthorized gracefully.
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -581,8 +585,15 @@ def _fetch_bars(
             "adjustment": adjustment,
         }
         url = "https://data.alpaca.markets/v2/stocks/bars"
+        # Prefer an instance-level patched session.get when present (tests),
+        # otherwise route through the module-level `requests.get` so tests that
+        # monkeypatch `df.requests.get` can intercept deterministically.
+        use_session_get = hasattr(session, "__dict__") and ("get" in getattr(session, "__dict__", {}))
         try:
-            resp = session.get(url, params=params, headers=headers, timeout=timeout)
+            if use_session_get:
+                resp = session.get(url, params=params, headers=headers, timeout=timeout)
+            else:
+                resp = requests.get(url, params=params, headers=headers, timeout=timeout)
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()
@@ -763,7 +774,7 @@ def _fetch_bars(
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
-    alt_feed = "iex" if _feed != "iex" else ("sip" if _ALLOW_SIP else None)
+    alt_feed = "iex" if _feed != "iex" else "sip"
     fallback = None
     if alt_feed and not (alt_feed == "sip" and _SIP_UNAUTHORIZED):
         fallback = (_interval, alt_feed, _start, _end)

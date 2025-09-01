@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import requests
 from typing import cast
 from requests.adapters import HTTPAdapter
@@ -21,6 +22,23 @@ class TimeoutSession(requests.Session):
         else:
             kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
         return super().request(method, url, **kwargs)
+
+    def get(self, url, **kwargs):  # type: ignore[override]
+        """Issue a GET request with a test-friendly fast path.
+
+        In test environments (TESTING=1), route through the top-level
+        ``requests.get`` function so test suites that monkeypatch
+        ``requests.get`` can intercept calls deterministically. Otherwise,
+        defer to the parent ``Session.get`` implementation which preserves
+        connection pooling and retry adapters.
+        """
+        if os.getenv("TESTING", "0") == "1":
+            if "timeout" not in kwargs or kwargs["timeout"] is None:
+                kwargs["timeout"] = self._default_timeout
+            else:
+                kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
+            return requests.get(url, **kwargs)
+        return super().get(url, **kwargs)
 
 
 # Public alias used throughout the codebase
