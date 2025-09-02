@@ -37,9 +37,9 @@ def canon_feed(value: Any) -> str:
 def canon_symbol(value: Any) -> str:
     """Return canonical stock symbol for Alpaca REST calls.
 
-    Alpaca expects class share separators to use dots rather than dashes
-    (e.g., ``BRK.B``).  This helper normalizes incoming symbols by
-    uppercasing and replacing a single dash with a dot when present.  Any
+    Alpaca expects class share separators to use slashes rather than dashes
+    (e.g., ``BRK/B``).  This helper normalizes incoming symbols by
+    uppercasing and replacing a single dash with a slash when present.  Any
     non-string input results in an empty string.
     """
     try:
@@ -49,7 +49,7 @@ def canon_symbol(value: Any) -> str:
     if '-' in sym:
         parts = sym.split('-')
         if len(parts) == 2 and all(parts):
-            sym = '.'.join(parts)
+            sym = '/'.join(parts)
     return sym
 
 def normalize_extra(extra: Mapping[str, Any] | None) -> dict:

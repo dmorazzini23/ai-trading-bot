@@ -1490,7 +1490,7 @@ emitted when `AI_TRADING_MODEL_PATH` points to a missing file.
 - `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv` — explicit override, highest priority.
 - `TICKERS_FILE_PATH=/abs/path/to/tickers.csv` — used when the above is unset; defaults to `$AI_TRADING_DATA_DIR/tickers.csv`.
 - Default: packaged `ai_trading/data/tickers.csv` (S&P-100).
-- Symbols are uppercased and mapped for provider quirks (e.g., `BRK.B` → `BRK-B` for Yahoo Finance).
+- Symbols are uppercased and mapped for provider quirks (e.g., `BRK.B` → `BRK-B` for Yahoo Finance, `BRK-B` → `BRK/B` for Alpaca).
 - Missing file: logs an error and falls back to `['SPY', 'AAPL', 'MSFT', 'AMZN', 'GOOGL']`.
 
 Example systemd unit override:
