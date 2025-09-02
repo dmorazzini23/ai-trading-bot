@@ -2587,6 +2587,18 @@ TRADE_LOG_FILE = default_trade_log_path()
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
+_PEAK_EQUITY_PERMISSION_LOGGED = False
+
+
+def _log_peak_equity_permission() -> None:
+    """Log a warning once when peak equity file is inaccessible."""
+    global _PEAK_EQUITY_PERMISSION_LOGGED
+    if not _PEAK_EQUITY_PERMISSION_LOGGED:
+        logger.warning(
+            "PEAK_EQUITY_FILE %s permission denied; skipping peak equity tracking",
+            PEAK_EQUITY_FILE,
+        )
+        _PEAK_EQUITY_PERMISSION_LOGGED = True
 HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "halt.flag"))  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
@@ -7786,6 +7798,9 @@ def fractional_kelly_size(
                             portalocker.unlock(lock)  # type: ignore[attr-defined]
                         except AttributeError:
                             pass
+            except PermissionError:
+                _log_peak_equity_permission()
+                prev_peak = balance
             except (OSError, ValueError) as e:
                 logger.warning(
                     "Error reading peak equity file: %s, using current balance", e
@@ -7860,6 +7875,8 @@ def fractional_kelly_size(
                         lock.write(str(new_peak))
                     finally:
                         portalocker.unlock(lock)
+            except PermissionError:
+                _log_peak_equity_permission()
             except OSError as e:
                 logger.warning("Error updating peak equity file: %s", e)
             return 1
@@ -7896,6 +7913,8 @@ def fractional_kelly_size(
                         portalocker.unlock(lock)  # type: ignore[attr-defined]
                     except AttributeError:
                         pass
+        except PermissionError:
+            _log_peak_equity_permission()
         except OSError as e:
             logger.warning("Error updating peak equity file: %s", e)
 
@@ -11266,9 +11285,11 @@ def _current_drawdown() -> float:
             peak = float(pf.read().strip() or 0)
         with open(EQUITY_FILE) as ef:
             eq = float(ef.read().strip() or 0)
+    except PermissionError:
+        _log_peak_equity_permission()
+        return 0.0
     except (
         FileNotFoundError,
-        PermissionError,
         IsADirectoryError,
         JSONDecodeError,
         ValueError,

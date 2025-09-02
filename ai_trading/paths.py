@@ -25,7 +25,7 @@ def _ensure_dir(path: Path) -> Path:
             logger.debug("chmod failed for %s: %s", path, perm_err)
         return path
     except OSError as e:
-        if e.errno == errno.EROFS:
+        if e.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
             fallback = Path(tempfile.gettempdir()) / APP_NAME
             fallback.mkdir(parents=True, exist_ok=True)
             try:
@@ -53,9 +53,10 @@ def _first_env_path(*names: str) -> Path | None:
     return None
 
 def _default_state_dir() -> Path:
-    if os.geteuid() == 0:
-        return Path('/var/lib') / APP_NAME
-    return Path.home() / '.local' / 'share' / APP_NAME
+    home = Path.home()
+    if os.access(home, os.W_OK):
+        return home / '.local' / 'share' / APP_NAME
+    return Path(tempfile.gettempdir()) / APP_NAME
 
 def _default_cache_dir() -> Path:
     if os.geteuid() == 0:
