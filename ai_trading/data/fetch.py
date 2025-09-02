@@ -2,6 +2,7 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import warnings
+import time
 from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -862,19 +863,45 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 cnt = _EMPTY_BAR_COUNTS.get(symbol, 0) + 1
                 _EMPTY_BAR_COUNTS[symbol] = cnt
                 if cnt >= _EMPTY_BAR_THRESHOLD:
-                    _SKIPPED_SYMBOLS.add(symbol)
-                    logger.warning(
-                        "ALPACA_EMPTY_BAR_SKIP",
-                        extra={"symbols": sorted(_SKIPPED_SYMBOLS)},
+                    backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
+                    ctx = {
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "occurrences": cnt,
+                        "backoff": backoff,
+                        "finnhub_enabled": use_finnhub,
+                        "feed": feed or _DEFAULT_FEED,
+                    }
+                    logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
+                    time.sleep(backoff)
+                    try:
+                        df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+                    except Exception as alt_err:  # pragma: no cover - network failure
+                        logger.warning(
+                            "ALT_PROVIDER_FAILED",
+                            extra={"symbol": symbol, "err": str(alt_err)},
+                        )
+                        df = None
+                    if df is None or getattr(df, "empty", True):
+                        _SKIPPED_SYMBOLS.add(symbol)
+                        logger.warning(
+                            "ALPACA_EMPTY_BAR_SKIP",
+                            extra={
+                                "symbol": symbol,
+                                "timeframe": "1Min",
+                                "occurrences": cnt,
+                            },
+                        )
+                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                else:
+                    logger.debug(
+                        "ALPACA_EMPTY_BARS",
+                        extra={"symbol": symbol, "occurrences": cnt},
                     )
-                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                logger.debug(
-                    "ALPACA_EMPTY_BARS",
-                    extra={"symbol": symbol, "occurrences": cnt},
-                )
+                    df = None
             else:
                 logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
-            df = None
+                df = None
     if df is None or getattr(df, "empty", True):
         max_span = _dt.timedelta(days=8)
         total_span = end_dt - start_dt
