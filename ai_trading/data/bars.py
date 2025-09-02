@@ -23,6 +23,13 @@ from ai_trading.alpaca_api import (
 )
 import time
 
+# Alpaca SDK APIError (optional during tests)
+try:  # pragma: no cover - alpaca may be missing
+    from alpaca.common.exceptions import APIError
+except Exception:  # pragma: no cover - define fallback
+    class APIError(Exception):
+        pass
+
 # Export dynamic Alpaca request classes at module import time; tolerate missing SDK
 try:
     TimeFrame = get_timeframe_cls()
@@ -179,6 +186,12 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     try:
         try:
             response = _client_fetch_stock_bars(client, request)
+        except APIError as e:
+            _log.error(
+                "ALPACA_BARS_APIERROR",
+                extra={"symbol": symbol, "context": context, "error": str(e)},
+            )
+            return _create_empty_bars_dataframe()
         except (ValueError, TypeError) as e:
             status = getattr(e, 'status_code', None)
             if status in (401, 403):
@@ -211,6 +224,12 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
             try:
                 response = _client_fetch_stock_bars(client, request)
                 df = _ensure_df(getattr(response, 'df', response))
+            except APIError as e:
+                _log.error(
+                    "ALPACA_BARS_APIERROR",
+                    extra={"symbol": symbol, "context": context, "error": str(e)},
+                )
+                df = pd.DataFrame()
             except COMMON_EXC:
                 df = pd.DataFrame()
             if df.empty:
@@ -238,6 +257,11 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                                 last = df2.index[-1]
                                 if last.date() == start_dt.date():
                                     df = df2.loc[[last]]
+                        except APIError as e:
+                            _log.error(
+                                "ALPACA_BARS_APIERROR",
+                                extra={"symbol": symbol, "context": context, "error": str(e)},
+                            )
                         except (ValueError, TypeError) as e:
                             status = getattr(e, 'status_code', None)
                             if status in (401, 403):
