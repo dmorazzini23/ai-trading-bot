@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from ai_trading import paths
 
 try:  # pragma: no cover - optional heavy dependency
     import pandas as pd  # type: ignore
@@ -271,6 +272,58 @@ def train_xgboost_with_optuna(
     return model
 
 
+def ensure_default_models(symbols: Sequence[str] | None = None) -> None:
+    """Ensure required model files exist under :data:`paths.MODELS_DIR`.
+
+    If a model file for a symbol is missing, this attempts to download a
+    pre-trained model from ``DEFAULT_MODEL_URL``. If the download fails or no
+    URL is configured, a lightweight fallback model is trained and persisted via
+    :func:`ai_trading.model_loader.train_and_save_model`.
+    """
+
+    from ai_trading.config import management as config
+    from ai_trading.model_loader import train_and_save_model
+
+    models_dir = paths.MODELS_DIR
+    syms = list(symbols or getattr(config, "SYMBOLS", [])) or ["SPY"]
+    url = config.get_env("DEFAULT_MODEL_URL", "")
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    for sym in syms:
+        path = models_dir / f"{sym}.pkl"
+        if path.exists():
+            continue
+        downloaded = False
+        if url:
+            try:  # pragma: no cover - network best effort
+                import requests
+
+                resp = requests.get(url, timeout=10)
+                resp.raise_for_status()
+                path.write_bytes(resp.content)
+                downloaded = True
+                logger.info(
+                    "MODEL_DOWNLOADED",
+                    extra={"symbol": sym, "url": url, "path": str(path)},
+                )
+            except Exception as exc:  # noqa: BLE001 - network errors vary
+                logger.warning(
+                    "MODEL_DOWNLOAD_FAILED",
+                    extra={"symbol": sym, "url": url, "error": str(exc)},
+                )
+        if not downloaded:
+            logger.warning(
+                "MODEL_FILE_MISSING", extra={"symbol": sym, "path": str(path)}
+            )
+            try:
+                train_and_save_model(sym, models_dir)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "MODEL_TRAIN_FAILED",
+                    extra={"symbol": sym, "error": str(exc)},
+                )
+
+
 __all__ = [
     "MLModel",
     "train_model",
@@ -278,5 +331,6 @@ __all__ = [
     "save_model",
     "load_model",
     "train_xgboost_with_optuna",
+    "ensure_default_models",
 ]
 

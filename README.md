@@ -1474,6 +1474,11 @@ Set exactly one of:
 - AI_TRADING_MODEL_PATH=/abs/path/to/model.joblib
 - AI_TRADING_MODEL_MODULE=your.module.with.get_model
 
+At startup the engine verifies that model files exist in
+``paths.MODELS_DIR``. If none are found, a lightweight fallback model is
+trained automatically. Supplying your own model via the variables above
+enables full prediction capability.
+
 Service example:
 Environment="AI_TRADING_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
 
