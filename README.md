@@ -726,10 +726,10 @@ exits early with a clear error message when these values are invalid.
    ALPACA_API_URL=https://paper-api.alpaca.markets  # Paper trading
    ALPACA_DATA_FEED=iex
    # Set the following only if your Alpaca account has SIP permissions
-   # ALPACA_DATA_FEED=sip
-   # ALPACA_ALLOW_SIP=1  # enable SIP feed and SIP fallback
-   # Without ALPACA_ALLOW_SIP, SIP requests are skipped and a warning is logged
-   # ALPACA_SIP_UNAUTHORIZED=1  # legacy flag to suppress SIP after a 403
+  # ALPACA_DATA_FEED=sip
+  # ALPACA_ALLOW_SIP=1  # enable SIP feed and SIP fallback (requires SIP subscription)
+  # Without ALPACA_ALLOW_SIP, SIP requests are skipped and a warning is logged
+  # ALPACA_SIP_UNAUTHORIZED=1  # legacy flag to suppress SIP after a 403
    ALPACA_ADJUSTMENT=all
    DATA_LOOKBACK_DAYS_DAILY=10
    DATA_LOOKBACK_DAYS_MINUTE=5
@@ -756,7 +756,9 @@ exits early with a clear error message when these values are invalid.
 
   Unauthorized SIP requests return an empty DataFrame and automatically
   disable further SIP retries.  Set `ALPACA_SIP_UNAUTHORIZED=1` to skip SIP
-  requests when your account lacks access.
+  requests when your account lacks access.  The fetcher performs a small
+  pre-check for SIP entitlement and logs `UNAUTHORIZED_SIP` when the
+  subscription is missing.
 
   Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH. Do not set both.
 

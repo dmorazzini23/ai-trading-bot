@@ -137,3 +137,25 @@ def test_empty_bars_fallback(monkeypatch: pytest.MonkeyPatch):
     out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="iex", adjustment="raw")
     assert isinstance(out, pd.DataFrame) and not out.empty
     assert calls["count"] >= 2
+
+
+def test_sip_fallback_precheck_skips_request(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
+    feeds: list[str | None] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
+        feed = (params or {}).get("feed")
+        feeds.append(feed)
+        if feed == "iex":
+            return _Resp(429, payload={"message": "rate limit"})
+        return _Resp(403, payload={"message": "auth"})
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+    start, end = _dt_range(2)
+    with caplog.at_level("WARNING"):
+        with pytest.raises(ValueError, match="rate_limited"):
+            df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert feeds == ["iex", "sip"]
+    assert df._SIP_UNAUTHORIZED is True
+    assert "UNAUTHORIZED_SIP" in caplog.text

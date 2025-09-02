@@ -203,6 +203,50 @@ _ALLOW_SIP = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower() in {
     "yes",
 }
 _SIP_DISALLOWED_WARNED = False
+_SIP_PRECHECK_DONE = False
+
+
+def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timeframe: str) -> bool:
+    """Return True if SIP fallback should be attempted."""
+    global _SIP_UNAUTHORIZED, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
+    if not _ALLOW_SIP:
+        if not _SIP_DISALLOWED_WARNED:
+            logger.warning(
+                "SIP_DISABLED",
+                extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe}),
+            )
+            _SIP_DISALLOWED_WARNED = True
+        return False
+    if _SIP_UNAUTHORIZED:
+        return False
+    if _SIP_PRECHECK_DONE:
+        return True
+    _SIP_PRECHECK_DONE = True
+    url = "https://data.alpaca.markets/v2/stocks/bars"
+    params = {"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"}
+    use_session_get = hasattr(session, "__dict__") and ("get" in getattr(session, "__dict__", {}))
+    try:
+        if use_session_get:
+            resp = session.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
+        else:
+            resp = requests.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
+    except Exception as e:  # pragma: no cover - best effort
+        logger.debug(
+            "SIP_PRECHECK_FAILED",
+            extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe, "error": str(e)}),
+        )
+        return True
+    if getattr(resp, "status_code", None) in (401, 403):
+        _incr("data.fetch.unauthorized", value=1.0, tags={"provider": "alpaca", "feed": "sip", "timeframe": timeframe})
+        metrics.unauthorized += 1
+        _SIP_UNAUTHORIZED = True
+        os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
+        logger.warning(
+            "UNAUTHORIZED_SIP",
+            extra=_norm_extra({"provider": "alpaca", "status": "precheck", "feed": "sip", "timeframe": timeframe}),
+        )
+        return False
+    return True
 
 
 class _FinnhubFetcherStub:
@@ -575,6 +619,16 @@ def _fetch_bars(
     ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
         global _SIP_UNAUTHORIZED
+        def _attempt_fallback(fb: tuple[str, str, _dt.datetime, _dt.datetime]) -> pd.DataFrame | None:
+            nonlocal _interval, _feed, _start, _end
+            fb_interval, fb_feed, fb_start, fb_end = fb
+            if fb_feed == "sip" and not _sip_fallback_allowed(session, headers, fb_interval):
+                return None
+            _interval, _feed, _start, _end = fb
+            _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
+            payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
+            logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
+            return _req(session, None, headers=headers, timeout=timeout)
         params = {
             "symbols": symbol,
             "timeframe": _interval,
@@ -607,11 +661,9 @@ def _fetch_bars(
             _incr("data.fetch.timeout", value=1.0, tags=_tags())
             metrics.timeout += 1
             if fallback:
-                _interval, _feed, _start, _end = fallback
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(session, None, headers=headers, timeout=timeout)
+                result = _attempt_fallback(fallback)
+                if result is not None:
+                    return result
             raise
         except ConnectionError as e:
             logger.warning(
@@ -620,11 +672,9 @@ def _fetch_bars(
             )
             _incr("data.fetch.connection_error", value=1.0, tags=_tags())
             if fallback:
-                _interval, _feed, _start, _end = fallback
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(session, None, headers=headers, timeout=timeout)
+                result = _attempt_fallback(fallback)
+                if result is not None:
+                    return result
             raise
         except (HTTPError, RequestException, ValueError, KeyError) as e:
             logger.warning(
@@ -633,11 +683,9 @@ def _fetch_bars(
             )
             _incr("data.fetch.error", value=1.0, tags=_tags())
             if fallback:
-                _interval, _feed, _start, _end = fallback
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(session, None, headers=headers, timeout=timeout)
+                result = _attempt_fallback(fallback)
+                if result is not None:
+                    return result
             raise
         payload: dict[str, Any] | list[Any] = {}
         if status != 400 and text:
@@ -670,11 +718,9 @@ def _fetch_bars(
                 os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
                 return pd.DataFrame()
             if fallback:
-                _interval, _feed, _start, _end = fallback
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(session, None, headers=headers, timeout=timeout)
+                result = _attempt_fallback(fallback)
+                if result is not None:
+                    return result
             raise ValueError("unauthorized")
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
@@ -686,11 +732,9 @@ def _fetch_bars(
                 ),
             )
             if fallback:
-                _interval, _feed, _start, _end = fallback
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(session, None, headers=headers, timeout=timeout)
+                result = _attempt_fallback(fallback)
+                if result is not None:
+                    return result
             raise ValueError("rate_limited")
         df = pd.DataFrame(data)
         if df.empty:
@@ -739,11 +783,9 @@ def _fetch_bars(
                         ),
                     )
             if fallback:
-                _interval, _feed, _start, _end = fallback
-                _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-                payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                return _req(session, None, headers=headers, timeout=timeout)
+                result = _attempt_fallback(fallback)
+                if result is not None:
+                    return result
             # Retry once for intraday when market is closed to accommodate transient empty payloads
             if (not _open) and str(_interval).lower() not in {"1day", "day", "1d"} and (not _state["retried_empty_once"]):
                 _state["retried_empty_once"] = True
