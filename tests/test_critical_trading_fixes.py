@@ -693,10 +693,13 @@ def test_emergency_data_validation():
     from ai_trading.data_validation import emergency_data_check
 
     # Test with valid data
-    valid_data = pd.DataFrame({
-        'Close': [150.0, 151.0, 152.0],
-        'Volume': [1000, 1100, 1200]
-    }, index=pd.date_range('2024-01-01 09:30:00', periods=3, freq='1min', tz='UTC'))
+    valid_data = pd.DataFrame(
+        {
+            'close': [150.0, 151.0, 152.0],
+            'volume': [1000, 1100, 1200],
+        },
+        index=pd.date_range('2024-01-01 09:30:00', periods=3, freq='1min', tz='UTC'),
+    )
 
     # Should pass emergency validation
     assert emergency_data_check(valid_data, "AAPL") is True
@@ -706,10 +709,13 @@ def test_emergency_data_validation():
     assert emergency_data_check(empty_data, "AAPL") is False
 
     # Test with invalid price data
-    invalid_data = pd.DataFrame({
-        'Close': [150.0, 151.0, -10.0],  # Invalid negative price
-        'Volume': [1000, 1100, 1200]
-    }, index=pd.date_range('2024-01-01 09:30:00', periods=3, freq='1min', tz='UTC'))
+    invalid_data = pd.DataFrame(
+        {
+            'close': [150.0, 151.0, -10.0],  # Invalid negative price
+            'volume': [1000, 1100, 1200],
+        },
+        index=pd.date_range('2024-01-01 09:30:00', periods=3, freq='1min', tz='UTC'),
+    )
 
     assert emergency_data_check(invalid_data, "AAPL") is False
 
