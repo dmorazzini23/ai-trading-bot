@@ -19,3 +19,19 @@ def test_parse_local_positions_creates_trade_log(tmp_path, monkeypatch):
     assert log_path.exists()
     assert log_path.stat().st_size > 0
 
+
+def test_trade_logger_records_entry(tmp_path, monkeypatch):
+    """Trade logger writes header then appends entries on first use."""
+
+    log_path = tmp_path / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    logger = bot_engine.get_trade_logger()
+    logger.log_entry("AAPL", 100.0, 1, "buy", "test")
+
+    lines = log_path.read_text().splitlines()
+    assert lines[0].startswith("symbol,entry_time")
+    assert len(lines) == 2
+    assert "AAPL" in lines[1]
+

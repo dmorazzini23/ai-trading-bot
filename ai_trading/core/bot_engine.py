@@ -4865,6 +4865,13 @@ def _read_trade_log(
     Emits a warning when the log file is missing or empty with guidance on
     initializing the trade log via :func:`get_trade_logger`.
     """
+    # Ensure the trade log exists with headers before attempting to read. The
+    # :func:`get_trade_logger` helper will create the file and write the header
+    # row on first use. Calling it here prevents downstream consumers from
+    # failing when the trade log is missing or empty during startup or in fresh
+    # deployments.
+    get_trade_logger()
+
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         logger.warning(
             "TRADE_LOG_MISSING_OR_EMPTY | path=%s | hint=call get_trade_logger() to initialize",
