@@ -155,9 +155,10 @@ def bars_time_window_day(days: int = 10, *, end: _dt.datetime | None = None) -> 
 
 _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 
-# Track consecutive empty-bar responses per symbol to avoid repeated fetch noise
-_EMPTY_BAR_COUNTS: dict[str, int] = {}
-_SKIPPED_SYMBOLS: set[str] = set()
+# Track consecutive empty-bar responses per (symbol, timeframe) pair to avoid
+# repeated fetch noise and allow skipping per interval
+_EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
+_SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
 
 
@@ -837,7 +838,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    if symbol in _SKIPPED_SYMBOLS:
+    tf_key = (symbol, "1Min")
+    if tf_key in _SKIPPED_SYMBOLS:
         logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
         return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
     use_finnhub = (
@@ -860,8 +862,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
         except (ValueError, RuntimeError) as e:
             if isinstance(e, ValueError) and str(e) == "empty_bars":
-                cnt = _EMPTY_BAR_COUNTS.get(symbol, 0) + 1
-                _EMPTY_BAR_COUNTS[symbol] = cnt
+                cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
+                _EMPTY_BAR_COUNTS[tf_key] = cnt
                 if cnt >= _EMPTY_BAR_THRESHOLD:
                     backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
                     ctx = {
@@ -883,7 +885,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                         )
                         df = None
                     if df is None or getattr(df, "empty", True):
-                        _SKIPPED_SYMBOLS.add(symbol)
+                        _SKIPPED_SYMBOLS.add(tf_key)
                         logger.warning(
                             "ALPACA_EMPTY_BAR_SKIP",
                             extra={
@@ -939,8 +941,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 last_ts = None
             if last_ts is not None:
                 set_cached_minute_timestamp(symbol, last_ts)
-            _EMPTY_BAR_COUNTS.pop(symbol, None)
-            _SKIPPED_SYMBOLS.discard(symbol)
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            _SKIPPED_SYMBOLS.discard(tf_key)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
     return _post_process(df)
