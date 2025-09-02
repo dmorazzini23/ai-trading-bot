@@ -1166,9 +1166,9 @@ if not os.getenv("PYTEST_RUNNING"):
         compute_macd,
         compute_macds,
         compute_vwap,
+        compute_atr,
         ensure_columns,
     )
-    from ai_trading.indicators import compute_atr
 else:
     # AI-AGENT-REF: mock feature functions for test environments to avoid slow imports
     def compute_macd(*args, **kwargs):
@@ -8745,7 +8745,7 @@ def _fetch_feature_data(
 
     df = compute_macds(df)
     logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
-    df = ensure_columns(df, ["macd", "atr", "vwap", "macds"], symbol)
+    df = ensure_columns(df, ["macd", "vwap", "macds"], symbol)
     if df.empty and raw_df is not None:
         df = raw_df.copy()
 

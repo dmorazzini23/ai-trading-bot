@@ -21,6 +21,10 @@ The AI Trading Bot uses the `ta` library v0.11.0 as its primary technical analys
 - Complete coverage of trend, momentum, volatility, and volume indicators
 - Advanced indicators not available in basic TA-Lib implementations
 
+## Data Requirements & Missing Features
+
+Most indicators expect standard OHLCV columns (open, high, low, close, volume). The helper `ensure_columns` inserts any missing base columns with zeros to keep pipelines running. Optional features, such as ATR, are computed only when their prerequisite columns are present; if they cannot be derived, ATR-dependent logic is skipped without repeated warnings.
+
 ## Available Indicators
 
 ### Trend Indicators

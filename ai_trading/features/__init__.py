@@ -1,14 +1,13 @@
 """
 Feature engineering public API.
 """
-from ai_trading.indicators import compute_atr
-from .indicators import compute_macd, compute_macds, compute_vwap, ensure_columns
+from .indicators import compute_macd, compute_macds, compute_vwap, compute_atr, ensure_columns
 
 def build_features_pipeline(df, symbol: str):
     """
     Minimal pipeline expected by tests:
     - ensure expected columns
-    - compute MACD/MACD signal, ATR, VWAP
+    - compute MACD/MACD signal, ATR (if possible), VWAP
     """
     df = compute_macd(df)
     df = compute_macds(df)

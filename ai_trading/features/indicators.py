@@ -32,6 +32,26 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         logger.error('MACD computation failed', exc_info=True)
         return df
 
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Compute Average True Range (ATR)."""
+    try:
+        if not all((col in df.columns for col in ['high', 'low', 'close'])):
+            logger.warning('Missing required columns for ATR calculation; skipping')
+            return df
+        high = df['high'].astype(float)
+        low = df['low'].astype(float)
+        close = df['close'].astype(float)
+        tr = pd.concat([
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ], axis=1).max(axis=1)
+        df['atr'] = tr.rolling(window=period).mean()
+        return df
+    except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+        logger.error('ATR computation failed', exc_info=True)
+        return df
+
 def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
     """Compute Volume Weighted Average Price (VWAP)."""
     try:
@@ -75,4 +95,4 @@ def ensure_columns(df: pd.DataFrame, required: list[str] | None=None, symbol: st
         logger.error('Column validation failed', exc_info=True)
         return df
 
-__all__ = ['compute_macd', 'compute_vwap', 'compute_macds', 'ensure_columns']
+__all__ = ['compute_macd', 'compute_atr', 'compute_vwap', 'compute_macds', 'ensure_columns']
