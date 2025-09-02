@@ -4922,7 +4922,7 @@ def _read_trade_log(
         )
         return None
     if df.empty:
-        logger.warning(
+        logger.info(
             "Trade log %s parsed but contains no rows | hint=call get_trade_logger() to initialize",
             path,
         )
