@@ -38,7 +38,7 @@ def canon_symbol(value: Any) -> str:
     """Return canonical stock symbol for Alpaca REST calls.
 
     Alpaca expects class share separators to use slashes rather than dashes
-    (e.g., ``BRK/B``).  This helper normalizes incoming symbols by
+    (e.g., ``ABC/B``).  This helper normalizes incoming symbols by
     uppercasing and replacing a single dash with a slash when present.  Any
     non-string input results in an empty string.
     """
