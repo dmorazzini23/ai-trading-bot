@@ -1,11 +1,19 @@
 from __future__ import annotations
-from datetime import date, datetime, time, timedelta
+import datetime
+from datetime import date, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
-NY = ZoneInfo('America/New_York')
-UTC = ZoneInfo('UTC')
 
-def ensure_utc_datetime(value: Any, *, default: datetime | None=None, clamp_to: str | None=None, allow_callables: bool=False) -> datetime:
+NY = ZoneInfo('America/New_York')
+UTC = datetime.timezone.utc
+
+def ensure_utc_datetime(
+    value: Any,
+    *,
+    default: datetime.datetime | None = None,
+    clamp_to: str | None = None,
+    allow_callables: bool = False,
+) -> datetime.datetime:
     """Normalize a variety of inputs to a timezone-aware UTC datetime.
 
     - If ``value`` is callable and ``allow_callables`` is ``True``, call it (no args) and
@@ -22,12 +30,12 @@ def ensure_utc_datetime(value: Any, *, default: datetime | None=None, clamp_to: 
         else:
             raise TypeError('datetime argument was callable')
     try:
-        if isinstance(value, datetime):
+        if isinstance(value, datetime.datetime):
             dt = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
         elif isinstance(value, date):
-            dt = datetime(value.year, value.month, value.day, tzinfo=UTC)
+            dt = datetime.datetime(value.year, value.month, value.day, tzinfo=UTC)
         elif isinstance(value, str):
-            tmp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            tmp = datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00'))
             dt = tmp.astimezone(UTC) if tmp.tzinfo else tmp.replace(tzinfo=UTC)
         else:
             raise TypeError(f'Unsupported datetime type: {type(value).__name__}')
@@ -43,8 +51,8 @@ def ensure_utc_datetime(value: Any, *, default: datetime | None=None, clamp_to: 
 
 def nyse_session_utc(for_day: date):
     """Return (start_utc, end_utc) for regular 09:30–16:00 NY session converted to UTC."""
-    start_ny = datetime.combine(for_day, time(9, 30), tzinfo=NY)
-    end_ny = datetime.combine(for_day, time(16, 0), tzinfo=NY)
+    start_ny = datetime.datetime.combine(for_day, time(9, 30), tzinfo=NY)
+    end_ny = datetime.datetime.combine(for_day, time(16, 0), tzinfo=NY)
     return (start_ny.astimezone(UTC), end_ny.astimezone(UTC))
 
 def previous_business_day(d: date) -> date:

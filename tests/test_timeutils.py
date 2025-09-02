@@ -1,5 +1,4 @@
-from datetime import date
-from zoneinfo import ZoneInfo
+from datetime import UTC, date
 
 from ai_trading.data.timeutils import nyse_session_utc
 
@@ -7,8 +6,8 @@ from ai_trading.data.timeutils import nyse_session_utc
 def test_nyse_session_dst():
     # July 15, 2024 (DST)
     s, e = nyse_session_utc(date(2024, 7, 15))
-    assert s.hour == 13 and s.tzinfo == ZoneInfo("UTC")
-    assert e.hour == 20 and e.tzinfo == ZoneInfo("UTC")
+    assert s.hour == 13 and s.tzinfo == UTC
+    assert e.hour == 20 and e.tzinfo == UTC
 
 
 def test_nyse_session_standard():
