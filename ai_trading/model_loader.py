@@ -19,25 +19,14 @@ ML_MODELS: dict[str, object | None] = {}
 
 
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
-    """Train a fallback linear model for ``symbol`` and persist it.
+    """Train a fallback classification model for ``symbol`` and persist it."""
 
-    Parameters
-    ----------
-    symbol:
-        Ticker symbol to train a model for.
-    models_dir:
-        Directory where the trained model should be stored.
-
-    Returns
-    -------
-    object
-        The trained model instance.
-    """
     from datetime import datetime, timedelta
 
     import numpy as np
     import pandas as pd
-    from sklearn.linear_model import LinearRegression
+    from sklearn.dummy import DummyClassifier
+    from sklearn.linear_model import LogisticRegression
 
     from ai_trading.data.fetch import get_daily_df
 
@@ -52,13 +41,13 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
 
     X = np.arange(len(df)).reshape(-1, 1)
-    y = df["close"].astype(float).values
-    model = LinearRegression()
+    y = (df["close"].diff().fillna(0) > 0).astype(int).values
+    model = LogisticRegression()
     try:
         model.fit(X, y)
-    except (ValueError, TypeError) as exc:
+    except (Exception) as exc:  # noqa: BLE001 - broad to fall back gracefully
         logger.exception("Model training failed: %s", exc)
-        model = LinearRegression().fit([[0], [1]], [0, 1])
+        model = DummyClassifier(strategy="prior").fit([[0], [1]], [0, 1])
 
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -89,10 +78,15 @@ def load_model(symbol: str) -> object:
     if path.exists():
         try:
             model = joblib.load(path)
-        except (OSError, ValueError, TypeError) as exc:
+        except Exception as exc:  # noqa: BLE001 - joblib may raise various errors
             msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
+            logger.error(
+                "MODEL_LOAD_ERROR",
+                extra={"symbol": symbol, "path": str(path), "error": str(exc)},
+            )
             raise RuntimeError(msg) from exc
     else:
+        logger.warning("MODEL_FILE_MISSING", extra={"symbol": symbol, "path": str(path)})
         model = train_and_save_model(symbol, models_dir)
 
     ML_MODELS[symbol] = model

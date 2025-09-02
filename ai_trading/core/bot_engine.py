@@ -2246,7 +2246,7 @@ def assert_row_integrity(
 
 
 def _load_ml_model(symbol: str):
-    """Return preloaded ML model from ``ML_MODELS`` cache."""
+    """Return an ML model for ``symbol`` with basic validation."""
 
     # AI-AGENT-REF: Check cache size and cleanup if needed
     _cleanup_ml_model_cache()
@@ -2256,8 +2256,31 @@ def _load_ml_model(symbol: str):
         return cached
 
     model = ML_MODELS.get(symbol)
-    if model is not None:
-        _ML_MODEL_CACHE[symbol] = model
+    if model is None:
+        try:
+            from ai_trading.model_loader import load_model
+
+            model = load_model(symbol)
+        except RuntimeError as exc:
+            logger.error(
+                "MODEL_LOAD_ERROR", extra={"symbol": symbol, "error": str(exc)}
+            )
+            strict = bool(
+                get_env("AI_TRADING_STRICT_MODEL_LOADING", "0", cast=int)
+            )
+            if strict:
+                raise
+            model = None
+
+    if model is not None and not (
+        hasattr(model, "predict") and hasattr(model, "predict_proba")
+    ):
+        logger.error(
+            "MODEL_INTERFACE_MISSING", extra={"symbol": symbol}
+        )
+        model = None
+
+    _ML_MODEL_CACHE[symbol] = model
     return model
 
 
