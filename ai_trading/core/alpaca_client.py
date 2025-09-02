@@ -40,7 +40,7 @@ def _validate_trading_api(api: Any) -> bool:
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            logger_once.warning("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped")
+            logger_once.info("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped")
         else:
             logger_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
             if not is_shadow_mode():
