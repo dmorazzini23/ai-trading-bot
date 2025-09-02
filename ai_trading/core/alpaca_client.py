@@ -28,8 +28,6 @@ def _validate_trading_api(api: Any) -> bool:
                 status = kwargs.pop("status", None)
                 if status is None:
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-                import inspect
-                params = inspect.signature(api.get_orders).parameters
                 enum_val: Any = status
                 try:  # optional import paths for SDK enums
                     enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
@@ -38,26 +36,7 @@ def _validate_trading_api(api: Any) -> bool:
                         enum_val = getattr(enum_cls, str(status).upper(), status)
                 except Exception:
                     pass
-                if "status" in params:
-                    kwargs["status"] = enum_val
-                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-                req = None
-                try:
-                    requests_mod = __import__("alpaca.trading.requests", fromlist=[""])
-                    enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(enums_mod, "OrderStatus", None)
-                    if enum_cls is not None:
-                        enum_val = getattr(enum_cls, str(status).upper(), status)
-                    req_cls = getattr(requests_mod, "GetOrdersRequest")
-                    req = req_cls(statuses=[enum_val])
-                except Exception:
-                    pass
-                if req is not None:
-                    try:
-                        return api.get_orders(*args, filter=req, **kwargs)  # type: ignore[attr-defined]
-                    except TypeError:
-                        return api.get_orders(req, *args, **kwargs)  # type: ignore[attr-defined]
-                kwargs["status"] = status
+                kwargs["status"] = enum_val
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
