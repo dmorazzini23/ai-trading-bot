@@ -7051,7 +7051,7 @@ def check_halt_flag(runtime) -> bool:
 def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
     """Check if there are too many positions, with allowance for rebalancing."""
     try:
-        current_positions = ctx.api.list_positions()
+        current_positions = ctx.api.get_all_positions()
         position_count = len(current_positions)
 
         # If we're not at the limit, allow new positions
@@ -7076,6 +7076,9 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
 
         return position_count >= get_max_portfolio_positions()
 
+    except AttributeError as e:
+        logger.warning(f"[too_many_positions] Positions API unavailable: {e}")
+        return False
     except (
         FileNotFoundError,
         PermissionError,
@@ -7085,6 +7088,7 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
         KeyError,
         TypeError,
         OSError,
+        APIError,
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.warning(f"[too_many_positions] Could not fetch positions: {e}")
         return False
