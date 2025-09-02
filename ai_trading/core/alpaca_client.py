@@ -24,23 +24,55 @@ def _validate_trading_api(api: Any) -> bool:
         return False
     if not hasattr(api, "list_orders"):
         if hasattr(api, "get_orders"):
+            import inspect
+
+            try:
+                sig = inspect.signature(api.get_orders)  # type: ignore[attr-defined]
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                sig = None
+            accepts_status = bool(sig and "status" in sig.parameters)
+            accepts_filter = bool(sig and "filter" in sig.parameters)
+
             def _list_orders_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
                 status = kwargs.pop("status", None)
                 if status is None:
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+
                 enum_val: Any = status
                 try:  # optional import paths for SDK enums
                     enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(enums_mod, "OrderStatus", None)
+                    enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
+                        enums_mod, "OrderStatus", None
+                    )
                     if enum_cls is not None:
                         enum_val = getattr(enum_cls, str(status).upper(), status)
                 except Exception:
                     pass
+
+                if accepts_status:
+                    kwargs["status"] = enum_val
+                    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+
+                if accepts_filter:
+                    try:
+                        requests_mod = __import__(
+                            "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
+                        )
+                        GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
+                        filter_obj = GetOrdersRequest(statuses=[enum_val])
+                        return api.get_orders(
+                            *args, filter=filter_obj, **kwargs
+                        )  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
                 kwargs["status"] = enum_val
                 return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            logger_once.warning("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped")
+            logger_once.warning(
+                "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
+            )
         else:
             logger_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
             if not is_shadow_mode():
