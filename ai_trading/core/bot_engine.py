@@ -108,6 +108,7 @@ from ai_trading.config.management import (
     TradingConfig,
 )
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
+from ai_trading.broker.alpaca_credentials import check_alpaca_available
 from ai_trading import portfolio  # expose portfolio module for tests/monkeypatching
 from ai_trading.utils import portfolio_lock  # expose lock for tests/monkeypatching
 
@@ -309,6 +310,9 @@ __all__ = [
     "MockSignal",
     "MockContext",
     "StockHistoricalDataClient",
+    "prediction_executor",
+    "ctx",
+    "check_alpaca_available",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -3401,6 +3405,7 @@ import ai_trading.core.executors as executors
 
 # Expose cleanup function on this module for tests/back-compat
 cleanup_executors = executors.cleanup_executors
+prediction_executor = executors.prediction_executor
 
 # Ensure executor cleanup is registered with the correct reference
 atexit.register(cleanup_executors)
@@ -5895,6 +5900,7 @@ async def on_trade_update(event):
 
 # AI-AGENT-REF: Global context and engine will be initialized lazily
 _ctx = None
+ctx = None  # alias for external access
 _exec_engine = None
 
 
@@ -5909,7 +5915,7 @@ class LazyBotContext:
     def _ensure_initialized(self):
         """Ensure the context is initialized."""
         _init_metrics()
-        global _ctx, _exec_engine, data_fetcher
+        global _ctx, ctx, _exec_engine, data_fetcher
 
         if self._initialized and self._context is not None:
             return
@@ -6001,6 +6007,7 @@ class LazyBotContext:
                 logger.debug("_initialize_bot_context_post_setup not present; skipping.")
 
         _ctx = self._context
+        ctx = _ctx
         self._initialized = True
 
         # AI-AGENT-REF: Mark runtime as ready after context is fully initialized
