@@ -495,6 +495,14 @@ class BotEngine:
         # Load universe tickers once and store on both engine and runtime
         self._tickers = load_universe()
         setattr(self._ctx, "tickers", self._tickers)
+        try:
+            from ai_trading.ml_model import ensure_default_models
+
+            ensure_default_models(self._tickers)
+        except Exception as exc:  # noqa: BLE001 - best effort on startup
+            self.logger.warning(
+                "MODEL_STARTUP_CHECK_FAILED", extra={"error": str(exc)}
+            )
 
     @property
     def ctx(self):
@@ -5248,9 +5256,10 @@ class SignalManager:
         if model is None or not (
             hasattr(model, "predict") and hasattr(model, "predict_proba")
         ):
-            logger.debug(
-                "ML_PREDICT_SKIPPED", extra={"reason": "model_missing_or_invalid"}
-            )  # AI-AGENT-REF: guard absent model
+            logger.warning(
+                "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE"
+            )
+            # AI-AGENT-REF: guard absent model
             return None
         try:
             if hasattr(model, "feature_names_in_"):
