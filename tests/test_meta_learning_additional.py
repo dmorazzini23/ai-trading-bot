@@ -55,6 +55,38 @@ def test_retrain_meta_learner(monkeypatch, tmp_path):
     assert ok
 
 
+def test_retrain_meta_learner_handles_non_iterable_columns(monkeypatch, tmp_path):
+    """Handles DataFrames where ``columns`` is not iterable."""
+    path = tmp_path / "trades.csv"
+    pd.DataFrame({
+        "entry_price": [1],
+        "exit_price": [1],
+        "signal_tags": ["a"],
+        "side": ["buy"],
+    }).to_csv(path, index=False)
+
+    def fake_getattr(obj, name, default=None):
+        if name == "columns":
+            return 123  # non-iterable placeholder
+        return getattr(obj, name, default)
+
+    monkeypatch.setattr(meta_learning, "getattr", fake_getattr)
+    monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
+    monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
+    monkeypatch.setattr(
+        sklearn.linear_model,
+        "Ridge",
+        lambda *a, **k: types.SimpleNamespace(
+            fit=lambda X, y, sample_weight=None: None,
+            predict=lambda X: [0] * len(X),
+        ),
+    )
+    result = meta_learning.retrain_meta_learner(
+        str(path), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
+    )
+    assert not result
+
+
 def test_optimize_signals(monkeypatch):
     """optimize_signals uses model predictions when available."""
     m = types.SimpleNamespace(predict=lambda X: [1,2,3])
