@@ -154,6 +154,11 @@ def bars_time_window_day(days: int = 10, *, end: _dt.datetime | None = None) -> 
 
 _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 
+# Track consecutive empty-bar responses per symbol to avoid repeated fetch noise
+_EMPTY_BAR_COUNTS: dict[str, int] = {}
+_SKIPPED_SYMBOLS: set[str] = set()
+_EMPTY_BAR_THRESHOLD = 3
+
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
     """Return cached last bar timestamp for symbol."""
@@ -831,6 +836,9 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    if symbol in _SKIPPED_SYMBOLS:
+        logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
+        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
     use_finnhub = (
         os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
         and os.getenv("FINNHUB_API_KEY")
@@ -850,7 +858,22 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
         try:
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
         except (ValueError, RuntimeError) as e:
-            logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+            if isinstance(e, ValueError) and str(e) == "empty_bars":
+                cnt = _EMPTY_BAR_COUNTS.get(symbol, 0) + 1
+                _EMPTY_BAR_COUNTS[symbol] = cnt
+                if cnt >= _EMPTY_BAR_THRESHOLD:
+                    _SKIPPED_SYMBOLS.add(symbol)
+                    logger.warning(
+                        "ALPACA_EMPTY_BAR_SKIP",
+                        extra={"symbols": sorted(_SKIPPED_SYMBOLS)},
+                    )
+                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                logger.debug(
+                    "ALPACA_EMPTY_BARS",
+                    extra={"symbol": symbol, "occurrences": cnt},
+                )
+            else:
+                logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
             df = None
     if df is None or getattr(df, "empty", True):
         max_span = _dt.timedelta(days=8)
@@ -889,6 +912,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 last_ts = None
             if last_ts is not None:
                 set_cached_minute_timestamp(symbol, last_ts)
+            _EMPTY_BAR_COUNTS.pop(symbol, None)
+            _SKIPPED_SYMBOLS.discard(symbol)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
     return _post_process(df)

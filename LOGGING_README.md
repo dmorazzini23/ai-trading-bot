@@ -50,8 +50,9 @@ Daily price requests now log their parameters and outcome:
 - Unauthorized feed responses trigger a quick entitlement check and switch to a
   permitted feed when available. If no alternative exists, operators are
   notified once.
-- Empty bar responses are retried with a short backoff and warnings are
-  throttled to once per minute to reduce log noise.
+- Empty bar responses are retried with a short backoff. Symbols that
+  repeatedly return empty bars are skipped and summarized once to reduce
+  log noise.
 
 ### Example Usage
 
