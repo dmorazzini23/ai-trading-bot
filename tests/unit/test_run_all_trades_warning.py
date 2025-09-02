@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import types
 import sys
-from unittest.mock import Mock, call
+from unittest.mock import Mock
 
 sklearn_stub = types.ModuleType("sklearn")
 ensemble_stub = types.ModuleType("sklearn.ensemble")
@@ -99,16 +99,14 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
     monkeypatch.setattr(eng, "run_lock", DummyLock())
 
     warn_mock = Mock()
+    info_mock = Mock()
     monkeypatch.setattr(eng.logger_once, "warning", warn_mock)
+    monkeypatch.setattr(eng.logger_once, "info", info_mock)
 
     eng.run_all_trades_worker(state, runtime)
 
-    warn_mock.assert_has_calls(
-        [
-            call("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"),
-            call("ALPACA_API_ADAPTER", key="alpaca_api_adapter"),
-        ]
-    )
+    info_mock.assert_called_once_with("API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped")
+    warn_mock.assert_called_once_with("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
     assert api.called_with is not None
     assert "filter" in api.called_with
     assert api.called_with["filter"].statuses == [OrderStatus.OPEN]
