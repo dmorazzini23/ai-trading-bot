@@ -32,7 +32,7 @@ def test_canonicalizers_map_weird_values_to_safe_defaults():
     assert _canon_feed("IEX") == "iex"
     assert _canon_feed("sip") == "sip"
 
-    assert _canon_symbol("brk-b") == "BRK.B"
+    assert _canon_symbol("brk-b") == "BRK/B"
     assert _canon_symbol("AAPL") == "AAPL"
 
 
@@ -79,12 +79,13 @@ def test_safe_get_stock_bars_normalizes_symbol(monkeypatch):
             sym = request.symbol_or_symbols
             if isinstance(sym, list):
                 sym = sym[0]
-            if sym == "BRK-B":
+            if sym in {"BRK-B", "BRK.B"}:
                 raise APIError("bad symbol")
             called["symbol"] = sym
             return self._Resp()
 
     req = bars_mod.StockBarsRequest(symbol_or_symbols="BRK-B", timeframe=bars_mod.TimeFrame.Day)
-    bars_mod.safe_get_stock_bars(Client(), req, symbol="BRK-B", context="TEST")
+    df = bars_mod.safe_get_stock_bars(Client(), req, symbol="BRK-B", context="TEST")
 
-    assert called["symbol"] == "BRK.B"
+    assert isinstance(df, pd.DataFrame)
+    assert called["symbol"] == "BRK/B"
