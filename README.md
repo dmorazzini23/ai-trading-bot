@@ -800,6 +800,16 @@ connectivity.
 | `CACHE_MARKET_DATA` | `true` | Enable data caching |
 | `TRADING_HOURS_ONLY` | `true` | Trade only during market hours |
 
+After several empty bar responses from the primary provider, the bot backs off
+and queries the backup source. Configure additional fallbacks with:
+
+- `ENABLE_FINNHUB=1` and `FINNHUB_API_KEY` to allow an intermediate Finnhub
+  retry before using the backup provider.
+- `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback.
+
+When this backoff triggers, the system logs the affected symbol, timeframe and
+provider status to aid debugging.
+
 #### Machine Learning Configuration
 
 | Parameter | Default | Description |
