@@ -79,6 +79,10 @@ def preflight_import_health() -> None:
             )
             raise SystemExit(1)
     logger.info("IMPORT_PREFLIGHT_OK")
+    try:
+        importlib.import_module("ai_trading.core.bot_engine").get_trade_logger()
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("TRADE_LOG_INIT_FAILED", extra={"error": repr(exc)})
 
 
 def run_cycle() -> None:
