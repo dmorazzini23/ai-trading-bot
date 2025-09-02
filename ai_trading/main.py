@@ -46,7 +46,7 @@ from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import get_env, validate_required_env, reload_env
-from ai_trading.metrics import Histogram, Counter
+from ai_trading.metrics import get_histogram, get_counter
 from time import monotonic as _mono
 
 
@@ -476,8 +476,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     # Metrics for cycle timing and budget overruns (labels are no-op when metrics unavailable)
     # Labeled stage timings: fetch/compute/execute
-    _cycle_stage_seconds = Histogram("cycle_stage_seconds", "Cycle stage duration seconds", ["stage"])  # type: ignore[arg-type]
-    _cycle_budget_over_total = Counter("cycle_budget_over_total", "Budget-over events", ["stage"])  # type: ignore[arg-type]
+    _cycle_stage_seconds = get_histogram("cycle_stage_seconds", "Cycle stage duration seconds", ["stage"])  # type: ignore[arg-type]
+    _cycle_budget_over_total = get_counter("cycle_budget_over_total", "Budget-over events", ["stage"])  # type: ignore[arg-type]
 
     try:
         _validate_runtime_config(config, S)
