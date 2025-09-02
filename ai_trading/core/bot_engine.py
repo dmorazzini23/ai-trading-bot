@@ -1893,9 +1893,9 @@ except ImportError:  # pragma: no cover - fallback  # AI-AGENT-REF: optional pyb
 from ai_trading.metrics import (
     PROMETHEUS_AVAILABLE,
     REGISTRY,
-    Counter,
-    Gauge,
-    Histogram,
+    get_counter,
+    get_gauge,
+    get_histogram,
     Summary,
     start_http_server,
 )
@@ -1907,63 +1907,41 @@ _METRICS_READY = False
 def _init_metrics() -> None:
     """Create/register metrics once; tolerate partial imports & re-imports."""
     global _METRICS_READY, orders_total, order_failures, daily_drawdown, signals_evaluated
-    global run_all_trades_duration, minute_cache_hit, minute_cache_miss, daily_cache_hit
-    global daily_cache_miss, event_cooldown_hits, slippage_total, slippage_count
-    global weekly_drawdown, skipped_duplicates, skipped_cooldown
+    global run_all_trades_duration, minute_cache_hit, minute_cache_miss, daily_cache_hit, daily_cache_miss
+    global event_cooldown_hits, slippage_total, slippage_count, weekly_drawdown, skipped_duplicates, skipped_cooldown
     if _METRICS_READY:
         return
-    try:
-        orders_total = Counter("bot_orders_total", "Total orders sent")
-        order_failures = Counter("bot_order_failures", "Order submission failures")
-        daily_drawdown = Gauge("bot_daily_drawdown", "Current daily drawdown fraction")
-        signals_evaluated = Counter(
-            "bot_signals_evaluated_total", "Total signals evaluated"
-        )
-        run_all_trades_duration = Histogram(
-            "run_all_trades_duration_seconds", "Time spent in run_all_trades"
-        )
-        minute_cache_hit = Counter("bot_minute_cache_hits", "Minute bar cache hits")
-        minute_cache_miss = Counter(
-            "bot_minute_cache_misses", "Minute bar cache misses"
-        )
-        daily_cache_hit = Counter("bot_daily_cache_hits", "Daily bar cache hits")
-        daily_cache_miss = Counter("bot_daily_cache_misses", "Daily bar cache misses")
-        event_cooldown_hits = Counter("bot_event_cooldown_hits", "Event cooldown hits")
-        slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
-        slippage_count = Counter(
-            "bot_slippage_count", "Number of orders with slippage logged"
-        )
-        weekly_drawdown = Gauge(
-            "bot_weekly_drawdown", "Current weekly drawdown fraction"
-        )
-        skipped_duplicates = Counter(
-            "bot_skipped_duplicates",
-            "Trades skipped due to open position",
-        )
-        skipped_cooldown = Counter(
-            "bot_skipped_cooldown",
-            "Trades skipped due to recent execution",
-        )
-    except ValueError:
-        # Already registered (e.g., prior partial import). Reuse existing.
-        # Accessing REGISTRY internals is stable in prometheus-client; safe fallback.
-        if REGISTRY is not None:
-            existing = getattr(REGISTRY, "_names_to_collectors", {})
-            orders_total = existing.get("bot_orders_total")
-            order_failures = existing.get("bot_order_failures")
-            daily_drawdown = existing.get("bot_daily_drawdown")
-            signals_evaluated = existing.get("bot_signals_evaluated_total")
-            run_all_trades_duration = existing.get("run_all_trades_duration_seconds")
-            minute_cache_hit = existing.get("bot_minute_cache_hits")
-            minute_cache_miss = existing.get("bot_minute_cache_misses")
-            daily_cache_hit = existing.get("bot_daily_cache_hits")
-            daily_cache_miss = existing.get("bot_daily_cache_misses")
-            event_cooldown_hits = existing.get("bot_event_cooldown_hits")
-            slippage_total = existing.get("bot_slippage_total")
-            slippage_count = existing.get("bot_slippage_count")
-            weekly_drawdown = existing.get("bot_weekly_drawdown")
-            skipped_duplicates = existing.get("bot_skipped_duplicates")
-            skipped_cooldown = existing.get("bot_skipped_cooldown")
+    orders_total = get_counter("bot_orders_total", "Total orders sent")
+    order_failures = get_counter("bot_order_failures", "Order submission failures")
+    daily_drawdown = get_gauge("bot_daily_drawdown", "Current daily drawdown fraction")
+    signals_evaluated = get_counter(
+        "bot_signals_evaluated_total", "Total signals evaluated"
+    )
+    run_all_trades_duration = get_histogram(
+        "run_all_trades_duration_seconds", "Time spent in run_all_trades"
+    )
+    minute_cache_hit = get_counter("bot_minute_cache_hits", "Minute bar cache hits")
+    minute_cache_miss = get_counter(
+        "bot_minute_cache_misses", "Minute bar cache misses"
+    )
+    daily_cache_hit = get_counter("bot_daily_cache_hits", "Daily bar cache hits")
+    daily_cache_miss = get_counter("bot_daily_cache_misses", "Daily bar cache misses")
+    event_cooldown_hits = get_counter("bot_event_cooldown_hits", "Event cooldown hits")
+    slippage_total = get_counter("bot_slippage_total", "Cumulative slippage in cents")
+    slippage_count = get_counter(
+        "bot_slippage_count", "Number of orders with slippage logged"
+    )
+    weekly_drawdown = get_gauge(
+        "bot_weekly_drawdown", "Current weekly drawdown fraction"
+    )
+    skipped_duplicates = get_counter(
+        "bot_skipped_duplicates",
+        "Trades skipped due to open position",
+    )
+    skipped_cooldown = get_counter(
+        "bot_skipped_cooldown",
+        "Trades skipped due to recent execution",
+    )
     _METRICS_READY = True
 
 

@@ -17,15 +17,15 @@ from typing import Any
 from types import SimpleNamespace
 from alpaca.common.exceptions import APIError
 from ai_trading.logging.emit_once import emit_once
-from ai_trading.metrics import Counter
+from ai_trading.metrics import get_counter
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
 
 # Lightweight Prometheus counters (no-op if client unavailable)
-_orders_submitted_total = Counter("orders_submitted_total", "Orders submitted")
-_orders_rejected_total = Counter("orders_rejected_total", "Orders rejected")
-_orders_duplicate_total = Counter("orders_duplicate_total", "Duplicate orders prevented")
+_orders_submitted_total = get_counter("orders_submitted_total", "Orders submitted")
+_orders_rejected_total = get_counter("orders_rejected_total", "Orders rejected")
+_orders_duplicate_total = get_counter("orders_duplicate_total", "Duplicate orders prevented")
 
 from ai_trading.monitoring.order_health_monitor import (
     OrderInfo,

@@ -93,6 +93,49 @@ def compute_basic_metrics(data):
     if hasattr(data, 'empty') and data.empty:
         return {'sharpe': 0.0, 'max_drawdown': 0.0}
     return {'sharpe': 0.0, 'max_drawdown': 0.0}
+
+
+def reset_registry(registry: CollectorRegistry | None = None) -> CollectorRegistry:
+    """Replace and return the active metrics registry.
+
+    Tests may call this helper to ensure a clean registry between runs.
+    When ``registry`` is ``None`` a new :class:`CollectorRegistry` is created.
+    """
+    global REGISTRY
+    REGISTRY = registry or CollectorRegistry()  # type: ignore[call-arg]
+    return REGISTRY
+
+
+def _get_metric(metric_cls, name: str, documentation: str, *args, **kwargs):
+    """Return an existing metric or create a new one in ``REGISTRY``.
+
+    ``prometheus_client`` raises ``ValueError`` if a metric is registered more
+    than once.  This helper checks ``REGISTRY`` before creation and reuses an
+    existing collector when present, preventing duplication on re-imports.
+    """
+    registry = kwargs.pop("registry", REGISTRY)
+    get_sample = getattr(registry, "get_sample_value", None)
+    if callable(get_sample) and get_sample(name) is not None:  # type: ignore[misc]
+        existing = getattr(registry, "_names_to_collectors", {})
+        collector = existing.get(name)
+        if collector is not None:
+            return collector
+    return metric_cls(name, documentation, *args, registry=registry, **kwargs)
+
+
+def get_counter(name: str, documentation: str, *args, **kwargs):
+    """Return a :class:`Counter` avoiding duplicate registration."""
+    return _get_metric(Counter, name, documentation, *args, **kwargs)
+
+
+def get_gauge(name: str, documentation: str, *args, **kwargs):
+    """Return a :class:`Gauge` avoiding duplicate registration."""
+    return _get_metric(Gauge, name, documentation, *args, **kwargs)
+
+
+def get_histogram(name: str, documentation: str, *args, **kwargs):
+    """Return a :class:`Histogram` avoiding duplicate registration."""
+    return _get_metric(Histogram, name, documentation, *args, **kwargs)
 __all__ = [
     'PROMETHEUS_AVAILABLE',
     'REGISTRY',
@@ -105,4 +148,8 @@ __all__ = [
     'safe_divide',
     'calculate_atr',
     'compute_basic_metrics',
+    'reset_registry',
+    'get_counter',
+    'get_gauge',
+    'get_histogram',
 ]

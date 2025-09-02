@@ -15,7 +15,7 @@ import importlib.util
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
-from ai_trading.metrics import Counter, Histogram
+from ai_trading.metrics import get_counter, get_histogram
 from time import monotonic as _mono
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -28,9 +28,9 @@ _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
 _HTTP: HTTPSession = get_http_session()
 
 # Lightweight Prometheus metrics (no-op when client unavailable)
-_alpaca_calls_total = Counter("alpaca_calls_total", "Total Alpaca calls")
-_alpaca_errors_total = Counter("alpaca_errors_total", "Total Alpaca call errors")
-_alpaca_call_latency = Histogram(
+_alpaca_calls_total = get_counter("alpaca_calls_total", "Total Alpaca calls")
+_alpaca_errors_total = get_counter("alpaca_errors_total", "Total Alpaca call errors")
+_alpaca_call_latency = get_histogram(
     "alpaca_call_latency_seconds",
     "Latency of Alpaca calls",
 )
