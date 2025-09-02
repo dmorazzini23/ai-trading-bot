@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 # Mapping for data providers that expect alternate share-class separators.
-# Yahoo Finance uses dashes instead of dots for class shares (e.g., ``BRK-B``).
-_SYMBOL_FIXES: dict[str, str] = {"BRK.B": "BRK-B"}
+_SYMBOL_FIXES: dict[str, str] = {}
 
 
 def normalize_symbol(symbol: str) -> str:

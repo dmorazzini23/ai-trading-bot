@@ -172,19 +172,6 @@ def test_malformed_empty_csv_logs_and_returns_empty(tmp_path: Path, monkeypatch:
     assert called and called[0][0] == "TICKERS_FILE_READ_FAILED"
 
 
-def test_brk_dot_b_normalized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """BRK.B should be normalized to BRK-B for Yahoo Finance."""
-
-    csv_path = tmp_path / "tickers.csv"
-    csv_path.write_text("symbol\nBRK.B\n", encoding="utf-8")
-    monkeypatch.setenv("AI_TRADING_TICKERS_CSV", str(csv_path))
-    try:
-        symbols = universe.load_universe()
-    finally:
-        monkeypatch.delenv("AI_TRADING_TICKERS_CSV", raising=False)
-    assert symbols == ["BRK-B"]
-
-
 def test_screen_candidates_empty_watchlist_returns_fallback():
     """screen_candidates returns fallback symbols when watchlist is empty."""
     runtime = types.SimpleNamespace()
