@@ -79,7 +79,11 @@ def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symb
     Back-compat: ``emergency_data_check(df, "AAPL")`` returns ``not df.empty``.
     """
     if isinstance(symbols_or_df, pd.DataFrame) and isinstance(symbol, str):
-        return not symbols_or_df.empty
+        return (
+            not symbols_or_df.empty
+            and 'close' in symbols_or_df.columns
+            and (symbols_or_df['close'] > 0).all()
+        )
     if isinstance(symbols_or_df, str | bytes):
         to_check = [symbols_or_df]
     elif isinstance(symbols_or_df, Sequence):
@@ -95,7 +99,12 @@ def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symb
     for sym in to_check:
         try:
             df = fetch(sym, '1Min', start, end)
-            if df is not None and (not df.empty):
+            if (
+                df is not None
+                and not df.empty
+                and 'close' in df.columns
+                and (df['close'] > 0).all()
+            ):
                 return True
         except (ValueError, TypeError):
             continue

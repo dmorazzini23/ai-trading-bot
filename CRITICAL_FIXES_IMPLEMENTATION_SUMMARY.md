@@ -41,7 +41,7 @@ def alpaca_client(self):
 **Solution**: Created comprehensive `ai_trading.data_validation` module:
 - `check_data_freshness()` - Validates data age (default: 15 minutes max)
 - `validate_trading_data()` - Batch validation for multiple symbols
-- `emergency_data_check()` - Fast validation for critical trades
+- `emergency_data_check()` - Fast validation ensuring bars exist and all closes are positive
 - `should_halt_trading()` - Automatic trading halt on data quality issues
 
 **File**: `ai_trading.data_validation` (complete new module)
