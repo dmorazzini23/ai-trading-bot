@@ -536,9 +536,9 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         valid_rows = int(valid.sum())
     except (ValueError, TypeError):
         valid_rows = total_rows
-    cols_obj = getattr(df, 'columns', [])
+    cols_obj = getattr(df, "columns", None)
     try:
-        cols = set(cols_obj)
+        cols = set(cols_obj) if cols_obj is not None else set()
     except TypeError:
         cols = set()
     quality_report.update({'file_exists': bool(total_rows), 'has_valid_format': required_cols.issubset(cols), 'row_count': total_rows, 'valid_price_rows': valid_rows, 'data_quality_score': valid_rows / total_rows if total_rows else 0.0})
