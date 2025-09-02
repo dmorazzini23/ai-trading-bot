@@ -18,7 +18,8 @@ def test_backoff_uses_alternate_provider(monkeypatch, caplog):
     symbol = "AAPL"
     fetch._EMPTY_BAR_COUNTS.clear()
     fetch._SKIPPED_SYMBOLS.clear()
-    fetch._EMPTY_BAR_COUNTS[symbol] = fetch._EMPTY_BAR_THRESHOLD - 1
+    key = (symbol, "1Min")
+    fetch._EMPTY_BAR_COUNTS[key] = fetch._EMPTY_BAR_THRESHOLD - 1
 
     def _raise_empty(*_a, **_k):
         raise ValueError("empty_bars")
@@ -56,7 +57,7 @@ def test_backoff_uses_alternate_provider(monkeypatch, caplog):
     assert not out.empty
     assert called.get("alt")
     assert called.get("sleep")
-    assert symbol not in fetch._SKIPPED_SYMBOLS
+    assert key not in fetch._SKIPPED_SYMBOLS
     assert any(r.message == "ALPACA_EMPTY_BAR_BACKOFF" for r in caplog.records)
 
 
@@ -65,7 +66,8 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
     symbol = "MSFT"
     fetch._EMPTY_BAR_COUNTS.clear()
     fetch._SKIPPED_SYMBOLS.clear()
-    fetch._EMPTY_BAR_COUNTS[symbol] = fetch._EMPTY_BAR_THRESHOLD - 1
+    key = (symbol, "1Min")
+    fetch._EMPTY_BAR_COUNTS[key] = fetch._EMPTY_BAR_THRESHOLD - 1
 
     def _raise_empty(*_a, **_k):
         raise ValueError("empty_bars")
@@ -81,5 +83,5 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
         out = fetch.get_minute_df(symbol, start, end)
 
     assert out.empty
-    assert symbol in fetch._SKIPPED_SYMBOLS
+    assert key in fetch._SKIPPED_SYMBOLS
     assert any(r.message == "ALPACA_EMPTY_BAR_BACKOFF" for r in caplog.records)
