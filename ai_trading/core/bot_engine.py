@@ -752,7 +752,14 @@ def _load_required_model() -> Any:
     path = os.getenv("AI_TRADING_MODEL_PATH")
     modname = os.getenv("AI_TRADING_MODEL_MODULE")
 
-    if path and os.path.isfile(path):
+    if path:
+        if not os.path.isfile(path):
+            logger.error(
+                "MODEL_PATH_INVALID", extra={"path": path}
+            )
+            raise RuntimeError(
+                f"AI_TRADING_MODEL_PATH '{path}' does not exist or is not a file"
+            )
         mdl = joblib.load(path)
         try:
             digest = _sha256_file(path)
@@ -766,11 +773,18 @@ def _load_required_model() -> Any:
         try:
             mod = importlib.import_module(modname)
         except COMMON_EXC as e:  # noqa: BLE001
+            logger.error(
+                "MODEL_MODULE_IMPORT_FAILED",
+                extra={"module": modname, "error": str(e)},
+            )
             raise RuntimeError(
                 f"Failed to import AI_TRADING_MODEL_MODULE='{modname}': {e}"
             ) from e
         factory = getattr(mod, "get_model", None) or getattr(mod, "Model", None)
         if not factory:
+            logger.error(
+                "MODEL_MODULE_FACTORY_MISSING", extra={"module": modname}
+            )
             raise RuntimeError(
                 f"Module '{modname}' missing get_model()/Model() factory."
             )

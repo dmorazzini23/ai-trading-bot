@@ -1481,6 +1481,12 @@ Set exactly one of:
 - AI_TRADING_MODEL_PATH=/abs/path/to/model.joblib
 - AI_TRADING_MODEL_MODULE=your.module.with.get_model
 
+The default systemd unit expects the model at
+`/var/lib/ai-trading-bot/models/trained_model.pkl`. On startup the bot
+validates these settings and **fails fast** if the path is missing or the
+module import fails, logging `MODEL_PATH_INVALID` or
+`MODEL_MODULE_IMPORT_FAILED`.
+
 At startup the engine verifies that model files exist in
 ``paths.MODELS_DIR``. If none are found, a lightweight fallback model is
 trained automatically. Supplying your own model via the variables above
