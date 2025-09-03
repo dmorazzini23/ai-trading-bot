@@ -3,6 +3,7 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
+import pytest
 
 from ai_trading.data import fetch
 
@@ -85,3 +86,48 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
     assert out.empty
     assert key in fetch._SKIPPED_SYMBOLS
     assert any(r.message == "ALPACA_EMPTY_BAR_BACKOFF" for r in caplog.records)
+
+
+def test_retry_limit_raises(monkeypatch, caplog):
+    start, end = _dt_range()
+    symbol = "TSLA"
+    fetch._EMPTY_BAR_COUNTS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+    key = (symbol, "1Min")
+    fetch._EMPTY_BAR_COUNTS[key] = fetch._EMPTY_BAR_MAX_RETRIES
+
+    def _raise_empty(*_a, **_k):
+        raise fetch.EmptyBarsError("empty_bars")
+
+    monkeypatch.setattr(fetch, "_fetch_bars", _raise_empty)
+    monkeypatch.setattr(fetch, "fh_fetcher", None)
+    monkeypatch.setenv("ENABLE_FINNHUB", "0")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(fetch.EmptyBarsError):
+            fetch.get_minute_df(symbol, start, end)
+
+    assert any(r.message == "ALPACA_EMPTY_BAR_MAX_RETRIES" for r in caplog.records)
+
+
+def test_skip_retry_when_market_closed(monkeypatch, caplog):
+    start, end = _dt_range()
+    symbol = "IBM"
+    fetch._EMPTY_BAR_COUNTS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+
+    def _raise_empty(*_a, **_k):
+        raise fetch.EmptyBarsError("empty_bars")
+
+    monkeypatch.setattr(fetch, "_fetch_bars", _raise_empty)
+    monkeypatch.setattr(fetch, "fh_fetcher", None)
+    monkeypatch.setenv("ENABLE_FINNHUB", "0")
+    monkeypatch.setattr(fetch, "is_market_open", lambda: False)
+
+    with caplog.at_level(logging.INFO):
+        out = fetch.get_minute_df(symbol, start, end)
+
+    assert out.empty
+    assert any(
+        r.message == "ALPACA_EMPTY_BAR_MARKET_CLOSED" for r in caplog.records
+    )

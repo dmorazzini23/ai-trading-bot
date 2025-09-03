@@ -164,6 +164,7 @@ _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
+_EMPTY_BAR_MAX_RETRIES = 10
 
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
@@ -946,8 +947,33 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
         except (EmptyBarsError, ValueError, RuntimeError) as e:
             if isinstance(e, EmptyBarsError):
+                now = datetime.now(UTC)
+                if end_dt > now or start_dt > now:
+                    logger.info(
+                        "ALPACA_EMPTY_BAR_FUTURE",
+                        extra={"symbol": symbol, "timeframe": "1Min"},
+                    )
+                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                try:
+                    market_open = is_market_open()
+                except Exception:  # pragma: no cover - defensive
+                    market_open = True
+                if not market_open:
+                    logger.info(
+                        "ALPACA_EMPTY_BAR_MARKET_CLOSED",
+                        extra={"symbol": symbol, "timeframe": "1Min"},
+                    )
+                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
                 _EMPTY_BAR_COUNTS[tf_key] = cnt
+                if cnt > _EMPTY_BAR_MAX_RETRIES:
+                    logger.error(
+                        "ALPACA_EMPTY_BAR_MAX_RETRIES",
+                        extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
+                    )
+                    raise EmptyBarsError(
+                        f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
+                    ) from e
                 if cnt >= _EMPTY_BAR_THRESHOLD:
                     backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
                     ctx = {

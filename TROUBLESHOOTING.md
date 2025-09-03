@@ -189,6 +189,10 @@ nslookup api.alpaca.markets 8.8.8.8
 - Empty dataframes
 - Stale data warnings
 - Data provider fallback messages
+- `ALPACA_EMPTY_BAR_MAX_RETRIES` in logs
+
+Repeated empty responses trigger this limit. Verify the market is open or that
+data exists for the requested window before retrying.
 
 **Data Provider Diagnostics:**
 
