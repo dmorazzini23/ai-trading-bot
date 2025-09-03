@@ -7,6 +7,7 @@ import logging
 from threading import Thread
 import signal
 from datetime import datetime, UTC
+from zoneinfo import ZoneInfo
 from ai_trading.env import ensure_dotenv_loaded
 
 # Ensure environment variables are loaded before any logging configuration
@@ -462,6 +463,15 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    try:
+        if not _is_market_open_base():
+            now = datetime.now(ZoneInfo("America/New_York"))
+            logger.warning(
+                "STARTUP_OUTSIDE_MARKET_HOURS",
+                extra={"now": now.isoformat()},
+            )
+    except Exception:
+        logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
     _cap_env = os.getenv("CAPITAL_CAP")
     if _cap_env:

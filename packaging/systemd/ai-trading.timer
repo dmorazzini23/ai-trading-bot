@@ -1,0 +1,11 @@
+[Unit]
+Description=Start AI Trading Bot at US market open
+
+[Timer]
+OnCalendar=Mon..Fri 09:30
+Timezone=America/New_York
+Persistent=true
+Unit=ai-trading.service
+
+[Install]
+WantedBy=timers.target

@@ -6,11 +6,16 @@ Use the canonical unit at `packaging/systemd/ai-trading.service`.
 
 ```bash
 sudo cp packaging/systemd/ai-trading.service /etc/systemd/system/ai-trading.service
+sudo cp packaging/systemd/ai-trading.timer /etc/systemd/system/ai-trading.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now ai-trading.service
-sudo systemctl restart ai-trading.service
+# Confirm host timezone (service timer uses America/New_York)
+timedatectl | grep 'Time zone'
+# Enable timer to run the bot 09:30-16:00 US/Eastern
+sudo systemctl enable --now ai-trading.timer
 sudo systemctl status ai-trading.service
 ```
+
+The timer schedules the bot to start at market open and the service exits automatically after 6.5 hours (16:00 US/Eastern).
 
 Check logs and health:
 
