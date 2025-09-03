@@ -250,5 +250,41 @@
     "pnl": 9,
     "confidence": 0.8,
     "signal_strength": 0.7
+  },
+  {
+    "symbol": "AAPL",
+    "side": "buy",
+    "quantity": 2,
+    "entry_price": 195.5,
+    "exit_price": 198.0,
+    "entry_time": "2025-08-02T07:34:58.787625",
+    "exit_time": "2025-08-02T09:34:58.787625",
+    "pnl": 5.0,
+    "confidence": 0.75,
+    "signal_strength": 0.65
+  },
+  {
+    "symbol": "AAPL",
+    "side": "sell",
+    "quantity": 1,
+    "entry_price": 197.0,
+    "exit_price": 196.0,
+    "entry_time": "2025-08-03T07:34:58.787625",
+    "exit_time": "2025-08-03T09:34:58.787625",
+    "pnl": -1.0,
+    "confidence": 0.72,
+    "signal_strength": 0.6
+  },
+  {
+    "symbol": "GOOGL",
+    "side": "buy",
+    "quantity": 3,
+    "entry_price": 2800.0,
+    "exit_price": 2815.0,
+    "entry_time": "2025-08-04T07:34:58.787625",
+    "exit_time": "2025-08-04T09:34:58.787625",
+    "pnl": 45.0,
+    "confidence": 0.8,
+    "signal_strength": 0.7
   }
 ]
