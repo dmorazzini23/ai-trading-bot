@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     alpaca_api_key: str | None = Field(default=None, alias='ALPACA_API_KEY')
     alpaca_secret_key: SecretStr | None = Field(default=None, alias='ALPACA_SECRET_KEY')
     redis_url: str | None = Field(default=None, alias='REDIS_URL')
+    enable_finnhub: bool = Field(True, alias='ENABLE_FINNHUB')
+    finnhub_api_key: str | None = Field(default=None, alias='FINNHUB_API_KEY')
     alpaca_base_url: str = Field(
         default='https://paper-api.alpaca.markets',
         alias='ALPACA_API_URL',
