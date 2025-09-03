@@ -91,6 +91,7 @@ def run_cycle() -> None:
         BotState,
         run_all_trades_worker,
         get_ctx,
+        get_trade_logger,
     )
     from ai_trading.core.runtime import (
         build_runtime,
@@ -102,6 +103,10 @@ def run_cycle() -> None:
 
     state = BotState()
     cfg = TradingConfig.from_env()
+
+    # Ensure trade log file exists before any symbol processing occurs.
+    # get_trade_logger lazily creates the log and writes the header on first use.
+    get_trade_logger()
 
     # Carry through a pre-resolved max position size if available on Settings.
     S = get_settings()
