@@ -460,12 +460,18 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         scaled_atr_stop,
         targets_lock,
         BotState,
+        get_trade_logger,  # AI-AGENT-REF: ensure trade log initialization
     )
     import numpy as np  # local import to avoid global cost
     from datetime import UTC, datetime
     from zoneinfo import ZoneInfo
 
     PACIFIC = ZoneInfo("America/Los_Angeles")
+
+    # Ensure trade log file exists before logging first entry
+    tl = get_trade_logger()
+    if getattr(ctx, "trade_logger", None) is None:
+        ctx.trade_logger = tl
 
     if getattr(ctx, "api", None) is None:
         logger.warning("ctx.api is None - cannot execute entry")
