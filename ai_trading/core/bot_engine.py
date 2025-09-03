@@ -3708,7 +3708,9 @@ def compute_spy_vol_stats(runtime) -> None:
     cached = None
     if fetcher is not None:
         with cache_lock:
-            cached = getattr(fetcher, "_daily_cache", {}).get(symbol)
+            entry = getattr(fetcher, "_daily_cache", {}).get(symbol)
+            if entry:
+                cached = entry[1]
     if cached is not None and len(cached) >= required_rows:
         df = cached
         logger.info(
@@ -3808,7 +3810,8 @@ def is_high_vol_thr_spy() -> bool:
         return False
 
     with cache_lock:
-        spy_df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
+        entry = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
+        spy_df = entry[1] if entry else None
     if spy_df is None or len(spy_df) < ATR_LENGTH:
         return False
 
@@ -3834,7 +3837,7 @@ _last_fh_prefetch_date: date | None = None
 @dataclass
 class DataFetcher:
     def __post_init__(self):
-        self._daily_cache: dict[str, pd.DataFrame | None] = {}
+        self._daily_cache: dict[str, tuple[date, pd.DataFrame | None]] = {}
         self._minute_cache: dict[str, pd.DataFrame | None] = {}
         self._minute_timestamps: dict[str, datetime] = {}
         # AI-AGENT-REF: rate-limit repeated warnings per (symbol, timeframe)
@@ -3914,8 +3917,10 @@ class DataFetcher:
             },
         )
 
+        fetch_date = end_ts.date()
         with cache_lock:
-            if symbol in self._daily_cache:
+            entry = self._daily_cache.get(symbol)
+            if entry and entry[0] == fetch_date:
                 if daily_cache_hit:
                     try:
                         daily_cache_hit.inc()
@@ -3931,19 +3936,20 @@ class DataFetcher:
                     ) as exc:  # AI-AGENT-REF: narrow exception
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
-                cached = self._daily_cache[symbol]
+                cached_df = entry[1]
                 logger.info(
-                    "DAILY_FETCH_RESULT",
+                    "DAILY_FETCH_CACHE_HIT",
                     extra={
                         "symbol": symbol,
                         "timeframe": str(bars.TimeFrame.Day),
                         "start": start_ts.isoformat(),
                         "end": end_ts.isoformat(),
-                        "rows": 0 if cached is None else len(cached),
-                        "cache": True,
+                        "rows": 0 if cached_df is None else len(cached_df),
                     },
                 )
-                return cached
+                return cached_df
+            # purge stale cache entry if present
+            self._daily_cache.pop(symbol, None)
 
         settings = get_settings()
         api_key = settings.alpaca_api_key
@@ -4211,7 +4217,22 @@ class DataFetcher:
             raise DataFetchError(f"failed to fetch daily data for {symbol}") from e
 
         with cache_lock:
-            self._daily_cache[symbol] = df
+            self._daily_cache[symbol] = (fetch_date, df)
+        if daily_cache_miss:
+            try:
+                daily_cache_miss.inc()
+            except (
+                FileNotFoundError,
+                PermissionError,
+                IsADirectoryError,
+                JSONDecodeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+            ) as exc:  # AI-AGENT-REF: narrow exception
+                logger.exception("bot.py unexpected", exc_info=exc)
+                raise
         logger.info(
             "DAILY_FETCH_RESULT",
             extra={
