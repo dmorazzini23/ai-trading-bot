@@ -1,4 +1,5 @@
 import importlib
+import logging
 import sys
 import types
 
@@ -18,6 +19,33 @@ def test_load_model_from_path(monkeypatch, tmp_path):
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
     mdl = be._load_required_model()
     assert isinstance(mdl, dict) and mdl["ok"] is True
+
+
+def test_load_model_logs_activation(monkeypatch, tmp_path):
+    be = reload_bot_engine()
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"ok": True}, mpath)
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+
+    class ListHandler(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:  # noqa: D401
+            """Store log records for assertions."""
+            self.records.append(record)
+
+    handler = ListHandler()
+    logger = logging.getLogger("ai_trading.core.bot_engine")
+    logger.addHandler(handler)
+    try:
+        be._load_required_model()
+    finally:
+        logger.removeHandler(handler)
+
+    assert any(r.levelno == logging.INFO and r.getMessage() == "MODEL_LOADED" for r in handler.records)
 
 
 def test_load_model_from_module(monkeypatch, tmp_path):
