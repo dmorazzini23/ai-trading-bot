@@ -23,8 +23,8 @@ ExecStartPre=/usr/bin/install -d -m 700 -o aiuser -g aiuser \
     /var/cache/ai-trading-bot \
     /var/log/ai-trading-bot
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.main
-Restart=always
-RestartSec=10
+RuntimeMaxSec=23400
+Restart=no
 StandardOutput=journal
 StandardError=journal
 
