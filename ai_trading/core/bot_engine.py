@@ -5291,13 +5291,15 @@ class SignalManager:
         ):
             _path = os.getenv("AI_TRADING_MODEL_PATH")
             _mod = os.getenv("AI_TRADING_MODEL_MODULE")
-            logger.warning(
-                "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE "
-                f"(AI_TRADING_MODEL_PATH={_path!r}, AI_TRADING_MODEL_MODULE={_mod!r})",
-                extra={"model_path": _path, "model_module": _mod},
-            )
-            # AI-AGENT-REF: guard absent model
-            return None
+            if not getattr(self, "_ml_warned", False):
+                logger.warning(
+                    "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE "
+                    f"(AI_TRADING_MODEL_PATH={_path!r}, AI_TRADING_MODEL_MODULE={_mod!r})",
+                    extra={"model_path": _path, "model_module": _mod},
+                )
+                self._ml_warned = True
+            # AI-AGENT-REF: guard absent model with heuristic fallback
+            return self.signal_vsa(df)
         try:
             if hasattr(model, "feature_names_in_"):
                 feat = list(model.feature_names_in_)

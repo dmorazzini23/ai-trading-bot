@@ -1510,9 +1510,9 @@ pip install -r requirements-extras-train.txt
 python -m ai_trading.training.train_ml
 ```
 
-If `AI_TRADING_MODEL_PATH` is unset and the default file is missing, the bot
-quietly falls back to the baseline model (`USE_ML=False`). A warning is only
-emitted when `AI_TRADING_MODEL_PATH` points to a missing file.
+If neither variable is provided at runtime, the engine logs a single warning
+and falls back to a lightweight volume-spread-analysis heuristic. Repeated
+calls suppress further warnings to avoid log spam.
 
 ### Universe CSV
 - `AI_TRADING_TICKERS_CSV=/abs/path/to/tickers.csv` — explicit override, highest priority.
