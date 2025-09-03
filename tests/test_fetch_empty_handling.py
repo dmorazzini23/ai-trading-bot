@@ -21,8 +21,11 @@ class _Resp:
 class _Session:
     def __init__(self, payloads):
         self._payloads = list(payloads)
+        self.calls = 0
+        self.get = self._get
 
-    def get(self, url, params=None, headers=None, timeout=None):
+    def _get(self, url, params=None, headers=None, timeout=None):
+        self.calls += 1
         return _Resp(self._payloads.pop(0))
 
 
@@ -34,10 +37,13 @@ def _dt_range():
 
 def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     start, end = _dt_range()
-    sess = _Session([{"bars": []}])
+    sess = _Session([{"bars": []}, {"bars": []}])
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
+    monkeypatch.setattr(fetch, "_empty_should_emit", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_empty_record", lambda *a, **k: 1)
+    monkeypatch.setattr(fetch, "_empty_classify", lambda **k: logging.WARNING)
 
     with caplog.at_level(logging.WARNING):
         with pytest.raises(fetch.EmptyBarsError, match="empty_bars"):

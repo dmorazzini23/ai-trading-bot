@@ -586,6 +586,9 @@ def _fetch_bars(
         raise RuntimeError("pandas not available")
     _start = ensure_datetime(start)
     _end = ensure_datetime(end)
+    # Normalize timestamps to the minute to avoid querying empty slices
+    _start = _start.replace(second=0, microsecond=0)
+    _end = _end.replace(second=0, microsecond=0)
     _interval = _canon_tf(timeframe)
     _feed = _canon_feed(feed or _DEFAULT_FEED)
     global _SIP_DISALLOWED_WARNED
@@ -619,7 +622,7 @@ def _fetch_bars(
     session = _HTTP_SESSION
 
     # Track a single retry-on-empty for intraday when market is closed (mutable state to avoid nonlocal pitfalls)
-    _state = {"retried_empty_once": False}
+    _state = {"retried_empty_once": False, "corr_id": None, "retries": 0}
 
     def _req(
         session: HTTPSession,
@@ -654,14 +657,7 @@ def _fetch_bars(
         # otherwise route through the module-level `requests.get` so tests that
         # monkeypatch `df.requests.get` can intercept deterministically.
         use_session_get = hasattr(session, "__dict__") and ("get" in getattr(session, "__dict__", {}))
-        log_fetch_attempt(
-            "alpaca",
-            url=url,
-            symbol=symbol,
-            feed=_feed,
-            timeframe=_interval,
-            params=params,
-        )
+        prev_corr = _state.get("corr_id")
         try:
             if use_session_get:
                 resp = session.get(url, params=params, headers=headers, timeout=timeout)
@@ -677,26 +673,18 @@ def _fetch_bars(
                 or resp.headers.get("apca-request-id")
                 or resp.headers.get("x-correlation-id")
             )
-            log_fetch_attempt(
-                "alpaca",
-                url=url,
-                symbol=symbol,
-                feed=_feed,
-                timeframe=_interval,
-                status=status,
-                params=params,
-                correlation_id=corr_id,
-            )
+            _state["corr_id"] = corr_id
         except Timeout as e:
-            log_fetch_attempt(
-                "alpaca",
-                url=url,
-                symbol=symbol,
-                feed=_feed,
-                timeframe=_interval,
-                error=str(e),
-                params=params,
-            )
+            log_extra = {
+                "url": url,
+                "symbol": symbol,
+                "feed": _feed,
+                "timeframe": _interval,
+                "params": params,
+            }
+            if prev_corr:
+                log_extra["previous_correlation_id"] = prev_corr
+            log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -709,15 +697,16 @@ def _fetch_bars(
                     return result
             raise
         except ConnectionError as e:
-            log_fetch_attempt(
-                "alpaca",
-                url=url,
-                symbol=symbol,
-                feed=_feed,
-                timeframe=_interval,
-                error=str(e),
-                params=params,
-            )
+            log_extra = {
+                "url": url,
+                "symbol": symbol,
+                "feed": _feed,
+                "timeframe": _interval,
+                "params": params,
+            }
+            if prev_corr:
+                log_extra["previous_correlation_id"] = prev_corr
+            log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -729,15 +718,16 @@ def _fetch_bars(
                     return result
             raise
         except (HTTPError, RequestException, ValueError, KeyError) as e:
-            log_fetch_attempt(
-                "alpaca",
-                url=url,
-                symbol=symbol,
-                feed=_feed,
-                timeframe=_interval,
-                error=str(e),
-                params=params,
-            )
+            log_extra = {
+                "url": url,
+                "symbol": symbol,
+                "feed": _feed,
+                "timeframe": _interval,
+                "params": params,
+            }
+            if prev_corr:
+                log_extra["previous_correlation_id"] = prev_corr
+            log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -763,11 +753,23 @@ def _fetch_bars(
                 data = payload[symbol]["bars"]
         elif isinstance(payload, list):
             data = payload
+        log_extra = {
+            "url": url,
+            "symbol": symbol,
+            "feed": _feed,
+            "timeframe": _interval,
+            "params": params,
+            "correlation_id": _state["corr_id"],
+        }
+        if prev_corr:
+            log_extra["previous_correlation_id"] = prev_corr
         if status == 400:
+            log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra)
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
+            log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra)
             logger.warning(
                 "UNAUTHORIZED_SIP" if _feed == "sip" else "DATA_SOURCE_UNAUTHORIZED",
                 extra=_norm_extra(
@@ -786,6 +788,7 @@ def _fetch_bars(
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             metrics.rate_limit += 1
+            log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra)
             logger.warning(
                 "DATA_SOURCE_RATE_LIMITED",
                 extra=_norm_extra(
@@ -799,17 +802,7 @@ def _fetch_bars(
             raise ValueError("rate_limited")
         df = pd.DataFrame(data)
         if df.empty:
-            log_fetch_attempt(
-                "alpaca",
-                url=url,
-                symbol=symbol,
-                feed=_feed,
-                timeframe=_interval,
-                status=status,
-                error="empty",
-                params=params,
-                correlation_id=corr_id,
-            )
+            log_fetch_attempt("alpaca", status=status, error="empty", **log_extra)
             metrics.empty_payload += 1
             if fallback:
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
@@ -865,6 +858,8 @@ def _fetch_bars(
             # Retry once for intraday requests when an empty payload is returned
             if str(_interval).lower() not in {"1day", "day", "1d"} and (not _state["retried_empty_once"]):
                 _state["retried_empty_once"] = True
+                _state["retries"] += 1
+                backoff = min(2 ** (_state["retries"] - 1), 5.0)
                 logger.debug(
                     "RETRY_EMPTY_BARS",
                     extra=_norm_extra(
@@ -875,10 +870,13 @@ def _fetch_bars(
                             "symbol": symbol,
                             "start": _start.isoformat(),
                             "end": _end.isoformat(),
-                            "correlation_id": corr_id,
+                            "correlation_id": _state["corr_id"],
+                            "retry_delay": backoff,
+                            "previous_correlation_id": prev_corr,
                         }
                     ),
                 )
+                time.sleep(backoff)
                 return _req(session, None, headers=headers, timeout=timeout)
             # Closed-market contract: degrade silently when no daily data
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
@@ -907,6 +905,7 @@ def _fetch_bars(
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         df = df.dropna(subset=["open", "high", "low", "close"])
         df.set_index("timestamp", inplace=True, drop=False)
+        log_fetch_attempt("alpaca", status=status, **log_extra)
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
