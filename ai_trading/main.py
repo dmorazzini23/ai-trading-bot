@@ -106,12 +106,13 @@ def run_cycle() -> None:
     from ai_trading.config.management import TradingConfig
     from ai_trading.config import get_settings
 
+    # Ensure trade log file exists before any trade-log reads occur. The
+    # ``get_trade_logger`` helper lazily creates the log and writes the header on
+    # first use so downstream components can safely read from it during startup.
+    get_trade_logger()
+
     state = BotState()
     cfg = TradingConfig.from_env()
-
-    # Ensure trade log file exists before any symbol processing occurs.
-    # get_trade_logger lazily creates the log and writes the header on first use.
-    get_trade_logger()
 
     # Carry through a pre-resolved max position size if available on Settings.
     S = get_settings()

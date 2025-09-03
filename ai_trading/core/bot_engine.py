@@ -4972,6 +4972,9 @@ def _read_trade_log(
         )
         return None
     if df.empty:
+        # Startup may legitimately run before any trades have executed; use INFO
+        # instead of WARNING to reduce noise when the log exists but has no
+        # rows yet.
         logger.info(
             "Trade log %s parsed but contains no rows | hint=call get_trade_logger() to initialize",
             path,

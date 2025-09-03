@@ -37,6 +37,20 @@ def test_trade_logger_records_entry(tmp_path, monkeypatch):
     assert "AAPL" in lines[1]
 
 
+def test_get_trade_logger_creates_header_when_missing(tmp_path, monkeypatch):
+    """get_trade_logger should create the file with a header if absent."""
+
+    log_path = tmp_path / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    bot_engine.get_trade_logger()
+
+    assert log_path.exists()
+    lines = log_path.read_text().splitlines()
+    assert lines[0].startswith("symbol,entry_time")
+
+
 def test_read_trade_log_initializes_file_with_header(tmp_path, monkeypatch):
     """_read_trade_log initializes missing file and writes header."""
 

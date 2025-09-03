@@ -12,17 +12,17 @@ def _write_empty_csv(path: Path, header: list[str]) -> None:
     path.write_text(",".join(header) + "\n")
 
 
-def test_parse_local_positions_warns_on_empty(caplog, tmp_path, monkeypatch):
-    """_parse_local_positions should warn when the log is empty."""
+def test_parse_local_positions_logs_info_on_empty(caplog, tmp_path, monkeypatch):
+    """_parse_local_positions should log info when the log is empty."""
 
     trade_log = tmp_path / "trades.csv"
     _write_empty_csv(trade_log, ["symbol", "qty", "side", "exit_time"])
     monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(trade_log))
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         bot_engine._parse_local_positions()
 
-    assert any(r.levelno == logging.WARNING and str(trade_log) in r.getMessage() for r in caplog.records)
+    assert any(r.levelno == logging.INFO and str(trade_log) in r.getMessage() for r in caplog.records)
 
 
 def test_parse_local_positions_warns_when_missing(caplog, tmp_path, monkeypatch):
