@@ -332,6 +332,8 @@ def run_bot(*_a, **_k) -> int:
             logger.info("Memory optimization enabled")
         logger.info("Bot startup complete - entering main loop")
         preflight_import_health()
+        from ai_trading.core.bot_engine import get_trade_logger
+        get_trade_logger()
         run_cycle()
         return 0
     except (ValueError, TypeError, RuntimeError) as e:
@@ -521,6 +523,8 @@ def main(argv: list[str] | None = None) -> None:
     }
     logger.info("STARTUP_BANNER", extra=_redact(banner))
     _install_signal_handlers()
+    from ai_trading.core.bot_engine import get_trade_logger
+    get_trade_logger()
     try:
         run_cycle()
     except (TypeError, ValueError) as e:
