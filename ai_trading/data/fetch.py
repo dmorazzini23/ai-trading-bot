@@ -17,7 +17,7 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
-from ai_trading.logging import logger
+from ai_trading.logging import log_fetch_attempt, logger
 from ai_trading.data.metrics import metrics
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
@@ -654,6 +654,13 @@ def _fetch_bars(
         # otherwise route through the module-level `requests.get` so tests that
         # monkeypatch `df.requests.get` can intercept deterministically.
         use_session_get = hasattr(session, "__dict__") and ("get" in getattr(session, "__dict__", {}))
+        log_fetch_attempt(
+            "alpaca",
+            url=url,
+            symbol=symbol,
+            feed=_feed,
+            timeframe=_interval,
+        )
         try:
             if use_session_get:
                 resp = session.get(url, params=params, headers=headers, timeout=timeout)
@@ -664,7 +671,23 @@ def _fetch_bars(
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()
+            log_fetch_attempt(
+                "alpaca",
+                url=url,
+                symbol=symbol,
+                feed=_feed,
+                timeframe=_interval,
+                status=status,
+            )
         except Timeout as e:
+            log_fetch_attempt(
+                "alpaca",
+                url=url,
+                symbol=symbol,
+                feed=_feed,
+                timeframe=_interval,
+                error=str(e),
+            )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -677,6 +700,14 @@ def _fetch_bars(
                     return result
             raise
         except ConnectionError as e:
+            log_fetch_attempt(
+                "alpaca",
+                url=url,
+                symbol=symbol,
+                feed=_feed,
+                timeframe=_interval,
+                error=str(e),
+            )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -688,6 +719,14 @@ def _fetch_bars(
                     return result
             raise
         except (HTTPError, RequestException, ValueError, KeyError) as e:
+            log_fetch_attempt(
+                "alpaca",
+                url=url,
+                symbol=symbol,
+                feed=_feed,
+                timeframe=_interval,
+                error=str(e),
+            )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
@@ -749,6 +788,15 @@ def _fetch_bars(
             raise ValueError("rate_limited")
         df = pd.DataFrame(data)
         if df.empty:
+            log_fetch_attempt(
+                "alpaca",
+                url=url,
+                symbol=symbol,
+                feed=_feed,
+                timeframe=_interval,
+                status=status,
+                error="empty",
+            )
             metrics.empty_payload += 1
             if fallback:
                 _incr("data.fetch.empty", value=1.0, tags=_tags())

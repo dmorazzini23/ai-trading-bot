@@ -478,6 +478,35 @@ def get_logger(name: str) -> SanitizingLoggerAdapter:
 logger = SanitizingLoggerAdapter(logging.getLogger(__name__), {})
 logger_once = EmitOnceLogger(logger)
 
+def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | None = None, **extra: Any) -> None:
+    """Log a market data fetch attempt and its outcome.
+
+    Parameters
+    ----------
+    provider : str
+        Data source name, e.g. ``"alpaca"`` or ``"yfinance"``.
+    status : Optional[int]
+        HTTP status code returned by the provider, if available.
+    error : Optional[str]
+        Error message when the attempt fails or returns an unexpected payload.
+    **extra : dict
+        Additional context about the request (symbol, feed, timeframe, ...).
+
+    Notes
+    -----
+    This helper centralizes fetch attempt logging so callers can capture
+    success, empty responses, and error codes with consistent structured
+    metadata.
+    """
+    payload: dict[str, Any] = {"provider": provider, **extra}
+    if status is not None:
+        payload["status"] = status
+    if error is not None:
+        payload["error"] = error
+        logger.warning("FETCH_ATTEMPT", extra=payload)
+    else:
+        logger.info("FETCH_ATTEMPT", extra=payload)
+
 def get_phase_logger(name: str, phase: str | None=None) -> logging.Logger:
     """
     Return a logger that prefixes messages with a trading 'phase' token so
@@ -797,4 +826,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
+__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
