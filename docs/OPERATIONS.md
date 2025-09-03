@@ -17,7 +17,7 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics  # 200 if e
 Set `RUN_HEALTHCHECK=1` in the environment to enable the Flask endpoints.
 
 ### Paths & default files
-- Trade log file defaults to `<repo>/logs/trades.jsonl` when `TRADE_LOG_PATH` is not set. The directory is auto-created.
+- Trade log file defaults to `/var/log/ai-trading-bot/trades.jsonl` when `TRADE_LOG_PATH` is not set. The directory is auto-created.
 - The application initializes this trade log on startup via `ai_trading.core.bot_engine.get_trade_logger()`. Custom deployments should call it once if they bypass the standard entrypoint.
 - Empty model path disables ML quietly. Set `MODEL_PATH` to enable.
 - Override cache location with `AI_TRADING_CACHE_DIR` when the default `~/.cache/ai-trading-bot`
