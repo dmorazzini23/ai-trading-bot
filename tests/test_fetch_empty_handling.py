@@ -40,7 +40,7 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(ValueError, match="empty_bars"):
+        with pytest.raises(fetch.EmptyBarsError, match="empty_bars"):
             fetch._fetch_bars("AAPL", start, end, "1Min")
 
     assert any(r.message == "EMPTY_DATA" and r.levelno == logging.WARNING for r in caplog.records)

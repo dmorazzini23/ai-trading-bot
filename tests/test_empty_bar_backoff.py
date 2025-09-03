@@ -22,7 +22,7 @@ def test_backoff_uses_alternate_provider(monkeypatch, caplog):
     fetch._EMPTY_BAR_COUNTS[key] = fetch._EMPTY_BAR_THRESHOLD - 1
 
     def _raise_empty(*_a, **_k):
-        raise ValueError("empty_bars")
+        raise fetch.EmptyBarsError("empty_bars")
 
     monkeypatch.setattr(fetch, "_fetch_bars", _raise_empty)
     monkeypatch.setattr(fetch, "fh_fetcher", None)
@@ -70,7 +70,7 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
     fetch._EMPTY_BAR_COUNTS[key] = fetch._EMPTY_BAR_THRESHOLD - 1
 
     def _raise_empty(*_a, **_k):
-        raise ValueError("empty_bars")
+        raise fetch.EmptyBarsError("empty_bars")
 
     monkeypatch.setattr(fetch, "_fetch_bars", _raise_empty)
     monkeypatch.setattr(fetch, "fh_fetcher", None)
