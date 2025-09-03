@@ -51,3 +51,20 @@ def test_read_trade_log_initializes_file_with_header(tmp_path, monkeypatch):
     lines = log_path.read_text().splitlines()
     assert lines[0].startswith("symbol,entry_time")
 
+
+def test_existing_empty_log_gets_header_and_entry(tmp_path, monkeypatch):
+    """Existing empty log gets header and first entry on startup."""
+
+    log_path = tmp_path / "trades.jsonl"
+    log_path.touch()
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    logger = bot_engine.get_trade_logger()
+    logger.log_entry("MSFT", 123.0, 1, "buy", "test")
+
+    lines = log_path.read_text().splitlines()
+    assert lines[0].startswith("symbol,entry_time")
+    assert len(lines) == 2
+    assert "MSFT" in lines[1]
+

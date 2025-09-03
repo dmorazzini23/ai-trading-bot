@@ -605,7 +605,7 @@ def default_trade_log_path() -> str:
             os.makedirs(os.path.dirname(cand), exist_ok=True)
             return cand
 
-    fallback = os.path.join(BASE_DIR, "logs", "trades.jsonl")
+    fallback = "/var/log/ai-trading-bot/trades.jsonl"
     os.makedirs(os.path.dirname(fallback), exist_ok=True)
     return fallback
 
@@ -5591,7 +5591,7 @@ class BotContext:
 
 data_fetcher: DataFetcher | None = None
 signal_manager = SignalManager()
-# AI-AGENT-REF: Lazy initialization for trade logger to speed up imports in testing
+# AI-AGENT-REF: Singleton initialized at import to ensure trade log availability
 _TRADE_LOGGER_SINGLETON = None
 
 
@@ -5641,8 +5641,10 @@ from ai_trading.utils.imports import (
     resolve_risk_engine_cls,
     resolve_strategy_allocator_cls,
 )
-
 logger = get_logger(__name__)
+
+# Ensure trade log file exists when module is imported
+get_trade_logger()
 
 
 def get_risk_engine():
