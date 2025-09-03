@@ -1,9 +1,27 @@
-import importlib.util
+import importlib
 import os
 import random
+import sys
+import types
 from pathlib import Path
 
 import pytest
+
+# Provide a lightweight default model so bot initialization can preload it
+_dummy_mod = types.ModuleType("dummy_model")
+
+
+class _DummyModel:
+    def predict(self, _x):
+        return [0]
+
+    def predict_proba(self, _x):
+        return [[0.5, 0.5]]
+
+
+_dummy_mod.get_model = lambda: _DummyModel()
+sys.modules["dummy_model"] = _dummy_mod
+os.environ.setdefault("AI_TRADING_MODEL_MODULE", "dummy_model")
 
 
 def _missing(mod: str) -> bool:

@@ -1085,6 +1085,8 @@ User=ai-trading
 Group=ai-trading
 WorkingDirectory=/opt/ai-trading-bot
 Environment=PATH=/opt/ai-trading-bot/venv/bin
+Environment=AI_TRADING_MODEL_MODULE=ai_trading.model_loader
+Environment=AI_TRADING_MODEL_PATH=/var/lib/ai-trading-bot/models/trained_model.pkl
 Environment=AI_TRADING_DATA_DIR=/var/lib/ai-trading-bot
 Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
 Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
