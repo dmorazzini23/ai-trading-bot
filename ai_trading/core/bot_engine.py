@@ -9240,22 +9240,28 @@ def _evaluate_trade_signal(
 ) -> tuple[float, float, str]:
     """Return ``(final_score, confidence, strategy)`` for ``symbol``."""
 
-    sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
+    ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
+    unique: dict[str, tuple[int, float, str]] = {}
+    for s, w, lab in ctx.signal_manager.last_components:
+        unique[lab] = (s, w, lab)
+    ctx.signal_manager.last_components = list(unique.values())
     comp_list = [
         {"signal": lab, "flag": s, "weight": w}
         for s, w, lab in ctx.signal_manager.last_components
     ]
     logger.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
+    confidence = sum(w for _, w, _ in ctx.signal_manager.last_components)
+    strat = "+".join(lab for _, _, lab in ctx.signal_manager.last_components)
     logger.info(
         "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
         symbol,
         final_score,
-        conf,
+        confidence,
     )
     if final_score is None or not np.isfinite(final_score) or final_score == 0:
         raise ValueError("Invalid or empty signal")
-    return final_score, conf, strat
+    return final_score, confidence, strat
 
 
 def _current_qty(ctx, symbol: str) -> int:
