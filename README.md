@@ -738,6 +738,7 @@ exits early with a clear error message when these values are invalid.
    ALPACA_ADJUSTMENT=all
    DATA_LOOKBACK_DAYS_DAILY=10
    DATA_LOOKBACK_DAYS_MINUTE=5
+   MAX_EMPTY_RETRIES=10               # Max empty-bar retries before fallback/skip
    TZ=UTC
    # ALPACA_API_URL=https://api.alpaca.markets     # Live trading (DANGER!)
    # ALPACA_BASE_URL is also accepted for backward compatibility
@@ -758,6 +759,10 @@ exits early with a clear error message when these values are invalid.
   MAX_POSITION_SIZE=5000              # Absolute USD cap per position (1-10000; derived from CAPITAL_CAP if unset)
   AI_TRADING_MAX_POSITION_SIZE=5000   # Explicit override; deployment scripts require this to be set
   ```
+
+Repeated empty responses from Alpaca are retried up to `MAX_EMPTY_RETRIES`
+times. Once exhausted, the bot logs `EMPTY_RETRIES_EXHAUSTED` and will either
+fall back to another feed or skip the symbol to avoid infinite loops.
 
   Unauthorized SIP requests return an empty DataFrame and automatically
   disable further SIP retries.  Set `ALPACA_SIP_UNAUTHORIZED=1` to skip SIP

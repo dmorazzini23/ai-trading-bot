@@ -4,6 +4,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from ai_trading.config.management import MAX_EMPTY_RETRIES
+
 @dataclass
 class _State:
     count: int = 0
@@ -28,4 +30,8 @@ def record(key: tuple[str, str, str, str, str], now: datetime) -> int:
     st.last = now
     return st.count
 
-__all__ = ["classify", "should_emit", "record"]
+
+def exhausted(key: tuple[str, str, str, str, str], limit: int = MAX_EMPTY_RETRIES) -> bool:
+    """Return True when ``record`` count meets or exceeds ``limit``."""
+    return _store[key].count >= limit
+__all__ = ["classify", "should_emit", "record", "exhausted"]

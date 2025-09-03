@@ -17,7 +17,8 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
-from ai_trading.logging import log_fetch_attempt, logger
+from ai_trading.logging import log_empty_retries_exhausted, log_fetch_attempt, logger
+from ai_trading.config.management import MAX_EMPTY_RETRIES
 from ai_trading.data.metrics import metrics
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
@@ -164,7 +165,7 @@ _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
-_EMPTY_BAR_MAX_RETRIES = 10
+_EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
@@ -971,6 +972,14 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                         "ALPACA_EMPTY_BAR_MAX_RETRIES",
                         extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
                     )
+                    log_empty_retries_exhausted(
+                        "alpaca",
+                        symbol=symbol,
+                        timeframe="1Min",
+                        feed=feed or _DEFAULT_FEED,
+                        retries=cnt,
+                    )
+                    _SKIPPED_SYMBOLS.add(tf_key)
                     raise EmptyBarsError(
                         f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
                     ) from e
