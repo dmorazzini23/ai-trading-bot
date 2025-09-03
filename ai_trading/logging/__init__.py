@@ -508,6 +508,27 @@ def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | 
     else:
         logger.info("FETCH_ATTEMPT", extra=payload)
 
+
+def log_empty_retries_exhausted(
+    provider: str,
+    *,
+    symbol: str,
+    timeframe: str,
+    feed: str | None = None,
+    retries: int | None = None,
+) -> None:
+    """Log when repeated data fetches yield empty results."""
+    payload: dict[str, Any] = {
+        "provider": provider,
+        "symbol": symbol,
+        "timeframe": timeframe,
+    }
+    if feed is not None:
+        payload["feed"] = feed
+    if retries is not None:
+        payload["retries"] = retries
+    logger.error("EMPTY_RETRIES_EXHAUSTED", extra=payload)
+
 def get_phase_logger(name: str, phase: str | None=None) -> logging.Logger:
     """
     Return a logger that prefixes messages with a trading 'phase' token so
@@ -827,4 +848,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
+__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']

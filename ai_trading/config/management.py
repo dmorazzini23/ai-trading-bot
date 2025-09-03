@@ -107,6 +107,10 @@ def is_shadow_mode() -> bool:
 # Canonical runtime seed used by risk/engine and anywhere else needing determinism.
 SEED: int = int(os.environ.get("SEED", "42"))  # AI-AGENT-REF: expose runtime seed
 
+# Limit for consecutive empty data retries before surfacing an error. Can be
+# overridden via the ``MAX_EMPTY_RETRIES`` environment variable.
+MAX_EMPTY_RETRIES: int = int(os.environ.get("MAX_EMPTY_RETRIES", "10"))
+
 # Required environment variables for a functional deployment. "MAX_POSITION_SIZE"
 # is intentionally excluded; when unset the runtime derives an appropriate value
 # based on capital constraints.
@@ -196,6 +200,7 @@ __all__ = [
     "get_env",
     "is_shadow_mode",
     "SEED",
+    "MAX_EMPTY_RETRIES",
     "validate_required_env",
     "validate_alpaca_credentials",
     "Settings",
