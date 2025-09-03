@@ -3214,6 +3214,7 @@ LIMIT_ORDER_SLIPPAGE = params.get(
     ),
 )
 # Resolved during runtime build to avoid premature network calls.
+# Initialized from TradingConfig so env overrides match runtime resolution.
 MAX_POSITION_SIZE = 8000.0
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get(
@@ -3311,6 +3312,13 @@ def _env_float(default: float, *keys: str) -> float:
 
 CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
 _cfg = TradingConfig.from_env()
+# Align default MAX_POSITION_SIZE with configuration at import time. Runtime
+# may update this later when dynamic sizing is resolved.
+if getattr(_cfg, "max_position_size", None):
+    try:
+        MAX_POSITION_SIZE = float(_cfg.max_position_size)
+    except Exception:  # pragma: no cover - defensive
+        pass
 _settings_drl = get_dollar_risk_limit()
 DOLLAR_RISK_LIMIT = _settings_drl
 if _cfg.dollar_risk_limit is not None and _cfg.dollar_risk_limit != _settings_drl:

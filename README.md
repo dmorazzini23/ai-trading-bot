@@ -756,8 +756,8 @@ exits early with a clear error message when these values are invalid.
   # Risk parameters
   CAPITAL_CAP=0.04                    # Fraction of equity usable per cycle
   DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
-  MAX_POSITION_SIZE=5000              # Absolute USD cap per position (1-10000; derived from CAPITAL_CAP if unset)
-  AI_TRADING_MAX_POSITION_SIZE=5000   # Explicit override; deployment scripts require this to be set
+  MAX_POSITION_SIZE=5000              # Static USD cap per position (1-10000). Ignored when AUTO sizing is active.
+  AI_TRADING_MAX_POSITION_SIZE=5000   # Hard override; takes precedence over dynamic sizing and is required by deploy scripts
   ```
 
 Repeated empty responses from Alpaca are retried up to `MAX_EMPTY_RETRIES`
@@ -772,11 +772,12 @@ fall back to another feed or skip the symbol to avoid infinite loops.
 
   Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH. Do not set both.
 
-  `MAX_POSITION_SIZE` must be a positive dollar value (>0). Values ≤0 are rejected.
-  If omitted, the bot derives a value from `CAPITAL_CAP` and available equity. Set
-  `AI_TRADING_MAX_POSITION_SIZE` to explicitly enforce a limit—deployment scripts
-  expect this variable to be present. Optionally set `MAX_POSITION_SIZE_PCT` to cap
-  positions as a percentage of the portfolio.
+  `MAX_POSITION_SIZE` must be a positive dollar value (>0). If `max_position_mode`
+  is set to `AUTO`, this static value is replaced at startup by multiplying
+  `CAPITAL_CAP` with current equity. `AI_TRADING_MAX_POSITION_SIZE`, when set,
+  acts as a hard ceiling and overrides both the static value and the automatic
+  equity-based sizing. Optionally set `MAX_POSITION_SIZE_PCT` to cap positions as
+  a percentage of the portfolio.
 
 If any `ALPACA_*` credentials are missing or `alpaca-py` is not installed,
 the bot now aborts startup with a clear error instead of running without broker

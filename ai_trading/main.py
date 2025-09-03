@@ -506,19 +506,6 @@ def main(argv: list[str] | None = None) -> None:
         raise
     if not _init_http_session(config):
         return
-    try:
-        # Use full Settings so equity resolves with credentials; AUTO comes from Settings
-        resolved_size, sizing_meta = resolve_max_position_size(config, S)
-        try:
-            setattr(S, "max_position_size", float(resolved_size))
-        except (AttributeError, TypeError):
-            pass
-        if sizing_meta.get("source") == "fallback":
-            logger.warning("POSITION_SIZING_FALLBACK", extra={**sizing_meta, "resolved": resolved_size})
-        else:
-            logger.info("POSITION_SIZING_RESOLVED", extra={**sizing_meta, "resolved": resolved_size})
-    except (ValueError, TypeError) as e:
-        logger.warning("POSITION_SIZING_ERROR", extra={"error": str(e)})
     banner = {
         "mode": getattr(config, "trading_mode", "balanced"),
         "paper": getattr(config, "paper", True),
