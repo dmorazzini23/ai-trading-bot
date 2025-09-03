@@ -504,6 +504,9 @@ class BotEngine:
                 "MODEL_STARTUP_CHECK_FAILED", extra={"error": str(exc)}
             )
 
+        # Eagerly load the configured model so misconfiguration fails fast
+        _load_required_model()
+
     @property
     def ctx(self):
         """Return the lazily-initialized bot context."""
@@ -5269,8 +5272,12 @@ class SignalManager:
         if model is None or not (
             hasattr(model, "predict") and hasattr(model, "predict_proba")
         ):
+            _path = os.getenv("AI_TRADING_MODEL_PATH")
+            _mod = os.getenv("AI_TRADING_MODEL_MODULE")
             logger.warning(
-                "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE"
+                "ML predictions disabled; provide a model via AI_TRADING_MODEL_PATH or AI_TRADING_MODEL_MODULE "
+                f"(AI_TRADING_MODEL_PATH={_path!r}, AI_TRADING_MODEL_MODULE={_mod!r})",
+                extra={"model_path": _path, "model_module": _mod},
             )
             # AI-AGENT-REF: guard absent model
             return None
