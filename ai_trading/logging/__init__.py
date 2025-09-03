@@ -490,7 +490,8 @@ def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | 
     error : Optional[str]
         Error message when the attempt fails or returns an unexpected payload.
     **extra : dict
-        Additional context about the request (symbol, feed, timeframe, ...).
+        Additional context about the request (symbol, feed, timeframe, request
+        parameters, correlation IDs, etc.).
 
     Notes
     -----
