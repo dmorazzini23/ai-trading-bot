@@ -2324,6 +2324,19 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     else:
         df = get_minute_df(symbol, start_dt, now_utc)
 
+    # Drop bars with zero volume or from the current (incomplete) minute
+    try:
+        current_minute = now_utc.replace(second=0, microsecond=0)
+        ts_col = "timestamp" if "timestamp" in df.columns else None
+        if ts_col is not None:
+            df = df[df[ts_col] < current_minute]
+        else:
+            df = df[df.index < current_minute]
+        if "volume" in df.columns:
+            df = df[df["volume"] > 0]
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("minute bar filtering failed: %s", exc)
+
     if df.empty:
         msg = "Minute bars DataFrame is empty after fallbacks; market likely closed"  # AI-AGENT-REF
         logger.warning(
