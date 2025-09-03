@@ -7,14 +7,13 @@ avoids ``pickle.load`` where possible.
 """
 
 from ai_trading.logging import get_logger
+from ai_trading.paths import MODELS_DIR
 from datetime import UTC
 from pathlib import Path
 
 import joblib
 
 logger = get_logger(__name__)
-BASE_DIR = Path(__file__).resolve().parents[1]
-ALLOWED_MODELS_DIR = (BASE_DIR / "models").resolve()
 ML_MODELS: dict[str, object | None] = {}
 
 
@@ -61,17 +60,14 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
 def load_model(symbol: str) -> object:
     """Load or train an ML model for ``symbol``.
 
-    The models directory is resolved via ``config.get_env('MODELS_DIR')`` if set,
-    otherwise defaults to ``<project>/models``. Paths are validated to reside
-    within the allowed models directory. Any deserialization error results in a
-    ``RuntimeError`` that includes the absolute path and ``symbol`` for
-    context.
+    The models directory defaults to :data:`ai_trading.paths.MODELS_DIR` and can
+    be overridden via the ``AI_TRADING_MODELS_DIR`` environment variable.
+    Resolved paths are validated to remain within ``models_dir``. Any
+    deserialization error results in a ``RuntimeError`` that includes the
+    absolute path and ``symbol`` for context.
     """
-    from ai_trading.config import management as config
 
-    models_dir = Path(config.get_env("MODELS_DIR") or ALLOWED_MODELS_DIR).resolve()
-    if not models_dir.is_relative_to(ALLOWED_MODELS_DIR):
-        raise RuntimeError(f"Disallowed models directory: {models_dir}")
+    models_dir = MODELS_DIR
     path = (models_dir / f"{symbol}.pkl").resolve()
     if not path.is_relative_to(models_dir):
         raise RuntimeError(f"Model path escapes models directory: {path}")

@@ -62,6 +62,10 @@ the default `~/.cache/ai-trading-bot` is unavailable (for example, if the home
 directory is mounted read-only). The directory is created with `0700`
 permissions during startup.
 
+To load ML models from a custom location, set `AI_TRADING_MODELS_DIR` before
+startup. The path may reside outside the repository; each model file is
+validated to stay within this directory to guard against path traversal.
+
 
 ## Config
 
