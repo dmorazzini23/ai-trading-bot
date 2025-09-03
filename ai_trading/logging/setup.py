@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List
+
 
 # Internal list of log file paths used when configuring logging.
 _logger_paths: list[str] | None = None
@@ -12,6 +12,26 @@ _logger_paths: list[str] | None = None
 def get_logger_paths() -> list[str]:
     """Return a copy of the log file paths registered so far."""
     return list(_logger_paths or [])
+
+
+def _apply_library_filters() -> None:
+    """Set log levels for noisy third-party libraries.
+
+    Default filters target common verbose dependencies but can be adjusted via
+    the ``LOG_QUIET_LIBRARIES`` environment variable which accepts comma
+    separated ``logger=LEVEL`` pairs. Example: ``urllib3=WARNING,foo=ERROR``.
+    """
+    from ai_trading.config import management as config
+
+    filters: dict[str, str] = {"charset_normalizer": "INFO"}
+    raw = config.get_env("LOG_QUIET_LIBRARIES", "")
+    for item in raw.split(","):
+        name, _, level = item.partition("=")
+        if name.strip() and level.strip():
+            filters[name.strip()] = level.strip().upper()
+    for name, level_name in filters.items():
+        level = getattr(logging, level_name.upper(), logging.INFO)
+        logging.getLogger(name).setLevel(level)
 
 
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
@@ -32,4 +52,6 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         _logger_paths.append(log_file)
 
     # ``debug`` is intentionally ignored; callers should set ``LOG_LEVEL``.
-    return _setup_logging(log_file=log_file)
+    logger = _setup_logging(log_file=log_file)
+    _apply_library_filters()
+    return logger
