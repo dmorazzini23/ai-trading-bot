@@ -99,6 +99,12 @@ The global HTTP session used for data/broker calls can be tuned via env to balan
 
 These map to `ai_trading.settings.Settings` and are applied at startup by `main._init_http_session`.
 
+### Market hours
+
+The bot checks NYSE trading hours at startup. If launched while the market is
+closed, it sleeps until the next session begins. Set `ALLOW_AFTER_HOURS=1` to
+skip this guard for testing or after-hours experimentation.
+
 ## Timezones
 
 Uses Python stdlib **zoneinfo**.
