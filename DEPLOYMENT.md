@@ -539,6 +539,9 @@ PROMETHEUS_PORT=8000
 HEALTH_CHECK_INTERVAL=30
 ```
 
+The service waits for the next NYSE session if it starts outside regular market
+hours. Set `ALLOW_AFTER_HOURS=1` to bypass this check during testing.
+
 ### Configuration Validation
 
 ```python

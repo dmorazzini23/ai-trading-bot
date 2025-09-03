@@ -44,7 +44,7 @@ from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact, redact_env
 from ai_trading.net.http import build_retrying_session, set_global_session, mount_host_retry_profile
 from ai_trading.utils.http import clamp_request_timeout
-from ai_trading.utils.base import is_market_open as _is_market_open_base
+from ai_trading.utils.base import is_market_open as _is_market_open_base, next_market_open
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
 from ai_trading.config.management import (
     get_env,
@@ -463,13 +463,28 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     try:
         if not _is_market_open_base():
             now = datetime.now(ZoneInfo("America/New_York"))
-            logger.warning(
-                "STARTUP_OUTSIDE_MARKET_HOURS",
-                extra={"now": now.isoformat()},
-            )
+            if allow_after_hours:
+                logger.warning(
+                    "STARTUP_OUTSIDE_MARKET_HOURS",
+                    extra={"now": now.isoformat(), "override": True},
+                )
+            else:
+                try:
+                    nxt = next_market_open(now)
+                except Exception:
+                    logger.error("NEXT_MARKET_OPEN_FAILED", exc_info=True)
+                    raise SystemExit(1)
+                wait = max((nxt - now).total_seconds(), 0)
+                logger.warning(
+                    "MARKET_CLOSED_SLEEP",
+                    extra={"now": now.isoformat(), "next_open": nxt.isoformat(), "sleep_s": int(wait)},
+                )
+                if wait > 0:
+                    time.sleep(wait)
     except Exception:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps

@@ -385,6 +385,48 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
+def next_market_open(now: dt.datetime | None = None) -> dt.datetime:
+    """Return the next NYSE market open time in US/Eastern."""
+    check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
+    try:
+        import pandas_market_calendars as mcal  # pylint: disable=import-error
+
+        nyse = mcal.get_calendar("NYSE")
+        start = check_time.date()
+        end = start + dt.timedelta(days=7)
+        sched = nyse.schedule(start_date=start, end_date=end)
+        future = sched[sched["market_open"] > check_time]
+        if not future.empty:
+            return future.iloc[0]["market_open"].tz_convert(EASTERN_TZ).to_pydatetime()
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.debug("next_market_open calendar lookup failed: %s", exc)
+
+    candidate = check_time
+    if candidate.weekday() < 5 and candidate.time() < MARKET_OPEN_TIME:
+        candidate = candidate.replace(
+            hour=MARKET_OPEN_TIME.hour,
+            minute=MARKET_OPEN_TIME.minute,
+            second=0,
+            microsecond=0,
+        )
+    else:
+        candidate = (candidate + dt.timedelta(days=1)).replace(
+            hour=MARKET_OPEN_TIME.hour,
+            minute=MARKET_OPEN_TIME.minute,
+            second=0,
+            microsecond=0,
+        )
+    while candidate.weekday() >= 5:
+        candidate += dt.timedelta(days=1)
+        candidate = candidate.replace(
+            hour=MARKET_OPEN_TIME.hour,
+            minute=MARKET_OPEN_TIME.minute,
+            second=0,
+            microsecond=0,
+        )
+    return candidate
+
+
 def market_open_between(start: datetime, end: datetime) -> bool:
     """Return True if market is open at any point in [start, end]."""
     if end < start:
