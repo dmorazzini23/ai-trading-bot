@@ -23,6 +23,10 @@ from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
 
+if os.getenv("FINNHUB_API_KEY") and os.getenv("ENABLE_FINNHUB") is None:
+    os.environ["ENABLE_FINNHUB"] = "1"
+    logging.getLogger(__name__).debug("ENABLE_FINNHUB_SET", extra={"enabled": True})
+
 def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
 
