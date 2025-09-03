@@ -39,11 +39,14 @@ present before the service starts:
 | --- | --- |
 | `ALPACA_API_KEY` | Alpaca API authentication |
 | `ALPACA_SECRET_KEY` | Alpaca API authentication |
-| `ALPACA_API_URL` | Broker endpoint URL |
+| `ALPACA_API_URL` / `ALPACA_BASE_URL` | Broker endpoint URL (either variable is accepted and logged) |
 | `ALPACA_DATA_FEED` | Market data feed selection |
 | `WEBHOOK_SECRET` | Protects inbound webhooks |
 | `CAPITAL_CAP` | Maximum portfolio allocation |
 | `DOLLAR_RISK_LIMIT` | Maximum per-trade dollar risk |
+
+Either `ALPACA_API_URL` or `ALPACA_BASE_URL` may be set; the service resolves the
+alias and logs the effective URL during startup.
 
 If any are missing or empty the process exits with a `RuntimeError` listing the
 missing keys; values are masked in logs and exceptions. During health server

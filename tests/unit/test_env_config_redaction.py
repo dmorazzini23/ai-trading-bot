@@ -38,3 +38,19 @@ def test_redact_env_drop_removes_keys():
     redacted = redact_env(payload, drop=True)
     for k in _SENSITIVE_ENV:
         assert k not in redacted
+
+
+def test_base_url_alias_logged(caplog, monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "AK123456789")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "SK987654321")
+    monkeypatch.delenv("ALPACA_API_URL", raising=False)
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://alias-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "iex")
+    monkeypatch.setenv("WEBHOOK_SECRET", "HOOK-SECRET")
+    monkeypatch.setenv("CAPITAL_CAP", "0.5")
+    monkeypatch.setenv("DOLLAR_RISK_LIMIT", "1000")
+
+    caplog.set_level(logging.INFO)
+    main._fail_fast_env()
+    env_log = next(rec for rec in caplog.records if rec.getMessage() == "ENV_CONFIG_LOADED")
+    assert env_log.ALPACA_API_URL == "https://alias-api.alpaca.markets"
