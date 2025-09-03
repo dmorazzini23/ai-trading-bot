@@ -9,9 +9,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from .protocols import AllocatorProtocol
 from ai_trading.position_sizing import (
-    get_max_position_size,
+    resolve_max_position_size,
     _get_equity_from_alpaca,
 )
+from ai_trading.logging import get_logger
+logger = get_logger(__name__)
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
 REQUIRED_PARAM_DEFAULTS = {
@@ -109,6 +111,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
 
     # Resolve max_position_size consistently with position_sizing helper.
     val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)
+    sizing_meta: dict[str, Any] = {}
     if val is None:
         try:
             from ai_trading.config.management import get_env
@@ -120,9 +123,14 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             val = env_val
 
     if val is None:
-        resolved = get_max_position_size(cfg, cfg, force_refresh=True)
+        resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
     else:
         resolved = float(val)
+        sizing_meta = {
+            "mode": str(getattr(cfg, "max_position_mode", "STATIC")).upper(),
+            "source": "provided",
+            "capital_cap": getattr(cfg, "capital_cap", 0.0),
+        }
 
     if getattr(cfg, "max_position_size", None) != resolved:
         try:
@@ -139,6 +147,10 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             be.MAX_POSITION_SIZE = float(resolved)
     except Exception:
         pass
+    if sizing_meta.get("source") == "fallback":
+        logger.warning("POSITION_SIZING_FALLBACK", extra={**sizing_meta, "resolved": resolved})
+    else:
+        logger.info("POSITION_SIZING_RESOLVED", extra={**sizing_meta, "resolved": resolved})
     runtime = BotRuntime(cfg=cfg, params=params, allocator=kwargs.get('allocator'))
     runtime.model = NullAlphaModel()
     return runtime
