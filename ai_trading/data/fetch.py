@@ -94,6 +94,10 @@ class DataFetchError(Exception):
 DataFetchException = DataFetchError
 
 
+class EmptyBarsError(DataFetchError, ValueError):
+    """Raised when a data provider returns no bars for a request."""
+
+
 class FinnhubAPIException(Exception):
     """Minimal Finnhub API error for tests."""
 
@@ -805,7 +809,9 @@ def _fetch_bars(
                     return pd_mod.DataFrame()
                 except Exception:
                     return pd.DataFrame()
-            raise ValueError("empty_bars")
+            raise EmptyBarsError(
+                f"empty_bars: symbol={symbol}, feed={_feed}, timeframe={_interval}"
+            )
         ts_col = None
         for c in df.columns:
             if c.lower() in ("t", "timestamp", "time"):
@@ -860,8 +866,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     if df is None or getattr(df, "empty", True):
         try:
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
-        except (ValueError, RuntimeError) as e:
-            if isinstance(e, ValueError) and str(e) == "empty_bars":
+        except (EmptyBarsError, ValueError, RuntimeError) as e:
+            if isinstance(e, EmptyBarsError):
                 cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
                 _EMPTY_BAR_COUNTS[tf_key] = cnt
                 if cnt >= _EMPTY_BAR_THRESHOLD:
@@ -902,7 +908,9 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                     )
                     df = None
             else:
-                logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+                logger.warning(
+                    "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
+                )
                 df = None
     if df is None or getattr(df, "empty", True):
         max_span = _dt.timedelta(days=8)
