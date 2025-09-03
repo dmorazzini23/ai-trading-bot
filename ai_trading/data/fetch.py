@@ -660,6 +660,7 @@ def _fetch_bars(
             symbol=symbol,
             feed=_feed,
             timeframe=_interval,
+            params=params,
         )
         try:
             if use_session_get:
@@ -671,6 +672,11 @@ def _fetch_bars(
             status = resp.status_code
             text = (resp.text or "").strip()
             ctype = (resp.headers.get("Content-Type") or "").lower()
+            corr_id = (
+                resp.headers.get("x-request-id")
+                or resp.headers.get("apca-request-id")
+                or resp.headers.get("x-correlation-id")
+            )
             log_fetch_attempt(
                 "alpaca",
                 url=url,
@@ -678,6 +684,8 @@ def _fetch_bars(
                 feed=_feed,
                 timeframe=_interval,
                 status=status,
+                params=params,
+                correlation_id=corr_id,
             )
         except Timeout as e:
             log_fetch_attempt(
@@ -687,6 +695,7 @@ def _fetch_bars(
                 feed=_feed,
                 timeframe=_interval,
                 error=str(e),
+                params=params,
             )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -707,6 +716,7 @@ def _fetch_bars(
                 feed=_feed,
                 timeframe=_interval,
                 error=str(e),
+                params=params,
             )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -726,6 +736,7 @@ def _fetch_bars(
                 feed=_feed,
                 timeframe=_interval,
                 error=str(e),
+                params=params,
             )
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -796,6 +807,8 @@ def _fetch_bars(
                 timeframe=_interval,
                 status=status,
                 error="empty",
+                params=params,
+                correlation_id=corr_id,
             )
             metrics.empty_payload += 1
             if fallback:
@@ -838,6 +851,10 @@ def _fetch_bars(
                                 "feed": _feed,
                                 "timeframe": _interval,
                                 "occurrences": cnt,
+                                "symbol": symbol,
+                                "start": _start.isoformat(),
+                                "end": _end.isoformat(),
+                                "correlation_id": corr_id,
                             }
                         ),
                     )
@@ -845,9 +862,23 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
-            # Retry once for intraday when market is closed to accommodate transient empty payloads
-            if (not _open) and str(_interval).lower() not in {"1day", "day", "1d"} and (not _state["retried_empty_once"]):
+            # Retry once for intraday requests when an empty payload is returned
+            if str(_interval).lower() not in {"1day", "day", "1d"} and (not _state["retried_empty_once"]):
                 _state["retried_empty_once"] = True
+                logger.debug(
+                    "RETRY_EMPTY_BARS",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": corr_id,
+                        }
+                    ),
+                )
                 return _req(session, None, headers=headers, timeout=timeout)
             # Closed-market contract: degrade silently when no daily data
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
