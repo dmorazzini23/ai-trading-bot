@@ -4,7 +4,7 @@ from ai_trading.core import bot_engine
 def test_parse_local_positions_creates_trade_log(tmp_path, monkeypatch):
     """Smoke test: reading positions initializes the trade log file."""
 
-    log_path = tmp_path / "trades.csv"
+    log_path = tmp_path / "trades.jsonl"
     # Point the bot engine to our temporary log file and reset singleton
     monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
     bot_engine._TRADE_LOGGER_SINGLETON = None
@@ -17,7 +17,8 @@ def test_parse_local_positions_creates_trade_log(tmp_path, monkeypatch):
 
     assert positions == {}
     assert log_path.exists()
-    assert log_path.stat().st_size > 0
+    lines = log_path.read_text().splitlines()
+    assert lines[0].startswith("symbol,entry_time")
 
 
 def test_trade_logger_records_entry(tmp_path, monkeypatch):
@@ -34,4 +35,19 @@ def test_trade_logger_records_entry(tmp_path, monkeypatch):
     assert lines[0].startswith("symbol,entry_time")
     assert len(lines) == 2
     assert "AAPL" in lines[1]
+
+
+def test_read_trade_log_initializes_file_with_header(tmp_path, monkeypatch):
+    """_read_trade_log initializes missing file and writes header."""
+
+    log_path = tmp_path / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    df = bot_engine._read_trade_log(str(log_path))
+
+    assert df is None
+    assert log_path.exists()
+    lines = log_path.read_text().splitlines()
+    assert lines[0].startswith("symbol,entry_time")
 
