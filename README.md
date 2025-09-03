@@ -135,6 +135,7 @@ are imported directly.
 
 ### 📊 Technical Analysis Engine
 - **50+ Technical Indicators**: RSI, MACD, Bollinger Bands, ATR, and custom indicators
+- **Fully-formed Bars Only**: Zero-volume and current-minute bars are discarded before indicator calculations
 - **Parallel Processing**: Concurrent indicator calculations for optimal performance
 - **Multi-horizon Signals**: Aggregated signals across different timeframes
 - **Regime Detection**: Hidden Markov Models for market state identification
