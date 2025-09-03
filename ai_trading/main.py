@@ -45,7 +45,12 @@ from ai_trading.net.http import build_retrying_session, set_global_session, moun
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
-from ai_trading.config.management import get_env, validate_required_env, reload_env
+from ai_trading.config.management import (
+    get_env,
+    validate_required_env,
+    reload_env,
+    _resolve_alpaca_env,
+)
 from ai_trading.metrics import get_histogram, get_counter
 from time import monotonic as _mono
 
@@ -201,7 +206,6 @@ def _fail_fast_env() -> None:
     required = (
         "ALPACA_API_KEY",
         "ALPACA_SECRET_KEY",
-        "ALPACA_API_URL",
         "ALPACA_DATA_FEED",
         "WEBHOOK_SECRET",
         "CAPITAL_CAP",
@@ -210,7 +214,11 @@ def _fail_fast_env() -> None:
     try:
         loaded = reload_env()
         validate_required_env(required)
-        snapshot = {k: os.getenv(k, "") for k in required}
+        snapshot = {k: get_env(k, "") or "" for k in required}
+        _, _, base_url = _resolve_alpaca_env()
+        if not base_url:
+            raise RuntimeError("Missing required environment variable: ALPACA_API_URL or ALPACA_BASE_URL")
+        snapshot["ALPACA_API_URL"] = base_url
     except RuntimeError as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
