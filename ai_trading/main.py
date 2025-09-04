@@ -8,6 +8,7 @@ from threading import Thread
 import signal
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
+from pathlib import Path
 from ai_trading.env import ensure_dotenv_loaded
 
 # Ensure environment variables are loaded before any logging configuration
@@ -85,10 +86,7 @@ def preflight_import_health() -> None:
             )
             raise SystemExit(1)
     logger.info("IMPORT_PREFLIGHT_OK")
-    try:
-        importlib.import_module("ai_trading.core.bot_engine").get_trade_logger()
-    except Exception as exc:  # pragma: no cover - best effort
-        logger.warning("TRADE_LOG_INIT_FAILED", extra={"error": repr(exc)})
+    ensure_trade_log_path()
 
 
 def run_cycle() -> None:
@@ -311,6 +309,24 @@ def validate_environment() -> None:
         os.makedirs(logs_dir, exist_ok=True)
 
 
+def ensure_trade_log_path() -> None:
+    """Initialize trade log and verify the path is writable."""
+    from ai_trading.core.bot_engine import get_trade_logger
+
+    tl = get_trade_logger()
+    path = Path(tl.path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a"):
+            pass
+    except OSError as exc:  # pragma: no cover - fail fast on unwritable path
+        logger.critical(
+            "TRADE_LOG_PATH_UNWRITABLE",
+            extra={"path": str(path), "error": str(exc)},
+        )
+        raise SystemExit(1) from exc
+
+
 def run_bot(*_a, **_k) -> int:
     """
     Main entry point for the trading bot.
@@ -342,8 +358,7 @@ def run_bot(*_a, **_k) -> int:
             logger.info("Memory optimization enabled")
         logger.info("Bot startup complete - entering main loop")
         preflight_import_health()
-        from ai_trading.core.bot_engine import get_trade_logger
-        get_trade_logger()
+        ensure_trade_log_path()
         run_cycle()
         return 0
     except (ValueError, TypeError, RuntimeError) as e:
@@ -544,8 +559,7 @@ def main(argv: list[str] | None = None) -> None:
     }
     logger.info("STARTUP_BANNER", extra=_redact(banner))
     _install_signal_handlers()
-    from ai_trading.core.bot_engine import get_trade_logger
-    get_trade_logger()
+    ensure_trade_log_path()
     try:
         run_cycle()
     except (TypeError, ValueError) as e:
