@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 - Makefile: add `PYTHON ?= python3` and route all invocations through
   `$(PYTHON)` for compatibility on Debian/Ubuntu where `python` shim is
   absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
+
+### Added
+- Cache fallback data provider usage to skip redundant Alpaca requests
+  for the same symbol and window.
 - **Python**: restrict supported version to >=3.12,<3.13
 - **Package Structure**: Root modules previously moved into `ai_trading/` package
   - **Migration Required**: Use `from ai_trading.signals import ...` instead of `from signals import ...`
