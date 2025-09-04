@@ -8,6 +8,11 @@ import ai_trading.data.fetch as data_fetcher
 pd = pytest.importorskip("pandas")
 
 
+@pytest.fixture(autouse=True)
+def _force_window(monkeypatch):
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
+
+
 def _dt_range():
     start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(minutes=1)

@@ -14,6 +14,11 @@ def _dt_range():
     return start, end
 
 
+@pytest.fixture(autouse=True)
+def _force_window(monkeypatch):
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+
+
 def test_backoff_uses_alternate_provider(monkeypatch, caplog):
     start, end = _dt_range()
     symbol = "AAPL"

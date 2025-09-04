@@ -52,6 +52,11 @@ def _ts_window() -> tuple[dt.datetime, dt.datetime]:
     return start, end
 
 
+@pytest.fixture(autouse=True)
+def _force_window(monkeypatch):
+    monkeypatch.setattr(df, "_window_has_trading_session", lambda *a, **k: True)
+
+
 def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     start, end = _ts_window()
