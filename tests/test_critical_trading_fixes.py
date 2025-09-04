@@ -610,6 +610,21 @@ def test_risk_management_sector_exposure_logging():
     assert result is True  # Should allow initial positions
 
 
+def test_sector_exposure_handles_non_iterable_positions():
+    """sector_exposure should treat non-iterable positions as empty."""
+    from ai_trading.core.bot_engine import sector_exposure
+
+    mock_ctx = Mock()
+    mock_ctx.api = Mock()
+
+    mock_ctx.api.list_positions.return_value = None
+    mock_account = Mock()
+    mock_account.portfolio_value = 1000
+    mock_ctx.api.get_account.return_value = mock_account
+
+    assert sector_exposure(mock_ctx) == {}
+
+
 def test_data_integrity_validation():
     """Test comprehensive data integrity validation."""
     from ai_trading.data_validation import (
