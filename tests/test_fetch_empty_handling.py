@@ -44,12 +44,14 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_empty_should_emit", lambda *a, **k: True)
     monkeypatch.setattr(fetch, "_empty_record", lambda *a, **k: 1)
     monkeypatch.setattr(fetch, "_empty_classify", lambda **k: logging.WARNING)
+    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(fetch.EmptyBarsError, match="empty_bars"):
-            fetch._fetch_bars("AAPL", start, end, "1Min")
+        out = fetch._fetch_bars("AAPL", start, end, "1Min")
 
+    assert out is None
     assert any(r.message == "EMPTY_DATA" and r.levelno == logging.WARNING for r in caplog.records)
+    assert any(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records)
 
 
 def test_silent_fallback_when_market_closed(monkeypatch, caplog):
@@ -68,3 +70,19 @@ def test_silent_fallback_when_market_closed(monkeypatch, caplog):
 
     assert not df.empty
     assert all(r.message != "EMPTY_DATA" for r in caplog.records)
+
+
+def test_skip_retry_outside_market_hours(monkeypatch, caplog):
+    start, end = _dt_range()
+    sess = _Session([{"bars": []}])
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
+    monkeypatch.setattr(fetch, "is_market_open", lambda: False)
+    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: True)
+
+    with caplog.at_level(logging.INFO):
+        out = fetch._fetch_bars("AAPL", start, end, "1Min")
+
+    assert out is None
+    assert sess.calls == 1
+    assert any(r.message == "ALPACA_FETCH_MARKET_CLOSED" for r in caplog.records)

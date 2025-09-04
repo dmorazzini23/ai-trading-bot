@@ -166,6 +166,17 @@ _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
+_FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "1"))
+
+
+def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
+    """Return True if both ``start`` and ``end`` fall outside market hours."""
+    try:
+        from ai_trading.utils.base import is_market_open as _is_open
+
+        return not (_is_open(start) or _is_open(end))
+    except Exception:  # pragma: no cover - fallback to retrying
+        return False
 
 
 def _has_alpaca_keys() -> bool:
@@ -628,8 +639,9 @@ def _fetch_bars(
     timeout_v = clamp_request_timeout(10)
     session = _HTTP_SESSION
 
-    # Track a single retry-on-empty for intraday when market is closed (mutable state to avoid nonlocal pitfalls)
-    _state = {"retried_empty_once": False, "corr_id": None, "retries": 0}
+    # Mutable state for retry tracking
+    _state = {"corr_id": None, "retries": 0}
+    max_retries = _FETCH_BARS_MAX_RETRIES
 
     def _req(
         session: HTTPSession,
@@ -862,30 +874,62 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
-            # Retry once for intraday requests when an empty payload is returned
-            if str(_interval).lower() not in {"1day", "day", "1d"} and (not _state["retried_empty_once"]):
-                _state["retried_empty_once"] = True
-                _state["retries"] += 1
-                backoff = min(2 ** (_state["retries"] - 1), 5.0)
-                logger.debug(
-                    "RETRY_EMPTY_BARS",
+            if str(_interval).lower() not in {"1day", "day", "1d"}:
+                if _state["retries"] < max_retries:
+                    if _outside_market_hours(_start, _end):
+                        logger.info(
+                            "ALPACA_FETCH_MARKET_CLOSED",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "status": "market_closed",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "symbol": symbol,
+                                    "start": _start.isoformat(),
+                                    "end": _end.isoformat(),
+                                    "correlation_id": _state["corr_id"],
+                                }
+                            ),
+                        )
+                        return None
+                    _state["retries"] += 1
+                    backoff = min(2 ** (_state["retries"] - 1), 5.0)
+                    logger.debug(
+                        "RETRY_EMPTY_BARS",
+                        extra=_norm_extra(
+                            {
+                                "provider": "alpaca",
+                                "feed": _feed,
+                                "timeframe": _interval,
+                                "symbol": symbol,
+                                "start": _start.isoformat(),
+                                "end": _end.isoformat(),
+                                "correlation_id": _state["corr_id"],
+                                "retry_delay": backoff,
+                                "previous_correlation_id": prev_corr,
+                            }
+                        ),
+                    )
+                    time.sleep(backoff)
+                    return _req(session, None, headers=headers, timeout=timeout)
+                logger.warning(
+                    "ALPACA_FETCH_RETRY_LIMIT",
                     extra=_norm_extra(
                         {
                             "provider": "alpaca",
+                            "status": "empty",
                             "feed": _feed,
                             "timeframe": _interval,
                             "symbol": symbol,
                             "start": _start.isoformat(),
                             "end": _end.isoformat(),
                             "correlation_id": _state["corr_id"],
-                            "retry_delay": backoff,
-                            "previous_correlation_id": prev_corr,
+                            "retries": _state["retries"],
                         }
                     ),
                 )
-                time.sleep(backoff)
-                return _req(session, None, headers=headers, timeout=timeout)
-            # Closed-market contract: degrade silently when no daily data
+                return None
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
                 from ai_trading.utils.lazy_imports import load_pandas as _lp
                 pd_mod = _lp()
@@ -893,9 +937,23 @@ def _fetch_bars(
                     return pd_mod.DataFrame()
                 except Exception:
                     return pd.DataFrame()
-            raise EmptyBarsError(
-                f"empty_bars: symbol={symbol}, feed={_feed}, timeframe={_interval}"
+            logger.warning(
+                "ALPACA_FETCH_RETRY_LIMIT",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "status": "empty",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state["corr_id"],
+                        "retries": _state["retries"],
+                    }
+                ),
             )
+            return None
         ts_col = None
         for c in df.columns:
             if c.lower() in ("t", "timestamp", "time"):
@@ -1148,7 +1206,7 @@ def get_daily_df(
 
 def get_bars(
     symbol: str, timeframe: str, start: Any, end: Any, *, feed: str | None = None, adjustment: str | None = None
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     """Compatibility wrapper delegating to _fetch_bars."""
     S = get_settings()
     if S is None:

@@ -190,9 +190,14 @@ nslookup api.alpaca.markets 8.8.8.8
 - Stale data warnings
 - Data provider fallback messages
 - `ALPACA_EMPTY_BAR_MAX_RETRIES` in logs
+- `ALPACA_FETCH_RETRY_LIMIT` in logs
 
 Repeated empty responses trigger this limit. Verify the market is open or that
 data exists for the requested window before retrying.
+
+Per-request retries can be tuned via the `FETCH_BARS_MAX_RETRIES` environment
+variable. When the limit is reached the fetcher returns `None` so callers can
+fall back to cached data or alternate providers.
 
 **Data Provider Diagnostics:**
 
