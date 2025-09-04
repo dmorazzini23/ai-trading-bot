@@ -1130,11 +1130,11 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                             extra={"symbol": symbol, "timeframe": "1Min", "feed": feed or _DEFAULT_FEED, "occurrences": cnt},
                         )
                         df = None
-            else:
-                logger.warning(
-                    "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
-                )
-                df = None
+                else:
+                    logger.warning(
+                        "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
+                    )
+                    df = None
         else:
             logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
             df = None
