@@ -539,10 +539,17 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         valid_rows = total_rows
     cols_obj = getattr(df, "columns", None)
     try:
-        cols = set(cols_obj) if cols_obj is not None else set()
+        cols_list = list(cols_obj) if cols_obj is not None else []
     except TypeError:
-        cols = set()
-    quality_report.update({'file_exists': bool(total_rows), 'has_valid_format': required_cols.issubset(cols), 'row_count': total_rows, 'valid_price_rows': valid_rows, 'data_quality_score': valid_rows / total_rows if total_rows else 0.0})
+        cols_list = []
+    cols = set(cols_list)
+    quality_report.update({
+        'file_exists': bool(total_rows),
+        'has_valid_format': required_cols.issubset(cols),
+        'row_count': total_rows,
+        'valid_price_rows': valid_rows,
+        'data_quality_score': valid_rows / total_rows if total_rows else 0.0,
+    })
     if total_rows > 0 and 'Trade log file is empty' in quality_report['issues']:
         try:
             quality_report['issues'].remove('Trade log file is empty')
@@ -553,7 +560,7 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         logger.warning(f'META_LEARNING_DATA_ISSUE: {issue}')
     for rec in quality_report['recommendations']:
         logger.info(f'META_LEARNING_RECOMMENDATION: {rec}')
-    if not required_cols.issubset(df.columns):
+    if not required_cols.issubset(cols):
         logger.error('META_LEARNING_CRITICAL_ISSUES: Missing required columns')
         return False
     if valid.sum() < int(min_samples):
@@ -561,9 +568,8 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         return False
     original_rows = len(df)
     logger.debug(f'META_LEARNING_RAW_DATA: {original_rows} total rows loaded from {trade_log_path}')
-    if len(df) > 0 and len(df.columns) >= 3:
-        columns = df.columns.tolist()
-        has_meta_headers = any((col in ['symbol', 'entry_price', 'exit_price', 'signal_tags'] for col in columns))
+    if len(df) > 0 and len(cols) >= 3:
+        has_meta_headers = any(col in ['symbol', 'entry_price', 'exit_price', 'signal_tags'] for col in cols_list)
         if has_meta_headers:
             sample_size = min(5, len(df))
             audit_format_detected = False
@@ -774,7 +780,12 @@ def _generate_bootstrap_training_data(trade_log_path: str, target_samples: int) 
         if pd is not None and os.path.exists(trade_log_path):
             try:
                 df = pd.read_csv(trade_log_path)
-                if not df.empty and 'entry_price' in df.columns:
+                cols_obj = getattr(df, "columns", None)
+                try:
+                    cols = set(cols_obj) if cols_obj is not None else set()
+                except TypeError:
+                    cols = set()
+                if hasattr(df, "empty") and not df.empty and 'entry_price' in cols:
                     valid_df = df.dropna(subset=['entry_price', 'side', 'signal_tags'])
                     existing_data = valid_df.to_dict('records')
                     logger.info(f'META_LEARNING_BOOTSTRAP: Found {len(existing_data)} existing trades for pattern analysis')
@@ -1108,7 +1119,12 @@ def trigger_rebalance_on_regime(df: 'pd.DataFrame') -> None:
     if PortfolioReinforcementLearner is None:
         raise RuntimeError('Reinforcement learning enabled but ai_trading.portfolio_rl module unavailable. Set ENABLE_REINFORCEMENT_LEARNING=False to disable')
     rl = PortfolioReinforcementLearner()
-    if 'Regime' in df.columns and len(df) > 2:
+    cols_obj = getattr(df, "columns", None)
+    try:
+        cols = set(cols_obj) if cols_obj is not None else set()
+    except TypeError:
+        cols = set()
+    if 'Regime' in cols and len(df) > 2:
         if df['Regime'].iloc[-1] != df['Regime'].iloc[-2]:
             state_data = df.tail(10).dropna().values.flatten()
             rl.rebalance_portfolio(state_data)
