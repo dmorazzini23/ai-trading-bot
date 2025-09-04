@@ -2,16 +2,20 @@ from __future__ import annotations
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 try:  # requests is optional
     import requests  # type: ignore
     from requests.adapters import HTTPAdapter  # type: ignore
     from requests.exceptions import RequestException as RequestsRequestException  # type: ignore
+
     REQUESTS_AVAILABLE = True
 except ImportError:  # pragma: no cover - requests missing
     requests = None  # type: ignore
     HTTPAdapter = None  # type: ignore
+
     class RequestsRequestException(Exception):  # type: ignore
         pass
+
     REQUESTS_AVAILABLE = False
 
     class _StubSession:
@@ -27,6 +31,9 @@ except ImportError:  # pragma: no cover - requests missing
         def put(self, *args, **kwargs):
             return self.request(*args, **kwargs)
 
+        def delete(self, *args, **kwargs):
+            return self.request(*args, **kwargs)
+
     class _StubResponse:
         pass
 
@@ -40,9 +47,12 @@ except ImportError:  # pragma: no cover - requests missing
 try:  # urllib3 is only needed when requests is available
     from urllib3.util.retry import Retry  # type: ignore
 except ImportError:  # pragma: no cover - fallback when urllib3 missing
+
     class Retry:  # type: ignore
         def __init__(self, *a, **k):
             pass
+
+
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call
@@ -79,6 +89,7 @@ def clamp_request_timeout(
 
 
 if REQUESTS_AVAILABLE:
+
     class HTTPSession(requests.Session):
         """Session with sane connection pooling and timeout defaults.
 
@@ -118,7 +129,9 @@ if REQUESTS_AVAILABLE:
                 timeout = self._timeout
             kwargs["timeout"] = clamp_request_timeout(timeout)
             return super().request(method, url, **kwargs)
+
 else:  # pragma: no cover - exercised in tests
+
     class HTTPSession(requests.Session):
         """Stub session used when :mod:`requests` is unavailable."""
 
@@ -252,6 +265,10 @@ def put(url: str, **kwargs) -> requests.Response:
     return request("PUT", url, **kwargs)
 
 
+def delete(url: str, **kwargs) -> requests.Response:
+    return request("DELETE", url, **kwargs)
+
+
 def pool_stats() -> dict:
     return dict(_pool_stats)
 
@@ -289,6 +306,7 @@ __all__ = [
     "get",
     "post",
     "put",
+    "delete",
     "pool_stats",
     "map_get",
     "clamp_request_timeout",
