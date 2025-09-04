@@ -51,6 +51,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing helpers
     import pandas as _pd  # noqa: F401
 
 open = open
+getattr = getattr
 logger = get_logger(__name__)
 
 try:
