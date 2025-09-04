@@ -59,7 +59,10 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     monkeypatch.setattr(
         fetch,
         "time",
-        types.SimpleNamespace(sleep=lambda s: sleep_called.setdefault("delay", s)),
+        types.SimpleNamespace(
+            sleep=lambda s: sleep_called.setdefault("delay", s),
+            monotonic=lambda: 0.0,
+        ),
     )
 
     calls = []

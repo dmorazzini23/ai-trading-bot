@@ -166,7 +166,7 @@ _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
-_FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "1"))
+_FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "3"))
 
 
 def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
@@ -640,6 +640,7 @@ def _fetch_bars(
     session = _HTTP_SESSION
 
     # Mutable state for retry tracking
+    start_time = time.monotonic()
     _state = {"corr_id": None, "retries": 0}
     max_retries = _FETCH_BARS_MAX_RETRIES
 
@@ -895,6 +896,7 @@ def _fetch_bars(
                         return None
                     _state["retries"] += 1
                     backoff = min(2 ** (_state["retries"] - 1), 5.0)
+                    elapsed = time.monotonic() - start_time
                     logger.debug(
                         "RETRY_EMPTY_BARS",
                         extra=_norm_extra(
@@ -908,6 +910,8 @@ def _fetch_bars(
                                 "correlation_id": _state["corr_id"],
                                 "retry_delay": backoff,
                                 "previous_correlation_id": prev_corr,
+                                "attempt": _state["retries"],
+                                "total_elapsed": elapsed,
                             }
                         ),
                     )
