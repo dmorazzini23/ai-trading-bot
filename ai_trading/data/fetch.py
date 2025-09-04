@@ -1139,6 +1139,14 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
             df = None
     if df is None or getattr(df, "empty", True):
+        if not use_finnhub:
+            logger.warning(
+                "FINNHUB_DISABLED_NO_DATA",
+                extra={
+                    "symbol": symbol,
+                    "recommendation": "set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY",
+                },
+            )
         max_span = _dt.timedelta(days=8)
         total_span = end_dt - start_dt
         if total_span > max_span:

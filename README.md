@@ -820,7 +820,7 @@ connectivity.
 After several empty bar responses from the primary provider, the bot backs off
 and queries the backup source. Configure additional fallbacks with:
 
-- `ENABLE_FINNHUB=1` and `FINNHUB_API_KEY` to allow an intermediate Finnhub
+- Set `ENABLE_FINNHUB=1` and supply `FINNHUB_API_KEY` to enable a Finnhub
   retry before using the backup provider.
 - `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback.
 
@@ -931,9 +931,9 @@ SECONDARY_DATA_PROVIDER=finnhub
 FALLBACK_DATA_PROVIDER=yahoo
 
 # Finnhub API (optional, for enhanced data)
+# Set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY to enable Finnhub fallback
 FINNHUB_API_KEY=your_finnhub_api_key
-# Disable Finnhub integration if credentials missing
-ENABLE_FINNHUB=false
+ENABLE_FINNHUB=1
 
 # Data quality settings
 ENABLE_DATA_VALIDATION=true
