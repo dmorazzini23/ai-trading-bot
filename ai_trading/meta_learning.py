@@ -1045,7 +1045,13 @@ def _convert_audit_to_meta_format(df: 'pd.DataFrame') -> 'pd.DataFrame':
         logger.error(f'META_LEARNING_AUDIT_CONVERSION: Conversion failed: {e}')
         return pd.DataFrame()
 
-def optimize_signals(signal_data: Any, cfg: Any, model: Any | None=None, *, volatility: float=1.0) -> Any:
+def optimize_signals(
+    signal_data: Any,
+    cfg: Any | None = None,
+    model: Any | None = None,
+    *,
+    volatility: float = 1.0,
+) -> Any:
     """Optimize trading signals using ``model`` if provided."""
     if signal_data is None:
         logger.warning('optimize_signals received None signal_data, returning empty list')
@@ -1064,6 +1070,9 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None=None, *, vola
             logger.exception('optimize_signals model prediction failed: %s', exc)
             return signal_data if signal_data is not None else []
     if model is None:
+        if cfg is None:
+            logger.debug('No cfg provided for model loading')
+            return signal_data if signal_data is not None else []
         try:
             model = load_model_checkpoint(cfg.MODEL_PATH)
         except AttributeError:
