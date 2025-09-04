@@ -131,3 +131,43 @@ def test_skip_retry_when_market_closed(monkeypatch, caplog):
     assert any(
         r.message == "ALPACA_EMPTY_BAR_MARKET_CLOSED" for r in caplog.records
     )
+
+
+def test_feed_switch_and_window_shrink(monkeypatch):
+    symbol = "ZZZZ"
+    fetch._EMPTY_BAR_COUNTS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+    key = (symbol, "1Min")
+    fetch._EMPTY_BAR_COUNTS[key] = fetch._EMPTY_BAR_THRESHOLD - 1
+
+    calls: list[tuple[str, datetime, datetime]] = []
+
+    def _raise_empty(_symbol, start, end, timeframe, *, feed=fetch._DEFAULT_FEED, adjustment="raw"):
+        calls.append((feed, start, end))
+        raise fetch.EmptyBarsError("empty")
+
+    monkeypatch.setattr(fetch, "_fetch_bars", _raise_empty)
+    monkeypatch.setattr(fetch, "fh_fetcher", None)
+    monkeypatch.setenv("ENABLE_FINNHUB", "0")
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+    monkeypatch.setattr(fetch, "time", types.SimpleNamespace(sleep=lambda _s: None))
+    monkeypatch.setattr(fetch, "is_market_open", lambda: True)
+
+    df = pd.DataFrame({
+        "timestamp": [datetime(2024, 1, 1, tzinfo=UTC)],
+        "open": [1],
+        "high": [1],
+        "low": [1],
+        "close": [1],
+    })
+    monkeypatch.setattr(fetch, "_yahoo_get_bars", lambda *a, **k: df)
+
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    end = start + timedelta(days=3)
+    fetch.get_minute_df(symbol, start, end)
+
+    feeds = [f for f, _, _ in calls]
+    assert "sip" in feeds
+    starts = [s for _, s, _ in calls]
+    assert any(s > start for s in starts)
