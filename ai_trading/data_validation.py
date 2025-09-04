@@ -30,7 +30,7 @@ def is_valid_ohlcv(df: pd.DataFrame, min_rows: int=50) -> bool:
         return False
     if not set(REQUIRED_PRICE_COLS).issubset(df.columns):
         return False
-    return len(df) >= min_rows
+    return bool(len(df) >= min_rows)
 
 def check_data_freshness(df: pd.DataFrame | None, symbol: str, *, max_staleness_minutes: int=15) -> dict[str, float | str | bool]:
     """Return freshness info for ``symbol`` handling empty/naive data."""
@@ -79,7 +79,7 @@ def emergency_data_check(symbols_or_df: Sequence[str] | str | pd.DataFrame, symb
     Back-compat: ``emergency_data_check(df, "AAPL")`` returns ``not df.empty``.
     """
     if isinstance(symbols_or_df, pd.DataFrame) and isinstance(symbol, str):
-        return (
+        return bool(
             not symbols_or_df.empty
             and 'close' in symbols_or_df.columns
             and (symbols_or_df['close'] > 0).all()
