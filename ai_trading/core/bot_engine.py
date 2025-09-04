@@ -3871,6 +3871,7 @@ class DataFetcher:
         self._minute_timestamps: dict[str, datetime] = {}
         # AI-AGENT-REF: rate-limit repeated warnings per (symbol, timeframe)
         self._warn_seen: dict[str, int] = {}
+        self._daily_cache_hit_logged = False
 
         # Verify required Alpaca configuration
         has_key = bool(getattr(CFG, "alpaca_api_key", ""))
@@ -3935,17 +3936,6 @@ class DataFetcher:
             )
             end_ts = datetime.combine(today, dt_time.max, tzinfo=UTC)
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
-
-        logger.info(
-            "DAILY_FETCH_REQUEST",
-            extra={
-                "symbol": symbol,
-                "timeframe": str(bars.TimeFrame.Day),
-                "start": start_ts.isoformat(),
-                "end": end_ts.isoformat(),
-            },
-        )
-
         fetch_date = end_ts.date()
         with cache_lock:
             entry = self._daily_cache.get(symbol)
@@ -3966,16 +3956,11 @@ class DataFetcher:
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
                 cached_df = entry[1]
-                logger.info(
-                    "DAILY_FETCH_CACHE_HIT",
-                    extra={
-                        "symbol": symbol,
-                        "timeframe": str(bars.TimeFrame.Day),
-                        "start": start_ts.isoformat(),
-                        "end": end_ts.isoformat(),
-                        "rows": 0 if cached_df is None else len(cached_df),
-                    },
-                )
+                if not self._daily_cache_hit_logged:
+                    logger.info("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
+                    self._daily_cache_hit_logged = True
+                elif logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
                 return cached_df
             # purge stale cache entry if present
             self._daily_cache.pop(symbol, None)
@@ -3987,6 +3972,16 @@ class DataFetcher:
         if not api_key or not api_secret:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
+
+        logger.info(
+            "DAILY_FETCH_REQUEST",
+            extra={
+                "symbol": symbol,
+                "timeframe": str(bars.TimeFrame.Day),
+                "start": start_ts.isoformat(),
+                "end": end_ts.isoformat(),
+            },
+        )
 
         client = StockHistoricalDataClient(
             api_key=api_key,

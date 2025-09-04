@@ -45,7 +45,8 @@ not contain secret key names or placeholder values.
 #### Data Fetch Diagnostics
 Daily price requests now log their parameters and outcome:
 
-- `DAILY_FETCH_REQUEST` records the symbol, timeframe, and date range
+- `DAILY_FETCH_REQUEST` records the symbol, timeframe, and date range only when a cache miss triggers a fetch
+- `DAILY_FETCH_CACHE_HIT` emits once on first cache use; subsequent hits appear only when debug logging is enabled
 - `DAILY_FETCH_RESULT` reports the number of rows returned and whether the
   response came from cache
 - Unauthorized feed responses trigger a quick entitlement check and switch to a
