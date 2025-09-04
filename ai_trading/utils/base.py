@@ -398,7 +398,7 @@ def next_market_open(now: dt.datetime | None = None) -> dt.datetime:
         future = sched[sched["market_open"] > check_time]
         if not future.empty:
             return future.iloc[0]["market_open"].tz_convert(EASTERN_TZ).to_pydatetime()
-    except Exception as exc:  # pragma: no cover - best effort
+    except (ImportError, ValueError, TypeError) as exc:  # pragma: no cover - best effort
         logger.debug("next_market_open calendar lookup failed: %s", exc)
 
     candidate = check_time
@@ -855,9 +855,7 @@ def _get_alpaca_rest():
     try:
         from alpaca.trading.client import TradingClient  # pylint: disable=import-error
     except ImportError as exc:  # pragma: no cover - alpaca SDK missing
-        raise ImportError(
-            "alpaca-py is required for Alpaca access. Install with `pip install alpaca-py`."
-        ) from exc
+        raise ImportError("alpaca-py is required for Alpaca access. Install with `pip install alpaca-py`.") from exc
     return TradingClient
 
 
