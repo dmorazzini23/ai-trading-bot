@@ -28,6 +28,9 @@ All notable changes to this project will be documented in this file.
 - Dev deps: align `packaging` version with `constraints.txt` (25.0) to
   resolve resolver conflicts during `ensure-runtime` install.
 - **Data Fetch**: raise error when configuration unavailable instead of repeated warnings.
+- **Data Fetch**: improve Alpaca empty-bar handling by logging timeframe/feed,
+  verifying API credentials and market hours, and attempting feed or window
+  fallbacks before resorting to alternate providers.
 - Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
 - **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,

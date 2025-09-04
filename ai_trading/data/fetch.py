@@ -168,6 +168,11 @@ _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 
 
+def _has_alpaca_keys() -> bool:
+    """Return True if Alpaca API credentials appear configured."""
+    return bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
+
+
 def get_cached_minute_timestamp(symbol: str) -> int | None:
     """Return cached last bar timestamp for symbol."""
     rec = _MINUTE_CACHE.get(symbol)
@@ -944,87 +949,137 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
         logger.debug("FINNHUB_DISABLED", extra={"symbol": symbol})
         df = None
     if df is None or getattr(df, "empty", True):
-        try:
-            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
-        except (EmptyBarsError, ValueError, RuntimeError) as e:
-            if isinstance(e, EmptyBarsError):
-                now = datetime.now(UTC)
-                if end_dt > now or start_dt > now:
-                    logger.info(
-                        "ALPACA_EMPTY_BAR_FUTURE",
-                        extra={"symbol": symbol, "timeframe": "1Min"},
-                    )
-                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                try:
-                    market_open = is_market_open()
-                except Exception:  # pragma: no cover - defensive
-                    market_open = True
-                if not market_open:
-                    logger.info(
-                        "ALPACA_EMPTY_BAR_MARKET_CLOSED",
-                        extra={"symbol": symbol, "timeframe": "1Min"},
-                    )
-                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
-                _EMPTY_BAR_COUNTS[tf_key] = cnt
-                if cnt > _EMPTY_BAR_MAX_RETRIES:
-                    logger.error(
-                        "ALPACA_EMPTY_BAR_MAX_RETRIES",
-                        extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
-                    )
-                    log_empty_retries_exhausted(
-                        "alpaca",
-                        symbol=symbol,
-                        timeframe="1Min",
-                        feed=feed or _DEFAULT_FEED,
-                        retries=cnt,
-                    )
-                    _SKIPPED_SYMBOLS.add(tf_key)
-                    raise EmptyBarsError(
-                        f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
-                    ) from e
-                if cnt >= _EMPTY_BAR_THRESHOLD:
-                    backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
-                    ctx = {
-                        "symbol": symbol,
-                        "timeframe": "1Min",
-                        "occurrences": cnt,
-                        "backoff": backoff,
-                        "finnhub_enabled": use_finnhub,
-                        "feed": feed or _DEFAULT_FEED,
-                    }
-                    logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
-                    time.sleep(backoff)
-                    try:
-                        df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
-                    except Exception as alt_err:  # pragma: no cover - network failure
-                        logger.warning(
-                            "ALT_PROVIDER_FAILED",
-                            extra={"symbol": symbol, "err": str(alt_err)},
-                        )
-                        df = None
-                    if df is None or getattr(df, "empty", True):
-                        _SKIPPED_SYMBOLS.add(tf_key)
-                        logger.warning(
-                            "ALPACA_EMPTY_BAR_SKIP",
-                            extra={
-                                "symbol": symbol,
-                                "timeframe": "1Min",
-                                "occurrences": cnt,
-                            },
+        if _has_alpaca_keys():
+            try:
+                df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
+            except (EmptyBarsError, ValueError, RuntimeError) as e:
+                if isinstance(e, EmptyBarsError):
+                    now = datetime.now(UTC)
+                    if end_dt > now or start_dt > now:
+                        logger.info(
+                            "ALPACA_EMPTY_BAR_FUTURE",
+                            extra={"symbol": symbol, "timeframe": "1Min"},
                         )
                         return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                else:
-                    logger.debug(
-                        "ALPACA_EMPTY_BARS",
-                        extra={"symbol": symbol, "occurrences": cnt},
-                    )
-                    df = None
+                    try:
+                        market_open = is_market_open()
+                    except Exception:  # pragma: no cover - defensive
+                        market_open = True
+                    if not market_open:
+                        logger.info(
+                            "ALPACA_EMPTY_BAR_MARKET_CLOSED",
+                            extra={"symbol": symbol, "timeframe": "1Min"},
+                        )
+                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                    cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
+                    _EMPTY_BAR_COUNTS[tf_key] = cnt
+                    if cnt > _EMPTY_BAR_MAX_RETRIES:
+                        logger.error(
+                            "ALPACA_EMPTY_BAR_MAX_RETRIES",
+                            extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
+                        )
+                        log_empty_retries_exhausted(
+                            "alpaca",
+                            symbol=symbol,
+                            timeframe="1Min",
+                            feed=feed or _DEFAULT_FEED,
+                            retries=cnt,
+                        )
+                        _SKIPPED_SYMBOLS.add(tf_key)
+                        raise EmptyBarsError(
+                            f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
+                        ) from e
+                    if cnt >= _EMPTY_BAR_THRESHOLD:
+                        backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
+                        ctx = {
+                            "symbol": symbol,
+                            "timeframe": "1Min",
+                            "occurrences": cnt,
+                            "backoff": backoff,
+                            "finnhub_enabled": use_finnhub,
+                            "feed": feed or _DEFAULT_FEED,
+                        }
+                        logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
+                        time.sleep(backoff)
+                        alt_feed = "sip" if (feed or _DEFAULT_FEED) != "sip" else "iex"
+                        if alt_feed != (feed or _DEFAULT_FEED):
+                            try:
+                                df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
+                            except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
+                                logger.debug(
+                                    "ALPACA_ALT_FEED_FAILED",
+                                    extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "err": str(alt_err)},
+                                )
+                                df_alt = None
+                            else:
+                                if df_alt is not None and not getattr(df_alt, "empty", True):
+                                    logger.info(
+                                        "ALPACA_ALT_FEED_SUCCESS",
+                                        extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "timeframe": "1Min"},
+                                    )
+                                    return df_alt
+                        if end_dt - start_dt > _dt.timedelta(days=1):
+                            short_start = end_dt - _dt.timedelta(days=1)
+                            logger.debug(
+                                "ALPACA_SHORT_WINDOW_RETRY",
+                                extra={
+                                    "symbol": symbol,
+                                    "timeframe": "1Min",
+                                    "start": short_start.isoformat(),
+                                    "end": end_dt.isoformat(),
+                                    "feed": feed or _DEFAULT_FEED,
+                                },
+                            )
+                            try:
+                                df_short = _fetch_bars(symbol, short_start, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
+                            except (EmptyBarsError, ValueError, RuntimeError):
+                                df_short = None
+                            else:
+                                if df_short is not None and not getattr(df_short, "empty", True):
+                                    logger.info(
+                                        "ALPACA_SHORT_WINDOW_SUCCESS",
+                                        extra={
+                                            "symbol": symbol,
+                                            "timeframe": "1Min",
+                                            "feed": feed or _DEFAULT_FEED,
+                                            "start": short_start.isoformat(),
+                                            "end": end_dt.isoformat(),
+                                        },
+                                    )
+                                    return df_short
+                        try:
+                            df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+                        except Exception as alt_err:  # pragma: no cover - network failure
+                            logger.warning(
+                                "ALT_PROVIDER_FAILED",
+                                extra={"symbol": symbol, "err": str(alt_err)},
+                            )
+                            df = None
+                        if df is None or getattr(df, "empty", True):
+                            _SKIPPED_SYMBOLS.add(tf_key)
+                            logger.warning(
+                                "ALPACA_EMPTY_BAR_SKIP",
+                                extra={
+                                    "symbol": symbol,
+                                    "timeframe": "1Min",
+                                    "occurrences": cnt,
+                                },
+                            )
+                            return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                    else:
+                        logger.debug(
+                            "ALPACA_EMPTY_BARS",
+                            extra={"symbol": symbol, "timeframe": "1Min", "feed": feed or _DEFAULT_FEED, "occurrences": cnt},
+                        )
+                        df = None
             else:
                 logger.warning(
                     "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
                 )
                 df = None
+        else:
+            logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
+            df = None
     if df is None or getattr(df, "empty", True):
         max_span = _dt.timedelta(days=8)
         total_span = end_dt - start_dt
@@ -1125,8 +1180,16 @@ def fetch_minute_yfinance(symbol: str, start_dt: _dt.datetime, end_dt: _dt.datet
 
 
 def is_market_open() -> bool:
-    """Simplistic market-hours check used in tests."""
-    return True
+    """Return True if the market is currently open.
+
+    Falls back to ``True`` when the detailed calendar check is unavailable.
+    """
+    try:
+        from ai_trading.utils.base import is_market_open as _is_open
+
+        return bool(_is_open())
+    except Exception:
+        return True
 
 
 def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
