@@ -23,6 +23,9 @@ All notable changes to this project will be documented in this file.
   - **Migration Required**: Use `from ai_trading.signals import ...` instead of `from signals import ...`
   - **Breaking**: Root imports are no longer supported as of this version
 - **Utils**: remove legacy `pathlib_shim` re-export; use `ai_trading.utils.paths` instead
+- **Data Fetch**: validate Alpaca request parameters, check trading windows
+  against the market calendar, retry up to 5 times, and optionally fall back to
+  Yahoo when IEX returns empty.
 
 ### Fixed
 - Dev deps: align `packaging` version with `constraints.txt` (25.0) to

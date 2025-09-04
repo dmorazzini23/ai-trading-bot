@@ -9,6 +9,11 @@ from ai_trading.data import fetch as data_fetcher
 from ai_trading import utils as _utils  # type: ignore
 
 
+@pytest.fixture(autouse=True)
+def _force_window(monkeypatch):
+    monkeypatch.setattr(data_fetcher, "_window_has_trading_session", lambda *a, **k: True)
+
+
 def test_price_snapshot_minute_fallback(monkeypatch):
     ctx = SimpleNamespace(
         data_fetcher=SimpleNamespace(get_daily_df=lambda ctx, s: pd.DataFrame()),

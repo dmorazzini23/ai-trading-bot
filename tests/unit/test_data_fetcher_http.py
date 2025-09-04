@@ -43,6 +43,11 @@ def _dt_range(minutes: int = 5):
     return start, end
 
 
+@pytest.fixture(autouse=True)
+def _force_window(monkeypatch):
+    monkeypatch.setattr(df, "_window_has_trading_session", lambda *a, **k: True)
+
+
 @pytest.mark.parametrize("status_first", [401, 403])
 def test_sip_unauthorized_returns_empty(monkeypatch: pytest.MonkeyPatch, status_first: int):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)

@@ -40,6 +40,7 @@ def _dt_range():
 
 def test_single_retry_and_warning(monkeypatch, caplog):
     start, end = _dt_range()
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     payloads = [
         {"bars": []},
         {

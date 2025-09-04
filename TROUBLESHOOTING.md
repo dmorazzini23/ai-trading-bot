@@ -193,11 +193,15 @@ nslookup api.alpaca.markets 8.8.8.8
 - `ALPACA_FETCH_RETRY_LIMIT` in logs
 
 Repeated empty responses trigger this limit. Verify the market is open or that
-data exists for the requested window before retrying.
+data exists for the requested window before retrying. The fetcher now validates
+that the requested time window intersects a trading session and will raise
+`window_no_trading_session` if it does not.
 
-Per-request retries can be tuned via the `FETCH_BARS_MAX_RETRIES` environment
-variable. When the limit is reached the fetcher returns `None` so callers can
-fall back to cached data or alternate providers.
+Per-request retries (default **5**) can be tuned via the
+`FETCH_BARS_MAX_RETRIES` environment variable. When the limit is reached the
+fetcher returns `None` so callers can fall back to cached data or alternate
+providers. Enable an optional Yahoo fallback by setting
+`ENABLE_HTTP_FALLBACK=1`.
 
 **Data Provider Diagnostics:**
 

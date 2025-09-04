@@ -2,11 +2,17 @@ from datetime import datetime, timedelta, UTC
 
 from ai_trading.utils.lazy_imports import load_pandas
 
+import pytest
 import ai_trading.config.settings as settings_mod
 from ai_trading.data import fetch
 from ai_trading.config import management
 
 pd = load_pandas()
+
+
+@pytest.fixture(autouse=True)
+def _force_window(monkeypatch):
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
 
 
 def test_get_bars_recovers_after_env_reload(monkeypatch, tmp_path):

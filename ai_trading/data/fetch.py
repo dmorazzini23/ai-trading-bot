@@ -11,6 +11,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 
 
 from ai_trading.data.timeutils import ensure_utc_datetime
+from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
 from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
@@ -166,7 +167,15 @@ _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
-_FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "3"))
+_FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
+_ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() not in {
+    "0",
+    "false",
+}
+
+_VALID_FEEDS = {"iex", "sip"}
+_VALID_ADJUSTMENTS = {"raw", "split", "dividend", "all"}
+_VALID_TIMEFRAMES = {"1Min", "5Min", "15Min", "1Hour", "1Day"}
 
 
 def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
@@ -177,6 +186,33 @@ def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
         return not (_is_open(start) or _is_open(end))
     except Exception:  # pragma: no cover - fallback to retrying
         return False
+
+
+def _validate_alpaca_params(
+    start: _dt.datetime, end: _dt.datetime, timeframe: str, feed: str, adjustment: str
+) -> None:
+    """Raise ``ValueError`` if request parameters are invalid."""
+    if start >= end:
+        raise ValueError("invalid_time_window")
+    if feed not in _VALID_FEEDS:
+        raise ValueError("invalid_feed")
+    if adjustment not in _VALID_ADJUSTMENTS:
+        raise ValueError("invalid_adjustment")
+    if timeframe not in _VALID_TIMEFRAMES:
+        raise ValueError("invalid_timeframe")
+
+
+def _window_has_trading_session(start: _dt.datetime, end: _dt.datetime) -> bool:
+    """Return True if any trading session overlaps the ``start``/``end`` window."""
+    day = start.date()
+    end_day = end.date()
+    while day <= end_day:
+        if is_trading_day(day):
+            open_dt, close_dt = rth_session_utc(day)
+            if end > open_dt and start < close_dt:
+                return True
+        day += _dt.timedelta(days=1)
+    return False
 
 
 def _has_alpaca_keys() -> bool:
@@ -220,7 +256,6 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
 
 
 _DEFAULT_FEED = "iex"
-_VALID_FEEDS = ("iex", "sip")
 _SIP_UNAUTHORIZED = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower() in {
     "1",
     "true",
@@ -609,6 +644,9 @@ def _fetch_bars(
     _end = _end.replace(second=0, microsecond=0)
     _interval = _canon_tf(timeframe)
     _feed = _canon_feed(feed or _DEFAULT_FEED)
+    _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
+    if not _window_has_trading_session(_start, _end):
+        raise ValueError("window_no_trading_session")
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _ALLOW_SIP:
         if not _SIP_DISALLOWED_WARNED:
@@ -982,7 +1020,22 @@ def _fetch_bars(
     fallback = None
     if alt_feed and not (alt_feed == "sip" and _SIP_UNAUTHORIZED):
         fallback = (_interval, alt_feed, _start, _end)
-    return _req(session, fallback, headers=headers, timeout=timeout_v)
+    df = _req(session, fallback, headers=headers, timeout=timeout_v)
+    if (df is None or getattr(df, "empty", True)) and _ENABLE_HTTP_FALLBACK:
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        y_int = interval_map.get(_interval)
+        if y_int:
+            try:
+                alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
+            except Exception:  # pragma: no cover - network variance
+                alt_df = pd.DataFrame()
+            if alt_df is not None and (not alt_df.empty):
+                logger.info(
+                    "DATA_SOURCE_FALLBACK_ATTEMPT",
+                    extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
+                )
+                return alt_df
+    return df
 
 
 def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) -> pd.DataFrame:

@@ -37,6 +37,7 @@ def _dt_range():
 
 
 def test_warn_on_empty_when_market_open(monkeypatch, caplog):
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     start, end = _dt_range()
     sess = _Session([{ "bars": []} for _ in range(4)])
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
@@ -74,6 +75,7 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
 
 
 def test_silent_fallback_when_market_closed(monkeypatch, caplog):
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     start, end = _dt_range()
     payloads = [
         {"bars": []},
@@ -98,6 +100,7 @@ def test_silent_fallback_when_market_closed(monkeypatch, caplog):
 
 
 def test_skip_retry_outside_market_hours(monkeypatch, caplog):
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     start, end = _dt_range()
     sess = _Session([{"bars": []}])
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
