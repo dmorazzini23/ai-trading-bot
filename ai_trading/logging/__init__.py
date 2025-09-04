@@ -491,7 +491,7 @@ def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | 
         Error message when the attempt fails or returns an unexpected payload.
     **extra : dict
         Additional context about the request (symbol, feed, timeframe, request
-        parameters, correlation IDs, etc.).
+        parameters, correlation IDs, remaining retries, backoff delay, etc.).
 
     Notes
     -----
@@ -522,6 +522,7 @@ def log_empty_retries_exhausted(
         "provider": provider,
         "symbol": symbol,
         "timeframe": timeframe,
+        "remaining_retries": 0,
     }
     if feed is not None:
         payload["feed"] = feed

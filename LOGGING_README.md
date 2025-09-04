@@ -52,9 +52,11 @@ Daily price requests now log their parameters and outcome:
 - Unauthorized feed responses trigger a quick entitlement check and switch to a
   permitted feed when available. If no alternative exists, operators are
   notified once.
-- Empty bar responses are retried with a short backoff. Symbols that
-  repeatedly return empty bars are skipped and summarized once to reduce
-  log noise.
+- Empty bar responses are retried with an exponential backoff. The retry
+  policy can be tuned via `FETCH_BARS_MAX_RETRIES`, `FETCH_BARS_BACKOFF_BASE`,
+  and `FETCH_BARS_BACKOFF_CAP`. Logs include the remaining retry count and
+  emit a final "retries exhausted" message when no more attempts remain,
+  allowing operators to diagnose persistent data issues quickly.
 
 ### Example Usage
 

@@ -171,6 +171,9 @@ _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
+# Configurable backoff parameters for retry logic
+_FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
+_FETCH_BARS_BACKOFF_CAP = float(os.getenv("FETCH_BARS_BACKOFF_CAP", "5"))
 _ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() not in {
     "0",
     "false",
@@ -769,6 +772,9 @@ def _fetch_bars(
             }
             if prev_corr:
                 log_extra["previous_correlation_id"] = prev_corr
+            attempt = _state["retries"] + 1
+            remaining = max_retries - attempt
+            log_extra["remaining_retries"] = remaining
             log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -780,7 +786,43 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
-            raise
+            if attempt >= max_retries:
+                logger.error(
+                    "FETCH_RETRIES_EXHAUSTED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "error": str(e),
+                            "correlation_id": _state["corr_id"],
+                        }
+                    ),
+                )
+                raise
+            _state["retries"] = attempt
+            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            logger.debug(
+                "RETRY_FETCH_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state["corr_id"],
+                        "retry_delay": backoff,
+                        "attempt": _state["retries"],
+                        "remaining_retries": max_retries - _state["retries"],
+                        "previous_correlation_id": prev_corr,
+                    }
+                ),
+            )
+            time.sleep(backoff)
+            return _req(session, None, headers=headers, timeout=timeout)
         except ConnectionError as e:
             log_extra = {
                 "url": url,
@@ -791,6 +833,9 @@ def _fetch_bars(
             }
             if prev_corr:
                 log_extra["previous_correlation_id"] = prev_corr
+            attempt = _state["retries"] + 1
+            remaining = max_retries - attempt
+            log_extra["remaining_retries"] = remaining
             log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -801,7 +846,43 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
-            raise
+            if attempt >= max_retries:
+                logger.error(
+                    "FETCH_RETRIES_EXHAUSTED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "error": str(e),
+                            "correlation_id": _state["corr_id"],
+                        }
+                    ),
+                )
+                raise
+            _state["retries"] = attempt
+            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            logger.debug(
+                "RETRY_FETCH_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state["corr_id"],
+                        "retry_delay": backoff,
+                        "attempt": _state["retries"],
+                        "remaining_retries": max_retries - _state["retries"],
+                        "previous_correlation_id": prev_corr,
+                    }
+                ),
+            )
+            time.sleep(backoff)
+            return _req(session, None, headers=headers, timeout=timeout)
         except (HTTPError, RequestException, ValueError, KeyError) as e:
             log_extra = {
                 "url": url,
@@ -812,6 +893,9 @@ def _fetch_bars(
             }
             if prev_corr:
                 log_extra["previous_correlation_id"] = prev_corr
+            attempt = _state["retries"] + 1
+            remaining = max_retries - attempt
+            log_extra["remaining_retries"] = remaining
             log_fetch_attempt("alpaca", error=str(e), **log_extra)
             logger.warning(
                 "DATA_SOURCE_HTTP_ERROR",
@@ -822,7 +906,43 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
-            raise
+            if attempt >= max_retries:
+                logger.error(
+                    "FETCH_RETRIES_EXHAUSTED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "error": str(e),
+                            "correlation_id": _state["corr_id"],
+                        }
+                    ),
+                )
+                raise
+            _state["retries"] = attempt
+            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
+            logger.debug(
+                "RETRY_FETCH_ERROR",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state["corr_id"],
+                        "retry_delay": backoff,
+                        "attempt": _state["retries"],
+                        "remaining_retries": max_retries - _state["retries"],
+                        "previous_correlation_id": prev_corr,
+                    }
+                ),
+            )
+            time.sleep(backoff)
+            return _req(session, None, headers=headers, timeout=timeout)
         payload: dict[str, Any] | list[Any] = {}
         if status != 400 and text:
             if "json" in ctype:
@@ -849,12 +969,14 @@ def _fetch_bars(
         if prev_corr:
             log_extra["previous_correlation_id"] = prev_corr
         if status == 400:
-            log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra)
+            log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+            log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra_with_remaining)
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
-            log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra)
+            log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+            log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             logger.warning(
                 "UNAUTHORIZED_SIP" if _feed == "sip" else "DATA_SOURCE_UNAUTHORIZED",
                 extra=_norm_extra(
@@ -873,7 +995,8 @@ def _fetch_bars(
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             metrics.rate_limit += 1
-            log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra)
+            log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+            log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
                 "DATA_SOURCE_RATE_LIMITED",
                 extra=_norm_extra(
@@ -887,7 +1010,9 @@ def _fetch_bars(
             raise ValueError("rate_limited")
         df = pd.DataFrame(data)
         if df.empty:
-            log_fetch_attempt("alpaca", status=status, error="empty", **log_extra)
+            attempt = _state["retries"] + 1
+            log_extra_with_remaining = {"remaining_retries": max_retries - attempt, **log_extra}
+            log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             if fallback:
@@ -1002,7 +1127,10 @@ def _fetch_bars(
                         )
                         return None
                     _state["retries"] += 1
-                    backoff = min(2 ** (_state["retries"] - 1), 5.0)
+                    backoff = min(
+                        _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1),
+                        _FETCH_BARS_BACKOFF_CAP,
+                    )
                     elapsed = time.monotonic() - start_time
                     logger.debug(
                         "RETRY_EMPTY_BARS",
@@ -1018,6 +1146,7 @@ def _fetch_bars(
                                 "retry_delay": backoff,
                                 "previous_correlation_id": prev_corr,
                                 "attempt": _state["retries"],
+                                "remaining_retries": max_retries - _state["retries"],
                                 "total_elapsed": elapsed,
                             }
                         ),
@@ -1082,7 +1211,8 @@ def _fetch_bars(
         df = df.dropna(subset=["open", "high", "low", "close"])
         df.set_index("timestamp", inplace=True, drop=False)
         _IEX_EMPTY_COUNTS.pop((symbol, _interval), None)
-        log_fetch_attempt("alpaca", status=status, **log_extra)
+        log_extra_success = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+        log_fetch_attempt("alpaca", status=status, **log_extra_success)
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
