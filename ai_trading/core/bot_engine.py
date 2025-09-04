@@ -499,7 +499,7 @@ class BotEngine:
             from ai_trading.ml_model import ensure_default_models
 
             ensure_default_models(self._tickers)
-        except Exception as exc:  # noqa: BLE001 - best effort on startup
+        except (*COMMON_EXC, OSError, RuntimeError) as exc:  # pragma: no cover - best effort on startup
             self.logger.warning(
                 "MODEL_STARTUP_CHECK_FAILED", extra={"error": str(exc)}
             )
@@ -2351,7 +2351,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df = df[df.index < current_minute]
         if "volume" in df.columns:
             df = df[df["volume"] > 0]
-    except Exception as exc:  # pragma: no cover - defensive
+    except (*COMMON_EXC, AttributeError) as exc:  # pragma: no cover - defensive
         logger.debug("minute bar filtering failed: %s", exc)
 
     if df.empty:
@@ -3317,7 +3317,7 @@ _cfg = TradingConfig.from_env()
 if getattr(_cfg, "max_position_size", None):
     try:
         MAX_POSITION_SIZE = float(_cfg.max_position_size)
-    except Exception:  # pragma: no cover - defensive
+    except (ValueError, TypeError):  # pragma: no cover - defensive
         pass
 _settings_drl = get_dollar_risk_limit()
 DOLLAR_RISK_LIMIT = _settings_drl
