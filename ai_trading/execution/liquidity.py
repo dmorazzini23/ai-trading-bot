@@ -60,6 +60,8 @@ class LiquidityAnalyzer:
             Comprehensive liquidity analysis
         """
         try:
+            if market_data is None or (hasattr(market_data, "empty") and market_data.empty):
+                return {"error": "No market data", "symbol": symbol}
             analysis_start = datetime.now(UTC)
             volume_analysis = self._analyze_volume_patterns(market_data)
             spread_analysis = self._analyze_bid_ask_spread(market_data, current_price)
@@ -414,6 +416,8 @@ class LiquidityManager:
     def update_symbol_liquidity(self, symbol: str, market_data: dict, current_price: float=None) -> dict[str, Any]:
         """Update liquidity analysis for a symbol."""
         try:
+            if market_data is None or (hasattr(market_data, "empty") and market_data.empty):
+                return {"error": "No market data", "symbol": symbol}
             analysis = self.analyzer.analyze_liquidity(symbol, market_data, current_price)
             if 'error' not in analysis:
                 self.symbol_liquidity[symbol] = analysis
