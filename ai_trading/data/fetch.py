@@ -179,6 +179,21 @@ _ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() n
     "false",
 }
 
+# Track fallback usage to avoid repeated Alpaca requests for the same window
+_FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
+
+
+def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> tuple[str, str, int, int]:
+    return (symbol, timeframe, int(start.timestamp()), int(end.timestamp()))
+
+
+def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> None:
+    _FALLBACK_WINDOWS.add(_fallback_key(symbol, timeframe, start, end))
+
+
+def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
+    return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
+
 _VALID_FEEDS = {"iex", "sip"}
 _VALID_ADJUSTMENTS = {"raw", "split", "dividend", "all"}
 _VALID_TIMEFRAMES = {"1Min", "5Min", "15Min", "1Hour", "1Day"}
@@ -677,6 +692,11 @@ def _fetch_bars(
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
     if not _window_has_trading_session(_start, _end):
         raise ValueError("window_no_trading_session")
+    if _used_fallback(symbol, _interval, _start, _end):
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_int = interval_map.get(_interval)
+        if fb_int:
+            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _ALLOW_SIP:
         if not _SIP_DISALLOWED_WARNED:
@@ -1236,6 +1256,7 @@ def _fetch_bars(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
                 )
+                _mark_fallback(symbol, _interval, _start, _end)
                 return alt_df
     return df
 
@@ -1250,6 +1271,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     if tf_key in _SKIPPED_SYMBOLS:
         logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
         return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+    used_backup = False
     use_finnhub = (
         os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
         and os.getenv("FINNHUB_API_KEY")
@@ -1374,13 +1396,14 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                                         },
                                     )
                                     return df_short
-                        try:
-                            df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
-                        except Exception as alt_err:  # pragma: no cover - network failure
-                            logger.warning(
-                                "ALT_PROVIDER_FAILED",
-                                extra={"symbol": symbol, "err": str(alt_err)},
-                            )
+                            try:
+                                df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+                                used_backup = True
+                            except Exception as alt_err:  # pragma: no cover - network failure
+                                logger.warning(
+                                    "ALT_PROVIDER_FAILED",
+                                    extra={"symbol": symbol, "err": str(alt_err)},
+                                )
                             df = None
                         if df is None or getattr(df, "empty", True):
                             _SKIPPED_SYMBOLS.add(tf_key)
@@ -1433,6 +1456,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             while cur_start < end_dt:
                 cur_end = min(cur_start + max_span, end_dt)
                 dfs.append(_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
+                used_backup = True
                 cur_start = cur_end
             if pd is not None and dfs:
                 df = pd.concat(dfs, ignore_index=True)
@@ -1442,6 +1466,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
         else:
             df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+            used_backup = True
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
@@ -1455,6 +1480,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
+            if used_backup:
+                _mark_fallback(symbol, "1Min", start_dt, end_dt)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
     return _post_process(df)

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import pathlib
 
 import pytest
+import ai_trading.data.fetch as data_fetcher
 
 try:
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
@@ -138,3 +139,8 @@ def _sanitize_executor_env(monkeypatch):
         return _orig_getenv(key, default)
 
     monkeypatch.setattr(_os, "getenv", _sanitized_getenv, raising=True)
+
+
+@pytest.fixture(autouse=True)
+def _reset_fallback_cache(monkeypatch):
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
