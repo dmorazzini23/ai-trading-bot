@@ -672,6 +672,9 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         raise ImportError('scikit-learn is required for retrain_meta_learner')
     from sklearn.linear_model import Ridge
     model = Ridge(alpha=1.0, fit_intercept=True)
+    if not (callable(getattr(model, 'fit', None)) and callable(getattr(model, 'predict', None))):
+        logger.error('META_LEARNING_MODEL_INTERFACE: Ridge missing fit or predict method')
+        return False
     import inspect
     try:
         sig = inspect.signature(model.fit)
