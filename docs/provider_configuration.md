@@ -7,6 +7,13 @@ This project supports multiple market data sources. Operators can toggle provide
 - `ENABLE_FINNHUB`: set to `1` to enable, `0` to disable.
 - `FINNHUB_API_KEY`: required when Finnhub access is enabled.
 
+Example:
+
+```bash
+export FINNHUB_API_KEY=your_finnhub_key
+export ENABLE_FINNHUB=1
+```
+
 ## Alpaca Feed
 
 - `ALPACA_DATA_FEED`: choose `iex` (default) or `sip`. The `sip` option requires a SIP-enabled Alpaca account.

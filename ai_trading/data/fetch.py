@@ -18,7 +18,13 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
-from ai_trading.logging import log_empty_retries_exhausted, log_fetch_attempt, logger
+from ai_trading.logging import (
+    log_empty_retries_exhausted,
+    log_fetch_attempt,
+    log_finnhub_disabled,
+    warn_finnhub_disabled_no_data,
+    logger,
+)
 from ai_trading.config.management import MAX_EMPTY_RETRIES
 from ai_trading.data.metrics import metrics
 from ai_trading.net.http import HTTPSession, get_http_session
@@ -1333,7 +1339,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
             df = None
     else:
-        logger.debug("FINNHUB_DISABLED", extra={"symbol": symbol})
+        log_finnhub_disabled(symbol)
         df = None
     if df is None or getattr(df, "empty", True):
         if _has_alpaca_keys():
@@ -1480,13 +1486,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             df = None
     if df is None or getattr(df, "empty", True):
         if not use_finnhub:
-            logger.warning(
-                "FINNHUB_DISABLED_NO_DATA",
-                extra={
-                    "symbol": symbol,
-                    "recommendation": "set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY",
-                },
-            )
+            warn_finnhub_disabled_no_data(symbol)
         max_span = _dt.timedelta(days=8)
         total_span = end_dt - start_dt
         if total_span > max_span:
