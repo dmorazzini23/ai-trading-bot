@@ -6158,6 +6158,11 @@ class LazyBotContext:
         return self._context.execution_engine
 
     @property
+    def trade_logger(self):
+        self._ensure_initialized()
+        return self._context.trade_logger
+
+    @property
     def stop_targets(self):
         self._ensure_initialized()
         return self._context.stop_targets
@@ -6171,6 +6176,26 @@ class LazyBotContext:
     def confirmation_count(self):
         self._ensure_initialized()
         return self._context.confirmation_count
+
+    @property
+    def portfolio_weights(self):
+        self._ensure_initialized()
+        return self._context.portfolio_weights
+
+    @property
+    def rebalance_buys(self):
+        self._ensure_initialized()
+        return self._context.rebalance_buys
+
+    @property
+    def rebalance_ids(self):
+        self._ensure_initialized()
+        return self._context.rebalance_ids
+
+    @property
+    def rebalance_attempts(self):
+        self._ensure_initialized()
+        return self._context.rebalance_attempts
 
     @property
     def symbols(self):
@@ -6201,6 +6226,31 @@ class LazyBotContext:
     def trailing_extremes(self):
         self._ensure_initialized()
         return self._context.trailing_extremes
+
+    @property
+    def allocator(self):
+        self._ensure_initialized()
+        return self._context.allocator
+
+    @property
+    def strategies(self):
+        self._ensure_initialized()
+        return self._context.strategies
+
+    @property
+    def drawdown_circuit_breaker(self):
+        self._ensure_initialized()
+        return self._context.drawdown_circuit_breaker
+
+    @property
+    def logger(self):
+        self._ensure_initialized()
+        return self._context.logger
+
+    @property
+    def tickers(self):
+        self._ensure_initialized()
+        return self._context.tickers
 
     @property
     def params(self):

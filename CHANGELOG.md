@@ -38,6 +38,7 @@ All notable changes to this project will be documented in this file.
 - **Import Blocker**: Replaced corrupted `ai_trading/model_registry.py` with clean, minimal, typed model registry implementation
 - Removed hard `data_client` dependency in risk engine with optional Alpaca client.
 - Added `RLTrader` alias and completed config defaults for stable runtime.
+- **BotContext**: expose portfolio weighting and rebalance attributes on `LazyBotContext` to avoid `AttributeError` during trades.
 - Replaced test mock imports in sentiment module with local stub to avoid leakage.
   - Supports `register_model`, `load_model`, and `latest_for` operations
   - Maintains JSON index for model metadata
