@@ -205,15 +205,22 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
         quality_report['file_readable'] = True
         try:
             with open(trade_log_path, 'r') as f:
-                lines = f.readlines()
+                raw_lines = f.readlines()
+            if not raw_lines:
+                quality_report['issues'].append('Trade log file is empty')
+                quality_report['recommendations'].append('Ensure trade logging is actively writing data')
+                return quality_report
+            # Remove empty lines and split out header row
+            lines = [l for l in raw_lines if l.strip()]
             if not lines:
                 quality_report['issues'].append('Trade log file is empty')
                 quality_report['recommendations'].append('Ensure trade logging is actively writing data')
                 return quality_report
+            _header, *data_lines = lines
             audit_format_rows = 0
             meta_format_rows = 0
             valid_price_rows = 0
-            for line_num, line in enumerate(lines):
+            for line_num, line in enumerate(data_lines, start=2):
                 line = line.strip()
                 if not line:
                     continue
@@ -260,7 +267,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                 except COMMON_EXC as e:
                     logger.debug(f'Failed to parse line {line_num}: {e}')
                     continue
-            quality_report['row_count'] = len([l for l in lines if l.strip()])
+            quality_report['row_count'] = len(data_lines)
             quality_report['audit_format_rows'] = audit_format_rows
             quality_report['meta_format_rows'] = meta_format_rows
             quality_report['valid_price_rows'] = valid_price_rows
@@ -276,7 +283,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             elif meta_format_rows > 0:
                 quality_report['has_valid_format'] = True
             elif quality_report['row_count'] > 0:
-                for line_num, line in enumerate(lines[:5]):
+                for line_num, line in enumerate(data_lines[:5], start=2):
                     line = line.strip()
                     if not line or line.startswith('#'):
                         continue
