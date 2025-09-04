@@ -128,6 +128,11 @@ class ModelRegistry:
             return None
         return sorted(candidates, key=lambda t: t[1])[-1][0]
 
+    def list_models(self) -> list[str]:
+        """Return a list of all registered model IDs."""
+
+        return list(self.model_index)
+
     @staticmethod
     def _json_safe(data: dict[str, Any]) -> dict[str, Any]:
         """Convert non-JSON-serializable objects to string paths."""

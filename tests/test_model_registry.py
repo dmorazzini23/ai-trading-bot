@@ -173,3 +173,17 @@ class TestModelRegistry:
             )
             _model, meta = registry.load_model(model_id)
             assert meta["cls"] == "unittest.mock.Mock"
+
+    def test_list_models_empty_registry(self):
+        """list_models returns an empty list when no models registered."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            assert registry.list_models() == []
+
+    def test_list_models_populated_registry(self):
+        """list_models returns all registered model IDs."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            m1 = registry.register_model({"a": 1}, "s1", "t1")
+            m2 = registry.register_model({"b": 2}, "s2", "t2")
+            assert sorted(registry.list_models()) == sorted([m1, m2])
