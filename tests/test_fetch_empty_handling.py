@@ -65,13 +65,13 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
         out = fetch._fetch_bars("AAPL", start, end, "1Min")
 
     assert out is None
-    assert sess.calls == 4
+    assert sess.calls == 2
     retry_logs = [r for r in caplog.records if r.message == "RETRY_EMPTY_BARS"]
-    assert [r.attempt for r in retry_logs] == [1, 2, 3]
-    assert [r.total_elapsed for r in retry_logs] == [0, 1, 3]
-    assert delays == [1, 2, 4]
+    assert [r.attempt for r in retry_logs] == [1]
+    assert [r.total_elapsed for r in retry_logs] == [0]
+    assert delays == [1]
     assert any(r.message == "EMPTY_DATA" and r.levelno == logging.WARNING for r in caplog.records)
-    assert any(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records)
+    assert sum(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records) == 1
 
 
 def test_silent_fallback_when_market_closed(monkeypatch, caplog):
