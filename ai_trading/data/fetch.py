@@ -342,6 +342,12 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
         except (AttributeError, TypeError, ValueError):
             pass
         df = df[~df.index.duplicated(keep="last")].sort_index()
+    if "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+        df = df.reset_index().rename(columns={df.index.name or "index": "timestamp"})
+    required = ["open", "high", "low", "close", "volume"]
+    for col in required:
+        if col not in df.columns:
+            df[col] = pd.Series(dtype="float64")
     return df
 
 
