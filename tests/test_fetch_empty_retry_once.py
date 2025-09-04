@@ -53,6 +53,7 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
     monkeypatch.setattr(fetch, "_sip_fallback_allowed", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
 
     sleep_called = {}
     monkeypatch.setattr(
