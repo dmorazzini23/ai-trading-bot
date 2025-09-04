@@ -55,6 +55,9 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
     monkeypatch.setattr(fetch, "_sip_fallback_allowed", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_empty_should_emit", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_empty_record", lambda *a, **k: 1)
+    monkeypatch.setattr(fetch, "_empty_classify", lambda **k: logging.WARNING)
 
     sleep_called = {}
     monkeypatch.setattr(

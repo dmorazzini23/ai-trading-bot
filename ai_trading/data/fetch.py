@@ -1109,6 +1109,54 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
+            if _state["retries"] >= 1:
+                reason = (
+                    "market_closed"
+                    if (
+                        _outside_market_hours(_start, _end)
+                        or not _window_has_trading_session(_start, _end)
+                    )
+                    else "symbol_delisted_or_wrong_feed"
+                )
+                hint = (
+                    "Market likely closed for requested window"
+                    if reason == "market_closed"
+                    else "Symbol may be delisted or feed may be incorrect"
+                )
+                logger.error(
+                    "ALPACA_EMPTY_RESPONSE",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": _state["corr_id"],
+                            "reason": reason,
+                            "hint": hint,
+                        }
+                    ),
+                )
+                logger.warning(
+                    "ALPACA_FETCH_RETRY_LIMIT",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "status": "empty",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": _state["corr_id"],
+                            "retries": _state["retries"],
+                            "reason": reason,
+                        }
+                    ),
+                )
+                return None
             if str(_interval).lower() not in {"1day", "day", "1d"}:
                 if _state["retries"] < max_retries:
                     if _outside_market_hours(_start, _end):
