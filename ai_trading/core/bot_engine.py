@@ -7561,7 +7561,11 @@ def sector_exposure(ctx: BotContext) -> dict[str, float]:
     ):  # AI-AGENT-REF: narrow exception
         total = 0.0
     exposure: dict[str, float] = {}
-    for pos in positions:
+    try:
+        iter_positions = list(positions)
+    except TypeError:
+        iter_positions = []
+    for pos in iter_positions:
         qty = abs(int(getattr(pos, "qty", 0)))
         price = float(
             getattr(pos, "current_price", 0) or getattr(pos, "avg_entry_price", 0) or 0
