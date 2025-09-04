@@ -8305,8 +8305,19 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             except (APIError, TimeoutError, ConnectionError):
                 acct = None
             if acct and order_args.get("side") == "buy":
-                price = order_args.get("limit_price") or order_args.get("notional", 0)
-                need = float(price or 0) * float(order_args.get("qty", 0))
+                price_val = order_args.get("limit_price")
+                if price_val is None:
+                    price_val = order_args.get("notional")
+                try:
+                    price = float(price_val) if price_val is not None else 0.0
+                except (TypeError, ValueError):
+                    price = 0.0
+                qty_val = order_args.get("qty")
+                try:
+                    qty = float(qty_val) if qty_val is not None else 0.0
+                except (TypeError, ValueError):
+                    qty = 0.0
+                need = price * qty
                 if need > float(getattr(acct, "buying_power", 0)):
                     logger.warning(
                         "insufficient buying power for %s: requested %s, available %s",
@@ -8328,7 +8339,11 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     ),
                     0.0,
                 )
-                if float(order_args.get("qty", 0)) > avail:
+                try:
+                    req_qty = float(order_args.get("qty") or 0)
+                except (TypeError, ValueError):
+                    req_qty = 0.0
+                if req_qty > avail:
                     logger.warning(
                         f"insufficient qty available for {order_args.get('symbol')}: requested {order_args.get('qty')}, available {avail}"
                     )
