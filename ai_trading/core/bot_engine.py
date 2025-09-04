@@ -8371,7 +8371,8 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     raise
 
             start_ts = time.monotonic()
-            while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
+            pending_new = getattr(OrderStatus, "PENDING_NEW", "pending_new")
+            while getattr(order, "status", None) == pending_new:
                 if time.monotonic() - start_ts > 1:
                     logger.warning(
                         f"Order stuck in PENDING_NEW: {order_args.get('symbol')}, retrying or monitoring required."
@@ -8403,8 +8404,10 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 raise OrderExecutionError(
                     f"Buy failed for {order_args.get('symbol')}: {status}"
                 )
-            elif status == OrderStatus.NEW:
-                logger.info(f"Order for {order_args.get('symbol')} is NEW; awaiting fill")
+            elif status == getattr(OrderStatus, "NEW", "new"):
+                logger.info(
+                    f"Order for {order_args.get('symbol')} is NEW; awaiting fill"
+                )
             else:
                 logger.error(
                     f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
