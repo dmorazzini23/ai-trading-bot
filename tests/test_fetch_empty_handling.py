@@ -1,5 +1,6 @@
 import json
 import logging
+import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -37,7 +38,7 @@ def _dt_range():
 
 def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     start, end = _dt_range()
-    sess = _Session([{"bars": []}, {"bars": []}])
+    sess = _Session([{ "bars": []} for _ in range(4)])
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
@@ -46,10 +47,28 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_empty_classify", lambda **k: logging.WARNING)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
 
-    with caplog.at_level(logging.WARNING):
+    elapsed = 0.0
+    delays: list[float] = []
+
+    def _monotonic() -> float:
+        return elapsed
+
+    def _sleep(sec: float) -> None:
+        nonlocal elapsed
+        elapsed += sec
+        delays.append(sec)
+
+    monkeypatch.setattr(fetch, "time", types.SimpleNamespace(monotonic=_monotonic, sleep=_sleep))
+
+    with caplog.at_level(logging.DEBUG):
         out = fetch._fetch_bars("AAPL", start, end, "1Min")
 
     assert out is None
+    assert sess.calls == 4
+    retry_logs = [r for r in caplog.records if r.message == "RETRY_EMPTY_BARS"]
+    assert [r.attempt for r in retry_logs] == [1, 2, 3]
+    assert [r.total_elapsed for r in retry_logs] == [0, 1, 3]
+    assert delays == [1, 2, 4]
     assert any(r.message == "EMPTY_DATA" and r.levelno == logging.WARNING for r in caplog.records)
     assert any(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records)
 
@@ -64,6 +83,12 @@ def test_silent_fallback_when_market_closed(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
     monkeypatch.setattr(fetch, "is_market_open", lambda: False)
+
+    monkeypatch.setattr(
+        fetch,
+        "time",
+        types.SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _s: None),
+    )
 
     with caplog.at_level(logging.INFO):
         df = fetch._fetch_bars("AAPL", start, end, "1Min")
