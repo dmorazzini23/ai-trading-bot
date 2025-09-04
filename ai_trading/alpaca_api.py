@@ -80,6 +80,70 @@ ALPACA_AVAILABLE = (
 )
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
+if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
+    from dataclasses import dataclass
+    from enum import Enum
+    from typing import Any
+
+    class TimeFrameUnit(Enum):
+        Minute = "Min"
+        Hour = "Hour"
+        Day = "Day"
+
+    @dataclass(frozen=True)
+    class TimeFrame:
+        amount: int
+        unit: TimeFrameUnit
+
+        def __str__(self) -> str:
+            return f"{self.amount}{self.unit.value}"
+
+    # Pre-defined shorthand attributes mirroring alpaca-py
+    TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
+    TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
+    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)  # type: ignore[attr-defined]
+
+    @dataclass
+    class StockBarsRequest:
+        symbol_or_symbols: Any
+        timeframe: Any
+        start: Any | None = None
+        end: Any | None = None
+        limit: int | None = None
+        adjustment: str | None = None
+        feed: str | None = None
+        sort: str | None = None
+        asof: str | None = None
+        currency: str | None = None
+
+        def __init__(
+            self,
+            symbol_or_symbols: Any,
+            timeframe: Any,
+            *,
+            start: Any | None = None,
+            end: Any | None = None,
+            limit: int | None = None,
+            adjustment: str | None = None,
+            feed: str | None = None,
+            sort: str | None = None,
+            asof: str | None = None,
+            currency: str | None = None,
+            **extra: Any,
+        ) -> None:
+            self.symbol_or_symbols = symbol_or_symbols
+            self.timeframe = timeframe
+            self.start = start
+            self.end = end
+            self.limit = limit
+            self.adjustment = adjustment
+            self.feed = feed
+            self.sort = sort
+            self.asof = asof
+            self.currency = currency
+            for k, v in extra.items():
+                setattr(self, k, v)
+
 def _make_client_order_id(prefix: str='ai') -> str:
     return f'{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}'
 generate_client_order_id = _make_client_order_id
@@ -114,17 +178,23 @@ def _data_classes():
 
 
 def get_stock_bars_request_cls():
-    StockBarsRequest, _, _ = _data_classes()
+    if ALPACA_AVAILABLE:
+        cls, _, _ = _data_classes()
+        return cls
     return StockBarsRequest
 
 
 def get_timeframe_cls():
-    _, TimeFrame, _ = _data_classes()
+    if ALPACA_AVAILABLE:
+        _, cls, _ = _data_classes()
+        return cls
     return TimeFrame
 
 
 def get_timeframe_unit_cls():
-    _, _, TimeFrameUnit = _data_classes()
+    if ALPACA_AVAILABLE:
+        _, _, cls = _data_classes()
+        return cls
     return TimeFrameUnit
 
 def _normalize_timeframe_for_tradeapi(tf_raw):

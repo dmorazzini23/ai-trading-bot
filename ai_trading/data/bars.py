@@ -35,8 +35,67 @@ try:
     TimeFrame = get_timeframe_cls()
     StockBarsRequest = get_stock_bars_request_cls()
 except Exception:  # pragma: no cover - optional Alpaca SDK unavailable during some tests
-    TimeFrame = object  # type: ignore[assignment]
-    StockBarsRequest = object  # type: ignore[assignment]
+    from dataclasses import dataclass
+    from enum import Enum
+
+    class _TFUnit(Enum):
+        Minute = "Min"
+        Hour = "Hour"
+        Day = "Day"
+
+    @dataclass(frozen=True)
+    class TimeFrame:
+        amount: int
+        unit: _TFUnit
+
+        def __str__(self) -> str:  # pragma: no cover - trivial
+            return f"{self.amount}{self.unit.value}"
+
+    # Predefined common units
+    TimeFrame.Minute = TimeFrame(1, _TFUnit.Minute)  # type: ignore[attr-defined]
+    TimeFrame.Hour = TimeFrame(1, _TFUnit.Hour)  # type: ignore[attr-defined]
+    TimeFrame.Day = TimeFrame(1, _TFUnit.Day)  # type: ignore[attr-defined]
+
+    @dataclass
+    class StockBarsRequest:
+        symbol_or_symbols: Any
+        timeframe: Any
+        start: Any | None = None
+        end: Any | None = None
+        limit: int | None = None
+        adjustment: str | None = None
+        feed: str | None = None
+        sort: str | None = None
+        asof: str | None = None
+        currency: str | None = None
+
+        def __init__(
+            self,
+            symbol_or_symbols: Any,
+            timeframe: Any,
+            *,
+            start: Any | None = None,
+            end: Any | None = None,
+            limit: int | None = None,
+            adjustment: str | None = None,
+            feed: str | None = None,
+            sort: str | None = None,
+            asof: str | None = None,
+            currency: str | None = None,
+            **extra: Any,
+        ) -> None:
+            self.symbol_or_symbols = symbol_or_symbols
+            self.timeframe = timeframe
+            self.start = start
+            self.end = end
+            self.limit = limit
+            self.adjustment = adjustment
+            self.feed = feed
+            self.sort = sort
+            self.asof = asof
+            self.currency = currency
+            for k, v in extra.items():
+                setattr(self, k, v)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.data import TimeFrame as _TimeFrame, StockBarsRequest as _StockBarsRequest
