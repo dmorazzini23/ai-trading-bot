@@ -518,6 +518,7 @@ AI_TRADING_TICKERS_CSV=/app/data/tickers.csv    # optional override
 # API Configuration
 ALPACA_BASE_URL=https://api.alpaca.markets
 FINNHUB_API_KEY=your_finnhub_key
+ENABLE_FINNHUB=1
 
 # Logging
 LOG_LEVEL=INFO
