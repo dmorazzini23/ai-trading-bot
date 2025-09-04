@@ -387,6 +387,24 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     return df
 
 
+def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
+    """Route to configured backup provider or return empty DataFrame."""
+    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+    if provider == "yahoo":
+        logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+        return _yahoo_get_bars(symbol, start, end, interval)
+    pd_local = _ensure_pandas()
+    if provider in ("", "none"):
+        logger.info("BACKUP_PROVIDER_DISABLED", extra={"symbol": symbol})
+    else:
+        logger.warning("UNKNOWN_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+    if pd_local is None:
+        return []  # type: ignore[return-value]
+    idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
+    cols = ["open", "high", "low", "close", "volume"]
+    return pd_local.DataFrame(columns=cols, index=idx).reset_index()
+
+
 def _post_process(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize OHLCV DataFrame or return empty."""
     pd = _ensure_pandas()
@@ -1117,7 +1135,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                                     )
                                     return df_short
                         try:
-                            df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+                            df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
                         except Exception as alt_err:  # pragma: no cover - network failure
                             logger.warning(
                                 "ALT_PROVIDER_FAILED",
@@ -1174,7 +1192,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             cur_start = start_dt
             while cur_start < end_dt:
                 cur_end = min(cur_start + max_span, end_dt)
-                dfs.append(_yahoo_get_bars(symbol, cur_start, cur_end, interval="1m"))
+                dfs.append(_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
                 cur_start = cur_end
             if pd is not None and dfs:
                 df = pd.concat(dfs, ignore_index=True)
@@ -1183,7 +1201,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             else:
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
         else:
-            df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
+            df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
@@ -1289,6 +1307,7 @@ __all__ = [
     "get_daily",
     "fetch_daily_data_async",
     "_yahoo_get_bars",
+    "_backup_get_bars",
     "_fetch_bars",
     "get_bars",
     "get_bars_batch",

@@ -822,7 +822,10 @@ and queries the backup source. Configure additional fallbacks with:
 
 - Set `ENABLE_FINNHUB=1` and supply `FINNHUB_API_KEY` to enable a Finnhub
   retry before using the backup provider.
-- `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback.
+- `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback (`yahoo` or `none`).
+
+When the configured fallback is used, a `USING_BACKUP_PROVIDER` log entry is emitted with the provider name.
+See [docs/provider_configuration.md](docs/provider_configuration.md) for environment-specific examples.
 
 When this backoff triggers, the system logs the affected symbol, timeframe and
 provider status to aid debugging.
