@@ -478,6 +478,27 @@ def get_logger(name: str) -> SanitizingLoggerAdapter:
 logger = SanitizingLoggerAdapter(logging.getLogger(__name__), {})
 logger_once = EmitOnceLogger(logger)
 
+
+def log_finnhub_disabled(symbol: str) -> None:
+    """Debug once when Finnhub is disabled for ``symbol``."""
+    logger_once.debug(
+        "FINNHUB_DISABLED",
+        key=f"FINNHUB_DISABLED:{symbol}",
+        extra={"symbol": symbol},
+    )
+
+
+def warn_finnhub_disabled_no_data(symbol: str) -> None:
+    """Warn once per symbol when Finnhub is disabled and no data is returned."""
+    logger_once.warning(
+        "FINNHUB_DISABLED_NO_DATA",
+        key=f"FINNHUB_DISABLED_NO_DATA:{symbol}",
+        extra={
+            "symbol": symbol,
+            "recommendation": "set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY",
+        },
+    )
+
 def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | None = None, **extra: Any) -> None:
     """Log a market data fetch attempt and its outcome.
 
@@ -849,4 +870,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
+__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
