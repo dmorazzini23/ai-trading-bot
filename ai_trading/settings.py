@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     redis_url: str | None = Field(default=None, alias='REDIS_URL')
     enable_finnhub: bool = Field(True, alias='ENABLE_FINNHUB')
     finnhub_api_key: str | None = Field(default=None, alias='FINNHUB_API_KEY')
+    backup_data_provider: Literal['yahoo', 'none'] = Field(
+        'yahoo', alias='BACKUP_DATA_PROVIDER'
+    )
     alpaca_base_url: str = Field(
         default='https://paper-api.alpaca.markets',
         alias='ALPACA_API_URL',
@@ -368,6 +371,9 @@ def get_max_trades_per_day() -> int:
 
 def get_finnhub_rpm() -> int:
     return _to_int(getattr(get_settings(), 'finnhub_rpm', 55), 55)
+
+def get_backup_data_provider() -> str:
+    return getattr(get_settings(), 'backup_data_provider', 'yahoo')
 
 def get_data_cache_enable() -> bool:
     return _to_bool(getattr(get_settings(), 'data_cache_enable', True), True)
