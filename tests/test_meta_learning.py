@@ -67,6 +67,13 @@ def test_optimize_signals(monkeypatch):
     assert meta_learning.optimize_signals(data, cfg, model=None) == data
 
 
+def test_optimize_signals_no_cfg():
+    m = types.SimpleNamespace(predict=lambda X: [1] * len(X))
+    data = [3, 4]
+    assert meta_learning.optimize_signals(data, cfg=None, model=m) == [1, 1]
+    assert meta_learning.optimize_signals(data, cfg=None, model=None) == data
+
+
 def test_retrain_meta_missing(tmp_path):
     assert not meta_learning.retrain_meta_learner(str(tmp_path / "no.csv"))
 
