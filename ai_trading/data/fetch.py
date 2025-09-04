@@ -1011,8 +1011,10 @@ def _fetch_bars(
         df = pd.DataFrame(data)
         if df.empty:
             attempt = _state["retries"] + 1
-            log_extra_with_remaining = {"remaining_retries": max_retries - attempt, **log_extra}
-            log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
+            remaining_retries = max(0, max_retries - attempt)
+            log_extra_with_remaining = {"remaining_retries": remaining_retries, **log_extra}
+            if attempt <= max_retries:
+                log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             if fallback:
