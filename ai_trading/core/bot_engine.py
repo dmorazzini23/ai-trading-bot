@@ -5673,6 +5673,21 @@ def get_trade_logger() -> TradeLogger:
         _TRADE_LOGGER_SINGLETON = TradeLogger(TRADE_LOG_FILE)
 
     path = _TRADE_LOGGER_SINGLETON.path
+    log_dir = os.path.dirname(path) or "."
+
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
+        logger.error(
+            "TRADE_LOG_DIR_CREATE_FAILED",
+            extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
+        )
+        raise
+
+    if not os.access(log_dir, os.W_OK):
+        logger.error("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
+        raise PermissionError(f"Trade log directory {log_dir} not writable")
+
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         try:
             with open(path, "w", newline="") as f:
@@ -5711,9 +5726,6 @@ from ai_trading.utils.imports import (
     resolve_strategy_allocator_cls,
 )
 logger = get_logger(__name__)
-
-# Ensure trade log file exists when module is imported
-get_trade_logger()
 
 
 def get_risk_engine():
@@ -13587,6 +13599,15 @@ def main() -> None:
     except DataFetchError as exc:
         logger.critical(
             "DATA_FETCHER_INIT_FAILED", extra={"detail": str(exc)}
+        )
+        sys.exit(1)
+
+    # AI-AGENT-REF: Initialize trade log before any symbol processing
+    try:
+        get_trade_logger()
+    except PermissionError as exc:
+        logger.critical(
+            "TRADE_LOG_INIT_FAILED", extra={"detail": str(exc)}
         )
         sys.exit(1)
 

@@ -1,4 +1,5 @@
 from ai_trading.core import bot_engine
+import pytest
 
 
 def test_parse_local_positions_creates_trade_log(tmp_path, monkeypatch):
@@ -81,4 +82,32 @@ def test_existing_empty_log_gets_header_and_entry(tmp_path, monkeypatch):
     assert lines[0].startswith("symbol,entry_time")
     assert len(lines) == 2
     assert "MSFT" in lines[1]
+
+
+def test_get_trade_logger_creates_missing_directory(tmp_path, monkeypatch):
+    """get_trade_logger creates the parent directory when absent."""
+
+    log_dir = tmp_path / "nested"
+    log_path = log_dir / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    bot_engine.get_trade_logger()
+
+    assert log_dir.exists()
+    assert log_path.exists()
+
+
+def test_get_trade_logger_errors_when_dir_not_writable(tmp_path, monkeypatch):
+    """get_trade_logger raises if parent directory is not writable."""
+
+    log_dir = tmp_path / "readonly"
+    log_dir.mkdir()
+    log_dir.chmod(0o555)
+    log_path = log_dir / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    with pytest.raises(PermissionError):
+        bot_engine.get_trade_logger()
 
