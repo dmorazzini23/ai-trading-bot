@@ -891,6 +891,10 @@ def is_runtime_ready() -> bool:
 _HEALTH_CHECK_FAILURES = 0
 _HEALTH_CHECK_FAIL_THRESHOLD = 3
 
+_EMPTY_TRADE_LOG_INFO_EMITTED = False
+_TRADE_LOG_CACHE: Any | None = None
+_TRADE_LOG_CACHE_LOADED = False
+
 
 def _initialize_bot_context_post_setup(ctx: Any) -> None:
     """
@@ -898,6 +902,7 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
     Never raise: any failure logs a warning and returns.
     """
     global _HEALTH_CHECK_FAILURES
+    _load_trade_log_cache()
     try:
         # Skip health check when market is closed and daily cache is already warm
         try:
@@ -5020,12 +5025,26 @@ def _read_trade_log(
         # Startup may legitimately run before any trades have executed; use INFO
         # instead of WARNING to reduce noise when the log exists but has no
         # rows yet.
-        logger.info(
-            "Trade log %s parsed but contains no rows | hint=call get_trade_logger() to initialize",
-            path,
-        )
+        global _EMPTY_TRADE_LOG_INFO_EMITTED
+        if not _EMPTY_TRADE_LOG_INFO_EMITTED:
+            logger.info(
+                "Trade log %s parsed but contains no rows | hint=call get_trade_logger() to initialize",
+                path,
+            )
+            _EMPTY_TRADE_LOG_INFO_EMITTED = True
         return None
     return df
+
+
+def _load_trade_log_cache() -> Any | None:
+    """Load and cache the trade log once at startup."""
+    global _TRADE_LOG_CACHE, _TRADE_LOG_CACHE_LOADED
+    if not _TRADE_LOG_CACHE_LOADED:
+        _TRADE_LOG_CACHE = _read_trade_log(
+            TRADE_LOG_FILE, usecols=["symbol", "exit_time"]
+        )
+        _TRADE_LOG_CACHE_LOADED = True
+    return _TRADE_LOG_CACHE
 
 
 def _parse_local_positions() -> dict[str, int]:
@@ -7298,7 +7317,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
         import pandas as pd  # type: ignore
     except ImportError:
         return False
-    df = _read_trade_log(TRADE_LOG_FILE, usecols=["symbol", "exit_time"])
+    df = _load_trade_log_cache()
     if df is None or "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
