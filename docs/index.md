@@ -6,6 +6,9 @@ harness for optimizing its tunable hyperparameters.
 For details on how entry and exit signals are generated, see
 [Entry and Exit Signal Methodology](ENTRY_EXIT_SIGNALS.md).
 
+Before running in production, ensure meta-learning has seed data as
+described in [Seeding Trade History](SEED_TRADE_HISTORY.md).
+
 ## Running the Backtester
 
 ```

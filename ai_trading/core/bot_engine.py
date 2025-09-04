@@ -10075,7 +10075,7 @@ def load_global_signal_performance(
         df = df.dropna(subset=["exit_price", "entry_price", "signal_tags"])
 
         if df.empty:
-            logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
+            logger.info("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
             return {}
 
         # Enhanced data validation and cleaning
