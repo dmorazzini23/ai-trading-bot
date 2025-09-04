@@ -11,6 +11,7 @@ import importlib.util
 import os
 import sys
 from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
+from collections import deque
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
 
@@ -273,6 +274,11 @@ from ai_trading.core.alpaca_client import (  # noqa: E402
 SENTIMENT_FAILURE_THRESHOLD: int = 25
 _SENTIMENT_FAILURES: int = 0
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
+SENTIMENT_SUCCESS_TTL_SEC: int = int(os.getenv("SENTIMENT_SUCCESS_TTL_SEC", "900"))
+SENTIMENT_MAX_RETRIES: int = int(os.getenv("SENTIMENT_MAX_RETRIES", "3"))
+SENTIMENT_BACKOFF_BASE: float = float(os.getenv("SENTIMENT_BACKOFF_BASE", "1"))
+SENTIMENT_MAX_CALLS_PER_MIN: int = int(os.getenv("SENTIMENT_MAX_CALLS_PER_MIN", "0"))
+_SENTIMENT_CALL_TIMES: deque[float] = deque()
 
 from enum import Enum
 
@@ -301,6 +307,9 @@ __all__ = [
     "SENTIMENT_API_KEY",
     "SENTIMENT_API_URL",
     "SENTIMENT_FAILURE_THRESHOLD",
+    "SENTIMENT_SUCCESS_TTL_SEC",
+    "SENTIMENT_MAX_RETRIES",
+    "SENTIMENT_MAX_CALLS_PER_MIN",
     "_SENTIMENT_CACHE",
     "fetch_sentiment",
     "ALPACA_AVAILABLE",
@@ -395,6 +404,7 @@ import io
 import logging
 from ai_trading.logging import get_logger
 import math
+import random
 import time
 import traceback
 import types
@@ -702,33 +712,44 @@ def fetch_sentiment(
         symbol = symbol_or_ctx  # backward compat: first arg was context
     now = time.time()
     cached = _SENTIMENT_CACHE.get(symbol)
-    if cached and now - cached[0] < ttl_s:
-        return cached[1]
+    if cached:
+        cache_ttl = SENTIMENT_SUCCESS_TTL_SEC if cached[1] != 0.0 else ttl_s
+        if now - cached[0] < cache_ttl:
+            return cached[1]
     if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD or not SENTIMENT_API_KEY:
         return 0.0
+
+    if SENTIMENT_MAX_CALLS_PER_MIN > 0:
+        cutoff = now - 60
+        while _SENTIMENT_CALL_TIMES and _SENTIMENT_CALL_TIMES[0] < cutoff:
+            _SENTIMENT_CALL_TIMES.popleft()
+        if len(_SENTIMENT_CALL_TIMES) >= SENTIMENT_MAX_CALLS_PER_MIN:
+            _SENTIMENT_CACHE[symbol] = (now, cached[1] if cached else 0.0)
+            return cached[1] if cached else 0.0
+
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
-    try:
-        # fmt: off
-        resp = _HTTP_SESSION.get(
-            SENTIMENT_API_URL, params=params, timeout=clamp_request_timeout(HTTP_TIMEOUT)
-        )
-        # fmt: on
-        if resp.status_code in {429, 500, 502, 503, 504}:
+    for attempt in range(1, SENTIMENT_MAX_RETRIES + 1):
+        try:
+            _SENTIMENT_CALL_TIMES.append(time.time())
+            # fmt: off
+            resp = _HTTP_SESSION.get(
+                SENTIMENT_API_URL, params=params, timeout=clamp_request_timeout(HTTP_TIMEOUT)
+            )
+            # fmt: on
+            if resp.status_code in {429, 500, 502, 503, 504}:
+                raise RequestException(f"status {resp.status_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            score = float(data.get("sentiment", 0.0))
+            _SENTIMENT_CACHE[symbol] = (time.time(), score)
+            return score
+        except COMMON_EXC:
             _SENTIMENT_FAILURES += 1
-            _SENTIMENT_CACHE[symbol] = (now, 0.0)
-            return 0.0
-        resp.raise_for_status()
-        data = resp.json()
-        score = float(data.get("sentiment", 0.0))
-        _SENTIMENT_CACHE[symbol] = (now, score)
-        return score
-    except COMMON_EXC:
-        _SENTIMENT_FAILURES += 1
-        if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD:
-            _SENTIMENT_CACHE[symbol] = (now, 0.0)
-            return 0.0
-        _SENTIMENT_CACHE[symbol] = (now, 0.0)
-        return 0.0
+            if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD or attempt == SENTIMENT_MAX_RETRIES:
+                _SENTIMENT_CACHE[symbol] = (time.time(), 0.0)
+                return 0.0
+            sleep_s = SENTIMENT_BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, SENTIMENT_BACKOFF_BASE)
+            time.sleep(sleep_s)
 
 
 def _sha256_file(path: str) -> str:
