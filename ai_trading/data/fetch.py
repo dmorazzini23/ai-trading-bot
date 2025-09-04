@@ -163,6 +163,9 @@ _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 # Track consecutive empty-bar responses per (symbol, timeframe) pair to avoid
 # repeated fetch noise and allow skipping per interval
 _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
+# Track consecutive error="empty" responses specifically from the IEX feed to
+# allow proactive SIP fallback on subsequent requests.
+_IEX_EMPTY_COUNTS: dict[tuple[str, str], int] = {}
 _SKIPPED_SYMBOLS: set[tuple[str, str]] = set()
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
@@ -824,8 +827,50 @@ def _fetch_bars(
         if df.empty:
             log_fetch_attempt("alpaca", status=status, error="empty", **log_extra)
             metrics.empty_payload += 1
+            is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             if fallback:
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
+            if _feed == "iex" and is_empty_error:
+                key = (symbol, _interval)
+                cnt = _IEX_EMPTY_COUNTS.get(key, 0) + 1
+                _IEX_EMPTY_COUNTS[key] = cnt
+                prev = _state.get("corr_id")
+                if _ALLOW_SIP and not _SIP_UNAUTHORIZED:
+                    result = _attempt_fallback((_interval, "sip", _start, _end))
+                    sip_corr = _state.get("corr_id")
+                    if result is not None and not getattr(result, "empty", True):
+                        _IEX_EMPTY_COUNTS.pop(key, None)
+                        return result
+                    msg = "IEX_EMPTY_SIP_UNAUTHORIZED" if _SIP_UNAUTHORIZED else "IEX_EMPTY_SIP_EMPTY"
+                    logger.error(
+                        msg,
+                        extra=_norm_extra(
+                            {
+                                "provider": "alpaca",
+                                "symbol": symbol,
+                                "timeframe": _interval,
+                                "feed": "iex",
+                                "occurrences": cnt,
+                                "correlation_id": prev,
+                                "sip_correlation_id": sip_corr,
+                            }
+                        ),
+                    )
+                    return result if result is not None else pd.DataFrame()
+                logger.error(
+                    "IEX_EMPTY_NO_SIP",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "symbol": symbol,
+                            "timeframe": _interval,
+                            "feed": "iex",
+                            "occurrences": _IEX_EMPTY_COUNTS[key],
+                            "correlation_id": prev,
+                        }
+                    ),
+                )
+                return pd.DataFrame()
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
                     mdf = _fetch_bars(symbol, _start, _end, "1Min", feed=_feed, adjustment=adjustment)
@@ -974,6 +1019,7 @@ def _fetch_bars(
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         df = df.dropna(subset=["open", "high", "low", "close"])
         df.set_index("timestamp", inplace=True, drop=False)
+        _IEX_EMPTY_COUNTS.pop((symbol, _interval), None)
         log_fetch_attempt("alpaca", status=status, **log_extra)
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
@@ -1013,7 +1059,17 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     if df is None or getattr(df, "empty", True):
         if _has_alpaca_keys():
             try:
-                df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
+                feed_to_use = feed or _DEFAULT_FEED
+                if (
+                    feed_to_use == "iex"
+                    and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
+                    and _ALLOW_SIP
+                    and not _SIP_UNAUTHORIZED
+                ):
+                    feed_to_use = "sip"
+                    payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
+                    logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
+                df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
             except (EmptyBarsError, ValueError, RuntimeError) as e:
                 if isinstance(e, EmptyBarsError):
                     now = datetime.now(UTC)
@@ -1188,6 +1244,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             if last_ts is not None:
                 set_cached_minute_timestamp(symbol, last_ts)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
