@@ -102,6 +102,67 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     TimeFrame = _TimeFrame
     StockBarsRequest = _StockBarsRequest
 
+
+# Capture the dynamically resolved request class so we can wrap it.  Tests
+# may monkeypatch Alpaca's request objects after this module is imported which
+# can lead to mismatched ``TimeFrame`` types being passed to a Pydantic model
+# expecting its own class.  Wrapping the constructor lets us coerce arbitrary
+# timeframe inputs to the active ``TimeFrame`` type at call time.
+_BaseStockBarsRequest = StockBarsRequest  # type: ignore[assignment]
+_BaseTimeFrame = TimeFrame  # type: ignore[assignment]
+
+def _coerce_timeframe(tf: Any) -> Any:
+    """Return ``tf`` as an instance of the active ``TimeFrame`` class."""
+    try:
+        if isinstance(tf, _BaseTimeFrame):
+            return tf
+    except Exception:  # pragma: no cover - defensive
+        return tf
+
+    try:
+        unit_cls = get_timeframe_unit_cls()
+    except Exception:  # pragma: no cover - optional SDK
+        unit_cls = None
+
+    # Accept objects with ``amount`` and ``unit`` attributes
+    amount = getattr(tf, "amount", None)
+    unit = getattr(tf, "unit", None)
+    if amount is not None and unit is not None and unit_cls is not None:
+        try:
+            if not isinstance(unit, unit_cls):
+                name = getattr(unit, "name", str(unit)).capitalize()
+                unit = getattr(unit_cls, name, getattr(unit_cls, "Day"))
+            return _BaseTimeFrame(int(amount), unit)  # type: ignore[arg-type]
+        except Exception:
+            pass
+
+    # Fallback: parse string representations like "1Day" or "minute"
+    try:
+        s = str(tf).strip()
+        if s:
+            import re
+            m = re.match(r"(\d+)?\s*(\w+)", s)
+            if m:
+                amt = int(m.group(1) or 1)
+                unit_name = m.group(2).capitalize()
+                if unit_cls is not None:
+                    unit = getattr(unit_cls, unit_name, getattr(unit_cls, "Day"))
+                    return _BaseTimeFrame(amt, unit)  # type: ignore[arg-type]
+    except Exception:
+        pass
+    return tf
+
+
+def StockBarsRequest(*args: Any, **kwargs: Any):
+    """Construct a StockBarsRequest ensuring timeframe compatibility."""
+    args = list(args)
+    if len(args) >= 2 and "timeframe" not in kwargs:
+        args[1] = _coerce_timeframe(args[1])
+    elif "timeframe" in kwargs:
+        kwargs["timeframe"] = _coerce_timeframe(kwargs["timeframe"])
+    return _BaseStockBarsRequest(*args, **kwargs)
+
+
 __all__ = ["TimeFrame", "StockBarsRequest"]
 
 # Lazy pandas proxy; only imported on first use

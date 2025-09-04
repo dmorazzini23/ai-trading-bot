@@ -110,16 +110,15 @@ def _get_metric(metric_cls, name: str, documentation: str, *args, **kwargs):
     """Return an existing metric or create a new one in ``REGISTRY``.
 
     ``prometheus_client`` raises ``ValueError`` if a metric is registered more
-    than once.  This helper checks ``REGISTRY`` before creation and reuses an
-    existing collector when present, preventing duplication on re-imports.
+    than once.  Older versions expose ``_names_to_collectors`` on the registry
+    which we can query directly without requiring a sample to have been
+    recorded.  This approach avoids duplicate registration even when the metric
+    has not been used yet.
     """
     registry = kwargs.pop("registry", REGISTRY)
-    get_sample = getattr(registry, "get_sample_value", None)
-    if callable(get_sample) and get_sample(name) is not None:  # type: ignore[misc]
-        existing = getattr(registry, "_names_to_collectors", {})
-        collector = existing.get(name)
-        if collector is not None:
-            return collector
+    existing = getattr(registry, "_names_to_collectors", {}).get(name)
+    if existing is not None:
+        return existing
     return metric_cls(name, documentation, *args, registry=registry, **kwargs)
 
 
