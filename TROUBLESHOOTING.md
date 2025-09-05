@@ -196,8 +196,8 @@ nslookup api.alpaca.markets 8.8.8.8
 Repeated empty 200-responses trigger this limit quickly. Verify the market is
 open or that data exists for the requested window (symbol still listed, feed
 correct) before retrying. The fetcher now validates that the requested time
-window intersects a trading session and will raise `window_no_trading_session`
-if it does not.
+window intersects a trading session. If it does not, it logs
+`DATA_WINDOW_NO_SESSION` and returns an empty DataFrame.
 
 When Alpaca returns an empty payload for a valid window, the fetcher checks
 `/v2/stocks/{symbol}/meta` or a local ticker list to confirm the symbol status.
