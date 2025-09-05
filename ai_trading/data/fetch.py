@@ -747,8 +747,29 @@ def _fetch_bars(
     _interval = _canon_tf(timeframe)
     _feed = _canon_feed(feed or _DEFAULT_FEED)
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
-    if not _window_has_trading_session(_start, _end):
-        raise ValueError("window_no_trading_session")
+    try:
+        if not _window_has_trading_session(_start, _end):
+            raise ValueError("window_no_trading_session")
+    except ValueError as e:
+        if "window_no_trading_session" in str(e):
+            tf_key = (symbol, _interval)
+            _SKIPPED_SYMBOLS.add(tf_key)
+            _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            logger.info(
+                "DATA_WINDOW_NO_SESSION",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                    }
+                ),
+            )
+            return pd.DataFrame()
+        raise
     global _alpaca_disabled_until
     if _alpaca_disabled_until and datetime.now(UTC) < _alpaca_disabled_until:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
