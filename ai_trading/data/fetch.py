@@ -1195,12 +1195,13 @@ def _fetch_bars(
             key = (symbol, _interval)
             if (
                 _feed == "iex"
-                and _IEX_EMPTY_COUNTS.get(key, 0) > _IEX_EMPTY_THRESHOLD
+                and _IEX_EMPTY_COUNTS.get(key, 0) >= _IEX_EMPTY_THRESHOLD
                 and _ALLOW_SIP
                 and not _SIP_UNAUTHORIZED
+                and _sip_fallback_allowed(session, headers, _interval)
             ):
-                logger.info(
-                    "ALPACA_IEX_FALLBACK_SIP",
+                logger.warning(
+                    "ALPACA_IEX_EMPTY_SWITCH_SIP",
                     extra=_norm_extra(
                         {
                             "provider": "alpaca",
@@ -1210,6 +1211,11 @@ def _fetch_bars(
                         }
                     ),
                 )
+                _incr("data.fetch.feed_switch", value=1.0, tags=_tags())
+                try:
+                    metrics.feed_switch += 1
+                except Exception:
+                    pass
                 result = _attempt_fallback((_interval, "sip", _start, _end))
                 if result is not None:
                     if not getattr(result, "empty", True):

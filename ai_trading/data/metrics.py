@@ -13,6 +13,7 @@ class Metrics:
     timeout: int = 0
     unauthorized: int = 0
     empty_payload: int = 0
+    feed_switch: int = 0
 
 
 metrics = Metrics()
