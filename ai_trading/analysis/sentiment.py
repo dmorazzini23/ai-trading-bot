@@ -25,79 +25,86 @@ from ai_trading.utils.device import get_device, tensors_to_device  # AI-AGENT-RE
 from ai_trading.exc import RequestException, HTTPError
 
 SENTIMENT_API_KEY = get_env("SENTIMENT_API_KEY", "")
-_HTTP: HTTPSession = get_http_session()
-DEVICE = None
-_SENTIMENT_INITIALIZED = False
+_http_session: HTTPSession = get_http_session()
+_device = None
+_sentiment_initialized = False
 
 
 def _init_sentiment() -> None:
     """Initialize sentiment utilities once."""
-    global _SENTIMENT_INITIALIZED, DEVICE
-    if _SENTIMENT_INITIALIZED:
+    global _sentiment_initialized, _device
+    if _sentiment_initialized:
         return
     if not get_env("PYTEST_RUNNING", "0", cast=bool):
         validate_required_env()
-    DEVICE = get_device()
-    _SENTIMENT_INITIALIZED = True
+    _device = get_device()
+    _sentiment_initialized = True
     logger.debug("SENTIMENT_INIT")
-_BS4 = None
-_TRANSFORMERS = None
-_SENT_DEPS_LOGGED: set[str] = set()
+_bs4 = None
+_transformers_bundle = None
+_sentiment_deps_logged: set[str] = set()
 
 def _load_bs4(log=logger):
-    global _BS4
-    if _BS4 is not None:
-        return _BS4
+    global _bs4
+    if _bs4 is not None:
+        return _bs4
     try:
         from bs4 import BeautifulSoup
-        _BS4 = BeautifulSoup
-    except (ValueError, TypeError):
-        if 'bs4' not in _SENT_DEPS_LOGGED:
+        _bs4 = BeautifulSoup
+    except (ImportError, ValueError, TypeError):
+        if 'bs4' not in _sentiment_deps_logged:
             log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'bs4'})
-            _SENT_DEPS_LOGGED.add('bs4')
-        _BS4 = None
-    return _BS4
+            _sentiment_deps_logged.add('bs4')
+        _bs4 = None
+    return _bs4
 
 def _load_transformers(log=logger):
-    global _TRANSFORMERS
-    if _TRANSFORMERS is not None:
-        return _TRANSFORMERS
+    global _transformers_bundle
+    if _transformers_bundle is not None:
+        return _transformers_bundle
     try:
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained('yiyanghkust/finbert-tone')
         model = AutoModelForSequenceClassification.from_pretrained('yiyanghkust/finbert-tone')
-        model.to(DEVICE)
+        model.to(_device)
         model.eval()
-        _TRANSFORMERS = (torch, tokenizer, model)
-    except (ValueError, TypeError):
-        if 'transformers' not in _SENT_DEPS_LOGGED:
+        _transformers_bundle = (torch, tokenizer, model)
+    except (ImportError, ValueError, TypeError):
+        if 'transformers' not in _sentiment_deps_logged:
             log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'transformers'})
-            _SENT_DEPS_LOGGED.add('transformers')
-        _TRANSFORMERS = None
-    return _TRANSFORMERS
+            _sentiment_deps_logged.add('transformers')
+        _transformers_bundle = None
+    return _transformers_bundle
 SENTIMENT_TTL_SEC = 600
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200
 SENTIMENT_FAILURE_THRESHOLD = 15
 SENTIMENT_RECOVERY_TIMEOUT = 1800
 SENTIMENT_MAX_RETRIES = 5
 SENTIMENT_BASE_DELAY = 5
-_SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
+_sentiment_cache: dict[str, tuple[float, float]] = {}
 # track failures and progressive retry scheduling
-_SENTIMENT_CIRCUIT_BREAKER = {
+_sentiment_circuit_breaker = {
     'failures': 0,
     'last_failure': 0,
     'state': 'closed',
     'next_retry': 0,
 }
 sentiment_lock = Lock()
-__all__ = ['fetch_sentiment', 'analyze_text', 'sentiment_lock', '_SENTIMENT_CACHE', 'SENTIMENT_FAILURE_THRESHOLD', 'SENTIMENT_API_KEY']
+__all__ = [
+    'fetch_sentiment',
+    'analyze_text',
+    'sentiment_lock',
+    '_sentiment_cache',
+    'SENTIMENT_FAILURE_THRESHOLD',
+    'SENTIMENT_API_KEY',
+]
 
 def _check_sentiment_circuit_breaker() -> bool:
     """Check if sentiment circuit breaker allows requests."""
-    global _SENTIMENT_CIRCUIT_BREAKER
+    global _sentiment_circuit_breaker
     now = pytime.time()
-    cb = _SENTIMENT_CIRCUIT_BREAKER
+    cb = _sentiment_circuit_breaker
     if cb['state'] == 'open':
         if now - cb['last_failure'] > SENTIMENT_RECOVERY_TIMEOUT:
             cb['state'] = 'half-open'
@@ -113,17 +120,17 @@ def _check_sentiment_circuit_breaker() -> bool:
 
 def _record_sentiment_success():
     """Record successful sentiment API call."""
-    global _SENTIMENT_CIRCUIT_BREAKER
-    _SENTIMENT_CIRCUIT_BREAKER['failures'] = 0
-    _SENTIMENT_CIRCUIT_BREAKER['next_retry'] = 0
-    if _SENTIMENT_CIRCUIT_BREAKER['state'] == 'half-open':
-        _SENTIMENT_CIRCUIT_BREAKER['state'] = 'closed'
+    global _sentiment_circuit_breaker
+    _sentiment_circuit_breaker['failures'] = 0
+    _sentiment_circuit_breaker['next_retry'] = 0
+    if _sentiment_circuit_breaker['state'] == 'half-open':
+        _sentiment_circuit_breaker['state'] = 'closed'
         logger.info('Sentiment circuit breaker closed - service recovered')
 
 def _record_sentiment_failure():
     """Record failed sentiment API call and update circuit breaker."""
-    global _SENTIMENT_CIRCUIT_BREAKER
-    cb = _SENTIMENT_CIRCUIT_BREAKER
+    global _sentiment_circuit_breaker
+    cb = _sentiment_circuit_breaker
     cb['failures'] += 1
     cb['last_failure'] = pytime.time()
     delay = min(
@@ -157,32 +164,42 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     """
     _init_sentiment()
     settings = get_settings()
-    api_key = SENTIMENT_API_KEY or getattr(settings, 'sentiment_api_key', None) or get_news_api_key()
+    api_key = (
+        SENTIMENT_API_KEY
+        or getattr(settings, 'sentiment_api_key', None)
+        or get_news_api_key()
+    )
     if not api_key:
         logger.debug('No sentiment API key configured (checked settings.sentiment_api_key and news API key)')
         return 0.0
     now_ts = pytime.time()
     with sentiment_lock:
-        cached = _SENTIMENT_CACHE.get(ticker)
+        cached = _sentiment_cache.get(ticker)
         if cached:
             last_ts, last_score = cached
-            cache_ttl = SENTIMENT_RATE_LIMITED_TTL_SEC if _SENTIMENT_CIRCUIT_BREAKER['state'] == 'open' else SENTIMENT_TTL_SEC
+            cache_ttl = (
+                SENTIMENT_RATE_LIMITED_TTL_SEC
+                if _sentiment_circuit_breaker['state'] == 'open'
+                else SENTIMENT_TTL_SEC
+            )
             if now_ts - last_ts < cache_ttl:
-                logger.debug(f'Sentiment cache hit for {ticker} (age: {(now_ts - last_ts) / 60:.1f}m)')
+                logger.debug(
+                    f'Sentiment cache hit for {ticker} (age: {(now_ts - last_ts) / 60:.1f}m)'
+                )
                 return last_score
     if not _check_sentiment_circuit_breaker():
         logger.info(f'Sentiment circuit breaker open, returning cached/neutral for {ticker}')
         with sentiment_lock:
-            cached = _SENTIMENT_CACHE.get(ticker)
+            cached = _sentiment_cache.get(ticker)
             if cached:
                 _, last_score = cached
                 logger.debug(f'Using stale cached sentiment {last_score} for {ticker}')
                 return last_score
-            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            _sentiment_cache[ticker] = (now_ts, 0.0)
             return 0.0
     try:
         url = f'{settings.sentiment_api_url}?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={api_key}'
-        resp = _HTTP.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))
+        resp = _http_session.get(url, timeout=clamp_request_timeout(HTTP_TIMEOUT))
         if resp.status_code == 429:
             logger.warning(f'fetch_sentiment({ticker}) rate-limited (429) → using enhanced fallback strategies')
             return _handle_rate_limit_with_enhanced_strategies(ticker)
@@ -222,24 +239,24 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         final_score = max(-1.0, min(1.0, final_score))
         _record_sentiment_success()
         with sentiment_lock:
-            _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
+            _sentiment_cache[ticker] = (now_ts, final_score)
         return final_score
     except (ValueError, TypeError) as e:
         logger.warning(f'Sentiment API request failed for {ticker}: {e}')
         _record_sentiment_failure()
         with sentiment_lock:
-            cached = _SENTIMENT_CACHE.get(ticker)
+            cached = _sentiment_cache.get(ticker)
             if cached:
                 _, last_score = cached
                 logger.debug(f'Using cached sentiment fallback {last_score} for {ticker}')
                 return last_score
-            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            _sentiment_cache[ticker] = (now_ts, 0.0)
             return 0.0
     except (ValueError, TypeError) as e:
         logger.error(f'Unexpected error fetching sentiment for {ticker}: {e}')
         _record_sentiment_failure()
         with sentiment_lock:
-            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            _sentiment_cache[ticker] = (now_ts, 0.0)
         return 0.0
 
 def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
@@ -249,7 +266,12 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
     AI-AGENT-REF: Implements exponential backoff and multiple fallback data sources for critical sentiment rate limiting fix.
     """
     _record_sentiment_failure()
-    fallback_sources = [_try_alternative_sentiment_sources, _try_cached_similar_symbols, _try_sector_sentiment_proxy, _get_cached_or_neutral_sentiment]
+    fallback_sources = [
+        _try_alternative_sentiment_sources,
+        _try_cached_similar_symbols,
+        _try_sector_sentiment_proxy,
+        _get_cached_or_neutral_sentiment,
+    ]
     for fallback_func in fallback_sources:
         try:
             result = fallback_func(ticker)
@@ -260,7 +282,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
             logger.debug(f'SENTIMENT_FALLBACK_FAILED | ticker={ticker} source={fallback_func.__name__} error={e}')
             continue
     with sentiment_lock:
-        cached = _SENTIMENT_CACHE.get(ticker)
+        cached = _sentiment_cache.get(ticker)
         if cached:
             cache_ts, sentiment_val = cached
             if pytime.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
@@ -270,7 +292,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
                 )
                 return sentiment_val
         now_ts = pytime.time()
-        _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+        _sentiment_cache[ticker] = (now_ts, 0.0)
     logger.warning('SENTIMENT_RATE_LIMIT_ALL_FALLBACKS_EXHAUSTED', extra={'ticker': ticker, 'fallback_strategies_tried': len(fallback_sources), 'cache_ttl_hours': SENTIMENT_RATE_LIMITED_TTL_SEC / 3600, 'recommendation': 'Consider upgrading NewsAPI plan, adding alternative sentiment sources, or reviewing rate limits'})
     return 0.0
 
@@ -283,11 +305,11 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     try:
         primary_url_full = f'{primary_url}?symbol={ticker}&apikey={primary_key}'
         timeout_v = HTTP_TIMEOUT
-        primary_resp = _HTTP.get(primary_url_full, timeout=clamp_request_timeout(timeout_v))
+        primary_resp = _http_session.get(primary_url_full, timeout=clamp_request_timeout(timeout_v))
         if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
             pytime.sleep(0.5)
             alt_url = f'{alt_api_url}?symbol={ticker}&apikey={alt_api_key}'
-            alt_resp = _HTTP.get(alt_url, timeout=clamp_request_timeout(timeout_v))
+            alt_resp = _http_session.get(alt_url, timeout=clamp_request_timeout(timeout_v))
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
                 sentiment_score = data.get('sentiment_score', 0.0)
@@ -309,7 +331,7 @@ def _try_cached_similar_symbols(ticker: str) -> float | None:
     similar_symbols = symbol_correlations.get(ticker, [])
     with sentiment_lock:
         for similar_symbol in similar_symbols:
-            cached = _SENTIMENT_CACHE.get(similar_symbol)
+            cached = _sentiment_cache.get(similar_symbol)
             if cached:
                 cache_ts, sentiment_val = cached
                 if pytime.time() - cache_ts < SENTIMENT_TTL_SEC:
@@ -324,7 +346,7 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
     with sentiment_lock:
         for sector_etf, symbols in sector_proxies.items():
             if ticker in symbols or '*' in symbols:
-                cached = _SENTIMENT_CACHE.get(sector_etf)
+                cached = _sentiment_cache.get(sector_etf)
                 if cached:
                     cache_ts, sentiment_val = cached
                     if pytime.time() - cache_ts < SENTIMENT_TTL_SEC * 2:
@@ -336,7 +358,7 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
 def _get_cached_or_neutral_sentiment(ticker: str) -> float:
     """Get cached sentiment or return neutral if no cache available."""
     with sentiment_lock:
-        cached = _SENTIMENT_CACHE.get(ticker)
+        cached = _sentiment_cache.get(ticker)
         if cached:
             cache_ts, sentiment_val = cached
             if pytime.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
@@ -355,7 +377,7 @@ def analyze_text(text: str, logger=logger) -> dict:
     torch, tokenizer, model = deps
     try:
         inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=128)
-        inputs = tensors_to_device(inputs, DEVICE)
+        inputs = tensors_to_device(inputs, _device)
         with torch.no_grad():
             outputs = model(**inputs)
             logits = outputs.logits[0]
@@ -386,7 +408,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         headers = {'User-Agent': 'AI Trading Bot'}
         backoff = 0.5
         for attempt in range(3):
-            r = _HTTP.get(url, headers=headers, timeout=clamp_request_timeout(HTTP_TIMEOUT))
+            r = _http_session.get(url, headers=headers, timeout=clamp_request_timeout(HTTP_TIMEOUT))
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                 pytime.sleep(backoff)
                 backoff *= 2
