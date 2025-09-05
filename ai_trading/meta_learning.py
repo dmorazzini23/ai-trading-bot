@@ -332,9 +332,17 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
 
 
 def has_mixed_format(trade_log_path: str | os.PathLike) -> bool:
-    """Return ``True`` if trade log contains both audit and meta-learning rows."""
+    """Return ``True`` when both audit and meta-learning rows exist.
+
+    Uses the row counts from :func:`validate_trade_data_quality` so the file is
+    parsed only once.  ``True`` is returned only if *both* audit-style rows and
+    meta-learning rows are present in the log.
+    """
+
     report = validate_trade_data_quality(trade_log_path)
-    return bool(report.get('audit_format_rows')) and bool(report.get('meta_format_rows'))
+    audit_rows = int(report.get("audit_format_rows") or 0)
+    meta_rows = int(report.get("meta_format_rows") or 0)
+    return audit_rows > 0 and meta_rows > 0
 
 def normalize_score(score: float, cap: float=1.2) -> float:
     """Clip ``score`` to ``cap`` preserving sign."""
