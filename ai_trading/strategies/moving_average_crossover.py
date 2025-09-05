@@ -24,6 +24,49 @@ class MovingAverageCrossoverStrategy:
     _guard_attempts: int = 0
     _guard_last_summary: float = 0.0
 
+    def __init__(
+        self,
+        short_window: int | None = None,
+        long_window: int | None = None,
+        min_history: int | None = None,
+        *,
+        short: int | None = None,
+        long: int | None = None,
+    ) -> None:
+        """Allow `short`/`long` kwargs mapping to window lengths.
+
+        Parameters
+        ----------
+        short_window, long_window, min_history:
+            Standard dataclass fields with defaults.
+        short, long:
+            Optional aliases for ``short_window`` and ``long_window`` respectively.
+        """
+        if short is not None and short_window is not None:
+            raise TypeError("Specify only one of 'short' or 'short_window'")
+        if long is not None and long_window is not None:
+            raise TypeError("Specify only one of 'long' or 'long_window'")
+
+        if short is not None:
+            short_window = short
+        if long is not None:
+            long_window = long
+
+        if short_window is None:
+            short_window = type(self).short_window
+        if long_window is None:
+            long_window = type(self).long_window
+        if min_history is None:
+            min_history = type(self).min_history
+
+        self.short_window = short_window
+        self.long_window = long_window
+        self.min_history = min_history
+        self._last_ts = None
+        self._guard_skips = 0
+        self._guard_attempts = 0
+        self._guard_last_summary = 0.0
+
     def _latest_cross(self, short: 'pd.Series', long: 'pd.Series') -> str | None:
         import pandas as pd  # heavy import; keep local
         if len(short) < 2 or len(long) < 2:
