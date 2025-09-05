@@ -71,7 +71,7 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     assert [r.total_elapsed for r in retry_logs] == [0]
     assert delays == [1]
     assert any(r.message == "EMPTY_DATA" and r.levelno == logging.WARNING for r in caplog.records)
-    assert sum(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records) == 1
+    assert sum(r.message == "ALPACA_FETCH_ABORTED" for r in caplog.records) == 1
 
 
 def test_silent_fallback_when_market_closed(monkeypatch, caplog):

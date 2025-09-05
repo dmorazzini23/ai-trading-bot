@@ -1169,8 +1169,11 @@ def _fetch_bars(
                         }
                     ),
                 )
+                remaining_retries = max_retries - _state["retries"]
                 logger.warning(
-                    "ALPACA_FETCH_RETRY_LIMIT",
+                    "ALPACA_FETCH_ABORTED"
+                    if remaining_retries > 0
+                    else "ALPACA_FETCH_RETRY_LIMIT",
                     extra=_norm_extra(
                         {
                             "provider": "alpaca",
@@ -1182,6 +1185,7 @@ def _fetch_bars(
                             "end": _end.isoformat(),
                             "correlation_id": _state["corr_id"],
                             "retries": _state["retries"],
+                            "remaining_retries": remaining_retries,
                             "reason": reason,
                         }
                     ),
@@ -1257,8 +1261,11 @@ def _fetch_bars(
                     return pd_mod.DataFrame()
                 except Exception:
                     return pd.DataFrame()
+            remaining_retries = max_retries - _state["retries"]
             logger.warning(
-                "ALPACA_FETCH_RETRY_LIMIT",
+                "ALPACA_FETCH_ABORTED"
+                if remaining_retries > 0
+                else "ALPACA_FETCH_RETRY_LIMIT",
                 extra=_norm_extra(
                     {
                         "provider": "alpaca",
@@ -1270,6 +1277,7 @@ def _fetch_bars(
                         "end": _end.isoformat(),
                         "correlation_id": _state["corr_id"],
                         "retries": _state["retries"],
+                        "remaining_retries": remaining_retries,
                     }
                 ),
             )

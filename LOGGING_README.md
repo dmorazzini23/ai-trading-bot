@@ -54,9 +54,10 @@ Daily price requests now log their parameters and outcome:
   notified once.
 - Empty bar responses are retried with an exponential backoff. The retry
   policy can be tuned via `FETCH_BARS_MAX_RETRIES`, `FETCH_BARS_BACKOFF_BASE`,
-  and `FETCH_BARS_BACKOFF_CAP`. Logs include the remaining retry count and
-  emit a final "retries exhausted" message when no more attempts remain,
-  allowing operators to diagnose persistent data issues quickly.
+  and `FETCH_BARS_BACKOFF_CAP`. Logs include the remaining retry count,
+  emit `ALPACA_FETCH_ABORTED` when a request is terminated early despite
+  remaining retries, and emit `ALPACA_FETCH_RETRY_LIMIT` when no more attempts
+  remain, allowing operators to diagnose persistent data issues quickly.
 
 ### Example Usage
 
