@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     volume_threshold: float = Field(default=0.0, env='AI_TRADING_VOLUME_THRESHOLD')
     alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
+    data_provider_priority: tuple[str, ...] = Field(
+        ('alpaca_iex', 'alpaca_sip', 'yahoo'), env='DATA_PROVIDER_PRIORITY'
+    )
+    max_data_fallbacks: int = Field(2, env='MAX_DATA_FALLBACKS')
     capital_cap: float = Field(
         0.04,
         validation_alias=AliasChoices('capital_cap', 'CAPITAL_CAP', 'AI_TRADING_CAPITAL_CAP'),
@@ -225,6 +229,13 @@ class Settings(BaseSettings):
     @classmethod
     def _norm_adj(cls, v):
         return str(v).lower().strip()
+
+    @field_validator('data_provider_priority', mode='before')
+    @classmethod
+    def _split_priority(cls, v):
+        if isinstance(v, str):
+            return tuple(i.strip() for i in v.split(',') if i.strip())
+        return tuple(v)
 
     @field_validator('capital_cap', mode='before')
     @classmethod

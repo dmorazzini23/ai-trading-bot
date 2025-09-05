@@ -27,12 +27,13 @@ from ai_trading.logging import (
     logger,
 )
 from ai_trading.config.management import MAX_EMPTY_RETRIES
+from ai_trading.config.settings import provider_priority, max_data_fallbacks
 from ai_trading.data.empty_bar_backoff import (
     _SKIPPED_SYMBOLS,
     mark_success,
     record_attempt,
 )
-from ai_trading.data.metrics import metrics
+from ai_trading.data.metrics import metrics, provider_fallback
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 
@@ -792,7 +793,7 @@ def _fetch_bars(
 
     # Mutable state for retry tracking
     start_time = time.monotonic()
-    _state = {"corr_id": None, "retries": 0}
+    _state = {"corr_id": None, "retries": 0, "providers": []}
     max_retries = _FETCH_BARS_MAX_RETRIES
 
     def _req(
@@ -804,12 +805,19 @@ def _fetch_bars(
     ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
         global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until
+        _state["providers"].append(_feed)
+
         def _attempt_fallback(fb: tuple[str, str, _dt.datetime, _dt.datetime]) -> pd.DataFrame | None:
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
             if fb_feed == "sip" and not _sip_fallback_allowed(session, headers, fb_interval):
                 return None
+            from_feed = _feed
             _interval, _feed, _start, _end = fb
+            provider_fallback.labels(
+                from_provider=f"alpaca_{from_feed}",
+                to_provider=f"alpaca_{fb_feed}",
+            ).inc()
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
             logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
@@ -1411,20 +1419,42 @@ def _fetch_bars(
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
-    alt_feed = "iex" if _feed != "iex" else "sip"
+    priority = list(provider_priority())
+    max_fb = max_data_fallbacks()
+    alt_feed = None
     fallback = None
-    if alt_feed and not (alt_feed == "sip" and _SIP_UNAUTHORIZED):
-        fallback = (_interval, alt_feed, _start, _end)
+    if max_fb >= 1:
+        try:
+            idx = priority.index(f"alpaca_{_feed}")
+        except ValueError:
+            idx = -1
+        for prov in priority[idx + 1:]:
+            if prov in {"alpaca_iex", "alpaca_sip"}:
+                candidate = prov.split("_")[1]
+                if not (candidate == "sip" and _SIP_UNAUTHORIZED):
+                    alt_feed = candidate
+                    break
+        if alt_feed is not None:
+            fallback = (_interval, alt_feed, _start, _end)
     df = _req(session, fallback, headers=headers, timeout=timeout_v)
     if (df is None or getattr(df, "empty", True)) and _ENABLE_HTTP_FALLBACK:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
-        if y_int:
+        providers_tried = set(_state["providers"])
+        can_use_sip = _ALLOW_SIP and not _SIP_UNAUTHORIZED
+        yahoo_allowed = (
+            (can_use_sip and {"iex", "sip"}.issubset(providers_tried) and max_fb >= 2)
+            or (not can_use_sip and "iex" in providers_tried and max_fb >= 1)
+        )
+        if y_int and yahoo_allowed and "yahoo" in priority:
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
             except Exception:  # pragma: no cover - network variance
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
+                provider_fallback.labels(
+                    from_provider=f"alpaca_{_feed}", to_provider="yahoo"
+                ).inc()
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
@@ -1522,8 +1552,19 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                     }
                     logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
                     time.sleep(backoff)
-                    alt_feed = "sip" if (feed or _DEFAULT_FEED) != "sip" else "iex"
-                    if alt_feed != (feed or _DEFAULT_FEED):
+                    alt_feed = None
+                    if max_data_fallbacks() >= 1:
+                        prio = provider_priority()
+                        cur = feed or _DEFAULT_FEED
+                        try:
+                            idx = prio.index(f"alpaca_{cur}")
+                        except ValueError:
+                            idx = -1
+                        for prov in prio[idx + 1:]:
+                            if prov in {"alpaca_iex", "alpaca_sip"}:
+                                alt_feed = prov.split("_", 1)[1]
+                                break
+                    if alt_feed and alt_feed != (feed or _DEFAULT_FEED):
                         try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
@@ -1705,7 +1746,13 @@ def get_bars(
     # If a client-like object is passed for `feed`, route via client helper for tests
     if feed is not None and not isinstance(feed, str):
         return _alpaca_get_bars(feed, symbol, start, end, timeframe=_canon_tf(timeframe))
-    feed = feed or S.alpaca_data_feed
+    if feed is None:
+        prio = provider_priority(S)
+        for prov in prio:
+            if prov.startswith("alpaca_"):
+                feed = prov.split("_", 1)[1]
+                break
+        feed = feed or S.alpaca_data_feed
     adjustment = adjustment or S.alpaca_adjustment
     return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
 

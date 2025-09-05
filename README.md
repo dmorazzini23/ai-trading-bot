@@ -742,6 +742,8 @@ exits early with a clear error message when these values are invalid.
   # Without ALPACA_ALLOW_SIP, SIP requests are skipped and a warning is logged
   # ALPACA_SIP_UNAUTHORIZED=1  # legacy flag to suppress SIP after a 403
    ALPACA_ADJUSTMENT=all
+   DATA_PROVIDER_PRIORITY=alpaca_iex,alpaca_sip,yahoo
+   MAX_DATA_FALLBACKS=2
    DATA_LOOKBACK_DAYS_DAILY=10
    DATA_LOOKBACK_DAYS_MINUTE=5
    MAX_EMPTY_RETRIES=10               # Max empty-bar retries before fallback/skip
