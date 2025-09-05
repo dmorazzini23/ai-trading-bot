@@ -110,13 +110,22 @@ def _fallback_max_size(cfg, tcfg) -> float:
     return 8000.0
 
 
-def _get_equity_from_alpaca(cfg, *, force_refresh: bool = False) -> float:
+def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
     """Fetch account equity using Alpaca SDK or HTTP fallback.
 
-    The result is cached to avoid repeated network calls. When ``force_refresh``
-    is ``True`` the cache is bypassed.
+    Parameters
+    ----------
+    cfg:
+        Configuration object containing Alpaca credentials and base URL.
+    force_refresh:
+        When ``True`` the cached equity value is ignored and a fresh value is
+        fetched from the API.
 
-    Returns ``0.0`` on any error (caller will fallback).
+    Returns
+    -------
+    float
+        The current account equity. ``0.0`` is returned on any error and the
+        value is cached for subsequent calls.
     """
     if not force_refresh and _CACHE.equity is not None:
         return _CACHE.equity
@@ -179,6 +188,11 @@ def _get_equity_from_alpaca(cfg, *, force_refresh: bool = False) -> float:
     _CACHE.equity = 0.0
     return 0.0
 
+
+# Backwards compatibility: older code imports `_get_equity_from_alpaca`
+# directly. Keep it as an alias of the new `_fetch_equity` implementation.
+_get_equity_from_alpaca = _fetch_equity
+
 def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[float, dict[str, Any]]:
     """Resolve max_position_size according to mode and settings.
 
@@ -212,7 +226,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 raise ValueError('max_position_size must be positive')
             eq = getattr(tcfg, 'equity', getattr(cfg, 'equity', None))
             if eq in (None, 0.0):
-                fetched = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
+                fetched = _fetch_equity(cfg, force_refresh=force_refresh)
                 if fetched > 0:
                     eq = fetched
                     for obj in (cfg, tcfg):
@@ -239,7 +253,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         )
     if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
-    eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
+    eq = _fetch_equity(cfg, force_refresh=force_refresh)
     _CACHE.equity = eq
     if eq <= 0.0 or cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)

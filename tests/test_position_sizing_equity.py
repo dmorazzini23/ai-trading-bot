@@ -6,7 +6,7 @@ import ai_trading.core.runtime as rt
 from ai_trading.logging import logger_once
 
 
-def test_get_equity_from_alpaca_sets_paper(monkeypatch):
+def test_fetch_equity_sets_paper(monkeypatch):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
 
     calls: dict[str, bool] = {}
@@ -26,7 +26,7 @@ def test_get_equity_from_alpaca_sets_paper(monkeypatch):
         alpaca_base_url="https://paper-api.alpaca.markets",
     )
 
-    ps._get_equity_from_alpaca(cfg, force_refresh=True)
+    ps._fetch_equity(cfg, force_refresh=True)
 
     assert calls.get("paper") is True
 
