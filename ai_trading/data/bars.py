@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, TYPE_CHECKING
+from typing import Any
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import get_settings
@@ -17,10 +17,7 @@ from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
-from ai_trading.alpaca_api import (
-    get_timeframe_cls,
-    get_stock_bars_request_cls,
-)
+from .models import StockBarsRequest, TimeFrame
 import time
 
 # Alpaca SDK APIError (optional during tests)
@@ -29,139 +26,6 @@ try:  # pragma: no cover - alpaca may be missing
 except Exception:  # pragma: no cover - define fallback
     class APIError(Exception):
         pass
-
-# Export dynamic Alpaca request classes at module import time; tolerate missing SDK
-try:
-    TimeFrame = get_timeframe_cls()
-    StockBarsRequest = get_stock_bars_request_cls()
-except Exception:  # pragma: no cover - optional Alpaca SDK unavailable during some tests
-    from dataclasses import dataclass
-    from enum import Enum
-
-    class _TFUnit(Enum):
-        Minute = "Min"
-        Hour = "Hour"
-        Day = "Day"
-
-    @dataclass(frozen=True)
-    class TimeFrame:
-        amount: int
-        unit: _TFUnit
-
-        def __str__(self) -> str:  # pragma: no cover - trivial
-            return f"{self.amount}{self.unit.value}"
-
-    # Predefined common units
-    TimeFrame.Minute = TimeFrame(1, _TFUnit.Minute)  # type: ignore[attr-defined]
-    TimeFrame.Hour = TimeFrame(1, _TFUnit.Hour)  # type: ignore[attr-defined]
-    TimeFrame.Day = TimeFrame(1, _TFUnit.Day)  # type: ignore[attr-defined]
-
-    @dataclass
-    class StockBarsRequest:
-        symbol_or_symbols: Any
-        timeframe: Any
-        start: Any | None = None
-        end: Any | None = None
-        limit: int | None = None
-        adjustment: str | None = None
-        feed: str | None = None
-        sort: str | None = None
-        asof: str | None = None
-        currency: str | None = None
-
-        def __init__(
-            self,
-            symbol_or_symbols: Any,
-            timeframe: Any,
-            *,
-            start: Any | None = None,
-            end: Any | None = None,
-            limit: int | None = None,
-            adjustment: str | None = None,
-            feed: str | None = None,
-            sort: str | None = None,
-            asof: str | None = None,
-            currency: str | None = None,
-            **extra: Any,
-        ) -> None:
-            self.symbol_or_symbols = symbol_or_symbols
-            self.timeframe = timeframe
-            self.start = start
-            self.end = end
-            self.limit = limit
-            self.adjustment = adjustment
-            self.feed = feed
-            self.sort = sort
-            self.asof = asof
-            self.currency = currency
-            for k, v in extra.items():
-                setattr(self, k, v)
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from alpaca.data import TimeFrame as _TimeFrame, StockBarsRequest as _StockBarsRequest
-    TimeFrame = _TimeFrame
-    StockBarsRequest = _StockBarsRequest
-
-
-# Capture the dynamically resolved request class so we can wrap it.  Tests
-# may monkeypatch Alpaca's request objects after this module is imported which
-# can lead to mismatched ``TimeFrame`` types being passed to a Pydantic model
-# expecting its own class.  Wrapping the constructor lets us coerce arbitrary
-# timeframe inputs to the active ``TimeFrame`` type at call time.
-_BaseStockBarsRequest = StockBarsRequest  # type: ignore[assignment]
-_BaseTimeFrame = TimeFrame  # type: ignore[assignment]
-
-def _coerce_timeframe(tf: Any) -> Any:
-    """Return ``tf`` as an instance of the active ``TimeFrame`` class."""
-    try:
-        if isinstance(tf, _BaseTimeFrame):
-            return tf
-    except Exception:  # pragma: no cover - defensive
-        return tf
-
-    try:
-        unit_cls = get_timeframe_unit_cls()
-    except Exception:  # pragma: no cover - optional SDK
-        unit_cls = None
-
-    # Accept objects with ``amount`` and ``unit`` attributes
-    amount = getattr(tf, "amount", None)
-    unit = getattr(tf, "unit", None)
-    if amount is not None and unit is not None and unit_cls is not None:
-        try:
-            if not isinstance(unit, unit_cls):
-                name = getattr(unit, "name", str(unit)).capitalize()
-                unit = getattr(unit_cls, name, getattr(unit_cls, "Day"))
-            return _BaseTimeFrame(int(amount), unit)  # type: ignore[arg-type]
-        except Exception:
-            pass
-
-    # Fallback: parse string representations like "1Day" or "minute"
-    try:
-        s = str(tf).strip()
-        if s:
-            import re
-            m = re.match(r"(\d+)?\s*(\w+)", s)
-            if m:
-                amt = int(m.group(1) or 1)
-                unit_name = m.group(2).capitalize()
-                if unit_cls is not None:
-                    unit = getattr(unit_cls, unit_name, getattr(unit_cls, "Day"))
-                    return _BaseTimeFrame(amt, unit)  # type: ignore[arg-type]
-    except Exception:
-        pass
-    return tf
-
-
-def StockBarsRequest(*args: Any, **kwargs: Any):
-    """Construct a StockBarsRequest ensuring timeframe compatibility."""
-    args = list(args)
-    if len(args) >= 2 and "timeframe" not in kwargs:
-        args[1] = _coerce_timeframe(args[1])
-    elif "timeframe" in kwargs:
-        kwargs["timeframe"] = _coerce_timeframe(kwargs["timeframe"])
-    return _BaseStockBarsRequest(*args, **kwargs)
-
 
 __all__ = ["TimeFrame", "StockBarsRequest"]
 
@@ -283,8 +147,7 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     This is a faithful move of the original implementation from bot_engine,
     with identical behavior and logging fields.
     """
-    TimeFrame = get_timeframe_cls()
-    StockBarsRequest = get_stock_bars_request_cls()
+    from .models import TimeFrame, StockBarsRequest
     symbol = _canon_symbol(symbol)
     sym_attr = getattr(request, 'symbol_or_symbols', None)
     try:
