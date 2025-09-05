@@ -42,8 +42,8 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
 
     def setUp(self):
         # Reset sentiment cache for each test
-        sentiment._SENTIMENT_CACHE.clear()
-        sentiment._SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed", "next_retry": 0}
+        sentiment._sentiment_cache.clear()
+        sentiment._sentiment_circuit_breaker = {"failures": 0, "last_failure": 0, "state": "closed", "next_retry": 0}
 
     def test_enhanced_rate_limiting_parameters(self):
         """Test that enhanced rate limiting parameters are properly configured."""
@@ -54,7 +54,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         self.assertEqual(sentiment.SENTIMENT_MAX_RETRIES, 5)
         self.assertEqual(sentiment.SENTIMENT_BASE_DELAY, 5)
 
-    @patch('ai_trading.analysis.sentiment._HTTP.get')
+    @patch('ai_trading.analysis.sentiment._http_session.get')
     def test_enhanced_fallback_strategies(self, mock_get):
         """Test that enhanced fallback strategies work when rate limited."""
         # Simulate rate limiting
@@ -71,7 +71,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         # Should return neutral sentiment when all fallbacks fail
         self.assertEqual(result, 0.0)
 
-    @patch('ai_trading.analysis.sentiment._HTTP.get')
+    @patch('ai_trading.analysis.sentiment._http_session.get')
     def test_alternative_sentiment_sources(self, mock_get):
         """Test alternative sentiment source functionality."""
         # Mock environment variables for alternative source
@@ -96,7 +96,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
     def test_similar_symbol_sentiment_proxy(self):
         """Test using sentiment from similar symbols as proxy."""
         # Add sentiment for MSFT
-        sentiment._SENTIMENT_CACHE['MSFT'] = (time.time(), 0.8)
+        sentiment._sentiment_cache['MSFT'] = (time.time(), 0.8)
 
         # Request sentiment for AAPL (should use MSFT as proxy)
         result = sentiment._try_cached_similar_symbols('AAPL')
@@ -108,7 +108,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
     def test_sector_sentiment_proxy(self):
         """Test using sector ETF sentiment as proxy."""
         # Add sentiment for technology sector ETF
-        sentiment._SENTIMENT_CACHE['XLK'] = (time.time(), 0.5)
+        sentiment._sentiment_cache['XLK'] = (time.time(), 0.5)
 
         # Request sentiment for AAPL (tech stock)
         result = sentiment._try_sector_sentiment_proxy('AAPL')
@@ -119,7 +119,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
 
     def test_progressive_retry_delay(self):
         """Consecutive failures increase retry delay."""
-        cb = sentiment._SENTIMENT_CIRCUIT_BREAKER
+        cb = sentiment._sentiment_circuit_breaker
         sentiment._record_sentiment_failure()
         first_delay = cb["next_retry"] - cb["last_failure"]
         sentiment._record_sentiment_failure()
