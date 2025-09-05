@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
   - Updated README/CHANGELOG to document package-only policy
 
 ### Changed
+- Config: validate Alpaca data feed entitlement and allow override via `ALPACA_DATA_FEED`, warning if switched.
+- Data fetch: switch to SIP feed after first empty IEX result and record `data.fetch.feed_switch` metric.
 - Main: finite `SCHEDULER_ITERATIONS` now exits promptly after completing
   the requested cycles instead of keeping the API thread alive. This
   avoids test/CI hangs; production runs continue to use infinite iterations.

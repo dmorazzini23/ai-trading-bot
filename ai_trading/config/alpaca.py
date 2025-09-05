@@ -2,6 +2,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+import logging
+import os
 from .settings import broker_keys, get_settings
 
 @dataclass(frozen=True)
@@ -11,6 +13,7 @@ class AlpacaConfig:
     secret_key: str
     use_paper: bool
     rate_limit_per_min: int | None = None
+    data_feed: str = "iex"
 
 def get_alpaca_config() -> AlpacaConfig:
     s = get_settings()
@@ -25,6 +28,34 @@ def get_alpaca_config() -> AlpacaConfig:
     if not base_url:
         base_url = 'https://paper-api.alpaca.markets' if use_paper else 'https://api.alpaca.markets'
     rate_limit = getattr(s, 'alpaca_rate_limit_per_min', None)
+    feed = (os.getenv('ALPACA_DATA_FEED') or getattr(s, 'alpaca_data_feed', 'iex')).lower()
     if not key_id or not secret:
         raise RuntimeError('Missing Alpaca credentials in broker_keys() (ALPACA_KEY_ID/ALPACA_SECRET_KEY)')
-    return AlpacaConfig(base_url=base_url, key_id=key_id, secret_key=secret, use_paper=use_paper, rate_limit_per_min=rate_limit)
+    try:
+        from alpaca.trading.client import TradingClient  # type: ignore
+
+        client = TradingClient(key_id, secret, paper=use_paper)
+        acct = client.get_account()
+        sub = getattr(acct, 'market_data_subscription', None) or getattr(acct, 'data_feed', None)
+        if isinstance(sub, str):
+            entitled = {sub.lower()}
+        elif isinstance(sub, (set, list, tuple)):
+            entitled = {str(x).lower() for x in sub}
+        else:
+            entitled = set()
+        if entitled and feed not in entitled:
+            alt = next(iter(entitled))
+            logging.getLogger(__name__).warning(
+                'ALPACA_FEED_UNENTITLED_SWITCH', extra={'requested': feed, 'using': alt}
+            )
+            feed = alt
+    except Exception:
+        pass
+    return AlpacaConfig(
+        base_url=base_url,
+        key_id=key_id,
+        secret_key=secret,
+        use_paper=use_paper,
+        rate_limit_per_min=rate_limit,
+        data_feed=feed,
+    )
