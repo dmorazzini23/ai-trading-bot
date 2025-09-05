@@ -127,7 +127,9 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
         The current account equity. ``0.0`` is returned on any error and the
         value is cached for subsequent calls.
     """
-    if not force_refresh and _CACHE.equity is not None:
+    if force_refresh:
+        _CACHE.equity = None
+    elif _CACHE.equity is not None:
         return _CACHE.equity
 
     base = str(getattr(cfg, "alpaca_base_url", "")).rstrip("/")
@@ -178,15 +180,19 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
             _log.warning("ALPACA_AUTH_FAILED", extra={"url": url, "status": status})
         else:
             _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": status})
+        _CACHE.equity = 0.0
+        return 0.0
     except RequestException as e:
         _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
+        _CACHE.equity = 0.0
+        return 0.0
     except JSONDecodeError as e:
         _log.warning("ALPACA_INVALID_RESPONSE", extra={"url": url, "error": str(e)})
+        _CACHE.equity = 0.0
+        return 0.0
     except Exception:  # log and propagate unexpected errors
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
-    _CACHE.equity = 0.0
-    return 0.0
 
 
 # Backwards compatibility: older code imports `_get_equity_from_alpaca`
