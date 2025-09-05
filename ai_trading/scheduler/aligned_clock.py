@@ -122,7 +122,8 @@ class AlignedClock:
                 next_close += timedelta(days=1)
         if self.calendar:
             try:
-                trading_days = self.calendar.valid_days(
+                valid_days = getattr(self.calendar, "valid_days", lambda *a, **k: [])
+                trading_days = valid_days(
                     start_date=next_close.date(), end_date=next_close.date() + timedelta(days=7)
                 )
                 if len(trading_days) > 0:
