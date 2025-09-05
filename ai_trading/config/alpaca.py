@@ -34,7 +34,7 @@ def get_alpaca_config() -> AlpacaConfig:
     try:
         from alpaca.trading.client import TradingClient  # type: ignore
 
-        client = TradingClient(key_id, secret, paper=use_paper)
+        client = TradingClient(api_key=key_id, secret_key=secret, paper=use_paper)
         acct = client.get_account()
         sub = getattr(acct, 'market_data_subscription', None) or getattr(acct, 'data_feed', None)
         if isinstance(sub, str):
