@@ -65,6 +65,15 @@ def _get_pandas():
         return None
 
 
+def _get_pandas_ta():
+    try:  # pragma: no cover - import is tested indirectly
+        import pandas_ta as ta  # type: ignore
+
+        return ta
+    except Exception:
+        return None
+
+
 def _get_gaussian_hmm():
     try:  # pragma: no cover - import is tested indirectly
         from hmmlearn.hmm import GaussianHMM  # type: ignore
@@ -317,6 +326,25 @@ def _apply_macd(data) -> Any | None:
     return data
 
 
+def _apply_psar(data) -> Any:
+    pd = _get_pandas()
+    if pd is None:
+        logger.warning("Pandas not available for PSAR application")
+        return data
+    ta = _get_pandas_ta()
+    data = data.copy()
+    try:
+        psar = ta.psar(data["high"], data["low"], data["close"])
+        data["psar_long"] = psar["PSARl_0.02_0.2"].astype(float)
+        data["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
+    except AttributeError:
+        logger.warning("PANDAS_TA_PSAR_MISSING")
+        approx = ((data["high"] + data["low"]) / 2).astype(float)
+        data["psar_long"] = approx
+        data["psar_short"] = approx
+    return data
+
+
 def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     """Prepare indicator columns for a trading strategy.
 
@@ -344,6 +372,7 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     if pd is not None and cache_path and cache_path.exists():
         return pd.read_parquet(cache_path)
     data = _apply_macd(data.copy())
+    data = _apply_psar(data)
     if pd is not None:
         logger.debug(f"After prepare_macd {ticker or ''}, tail close:\n{data[['close']].tail(5)}")
     if pd is not None and cache_path:
