@@ -381,8 +381,15 @@ def run_bot(*_a, **_k) -> int:
         return 1
 
 
-def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> None:
-    """Launch Flask API on an available port."""
+def run_flask_app(
+    port: int = 5000,
+    ready_signal: threading.Event | None = None,
+    **run_kwargs,
+) -> None:
+    """Launch Flask API on an available port.
+
+    Extra keyword arguments are forwarded to :func:`flask.Flask.run`.
+    """
     max_attempts = 10
     original_port = port
     for _attempt in range(max_attempts):
@@ -392,16 +399,21 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
     else:
         free_port = get_free_port()
         if free_port is None:
-            raise RuntimeError(f"Could not find available port starting from {original_port}")
+            raise RuntimeError(
+                f"Could not find available port starting from {original_port}"
+            )
         port = free_port
     from ai_trading import app
 
     application = app.create_app()
     if ready_signal is not None:
-        logger.info(f"Flask app created successfully, signaling ready on port {port}")
+        logger.info(
+            f"Flask app created successfully, signaling ready on port {port}"
+        )
         ready_signal.set()
     logger.info(f"Starting Flask app on 0.0.0.0:{port}")
-    application.run(host="0.0.0.0", port=port, debug=False)
+    debug = run_kwargs.pop("debug", False)
+    application.run(host="0.0.0.0", port=port, debug=debug, **run_kwargs)
 
 
 def start_api(ready_signal: threading.Event = None) -> None:

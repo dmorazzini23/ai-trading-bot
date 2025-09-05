@@ -28,16 +28,20 @@ from ai_trading import app, main
 
 
 def test_run_flask_app(monkeypatch):
-    """Flask app runs on provided port."""
+    """Flask app runs on provided port and forwards kwargs."""
     called = {}
 
     class App:
-        def run(self, host, port):
+        def run(self, host, port, debug=False, **kwargs):
             called["args"] = (host, port)
+            called["debug"] = debug
+            called["kwargs"] = kwargs
 
     monkeypatch.setattr(app, "create_app", lambda: App())
-    main.run_flask_app(1234)
+    main.run_flask_app(1234, debug=True, extra=1)
     assert called["args"] == ("0.0.0.0", 1234)
+    assert called["debug"] is True
+    assert called["kwargs"] == {"extra": 1}
 
 
 def test_run_flask_app_port_in_use(monkeypatch):
@@ -45,12 +49,12 @@ def test_run_flask_app_port_in_use(monkeypatch):
     called = []
 
     class App:
-        def run(self, host, port):
+        def run(self, host, port, debug=False, **kwargs):
             called.append(port)
 
     monkeypatch.setattr(app, "create_app", lambda: App())
-    monkeypatch.setattr(main.utils, "get_pid_on_port", lambda p: 111)
-    monkeypatch.setattr(main.utils, "get_free_port", lambda *a, **k: 5678)
+    monkeypatch.setattr(main, "get_pid_on_port", lambda p: 111)
+    monkeypatch.setattr(main, "get_free_port", lambda *a, **k: 5678)
     main.run_flask_app(1234)
     assert called == [5678]
 
