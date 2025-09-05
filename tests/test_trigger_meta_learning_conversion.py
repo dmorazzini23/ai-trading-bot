@@ -60,6 +60,8 @@ def test_trigger_meta_learning_conversion_pure_meta_format():
     try:
         # Set the trade log file path
         MockConfig.TRADE_LOG_FILE = test_file
+        # Ensure pandas is available for conversion
+        meta_learning._import_pandas(optional=True)
 
         # Test trade data
         test_trade = {
@@ -100,6 +102,8 @@ def test_trigger_meta_learning_conversion_pure_audit_format():
     try:
         # Set the trade log file path
         MockConfig.TRADE_LOG_FILE = test_file
+        # Ensure pandas is available for conversion
+        meta_learning._import_pandas(optional=True)
 
         # Test trade data
         test_trade = {
@@ -130,15 +134,25 @@ def test_trigger_meta_learning_conversion_pure_audit_format():
 def test_trigger_meta_learning_conversion_mixed_format():
     """Test trigger function with mixed format - should attempt conversion."""
     with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
-        # Write mixed format data (meta headers with audit data)
-        f.write("symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward\n")
-        f.write("123e4567-e89b-12d3-a456-426614174000,2025-08-05T23:17:35Z,TEST,buy,10,100.0,live,filled\n")
-        f.write("234e5678-e89b-12d3-a456-426614174001,2025-08-05T23:18:35Z,TEST,sell,10,105.0,live,filled\n")
+        # Write mixed format data: one meta-learning row and one audit-style row
+        f.write(
+            "symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward\n"
+        )
+        # Meta-learning formatted row
+        f.write(
+            "TEST,2025-08-05T23:17:35Z,100.0,2025-08-05T23:18:35Z,105.0,10,buy,test_strategy,test,signal1,0.8,5.0\n"
+        )
+        # Audit formatted row
+        f.write(
+            "123e4567-e89b-12d3-a456-426614174000,2025-08-05T23:19:35Z,AAPL,buy,5,150.0,live,filled\n"
+        )
         test_file = f.name
 
     try:
         # Set the trade log file path
         MockConfig.TRADE_LOG_FILE = test_file
+        # Ensure pandas is available for conversion
+        meta_learning._import_pandas(optional=True)
 
         # Test trade data
         test_trade = {
@@ -157,7 +171,7 @@ def test_trigger_meta_learning_conversion_mixed_format():
 
         # Test the trigger function - should attempt conversion and return True if successful
         result = meta_learning.trigger_meta_learning_conversion(test_trade)
-        assert result is True  # Should succeed in conversion
+        assert result is True  # Conversion should succeed with pandas available
 
     finally:
         if os.path.exists(test_file):
