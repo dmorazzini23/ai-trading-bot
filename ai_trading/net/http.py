@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import os
-import requests
 from typing import cast
-from requests.adapters import HTTPAdapter
+
+try:
+    import requests
+except Exception:  # pragma: no cover - fallback when requests missing
+    class _RequestsFallback:
+        Session = None
+        get = None
+
+    requests = _RequestsFallback()  # type: ignore[assignment]
+try:
+    from requests.adapters import HTTPAdapter
+except Exception:  # pragma: no cover - requests missing
+    HTTPAdapter = cast("type[object]", object)
 from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
 from urllib.parse import urlparse
 
 
-class TimeoutSession(requests.Session):
+_SessionBase = cast(
+    "type[object]", requests.Session if getattr(requests, "Session", None) else object
+)
+
+
+class TimeoutSession(_SessionBase):
     """Requests ``Session`` that injects a default timeout."""
 
     def __init__(self, default_timeout: tuple[float, float] = (5.0, 10.0)) -> None:
