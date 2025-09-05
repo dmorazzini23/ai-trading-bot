@@ -23,7 +23,10 @@ def _apply_library_filters() -> None:
     """
     from ai_trading.config import management as config
 
-    filters: dict[str, str] = {"charset_normalizer": "INFO"}
+    # ``charset_normalizer`` is particularly noisy at DEBUG level when used by
+    # ``requests``. Elevate it to WARNING by default so debug logs from that
+    # dependency do not clutter our output.
+    filters: dict[str, str] = {"charset_normalizer": "WARNING"}
     raw = config.get_env("LOG_QUIET_LIBRARIES", "")
     for item in raw.split(","):
         name, _, level = item.partition("=")
