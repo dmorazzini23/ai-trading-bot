@@ -59,6 +59,17 @@ Daily price requests now log their parameters and outcome:
   remaining retries, and emit `ALPACA_FETCH_RETRY_LIMIT` when no more attempts
   remain, allowing operators to diagnose persistent data issues quickly.
 
+#### Backup Provider Usage
+When the primary data source fails and the backup provider serves a window,
+the system logs `BACKUP_PROVIDER_USED` and increments the
+`backup_provider_used_total` Prometheus counter. The counter is labeled with
+`provider` and `symbol`, allowing operators to track fallback frequency per
+feed and instrument. Query the metric via the `/metrics` endpoint:
+
+```bash
+curl -sf http://localhost:$HEALTHCHECK_PORT/metrics | grep backup_provider_used_total
+```
+
 ### Example Usage
 
 ```bash

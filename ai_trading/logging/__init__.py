@@ -22,6 +22,7 @@ from typing import Any
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
+from ai_trading.data.metrics import backup_provider_used
 
 if os.getenv("FINNHUB_API_KEY") and os.getenv("ENABLE_FINNHUB") is None:
     os.environ["ENABLE_FINNHUB"] = "1"
@@ -530,6 +531,26 @@ def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | 
         logger.info("FETCH_ATTEMPT", extra=payload)
 
 
+def log_backup_provider_used(
+    provider: str,
+    *,
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Log and record when the backup data provider serves a window."""
+    payload: dict[str, Any] = {
+        "provider": provider,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
+    backup_provider_used.labels(provider=provider, symbol=symbol).inc()
+    logger.info("BACKUP_PROVIDER_USED", extra=payload)
+
+
 def log_empty_retries_exhausted(
     provider: str,
     *,
@@ -870,4 +891,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
+__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_backup_provider_used', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
