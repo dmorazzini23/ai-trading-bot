@@ -549,9 +549,14 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.info('check_stops: suppressed exception: %s', e)
 
-    def _validate_short_selling(self, symbol: str, qty: float, price: float) -> None:
+    def _validate_short_selling(
+        self, _api, symbol: str, qty: float, price: float | None = None
+    ) -> bool:
+        """Run short selling validation and return True on success."""
+
         from ai_trading.risk.short_selling import validate_short_selling
-        validate_short_selling(symbol, qty, price)
+
+        return validate_short_selling(symbol, qty, price)
 
     def _reconcile_partial_fills(self, *args, requested_qty=None, remaining_qty=None, symbol=None, side=None, **_kwargs) -> None:
         """Detect partial fills and emit guardrail alerts.

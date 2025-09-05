@@ -21,4 +21,4 @@ def validate_short_selling(symbol: str, qty: float, price: float) -> bool:
         raise ValueError("invalid_qty")
     if price is not None and price <= 0:
         raise ValueError("invalid_price")
-    return True
+    return True  # Engine expects ``True`` on successful validation
