@@ -38,6 +38,8 @@ All notable changes to this project will be documented in this file.
 - **Data Fetch**: improve Alpaca empty-bar handling by logging timeframe/feed,
   verifying API credentials and market hours, and attempting feed or window
   fallbacks before resorting to alternate providers.
+- **Main**: `validate_environment` now raises `RuntimeError` when required
+  environment variables are missing.
 - Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
 - **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,

@@ -293,9 +293,24 @@ def _interruptible_sleep(total_seconds: float) -> None:
 
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
-    from ai_trading.config.management import validate_required_env
+    from ai_trading.config.management import get_env, _resolve_alpaca_env
 
-    validate_required_env()
+    missing: list[str] = []
+    key, secret, base_url = _resolve_alpaca_env()
+    if not key:
+        missing.append("ALPACA_API_KEY")
+    if not secret:
+        missing.append("ALPACA_SECRET_KEY")
+    if not base_url:
+        missing.append("ALPACA_API_URL")
+    for var in ("WEBHOOK_SECRET", "CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
+        if not get_env(var):
+            missing.append(var)
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
+
     _ = get_settings()
     import os
 
