@@ -1139,15 +1139,25 @@ def _fetch_bars(
                 result = _attempt_fallback(fallback)
                 if result is not None:
                     return result
-            if _state["retries"] >= 1:
-                reason = (
-                    "market_closed"
-                    if (
-                        _outside_market_hours(_start, _end)
-                        or not _window_has_trading_session(_start, _end)
-                    )
-                    else "symbol_delisted_or_wrong_feed"
+            reason = (
+                "market_closed"
+                if (
+                    _outside_market_hours(_start, _end)
+                    or not _window_has_trading_session(_start, _end)
                 )
+                else "symbol_delisted_or_wrong_feed"
+            )
+            if (
+                _state["retries"] == 0
+                and _feed == "iex"
+                and reason == "symbol_delisted_or_wrong_feed"
+                and _ALLOW_SIP
+                and not _SIP_UNAUTHORIZED
+            ):
+                result = _attempt_fallback((_interval, "sip", _start, _end))
+                if result is not None:
+                    return result
+            if _state["retries"] >= 1:
                 hint = (
                     "Market likely closed for requested window"
                     if reason == "market_closed"

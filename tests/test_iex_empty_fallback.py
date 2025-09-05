@@ -39,6 +39,41 @@ def _dt_range():
     return start, end
 
 
+def test_iex_bars_empty_retries_sip(monkeypatch):
+    fetch._IEX_EMPTY_COUNTS.clear()
+    start, end = _dt_range()
+    sess = _Session(
+        [
+            _Resp({"bars": []}, corr="iex1"),
+            _Resp({"bars": []}, corr="pre"),
+            _Resp(
+                {
+                    "bars": [
+                        {"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+                    ]
+                },
+                corr="sip1",
+            ),
+        ]
+    )
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
+    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
+    monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 0)
+    monkeypatch.setattr(fetch, "_SIP_PRECHECK_DONE", False)
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "is_market_open", lambda: True)
+
+    df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert len(sess.calls) == 3
+    assert sess.calls[0]["feed"] == "iex"
+    assert sess.calls[1]["feed"] == "sip"
+    assert sess.calls[2]["feed"] == "sip"
+    assert not df.empty
+
+
 def test_iex_empty_falls_back_to_sip(monkeypatch, caplog):
     fetch._IEX_EMPTY_COUNTS.clear()
     start, end = _dt_range()
