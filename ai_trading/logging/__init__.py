@@ -490,8 +490,8 @@ def log_finnhub_disabled(symbol: str) -> None:
 
 
 def warn_finnhub_disabled_no_data(symbol: str) -> None:
-    """Warn once per symbol when Finnhub is disabled and no data is returned."""
-    logger_once.warning(
+    """Log once per symbol when Finnhub is disabled and no data is returned."""
+    logger_once.info(
         "FINNHUB_DISABLED_NO_DATA",
         key=f"FINNHUB_DISABLED_NO_DATA:{symbol}",
         extra={
