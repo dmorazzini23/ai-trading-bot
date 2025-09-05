@@ -21,4 +21,5 @@ VENV_PATH="${VENV_PATH:-venv}"
 source "${VENV_PATH}/bin/activate"
 
 python -m ai_trading.tools.env_validate
+python -m ai_trading.tools.seed_trade_history
 exec python -u -m ai_trading.main

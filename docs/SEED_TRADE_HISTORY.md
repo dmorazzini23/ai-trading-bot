@@ -1,7 +1,14 @@
 # Seeding Trade History
 
 Meta-learning components rely on a history file to evaluate signal
-performance. Before a new deployment, seed the history so each symbol has
+performance. Deployment now bootstraps the database from
+`trade_history.json` using a helper script invoked during startup:
+
+```bash
+python -m ai_trading.tools.seed_trade_history  # run manually to verify
+```
+
+Before a new deployment, ensure the history file exists so each symbol has
 at least one entry. This avoids warnings and lets the bot collect
 statistics from the first trade cycle.
 

@@ -191,6 +191,13 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
         if not Path(trade_log_path).exists():
             quality_report['issues'].append(f'Trade log file does not exist: {trade_log_path}')
             quality_report['recommendations'].append('Initialize trade logging system')
+            logger.warning(
+                'TRADE_HISTORY_MISSING: %s',
+                trade_log_path,
+                extra={
+                    'hint': 'Seed with `python -m ai_trading.tools.seed_trade_history` or see docs/SEED_TRADE_HISTORY.md'
+                },
+            )
             return quality_report
         quality_report['file_exists'] = True
         try:
@@ -198,6 +205,13 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             if file_size == 0:
                 quality_report['issues'].append('Trade log file is empty')
                 quality_report['recommendations'].append('Ensure trade logging is actively writing data')
+                logger.warning(
+                    'TRADE_HISTORY_EMPTY: %s',
+                    trade_log_path,
+                    extra={
+                        'hint': 'Seed with `python -m ai_trading.tools.seed_trade_history` or see docs/SEED_TRADE_HISTORY.md'
+                    },
+                )
                 return quality_report
         except COMMON_EXC as e:
             quality_report['issues'].append(f'Cannot access file stats: {e}')
@@ -209,12 +223,26 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             if not raw_lines:
                 quality_report['issues'].append('Trade log file is empty')
                 quality_report['recommendations'].append('Ensure trade logging is actively writing data')
+                logger.warning(
+                    'TRADE_HISTORY_EMPTY: %s',
+                    trade_log_path,
+                    extra={
+                        'hint': 'Seed with `python -m ai_trading.tools.seed_trade_history` or see docs/SEED_TRADE_HISTORY.md'
+                    },
+                )
                 return quality_report
             # Remove empty lines and split out header row
             lines = [l for l in raw_lines if l.strip()]
             if not lines:
                 quality_report['issues'].append('Trade log file is empty')
                 quality_report['recommendations'].append('Ensure trade logging is actively writing data')
+                logger.warning(
+                    'TRADE_HISTORY_EMPTY: %s',
+                    trade_log_path,
+                    extra={
+                        'hint': 'Seed with `python -m ai_trading.tools.seed_trade_history` or see docs/SEED_TRADE_HISTORY.md'
+                    },
+                )
                 return quality_report
             _header, *data_lines = lines
             audit_format_rows = 0
