@@ -788,6 +788,13 @@ class DataProviderManager:
             return self._fetch_yahoo_data(symbol, timeframe, start_date, end_date)
 ```
 
+### 3. Automatic IEX→SIP feed fallback
+
+When Alpaca's IEX feed returns consecutive empty responses, the bot now
+automatically retries the same request using the SIP feed before falling back
+to Yahoo Finance. This behavior is logged with the `ALPACA_IEX_FALLBACK_SIP`
+event and helps reduce data gaps caused by temporary IEX outages.
+
 ## FAQ
 
 ### Q: Bot is not making any trades
