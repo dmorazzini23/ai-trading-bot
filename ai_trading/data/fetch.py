@@ -698,8 +698,10 @@ def build_fetcher(config: Any):
     global _FETCHER_SINGLETON
     if _FETCHER_SINGLETON is not None:
         return _FETCHER_SINGLETON
-
-    from ai_trading.alpaca_api import ALPACA_AVAILABLE
+    try:
+        from ai_trading.alpaca_api import ALPACA_AVAILABLE
+    except Exception:  # pragma: no cover - optional dependency
+        ALPACA_AVAILABLE = False
 
     bot_mod = importlib.import_module("ai_trading.core.bot_engine")
     DataFetcher = bot_mod.DataFetcher
@@ -1739,8 +1741,10 @@ def get_daily_df(
     adjustment: str | None = None,
 ) -> pd.DataFrame:
     """Thin wrapper around :func:`bars.get_bars_df` for daily bars."""
-
-    from ai_trading.alpaca_api import get_bars_df as _get_bars_df
+    try:
+        from ai_trading.alpaca_api import get_bars_df as _get_bars_df
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise DataFetchError("Alpaca API unavailable") from exc
 
     return _get_bars_df(
         symbol,

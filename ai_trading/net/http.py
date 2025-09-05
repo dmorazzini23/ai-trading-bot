@@ -77,6 +77,8 @@ def build_retrying_session(
     connect_timeout_f = cast(float, clamp_request_timeout(connect_timeout))
     read_timeout_f = cast(float, clamp_request_timeout(read_timeout))
     s = TimeoutSession(default_timeout=(connect_timeout_f, read_timeout_f))
+    if HTTPAdapter is object:  # pragma: no cover - requests missing
+        return s
     retry = Retry(
         total=total_retries,
         connect=total_retries,
