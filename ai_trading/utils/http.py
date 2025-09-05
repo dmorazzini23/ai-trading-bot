@@ -56,7 +56,8 @@ except ImportError:  # pragma: no cover - fallback when urllib3 missing
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep
+from .timing import clamp_timeout, sleep
+from ai_trading.http.timeouts import get_session_timeout
 
 _log = get_logger(__name__)
 _session = None
@@ -101,8 +102,10 @@ if REQUESTS_AVAILABLE:
             :func:`ai_trading.utils.timing.clamp_timeout`.
         """
 
-        def __init__(self, timeout: float | int | None = HTTP_TIMEOUT) -> None:
+        def __init__(self, timeout: float | int | None = None) -> None:
             super().__init__()
+            if timeout is None:
+                timeout = get_session_timeout()
             self._timeout = clamp_request_timeout(timeout)
             _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
             _pool_stats["workers"] = int(
@@ -157,8 +160,8 @@ def _with_timeout(kwargs: dict) -> dict:
     if "timeout" in kwargs:
         kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
     else:
-        # Ensure callers without explicit timeout still get a sane default (number)
-        kwargs["timeout"] = clamp_timeout(None)
+        # Ensure callers without explicit timeout still get a sane default
+        kwargs["timeout"] = clamp_request_timeout(get_session_timeout())
     return kwargs
 
 

@@ -1,5 +1,6 @@
 """Validate timeout behavior via the centralized HTTP abstraction."""
 
+import importlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -54,6 +55,33 @@ def test_request_uses_session_default(monkeypatch):
     captured.clear()
     http.request("GET", "http://unit.test", timeout=1.23)
     assert captured["timeout"] == 1.23
+
+
+def test_httpsession_uses_config_or_default(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_HTTP_TIMEOUT", raising=False)
+    import ai_trading.http.timeouts as t
+    importlib.reload(t)
+    importlib.reload(http)
+
+    captured: dict[str, float] = {}
+
+    def fake_request(self, method, url, **kwargs):  # type: ignore[override]
+        captured.update(kwargs)
+        return MagicMock(status_code=200)
+
+    monkeypatch.setattr(http.requests.Session, "request", fake_request, raising=True)
+    s = http.HTTPSession()
+    s.get("http://localhost/test")
+    assert captured["timeout"] == 5.0
+
+    captured.clear()
+    monkeypatch.setenv("AI_TRADING_HTTP_TIMEOUT", "8")
+    importlib.reload(t)
+    importlib.reload(http)
+    monkeypatch.setattr(http.requests.Session, "request", fake_request, raising=True)
+    s = http.HTTPSession()
+    s.get("http://localhost/test")
+    assert captured["timeout"] == 8.0
 
 
 def test_request_function_errors_without_requests():
