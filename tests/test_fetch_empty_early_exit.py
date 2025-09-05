@@ -57,4 +57,4 @@ def test_persistent_empty_aborts_early(monkeypatch, caplog):
 
     assert out is None
     assert sess.calls == 2
-    assert sum(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records) == 1
+    assert sum(r.message == "ALPACA_FETCH_ABORTED" for r in caplog.records) == 1
