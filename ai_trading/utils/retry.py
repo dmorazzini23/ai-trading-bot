@@ -128,7 +128,8 @@ def retry(
     - backoff: multiplier for linear/exponential modes
     - mode: one of "fixed", "linear", "exponential"
     - exceptions: tuple of exception types to catch
-    - reraise: when True, propagate the last exception instead of raising RetryError
+    - reraise: when True, propagate the last exception instead of raising RetryError.
+      Forwarded to Tenacity's ``retry`` decorator when available.
     """
 
     attempts = max(0, int(retries))
@@ -148,7 +149,7 @@ def retry(
             else:
                 _wait = _wait_exponential(multiplier=base, min=base, max=None)
         _retry = retry if retry is not None else retry_if_exception_type(exceptions)
-        dec = _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=True)
+        dec = _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=reraise)
         # Also point tenacity.retry at this decorator to satisfy identity checks in tests
         try:
             import tenacity as _tenacity_mod  # type: ignore
@@ -167,7 +168,7 @@ def retry(
         else:  # exponential (default)
             _wait = _wait_exponential(multiplier=base, min=base, max=None)
         predicate = retry_if_exception_type(exceptions)
-        dec = _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=True)
+        dec = _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=reraise)
         try:
             import tenacity as _tenacity_mod  # type: ignore
 
