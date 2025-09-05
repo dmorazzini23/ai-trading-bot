@@ -81,10 +81,14 @@ class AlignedClock:
         current = utc_now
         if self.calendar:
             try:
-                exchange_tz = self.calendar.tz
+                exchange_tz = getattr(self.calendar, "tz", None)
+                if exchange_tz is None:
+                    raise AttributeError("tz")
                 current = utc_now.astimezone(exchange_tz)
-            except (ValueError, TypeError) as e:
-                self.logger.warning(f"Failed to get exchange time: {e.__class__.__name__}: {e}")
+            except (AttributeError, ValueError, TypeError) as e:
+                self.logger.warning(
+                    f"Failed to get exchange time: {e.__class__.__name__}: {e}; defaulting to UTC"
+                )
         if tz is not None:
             current = current.astimezone(tz)
         return current
@@ -172,17 +176,26 @@ class AlignedClock:
             self.logger.warning(f"Time skew detected: {skew_ms:.1f}ms (max allowed: {self.max_skew_ms}ms)")
         return skew_ms
 
-    def ensure_final_bar(self, symbol: str, timeframe: str = "1m", tz: tzinfo | None = None) -> BarValidation:
+    def ensure_final_bar(
+        self,
+        symbol: str,
+        timeframe: str = "1m",
+        tz: tzinfo | None = None,
+        tzinfo: tzinfo | None = None,
+    ) -> BarValidation:
         """
         Validate that the current bar is final before generating signals.
 
         Args:
             symbol: Trading symbol
             timeframe: Timeframe to validate
+            tz: Optional timezone for calculations
+            tzinfo: Deprecated alias for ``tz``
 
         Returns:
             BarValidation result with finality status
         """
+        tz = tz or tzinfo
         current_time = self.get_exchange_time(tz)
         next_close = self.next_bar_close(symbol, timeframe, tz)
         time_to_close = (next_close - current_time).total_seconds()
@@ -276,11 +289,14 @@ def get_aligned_clock() -> AlignedClock:
 
 
 def ensure_final_bar(
-    symbol: str, timeframe: str = "1m", tz: tzinfo | None = None
+    symbol: str,
+    timeframe: str = "1m",
+    tz: tzinfo | None = None,
+    tzinfo: tzinfo | None = None,
 ) -> BarValidation:
     """Convenience function to validate bar finality."""
     clock = get_aligned_clock()
-    return clock.ensure_final_bar(symbol, timeframe, tz)
+    return clock.ensure_final_bar(symbol, timeframe, tz=tz, tzinfo=tzinfo)
 
 
 def is_market_open(
