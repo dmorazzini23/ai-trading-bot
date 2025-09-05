@@ -155,9 +155,19 @@ def retry(
             import tenacity as _tenacity_mod  # type: ignore
 
             _tenacity_mod.retry = dec  # type: ignore[assignment]
-        except Exception:
+        except Exception:  # pragma: no cover - best effort wiring
             pass
-        return dec
+
+        def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+            wrapped = dec(fn)
+
+            @functools.wraps(fn)
+            def inner(*args, **kwargs):
+                return wrapped(*args, **kwargs)
+
+            return inner
+
+        return decorator
 
     if HAS_TENACITY:
         _stop = stop_after_attempt(attempts)
@@ -173,9 +183,19 @@ def retry(
             import tenacity as _tenacity_mod  # type: ignore
 
             _tenacity_mod.retry = dec  # type: ignore[assignment]
-        except Exception:
+        except Exception:  # pragma: no cover - best effort wiring
             pass
-        return dec
+
+        def decorator(fn: Callable[..., T]) -> Callable[..., T]:
+            wrapped = dec(fn)
+
+            @functools.wraps(fn)
+            def inner(*args, **kwargs):
+                return wrapped(*args, **kwargs)
+
+            return inner
+
+        return decorator
 
     # Fallback (no Tenacity installed)
     def _calc_wait(n: int) -> float:
@@ -200,6 +220,7 @@ def retry(
                             raise
                         raise RetryError() from exc
                     time.sleep(max(0.0, _calc_wait(attempt)))
+
         return wrapper
 
     return decorator
