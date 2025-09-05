@@ -73,6 +73,7 @@ All notable changes to this project will be documented in this file.
 - **CLI dry-run**: log indicator import confirmation and exit with code 0 before heavy imports.
 - **Settings**: centralize value normalization and eliminate `FieldInfo` leaks
 - **Position sizing**: fetch real account equity via Alpaca once and cache it to avoid repeated `EQUITY_MISSING` warnings.
+- **Scheduler**: default to UTC when market calendar lacks timezone info.
 
 ### Added
 - **Parallel Predictions**: Replaced single-threaded prediction executor with auto-sized thread pool
