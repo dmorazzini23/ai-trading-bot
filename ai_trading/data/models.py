@@ -28,10 +28,10 @@ def _coerce_timeframe(tf: Any) -> Any:
     """Return ``tf`` as an instance of the active ``TimeFrame`` class."""
 
     try:
-        if isinstance(tf, TimeFrame):
+        if isinstance(tf, TimeFrame) and tf.__class__ is TimeFrame:
             return tf
     except Exception:  # pragma: no cover - defensive
-        return tf
+        pass
 
     try:
         unit_cls = get_timeframe_unit_cls()
@@ -73,8 +73,17 @@ def _coerce_timeframe(tf: Any) -> Any:
                     return TimeFrame(amt, unit)  # type: ignore[arg-type]
     except Exception:
         pass
-    
-    return tf
+
+    # As a last resort ensure we return the active ``TimeFrame`` type
+    if unit_cls is not None:
+        try:
+            return TimeFrame(1, getattr(unit_cls, "Day"))
+        except Exception:
+            pass
+    try:
+        return TimeFrame(str(tf))  # type: ignore[arg-type]
+    except Exception:
+        return TimeFrame("1Day")
 
 
 # When the real SDK is available the base request class derives from Pydantic's
@@ -94,8 +103,18 @@ try:  # pragma: no cover - pydantic optional during some tests
             @model_validator(mode="before")
             @classmethod
             def _convert_timeframe(cls, data: Any) -> Any:
-                if isinstance(data, dict) and "timeframe" in data:
-                    data["timeframe"] = _coerce_timeframe(data["timeframe"])
+                if isinstance(data, dict):
+                    if "timeframe" in data:
+                        data["timeframe"] = _coerce_timeframe(data["timeframe"])
+                elif hasattr(data, "timeframe"):
+                    try:
+                        setattr(
+                            data,
+                            "timeframe",
+                            _coerce_timeframe(getattr(data, "timeframe")),
+                        )
+                    except Exception:
+                        pass
                 return data
 
         StockBarsRequest.model_rebuild()  # ensure validator is applied
