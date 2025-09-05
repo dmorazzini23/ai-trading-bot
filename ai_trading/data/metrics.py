@@ -25,4 +25,11 @@ backup_provider_used = get_counter(
     ["provider", "symbol"],
 )
 
-__all__ = ["Metrics", "metrics", "backup_provider_used"]
+# Prometheus counter tracking provider fallback events
+provider_fallback = get_counter(
+    "data_provider_fallback_total",
+    "Count of data provider fallbacks",
+    ["from_provider", "to_provider"],
+)
+
+__all__ = ["Metrics", "metrics", "backup_provider_used", "provider_fallback"]

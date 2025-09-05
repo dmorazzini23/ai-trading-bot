@@ -23,4 +23,9 @@ export ENABLE_FINNHUB=1
 - `BACKUP_DATA_PROVIDER`: fallback source when the primary feed returns empty data. The default is `yahoo`. Set to `none` to disable backup queries.
 - When a fallback is used, the bot logs `USING_BACKUP_PROVIDER` with the chosen provider. If disabled or unknown, `BACKUP_PROVIDER_DISABLED` or `UNKNOWN_BACKUP_PROVIDER` is logged.
 
+## Provider Priority and Fallbacks
+
+- `DATA_PROVIDER_PRIORITY`: comma-separated order of providers to try. Default is `alpaca_iex,alpaca_sip,yahoo`.
+- `MAX_DATA_FALLBACKS`: maximum number of fallbacks allowed before giving up. Default is `2` (tries both Alpaca feeds before Yahoo).
+
 Configure these variables in your deployment environment to control provider availability and failover behavior.
