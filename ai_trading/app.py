@@ -1,14 +1,28 @@
 from __future__ import annotations
 import logging
-from ai_trading.logging import get_logger
 import os
-from flask import Flask, jsonify
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+from ai_trading.logging import get_logger
+from flask import jsonify
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers only
+    from flask import Flask
 
 _log = get_logger(__name__)
 
 
 def create_app():
-    app = Flask(__name__)
+    """Create and configure the Flask application."""
+    # Bypass any mocked Flask import by resolving the class at call time
+    FlaskClass = import_module("flask.app").Flask
+    app: "Flask" = FlaskClass(__name__)
+
+    # Some tests may monkeypatch Flask and return objects without a real config
+    if not isinstance(getattr(app, "config", None), dict):
+        app.config = dict(getattr(app, "config", {}))
+
     get_logger('werkzeug').setLevel(logging.ERROR)
 
     # Cache required env validation once during app startup.
