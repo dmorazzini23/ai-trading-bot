@@ -178,6 +178,7 @@ _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 # Track consecutive error="empty" responses specifically from the IEX feed to
 # allow proactive SIP fallback on subsequent requests.
 _IEX_EMPTY_COUNTS: dict[tuple[str, str], int] = {}
+_IEX_EMPTY_THRESHOLD = 1
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
@@ -1138,6 +1139,29 @@ def _fetch_bars(
             if fallback:
                 result = _attempt_fallback(fallback)
                 if result is not None:
+                    return result
+            key = (symbol, _interval)
+            if (
+                _feed == "iex"
+                and _IEX_EMPTY_COUNTS.get(key, 0) > _IEX_EMPTY_THRESHOLD
+                and _ALLOW_SIP
+                and not _SIP_UNAUTHORIZED
+            ):
+                logger.info(
+                    "ALPACA_IEX_FALLBACK_SIP",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "symbol": symbol,
+                            "timeframe": _interval,
+                            "correlation_id": _state["corr_id"],
+                        }
+                    ),
+                )
+                result = _attempt_fallback((_interval, "sip", _start, _end))
+                if result is not None:
+                    if not getattr(result, "empty", True):
+                        _IEX_EMPTY_COUNTS.pop(key, None)
                     return result
             reason = (
                 "market_closed"
