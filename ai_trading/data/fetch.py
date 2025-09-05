@@ -194,6 +194,12 @@ _ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() n
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 
+# Track consecutive empty Alpaca responses across all symbols to temporarily
+# disable Alpaca fetching when upstream repeatedly returns empty payloads.
+_ALPACA_DISABLE_THRESHOLD = 3
+_alpaca_empty_streak = 0
+_alpaca_disabled_until: _dt.datetime | None = None
+
 
 def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> tuple[str, str, int, int]:
     return (symbol, timeframe, int(start.timestamp()), int(end.timestamp()))
@@ -742,6 +748,13 @@ def _fetch_bars(
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
     if not _window_has_trading_session(_start, _end):
         raise ValueError("window_no_trading_session")
+    global _alpaca_disabled_until
+    if _alpaca_disabled_until and datetime.now(UTC) < _alpaca_disabled_until:
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_int = interval_map.get(_interval)
+        if fb_int:
+            _mark_fallback(symbol, _interval, _start, _end)
+            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     if _used_fallback(symbol, _interval, _start, _end):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
@@ -790,7 +803,7 @@ def _fetch_bars(
         timeout: float | tuple[float, float],
     ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
-        global _SIP_UNAUTHORIZED
+        global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until
         def _attempt_fallback(fb: tuple[str, str, _dt.datetime, _dt.datetime]) -> pd.DataFrame | None:
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
@@ -1251,6 +1264,9 @@ def _fetch_bars(
                         }
                     ),
                 )
+                _alpaca_empty_streak += 1
+                if _alpaca_empty_streak > _ALPACA_DISABLE_THRESHOLD:
+                    _alpaca_disabled_until = datetime.now(UTC) + _dt.timedelta(minutes=5)
                 remaining_retries = max_retries - _state["retries"]
                 logger.warning(
                     "ALPACA_FETCH_ABORTED"
@@ -1366,6 +1382,7 @@ def _fetch_bars(
                 ),
             )
             return None
+        _alpaca_empty_streak = 0
         ts_col = None
         for c in df.columns:
             if c.lower() in ("t", "timestamp", "time"):
