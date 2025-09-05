@@ -27,6 +27,7 @@ RuntimeMaxSec=23400
 Restart=no
 StandardOutput=journal
 StandardError=journal
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
