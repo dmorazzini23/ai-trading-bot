@@ -26,7 +26,8 @@ def is_trading_day(d: date) -> bool:
     """Return True if *d* is a trading day."""
     cal = _get_calendar()
     if cal is not None:
-        days = cal.valid_days(start_date=d, end_date=d)
+        valid_days = getattr(cal, "valid_days", lambda *a, **k: [])
+        days = valid_days(start_date=d, end_date=d)
         return len(days) == 1
     return d.weekday() < 5
 
@@ -56,15 +57,21 @@ def rth_session_utc(d: date) -> tuple[datetime, datetime]:
 
 def previous_trading_session(d: date) -> date:
     """Return the previous trading day for *d*."""
+    from datetime import timedelta
     cal = _get_calendar()
     if cal is not None:
-        days = cal.valid_days(start_date=d.replace(day=1), end_date=d)
+        valid_days = getattr(cal, "valid_days", lambda *a, **k: [])
+        days = valid_days(start_date=d.replace(day=1), end_date=d)
         if len(days) == 0:
-            from datetime import timedelta
             back = d.replace(day=1) - timedelta(days=1)
-            days = cal.valid_days(start_date=back.replace(day=1), end_date=back)
+            days = valid_days(start_date=back.replace(day=1), end_date=back)
+        if len(days) == 0:
+            dd = d
+            while True:
+                dd = dd - timedelta(days=1)
+                if dd.weekday() < 5:
+                    return dd
         return days[-1].date()
-    from datetime import timedelta
     dd = d
     while True:
         dd = dd - timedelta(days=1)
