@@ -428,6 +428,10 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         atexit.register(_safe_shutdown_logging)
         _LOGGING_CONFIGURED = True
         logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
+        # Apply filters for noisy third-party libraries after configuration is complete.
+        from ai_trading.logging.setup import _apply_library_filters
+
+        _apply_library_filters()
         return logger
 
 def _safe_shutdown_logging():
