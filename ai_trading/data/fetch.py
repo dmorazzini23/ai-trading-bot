@@ -19,6 +19,7 @@ from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import (
+    log_backup_provider_used,
     log_empty_retries_exhausted,
     log_fetch_attempt,
     log_finnhub_disabled,
@@ -199,6 +200,14 @@ def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.dat
 
 
 def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> None:
+    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+    log_backup_provider_used(
+        provider,
+        symbol=symbol,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+    )
     _FALLBACK_WINDOWS.add(_fallback_key(symbol, timeframe, start, end))
 
 

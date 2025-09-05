@@ -6,6 +6,7 @@ pd = pytest.importorskip("pandas")
 
 from ai_trading.data import fetch as data_fetcher
 from ai_trading.config import settings as config_settings
+from ai_trading.data.metrics import backup_provider_used
 
 
 def test_switches_to_backup_provider(monkeypatch, caplog):
@@ -39,10 +40,12 @@ def test_switches_to_backup_provider(monkeypatch, caplog):
 
     monkeypatch.setattr(data_fetcher, "_fetch_bars", empty_fetch)
     monkeypatch.setattr(data_fetcher, "_yahoo_get_bars", fake_backup)
-
+    before = backup_provider_used.labels(provider="yahoo", symbol="AAPL")._value.get()
     with caplog.at_level(logging.INFO):
         df = data_fetcher.get_minute_df("AAPL", start, end)
 
+    after = backup_provider_used.labels(provider="yahoo", symbol="AAPL")._value.get()
     assert called.get("used")
     assert not df.empty
-    assert any(r.message == "USING_BACKUP_PROVIDER" for r in caplog.records)
+    assert after == before + 1
+    assert any(r.message == "BACKUP_PROVIDER_USED" for r in caplog.records)
