@@ -424,16 +424,29 @@ class ExecutionEngine:
     _minute_stats: dict[str, float] = {}
     _latest_quote: dict[str, float] = {}
 
-    def __init__(self, market_data_feed=None, broker_interface=None):
+    def __init__(self, ctx=None, market_data_feed=None, broker_interface=None):
         """Initialize execution engine."""
+        self.ctx = ctx
         self.order_manager = OrderManager()
         self.market_data_feed = market_data_feed
         self.broker_interface = broker_interface
         self.logger = logger
         self._open_orders: dict[str, OrderInfo] = {}
         self._available_qty: float = 0
-        self.execution_stats = {'total_orders': 0, 'filled_orders': 0, 'cancelled_orders': 0, 'rejected_orders': 0, 'total_volume': 0.0, 'average_fill_time': 0.0}
+        self.execution_stats = {
+            'total_orders': 0,
+            'filled_orders': 0,
+            'cancelled_orders': 0,
+            'rejected_orders': 0,
+            'total_volume': 0.0,
+            'average_fill_time': 0.0,
+        }
         emit_once(logger, 'EXECUTION_ENGINE_INIT', 'info', 'ExecutionEngine initialized')
+
+    def _select_api(self):
+        """Return the active broker API interface."""
+        ctx_api = getattr(getattr(self, 'ctx', None), 'api', None)
+        return ctx_api or self.broker_interface
 
     @property
     def available_qty(self) -> float:
@@ -640,6 +653,9 @@ class ExecutionEngine:
             Order ID if successful, ``None`` if rejected.
         """
         try:
+            api = self._select_api()
+            if api is None:
+                logger.debug('NO_API_SELECTED')
             if isinstance(side, str):
                 side = OrderSide(side)
             quantity = int(_ensure_positive_qty(quantity))
