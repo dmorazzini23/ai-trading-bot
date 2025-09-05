@@ -204,6 +204,36 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
 def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
 
+def _symbol_exists(symbol: str) -> bool:
+    """Return True if the symbol exists according to Alpaca or the local list."""
+    url = f"https://data.alpaca.markets/v2/stocks/{symbol}/meta"
+    try:
+        resp = _HTTP_SESSION.get(url, timeout=clamp_request_timeout(2.0))
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+            except Exception:
+                data = {}
+            if str(data.get("symbol", "")).upper() == symbol.upper():
+                return True
+        elif resp.status_code == 404:
+            return False
+    except Exception:
+        pass
+    path = os.getenv("AI_TRADING_TICKERS_CSV") or os.getenv("TICKERS_FILE_PATH")
+    if not path:
+        try:
+            from importlib.resources import files as pkg_files
+            p = pkg_files("ai_trading.data").joinpath("tickers.csv")
+            path = str(p) if p.is_file() else os.path.join(os.getcwd(), "tickers.csv")
+        except Exception:
+            path = os.path.join(os.getcwd(), "tickers.csv")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return any(line.strip().upper() == symbol.upper() for line in fh)
+    except OSError:
+        return False
+
 _VALID_FEEDS = {"iex", "sip"}
 _VALID_ADJUSTMENTS = {"raw", "split", "dividend", "all"}
 _VALID_TIMEFRAMES = {"1Min", "5Min", "15Min", "1Hour", "1Day"}
@@ -1147,10 +1177,15 @@ def _fetch_bars(
                 )
                 else "symbol_delisted_or_wrong_feed"
             )
+            if reason == "symbol_delisted_or_wrong_feed":
+                if _symbol_exists(symbol):
+                    reason = "feed_error"
+                else:
+                    _state["retries"] = max_retries
             if (
                 _state["retries"] == 0
                 and _feed == "iex"
-                and reason == "symbol_delisted_or_wrong_feed"
+                and reason in {"symbol_delisted_or_wrong_feed", "feed_error"}
                 and _ALLOW_SIP
                 and not _SIP_UNAUTHORIZED
             ):
@@ -1161,7 +1196,11 @@ def _fetch_bars(
                 hint = (
                     "Market likely closed for requested window"
                     if reason == "market_closed"
-                    else "Symbol may be delisted or feed may be incorrect"
+                    else (
+                        "Feed returned empty or wrong feed"
+                        if reason == "feed_error"
+                        else "Symbol may be delisted or feed may be incorrect"
+                    )
                 )
                 logger.error(
                     "ALPACA_EMPTY_RESPONSE",
@@ -1260,6 +1299,7 @@ def _fetch_bars(
                             "end": _end.isoformat(),
                             "correlation_id": _state["corr_id"],
                             "retries": _state["retries"],
+                            "reason": reason,
                         }
                     ),
                 )
@@ -1288,6 +1328,7 @@ def _fetch_bars(
                         "correlation_id": _state["corr_id"],
                         "retries": _state["retries"],
                         "remaining_retries": remaining_retries,
+                        "reason": reason,
                     }
                 ),
             )

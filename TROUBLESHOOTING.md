@@ -199,6 +199,12 @@ correct) before retrying. The fetcher now validates that the requested time
 window intersects a trading session and will raise `window_no_trading_session`
 if it does not.
 
+When Alpaca returns an empty payload for a valid window, the fetcher checks
+`/v2/stocks/{symbol}/meta` or a local ticker list to confirm the symbol status.
+If the symbol exists, the response is classified as a `feed_error` and the
+fetcher will retry or switch feeds. `ALPACA_FETCH_RETRY_LIMIT` is only emitted
+after the symbol is confirmed missing or all feeds return empty data.
+
 Per-request retries (default **5**) can be tuned via the
 `FETCH_BARS_MAX_RETRIES` environment variable. When the limit is reached the
 fetcher returns `None` so callers can fall back to cached data or alternate
