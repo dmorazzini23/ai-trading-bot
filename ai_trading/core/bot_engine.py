@@ -3871,6 +3871,7 @@ _last_fh_prefetch_date: date | None = None
 @dataclass
 class DataFetcher:
     def __post_init__(self):
+        self.settings = get_settings()
         self._daily_cache: dict[str, tuple[date, pd.DataFrame | None]] = {}
         self._minute_cache: dict[str, pd.DataFrame | None] = {}
         self._minute_timestamps: dict[str, datetime] = {}
@@ -3879,8 +3880,8 @@ class DataFetcher:
         self._daily_cache_hit_logged = False
 
         # Verify required Alpaca configuration
-        has_key = bool(getattr(CFG, "alpaca_api_key", ""))
-        has_secret = bool(getattr(CFG, "alpaca_secret_key_plain", ""))
+        has_key = bool(getattr(self.settings, "alpaca_api_key", ""))
+        has_secret = bool(getattr(self.settings, "alpaca_secret_key_plain", ""))
         if not (has_key and has_secret):
             logger.error(
                 "ALPACA_CREDENTIALS_MISSING",
@@ -3889,8 +3890,8 @@ class DataFetcher:
         logger.debug(
             "ALPACA_DATA_CONFIG",
             extra={
-                "feed": getattr(CFG, "alpaca_data_feed", None),
-                "adjustment": getattr(CFG, "alpaca_adjustment", None),
+                "feed": getattr(self.settings, "alpaca_data_feed", None),
+                "adjustment": getattr(self.settings, "alpaca_adjustment", None),
             },
         )
 
@@ -3970,9 +3971,8 @@ class DataFetcher:
             # purge stale cache entry if present
             self._daily_cache.pop(symbol, None)
 
-        settings = get_settings()
-        api_key = settings.alpaca_api_key
-        api_secret = settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
+        api_key = self.settings.alpaca_api_key
+        api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
         # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             logger.error(f"Missing Alpaca credentials for {symbol}")
@@ -4046,12 +4046,13 @@ class DataFetcher:
                 return None
 
         try:
+            feed = getattr(self.settings, "alpaca_data_feed", None) or "iex"
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Day,
                 start=start_ts,
                 end=end_ts,
-                feed=_DEFAULT_FEED,
+                feed=feed,
             )
 
             # AI-AGENT-REF: pre-sanitize to avoid TypeError on callables
@@ -4320,9 +4321,8 @@ class DataFetcher:
             ) as exc:  # AI-AGENT-REF: narrow exception
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
-        settings = get_settings()
-        api_key = settings.alpaca_api_key
-        api_secret = settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
+        api_key = self.settings.alpaca_api_key
+        api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
         # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
             raise RuntimeError(
@@ -4335,12 +4335,13 @@ class DataFetcher:
         )
 
         try:
+            feed = getattr(self.settings, "alpaca_data_feed", None) or "iex"
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Minute,
                 start=start_minute,
                 end=last_closed_minute,
-                feed=_DEFAULT_FEED,
+                feed=feed,
             )
             bars_df = bars.safe_get_stock_bars(client, req, symbol, "MINUTE")
             if bars_df is None:
@@ -4463,6 +4464,7 @@ class DataFetcher:
         """
         all_days: list[pd.DataFrame] = []
         current_day = start_date
+        feed = getattr(self.settings, "alpaca_data_feed", None) or "iex"
 
         while current_day <= end_date:
             day_start = datetime.combine(current_day, dt_time.min, UTC)
@@ -4479,7 +4481,7 @@ class DataFetcher:
                     start=day_start,
                     end=day_end,
                     limit=10000,
-                    feed=_DEFAULT_FEED,
+                    feed=feed,
                 )
                 try:
                     bars_day = bars.safe_get_stock_bars(
@@ -4490,7 +4492,7 @@ class DataFetcher:
                 except APIError as e:
                     if (
                         "subscription does not permit" in str(e).lower()
-                        and _DEFAULT_FEED != "iex"
+                        and feed != "iex"
                     ):
                         logger.warning(
                             (
