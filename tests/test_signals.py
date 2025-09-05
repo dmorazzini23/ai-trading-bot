@@ -7,7 +7,7 @@ pd = pytest.importorskip("pandas")
 
 np.random.seed(0)
 
-from ai_trading.signals import GaussianHMM, detect_market_regime_hmm
+from ai_trading.signals import GaussianHMM, detect_market_regime_hmm, prepare_indicators
 
 
 def test_hmm_regime_detection():
@@ -30,6 +30,12 @@ def sample_df():
         'volume': np.linspace(100, 130, n)
     }
     return pd.DataFrame(data)
+
+
+def test_prepare_indicators_requires_ohlcv():
+    df = pd.DataFrame({"open": [1], "high": [2], "low": [1], "close": [1]})
+    with pytest.raises(ValueError, match="missing required column"):
+        prepare_indicators(df)
 
 
 def test_prepare_indicators_calculates(sample_df, monkeypatch):

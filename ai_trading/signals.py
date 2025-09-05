@@ -293,8 +293,11 @@ def _validate_input_df(data) -> None:
         raise ValueError("Input must be a DataFrame")
     if pd is not None and (not isinstance(data, pd.DataFrame)):
         raise ValueError("Input must be a DataFrame")
-    if hasattr(data, "columns") and "close" not in data.columns:
-        raise ValueError("Input data missing 'close' column")
+    required = ["open", "high", "low", "close", "volume"]
+    if hasattr(data, "columns"):
+        missing = [col for col in required if col not in data.columns]
+        if missing:
+            raise ValueError(f"Input data missing required column(s): {missing}")
 
 
 def _apply_macd(data) -> Any | None:
@@ -320,7 +323,8 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     Parameters
     ----------
     data
-        Market data containing at least a ``close`` column.
+        Market data containing ``open``, ``high``, ``low``, ``close`` and
+        ``volume`` columns.
 
     Returns
     -------
@@ -330,7 +334,7 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     Raises
     ------
     ValueError
-        If the MACD indicator fails to calculate or ``close`` column is missing.
+        If the MACD indicator fails to calculate or required columns are missing.
     """
     pd = _get_pandas()
     _validate_input_df(data)
