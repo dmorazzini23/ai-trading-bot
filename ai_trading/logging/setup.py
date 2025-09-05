@@ -25,15 +25,15 @@ def _apply_library_filters() -> None:
 
     # ``charset_normalizer`` is particularly noisy at DEBUG level when used by
     # ``requests``. Elevate it to WARNING by default so debug logs from that
-    # dependency do not clutter our output.
-    filters: dict[str, str] = {"charset_normalizer": "WARNING"}
+    # dependency do not clutter our output. Additional filters may be provided
+    # via ``LOG_QUIET_LIBRARIES``.
+    filters: dict[str, int] = {"charset_normalizer": logging.WARNING}
     raw = config.get_env("LOG_QUIET_LIBRARIES", "")
     for item in raw.split(","):
         name, _, level = item.partition("=")
         if name.strip() and level.strip():
-            filters[name.strip()] = level.strip().upper()
-    for name, level_name in filters.items():
-        level = getattr(logging, level_name.upper(), logging.INFO)
+            filters[name.strip()] = getattr(logging, level.strip().upper(), logging.INFO)
+    for name, level in filters.items():
         logging.getLogger(name).setLevel(level)
 
 

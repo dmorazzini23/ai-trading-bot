@@ -8945,23 +8945,28 @@ def _fetch_feature_data(
             logger.warning("Corp actions adjust failed: %s", e)
 
     # AI-AGENT-REF: log initial dataframe and monitor row drops
-    logger.debug(f"Initial tail data for {symbol}:\n{df.tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Initial tail data for %s: %s", symbol, df.tail(5).to_dict(orient="list"))
     initial_len = len(df)
 
     df = compute_macd(df)
     assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
-    logger.debug(f"[{symbol}] Post MACD: last closes:\n{df[['close']].tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("[%s] Post MACD: last closes: %s", symbol, df["close"].tail(5).tolist())
 
     df = compute_atr(df)
     assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
-    logger.debug(f"[{symbol}] Post ATR: last closes:\n{df[['close']].tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("[%s] Post ATR: last closes: %s", symbol, df["close"].tail(5).tolist())
 
     df = compute_vwap(df)
     assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
-    logger.debug(f"[{symbol}] Post VWAP: last closes:\n{df[['close']].tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("[%s] Post VWAP: last closes: %s", symbol, df["close"].tail(5).tolist())
 
     df = compute_macds(df)
-    logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("%s dataframe columns after indicators: %s", symbol, df.columns.tolist())
     df = ensure_columns(df, ["macd", "vwap", "macds"], symbol)
     if df.empty and raw_df is not None:
         df = raw_df.copy()
@@ -9070,7 +9075,8 @@ def _enter_long(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
-    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Latest 5 rows for %s: %s", symbol, feat_df.tail(5).to_dict(orient="list"))
     logger.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
@@ -9225,7 +9231,8 @@ def _enter_short(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
-    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Latest 5 rows for %s: %s", symbol, feat_df.tail(5).to_dict(orient="list"))
     logger.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
@@ -9324,7 +9331,8 @@ def _manage_existing_position(
     current_qty: int,
 ) -> bool:
     price = get_latest_close(feat_df)
-    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Latest 5 rows for %s: %s", symbol, feat_df.tail(5).to_dict(orient="list"))
     logger.debug(f"Computed price for {symbol}: {price}")
     if price <= 0 or pd.isna(price):
         logger.critical(f"Invalid price computed for {symbol}: {price}")
@@ -12559,7 +12567,8 @@ def manage_position_risk(ctx, position) -> None:
         except DataFetchError:
             logger.critical(f"No minute data for {symbol}, skipping.")
             return
-        logger.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Latest rows for %s: %s", symbol, price_df.tail(3).to_dict(orient="list"))
         if "close" in price_df.columns:
             price_series = price_df["close"].dropna()
             if not price_series.empty:
