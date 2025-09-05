@@ -191,7 +191,7 @@ nvidia-nvjitlink-cu12==12.9.86
     #   nvidia-cusparse-cu12
 nvidia-nvtx-cu12==12.1.105
     # via torch
-packaging==24.1
+packaging==25.0
     # via
     #   -r requirements-dev.txt
     #   black
