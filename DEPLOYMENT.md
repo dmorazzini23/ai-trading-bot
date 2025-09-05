@@ -517,6 +517,7 @@ AI_TRADING_TICKERS_CSV=/app/data/tickers.csv    # optional override
 
 # API Configuration
 ALPACA_BASE_URL=https://api.alpaca.markets
+# Set FINNHUB_API_KEY and ENABLE_FINNHUB=1 to enable Finnhub fallback when Alpaca data is missing
 FINNHUB_API_KEY=your_finnhub_key
 ENABLE_FINNHUB=1
 

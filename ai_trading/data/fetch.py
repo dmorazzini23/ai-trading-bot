@@ -1440,179 +1440,180 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
         return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
     record_attempt(symbol, "1Min")
     used_backup = False
-    use_finnhub = (
-        os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
-        and os.getenv("FINNHUB_API_KEY")
+    enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
+    has_finnhub = (
+        os.getenv("FINNHUB_API_KEY")
         and fh_fetcher is not None
         and not getattr(fh_fetcher, "is_stub", False)
     )
-    if use_finnhub:
+    use_finnhub = enable_finnhub and bool(has_finnhub)
+    df = None
+    if _has_alpaca_keys():
         try:
-            df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
-        except (FinnhubAPIException, ValueError, NotImplementedError) as e:
-            logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
-            df = None
-    else:
-        log_finnhub_disabled(symbol)
-        df = None
-    if df is None or getattr(df, "empty", True):
-        if _has_alpaca_keys():
-            try:
-                feed_to_use = feed or _DEFAULT_FEED
-                if (
-                    feed_to_use == "iex"
-                    and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
-                    and _ALLOW_SIP
-                    and not _SIP_UNAUTHORIZED
-                ):
-                    feed_to_use = "sip"
-                    payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
-                    logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-                df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
-            except (EmptyBarsError, ValueError, RuntimeError) as e:
-                if isinstance(e, EmptyBarsError):
-                    now = datetime.now(UTC)
-                    if end_dt > now or start_dt > now:
-                        logger.info(
-                            "ALPACA_EMPTY_BAR_FUTURE",
-                            extra={"symbol": symbol, "timeframe": "1Min"},
-                        )
-                        _EMPTY_BAR_COUNTS.pop(tf_key, None)
-                        _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                        mark_success(symbol, "1Min")
-                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                    try:
-                        market_open = is_market_open()
-                    except Exception:  # pragma: no cover - defensive
-                        market_open = True
-                    if not market_open:
-                        logger.info(
-                            "ALPACA_EMPTY_BAR_MARKET_CLOSED",
-                            extra={"symbol": symbol, "timeframe": "1Min"},
-                        )
-                        _EMPTY_BAR_COUNTS.pop(tf_key, None)
-                        _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                        mark_success(symbol, "1Min")
-                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                    cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
-                    _EMPTY_BAR_COUNTS[tf_key] = cnt
-                    if cnt > _EMPTY_BAR_MAX_RETRIES:
-                        logger.error(
-                            "ALPACA_EMPTY_BAR_MAX_RETRIES",
-                            extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
-                        )
-                        log_empty_retries_exhausted(
-                            "alpaca",
-                            symbol=symbol,
-                            timeframe="1Min",
-                            feed=feed or _DEFAULT_FEED,
-                            retries=cnt,
-                        )
-                        _SKIPPED_SYMBOLS.add(tf_key)
-                        raise EmptyBarsError(
-                            f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
-                        ) from e
-                    if cnt >= _EMPTY_BAR_THRESHOLD:
-                        backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
-                        ctx = {
-                            "symbol": symbol,
-                            "timeframe": "1Min",
-                            "occurrences": cnt,
-                            "backoff": backoff,
-                            "finnhub_enabled": use_finnhub,
-                            "feed": feed or _DEFAULT_FEED,
-                        }
-                        logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
-                        time.sleep(backoff)
-                        alt_feed = "sip" if (feed or _DEFAULT_FEED) != "sip" else "iex"
-                        if alt_feed != (feed or _DEFAULT_FEED):
-                            try:
-                                df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
-                            except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
-                                logger.debug(
-                                    "ALPACA_ALT_FEED_FAILED",
-                                    extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "err": str(alt_err)},
-                                )
-                                df_alt = None
-                            else:
-                                if df_alt is not None and not getattr(df_alt, "empty", True):
-                                    logger.info(
-                                        "ALPACA_ALT_FEED_SUCCESS",
-                                        extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "timeframe": "1Min"},
-                                    )
-                                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
-                                    _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                                    mark_success(symbol, "1Min")
-                                    return df_alt
-                        if end_dt - start_dt > _dt.timedelta(days=1):
-                            short_start = end_dt - _dt.timedelta(days=1)
+            feed_to_use = feed or _DEFAULT_FEED
+            if (
+                feed_to_use == "iex"
+                and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
+                and _ALLOW_SIP
+                and not _SIP_UNAUTHORIZED
+            ):
+                feed_to_use = "sip"
+                payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
+                logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
+            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
+        except (EmptyBarsError, ValueError, RuntimeError) as e:
+            if isinstance(e, EmptyBarsError):
+                now = datetime.now(UTC)
+                if end_dt > now or start_dt > now:
+                    logger.info(
+                        "ALPACA_EMPTY_BAR_FUTURE",
+                        extra={"symbol": symbol, "timeframe": "1Min"},
+                    )
+                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                    _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                    mark_success(symbol, "1Min")
+                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                try:
+                    market_open = is_market_open()
+                except Exception:  # pragma: no cover - defensive
+                    market_open = True
+                if not market_open:
+                    logger.info(
+                        "ALPACA_EMPTY_BAR_MARKET_CLOSED",
+                        extra={"symbol": symbol, "timeframe": "1Min"},
+                    )
+                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                    _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                    mark_success(symbol, "1Min")
+                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
+                _EMPTY_BAR_COUNTS[tf_key] = cnt
+                if cnt > _EMPTY_BAR_MAX_RETRIES:
+                    logger.error(
+                        "ALPACA_EMPTY_BAR_MAX_RETRIES",
+                        extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
+                    )
+                    log_empty_retries_exhausted(
+                        "alpaca",
+                        symbol=symbol,
+                        timeframe="1Min",
+                        feed=feed or _DEFAULT_FEED,
+                        retries=cnt,
+                    )
+                    _SKIPPED_SYMBOLS.add(tf_key)
+                    raise EmptyBarsError(
+                        f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
+                    ) from e
+                if cnt >= _EMPTY_BAR_THRESHOLD:
+                    backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
+                    ctx = {
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "occurrences": cnt,
+                        "backoff": backoff,
+                        "finnhub_enabled": use_finnhub,
+                        "feed": feed or _DEFAULT_FEED,
+                    }
+                    logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
+                    time.sleep(backoff)
+                    alt_feed = "sip" if (feed or _DEFAULT_FEED) != "sip" else "iex"
+                    if alt_feed != (feed or _DEFAULT_FEED):
+                        try:
+                            df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
+                        except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
                             logger.debug(
-                                "ALPACA_SHORT_WINDOW_RETRY",
-                                extra={
-                                    "symbol": symbol,
-                                    "timeframe": "1Min",
-                                    "start": short_start.isoformat(),
-                                    "end": end_dt.isoformat(),
-                                    "feed": feed or _DEFAULT_FEED,
-                                },
+                                "ALPACA_ALT_FEED_FAILED",
+                                extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "err": str(alt_err)},
                             )
-                            try:
-                                df_short = _fetch_bars(symbol, short_start, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
-                            except (EmptyBarsError, ValueError, RuntimeError):
-                                df_short = None
-                            else:
-                                if df_short is not None and not getattr(df_short, "empty", True):
-                                    logger.info(
-                                        "ALPACA_SHORT_WINDOW_SUCCESS",
-                                        extra={
-                                            "symbol": symbol,
-                                            "timeframe": "1Min",
-                                            "feed": feed or _DEFAULT_FEED,
-                                            "start": short_start.isoformat(),
-                                            "end": end_dt.isoformat(),
-                                        },
-                                    )
-                                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
-                                    _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                                    mark_success(symbol, "1Min")
-                                    return df_short
-                            try:
-                                df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
-                                used_backup = True
-                            except Exception as alt_err:  # pragma: no cover - network failure
-                                logger.warning(
-                                    "ALT_PROVIDER_FAILED",
-                                    extra={"symbol": symbol, "err": str(alt_err)},
+                            df_alt = None
+                        else:
+                            if df_alt is not None and not getattr(df_alt, "empty", True):
+                                logger.info(
+                                    "ALPACA_ALT_FEED_SUCCESS",
+                                    extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "timeframe": "1Min"},
                                 )
-                            df = None
-                        if df is None or getattr(df, "empty", True):
-                            _SKIPPED_SYMBOLS.add(tf_key)
-                            logger.warning(
-                                "ALPACA_EMPTY_BAR_SKIP",
-                                extra={
-                                    "symbol": symbol,
-                                    "timeframe": "1Min",
-                                    "occurrences": cnt,
-                                },
-                            )
-                            return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                    else:
+                                _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                                mark_success(symbol, "1Min")
+                                return df_alt
+                    if end_dt - start_dt > _dt.timedelta(days=1):
+                        short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(
-                            "ALPACA_EMPTY_BARS",
-                            extra={"symbol": symbol, "timeframe": "1Min", "feed": feed or _DEFAULT_FEED, "occurrences": cnt},
+                            "ALPACA_SHORT_WINDOW_RETRY",
+                            extra={
+                                "symbol": symbol,
+                                "timeframe": "1Min",
+                                "start": short_start.isoformat(),
+                                "end": end_dt.isoformat(),
+                                "feed": feed or _DEFAULT_FEED,
+                            },
                         )
+                        try:
+                            df_short = _fetch_bars(symbol, short_start, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
+                        except (EmptyBarsError, ValueError, RuntimeError):
+                            df_short = None
+                        else:
+                            if df_short is not None and not getattr(df_short, "empty", True):
+                                logger.info(
+                                    "ALPACA_SHORT_WINDOW_SUCCESS",
+                                    extra={
+                                        "symbol": symbol,
+                                        "timeframe": "1Min",
+                                        "feed": feed or _DEFAULT_FEED,
+                                        "start": short_start.isoformat(),
+                                        "end": end_dt.isoformat(),
+                                    },
+                                )
+                                _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                                mark_success(symbol, "1Min")
+                                return df_short
+                        try:
+                            df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+                            used_backup = True
+                        except Exception as alt_err:  # pragma: no cover - network failure
+                            logger.warning(
+                                "ALT_PROVIDER_FAILED",
+                                extra={"symbol": symbol, "err": str(alt_err)},
+                            )
                         df = None
+                    if df is None or getattr(df, "empty", True):
+                        _SKIPPED_SYMBOLS.add(tf_key)
+                        logger.warning(
+                            "ALPACA_EMPTY_BAR_SKIP",
+                            extra={
+                                "symbol": symbol,
+                                "timeframe": "1Min",
+                                "occurrences": cnt,
+                            },
+                        )
+                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 else:
-                    logger.warning(
-                        "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
+                    logger.debug(
+                        "ALPACA_EMPTY_BARS",
+                        extra={"symbol": symbol, "timeframe": "1Min", "feed": feed or _DEFAULT_FEED, "occurrences": cnt},
                     )
                     df = None
-        else:
-            logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
-            df = None
+            else:
+                logger.warning(
+                    "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
+                )
+                df = None
+    else:
+        logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
+        df = None
     if df is None or getattr(df, "empty", True):
-        if not use_finnhub:
+        if use_finnhub:
+            try:
+                df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
+            except (FinnhubAPIException, ValueError, NotImplementedError) as e:
+                logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+                df = None
+        elif not enable_finnhub:
             warn_finnhub_disabled_no_data(symbol)
+        else:
+            log_finnhub_disabled(symbol)
+    if df is None or getattr(df, "empty", True):
         max_span = _dt.timedelta(days=8)
         total_span = end_dt - start_dt
         if total_span > max_span:
