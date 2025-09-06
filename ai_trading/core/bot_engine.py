@@ -6460,9 +6460,9 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
                 with _warnings.catch_warnings():
                     _warnings.simplefilter("ignore", category=FutureWarning)
                     df_min = get_minute_df("SPY", start_ts, end_ts, feed="iex")  # AI-AGENT-REF: robust minute fetch
-                if df_min.empty:
+                if df_min is None or df_min.empty:
                     df_min = get_minute_df("SPY", start_ts, end_ts, feed="sip")
-                if df_min.empty:
+                if df_min is None or df_min.empty:
                     logger.warning(
                         "DATA_HEALTH_CHECK: minute fallback still empty (rows=0)"
                     )

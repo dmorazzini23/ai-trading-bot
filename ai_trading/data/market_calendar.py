@@ -25,6 +25,15 @@ class Session:
 
 # Known session overrides when pandas_market_calendars is unavailable.
 _FALLBACK_SESSIONS: dict[date, Session] = {
+    # Dummy sessions for early January 2024 to keep tests deterministic
+    date(2024, 1, 1): Session(
+        datetime(2024, 1, 1, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2024, 1, 1, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    date(2024, 1, 2): Session(
+        datetime(2024, 1, 2, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2024, 1, 2, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
     # Black Friday early closes
     date(2024, 11, 29): Session(
         datetime(2024, 11, 29, 9, 30, tzinfo=_ET).astimezone(UTC),
