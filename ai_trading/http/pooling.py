@@ -10,7 +10,8 @@ _DEFAULT_LIMIT: Final[int] = 8
 
 def _resolve_limit() -> int:
     try:
-        return int(config.get_env("AI_TRADING_MAX_CONCURRENT_HOSTS", str(_DEFAULT_LIMIT), cast=int))
+        limit = int(config.get_env("AI_TRADING_HOST_LIMIT", str(_DEFAULT_LIMIT), cast=int))
+        return max(1, limit)
     except Exception:
         return _DEFAULT_LIMIT
 
