@@ -10,7 +10,7 @@ class TimeFrameUnit(Enum):
 
 @dataclass(frozen=True)
 class TimeFrame:
-    amount: int
-    unit: TimeFrameUnit
+    amount: int = 1
+    unit: TimeFrameUnit = TimeFrameUnit.Day
 
 __all__ = ["TimeFrame", "TimeFrameUnit"]
