@@ -68,7 +68,7 @@ _LAZY_MAP = {
     "market_open_between": ("ai_trading.utils.base", "market_open_between"),
     "log_warning": ("ai_trading.utils.base", "log_warning"),
     "model_lock": ("ai_trading.utils.base", "model_lock"),
-    "portfolio_lock": ("ai_trading.utils.base", "portfolio_lock"),
+    "portfolio_lock": ("ai_trading.utils.locks", "portfolio_lock"),
     "safe_to_datetime": ("ai_trading.utils.base", "safe_to_datetime"),
     "validate_ohlcv": ("ai_trading.utils.base", "validate_ohlcv"),
     "SUBPROCESS_TIMEOUT_DEFAULT": ("ai_trading.utils.safe_subprocess", "SUBPROCESS_TIMEOUT_DEFAULT"),
@@ -93,12 +93,12 @@ if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
         market_open_between,
         log_warning,
         model_lock,
-        portfolio_lock,
         safe_to_datetime,
         validate_ohlcv,
         SUBPROCESS_TIMEOUT_DEFAULT,
         safe_subprocess_run,
     )
+    from .locks import portfolio_lock  # type: ignore
 
 
 def __getattr__(name: str) -> Any:  # AI-AGENT-REF: importlib-based lazy loader
