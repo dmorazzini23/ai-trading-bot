@@ -19,32 +19,16 @@ from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
 from ai_trading.settings import get_verbose_logging
+from .safe_subprocess import (
+    SUBPROCESS_TIMEOUT_DEFAULT,
+    safe_subprocess_run,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd  # pylint: disable=unused-import
     from pandas import DataFrame, Series, Index, Timestamp
 else:  # pragma: no cover - runtime when pandas missing
     DataFrame = Series = Index = Timestamp = object
-SUBPROCESS_TIMEOUT_S = 5.0
-
-# Back-compat alias expected by ai_trading.core.bot_engine.get_git_hash()
-SUBPROCESS_TIMEOUT_DEFAULT = SUBPROCESS_TIMEOUT_S
-
-
-def safe_subprocess_run(cmd: list[str] | tuple[str, ...], timeout: float | int | None = None) -> str:
-    """Run a subprocess safely and return stdout text.
-
-    Returns an empty string on any failure so callers can degrade gracefully.
-    """
-    try:
-        t = float(timeout) if timeout is not None else SUBPROCESS_TIMEOUT_DEFAULT
-        res = subprocess.run(list(cmd), timeout=t, check=True, capture_output=True)
-        return (res.stdout or b"").decode(errors="ignore").strip()
-    except (subprocess.SubprocessError, subprocess.TimeoutExpired, OSError) as exc:
-        logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
-        return ""
-
-
 def ensure_utc_index(df: DataFrame) -> DataFrame:
     """Return DataFrame with UTC tz-aware ``DatetimeIndex`` if applicable."""
     try:

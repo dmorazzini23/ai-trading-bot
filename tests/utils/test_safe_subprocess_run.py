@@ -1,7 +1,7 @@
 import sys
 import pytest
 
-from ai_trading.utils.base import safe_subprocess_run
+from ai_trading.utils.safe_subprocess import safe_subprocess_run
 
 
 def test_safe_subprocess_run_success():
@@ -14,7 +14,7 @@ def test_safe_subprocess_run_timeout(caplog):
     with caplog.at_level("WARNING"):
         out = safe_subprocess_run(cmd, timeout=0.1)
     assert out == ""
-    assert any(str(cmd) in rec.message for rec in caplog.records)
+    assert any("timed out" in rec.message for rec in caplog.records)
 
 
 def test_safe_subprocess_run_nonzero_exit(caplog):
