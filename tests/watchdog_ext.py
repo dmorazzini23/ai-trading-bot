@@ -114,16 +114,6 @@ def _test_env():
 # Reset HTTP timeout coupling across tests to avoid order sensitivity
 @pytest.fixture(autouse=True)
 def _reset_http_timeout_env(monkeypatch):
-    try:
-        yield
-    finally:
-        # Clear HTTP_TIMEOUT to restore default precedence after tests that set it
-        monkeypatch.delenv("HTTP_TIMEOUT", raising=False)
-        # Reload timing module so the exported constant returns to default
-        try:
-            import importlib
-            from ai_trading.utils import timing as _timing
-
-            importlib.reload(_timing)
-        except Exception:
-            pass
+    # Ensure a clean timeout env at the start of each test; avoid reloading timing here
+    monkeypatch.delenv("HTTP_TIMEOUT", raising=False)
+    yield

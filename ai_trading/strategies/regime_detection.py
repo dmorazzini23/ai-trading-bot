@@ -207,14 +207,13 @@ class RegimeDetector:
                 volume_trend = 'decreasing'
             else:
                 volume_trend = 'stable'
-            data['obv'] = 0
-            for i in range(1, len(data)):
-                if data['close'].iloc[i] > data['close'].iloc[i - 1]:
-                    data['obv'].iloc[i] = data['obv'].iloc[i - 1] + data['volume'].iloc[i]
-                elif data['close'].iloc[i] < data['close'].iloc[i - 1]:
-                    data['obv'].iloc[i] = data['obv'].iloc[i - 1] - data['volume'].iloc[i]
-                else:
-                    data['obv'].iloc[i] = data['obv'].iloc[i - 1]
+            # Compute OBV without chained assignment warnings: sign(close change) * volume cumulative sum
+            delta = data['close'].diff()
+            up = (delta > 0).astype(int)
+            down = (delta < 0).astype(int)
+            direction = up - down  # 1 for up, -1 for down, 0 for equal
+            obv = (direction * data['volume'].fillna(0)).cumsum().fillna(0)
+            data['obv'] = obv
             obv_trend = 'neutral'
             if len(data) >= 20:
                 obv_20_ago = data['obv'].iloc[-21]

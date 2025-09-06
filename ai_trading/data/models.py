@@ -21,6 +21,18 @@ from ai_trading.alpaca_api import (
 # Resolve the Alpaca classes lazily at import time while tolerating the SDK
 # being unavailable during tests.
 TimeFrame = get_timeframe_cls()
+# Ensure common shorthand attributes exist for tests and call-sites
+try:  # best-effort: some SDK versions already provide these
+    unit_cls = get_timeframe_unit_cls()
+    if unit_cls is not None:
+        if not hasattr(TimeFrame, "Day"):
+            setattr(TimeFrame, "Day", TimeFrame(1, getattr(unit_cls, "Day", "Day")))  # type: ignore[arg-type]
+        if not hasattr(TimeFrame, "Minute"):
+            setattr(TimeFrame, "Minute", TimeFrame(1, getattr(unit_cls, "Minute", "Minute")))  # type: ignore[arg-type]
+        if not hasattr(TimeFrame, "Hour"):
+            setattr(TimeFrame, "Hour", TimeFrame(1, getattr(unit_cls, "Hour", "Hour")))  # type: ignore[arg-type]
+except Exception:
+    pass
 _BaseStockBarsRequest = get_stock_bars_request_cls()
 
 
@@ -141,4 +153,3 @@ except Exception:  # pragma: no cover - pydantic missing entirely
 
 
 __all__ = ["TimeFrame", "StockBarsRequest"]
-
