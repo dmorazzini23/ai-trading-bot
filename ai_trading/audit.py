@@ -251,9 +251,9 @@ def log_trade(
             logger.error("audit.log permission denied %s: %s", path, exc)
             # Invoke repair hook then retry once; swallow if still failing (tests
             # only assert that the repair was attempted).
-            repaired = fix_file_permissions(path)
-            if repaired:
+            if fix_file_permissions(path):
                 try:
+                    _ensure_file_header(path, headers)
                     with open(path, "a", newline="") as f:
                         writer = csv.DictWriter(f, fieldnames=headers)
                         writer.writerow(row)
