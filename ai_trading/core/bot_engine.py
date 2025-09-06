@@ -2576,10 +2576,14 @@ def abspath(fname: str) -> str:
 DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
 env_model = os.getenv("AI_TRADING_MODEL_PATH")
 MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
+WARN_IF_MODEL_MISSING = bool(
+    config.get_env("AI_TRADING_WARN_IF_MODEL_MISSING", "0", cast=int)
+)
 if MODEL_PATH and os.path.exists(MODEL_PATH):
     USE_ML = True
 elif MODEL_PATH and os.path.abspath(MODEL_PATH) != DEFAULT_MODEL_PATH:
-    logger.warning("ML_MODEL_MISSING", extra={"path": MODEL_PATH})
+    if WARN_IF_MODEL_MISSING:
+        logger.warning("ML_MODEL_MISSING", extra={"path": MODEL_PATH})
     USE_ML = False
 else:  # default path missing - no model required
     USE_ML = False

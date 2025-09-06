@@ -10,6 +10,7 @@
 
 - **`LOG_LEVEL_YFINANCE`** (default: `WARNING`): Controls the log level for the `yfinance` package. Set to `INFO` or another level to troubleshoot provider interactions.
 - **`LOG_QUIET_LIBRARIES`** (default: `charset_normalizer=INFO`): Comma-separated `logger=LEVEL` pairs used to suppress noisy third-party libraries.
+- **`AI_TRADING_WARN_IF_MODEL_MISSING`** (default: `false`): When set, emits an `ML_MODEL_MISSING` warning if a configured model path cannot be found.
 
 ### Features
 

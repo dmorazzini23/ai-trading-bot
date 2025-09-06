@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
   `$(PYTHON)` for compatibility on Debian/Ubuntu where `python` shim is
   absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
 - Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
+- Core: gate `ML_MODEL_MISSING` warning behind `AI_TRADING_WARN_IF_MODEL_MISSING` flag.
 
 ### Added
 - Cache fallback data provider usage to skip redundant Alpaca requests
