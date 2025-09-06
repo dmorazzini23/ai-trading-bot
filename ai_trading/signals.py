@@ -578,7 +578,7 @@ def compute_signal_matrix(df) -> Any | None:
         logger.debug("Computing signal matrix for %d rows", len(df))
         macd_df = calculate_macd(df["close"])
         if rsi is not None:
-            rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
+            rsi_series = rsi(tuple(df["close"].ffill().bfill().astype(float)), 14)
         else:
             rsi_series = pd.Series(50.0, index=df.index)
         sma_diff = df["close"] - df["close"].rolling(20).mean()
