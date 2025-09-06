@@ -187,45 +187,46 @@ def run_healthcheck() -> None:
     _run_loop(run_health_check, args, "Health check")
 
 
-def main() -> None:
+def main() -> int:
     """Default CLI entrypoint mirroring ``run_trade``."""
 
-    parser = _build_parser("AI Trading Bot", symbols=True)
-    args = parser.parse_args()
-    if args.dry_run:
-        logger.info("AI Main: Dry run - exiting")
-        logger.info("INDICATOR_IMPORT_OK")
-        import logging, time
-
-        time.sleep(0.1)
-        logging.shutdown()
-        sys.exit(0)
-
-    import os
-
-    os.environ["TRADING_MODE"] = "paper" if args.paper else "live"
-    from ai_trading.env import ensure_dotenv_loaded
-
-    ensure_dotenv_loaded()
-    _validate_startup_config()
-    from ai_trading import main as _main
-
-    _main.preflight_import_health()
-
-    _run_loop(_main.run_cycle, args, "Main")
-
-
-if __name__ == "__main__":
     try:
-        main()
-    except SystemExit:
+        parser = _build_parser("AI Trading Bot", symbols=True)
+        args = parser.parse_args()
+        if args.dry_run:
+            logger.info("AI Main: Dry run - exiting")
+            logger.info("INDICATOR_IMPORT_OK")
+            import logging, time
+
+            time.sleep(0.1)
+            logging.shutdown()
+            return 0
+
+        import os
+
+        os.environ["TRADING_MODE"] = "paper" if args.paper else "live"
+        from ai_trading.env import ensure_dotenv_loaded
+
+        ensure_dotenv_loaded()
+        _validate_startup_config()
+        from ai_trading import main as _main
+
+        _main.preflight_import_health()
+
+        _run_loop(_main.run_cycle, args, "Main")
+        return 0
+    except SystemExit:  # allow explicit exits to propagate
         raise
     except (ValueError, HTTPError) as e:
         logger.error("startup error: %s", e, exc_info=True)
         if "--dry-run" in sys.argv:
             logger.warning("dry-run: ignoring startup exception: %s", e)
-            sys.exit(0)
-        raise
+            return 0
+        return 1
     except Exception:
         logger.exception("unexpected startup error")
-        raise
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
