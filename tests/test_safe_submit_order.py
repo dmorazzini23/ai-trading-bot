@@ -5,7 +5,7 @@ class DummyAPI:
     def __init__(self):
         self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
         self.list_positions = lambda: []
-        self.submit_order = lambda order_data=None: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
+        self.submit_order = lambda **_kwargs: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
         self.get_order = lambda oid: types.SimpleNamespace(id=1, status="pending_new", filled_qty=0)
 
 
@@ -33,3 +33,19 @@ def test_safe_submit_order_pending_new(monkeypatch):
         # If imports fail due to missing dependencies, the test still passes
         # as we've verified the core import structure works
         pass
+
+
+def test_safe_submit_order_pending_new_symbol(monkeypatch):
+    """Ensure pending-new polling keeps original symbol."""
+
+    from ai_trading.core import bot_engine
+    from tests.support.dummy_api import DummyAPI as SymbolDummyAPI
+
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda x: True)
+
+    api = SymbolDummyAPI()
+    req = types.SimpleNamespace(symbol="MSFT", qty=1, side="buy")
+
+    order = bot_engine.safe_submit_order(api, req)
+    assert order.symbol == "MSFT"
