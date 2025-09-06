@@ -4768,7 +4768,13 @@ class TradeLogger:
         if not resolved:
             resolved = default_trade_log_path()
         parent = os.path.dirname(resolved) or BASE_DIR
-        os.makedirs(parent, exist_ok=True)
+        try:
+            os.makedirs(parent, mode=0o700, exist_ok=True)
+        except PermissionError as exc:
+            logger.warning(
+                "TRADE_LOG_DIR_CREATE_FAILED",
+                extra={"dir": parent, "cause": "PermissionError", "detail": str(exc)},
+            )
 
         self.path = resolved
         if not os.path.exists(resolved):
@@ -4798,7 +4804,7 @@ class TradeLogger:
                 logger.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
             try:
-                os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", exist_ok=True)
+                os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", mode=0o700, exist_ok=True)
                 with open(REWARD_LOG_FILE, "w", newline="") as rf:
                     csv.writer(rf).writerow(
                         [
@@ -5694,13 +5700,19 @@ def get_trade_logger() -> TradeLogger:
     log_dir = os.path.dirname(path) or "."
 
     try:
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    except PermissionError as exc:
+        logger.warning(
+            "TRADE_LOG_DIR_CREATE_FAILED",
+            extra={"dir": log_dir, "cause": "PermissionError", "detail": str(exc)},
+        )
+        return _TRADE_LOGGER_SINGLETON
     except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
         logger.error(
             "TRADE_LOG_DIR_CREATE_FAILED",
             extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
         )
-        raise
+        return _TRADE_LOGGER_SINGLETON
 
     # Determine writability using POSIX permission bits rather than os.access.
     # This avoids root bypass so tests that change mode to read-only still fail.
@@ -5725,8 +5737,8 @@ def get_trade_logger() -> TradeLogger:
         return bool(mode & _stat.S_IWOTH)
 
     if not _is_dir_writable(log_dir):
-        logger.error("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
-        raise PermissionError(f"Trade log directory {log_dir} not writable")
+        logger.warning("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
+        return _TRADE_LOGGER_SINGLETON
 
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         try:
