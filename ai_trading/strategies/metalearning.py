@@ -168,10 +168,12 @@ class MetaLearning(BaseStrategy):
             if not ML_AVAILABLE:
                 logger.warning('ML libraries not available, using fallback prediction')
                 self.is_trained = True
+                self.last_training_date = datetime.now(UTC)
                 return True
             if not PANDAS_AVAILABLE:
                 logger.warning('Pandas not available, using fallback mode')
                 self.is_trained = True
+                self.last_training_date = datetime.now(UTC)
                 return True
             model_sel = load_sklearn_model_selection()
             preproc = load_sklearn_preprocessing()
@@ -180,6 +182,7 @@ class MetaLearning(BaseStrategy):
             if not all([model_sel, preproc, ensemble, metrics]):
                 logger.warning('Required sklearn components missing, using fallback mode')
                 self.is_trained = True
+                self.last_training_date = datetime.now(UTC)
                 return True
             train_test_split = model_sel.train_test_split
             StandardScaler = preproc.StandardScaler
@@ -241,6 +244,7 @@ class MetaLearning(BaseStrategy):
             logger.info('ML training failed, enabling fallback mode')
             self.is_trained = True
             self.prediction_accuracy = 0.6
+            self.last_training_date = datetime.now(UTC)
             return True
 
     def predict_price_movement(self, data) -> dict | None:
