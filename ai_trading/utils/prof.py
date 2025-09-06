@@ -18,13 +18,17 @@ class SoftBudget:
 
     def __init__(self, interval_sec: float, fraction: float):
         self._deadline = time.monotonic() + max(0.0, interval_sec) * max(0.1, min(1.0, fraction))
-        self._start = time.monotonic()
+        self._start: float | None = None
 
     def remaining(self) -> float:
         return max(0.0, self._deadline - time.monotonic())
 
     def elapsed_ms(self) -> int:
-        return int((time.monotonic() - self._start) * 1000)
+        now = time.monotonic()
+        if self._start is None:
+            self._start = now
+            return 0
+        return int((now - self._start) * 1000)
 
     def over(self) -> bool:
         return time.monotonic() >= self._deadline
