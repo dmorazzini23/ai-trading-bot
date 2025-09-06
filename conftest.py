@@ -18,8 +18,17 @@ class _DummyModel:
     def predict_proba(self, _x):
         return [[0.5, 0.5]]
 
+def _get_model() -> _DummyModel:
+    """Return an instance of the dummy model.
 
-_dummy_mod.get_model = lambda: _DummyModel()
+    Using a named function keeps the test helper picklable with the standard
+    ``pickle`` module, whereas inline lambdas cannot be pickled.
+    """
+
+    return _DummyModel()
+
+
+_dummy_mod.get_model = _get_model
 sys.modules["dummy_model"] = _dummy_mod
 os.environ.setdefault("AI_TRADING_MODEL_MODULE", "dummy_model")
 
