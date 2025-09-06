@@ -331,18 +331,9 @@ def _apply_psar(data) -> Any:
     if pd is None:
         logger.warning("Pandas not available for PSAR application")
         return data
-    ta = _get_pandas_ta()
-    data = data.copy()
-    try:
-        psar = ta.psar(data["high"], data["low"], data["close"])
-        data["psar_long"] = psar["PSARl_0.02_0.2"].astype(float)
-        data["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
-    except AttributeError:
-        logger.warning("PANDAS_TA_PSAR_MISSING")
-        approx = ((data["high"] + data["low"]) / 2).astype(float)
-        data["psar_long"] = approx
-        data["psar_short"] = approx
-    return data
+    from .indicators import psar as _psar
+
+    return _psar(data)
 
 
 def prepare_indicators(data, ticker: str | None = None) -> Any | None:
