@@ -147,7 +147,7 @@ def retry(
             elif mode_lc == "linear":
                 _wait = _wait_incrementing(start=base, increment=max(0.0, factor))
             else:
-                _wait = _wait_exponential(multiplier=base, min=base, max=None)
+                _wait = _wait_exponential(multiplier=base, min=base)
         _retry = retry if retry is not None else retry_if_exception_type(exceptions)
         dec = _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=reraise)
         # Also point tenacity.retry at this decorator to satisfy identity checks in tests
@@ -176,7 +176,7 @@ def retry(
         elif mode_lc == "linear":
             _wait = _wait_incrementing(start=base, increment=max(0.0, factor))
         else:  # exponential (default)
-            _wait = _wait_exponential(multiplier=base, min=base, max=None)
+            _wait = _wait_exponential(multiplier=base, min=base)
         predicate = retry_if_exception_type(exceptions)
         dec = _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=reraise)
         try:
