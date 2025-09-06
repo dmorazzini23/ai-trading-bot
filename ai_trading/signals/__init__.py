@@ -16,7 +16,12 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
     import numpy as np  # type: ignore
     import pandas as pd  # type: ignore
 
-from alpaca.common.exceptions import APIError
+try:  # pragma: no cover - alpaca may be missing in tests
+    from alpaca.common.exceptions import APIError
+except Exception:  # ImportError
+    class APIError(Exception):
+        """Fallback APIError when alpaca package is absent."""
+
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout, clamp_request_timeout
 from ai_trading.exc import RequestException
