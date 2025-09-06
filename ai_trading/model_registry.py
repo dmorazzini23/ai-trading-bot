@@ -59,7 +59,11 @@ class ModelRegistry:
         dataset_fingerprint: str | None = None,
         tags: list[str] | None = None,
     ) -> str:
-        """Store model + metadata and return deterministic ID."""
+        """Store model + metadata and return deterministic ID.
+
+        Raises:
+            ValueError: If ``model`` is already registered.
+        """
         try:
             blob = pickle.dumps(model)
         except Exception as e:  # pragma: no cover - exercised via tests
@@ -82,6 +86,8 @@ class ModelRegistry:
         if dataset_fingerprint:
             id_components.append(dataset_fingerprint[:16])
         model_id = '-'.join(id_components)
+        if model_id in self.model_index:
+            raise ValueError(f"Model {model_id} already registered")
         model_dir = (self.base_path / model_id).resolve()
         if not model_dir.is_relative_to(self.base_path):
             raise RuntimeError(f"Model path escapes base directory: {model_dir}")
