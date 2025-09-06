@@ -107,7 +107,35 @@ class MomentumStrategy(BaseStrategy):
         return signals
 
     def generate(self, ctx) -> list[StrategySignal]:
-        return super().generate(ctx)
+        """Fetch close prices and generate signals.
+
+        When the provided context lacks sufficient price history for the
+        configured ``lookback`` window, a warning is logged and an empty list
+        is returned.  This keeps the method lightweight for tests and example
+        workflows that supply a simple ``ctx`` with ``tickers`` and a
+        ``data_fetcher``.
+        """
+        fetcher = getattr(ctx, "data_fetcher", None)
+        symbols = list(getattr(ctx, "tickers", []) or [])
+        if not fetcher or not symbols:
+            logger.warning("Insufficient data")
+            return []
+
+        prices: dict[str, Any] = {}
+        for sym in symbols:
+            df = fetcher.get_daily_df(ctx, sym)
+            try:
+                series = df["close"]
+            except Exception:  # pragma: no cover - defensive
+                logger.warning("Insufficient data")
+                return []
+            if df is None or len(series) <= self.lookback:
+                logger.warning("Insufficient data")
+                return []
+            prices[sym] = series
+
+        market_data = {"symbols": symbols, "prices": prices}
+        return self.generate_signals(market_data)
 
     def calculate_position_size(self, signal: StrategySignal, portfolio_value: float, current_position: float=0) -> int:
         """Simple position sizing based on signal strength."""
