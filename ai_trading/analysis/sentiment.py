@@ -82,6 +82,8 @@ SENTIMENT_FAILURE_THRESHOLD = 15
 SENTIMENT_RECOVERY_TIMEOUT = 1800
 SENTIMENT_MAX_RETRIES = 5
 SENTIMENT_BASE_DELAY = 5
+SENTIMENT_NEWS_WEIGHT = 0.8
+SENTIMENT_FORM4_WEIGHT = 0.2
 _sentiment_cache: dict[str, tuple[float, float]] = {}
 # track failures and progressive retry scheduling
 _sentiment_circuit_breaker = {
@@ -98,6 +100,8 @@ __all__ = [
     '_sentiment_cache',
     'SENTIMENT_FAILURE_THRESHOLD',
     'SENTIMENT_API_KEY',
+    'SENTIMENT_NEWS_WEIGHT',
+    'SENTIMENT_FORM4_WEIGHT',
 ]
 
 def _check_sentiment_circuit_breaker() -> bool:
@@ -235,7 +239,10 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             logger.debug('Form4 fetch failed for %s - data parsing error: %s', ticker, e)
         except (ValueError, TypeError) as e:
             logger.debug('Form4 fetch failed for %s - unexpected error: %s', ticker, e, extra={'component': 'sentiment', 'ticker': ticker, 'error_type': 'form4_fetch'})
-        final_score = 0.8 * news_score + 0.2 * form4_score
+        final_score = (
+            SENTIMENT_NEWS_WEIGHT * news_score
+            + SENTIMENT_FORM4_WEIGHT * form4_score
+        )
         final_score = max(-1.0, min(1.0, final_score))
         _record_sentiment_success()
         with sentiment_lock:
