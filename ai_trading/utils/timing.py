@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional, Union
 
-from .sleep import sleep
+from .sleep import _perf, _real_sleep, _time, sleep
 
 # Prefer AI_HTTP_TIMEOUT when present (tests set this); fallback to HTTP_TIMEOUT env
 HTTP_TIMEOUT: Union[int, float] = float(
