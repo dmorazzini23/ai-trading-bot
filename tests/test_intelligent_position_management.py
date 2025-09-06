@@ -13,10 +13,10 @@ AI-AGENT-REF: Comprehensive tests for intelligent position management
 """
 
 import importlib.util
-from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
+from tests.support.mock_series import MockSeries
 
 # AI-AGENT-REF: skip if ai_trading.position not available
 if importlib.util.find_spec("ai_trading.position") is None:  # pragma: no cover
@@ -47,7 +47,6 @@ class MockPosition:
 
 
 
-@dataclass
 class TestIntelligentPositionManager:
     """Test the main IntelligentPositionManager orchestrator."""
 
@@ -68,15 +67,13 @@ class TestIntelligentPositionManager:
         self.mock_ctx.data_fetcher.get_daily_df.return_value.empty = False
         self.mock_ctx.data_fetcher.get_daily_df.return_value.__len__ = lambda: 11
 
-        # Mock data access
+        # Mock data access using MockSeries
         for col, values in self.mock_daily_data.items():
-            mock_series = Mock()
-            mock_series.__len__ = lambda: len(values)
-            mock_series.iloc = Mock()
-            mock_series.iloc.__getitem__ = lambda idx: values[idx] if isinstance(idx, int) else values[idx]
-            mock_series.tail.return_value = Mock()
-            mock_series.tail.return_value.tolist.return_value = values[-5:]
-            setattr(self.mock_ctx.data_fetcher.get_daily_df.return_value, col, mock_series)
+            setattr(
+                self.mock_ctx.data_fetcher.get_daily_df.return_value,
+                col,
+                MockSeries(values),
+            )
 
         self.manager = IntelligentPositionManager(self.mock_ctx)
 
@@ -88,6 +85,12 @@ class TestIntelligentPositionManager:
         assert isinstance(self.manager.trailing_stop_manager, TrailingStopManager)
         assert isinstance(self.manager.profit_taking_engine, ProfitTakingEngine)
         assert isinstance(self.manager.correlation_analyzer, PortfolioCorrelationAnalyzer)
+
+        # Verify component extraction from mocked data
+        close_series = self.mock_ctx.data_fetcher.get_daily_df.return_value.close
+        assert isinstance(close_series, MockSeries)
+        assert close_series.diff() is close_series
+        assert close_series.tail().tolist() == self.mock_daily_data["close"][-5:]
 
     def test_should_hold_position_integration(self):
         """Test the enhanced should_hold_position method."""
