@@ -260,8 +260,31 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
     eq = _fetch_equity(cfg, force_refresh=force_refresh)
-    _CACHE.equity = eq
-    if eq <= 0.0 or cap <= 0.0:
+    if eq <= 0.0:
+        eq = _coerce_float(
+            getattr(
+                tcfg,
+                'max_position_equity_fallback',
+                getattr(cfg, 'max_position_equity_fallback', 200000.0),
+            ),
+            200000.0,
+        )
+        source = 'fallback_equity'
+        _CACHE.equity = eq
+        _log.info(
+            "CONFIG_AUTOFIX",
+            extra={
+                'field': 'equity',
+                'given': 0.0,
+                'fallback': eq,
+                'reason': 'equity_fetch_failed',
+                'capital_cap': cap,
+            },
+        )
+    else:
+        source = 'alpaca'
+        _CACHE.equity = eq
+    if cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
         _log.info(
             "CONFIG_AUTOFIX",
@@ -269,7 +292,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 'field': 'max_position_size',
                 'given': 0.0,
                 'fallback': fb,
-                'reason': 'missing_equity_or_cap',
+                'reason': 'missing_capital_cap',
                 'equity': eq,
                 'capital_cap': cap,
             },
@@ -295,9 +318,34 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         _coerce_float(vmax, None) if vmax is not None else None,
     )
     if val <= 0.0:
-        val = _fallback_max_size(cfg, tcfg)
+        fb = _fallback_max_size(cfg, tcfg)
+        _log.info(
+            "CONFIG_AUTOFIX",
+            extra={
+                'field': 'max_position_size',
+                'given': computed,
+                'fallback': fb,
+                'reason': 'non_positive_computed',
+                'equity': eq,
+                'capital_cap': cap,
+            },
+        )
+        val = _clamp(fb, vmin, vmax)
+        source = 'fallback'
     _CACHE.value, _CACHE.ts = (val, _now_utc())
-    return (val, {'mode': mode, 'source': 'alpaca', 'equity': eq, 'capital_cap': cap, 'computed': computed, 'clamp_min': vmin, 'clamp_max': vmax, 'refreshed_at': _CACHE.ts.isoformat()})
+    return (
+        val,
+        {
+            'mode': mode,
+            'source': source,
+            'equity': eq,
+            'capital_cap': cap,
+            'computed': computed,
+            'clamp_min': vmin,
+            'clamp_max': vmax,
+            'refreshed_at': _CACHE.ts.isoformat(),
+        },
+    )
 
 
 def get_max_position_size(
