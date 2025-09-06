@@ -1345,7 +1345,7 @@ def store_meta_learning_data(converted_data: dict) -> bool:
         logger.error('METALEARN_STORE_ERROR | error=%s', exc)
         return False
 
-def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> dict[str, float] | None:
+def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> dict[str, float]:
     """Load global signal performance with enhanced error handling.
 
     This function is available in both bot_engine.py and meta_learning.py for
@@ -1358,10 +1358,10 @@ def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> d
             trade_log_file = getattr(config, 'TRADE_LOG_FILE', 'trades.csv') if config else 'trades.csv'
             if not os.path.exists(trade_log_file):
                 logger.info('METALEARN_NO_HISTORY: Trade log file not found')
-                return None
+                return {}
             if pd is None:
                 logger.warning('METALEARN_NO_PANDAS: pandas not available for signal performance loading')
-                return None
+                return {}
             try:
                 df = pd.read_csv(trade_log_file, on_bad_lines='skip', engine='python', usecols=['exit_price', 'entry_price', 'signal_tags', 'side']).dropna(subset=['exit_price', 'entry_price', 'signal_tags'])
                 if df.empty:
@@ -1395,14 +1395,14 @@ def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> d
                 return result if result else {}
             except COMMON_EXC as e:
                 logger.error(f'META_LEARNING_SIGNAL_PERFORMANCE_ERROR: {e}')
-                return None
+                return {}
         else:
             bot_engine = sys.modules['bot_engine']
             if hasattr(bot_engine, 'load_global_signal_performance'):
                 return bot_engine.load_global_signal_performance(min_trades, threshold)
             else:
                 logger.warning('META_LEARNING_FUNCTION_MISSING: load_global_signal_performance not found in bot_engine')
-                return None
+                return {}
     except COMMON_EXC as exc:
         logger.error('META_LEARNING_LOAD_PERFORMANCE_ERROR: %s', exc)
-        return None
+        return {}

@@ -8,7 +8,7 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from ai_trading.core.enums import OrderSide
+from ai_trading.order.types import OrderSide
 
 # Set minimal environment variables
 os.environ['ALPACA_API_KEY'] = 'test_key'
@@ -96,7 +96,7 @@ class TestShortSellingImplementation(unittest.TestCase):
 
                         # Test that sell_short orders reach the validation step (don't get blocked by SKIP_NO_POSITION)
                         try:
-                            result = engine.execute_order("AAPL", "sell_short", 10)
+                            result = engine.execute_order("AAPL", OrderSide.SELL_SHORT, 10)
                         except RuntimeError:
                             # Expected to reach this point, meaning it passed the initial validation
                             pass
@@ -187,8 +187,8 @@ class TestShortSellingImplementation(unittest.TestCase):
         # Test when no trade log file exists
         with patch('os.path.exists', return_value=False):
             result = load_global_signal_performance()
-            # Should return None gracefully instead of raising an error
-            self.assertIsNone(result)
+            # Should return empty dict gracefully instead of raising an error
+            self.assertEqual(result, {})
 
         # Test when trade log exists but is empty or has insufficient data
         with patch('os.path.exists', return_value=True):

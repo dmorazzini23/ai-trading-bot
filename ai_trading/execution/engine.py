@@ -367,7 +367,7 @@ class OrderManager:
                 order.price = round_to_tick(order.price, tick)
                 if float(original_price) != float(order.price):
                     logger.debug(f'Price adjusted for {order.symbol}: {original_price} -> {order.price} (tick={tick})')
-            if order.side not in [OrderSide.BUY, OrderSide.SELL]:
+            if order.side not in [OrderSide.BUY, OrderSide.SELL, OrderSide.SELL_SHORT]:
                 logger.error(f'Invalid order side: {order.side}')
                 return False
             return True
@@ -649,7 +649,7 @@ class ExecutionEngine:
 
         Args:
             symbol: Trading symbol.
-            side: Order side, ``OrderSide.BUY`` or ``OrderSide.SELL``.
+            side: Order side, ``OrderSide.BUY``, ``OrderSide.SELL`` or ``OrderSide.SELL_SHORT``.
             quantity: Quantity to trade.
             order_type: Type of order.
             **kwargs: Additional order parameters.
@@ -663,6 +663,26 @@ class ExecutionEngine:
                 logger.debug('NO_API_SELECTED')
             if isinstance(side, str):
                 side = OrderSide(side)
+
+            available_qty_raw = self.get_available_qty()
+            if callable(available_qty_raw):  # accommodate mocked attributes
+                available_qty_raw = available_qty_raw()
+            try:
+                available_qty = float(available_qty_raw)
+            except (TypeError, ValueError):
+                available_qty = 0.0
+            if side == OrderSide.SELL:
+                if available_qty <= 0:
+                    self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
+                    self.execution_stats["rejected_orders"] += 1
+                    return None
+            elif side == OrderSide.SELL_SHORT:
+                self.logger.info(
+                    "SHORT_SELL_INITIATED | symbol=%s qty=%d", symbol, quantity
+                )
+                if not self._validate_short_selling(api, symbol, quantity):
+                    self.execution_stats["rejected_orders"] += 1
+                    return None
             quantity = int(_ensure_positive_qty(quantity))
             kwargs["limit_price"] = _ensure_valid_price(kwargs.get("limit_price"))
             kwargs["stop_price"] = _ensure_valid_price(kwargs.get("stop_price"))

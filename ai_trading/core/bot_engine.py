@@ -5587,7 +5587,7 @@ class SignalManager:
         performance_data = load_global_signal_performance()
 
         # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
-        if performance_data is None:
+        if not performance_data:
             # For new deployments, allow all signal types with warning
             logger.info(
                 "METALEARN_FALLBACK | No trade history - allowing all signals for new deployment"
@@ -10143,7 +10143,7 @@ def run_bayesian_meta_learning_optimizer(
 
 def load_global_signal_performance(
     min_trades: int | None = None, threshold: float | None = None
-) -> dict[str, float] | None:
+) -> dict[str, float]:
     """Load global signal performance with enhanced error handling and configurable thresholds."""
     # AI-AGENT-REF: Use configurable meta-learning parameters from environment
     # Reduced requirements to allow meta-learning to activate more easily
@@ -10160,7 +10160,7 @@ def load_global_signal_performance(
         )
         if df is None:
             logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
-            return None
+            return {}
         df = df.dropna(subset=["exit_price", "entry_price", "signal_tags"])
 
         if df.empty:

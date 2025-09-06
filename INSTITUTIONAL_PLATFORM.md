@@ -10,6 +10,7 @@ This implementation transforms the basic trading bot into a comprehensive **inst
 
 #### 1. Core Infrastructure (`core/`)
 - **`enums.py`** - Trading enums (OrderSide, OrderType, OrderStatus, RiskLevel, TimeFrame, AssetClass)
+  - **OrderSide**: `buy`, `sell`, `sell_short`
 - **`constants.py`** - Trading constants, market parameters, and system limits
 - **`__init__.py`** - Core module exports
 
