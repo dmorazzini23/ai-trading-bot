@@ -86,7 +86,7 @@ def test_model_loaded_once(monkeypatch):
     assert calls["count"] == 1
 
 
-def test_missing_model_file_errors_fast(monkeypatch, tmp_path, caplog):
+def test_missing_model_file_creates_placeholder(monkeypatch, tmp_path, caplog):
     missing = tmp_path / "no_model.pkl"
     monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(missing))
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
@@ -94,10 +94,11 @@ def test_missing_model_file_errors_fast(monkeypatch, tmp_path, caplog):
     caplog.set_level("WARNING")
     be = reload_bot_engine()
     assert "ML_MODEL_MISSING" not in caplog.text
-    with pytest.raises(RuntimeError, match="does not exist"):
-        be._load_required_model()
+    mdl = be._load_required_model()
+    assert mdl == {"placeholder": True}
+    assert missing.is_file()
     assert any(
-        r.levelname == "ERROR" and r.getMessage() == "MODEL_PATH_INVALID"
+        r.levelname == "WARNING" and r.getMessage() == "MODEL_PLACEHOLDER_CREATED"
         for r in caplog.records
     )
 
