@@ -769,6 +769,45 @@ def build_fetcher(config: Any):
     raise DataFetchError("No market data source available")
 
 
+def retry_empty_fetch_once(
+    *,
+    delay: float,
+    attempt: int,
+    max_retries: int,
+    previous_correlation_id: str | None,
+    total_elapsed: float,
+) -> dict[str, Any]:
+    """Return structured metadata for a single empty-bar retry.
+
+    Parameters
+    ----------
+    delay:
+        Backoff delay in seconds before the next request.
+    attempt:
+        The 1-indexed retry attempt number.
+    max_retries:
+        Maximum number of retries allowed.
+    previous_correlation_id:
+        Correlation ID from the prior request, if any.
+    total_elapsed:
+        Total time elapsed in seconds since the initial request.
+
+    Returns
+    -------
+    dict[str, Any]
+        Mapping used for structured logging of the retry.
+    """
+
+    return {
+        "retry_delay": delay,
+        "delay": delay,
+        "previous_correlation_id": previous_correlation_id,
+        "attempt": attempt,
+        "remaining_retries": max_retries - attempt,
+        "total_elapsed": total_elapsed,
+    }
+
+
 def _fetch_bars(
     symbol: str, start: Any, end: Any, timeframe: str, *, feed: str = _DEFAULT_FEED, adjustment: str = "raw"
 ) -> pd.DataFrame:
@@ -1120,6 +1159,9 @@ def _fetch_bars(
         }
         if prev_corr:
             log_extra["previous_correlation_id"] = prev_corr
+        delay = _state.pop("delay", None)
+        if delay is not None:
+            log_extra["delay"] = delay
         if status == 400:
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra_with_remaining)
@@ -1393,6 +1435,14 @@ def _fetch_bars(
                         _FETCH_BARS_BACKOFF_CAP,
                     )
                     elapsed = time.monotonic() - start_time
+                    _state["delay"] = backoff
+                    meta = retry_empty_fetch_once(
+                        delay=backoff,
+                        attempt=_state["retries"],
+                        max_retries=max_retries,
+                        previous_correlation_id=prev_corr,
+                        total_elapsed=elapsed,
+                    )
                     logger.debug(
                         "RETRY_EMPTY_BARS",
                         extra=_norm_extra(
@@ -1404,11 +1454,7 @@ def _fetch_bars(
                                 "start": _start.isoformat(),
                                 "end": _end.isoformat(),
                                 "correlation_id": _state["corr_id"],
-                                "retry_delay": backoff,
-                                "previous_correlation_id": prev_corr,
-                                "attempt": _state["retries"],
-                                "remaining_retries": max_retries - _state["retries"],
-                                "total_elapsed": elapsed,
+                                **meta,
                             }
                         ),
                     )
@@ -1907,4 +1953,5 @@ __all__ = [
     "age_cached_minute_timestamps",
     "last_minute_bar_age_seconds",
     "_build_daily_url",
+    "retry_empty_fetch_once",
 ]
