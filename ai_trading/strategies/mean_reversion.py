@@ -64,6 +64,7 @@ class MeanReversionStrategy:
                 pass
         mean, std = self._latest_stats(df['close'], lookback)
         if mean is None:
+            log.warning('mean_reversion: invalid rolling')
             return []
         px = float(df['close'].iloc[-1])
         z = (px - mean) / std
