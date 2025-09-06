@@ -35,6 +35,7 @@ from ai_trading.data.empty_bar_backoff import (
 from ai_trading.data.metrics import metrics, provider_fallback
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 
 logger = get_logger(__name__)
 
@@ -122,13 +123,6 @@ DataFetchException = DataFetchError
 class EmptyBarsError(DataFetchError, ValueError):
     """Raised when a data provider returns no bars for a request."""
 
-
-class FinnhubAPIException(Exception):
-    """Minimal Finnhub API error for tests."""
-
-    def __init__(self, status_code: int):
-        self.status_code = status_code
-        super().__init__(str(status_code))
 
 
 def ensure_datetime(value: Any) -> _dt.datetime:
@@ -425,18 +419,6 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
         )
         return False
     return True
-
-
-class _FinnhubFetcherStub:
-    """Minimal stub with a fetch() method; tests monkeypatch this."""
-
-    is_stub = True
-
-    def fetch(self, *args, **kwargs):
-        raise NotImplementedError
-
-
-fh_fetcher = _FinnhubFetcherStub()
 
 
 def get_last_available_bar(symbol: str) -> pd.DataFrame:
