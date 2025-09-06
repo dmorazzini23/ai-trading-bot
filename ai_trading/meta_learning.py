@@ -247,7 +247,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             _header, *data_lines = lines
             audit_format_rows = 0
             meta_format_rows = 0
-            valid_price_rows = 0
+            filtered_rows: list[list[str]] = []
             for line_num, line in enumerate(data_lines, start=2):
                 line = line.strip()
                 if not line:
@@ -261,44 +261,47 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         continue
                     first_col = str(row[0]).strip()
                     if len(first_col) > 20 and '-' in first_col:
-                        audit_format_rows += 1
                         if len(row) >= 6:
                             try:
                                 price = float(row[5])
-                                if price > 0:
-                                    valid_price_rows += 1
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in audit format row: %s', e)
+                                continue
+                            if price <= 0:
+                                continue
+                            audit_format_rows += 1
+                            filtered_rows.append(row)
                     elif len(first_col) <= 10 and first_col.isalpha() and (len(first_col) >= 2):
-                        meta_format_rows += 1
-                        if len(row) >= 3:
+                        if len(row) >= 5:
                             try:
-                                price = float(row[2])
-                                if price > 0:
-                                    valid_price_rows += 1
+                                entry_price = float(row[2])
+                                exit_price = float(row[4])
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in meta format row: %s', e)
+                                continue
+                            if entry_price <= 0 or exit_price <= 0:
+                                continue
+                            meta_format_rows += 1
+                            filtered_rows.append(row)
                     elif 'price' in first_col.lower() or any(('price' in str(col).lower() for col in row[:3])):
-                        meta_format_rows += 1
+                        # Header-like line; ignore for counting
+                        continue
                     else:
-                        found_numeric = False
+                        numeric_vals = []
                         for _col_idx, col_val in enumerate(row[:5]):
                             try:
-                                price = float(col_val)
-                                if price > 0:
-                                    found_numeric = True
-                                    break
+                                numeric_vals.append(float(col_val))
                             except (ValueError, TypeError):
                                 continue
-                        if found_numeric:
-                            valid_price_rows += 1
+                        if numeric_vals and all(v > 0 for v in numeric_vals):
+                            filtered_rows.append(row)
                 except COMMON_EXC as e:
                     logger.debug(f'Failed to parse line {line_num}: {e}')
                     continue
             quality_report['row_count'] = len(data_lines)
             quality_report['audit_format_rows'] = audit_format_rows
             quality_report['meta_format_rows'] = meta_format_rows
-            quality_report['valid_price_rows'] = valid_price_rows
+            quality_report['valid_price_rows'] = len(filtered_rows)
             if audit_format_rows > 0 and meta_format_rows > 0:
                 quality_report['mixed_format_detected'] = True
                 quality_report['issues'].append(f'Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows')
@@ -320,19 +323,16 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         import io
                         csv_reader = csv.reader(io.StringIO(line))
                         row = next(csv_reader)
-                        found_numeric = False
+                        numeric_vals = []
                         for col in row:
                             try:
-                                val = float(col)
-                                if val > 0:
-                                    found_numeric = True
-                                    valid_price_rows += 1
-                                    break
+                                numeric_vals.append(float(col))
                             except (ValueError, TypeError):
                                 continue
-                        if found_numeric:
+                        if numeric_vals and all(val > 0 for val in numeric_vals):
                             quality_report['has_valid_format'] = True
                             quality_report['meta_format_rows'] += 1
+                            filtered_rows.append(row)
                     except COMMON_EXC:
                         continue
                 if not quality_report['has_valid_format']:
