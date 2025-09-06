@@ -38,8 +38,13 @@ def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
 
     try:
         # Import audit after mocking config
+        if "ai_trading.audit" in sys.modules:
+            del sys.modules["ai_trading.audit"]
         if "audit" in sys.modules:
             del sys.modules["audit"]
+        # Ensure audit writes to our tmp path (data/trades.csv)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("TRADE_LOG_FILE", "data/trades.csv")
         from ai_trading import audit  # AI-AGENT-REF: canonical import
 
         # Ensure the file doesn't exist initially
@@ -94,6 +99,8 @@ def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
             del sys.modules["config"]
 
         # Clean up audit module
+        if "ai_trading.audit" in sys.modules:
+            del sys.modules["ai_trading.audit"]
         if "audit" in sys.modules:
             del sys.modules["audit"]
 
@@ -108,8 +115,13 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
     sys.modules["config"] = MockConfig()
 
     try:
+        if "ai_trading.audit" in sys.modules:
+            del sys.modules["ai_trading.audit"]
         if "audit" in sys.modules:
             del sys.modules["audit"]
+        # Ensure audit writes to our tmp path
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("TRADE_LOG_FILE", "trades.csv")
         from ai_trading import audit  # AI-AGENT-REF: canonical import
 
         # Log first trade
@@ -119,7 +131,13 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
         audit.log_trade("MSFT", 3, "sell", 250.0, "2024-01-01T11:00:00Z", "TEST_MODE")
 
         # Verify both trades are in file
-        with open(trade_log_path) as f:
+        from pathlib import Path as _P
+        env_path = _P(str(trade_log_path))
+        try:
+            env_path = _P(str(__import__('os').environ.get('TRADE_LOG_FILE', env_path)))
+        except Exception:
+            pass
+        with open(env_path) as f:
             content = f.read()
 
         # Should have header + 2 data rows
@@ -135,7 +153,7 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
         assert header_count == 1, f"Expected 1 header, found {header_count}"
 
         # Verify trade data
-        with open(trade_log_path) as f:
+        with open(env_path) as f:
             rows = list(csv.DictReader(f))
 
         assert len(rows) == 2

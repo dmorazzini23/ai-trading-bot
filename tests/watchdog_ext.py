@@ -109,3 +109,21 @@ def _test_env():
     os.environ.setdefault("AI_HTTP_TIMEOUT", "10")
     os.environ.setdefault("FLASK_PORT", "0")  # avoid port collisions
     yield
+
+
+# Reset HTTP timeout coupling across tests to avoid order sensitivity
+@pytest.fixture(autouse=True)
+def _reset_http_timeout_env(monkeypatch):
+    try:
+        yield
+    finally:
+        # Clear HTTP_TIMEOUT to restore default precedence after tests that set it
+        monkeypatch.delenv("HTTP_TIMEOUT", raising=False)
+        # Reload timing module so the exported constant returns to default
+        try:
+            import importlib
+            from ai_trading.utils import timing as _timing
+
+            importlib.reload(_timing)
+        except Exception:
+            pass

@@ -19,26 +19,24 @@ def _resolve_log_path() -> str:
     - Otherwise, use the process env `TRADE_LOG_FILE` or `AI_TRADING_TRADE_LOG_FILE`
     - Fall back to `trades.csv` in the current working directory
     """
-    # Try a lightweight config module if available
-    path: str | None = None
+    # Explicit environment override always wins
+    env_path = os.getenv("TRADE_LOG_FILE") or os.getenv("AI_TRADING_TRADE_LOG_FILE")
+    if env_path:
+        return env_path
+    # Otherwise consult a lightweight config module if available
     try:
         import sys as _sys
 
         cfg = _sys.modules.get("config")
         if cfg is not None:
-            path = getattr(cfg, "TRADE_LOG_FILE", None)
-            if not path:
-                # Prefer ./data/trades.csv for config-backed environments
-                path = os.path.join("data", DEFAULT_LOG_FILE)
+            cfg_path = getattr(cfg, "TRADE_LOG_FILE", None)
+            if cfg_path:
+                return cfg_path
+            # Provide a conventional default when config exists but lacks the attribute
+            return os.path.join("data", DEFAULT_LOG_FILE)
     except Exception:
-        path = None
-    if not path:
-        path = (
-            os.getenv("TRADE_LOG_FILE")
-            or os.getenv("AI_TRADING_TRADE_LOG_FILE")
-            or DEFAULT_LOG_FILE
-        )
-    return path
+        pass
+    return DEFAULT_LOG_FILE
 
 
 # Public, overridable module attribute used by tests
@@ -146,6 +144,9 @@ def _compute_targets(main: Path) -> list[Path]:
     also write to './trades.csv' and './data/trades.csv' so tests that expect
     either path observe the file.
     """
+    # If an explicit environment override is present, honor it strictly.
+    if os.getenv("TRADE_LOG_FILE"):
+        return [main]
     # Default: single target path
     targets = [main]
     if str(os.getenv("PYTEST_RUNNING", "")).strip():
