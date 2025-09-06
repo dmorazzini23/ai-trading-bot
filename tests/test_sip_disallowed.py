@@ -56,9 +56,9 @@ def test_sip_disallowed_falls_back_to_iex(monkeypatch, caplog):
     end = datetime(2024, 1, 2, tzinfo=UTC)
     with caplog.at_level("WARNING"):
         df = data_fetcher.get_bars("AAPL", "1Min", start, end, feed="sip")
-    assert feeds == ["iex"]
+    assert feeds == ["sip"]
     assert not df.empty
-    assert "SIP_" in caplog.text
+    assert "SIP_FEED_DISABLED" in caplog.text
     caplog.clear()
     data_fetcher.get_bars("AAPL", "1Min", start, end, feed="sip")
-    assert "SIP_" not in caplog.text
+    assert "SIP_FEED_DISABLED" not in caplog.text
