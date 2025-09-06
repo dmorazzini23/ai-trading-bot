@@ -9,20 +9,25 @@ req_mod.post = lambda *a, **k: None
 req_mod.exceptions = types.SimpleNamespace(RequestException=Exception)
 sys.modules.setdefault("requests", req_mod)
 
-import ai_trading.alpaca_api as api
+import ai_trading.shadow_mode.runtime  # registers lazy alpaca_api
 
 
-def test_shadow_mode_env_change_affects_behavior(monkeypatch):
+def test_lazy_alpaca_api_behavior_switch(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
-    importlib.reload(api)
+
+    api = sys.modules["ai_trading.alpaca_api"]
+    assert "submit_order" not in api.__dict__
 
     class Dummy:
         def submit_order(self, **kwargs):
             raise AssertionError("called real submit")
 
-    with pytest.raises(AssertionError):
-        api.submit_order("AAPL", 1, "buy", client=Dummy())
-
     monkeypatch.setenv("SHADOW_MODE", "1")
     res = api.submit_order("AAPL", 1, "buy", client=Dummy())
     assert res["id"].startswith("shadow-")
+
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
+    importlib.reload(sys.modules["ai_trading.alpaca_api"])
+
+    with pytest.raises(AssertionError):
+        sys.modules["ai_trading.alpaca_api"].submit_order("AAPL", 1, "buy", client=Dummy())
