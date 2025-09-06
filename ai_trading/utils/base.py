@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
 from ai_trading.exc import COMMON_EXC
 from ai_trading.settings import get_verbose_logging
+from .locks import portfolio_lock
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd  # pylint: disable=unused-import
@@ -189,7 +190,6 @@ def format_order_for_log(order: Any) -> str:
 MARKET_OPEN_TIME = dt.time(9, 30)
 MARKET_CLOSE_TIME = dt.time(16, 0)
 EASTERN_TZ = ZoneInfo("America/New_York")
-portfolio_lock = threading.Lock()
 
 
 class _CallableLock:
