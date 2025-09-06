@@ -63,6 +63,20 @@ class TestStrategyAllocatorRegression:
         assert len(out2) == 1, "Should confirm signal with default threshold"
         assert out2[0].symbol == "AAPL", "Should return AAPL signal"
 
+    def test_none_delta_threshold_treated_as_zero(self):
+        """Ensure None delta_threshold is treated as 0 without raising TypeError."""
+        cfg = SimpleNamespace(
+            delta_threshold=None,
+            signal_confirmation_bars=1,
+            min_confidence=0.0,
+        )
+        alloc = strategy_allocator.StrategyAllocator(config=cfg)
+
+        sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
+
+        out = alloc.select_signals({"s1": [sig]})
+        assert len(out) == 1, "Should confirm signal even when delta_threshold is None"
+
     def test_config_none_min_confidence(self):
         """
         Regression test for None min_confidence value.

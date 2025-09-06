@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 import importlib
 
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep  # AI-AGENT-REF: small re-exports
+from .timing import HTTP_TIMEOUT, clamp_timeout  # AI-AGENT-REF: small re-exports
+from .sleep import sleep  # AI-AGENT-REF: dedicated sleep helper
 from .optdeps import OptionalDependencyError, module_ok  # AI-AGENT-REF: tiny helpers
 
 _BASE_EXPORTS = {

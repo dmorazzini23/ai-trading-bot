@@ -261,13 +261,19 @@ class StrategyAllocator:
                     continue
 
             delta = abs(s.confidence - last_conf) if last_conf else s.confidence
-            if delta < self.config.delta_threshold and last_dir == s.side:
+            threshold_raw = getattr(self.config, "delta_threshold", 0.0)
+            try:
+                threshold = float(threshold_raw) if threshold_raw is not None else 0.0
+            except (TypeError, ValueError):
+                threshold = 0.0
+
+            if delta < threshold and last_dir == s.side:
                 logger.info(
                     "SIGNAL_SKIPPED_DELTA",
                     extra={
                         "symbol": s.symbol,
                         "delta": delta,
-                        "threshold": self.config.delta_threshold,
+                        "threshold": threshold,
                     },
                 )
                 continue
