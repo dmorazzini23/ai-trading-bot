@@ -103,6 +103,26 @@ def create_app():
     return app
 
 
+def get_test_client():
+    """Return a Flask test client or ``None`` if unavailable.
+
+    Importing ``flask.testing`` can fail in environments that provide a
+    lightweight Flask stub. This helper guards the import and falls back
+    gracefully when the testing utilities are missing.
+    """
+
+    try:  # Prefer attribute import to avoid accidentally pulling in a top-level
+        from flask import testing as flask_testing  # type: ignore
+    except ImportError:
+        try:
+            flask_testing = import_module("flask.testing")
+        except ImportError:
+            return None
+
+    app = create_app()
+    return flask_testing.FlaskClient(app)
+
+
 if __name__ == '__main__':
     if os.getenv('RUN_HEALTHCHECK') == '1':
         from ai_trading.config.settings import get_settings
