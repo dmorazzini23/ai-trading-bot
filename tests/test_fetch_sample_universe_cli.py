@@ -3,7 +3,10 @@ import pathlib
 
 spec = importlib.util.spec_from_file_location(
     "ai_trading.tools.fetch_sample_universe",
-    pathlib.Path(__file__).resolve().parents[1] / "ai_trading" / "tools" / "fetch_sample_universe.py",
+    pathlib.Path(__file__).resolve().parents[1]
+    / "ai_trading"
+    / "tools"
+    / "fetch_sample_universe.py",
 )
 fetch_module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -20,7 +23,7 @@ def test_run_success(monkeypatch):
 
     def fake_map_get(urls, timeout=None):
         urls_captured.extend(urls)
-        return [(u, 200, b"OK") for u in urls]
+        return [((u, 200, b"OK"), None) for u in urls]
 
     def fake_info(msg, *args, **kwargs):
         logged.append((msg, kwargs.get("extra", {})))
@@ -33,7 +36,14 @@ def test_run_success(monkeypatch):
     )
     monkeypatch.setattr("ai_trading.tools.fetch_sample_universe.logger.info", fake_info)
 
-    rc = run(["AAA", "BBB", "CCC"], timeout=1.0)
+    rc = run(
+        [
+            ("AAA", "a"),
+            ("BBB", "b"),
+            ("CCC", "c"),
+        ],
+        timeout=1.0,
+    )
     assert rc == 0
     assert urls_captured == [
         "https://example.com/AAA",
@@ -41,6 +51,8 @@ def test_run_success(monkeypatch):
         "https://example.com/CCC",
     ]
     timing = [m for m in logged if m[0] == "STAGE_TIMING"]
-    assert timing and timing[0][1]["stage"] == "UNIVERSE_FETCH" and timing[0][1]["universe_size"] == 3
+    assert (
+        timing and timing[0][1]["stage"] == "UNIVERSE_FETCH" and timing[0][1]["universe_size"] == 3
+    )
     stats = [m for m in logged if m[0] == "HTTP_POOL_STATS"]
     assert stats and {"workers", "per_host", "pool_maxsize"} <= stats[0][1].keys()
