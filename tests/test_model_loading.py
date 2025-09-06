@@ -90,8 +90,10 @@ def test_missing_model_file_errors_fast(monkeypatch, tmp_path, caplog):
     missing = tmp_path / "no_model.pkl"
     monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(missing))
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
-    caplog.set_level("ERROR")
+    monkeypatch.delenv("AI_TRADING_WARN_IF_MODEL_MISSING", raising=False)
+    caplog.set_level("WARNING")
     be = reload_bot_engine()
+    assert "ML_MODEL_MISSING" not in caplog.text
     with pytest.raises(RuntimeError, match="does not exist"):
         be._load_required_model()
     assert any(
@@ -103,8 +105,19 @@ def test_missing_model_file_errors_fast(monkeypatch, tmp_path, caplog):
 def test_default_model_missing_no_warning(monkeypatch, caplog):
     monkeypatch.delenv("AI_TRADING_MODEL_PATH", raising=False)
     monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    monkeypatch.delenv("AI_TRADING_WARN_IF_MODEL_MISSING", raising=False)
     caplog.set_level("WARNING")
     be = reload_bot_engine()
     assert be.USE_ML is False
     assert "ML_MODEL_MISSING" not in caplog.text
+
+
+def test_missing_model_warns_when_flag_set(monkeypatch, tmp_path, caplog):
+    missing = tmp_path / "no_model.pkl"
+    monkeypatch.setenv("AI_TRADING_MODEL_PATH", str(missing))
+    monkeypatch.setenv("AI_TRADING_WARN_IF_MODEL_MISSING", "1")
+    monkeypatch.delenv("AI_TRADING_MODEL_MODULE", raising=False)
+    caplog.set_level("WARNING")
+    reload_bot_engine()
+    assert "ML_MODEL_MISSING" in caplog.text
 
