@@ -187,3 +187,12 @@ class TestModelRegistry:
             m1 = registry.register_model({"a": 1}, "s1", "t1")
             m2 = registry.register_model({"b": 2}, "s2", "t2")
             assert sorted(registry.list_models()) == sorted([m1, m2])
+
+    def test_duplicate_registration(self):
+        """registering the same model twice should raise ValueError."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            registry = ModelRegistry(temp_dir)
+            model = {"a": 1}
+            registry.register_model(model, "s", "t")
+            with pytest.raises(ValueError, match="already registered"):
+                registry.register_model(model, "s", "t")
