@@ -42,7 +42,8 @@ from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
-from ai_trading.logging.redact import redact as _redact, redact_env
+from ai_trading.logging.redact import redact as _redact
+from ai_trading.env.config_redaction import redact_config_env
 from ai_trading.net.http import build_retrying_session, set_global_session, mount_host_retry_profile
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.base import is_market_open as _is_market_open_base, next_market_open
@@ -224,7 +225,7 @@ def _fail_fast_env() -> None:
         raise SystemExit(1) from e
     logger.info(
         "ENV_CONFIG_LOADED",
-        extra={"dotenv_path": loaded, **redact_env(snapshot, drop=True)},
+        extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
     )
 
 
