@@ -8,6 +8,7 @@ pd = pytest.importorskip("pandas")
 np.random.seed(0)
 
 from ai_trading.signals import GaussianHMM, detect_market_regime_hmm, prepare_indicators
+import ai_trading.signals.indicators as ind
 
 
 def test_hmm_regime_detection():
@@ -95,12 +96,13 @@ def test_composite_signal_confidence(monkeypatch):
     from ai_trading.core import bot_engine as bot
     sm = bot.SignalManager()
     monkeypatch.setattr(sm, 'load_signal_weights', lambda: {})
-    monkeypatch.setattr(bot, 'load_global_signal_performance', lambda: [])
+    monkeypatch.setattr(bot, 'load_global_signal_performance', lambda: {})
+    monkeypatch.setattr(bot, 'signals_evaluated', None, raising=False)
     monkeypatch.setattr(sm, 'signal_momentum', lambda df, model=None: (1, 0.4, 'momentum'))
     monkeypatch.setattr(sm, 'signal_mean_reversion', lambda df, model=None: (-1, 0.2, 'mean_reversion'))
     monkeypatch.setattr(sm, 'signal_ml', lambda df, model=None, symbol=None: (1, 0.6, 'ml'))
     monkeypatch.setattr(sm, 'signal_sentiment', lambda ctx, ticker, df=None, model=None: (1, 0.1, 'sentiment'))
-    monkeypatch.setattr(sm, 'signal_regime', lambda state, df, model=None: (1, 1.0, 'regime'))
+    monkeypatch.setattr(sm, 'signal_regime', lambda ctx, state, df, model=None: (1, 1.0, 'regime'))
     monkeypatch.setattr(sm, 'signal_stochrsi', lambda df, model=None: (1, 0.1, 'stochrsi'))
     monkeypatch.setattr(sm, 'signal_obv', lambda df, model=None: (1, 0.1, 'obv'))
     monkeypatch.setattr(sm, 'signal_vsa', lambda df, model=None: (1, 0.1, 'vsa'))
@@ -112,3 +114,22 @@ def test_composite_signal_confidence(monkeypatch):
     assert final == 1
     assert conf == pytest.approx(2.6)
     assert 'ml' in label
+
+
+def test_psar_wrapper(sample_df, monkeypatch):
+    pta = types.SimpleNamespace(psar=lambda h, l, c: pd.DataFrame({
+        "PSARl_0.02_0.2": c * 0 + 1.0,
+        "PSARs_0.02_0.2": c * 0 + 2.0,
+    }))
+    ind.load_pandas_ta.cache_clear()
+    monkeypatch.setattr(ind, "load_pandas_ta", lambda: pta)
+    out = ind.psar(sample_df)
+    assert out["psar_long"].iloc[0] == 1.0
+    assert out["psar_short"].iloc[0] == 2.0
+
+
+def test_composite_signal_confidence_dict_and_list():
+    conf_dict = {"a": 0.5, "b": 0.25}
+    conf_list = [0.5, 0.25]
+    assert ind.composite_signal_confidence(conf_dict) == pytest.approx(0.75)
+    assert ind.composite_signal_confidence(conf_list) == pytest.approx(0.75)

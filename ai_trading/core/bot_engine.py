@@ -568,6 +568,7 @@ def _log_finbert_disabled() -> None:
 
 # AI-AGENT-REF: normalize arbitrary inputs into DataFrames
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.signals.indicators import composite_signal_confidence
 import logging
 
 # Lazy pandas proxy
@@ -5640,8 +5641,9 @@ class SignalManager:
             return 0.0, 0.0, "no_signals"
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
-        confidence = sum(w for _, w, _ in signals)
-        labels = "+".join(label for _, _, label in signals)
+        conf_map = {label: w for _, w, label in signals}
+        confidence = composite_signal_confidence(conf_map)
+        labels = "+".join(conf_map.keys())
         return math.copysign(1, score), confidence, labels
 
 
