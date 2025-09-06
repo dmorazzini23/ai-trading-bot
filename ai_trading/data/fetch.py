@@ -1488,26 +1488,27 @@ def _fetch_bars(
     alt_feed = None
     fallback = None
     if max_fb >= 1:
-        try:
-            idx = priority.index(f"alpaca_{_feed}")
-        except ValueError:
-            idx = -1
-        # Consider both subsequent and preceding providers to find an Alpaca alt feed
-        scan = list(priority[idx + 1:]) + list(reversed(priority[: max(0, idx)]))
-        for prov in scan:
-            if prov in {"alpaca_iex", "alpaca_sip"}:
-                candidate = prov.split("_")[1]
-                if candidate == _feed:
-                    continue
-                if candidate == "sip" and _SIP_UNAUTHORIZED:
-                    continue
-                alt_feed = candidate
-                break
+        if priority:
+            try:
+                idx = priority.index(f"alpaca_{_feed}")
+            except ValueError:
+                idx = -1
+            # Consider both subsequent and preceding providers to find an Alpaca alt feed
+            scan = list(priority[idx + 1:]) + list(reversed(priority[: max(0, idx)]))
+            for prov in scan:
+                if prov in {"alpaca_iex", "alpaca_sip"}:
+                    candidate = prov.split("_")[1]
+                    if candidate == _feed:
+                        continue
+                    if candidate == "sip" and _SIP_UNAUTHORIZED:
+                        continue
+                    alt_feed = candidate
+                    break
         if alt_feed is not None:
             fallback = (_interval, alt_feed, _start, _end)
         elif _feed == "iex" and (not _SIP_UNAUTHORIZED):
             # Ensure a SIP fallback candidate exists for tests even when
-            # provider priority is customized.
+            # provider priority is customized or empty.
             fallback = (_interval, "sip", _start, _end)
     # Attempt request with bounded retries when empty or transient issues occur
     df = None
@@ -1638,10 +1639,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                     if max_data_fallbacks() >= 1:
                         prio = provider_priority()
                         cur = feed or _DEFAULT_FEED
-                        try:
-                            idx = prio.index(f"alpaca_{cur}")
-                        except ValueError:
-                            idx = -1
+                        idx = prio.index(f"alpaca_{cur}") if prio else -1
                         for prov in prio[idx + 1:]:
                             if prov in {"alpaca_iex", "alpaca_sip"}:
                                 alt_feed = prov.split("_", 1)[1]
