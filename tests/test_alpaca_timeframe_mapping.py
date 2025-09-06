@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover - inject stub
         Minute = type("Minute", (), {"name": "Minute"})()
 
     class TimeFrame:
-        def __init__(self, amount, unit):
+        def __init__(self, amount=1, unit=TimeFrameUnit.Day):
             self.amount = amount
             self.unit = unit
 

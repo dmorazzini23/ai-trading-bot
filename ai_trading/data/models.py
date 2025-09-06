@@ -92,10 +92,8 @@ def _coerce_timeframe(tf: Any) -> Any:
             return TimeFrame(1, getattr(unit_cls, "Day"))
         except Exception:
             pass
-    try:
-        return TimeFrame(str(tf))  # type: ignore[arg-type]
-    except Exception:
-        return TimeFrame("1Day")
+    # Fall back to default timeframe (1 Day)
+    return TimeFrame()
 
 
 # When the real SDK is available the base request class derives from Pydantic's

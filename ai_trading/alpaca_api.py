@@ -92,8 +92,8 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
 
     @dataclass(frozen=True)
     class TimeFrame:
-        amount: int
-        unit: TimeFrameUnit
+        amount: int = 1
+        unit: TimeFrameUnit = TimeFrameUnit.Day
 
         def __str__(self) -> str:
             return f"{self.amount}{self.unit.value}"

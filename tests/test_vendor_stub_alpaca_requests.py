@@ -7,11 +7,11 @@ behaviour when instantiated using positional or keyword arguments.
 from datetime import UTC, datetime
 
 from tests.vendor_stubs.alpaca.data.requests import StockBarsRequest
-from tests.vendor_stubs.alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from tests.vendor_stubs.alpaca.data.timeframe import TimeFrame
 
 
 def _tf_day():
-    return TimeFrame(1, TimeFrameUnit.Day)
+    return TimeFrame()
 
 
 def test_stock_bars_request_keyword_args():
