@@ -18,4 +18,4 @@ def test_sleep_unaffected_by_monkeypatch(monkeypatch) -> None:
     sleep(0)  # request 0 -> enforced minimum
     elapsed = perf_counter() - start
     assert slept["count"] == 0
-    assert elapsed >= 0.009
+    assert elapsed >= 0.01

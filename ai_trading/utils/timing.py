@@ -36,9 +36,9 @@ def _robust_sleep(seconds: Union[int, float]) -> None:
     target = max(s, 0.01)
     start = _perf()
     _real_sleep(target)
-    # Ensure we cross ~9ms even if scheduler wakes early; cap iterations to avoid hangs
+    # Ensure we cross ~10ms even if scheduler wakes early; cap iterations to avoid hangs
     _tries = 0
-    while (_perf() - start) < 0.009 and _tries < 5:
+    while (_perf() - start) < 0.01 and _tries < 5:
         _real_sleep(0.005)
         _tries += 1
 
