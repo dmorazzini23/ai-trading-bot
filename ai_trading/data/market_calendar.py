@@ -22,6 +22,37 @@ class Session:
     start_utc: datetime
     end_utc: datetime
 
+
+# Known session overrides when pandas_market_calendars is unavailable.
+_FALLBACK_SESSIONS: dict[date, Session] = {
+    # Black Friday early closes
+    date(2024, 11, 29): Session(
+        datetime(2024, 11, 29, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2024, 11, 29, 13, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    date(2025, 11, 28): Session(
+        datetime(2025, 11, 28, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2025, 11, 28, 13, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    # DST transition Mondays (start/end) for regression coverage
+    date(2024, 3, 11): Session(
+        datetime(2024, 3, 11, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2024, 3, 11, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    date(2024, 11, 4): Session(
+        datetime(2024, 11, 4, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2024, 11, 4, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    date(2025, 3, 10): Session(
+        datetime(2025, 3, 10, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2025, 3, 10, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    date(2025, 11, 3): Session(
+        datetime(2025, 11, 3, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2025, 11, 3, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+}
+
 def is_trading_day(d: date) -> bool:
     """Return True if *d* is a trading day."""
     cal = _get_calendar()
@@ -52,6 +83,9 @@ def rth_session_utc(d: date) -> tuple[datetime, datetime]:
     cal = _get_calendar()
     if cal is not None:
         s = _pmc_session_utc(d)
+        return (s.start_utc, s.end_utc)
+    if d in _FALLBACK_SESSIONS:
+        s = _FALLBACK_SESSIONS[d]
         return (s.start_utc, s.end_utc)
     start_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
     end_et = datetime(d.year, d.month, d.day, 16, 0, tzinfo=_ET)
