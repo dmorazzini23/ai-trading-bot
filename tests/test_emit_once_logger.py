@@ -2,6 +2,7 @@
 
 import logging
 from io import StringIO
+from datetime import date as real_date
 
 import pytest
 from ai_trading.logging import EmitOnceLogger
@@ -122,3 +123,32 @@ def test_emit_once_thread_safe():
     # The key should only be in the set once
     assert len(emit_once._emitted_keys) == 1
     assert "Thread safe test message" in emit_once._emitted_keys
+
+
+def test_emit_once_logger_daily_reset(logger_with_capture, monkeypatch):
+    """EmitOnceLogger should allow one message per key each day."""
+    logger, log_capture = logger_with_capture
+    emit_once = EmitOnceLogger(logger)
+
+    import ai_trading.logging as logging_mod
+
+    class Day1(real_date):
+        @classmethod
+        def today(cls) -> real_date:
+            return real_date(2024, 1, 1)
+
+    monkeypatch.setattr(logging_mod, "date", Day1)
+    emit_once.info("Daily", key="daily")
+    emit_once.info("Daily", key="daily")
+    assert log_capture.getvalue().count("Daily") == 1
+    assert emit_once._emitted_keys["daily"][1] == 2
+
+    class Day2(real_date):
+        @classmethod
+        def today(cls) -> real_date:
+            return real_date(2024, 1, 2)
+
+    monkeypatch.setattr(logging_mod, "date", Day2)
+    emit_once.info("Daily", key="daily")
+    assert log_capture.getvalue().count("Daily") == 2
+    assert emit_once._emitted_keys["daily"][1] == 1

@@ -36,7 +36,7 @@ def test_get_minute_df_returns_empty_when_finnhub_disabled(monkeypatch, caplog):
 def test_duplicate_info_suppressed(monkeypatch, caplog):
     from ai_trading.logging import logger_once
 
-    monkeypatch.setattr(logger_once, "_emitted_keys", set())
+    monkeypatch.setattr(logger_once, "_emitted_keys", {})
     monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
     monkeypatch.setenv("ENABLE_FINNHUB", "0")
     monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: pd.DataFrame())

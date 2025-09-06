@@ -252,16 +252,22 @@ class EmitOnceLogger:
 
     def __init__(self, base_logger: logging.Logger):
         self._logger = base_logger
-        self._emitted_keys: set[str] = set()
+        self._emitted_keys: dict[str, tuple[date, int]] = {}
         self._lock = threading.Lock()
 
     def _emit_if_new(self, level: str, key: str, msg: str, *args, **kwargs) -> None:
-        """Emit log message only if key hasn't been seen before."""
+        """Emit log message only once per key each day."""
+        today = date.today()
         with self._lock:
-            if key not in self._emitted_keys:
-                self._emitted_keys.add(key)
-                log_method = getattr(self._logger, level.lower())
-                log_method(msg, *args, **kwargs)
+            last_date, count = self._emitted_keys.get(key, (None, 0))
+            if last_date != today:
+                count = 0
+            count += 1
+            self._emitted_keys[key] = (today, count)
+            if count > 1:
+                return
+        log_method = getattr(self._logger, level.lower())
+        log_method(msg, *args, **kwargs)
 
     def info(self, msg: str, key: str | None=None, *args, **kwargs) -> None:
         """Log info message once per key (defaults to message text as key)."""
