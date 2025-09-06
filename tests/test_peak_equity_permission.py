@@ -1,21 +1,18 @@
-import ai_trading.core.bot_engine as bot
-from pathlib import Path
-import pytest
+import pathlib
+import ai_trading.analytics.peak_equity as peak_equity
+
 
 def test_peak_equity_permission(monkeypatch, tmp_path, caplog):
     peak = tmp_path / "peak.txt"
     peak.touch()
     peak.chmod(0)
-    equity = tmp_path / "equity.txt"
-    equity.write_text("0")
-    monkeypatch.setattr(bot, "PEAK_EQUITY_FILE", str(peak))
-    monkeypatch.setattr(bot, "EQUITY_FILE", str(equity))
-    monkeypatch.setattr(bot, "_PEAK_EQUITY_PERMISSION_LOGGED", False)
+    monkeypatch.setattr(peak_equity, "_PEAK_EQUITY_PERMISSION_LOGGED", False)
+    monkeypatch.setattr(pathlib.Path, "read_text", lambda self, *a, **k: (_ for _ in ()).throw(PermissionError()))
     caplog.set_level("WARNING")
 
-    assert bot._current_drawdown() == 0.0
+    assert peak_equity.read_peak_equity(peak) == 0.0
     assert "permission denied" in caplog.text.lower()
 
     caplog.clear()
-    assert bot._current_drawdown() == 0.0
+    assert peak_equity.read_peak_equity(peak) == 0.0
     assert caplog.text == ""
