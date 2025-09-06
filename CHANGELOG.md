@@ -58,6 +58,7 @@ All notable changes to this project will be documented in this file.
 - Replaced test mock imports in sentiment module with local stub to avoid leakage.
   - Supports `register_model`, `load_model`, and `latest_for` operations
   - Maintains JSON index for model metadata
+- **Logging**: handle `PermissionError` when creating log directories by warning and using secure permissions.
   - Includes dataset fingerprint verification for reproducibility
 - **Configuration**: Corrected `DISABLE_DAILY_RETRAIN` environment flag parsing with safe default (`false`)
 - **Import Hardening**: Made `model_pipeline` imports robust in `ai_trading/core/bot_engine.py`
