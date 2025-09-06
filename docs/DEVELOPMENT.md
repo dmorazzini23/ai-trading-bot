@@ -15,7 +15,7 @@ make install-dev
 # Validate environment
 make validate-env
 
-# Run tests
+# Run tests (installs requirements if needed)
 make test-all
 
 # Lint and tests directly
@@ -51,7 +51,7 @@ pip install -r requirements-dev.txt
 ### Available Test Commands
 
 ```bash
-# Run all tests with validation
+# Run all tests with validation (installs requirements)
 make test-all
 
 # Run tests quickly (fail fast)
