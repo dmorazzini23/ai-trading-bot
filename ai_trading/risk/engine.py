@@ -532,7 +532,7 @@ class RiskEngine:
             logger.warning("Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s", sig.weight, sig.symbol, e)
             requested_weight = 0.0
         base_weight = min(requested_weight, max_allowed)
-        return base_weight
+        return round(base_weight, 1)
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
         """Return multiple volatility estimates."""
