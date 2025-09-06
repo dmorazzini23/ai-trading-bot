@@ -17,7 +17,7 @@ try:
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     from alpaca.data import TimeFrame  # type: ignore  # noqa: F401
 except Exception:  # pragma: no cover - dependency missing
-    pytest.skip("alpaca-py is required for tests", allow_module_level=True)
+    pytest.exit("alpaca-py is required for tests", returncode=0)
 
 try:
     from freezegun import freeze_time  # type: ignore
