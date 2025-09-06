@@ -11,7 +11,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
-import importlib.util
+import importlib
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
@@ -79,6 +79,21 @@ ALPACA_AVAILABLE = (
     and _module_exists("alpaca.common.exceptions")
 )
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
+
+
+def initialize() -> None:
+    """Ensure required Alpaca SDK modules are importable.
+
+    Raises:
+        RuntimeError: If the Alpaca SDK cannot be imported, providing a
+            helpful message for installation.
+    """
+    try:
+        importlib.import_module("alpaca.trading.client")
+        importlib.import_module("alpaca.data.historical")
+        importlib.import_module("alpaca.common.exceptions")
+    except Exception as exc:  # pragma: no cover - exercised in tests
+        raise RuntimeError("alpaca-py SDK is required") from exc
 
 if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     from dataclasses import dataclass
@@ -753,4 +768,5 @@ __all__ = [
     'get_bars_df',
     'alpaca_get',
     'start_trade_updates_stream',
+    'initialize',
 ]
