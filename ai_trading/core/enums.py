@@ -1,18 +1,11 @@
-"""
-Core trading enums for institutional-grade trading platform.
+"""Core trading enums for institutional-grade trading platform.
 
 Provides standardized enumerations for order management, risk levels,
 and trading operations across the entire platform.
 """
 from enum import Enum
 
-class OrderSide(Enum):
-    """Order side enumeration for buy/sell operations."""
-    BUY = 'buy'
-    SELL = 'sell'
-
-    def __str__(self) -> str:
-        return self.value
+from ai_trading.order.types import OrderSide
 
 class OrderType(Enum):
     """Order type enumeration for different execution strategies."""

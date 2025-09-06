@@ -17,9 +17,7 @@ if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
 
-class OrderSide(Enum):
-    BUY = 'buy'
-    SELL = 'sell'
+from ai_trading.order.types import OrderSide
 
 class OrderType(Enum):
     MARKET = 'market'
