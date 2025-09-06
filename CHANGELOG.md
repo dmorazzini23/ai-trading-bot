@@ -38,6 +38,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Dev deps: align `packaging` version with `constraints.txt` (25.0) to
   resolve resolver conflicts during `ensure-runtime` install.
+- Risk engine now rounds weight limits to one decimal to avoid floating-point precision issues.
 - **Data Fetch**: raise error when configuration unavailable instead of repeated warnings.
 - **Data Fetch**: improve Alpaca empty-bar handling by logging timeframe/feed,
   verifying API credentials and market hours, and attempting feed or window

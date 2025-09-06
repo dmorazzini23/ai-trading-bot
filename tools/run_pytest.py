@@ -104,6 +104,11 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
     return cmd
 
 
+def echo_command(cmd: list[str]) -> str:
+    """Return the exact command string echoed by the runner."""
+    return "[run_pytest] " + " ".join(cmd)
+
+
 def _ensure_repo_on_path() -> None:
     """Prepend repository root to sys.path and PYTHONPATH for deterministic imports."""
     # AI-AGENT-REF: prepend repo root so smoke tests import workspace modules
@@ -135,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("PYTHONHASHSEED", "0")
     cmd = build_pytest_cmd(args)
     # AI-AGENT-REF: echo exact command for smoke test assertions
-    logger.info("[run_pytest] %s", " ".join(cmd))
+    logger.info(echo_command(cmd))
     rc = subprocess.call(cmd)
     if rc != 0 and "-n" in cmd and os.environ.get("NO_XDIST") != "1":
         logger.info("[run_pytest] xdist run failed; retrying without xdist…")
@@ -153,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
                 skip = True
                 continue
             cmd_wo.append(c)
-        logger.info("[run_pytest] %s", " ".join(cmd_wo))
+        logger.info(echo_command(cmd_wo))
         rc = subprocess.call(cmd_wo)
     if rc in {4, 5}:  # 5: no tests collected, 4: early exit via pytest.exit
         return 0
@@ -162,3 +167,6 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+__all__ = ["build_parser", "build_pytest_cmd", "echo_command", "main"]
