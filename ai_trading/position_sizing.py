@@ -232,7 +232,8 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 raise ValueError('max_position_size must be positive')
             eq = getattr(tcfg, 'equity', getattr(cfg, 'equity', None))
             if eq in (None, 0.0):
-                fetched = _fetch_equity(cfg, force_refresh=force_refresh)
+                # Allow tests to patch the public alias used by runtime.
+                fetched = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
                 if fetched > 0:
                     eq = fetched
                     for obj in (cfg, tcfg):
@@ -259,7 +260,8 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         )
     if not force_refresh and (not _should_refresh(ttl)) and (_CACHE.value is not None):
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
-    eq = _fetch_equity(cfg, force_refresh=force_refresh)
+    # Use public alias so callers/tests can patch equity retrieval.
+    eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
     if eq <= 0.0:
         eq = _coerce_float(
             getattr(
