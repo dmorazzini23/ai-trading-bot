@@ -36,6 +36,7 @@ from ai_trading.data.metrics import metrics, provider_fallback
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
+from . import fallback_order
 
 logger = get_logger(__name__)
 
@@ -1559,6 +1560,7 @@ def _fetch_bars(
             or (not can_use_sip and "iex" in providers_tried and max_fb >= 1)
         )
         if y_int and yahoo_allowed and "yahoo" in priority:
+            fallback_order.mark_yahoo()
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
             except Exception:  # pragma: no cover - network variance
