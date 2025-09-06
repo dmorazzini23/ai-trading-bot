@@ -1,4 +1,6 @@
 from datetime import datetime, UTC
+import os
+from typing import Any
 
 import ai_trading.data.fetch as data_fetcher
 from ai_trading.core import bot_engine
@@ -33,25 +35,16 @@ def test_get_bars_unauthorized_sip_returns_empty(monkeypatch):
 
 def test_data_check_skips_unauthorized_symbols(monkeypatch):
     """Symbols returning empty data are skipped during data_check."""
-
     monkeypatch.setattr(data_fetcher, "_SIP_UNAUTHORIZED", False, raising=False)
 
-    class _RespOK:
-        status_code = 200
-        headers = {"Content-Type": "application/json"}
-        text = "{\"bars\":[{\"t\":\"2024-01-01T00:00:00Z\",\"o\":1,\"h\":1,\"l\":1,\"c\":1,\"v\":1}]}"
+    if os.getenv("ALLOW_EXTERNAL_NETWORK", "0") != "1":
+        def fake_get_bars_df(symbol: str, timeframe: str | Any, *a, **k):  # noqa: ANN401
+            if symbol == "MSFT":
+                raise ValueError("unauthorized")
+            return pd.DataFrame({"v": [1]})
 
-        def json(self):
-            import json
+        monkeypatch.setattr(bot_engine, "get_bars_df", fake_get_bars_df)
 
-            return json.loads(self.text)
-
-    def fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
-        if params and params.get("symbols") == "MSFT":
-            return _RespForbidden()
-        return _RespOK()
-
-    monkeypatch.setattr(data_fetcher.requests, "get", fake_get)
     symbols = ["AAPL", "MSFT"]
     result = bot_engine.data_check(symbols, feed="sip")
     assert "AAPL" in result

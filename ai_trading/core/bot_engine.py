@@ -390,7 +390,9 @@ def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, 
     for sym in symbols:
         try:
             df = get_bars_df(sym, bars.TimeFrame.Day, feed=feed)
-        except ValueError:
+        except (ValueError, DataFetchError, RequestException, RuntimeError):
+            # Missing network access or unauthorized feeds are skipped so that
+            # the remaining symbols can still be processed.
             continue
         if df is None or df.empty:
             continue
