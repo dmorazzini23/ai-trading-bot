@@ -561,6 +561,21 @@ def load_model_checkpoint(filepath: str) -> Any | None:
         logger.error('Failed to load model checkpoint: %s', exc, exc_info=True)
         return None
 
+def load_checkpoint(filepath: str) -> dict[str, Any] | None:
+    """Load a checkpoint dictionary from ``filepath``.
+
+    Uses :func:`load_model_checkpoint` for path validation and safe
+    deserialization. Returns the loaded dictionary or ``None`` when the
+    checkpoint is missing, invalid, or does not contain a mapping.
+    """
+    obj = load_model_checkpoint(filepath)
+    if obj is None:
+        return None
+    if not isinstance(obj, dict):
+        logger.error('Checkpoint file %s did not contain a dict', filepath)
+        return None
+    return obj
+
 def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.pkl', history_path: str='meta_retrain_history.pkl', min_samples: int=10) -> bool:
     """Retrain the meta-learner model from trade logs.
 
