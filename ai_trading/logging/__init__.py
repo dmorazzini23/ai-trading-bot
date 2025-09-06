@@ -852,9 +852,9 @@ def dedupe_stream_handlers(log: logging.Logger) -> int:
 
     Returns the final total number of handlers on the logger after dedupe.
     """
-    before = len(logger.handlers)
+    before = len(log.handlers)
     _ensure_single_handler(log)
-    after = len(logger.handlers)
+    after = len(log.handlers)
     if after < before:
         get_logger(__name__).info('LOGGING_SETUP_DEDUPED', extra={'before': before, 'after': after})
     return after

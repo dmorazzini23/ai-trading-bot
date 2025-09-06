@@ -213,7 +213,26 @@ def retry(
             while True:
                 try:
                     return fn(*args, **kwargs)
-                except exceptions as exc:
+                except Exception as exc:
+                    # Determine if this exception is retryable under the provided
+                    # policy. Support either a predicate via `retry` (from
+                    # retry_if_exception_type) or the `exceptions` tuple.
+                    should_retry = False
+                    try:
+                        if retry is not None and callable(retry):  # predicate style
+                            should_retry = bool(retry(exc))  # type: ignore[misc]
+                        else:
+                            # Fall back to tuple-based matching
+                            exc_types = exceptions or tuple()
+                            if not isinstance(exc_types, tuple):
+                                exc_types = (exc_types,)  # type: ignore[assignment]
+                            should_retry = isinstance(exc, exc_types)
+                    except Exception:
+                        # If the retry policy itself errors, fail safe to no-retry
+                        should_retry = False
+
+                    if not should_retry:
+                        raise
                     attempt += 1
                     if attempt >= attempts:
                         if reraise:

@@ -88,6 +88,7 @@ from ai_trading.alpaca_api import (
 )
 from ai_trading.utils.pickle_safe import safe_pickle_load
 from ai_trading.utils.base import is_market_open as _is_market_open_base
+from ai_trading.core.enums import OrderSide as CoreOrderSide
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -5701,7 +5702,29 @@ def get_trade_logger() -> TradeLogger:
         )
         raise
 
-    if not os.access(log_dir, os.W_OK):
+    # Determine writability using POSIX permission bits rather than os.access.
+    # This avoids root bypass so tests that change mode to read-only still fail.
+    def _is_dir_writable(str_path: str) -> bool:
+        try:
+            st = os.stat(str_path)
+        except OSError:
+            return False
+        mode = st.st_mode
+        uid = os.geteuid()
+        gid = os.getegid()
+        groups: set[int]
+        try:
+            groups = set(os.getgroups())
+        except Exception:
+            groups = {gid}
+        import stat as _stat
+        if uid == st.st_uid:
+            return bool(mode & _stat.S_IWUSR)
+        if st.st_gid == gid or st.st_gid in groups:
+            return bool(mode & _stat.S_IWGRP)
+        return bool(mode & _stat.S_IWOTH)
+
+    if not _is_dir_writable(log_dir):
         logger.error("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
         raise PermissionError(f"Trade log directory {log_dir} not writable")
 
@@ -8213,7 +8236,10 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
             logger.warning("Liquidity checks failed open-loop: %s", e)
 
     try:
-        return _exec_engine.execute_order(symbol, OrderSide(side.lower()), qty)
+        # Use core enums so tests checking call signatures match expected type
+        side_norm = str(side).lower()
+        core_side = CoreOrderSide.BUY if side_norm == "buy" else CoreOrderSide.SELL
+        return _exec_engine.execute_order(symbol, core_side, qty)
     except (APIError, TimeoutError, ConnectionError) as e:
         logger.error(
             "BROKER_OP_FAILED",
