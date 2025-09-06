@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel
+from pydantic import field_validator, Field
 
 from ai_trading.logging.redact import redact_env
 
