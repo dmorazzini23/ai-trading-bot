@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-from ai_trading.net.http import get_global_session
-from ai_trading.position_sizing import resolve_max_position_size
+import ai_trading.position_sizing as ps
 
 
 class _Resp:
@@ -12,17 +11,18 @@ class _Resp:
         self.status_code = status_code
         self._payload = payload
 
-    def json(self):
+    def json(self):  # pragma: no cover - simple
         return self._payload
 
 
-def _stub_session(monkeypatch, status: int, payload: dict) -> None:
-    sess = get_global_session()
+def _stub_session(monkeypatch, status: int, payload: dict, *, calls: dict | None = None) -> None:
+    class Sess:
+        def get(self, url, headers=None):
+            if calls is not None:
+                calls["n"] = calls.get("n", 0) + 1
+            return _Resp(status, payload)
 
-    def fake_get(url, headers=None):
-        return _Resp(status, payload)
-
-    monkeypatch.setattr(sess, "get", fake_get, raising=True)
+    monkeypatch.setattr(ps, "get_global_session", lambda: Sess())
 
 
 def test_auto_mode_resolves_from_equity_and_capital_cap(monkeypatch, caplog):
@@ -41,7 +41,7 @@ def test_auto_mode_resolves_from_equity_and_capital_cap(monkeypatch, caplog):
     _stub_session(monkeypatch, 200, {"equity": "100000.00"})
 
     with caplog.at_level(logging.INFO):
-        size, meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
+        size, meta = ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
 
     assert size == 4000.0
     assert meta["source"] in {"alpaca", "cache"}
@@ -52,8 +52,8 @@ def test_auto_mode_fallback_on_error(monkeypatch, caplog):
         alpaca_base_url="https://paper-api.alpaca.markets",
         alpaca_api_key="k",
         alpaca_secret_key_plain="s",
-        default_max_position_size=9000.0,
         max_position_mode="AUTO",
+        max_position_equity_fallback=100000.0,
     )
     tcfg = SimpleNamespace(
         capital_cap=0.04,
@@ -61,11 +61,15 @@ def test_auto_mode_fallback_on_error(monkeypatch, caplog):
         dynamic_size_refresh_secs=3600,
     )
 
-    _stub_session(monkeypatch, 500, {})
+    calls: dict[str, int] = {}
+    _stub_session(monkeypatch, 500, {}, calls=calls)
 
     with caplog.at_level(logging.WARNING):
-        size, meta = resolve_max_position_size(cfg, tcfg, force_refresh=True)
+        size1, meta1 = ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
+        size2, meta2 = ps.resolve_max_position_size(cfg, tcfg)
 
-    assert size == 9000.0
-    assert meta["source"] == "fallback"
+    assert size1 == size2 == 4000.0
+    assert meta1["source"] == "fallback_equity"
+    assert meta2["source"] == "cache"
+    assert calls["n"] == 1
 
