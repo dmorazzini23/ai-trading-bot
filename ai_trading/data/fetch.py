@@ -24,7 +24,7 @@ from ai_trading.logging import (
     log_fetch_attempt,
     log_finnhub_disabled,
     warn_finnhub_disabled_no_data,
-    logger,
+    get_logger,
 )
 from ai_trading.config.management import MAX_EMPTY_RETRIES
 from ai_trading.config.settings import provider_priority, max_data_fallbacks
@@ -36,6 +36,8 @@ from ai_trading.data.empty_bar_backoff import (
 from ai_trading.data.metrics import metrics, provider_fallback
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
+
+logger = get_logger(__name__)
 
 # Lightweight indirection to support tests monkeypatching `data_fetcher.get_settings`
 def get_settings():  # pragma: no cover - simple alias for tests
@@ -361,7 +363,7 @@ def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timefra
         # to proceed so metrics and fallback paths can be validated.
         if not _SIP_DISALLOWED_WARNED:
             logger.warning(
-                "SIP_DISABLED",
+                "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe}),
             )
             _SIP_DISALLOWED_WARNED = True
@@ -825,7 +827,7 @@ def _fetch_bars(
     if _feed == "sip" and not _ALLOW_SIP:
         if not _SIP_DISALLOWED_WARNED:
             logger.warning(
-                "SIP_DISABLED",
+                "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
             )
             _SIP_DISALLOWED_WARNED = True
