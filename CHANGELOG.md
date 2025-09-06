@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
 - Makefile: add `PYTHON ?= python3` and route all invocations through
   `$(PYTHON)` for compatibility on Debian/Ubuntu where `python` shim is
   absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
+- Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
 
 ### Added
 - Cache fallback data provider usage to skip redundant Alpaca requests

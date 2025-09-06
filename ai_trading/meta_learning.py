@@ -512,6 +512,29 @@ def update_signal_weights(weights: dict[str, float], performance: dict[str, floa
         logger.exception('Exception in update_signal_weights: %s', exc)
         return weights
 
+
+class WeightOptimizer:
+    """Optimize signal weights from trade data."""
+
+    def optimize(self, df: "pd.DataFrame") -> dict[str, float]:
+        """Compute signal weights from ``df``.
+
+        Logs a warning and returns an empty dict when ``df`` is empty.
+        """
+        if df is None or df.empty:
+            logger.warning("WEIGHT_OPTIMIZER_EMPTY_DF")
+            return {}
+        tags = {
+            t.strip()
+            for row in df.get("signal_tags", [])
+            for t in str(row).split("+")
+            if t.strip()
+        }
+        if not tags:
+            return {}
+        weight = round(1 / len(tags), 3)
+        return {tag: weight for tag in sorted(tags)}
+
 def save_model_checkpoint(model: Any, filepath: str) -> None:
     """Serialize ``model`` to ``filepath`` using :mod:`pickle`."""
     try:
