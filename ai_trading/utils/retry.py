@@ -120,7 +120,13 @@ def retry(
     wait: object | None = None,
     retry: object | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    """Lightweight retry decorator with consistent API across environments.
+    """Lightweight retry decorator built on Tenacity when available.
+
+    This wrapper accepts simplified ``retries``/``delay``/``mode`` parameters and
+    delegates to :func:`tenacity.retry` under the hood.  It does **not** override
+    or re-export :mod:`tenacity`'s own ``retry`` function; instead it provides a
+    stable surface that degrades to a minimal implementation when Tenacity isn't
+    installed.
 
     Parameters
     - retries: number of attempts (total calls), e.g. 3 means up to 3 invocations
@@ -150,13 +156,6 @@ def retry(
                 _wait = _wait_exponential(multiplier=base, min=base, max=None)
         _retry = retry if retry is not None else retry_if_exception_type(exceptions)
         dec = _tenacity_retry(retry=_retry, stop=_stop, wait=_wait, reraise=reraise)
-        # Also point tenacity.retry at this decorator to satisfy identity checks in tests
-        try:
-            import tenacity as _tenacity_mod  # type: ignore
-
-            _tenacity_mod.retry = dec  # type: ignore[assignment]
-        except Exception:  # pragma: no cover - best effort wiring
-            pass
 
         def decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
@@ -179,12 +178,6 @@ def retry(
             _wait = _wait_exponential(multiplier=base, min=base, max=None)
         predicate = retry_if_exception_type(exceptions)
         dec = _tenacity_retry(retry=predicate, stop=_stop, wait=_wait, reraise=reraise)
-        try:
-            import tenacity as _tenacity_mod  # type: ignore
-
-            _tenacity_mod.retry = dec  # type: ignore[assignment]
-        except Exception:  # pragma: no cover - best effort wiring
-            pass
 
         def decorator(fn: Callable[..., T]) -> Callable[..., T]:
             wrapped = dec(fn)
@@ -250,17 +243,8 @@ __all__ = [
     "stop_after_attempt",
     "wait_exponential",
     "wait_random",
-    "retry_if_exception_type",
-    "RetryError",
-    "retry_call",
-    "HAS_TENACITY",
+"retry_if_exception_type",
+"RetryError",
+"retry_call",
+"HAS_TENACITY",
 ]
-
-# Align identity: expose our retry decorator as tenacity.retry when available
-try:  # pragma: no cover - identity wiring for tests
-    if HAS_TENACITY:
-        import tenacity as _tenacity_mod  # type: ignore
-
-        _tenacity_mod.retry = retry  # type: ignore[assignment]
-except Exception:
-    pass

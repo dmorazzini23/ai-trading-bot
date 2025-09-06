@@ -16,7 +16,17 @@ def test_real_tenacity_import():
     assert "site-packages" in tenacity_path or "/tmp" in tenacity_path, (
         f"Using local tenacity mock! Import path: {tenacity_path}"
     )
-    assert retry_utils.retry is tenacity.retry
+
+    orig_retry = tenacity.retry
+    # our wrapper should not overwrite tenacity's own retry decorator
+    assert retry_utils.retry is not tenacity.retry
+    @retry_utils.retry(retries=1, delay=0)
+    def _noop():
+        return True
+
+    assert _noop() is True
+    # Tenacity's retry should remain unchanged after using the wrapper
+    assert tenacity.retry is orig_retry
 
 
 def test_tenacity_functionality():
