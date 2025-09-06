@@ -15,4 +15,4 @@ def test_sleep_unaffected_by_monkeypatch(monkeypatch) -> None:
     monkeypatch.setattr(real_time, "sleep", fake_sleep)
     elapsed = sleep(0)  # request 0 -> enforced minimum
     assert slept["count"] == 0
-    assert elapsed >= 0.009
+    assert elapsed >= 0.01

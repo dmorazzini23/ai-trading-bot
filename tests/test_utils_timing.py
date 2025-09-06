@@ -19,5 +19,5 @@ def test_timing_exports_exist_and_behave():
     elapsed = perf_counter() - start
     if elapsed == 0.0:
         pytest.skip("perf_counter frozen")
-    assert elapsed >= 0.009
+    assert elapsed >= 0.01
 

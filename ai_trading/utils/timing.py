@@ -22,4 +22,32 @@ def clamp_timeout(value: Optional[float]) -> float:
         return HTTP_TIMEOUT
 
 
+def _robust_sleep(seconds: Union[int, float]) -> None:
+    """Block for at least ~10ms even under monkeypatched time.sleep.
+
+    Uses the original OS sleep captured at import time and a short
+    perf_counter-based busy wait to ensure measurable elapsed time.
+    """  # AI-AGENT-REF: deterministic sleep
+
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        s = 0.0
+    target = max(s, 0.01)
+    start = _perf()
+    _real_sleep(target)
+    # Ensure we cross ~10ms even if scheduler wakes early; cap iterations to avoid hangs
+    _tries = 0
+    while (_perf() - start) < 0.01 and _tries < 5:
+        _real_sleep(0.005)
+        _tries += 1
+
+
+_force_local_sleep = str(os.getenv("AI_TRADING_FORCE_LOCAL_SLEEP", "1")).lower() in {"1", "true", "yes", "on"}
+if _force_local_sleep:
+    sleep = _robust_sleep  # type: ignore[assignment]
+else:  # pragma: no cover
+    sleep = _time.sleep
+
+
 __all__ = ["HTTP_TIMEOUT", "clamp_timeout", "sleep"]
