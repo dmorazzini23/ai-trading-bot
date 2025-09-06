@@ -43,9 +43,10 @@ def _init_sentiment() -> None:
 _bs4 = None
 _transformers_bundle = None
 _sentiment_deps_logged: set[str] = set()
+_SENT_DEPS_LOGGED = False
 
 def _load_bs4(log=logger):
-    global _bs4
+    global _bs4, _SENT_DEPS_LOGGED
     if _bs4 is not None:
         return _bs4
     try:
@@ -55,11 +56,12 @@ def _load_bs4(log=logger):
         if 'bs4' not in _sentiment_deps_logged:
             log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'bs4'})
             _sentiment_deps_logged.add('bs4')
+            _SENT_DEPS_LOGGED = True
         _bs4 = None
     return _bs4
 
 def _load_transformers(log=logger):
-    global _transformers_bundle
+    global _transformers_bundle, _SENT_DEPS_LOGGED
     if _transformers_bundle is not None:
         return _transformers_bundle
     try:
@@ -74,6 +76,7 @@ def _load_transformers(log=logger):
         if 'transformers' not in _sentiment_deps_logged:
             log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'transformers'})
             _sentiment_deps_logged.add('transformers')
+            _SENT_DEPS_LOGGED = True
         _transformers_bundle = None
     return _transformers_bundle
 SENTIMENT_TTL_SEC = 600
