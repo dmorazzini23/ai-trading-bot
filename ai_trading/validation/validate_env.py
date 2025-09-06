@@ -6,7 +6,10 @@ from datetime import datetime
 from pydantic import BaseModel
 from pydantic import field_validator, Field
 
+from ai_trading.logging import get_logger
 from ai_trading.logging.redact import redact_env
+
+logger = get_logger(__name__)
 
 class Settings(BaseModel):
     ALPACA_API_KEY: str = Field(default_factory=lambda: os.environ["ALPACA_API_KEY"])
@@ -99,4 +102,27 @@ def validate_specific_env_var(name: str, required: bool = False) -> dict:
         "value": val,
         "issues": [],
     }
-__all__ = ['Settings', 'debug_environment', 'validate_specific_env_var']
+
+
+def main() -> int:
+    """Validate critical environment variables.
+
+    Missing credentials are tolerated for dry-run scenarios.
+    """
+    try:
+        Settings()
+    except KeyError as exc:
+        logger.warning("Missing credential: %s", exc)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+__all__ = [
+    'Settings',
+    'debug_environment',
+    'validate_specific_env_var',
+    'main',
+]
