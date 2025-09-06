@@ -101,7 +101,7 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     # Pre-defined shorthand attributes mirroring alpaca-py
     TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
     TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
-    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)  # type: ignore[attr-defined]
+    TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
 
     @dataclass
     class StockBarsRequest:
@@ -186,8 +186,13 @@ def get_stock_bars_request_cls():
 
 def get_timeframe_cls():
     if ALPACA_AVAILABLE:
-        _, cls, _ = _data_classes()
-        return cls
+        _, cls, unit_cls = _data_classes()
+
+        class _TF(cls):  # type: ignore[misc]
+            def __init__(self, amount: int = 1, unit=unit_cls.Day):  # type: ignore[assignment]
+                super().__init__(amount, unit)
+
+        return _TF
     return TimeFrame
 
 
