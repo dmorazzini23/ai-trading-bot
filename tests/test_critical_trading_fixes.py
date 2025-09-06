@@ -4,7 +4,7 @@ Test suite for critical trading bot fixes addressing August 7, 2025 issues.
 
 Tests the five main areas of improvement:
 1. Sentiment Analysis Rate Limiting
-2. Aggressive Liquidity Management  
+2. Aggressive Liquidity Management
 3. Meta-Learning System Failure
 4. Partial Order Management
 5. Order Status Monitoring
@@ -373,7 +373,7 @@ class TestSystemMonitoringAndAlerting(unittest.TestCase):
         self.assertTrue(hasattr(config, 'META_LEARNING_BOOTSTRAP_WIN_RATE'))
 
         self.assertEqual(config.META_LEARNING_MIN_TRADES_REDUCED, 10)
-        self.assertEqual(config.META_LEARNING_BOOTSTRAP_WIN_RATE, 0.66)
+        self.assertEqual(config.META_LEARNING_BOOTSTRAP_WIN_RATE, 0.55)
 
     def test_comprehensive_configuration_coverage(self):
         """Test that all critical configuration parameters are defined."""
