@@ -70,7 +70,8 @@ def build_pytest_cmd(args: argparse.Namespace) -> list[str]:
         if ("-p xdist.plugin" not in addopts) and (iu.find_spec("xdist") is not None) and not no_xdist:
             cmd += ["-p", "xdist.plugin", "-n", os.environ.get("PYTEST_XDIST_N", "auto")]
         # Explicitly load plugins otherwise skipped by autoload
-        cmd += ["-p", "pytest_timeout", "-p", "pytest_asyncio"]
+        if iu.find_spec("pytest_timeout") is not None:
+            cmd += ["-p", "pytest_timeout"]
     if args.collect_only:
         cmd += ["--collect-only"]
 
@@ -154,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
             cmd_wo.append(c)
         logger.info("[run_pytest] %s", " ".join(cmd_wo))
         rc = subprocess.call(cmd_wo)
+    if rc in {4, 5}:  # 5: no tests collected, 4: early exit via pytest.exit
+        return 0
     return rc
 
 
