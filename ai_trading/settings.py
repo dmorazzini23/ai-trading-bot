@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from ai_trading.logging import logger
 try:
     from pydantic.fields import FieldInfo
-except (ValueError, TypeError):
+except Exception:  # pragma: no cover - pydantic may be missing in tests
     FieldInfo = object
 
 def _secret_to_str(val: Any) -> str | None:

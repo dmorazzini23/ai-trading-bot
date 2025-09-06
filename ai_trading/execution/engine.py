@@ -15,7 +15,11 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from types import SimpleNamespace
-from alpaca.common.exceptions import APIError
+try:  # pragma: no cover - Alpaca SDK optional in tests
+    from alpaca.common.exceptions import APIError
+except Exception:  # ImportError
+    class APIError(Exception):
+        """Fallback when Alpaca SDK is unavailable."""
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import get_counter
 

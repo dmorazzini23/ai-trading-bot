@@ -6,7 +6,11 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 import numpy as np
-from alpaca.common.exceptions import APIError
+try:  # pragma: no cover - Alpaca optional
+    from alpaca.common.exceptions import APIError
+except Exception:  # ImportError
+    class APIError(Exception):
+        """Fallback when Alpaca SDK is absent."""
 from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 from ai_trading.settings import get_rebalance_interval_min

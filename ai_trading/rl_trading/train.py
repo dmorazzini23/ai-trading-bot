@@ -105,13 +105,14 @@ def train(
 
     config = TrainingConfig(data=data, model_path=str(model_path), timesteps=timesteps)
     model = Model(config)
-    try:
-        algo = PPO("MlpPolicy", data)
-        algo.learn(total_timesteps=timesteps)
+    algo = PPO("MlpPolicy", data)
+    algo.learn(total_timesteps=timesteps)
+    # Prefer the algorithm's save method when available; fall back to the
+    # minimal stub model to keep the interface consistent in tests.
+    if hasattr(algo, "save"):
         algo.save(str(model_path))
-    except Exception:  # pragma: no cover - optional stack may be missing
-        if config.model_path:
-            model.save(config.model_path)
+    elif config.model_path:
+        model.save(config.model_path)
     return model
 
 
