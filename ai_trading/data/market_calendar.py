@@ -37,12 +37,14 @@ def _pmc_session_utc(d: date) -> Session:
     if cal is None:
         raise RuntimeError("pandas_market_calendars not available")
     pd = load_pandas()
-    sched = cal.schedule(start_date=d, end_date=d, tz=_ET)
+    sched = cal.schedule(start_date=d, end_date=d)
     if sched.empty:
         prev = previous_trading_session(d)
-        sched = cal.schedule(start_date=prev, end_date=prev, tz=_ET)
-    open_et = sched.iloc[0]['market_open'].to_pydatetime().astimezone(_ET)
-    close_et = sched.iloc[0]['market_close'].to_pydatetime().astimezone(_ET)
+        sched = cal.schedule(start_date=prev, end_date=prev)
+    if sched.empty:
+        raise RuntimeError(f"No trading session for {d}")
+    open_et = sched.iloc[0]["market_open"].tz_convert(_ET).to_pydatetime()
+    close_et = sched.iloc[0]["market_close"].tz_convert(_ET).to_pydatetime()
     return Session(open_et.astimezone(UTC), close_et.astimezone(UTC))
 
 def rth_session_utc(d: date) -> tuple[datetime, datetime]:

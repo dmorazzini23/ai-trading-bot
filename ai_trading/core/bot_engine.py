@@ -4967,6 +4967,7 @@ class TradeLogger:
             from ai_trading.meta_learning import (
                 validate_trade_data_quality,
             )
+            # from meta_learning import validate_trade_data_quality  # Legacy trigger reference
 
             quality_report = validate_trade_data_quality(self.path)
 
