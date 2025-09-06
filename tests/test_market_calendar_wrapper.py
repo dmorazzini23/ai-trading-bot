@@ -5,7 +5,10 @@ from datetime import date
 
 import pytest
 from tests.optdeps import require
-from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
+from ai_trading.market.calendar_wrapper import (
+    is_trading_day,
+    rth_session_utc,
+)
 
 pmc = require("pandas_market_calendars")
 
