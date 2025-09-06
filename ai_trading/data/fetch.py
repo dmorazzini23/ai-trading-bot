@@ -15,7 +15,6 @@ from ai_trading.data.market_calendar import is_trading_day, rth_session_utc
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
 from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
-from ai_trading.logging.normalize import canon_feed as _canon_feed
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import (
@@ -98,7 +97,16 @@ def _to_timeframe_str(tf: object) -> str:
 
 
 def _to_feed_str(feed: object) -> str:
-    return _canon_feed(feed)
+    """Return canonical feed string with strict validation."""
+    try:
+        s = str(feed).strip().lower()
+    except Exception as e:  # pragma: no cover - defensive
+        raise ValueError("invalid_feed") from e
+    if "iex" in s:
+        return "iex"
+    if "sip" in s:
+        return "sip"
+    raise ValueError("invalid_feed")
 
 
 class DataFetchError(Exception):
@@ -348,8 +356,10 @@ _SIP_DISALLOWED_WARNED = False
 _SIP_PRECHECK_DONE = False
 
 
-def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timeframe: str) -> bool:
+def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], timeframe: str) -> bool:
     """Return True if SIP fallback should be attempted."""
+    if session is None or not hasattr(session, "get"):
+        raise ValueError("session_required")
     global _SIP_UNAUTHORIZED, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
@@ -366,21 +376,12 @@ def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timefra
             )
             _SIP_DISALLOWED_WARNED = True
         try:
-            # Best-effort precheck via session when available
-            if hasattr(session, "get"):
-                r = session.get(
-                    "https://data.alpaca.markets/v2/stocks/bars",
-                    params={"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"},
-                    headers=headers,
-                    timeout=clamp_request_timeout(5),
-                )
-            else:
-                r = requests.get(
-                    "https://data.alpaca.markets/v2/stocks/bars",
-                    params={"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"},
-                    headers=headers,
-                    timeout=clamp_request_timeout(5),
-                )
+            r = session.get(
+                "https://data.alpaca.markets/v2/stocks/bars",
+                params={"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"},
+                headers=headers,
+                timeout=clamp_request_timeout(5),
+            )
             if getattr(r, "status_code", None) in (401, 403):
                 _SIP_UNAUTHORIZED = True
                 try:
@@ -403,12 +404,8 @@ def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timefra
     _SIP_PRECHECK_DONE = True
     url = "https://data.alpaca.markets/v2/stocks/bars"
     params = {"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"}
-    use_session_get = hasattr(session, "get")
     try:
-        if use_session_get:
-            resp = session.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
-        else:
-            resp = requests.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
+        resp = session.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
     except Exception as e:  # pragma: no cover - best effort
         logger.debug(
             "SIP_PRECHECK_FAILED",
@@ -784,7 +781,7 @@ def _fetch_bars(
     _start = _start.replace(second=0, microsecond=0)
     _end = _end.replace(second=0, microsecond=0)
     _interval = _canon_tf(timeframe)
-    _feed = _canon_feed(feed or _DEFAULT_FEED)
+    _feed = _to_feed_str(feed or _DEFAULT_FEED)
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
     try:
         if not _window_has_trading_session(_start, _end):
@@ -850,6 +847,8 @@ def _fetch_bars(
     }
     timeout_v = clamp_request_timeout(10)
     session = _HTTP_SESSION
+    if session is None or not hasattr(session, "get"):
+        raise ValueError("session_required")
 
     # Mutable state for retry tracking
     start_time = time.monotonic()
