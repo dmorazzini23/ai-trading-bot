@@ -155,13 +155,20 @@ def _get_session() -> HTTPSession:
     return _session
 
 
-def _with_timeout(kwargs: dict) -> dict:
+def _with_timeout(kwargs: dict, default_timeout: float | int | None = None) -> dict:
     """Clamp provided timeout while allowing session defaults."""
     if "timeout" in kwargs:
         kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
     else:
-        # Ensure callers without explicit timeout still get a sane default
-        kwargs["timeout"] = clamp_request_timeout(get_session_timeout())
+        # Ensure callers without explicit timeout still get a sane default.
+        # Prefer the session default when available; otherwise fall back to
+        # ai_trading.utils.timing defaults used across tests.
+        if default_timeout is not None:
+            kwargs["timeout"] = clamp_request_timeout(default_timeout)
+        else:
+            from .timing import clamp_timeout as _clamp
+
+            kwargs["timeout"] = _clamp(None)
     return kwargs
 
 
@@ -185,7 +192,8 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
     if not REQUESTS_AVAILABLE:
         raise RuntimeError("requests library is required for HTTP operations")
     sess = _get_session()
-    kwargs = _with_timeout(kwargs)
+    sess_default = getattr(sess, "_timeout", None)
+    kwargs = _with_timeout(kwargs, sess_default)
     retries, backoff, max_backoff, jitter = _retry_config()
     excs = (RequestException, RequestsRequestException, JSONDecodeError, TimeoutError, OSError, ValueError)
     attempt = {"n": 0}

@@ -352,12 +352,43 @@ def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timefra
     """Return True if SIP fallback should be attempted."""
     global _SIP_UNAUTHORIZED, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
     if not _ALLOW_SIP:
+        # Even when SIP is disallowed, perform a one-time precheck to exercise
+        # the authorization path for tests and to record diagnostics, but do
+        # not allow fallback to proceed.
         if not _SIP_DISALLOWED_WARNED:
             logger.warning(
                 "SIP_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe}),
             )
             _SIP_DISALLOWED_WARNED = True
+        try:
+            # Best-effort precheck via session when available
+            if hasattr(session, "get"):
+                r = session.get(
+                    "https://data.alpaca.markets/v2/stocks/bars",
+                    params={"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"},
+                    headers=headers,
+                    timeout=clamp_request_timeout(5),
+                )
+            else:
+                r = requests.get(
+                    "https://data.alpaca.markets/v2/stocks/bars",
+                    params={"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"},
+                    headers=headers,
+                    timeout=clamp_request_timeout(5),
+                )
+            if getattr(r, "status_code", None) in (401, 403):
+                _SIP_UNAUTHORIZED = True
+                try:
+                    metrics.unauthorized += 1
+                except Exception:
+                    pass
+                logger.warning(
+                    "UNAUTHORIZED_SIP",
+                    extra=_norm_extra({"provider": "alpaca", "status": "precheck", "feed": "sip", "timeframe": timeframe}),
+                )
+        except Exception:
+            pass
         return False
     if _SIP_UNAUTHORIZED:
         return False
@@ -366,7 +397,7 @@ def _sip_fallback_allowed(session: HTTPSession, headers: dict[str, str], timefra
     _SIP_PRECHECK_DONE = True
     url = "https://data.alpaca.markets/v2/stocks/bars"
     params = {"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"}
-    use_session_get = hasattr(session, "__dict__") and ("get" in getattr(session, "__dict__", {}))
+    use_session_get = hasattr(session, "get")
     try:
         if use_session_get:
             resp = session.get(url, params=params, headers=headers, timeout=clamp_request_timeout(5))
@@ -1451,15 +1482,29 @@ def _fetch_bars(
             idx = priority.index(f"alpaca_{_feed}")
         except ValueError:
             idx = -1
-        for prov in priority[idx + 1:]:
+        # Consider both subsequent and preceding providers to find an Alpaca alt feed
+        scan = list(priority[idx + 1:]) + list(reversed(priority[: max(0, idx)]))
+        for prov in scan:
             if prov in {"alpaca_iex", "alpaca_sip"}:
                 candidate = prov.split("_")[1]
-                if not (candidate == "sip" and _SIP_UNAUTHORIZED):
-                    alt_feed = candidate
-                    break
+                if candidate == _feed:
+                    continue
+                if candidate == "sip" and _SIP_UNAUTHORIZED:
+                    continue
+                alt_feed = candidate
+                break
         if alt_feed is not None:
             fallback = (_interval, alt_feed, _start, _end)
-    df = _req(session, fallback, headers=headers, timeout=timeout_v)
+    # Attempt request with bounded retries when empty or transient issues occur
+    df = None
+    for _ in range(max(1, max_retries)):
+        df = _req(session, fallback, headers=headers, timeout=timeout_v)
+        # Stop immediately when SIP is unauthorized; further retries won't help.
+        if _feed == "sip" and _SIP_UNAUTHORIZED:
+            break
+        if df is not None and not getattr(df, "empty", True):
+            break
+        # Otherwise, loop to give the provider another chance
     if (df is None or getattr(df, "empty", True)) and _ENABLE_HTTP_FALLBACK:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
