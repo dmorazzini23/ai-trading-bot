@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 - **Data Fetch**: improve Alpaca empty-bar handling by logging timeframe/feed,
   verifying API credentials and market hours, and attempting feed or window
   fallbacks before resorting to alternate providers.
+- **Execution**: default missing `slice_qty` to `0` and validate `fill_ratio` inputs.
 - **Data Fetch**: retry with SIP feed when initial IEX request returns empty
   for a symbol that may be delisted or on the wrong feed.
 - **Main**: `validate_environment` now raises `RuntimeError` when required
