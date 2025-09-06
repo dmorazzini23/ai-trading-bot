@@ -257,6 +257,11 @@ class RiskEngine:
             self._returns.extend(list(returns))
         if drawdowns:
             self._drawdowns.extend(list(drawdowns))
+            try:
+                current_dd = float(drawdowns[-1])
+            except (ValueError, TypeError, IndexError):
+                current_dd = 0.0
+            self._check_drawdown_and_update_stop(current_dd)
         self._maybe_lift_hard_stop()
         if self.hard_stop:
             logger.error('TRADING_HALTED_RISK_LIMIT')
