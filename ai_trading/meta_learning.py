@@ -247,6 +247,8 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             _header, *data_lines = lines
             audit_format_rows = 0
             meta_format_rows = 0
+            audit_format_present = False
+            meta_format_present = False
             filtered_rows: list[list[str]] = []
             for line_num, line in enumerate(data_lines, start=2):
                 line = line.strip()
@@ -261,6 +263,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         continue
                     first_col = str(row[0]).strip()
                     if len(first_col) > 20 and '-' in first_col:
+                        audit_format_present = True
                         if len(row) >= 6:
                             try:
                                 price = float(row[5])
@@ -272,6 +275,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                             audit_format_rows += 1
                             filtered_rows.append(row)
                     elif len(first_col) <= 10 and first_col.isalpha() and (len(first_col) >= 2):
+                        meta_format_present = True
                         if len(row) >= 5:
                             try:
                                 entry_price = float(row[2])
@@ -302,17 +306,26 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             quality_report['audit_format_rows'] = audit_format_rows
             quality_report['meta_format_rows'] = meta_format_rows
             quality_report['valid_price_rows'] = len(filtered_rows)
-            if audit_format_rows > 0 and meta_format_rows > 0:
+            if audit_format_present and meta_format_present:
                 quality_report['mixed_format_detected'] = True
-                quality_report['issues'].append(f'Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows')
-                quality_report['recommendations'].append('Separate audit and meta-learning logs or implement unified parsing')
-                quality_report['has_valid_format'] = True
-            elif audit_format_rows > 0:
+                quality_report['issues'].append(
+                    f'Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows'
+                )
+                quality_report['recommendations'].append(
+                    'Separate audit and meta-learning logs or implement unified parsing'
+                )
+                quality_report['has_valid_format'] = audit_format_rows > 0 or meta_format_rows > 0
+                logger.warning(
+                    'TRADE_HISTORY_MIXED_FORMAT: %s',
+                    trade_log_path,
+                    extra={'audit_rows': audit_format_rows, 'meta_rows': meta_format_rows},
+                )
+            elif audit_format_present:
                 quality_report['issues'].append('Only audit format detected - conversion needed for meta-learning')
                 quality_report['recommendations'].append('Convert audit format to meta-learning format')
-                quality_report['has_valid_format'] = True
-            elif meta_format_rows > 0:
-                quality_report['has_valid_format'] = True
+                quality_report['has_valid_format'] = audit_format_rows > 0
+            elif meta_format_present:
+                quality_report['has_valid_format'] = meta_format_rows > 0
             elif quality_report['row_count'] > 0:
                 for line_num, line in enumerate(data_lines[:5], start=2):
                     line = line.strip()
