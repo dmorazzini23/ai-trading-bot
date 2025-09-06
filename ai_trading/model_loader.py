@@ -16,6 +16,9 @@ import joblib
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
 
+# Built-in models bundled with the package live alongside this module.
+INTERNAL_MODELS_DIR = Path(__file__).resolve().parent / "models"
+
 
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
     """Train a fallback classification model for ``symbol`` and persist it."""
@@ -58,35 +61,44 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
 
 
 def load_model(symbol: str) -> object:
-    """Load or train an ML model for ``symbol``.
+    """Load an ML model for ``symbol``.
 
-    The models directory defaults to :data:`ai_trading.paths.MODELS_DIR` and can
-    be overridden via the ``AI_TRADING_MODELS_DIR`` environment variable.
-    Resolved paths are validated to remain within ``models_dir``. Any
-    deserialization error results in a ``RuntimeError`` that includes the
-    absolute path and ``symbol`` for context.
+    Two locations are searched in order:
+
+    * The external models directory resolved from
+      :data:`ai_trading.paths.MODELS_DIR` (``AI_TRADING_MODELS_DIR``).
+    * Built-in models shipped with the package under ``INTERNAL_MODELS_DIR``.
+
+    The first matching ````.pkl```` file is deserialized with :mod:`joblib`. If no
+    model file exists in either location, a ``RuntimeError`` is raised. Paths are
+    validated to remain within their respective base directories.
     """
 
-    models_dir = MODELS_DIR
-    path = (models_dir / f"{symbol}.pkl").resolve()
-    if not path.is_relative_to(models_dir):
-        raise RuntimeError(f"Model path escapes models directory: {path}")
-    if path.exists():
-        try:
-            model = joblib.load(path)
-        except Exception as exc:  # noqa: BLE001 - joblib may raise various errors
-            msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
-            logger.error(
-                "MODEL_LOAD_ERROR",
-                extra={"symbol": symbol, "path": str(path), "error": str(exc)},
-            )
-            raise RuntimeError(msg) from exc
-    else:
-        logger.warning("MODEL_FILE_MISSING", extra={"symbol": symbol, "path": str(path)})
-        model = train_and_save_model(symbol, models_dir)
+    dirs = (MODELS_DIR, INTERNAL_MODELS_DIR)
+    for base in dirs:
+        path = (base / f"{symbol}.pkl").resolve()
+        if not path.is_relative_to(base):
+            raise RuntimeError(f"Model path escapes models directory: {path}")
+        if path.exists():
+            try:
+                model = joblib.load(path)
+            except Exception as exc:  # noqa: BLE001 - joblib may raise various errors
+                msg = f"Failed to load model for '{symbol}' at '{path}': {exc}"
+                logger.error(
+                    "MODEL_LOAD_ERROR",
+                    extra={"symbol": symbol, "path": str(path), "error": str(exc)},
+                )
+                raise RuntimeError(msg) from exc
+            ML_MODELS[symbol] = model
+            return model
 
-    ML_MODELS[symbol] = model
-    return model
+    logger.error(
+        "MODEL_FILE_MISSING",
+        extra={"symbol": symbol, "paths": [str(p) for p in dirs]},
+    )
+    raise RuntimeError(
+        f"Model file for '{symbol}' not found in {dirs[0]} or {dirs[1]}"
+    )
 
 
 # AI-AGENT-REF: avoid import-time model loading; expose explicit preload
