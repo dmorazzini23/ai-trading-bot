@@ -1697,14 +1697,14 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
                                 return df_short
-                        try:
-                            df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
-                            used_backup = True
-                        except Exception as alt_err:  # pragma: no cover - network failure
-                            logger.warning(
-                                "ALT_PROVIDER_FAILED",
-                                extra={"symbol": symbol, "err": str(alt_err)},
-                            )
+                    try:
+                        df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+                        used_backup = True
+                    except Exception as alt_err:  # pragma: no cover - network failure
+                        logger.warning(
+                            "ALT_PROVIDER_FAILED",
+                            extra={"symbol": symbol, "err": str(alt_err)},
+                        )
                         df = None
                     if df is None or getattr(df, "empty", True):
                         _SKIPPED_SYMBOLS.add(tf_key)
