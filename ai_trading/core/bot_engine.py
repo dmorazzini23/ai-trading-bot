@@ -12559,7 +12559,8 @@ def _process_symbols(
                 exc_info=True,
             )
 
-    futures = [executors.prediction_executor.submit(process_symbol, s) for s in symbols]
+    # Use module-level prediction_executor so tests can monkeypatch it
+    futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
         f.result()
     return processed, row_counts
