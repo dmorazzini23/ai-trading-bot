@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 import importlib
 
-from .timing import HTTP_TIMEOUT, clamp_timeout, sleep  # AI-AGENT-REF: small re-exports
+from .timing import HTTP_TIMEOUT, clamp_timeout  # AI-AGENT-REF: small re-exports
+from .sleep import sleep  # AI-AGENT-REF: dedicated sleep helper
 from .optdeps import OptionalDependencyError, module_ok  # AI-AGENT-REF: tiny helpers
 
 _BASE_EXPORTS = {
@@ -67,11 +68,11 @@ _LAZY_MAP = {
     "market_open_between": ("ai_trading.utils.base", "market_open_between"),
     "log_warning": ("ai_trading.utils.base", "log_warning"),
     "model_lock": ("ai_trading.utils.base", "model_lock"),
-    "portfolio_lock": ("ai_trading.utils.base", "portfolio_lock"),
+    "portfolio_lock": ("ai_trading.utils.locks", "portfolio_lock"),
     "safe_to_datetime": ("ai_trading.utils.base", "safe_to_datetime"),
     "validate_ohlcv": ("ai_trading.utils.base", "validate_ohlcv"),
-    "SUBPROCESS_TIMEOUT_DEFAULT": ("ai_trading.utils.base", "SUBPROCESS_TIMEOUT_DEFAULT"),
-    "safe_subprocess_run": ("ai_trading.utils.base", "safe_subprocess_run"),
+    "SUBPROCESS_TIMEOUT_DEFAULT": ("ai_trading.utils.safe_subprocess", "SUBPROCESS_TIMEOUT_DEFAULT"),
+    "safe_subprocess_run": ("ai_trading.utils.safe_subprocess", "safe_subprocess_run"),
 }
 
 if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
@@ -92,12 +93,12 @@ if TYPE_CHECKING:  # pragma: no cover - for static analyzers only
         market_open_between,
         log_warning,
         model_lock,
-        portfolio_lock,
         safe_to_datetime,
         validate_ohlcv,
         SUBPROCESS_TIMEOUT_DEFAULT,
         safe_subprocess_run,
     )
+    from .locks import portfolio_lock  # type: ignore
 
 
 def __getattr__(name: str) -> Any:  # AI-AGENT-REF: importlib-based lazy loader

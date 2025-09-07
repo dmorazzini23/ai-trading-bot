@@ -247,7 +247,9 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             _header, *data_lines = lines
             audit_format_rows = 0
             meta_format_rows = 0
-            valid_price_rows = 0
+            audit_format_present = False
+            meta_format_present = False
+            filtered_rows: list[list[str]] = []
             for line_num, line in enumerate(data_lines, start=2):
                 line = line.strip()
                 if not line:
@@ -261,55 +263,69 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         continue
                     first_col = str(row[0]).strip()
                     if len(first_col) > 20 and '-' in first_col:
-                        audit_format_rows += 1
+                        audit_format_present = True
                         if len(row) >= 6:
                             try:
                                 price = float(row[5])
-                                if price > 0:
-                                    valid_price_rows += 1
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in audit format row: %s', e)
+                                continue
+                            if price <= 0:
+                                continue
+                            audit_format_rows += 1
+                            filtered_rows.append(row)
                     elif len(first_col) <= 10 and first_col.isalpha() and (len(first_col) >= 2):
-                        meta_format_rows += 1
-                        if len(row) >= 3:
+                        meta_format_present = True
+                        if len(row) >= 5:
                             try:
-                                price = float(row[2])
-                                if price > 0:
-                                    valid_price_rows += 1
+                                entry_price = float(row[2])
+                                exit_price = float(row[4])
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in meta format row: %s', e)
+                                continue
+                            if entry_price <= 0 or exit_price <= 0:
+                                continue
+                            meta_format_rows += 1
+                            filtered_rows.append(row)
                     elif 'price' in first_col.lower() or any(('price' in str(col).lower() for col in row[:3])):
-                        meta_format_rows += 1
+                        # Header-like line; ignore for counting
+                        continue
                     else:
-                        found_numeric = False
+                        numeric_vals = []
                         for _col_idx, col_val in enumerate(row[:5]):
                             try:
-                                price = float(col_val)
-                                if price > 0:
-                                    found_numeric = True
-                                    break
+                                numeric_vals.append(float(col_val))
                             except (ValueError, TypeError):
                                 continue
-                        if found_numeric:
-                            valid_price_rows += 1
+                        if numeric_vals and all(v > 0 for v in numeric_vals):
+                            filtered_rows.append(row)
                 except COMMON_EXC as e:
                     logger.debug(f'Failed to parse line {line_num}: {e}')
                     continue
             quality_report['row_count'] = len(data_lines)
             quality_report['audit_format_rows'] = audit_format_rows
             quality_report['meta_format_rows'] = meta_format_rows
-            quality_report['valid_price_rows'] = valid_price_rows
-            if audit_format_rows > 0 and meta_format_rows > 0:
+            quality_report['valid_price_rows'] = len(filtered_rows)
+            if audit_format_present and meta_format_present:
                 quality_report['mixed_format_detected'] = True
-                quality_report['issues'].append(f'Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows')
-                quality_report['recommendations'].append('Separate audit and meta-learning logs or implement unified parsing')
-                quality_report['has_valid_format'] = True
-            elif audit_format_rows > 0:
+                quality_report['issues'].append(
+                    f'Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows'
+                )
+                quality_report['recommendations'].append(
+                    'Separate audit and meta-learning logs or implement unified parsing'
+                )
+                quality_report['has_valid_format'] = audit_format_rows > 0 or meta_format_rows > 0
+                logger.warning(
+                    'TRADE_HISTORY_MIXED_FORMAT: %s',
+                    trade_log_path,
+                    extra={'audit_rows': audit_format_rows, 'meta_rows': meta_format_rows},
+                )
+            elif audit_format_present:
                 quality_report['issues'].append('Only audit format detected - conversion needed for meta-learning')
                 quality_report['recommendations'].append('Convert audit format to meta-learning format')
-                quality_report['has_valid_format'] = True
-            elif meta_format_rows > 0:
-                quality_report['has_valid_format'] = True
+                quality_report['has_valid_format'] = audit_format_rows > 0
+            elif meta_format_present:
+                quality_report['has_valid_format'] = meta_format_rows > 0
             elif quality_report['row_count'] > 0:
                 for line_num, line in enumerate(data_lines[:5], start=2):
                     line = line.strip()
@@ -320,19 +336,16 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         import io
                         csv_reader = csv.reader(io.StringIO(line))
                         row = next(csv_reader)
-                        found_numeric = False
+                        numeric_vals = []
                         for col in row:
                             try:
-                                val = float(col)
-                                if val > 0:
-                                    found_numeric = True
-                                    valid_price_rows += 1
-                                    break
+                                numeric_vals.append(float(col))
                             except (ValueError, TypeError):
                                 continue
-                        if found_numeric:
+                        if numeric_vals and all(val > 0 for val in numeric_vals):
                             quality_report['has_valid_format'] = True
                             quality_report['meta_format_rows'] += 1
+                            filtered_rows.append(row)
                     except COMMON_EXC:
                         continue
                 if not quality_report['has_valid_format']:
@@ -512,6 +525,29 @@ def update_signal_weights(weights: dict[str, float], performance: dict[str, floa
         logger.exception('Exception in update_signal_weights: %s', exc)
         return weights
 
+
+class WeightOptimizer:
+    """Optimize signal weights from trade data."""
+
+    def optimize(self, df: "pd.DataFrame") -> dict[str, float]:
+        """Compute signal weights from ``df``.
+
+        Logs a warning and returns an empty dict when ``df`` is empty.
+        """
+        if df is None or df.empty:
+            logger.warning("WEIGHT_OPTIMIZER_EMPTY_DF")
+            return {}
+        tags = {
+            t.strip()
+            for row in df.get("signal_tags", [])
+            for t in str(row).split("+")
+            if t.strip()
+        }
+        if not tags:
+            return {}
+        weight = round(1 / len(tags), 3)
+        return {tag: weight for tag in sorted(tags)}
+
 def save_model_checkpoint(model: Any, filepath: str) -> None:
     """Serialize ``model`` to ``filepath`` using :mod:`pickle`."""
     try:
@@ -537,6 +573,21 @@ def load_model_checkpoint(filepath: str) -> Any | None:
     except RuntimeError as exc:
         logger.error('Failed to load model checkpoint: %s', exc, exc_info=True)
         return None
+
+def load_checkpoint(filepath: str) -> dict[str, Any] | None:
+    """Load a checkpoint dictionary from ``filepath``.
+
+    Uses :func:`load_model_checkpoint` for path validation and safe
+    deserialization. Returns the loaded dictionary or ``None`` when the
+    checkpoint is missing, invalid, or does not contain a mapping.
+    """
+    obj = load_model_checkpoint(filepath)
+    if obj is None:
+        return None
+    if not isinstance(obj, dict):
+        logger.error('Checkpoint file %s did not contain a dict', filepath)
+        return None
+    return obj
 
 def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.pkl', history_path: str='meta_retrain_history.pkl', min_samples: int=10) -> bool:
     """Retrain the meta-learner model from trade logs.
@@ -1294,7 +1345,7 @@ def store_meta_learning_data(converted_data: dict) -> bool:
         logger.error('METALEARN_STORE_ERROR | error=%s', exc)
         return False
 
-def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> dict[str, float] | None:
+def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> dict[str, float]:
     """Load global signal performance with enhanced error handling.
 
     This function is available in both bot_engine.py and meta_learning.py for
@@ -1307,10 +1358,10 @@ def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> d
             trade_log_file = getattr(config, 'TRADE_LOG_FILE', 'trades.csv') if config else 'trades.csv'
             if not os.path.exists(trade_log_file):
                 logger.info('METALEARN_NO_HISTORY: Trade log file not found')
-                return None
+                return {}
             if pd is None:
                 logger.warning('METALEARN_NO_PANDAS: pandas not available for signal performance loading')
-                return None
+                return {}
             try:
                 df = pd.read_csv(trade_log_file, on_bad_lines='skip', engine='python', usecols=['exit_price', 'entry_price', 'signal_tags', 'side']).dropna(subset=['exit_price', 'entry_price', 'signal_tags'])
                 if df.empty:
@@ -1344,14 +1395,14 @@ def load_global_signal_performance(min_trades: int=3, threshold: float=0.4) -> d
                 return result if result else {}
             except COMMON_EXC as e:
                 logger.error(f'META_LEARNING_SIGNAL_PERFORMANCE_ERROR: {e}')
-                return None
+                return {}
         else:
             bot_engine = sys.modules['bot_engine']
             if hasattr(bot_engine, 'load_global_signal_performance'):
                 return bot_engine.load_global_signal_performance(min_trades, threshold)
             else:
                 logger.warning('META_LEARNING_FUNCTION_MISSING: load_global_signal_performance not found in bot_engine')
-                return None
+                return {}
     except COMMON_EXC as exc:
         logger.error('META_LEARNING_LOAD_PERFORMANCE_ERROR: %s', exc)
-        return None
+        return {}

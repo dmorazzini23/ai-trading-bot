@@ -4,11 +4,14 @@ import sys
 import types
 
 import numpy as np
+import os
+import types
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
     sys.modules.pop(m, None)
 sys.modules.pop("risk_engine", None)
-from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import
-from ai_trading.strategies import TradeSignal
+from ai_trading.risk.engine import RiskEngine, TradeSignal  # AI-AGENT-REF: normalized import
+
+os.environ.setdefault("PYTEST_RUNNING", "1")
 
 
 class DummyAPI:
@@ -21,7 +24,7 @@ class DummyAPI:
 
 
 def make_signal():
-    return TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s")
+    return TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s", weight=0.0, asset_class="equity")
 
 
 def test_can_trade_limits():
@@ -35,18 +38,27 @@ def test_can_trade_limits():
     assert eng.can_trade(sig)
 
 
+def test_can_trade_drawdown_triggers_stop():
+    eng = RiskEngine()
+    sig = make_signal()
+    eng.max_drawdown_threshold = 0.05
+    assert not eng.can_trade(sig, drawdowns=[0.1])
+    assert eng.hard_stop
+
+
 def test_register_and_position_size(monkeypatch):
     eng = RiskEngine()
     sig = make_signal()
     sig.weight = 0.1  # Set weight to avoid exposure cap breach
     eng.asset_limits["equity"] = 1.0
     eng.strategy_limits["s"] = 1.0
+    eng.config = types.SimpleNamespace(position_size_min_usd=1, atr_multiplier=1.0)
     qty = eng.position_size(sig, cash=100, price=10)
     # Position size may be influenced by multiple factors, just ensure it's positive
     assert qty > 0
     eng.register_fill(sig)
     assert eng.exposure["equity"] == sig.weight
-    sell = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s", weight=sig.weight)
+    sell = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s", weight=sig.weight, asset_class="equity")
     eng.register_fill(sell)
     assert round(eng.exposure["equity"], 6) == 0
 

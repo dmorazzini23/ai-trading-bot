@@ -36,8 +36,8 @@ def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
     logger_once._emitted_keys.clear()
 
     # Stub equity fetcher to return a positive value
-    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg: 1000.0)
-    monkeypatch.setattr(rt, "_get_equity_from_alpaca", lambda cfg: 1000.0)
+    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
+    monkeypatch.setattr(rt, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
 
     class Cfg:
         capital_cap = 0.04
@@ -75,7 +75,7 @@ def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, capl
     logger_once._emitted_keys.clear()
     calls = {"n": 0}
 
-    def fake_fetch(cfg):
+    def fake_fetch(cfg, force_refresh=False):
         calls["n"] += 1
         return 50000.0
 
@@ -98,7 +98,7 @@ def test_failed_equity_fetch_warns_once_and_caches(monkeypatch, caplog):
     logger_once._emitted_keys.clear()
     calls = {"n": 0}
 
-    def fake_fetch(cfg):
+    def fake_fetch(cfg, force_refresh=False):
         calls["n"] += 1
         return 0.0
 
@@ -120,7 +120,7 @@ def test_equity_recovered_emits_warning_once(monkeypatch, caplog):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
     logger_once._emitted_keys.clear()
 
-    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg: 0.0)
+    monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 0.0)
 
     cfg = SimpleNamespace(alpaca_api_key="k", alpaca_secret_key_plain="s", alpaca_base_url="https://paper-api.alpaca.markets")
     tcfg = SimpleNamespace(capital_cap=0.02, max_position_mode="STATIC")

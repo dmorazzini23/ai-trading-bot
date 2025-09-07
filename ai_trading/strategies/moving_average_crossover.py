@@ -57,7 +57,7 @@ class MovingAverageCrossoverStrategy:
         if long_window is None:
             long_window = type(self).long_window
         if min_history is None:
-            min_history = type(self).min_history
+            min_history = long_window + 2
 
         self.short_window = short_window
         self.long_window = long_window
@@ -98,13 +98,18 @@ class MovingAverageCrossoverStrategy:
                 self._guard_attempts += 1
         except (AttributeError, IndexError, TypeError):
             pass
-        if 'close' not in df.columns or len(df) < max(self.min_history, self.long_window + 2):
+        required = max(self.min_history, self.long_window + 2)
+        if 'close' not in df.columns or len(df) < required:
+            if len(df) < required:
+                logger.warning('Insufficient data', extra={'symbol': sym, 'required': required, 'available': len(df)})
             return []
+
         short = df['close'].rolling(window=self.short_window, min_periods=self.short_window).mean()
         long = df['close'].rolling(window=self.long_window, min_periods=self.long_window).mean()
         action = self._latest_cross(short, long)
-        if not action:
-            return []
+        signals: list[StrategySignal] = []
+        if action:
+            signals.append(StrategySignal(symbol=sym, side=action))
         try:
             import time as _t
             now = _t.monotonic()
@@ -117,4 +122,4 @@ class MovingAverageCrossoverStrategy:
                 self._guard_last_summary = now
         except (ValueError, TypeError):
             pass
-        return [StrategySignal(symbol=sym, side=action)]
+        return signals

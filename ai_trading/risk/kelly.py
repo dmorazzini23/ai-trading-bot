@@ -17,11 +17,12 @@ def institutional_kelly(p: KellyParams) -> float:
     """Institutional-safe Kelly sizing.
 
     f* = cap * max(0, p_win - (1 - p_win)/R)
-    Clamped to [0, cap].
+    Clamped to [0, min(cap, config.kelly_fraction_max)].
     """
     raw = p.win_prob - (1.0 - p.win_prob) / max(p.win_loss_ratio, 1e-09)
     frac = max(0.0, raw)
-    return max(0.0, min(p.cap * frac, p.cap))
+    kelly = p.cap * frac
+    return max(0.0, min(kelly, p.cap, _DEFAULT_CONFIG.kelly_fraction_max))
 
 class InstitutionalKelly:
     """Callable wrapper around :func:`institutional_kelly`."""

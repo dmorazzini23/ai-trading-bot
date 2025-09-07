@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover - inject stub
         Minute = type("Minute", (), {"name": "Minute"})()
 
     class TimeFrame:
-        def __init__(self, amount, unit):
+        def __init__(self, amount=1, unit=TimeFrameUnit.Day):
             self.amount = amount
             self.unit = unit
 
@@ -51,14 +51,14 @@ def test_day_timeframe_normalized(mock_rest_cls):
 
 
 @patch("ai_trading.alpaca_api._get_rest")
-def test_tf_object_normalized(mock_rest_cls):
+def test_tf_zero_arg_normalized(mock_rest_cls):
     mock_rest = MagicMock()
     mock_rest.get_stock_bars.return_value = _Resp(
         pd.DataFrame({"open": [1.0], "close": [1.1]})
     )
     mock_rest_cls.return_value = mock_rest
 
-    df = get_bars_df("SPY", TimeFrame(1, TimeFrameUnit.Day), feed="iex", adjustment="all")
+    df = get_bars_df("SPY", TimeFrame(), feed="iex", adjustment="all")
     mock_rest_cls.assert_called_once_with(bars=True)
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert getattr(req.timeframe, "amount", None) == 1

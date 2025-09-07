@@ -1,15 +1,12 @@
 import pytest
+from ai_trading.regime.filters import load_trades
+
 pd = pytest.importorskip("pandas")
 
 
 def test_regime_changes():
-    df = pd.read_csv(
-        "data/trades.csv",
-        engine="python",
-        on_bad_lines="skip",
-        skip_blank_lines=True,
-    )
-    if "regime" not in df.columns:
+    df = load_trades()
+    if df is None or "regime" not in df.columns:
         pytest.skip("Trades data missing regime column")
 
     # Filter out empty/null regime values and check for diversity
@@ -20,4 +17,6 @@ def test_regime_changes():
         pytest.skip("No valid regime data found")
 
     unique_regimes = regime_values.nunique()
-    assert unique_regimes > 1, f"No regime changes detected ({unique_regimes} unique values), model might be static"
+    assert (
+        unique_regimes > 1
+    ), f"No regime changes detected ({unique_regimes} unique values), model might be static"

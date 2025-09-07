@@ -252,16 +252,22 @@ class EmitOnceLogger:
 
     def __init__(self, base_logger: logging.Logger):
         self._logger = base_logger
-        self._emitted_keys: set[str] = set()
+        self._emitted_keys: dict[str, tuple[date, int]] = {}
         self._lock = threading.Lock()
 
     def _emit_if_new(self, level: str, key: str, msg: str, *args, **kwargs) -> None:
-        """Emit log message only if key hasn't been seen before."""
+        """Emit log message only once per key each day."""
+        today = date.today()
         with self._lock:
-            if key not in self._emitted_keys:
-                self._emitted_keys.add(key)
-                log_method = getattr(self._logger, level.lower())
-                log_method(msg, *args, **kwargs)
+            last_date, count = self._emitted_keys.get(key, (None, 0))
+            if last_date != today:
+                count = 0
+            count += 1
+            self._emitted_keys[key] = (today, count)
+            if count > 1:
+                return
+        log_method = getattr(self._logger, level.lower())
+        log_method(msg, *args, **kwargs)
 
     def info(self, msg: str, key: str | None=None, *args, **kwargs) -> None:
         """Log info message once per key (defaults to message text as key)."""
@@ -306,7 +312,11 @@ def ensure_logging_configured(level: int | None=None) -> None:
 def get_rotating_handler(path: str, max_bytes: int=5000000, backup_count: int=5) -> logging.Handler:
     """Return a size-rotating file handler. Falls back to stderr on failure."""
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    except PermissionError as exc:
+        logging.getLogger(__name__).warning('Cannot create log directory %s: %s', os.path.dirname(path), exc)
+        return logging.StreamHandler(sys.stderr)
+    try:
         handler = RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count)
     except OSError as exc:
         logging.getLogger(__name__).error('Cannot open log file %s: %s', path, exc)
@@ -630,7 +640,11 @@ def log_performance_metrics(exposure_pct: float, equity_curve: list[float], regi
     max_dd = _get_metrics_logger().compute_max_drawdown(equity_curve)
     rec = {'date': str(as_of), 'exposure_pct': exposure_pct, 'sharpe20': sharpe, 'sortino20': sortino, 'realized_vol': realized_vol, 'max_drawdown': max_dd, 'regime': regime}
     try:
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        os.makedirs(os.path.dirname(filename), mode=0o700, exist_ok=True)
+    except PermissionError as exc:
+        logger.warning('Failed to log performance metrics: %s', exc)
+        return
+    try:
         new = not os.path.exists(filename)
         with open(filename, 'a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=rec.keys())
@@ -814,8 +828,13 @@ def setup_enhanced_logging(log_file: str=None, level: str='INFO', enable_json_fo
         root_logger.addHandler(console_handler)
         if log_file:
             try:
-                os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                file_handler = RotatingFileHandler(log_file, maxBytes=max_file_size_mb * 1024 * 1024, backupCount=backup_count, encoding='utf-8')
+                os.makedirs(os.path.dirname(log_file), mode=0o700, exist_ok=True)
+                file_handler = RotatingFileHandler(
+                    log_file,
+                    maxBytes=max_file_size_mb * 1024 * 1024,
+                    backupCount=backup_count,
+                    encoding='utf-8',
+                )
                 if enable_json_format:
                     file_formatter = JSONFormatter()
                 else:
@@ -823,6 +842,8 @@ def setup_enhanced_logging(log_file: str=None, level: str='INFO', enable_json_fo
                 file_handler.setFormatter(file_formatter)
                 file_handler.addFilter(secret_filter)
                 root_logger.addHandler(file_handler)
+            except PermissionError as e:
+                logging.warning('Failed to setup file logging: %s', e)
             except OSError as e:
                 logging.error('Failed to setup file logging: %s', e)
         if enable_performance_logging:
@@ -835,7 +856,11 @@ def _setup_performance_logging():
     perf_logger = get_logger('performance')
     perf_file = os.path.join(os.getenv('BOT_LOG_DIR', 'logs'), 'performance.log')
     try:
-        os.makedirs(os.path.dirname(perf_file), exist_ok=True)
+        os.makedirs(os.path.dirname(perf_file), mode=0o700, exist_ok=True)
+    except PermissionError as e:
+        logging.warning('Could not setup performance logging: %s', e)
+        return
+    try:
         perf_handler = RotatingFileHandler(perf_file, maxBytes=50 * 1024 * 1024, backupCount=3)
         perf_formatter = UTCFormatter('%(asctime)s PERF %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
         perf_handler.setFormatter(perf_formatter)

@@ -4,7 +4,6 @@ require("numpy")
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 import numpy as np
 import pytest
-from ai_trading.strategies import TradeSignal
 
 
 def test_can_trade_invalid_type(caplog):
@@ -41,7 +40,14 @@ def test_position_size_invalid_signal():
 def test_position_size_division_error():
     """Errors during quantity calc return zero."""
     eng = risk_engine.RiskEngine()
-    sig = TradeSignal(symbol='A', side='buy', confidence=1.0, strategy='s')
+    sig = risk_engine.TradeSignal(
+        symbol='A',
+        side='buy',
+        confidence=1.0,
+        strategy='s',
+        weight=1.0,
+        asset_class='equity',
+    )
     qty = eng.position_size(sig, cash=100, price=float('nan'))
     assert qty == 0
 
@@ -52,9 +58,16 @@ def test_apply_weight_limits():
     eng.asset_limits['equity'] = 0.5
     eng.strategy_limits['s'] = 0.3
     eng.exposure['equity'] = 0.4
-    sig = TradeSignal(symbol='A', side='buy', confidence=1.0, strategy='s', weight=1.0)
+    sig = risk_engine.TradeSignal(
+        symbol='A',
+        side='buy',
+        confidence=1.0,
+        strategy='s',
+        weight=1.0,
+        asset_class='equity',
+    )
     w = eng._apply_weight_limits(sig)
-    assert round(w, 1) == 0.1
+    assert w == 0.1
 
 
 def test_compute_volatility_error(monkeypatch):

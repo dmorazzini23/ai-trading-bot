@@ -54,6 +54,7 @@ class TestCoreModuleInit:
         # Test enum string representation
         assert str(OrderSide.BUY) == "buy"
         assert str(OrderSide.SELL) == "sell"
+        assert str(OrderSide.SELL_SHORT) == "sell_short"
 
         # Test enum properties
         assert RiskLevel.CONSERVATIVE.max_position_size == 0.02

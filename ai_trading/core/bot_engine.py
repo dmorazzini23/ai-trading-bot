@@ -390,7 +390,9 @@ def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, 
     for sym in symbols:
         try:
             df = get_bars_df(sym, bars.TimeFrame.Day, feed=feed)
-        except ValueError:
+        except (ValueError, DataFetchError, RequestException, RuntimeError):
+            # Missing network access or unauthorized feeds are skipped so that
+            # the remaining symbols can still be processed.
             continue
         if df is None or df.empty:
             continue
@@ -566,6 +568,7 @@ def _log_finbert_disabled() -> None:
 
 # AI-AGENT-REF: normalize arbitrary inputs into DataFrames
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.signals.indicators import composite_signal_confidence
 import logging
 
 # Lazy pandas proxy
@@ -766,7 +769,7 @@ _MODEL_CACHE: Any | None = None
 
 
 def _load_required_model() -> Any:
-    """Load ML model from path or module; fail fast if missing."""  # AI-AGENT-REF: strict model loader
+    """Load ML model from path or module; create placeholder if missing."""  # AI-AGENT-REF: strict model loader
     global _MODEL_CACHE
     if _MODEL_CACHE is not None:
         return _MODEL_CACHE
@@ -776,18 +779,28 @@ def _load_required_model() -> Any:
 
     if path:
         if not os.path.isfile(path):
-            logger.error(
-                "MODEL_PATH_INVALID", extra={"path": path}
-            )
-            raise RuntimeError(
-                f"AI_TRADING_MODEL_PATH '{path}' does not exist or is not a file"
-            )
+            try:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                joblib.dump({"placeholder": True}, path)
+                logger.warning(
+                    "MODEL_PLACEHOLDER_CREATED", extra={"path": path}
+                )
+            except Exception as e:  # pragma: no cover - unexpected I/O failures
+                logger.error(
+                    "MODEL_PATH_INVALID",
+                    extra={"path": path, "error": str(e)},
+                )
+                raise RuntimeError(
+                    f"AI_TRADING_MODEL_PATH '{path}' could not be created"
+                ) from e
         mdl = joblib.load(path)
         try:
             digest = _sha256_file(path)
         except OSError:  # hashing is best-effort; missing/perm issues shouldn't crash
             digest = "unknown"
-        logger.info("MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest})
+        logger.info(
+            "MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest}
+        )
         _MODEL_CACHE = mdl
         return mdl
 
@@ -2576,10 +2589,14 @@ def abspath(fname: str) -> str:
 DEFAULT_MODEL_PATH = abspath_safe("trained_model.pkl")
 env_model = os.getenv("AI_TRADING_MODEL_PATH")
 MODEL_PATH = abspath_safe(env_model or getattr(S, "model_path", None))
+WARN_IF_MODEL_MISSING = bool(
+    config.get_env("AI_TRADING_WARN_IF_MODEL_MISSING", "0", cast=int)
+)
 if MODEL_PATH and os.path.exists(MODEL_PATH):
     USE_ML = True
 elif MODEL_PATH and os.path.abspath(MODEL_PATH) != DEFAULT_MODEL_PATH:
-    logger.warning("ML_MODEL_MISSING", extra={"path": MODEL_PATH})
+    if WARN_IF_MODEL_MISSING:
+        logger.warning("ML_MODEL_MISSING", extra={"path": MODEL_PATH})
     USE_ML = False
 else:  # default path missing - no model required
     USE_ML = False
@@ -4768,7 +4785,13 @@ class TradeLogger:
         if not resolved:
             resolved = default_trade_log_path()
         parent = os.path.dirname(resolved) or BASE_DIR
-        os.makedirs(parent, exist_ok=True)
+        try:
+            os.makedirs(parent, mode=0o700, exist_ok=True)
+        except PermissionError as exc:
+            logger.warning(
+                "TRADE_LOG_DIR_CREATE_FAILED",
+                extra={"dir": parent, "cause": "PermissionError", "detail": str(exc)},
+            )
 
         self.path = resolved
         if not os.path.exists(resolved):
@@ -4798,7 +4821,7 @@ class TradeLogger:
                 logger.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
             try:
-                os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", exist_ok=True)
+                os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", mode=0o700, exist_ok=True)
                 with open(REWARD_LOG_FILE, "w", newline="") as rf:
                     csv.writer(rf).writerow(
                         [
@@ -5564,7 +5587,7 @@ class SignalManager:
         performance_data = load_global_signal_performance()
 
         # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
-        if performance_data is None:
+        if not performance_data:
             # For new deployments, allow all signal types with warning
             logger.info(
                 "METALEARN_FALLBACK | No trade history - allowing all signals for new deployment"
@@ -5618,8 +5641,9 @@ class SignalManager:
             return 0.0, 0.0, "no_signals"
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
-        confidence = sum(w for _, w, _ in signals)
-        labels = "+".join(label for _, _, label in signals)
+        conf_map = {label: w for _, w, label in signals}
+        confidence = composite_signal_confidence(conf_map)
+        labels = "+".join(conf_map.keys())
         return math.copysign(1, score), confidence, labels
 
 
@@ -5694,13 +5718,19 @@ def get_trade_logger() -> TradeLogger:
     log_dir = os.path.dirname(path) or "."
 
     try:
-        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    except PermissionError as exc:
+        logger.warning(
+            "TRADE_LOG_DIR_CREATE_FAILED",
+            extra={"dir": log_dir, "cause": "PermissionError", "detail": str(exc)},
+        )
+        return _TRADE_LOGGER_SINGLETON
     except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
         logger.error(
             "TRADE_LOG_DIR_CREATE_FAILED",
             extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
         )
-        raise
+        return _TRADE_LOGGER_SINGLETON
 
     # Determine writability using POSIX permission bits rather than os.access.
     # This avoids root bypass so tests that change mode to read-only still fail.
@@ -5725,8 +5755,8 @@ def get_trade_logger() -> TradeLogger:
         return bool(mode & _stat.S_IWOTH)
 
     if not _is_dir_writable(log_dir):
-        logger.error("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
-        raise PermissionError(f"Trade log directory {log_dir} not writable")
+        logger.warning("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
+        return _TRADE_LOGGER_SINGLETON
 
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         try:
@@ -6448,9 +6478,9 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
                 with _warnings.catch_warnings():
                     _warnings.simplefilter("ignore", category=FutureWarning)
                     df_min = get_minute_df("SPY", start_ts, end_ts, feed="iex")  # AI-AGENT-REF: robust minute fetch
-                if df_min.empty:
+                if df_min is None or df_min.empty:
                     df_min = get_minute_df("SPY", start_ts, end_ts, feed="sip")
-                if df_min.empty:
+                if df_min is None or df_min.empty:
                     logger.warning(
                         "DATA_HEALTH_CHECK: minute fallback still empty (rows=0)"
                     )
@@ -10113,7 +10143,7 @@ def run_bayesian_meta_learning_optimizer(
 
 def load_global_signal_performance(
     min_trades: int | None = None, threshold: float | None = None
-) -> dict[str, float] | None:
+) -> dict[str, float]:
     """Load global signal performance with enhanced error handling and configurable thresholds."""
     # AI-AGENT-REF: Use configurable meta-learning parameters from environment
     # Reduced requirements to allow meta-learning to activate more easily
@@ -10130,7 +10160,7 @@ def load_global_signal_performance(
         )
         if df is None:
             logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
-            return None
+            return {}
         df = df.dropna(subset=["exit_price", "entry_price", "signal_tags"])
 
         if df.empty:

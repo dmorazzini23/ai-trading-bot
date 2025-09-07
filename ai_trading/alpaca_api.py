@@ -11,7 +11,7 @@ from typing import Any, Optional, TYPE_CHECKING
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
-import importlib.util
+import importlib
 from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
@@ -80,6 +80,21 @@ ALPACA_AVAILABLE = (
 )
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
+
+def initialize() -> None:
+    """Ensure required Alpaca SDK modules are importable.
+
+    Raises:
+        RuntimeError: If the Alpaca SDK cannot be imported, providing a
+            helpful message for installation.
+    """
+    try:
+        importlib.import_module("alpaca.trading.client")
+        importlib.import_module("alpaca.data.historical")
+        importlib.import_module("alpaca.common.exceptions")
+    except Exception as exc:  # pragma: no cover - exercised in tests
+        raise RuntimeError("alpaca-py SDK is required") from exc
+
 if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     from dataclasses import dataclass
     from enum import Enum
@@ -92,8 +107,8 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
 
     @dataclass(frozen=True)
     class TimeFrame:
-        amount: int
-        unit: TimeFrameUnit
+        amount: int = 1
+        unit: TimeFrameUnit = TimeFrameUnit.Day
 
         def __str__(self) -> str:
             return f"{self.amount}{self.unit.value}"
@@ -101,7 +116,7 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     # Pre-defined shorthand attributes mirroring alpaca-py
     TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
     TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
-    TimeFrame.Day = TimeFrame(1, TimeFrameUnit.Day)  # type: ignore[attr-defined]
+    TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
 
     @dataclass
     class StockBarsRequest:
@@ -186,8 +201,13 @@ def get_stock_bars_request_cls():
 
 def get_timeframe_cls():
     if ALPACA_AVAILABLE:
-        _, cls, _ = _data_classes()
-        return cls
+        _, cls, unit_cls = _data_classes()
+
+        class _TF(cls):  # type: ignore[misc]
+            def __init__(self, amount: int = 1, unit=unit_cls.Day):  # type: ignore[assignment]
+                super().__init__(amount, unit)
+
+        return _TF
     return TimeFrame
 
 
@@ -748,4 +768,5 @@ __all__ = [
     'get_bars_df',
     'alpaca_get',
     'start_trade_updates_stream',
+    'initialize',
 ]

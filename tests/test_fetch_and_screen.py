@@ -1,13 +1,26 @@
 import datetime as dt
 import sys
 import types
+import warnings
 
 import pytest
+import urllib3
 
 pd = pytest.importorskip("pandas")
 from ai_trading.data import fetch as data_fetcher
 from ai_trading import alpaca_api as bars
 from ai_trading.utils.base import health_check
+
+
+@pytest.fixture(autouse=True)
+def _suppress_system_time_warning(monkeypatch):
+    """Normalize TLS validation clock warnings in tests."""
+
+    def _disable_warnings(category=urllib3.exceptions.HTTPWarning):
+        warnings.filterwarnings("ignore", category=category)
+
+    monkeypatch.setattr(urllib3, "disable_warnings", _disable_warnings)
+    urllib3.disable_warnings(urllib3.exceptions.SystemTimeWarning)
 
 
 def _stub_df():
@@ -43,3 +56,11 @@ def test_fetch_minute_success(monkeypatch):
     monkeypatch.setattr(data_fetcher, "get_minute_df", lambda *a, **k: df)
     result = data_fetcher.get_minute_df("AAPL", dt.date.today(), dt.date.today())
     assert health_check(result, "minute")
+
+
+def test_system_time_warning_suppressed():
+    """Ensure SystemTimeWarning from urllib3 is silenced."""
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.warn("clock skew", urllib3.exceptions.SystemTimeWarning)
+    assert not w

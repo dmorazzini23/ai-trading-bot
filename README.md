@@ -1499,10 +1499,10 @@ Set exactly one of:
 - AI_TRADING_MODEL_MODULE=your.module.with.get_model
 
 The default systemd unit expects the model at
-`/var/lib/ai-trading-bot/models/trained_model.pkl`. On startup the bot
-validates these settings and **fails fast** if the path is missing or the
-module import fails, logging `MODEL_PATH_INVALID` or
-`MODEL_MODULE_IMPORT_FAILED`.
+`/var/lib/ai-trading-bot/models/trained_model.pkl`. On startup the bot now
+ensures a placeholder model exists at this location if the file is missing,
+logging `MODEL_PLACEHOLDER_CREATED`. Supplying your own trained model enables
+full prediction capability; otherwise the placeholder leaves ML disabled.
 
 At startup the engine verifies that model files exist in
 ``paths.MODELS_DIR``. If none are found, a lightweight fallback model is

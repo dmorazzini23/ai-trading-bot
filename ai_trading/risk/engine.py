@@ -257,6 +257,11 @@ class RiskEngine:
             self._returns.extend(list(returns))
         if drawdowns:
             self._drawdowns.extend(list(drawdowns))
+            try:
+                current_dd = float(drawdowns[-1])
+            except (ValueError, TypeError, IndexError):
+                current_dd = 0.0
+            self._check_drawdown_and_update_stop(current_dd)
         self._maybe_lift_hard_stop()
         if self.hard_stop:
             logger.error('TRADING_HALTED_RISK_LIMIT')
@@ -532,7 +537,7 @@ class RiskEngine:
             logger.warning("Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s", sig.weight, sig.symbol, e)
             requested_weight = 0.0
         base_weight = min(requested_weight, max_allowed)
-        return base_weight
+        return round(base_weight, 1)
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
         """Return multiple volatility estimates."""

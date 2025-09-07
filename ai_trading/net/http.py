@@ -19,6 +19,14 @@ from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
 from urllib.parse import urlparse
 
+try:  # handle TLS validation clock skew warnings gracefully
+    import urllib3
+    urllib3.disable_warnings(
+        getattr(urllib3.exceptions, "SystemTimeWarning", urllib3.exceptions.HTTPWarning)
+    )
+except Exception:  # pragma: no cover - urllib3 missing or misbehaving
+    pass
+
 
 _SessionBase = cast(
     "type[object]", requests.Session if getattr(requests, "Session", None) else object

@@ -16,7 +16,12 @@ if TYPE_CHECKING:  # pragma: no cover - used for type hints
     import numpy as np  # type: ignore
     import pandas as pd  # type: ignore
 
-from alpaca.common.exceptions import APIError
+try:  # pragma: no cover - alpaca may be missing in tests
+    from alpaca.common.exceptions import APIError
+except Exception:  # ImportError
+    class APIError(Exception):
+        """Fallback APIError when alpaca package is absent."""
+
 from ai_trading.logging import get_logger
 from ai_trading.utils import clamp_timeout as _clamp_timeout, clamp_request_timeout
 from ai_trading.exc import RequestException
@@ -306,7 +311,7 @@ def _validate_input_df(data) -> None:
     if hasattr(data, "columns"):
         missing = [col for col in required if col not in data.columns]
         if missing:
-            raise ValueError(f"Input data missing required column(s): {missing}")
+            raise KeyError(f"Input data missing required column(s): {missing}")
 
 
 def _apply_macd(data) -> Any | None:
@@ -331,18 +336,9 @@ def _apply_psar(data) -> Any:
     if pd is None:
         logger.warning("Pandas not available for PSAR application")
         return data
-    ta = _get_pandas_ta()
-    data = data.copy()
-    try:
-        psar = ta.psar(data["high"], data["low"], data["close"])
-        data["psar_long"] = psar["PSARl_0.02_0.2"].astype(float)
-        data["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
-    except AttributeError:
-        logger.warning("PANDAS_TA_PSAR_MISSING")
-        approx = ((data["high"] + data["low"]) / 2).astype(float)
-        data["psar_long"] = approx
-        data["psar_short"] = approx
-    return data
+    from .indicators import psar as _psar
+
+    return _psar(data)
 
 
 def prepare_indicators(data, ticker: str | None = None) -> Any | None:
@@ -578,7 +574,7 @@ def compute_signal_matrix(df) -> Any | None:
         logger.debug("Computing signal matrix for %d rows", len(df))
         macd_df = calculate_macd(df["close"])
         if rsi is not None:
-            rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
+            rsi_series = rsi(tuple(df["close"].ffill().bfill().astype(float)), 14)
         else:
             rsi_series = pd.Series(50.0, index=df.index)
         sma_diff = df["close"] - df["close"].rolling(20).mean()

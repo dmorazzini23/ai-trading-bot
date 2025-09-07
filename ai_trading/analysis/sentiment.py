@@ -43,9 +43,10 @@ def _init_sentiment() -> None:
 _bs4 = None
 _transformers_bundle = None
 _sentiment_deps_logged: set[str] = set()
+_SENT_DEPS_LOGGED = False
 
 def _load_bs4(log=logger):
-    global _bs4
+    global _bs4, _SENT_DEPS_LOGGED
     if _bs4 is not None:
         return _bs4
     try:
@@ -55,11 +56,12 @@ def _load_bs4(log=logger):
         if 'bs4' not in _sentiment_deps_logged:
             log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'bs4'})
             _sentiment_deps_logged.add('bs4')
+            _SENT_DEPS_LOGGED = True
         _bs4 = None
     return _bs4
 
 def _load_transformers(log=logger):
-    global _transformers_bundle
+    global _transformers_bundle, _SENT_DEPS_LOGGED
     if _transformers_bundle is not None:
         return _transformers_bundle
     try:
@@ -74,6 +76,7 @@ def _load_transformers(log=logger):
         if 'transformers' not in _sentiment_deps_logged:
             log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'transformers'})
             _sentiment_deps_logged.add('transformers')
+            _SENT_DEPS_LOGGED = True
         _transformers_bundle = None
     return _transformers_bundle
 SENTIMENT_TTL_SEC = 600
@@ -82,6 +85,8 @@ SENTIMENT_FAILURE_THRESHOLD = 15
 SENTIMENT_RECOVERY_TIMEOUT = 1800
 SENTIMENT_MAX_RETRIES = 5
 SENTIMENT_BASE_DELAY = 5
+SENTIMENT_NEWS_WEIGHT = 0.8
+SENTIMENT_FORM4_WEIGHT = 0.2
 _sentiment_cache: dict[str, tuple[float, float]] = {}
 # track failures and progressive retry scheduling
 _sentiment_circuit_breaker = {
@@ -98,6 +103,8 @@ __all__ = [
     '_sentiment_cache',
     'SENTIMENT_FAILURE_THRESHOLD',
     'SENTIMENT_API_KEY',
+    'SENTIMENT_NEWS_WEIGHT',
+    'SENTIMENT_FORM4_WEIGHT',
 ]
 
 def _check_sentiment_circuit_breaker() -> bool:
@@ -235,7 +242,10 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             logger.debug('Form4 fetch failed for %s - data parsing error: %s', ticker, e)
         except (ValueError, TypeError) as e:
             logger.debug('Form4 fetch failed for %s - unexpected error: %s', ticker, e, extra={'component': 'sentiment', 'ticker': ticker, 'error_type': 'form4_fetch'})
-        final_score = 0.8 * news_score + 0.2 * form4_score
+        final_score = (
+            SENTIMENT_NEWS_WEIGHT * news_score
+            + SENTIMENT_FORM4_WEIGHT * form4_score
+        )
         final_score = max(-1.0, min(1.0, final_score))
         _record_sentiment_success()
         with sentiment_lock:

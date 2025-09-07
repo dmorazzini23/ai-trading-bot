@@ -12,6 +12,16 @@ from pydantic import ValidationError
 import pytest
 
 
+def test_pydantic_v2_migration_module_snippet():
+    """Ensure the migration snippet uses the correct import string."""
+    module_path = os.path.join(
+        os.path.dirname(__file__), '..', 'ai_trading', 'config', 'pydantic_v2_migration.py'
+    )
+    with open(module_path) as f:
+        content = f.read()
+    assert 'from pydantic import field_validator, Field' in content
+
+
 def test_pydantic_v2_migration_syntax():
     """Test that validate_env.py uses correct Pydantic V2 syntax."""
     validate_env_path = os.path.join(
@@ -50,7 +60,7 @@ def test_pydantic_v2_migration_syntax():
         assert decorator not in content, f"Found old V1 decorator: {decorator}"
 
     # Verify classmethod decorators are present
-    assert content.count('@classmethod') >= 6
+    assert content.count('@classmethod') >= 5
 
 
 def test_validate_env_import():

@@ -32,7 +32,7 @@ def test_generate_insufficient_data(caplog):
 
 
 def test_generate_buy_signal():
-    df = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6]})
+    df = pd.DataFrame({"close": [5, 4, 3, 4, 5]})
     ctx = Ctx(df)
     strat = MovingAverageCrossoverStrategy(short=2, long=3)
     signals = strat.generate(ctx)

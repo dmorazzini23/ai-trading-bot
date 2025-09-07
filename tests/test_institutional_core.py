@@ -30,8 +30,10 @@ class TestOrderEnums:
         """Test OrderSide enum values."""
         assert OrderSide.BUY.value == "buy"
         assert OrderSide.SELL.value == "sell"
+        assert OrderSide.SELL_SHORT.value == "sell_short"
         assert str(OrderSide.BUY) == "buy"
         assert str(OrderSide.SELL) == "sell"
+        assert str(OrderSide.SELL_SHORT) == "sell_short"
 
     def test_order_type_values(self):
         """Test OrderType enum values."""

@@ -6,6 +6,9 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+
+from ai_trading import meta_learning
 from ai_trading.core import bot_engine
 
 
@@ -74,6 +77,23 @@ def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
         )
 
     assert any(r.levelno == logging.WARNING and str(trade_log) in r.getMessage() for r in caplog.records)
+
+
+def test_weight_optimizer_logs_warning_on_empty_df(caplog):
+    """WeightOptimizer.optimize should warn when given an empty DataFrame."""
+
+    df = pd.DataFrame(
+        columns=["entry_price", "exit_price", "signal_tags", "side", "confidence"]
+    )
+    optimizer = meta_learning.WeightOptimizer()
+
+    with caplog.at_level(logging.WARNING):
+        optimizer.optimize(df)
+
+    assert any(
+        r.levelno == logging.WARNING and "WEIGHT_OPTIMIZER_EMPTY_DF" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_average_reward_debug(caplog, tmp_path, monkeypatch):

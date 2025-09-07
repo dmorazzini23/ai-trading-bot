@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from time import perf_counter
+from ai_trading.utils.sleep import sleep
 
-from ai_trading.utils.timing import sleep
 
 def test_sleep_unaffected_by_monkeypatch(monkeypatch) -> None:
     """sleep should block even if time.sleep is monkeypatched."""  # AI-AGENT-REF: ensure robustness
@@ -14,8 +13,6 @@ def test_sleep_unaffected_by_monkeypatch(monkeypatch) -> None:
     import time as real_time
 
     monkeypatch.setattr(real_time, "sleep", fake_sleep)
-    start = perf_counter()
-    sleep(0)  # request 0 -> enforced minimum
-    elapsed = perf_counter() - start
+    elapsed = sleep(0)  # request 0 -> enforced minimum
     assert slept["count"] == 0
-    assert elapsed >= 0.009
+    assert elapsed >= 0.01

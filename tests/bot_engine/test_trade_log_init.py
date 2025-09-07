@@ -1,5 +1,6 @@
 from ai_trading.core import bot_engine
 import pytest
+import logging
 
 
 def test_parse_local_positions_creates_trade_log(tmp_path, monkeypatch):
@@ -98,8 +99,8 @@ def test_get_trade_logger_creates_missing_directory(tmp_path, monkeypatch):
     assert log_path.exists()
 
 
-def test_get_trade_logger_errors_when_dir_not_writable(tmp_path, monkeypatch):
-    """get_trade_logger raises if parent directory is not writable."""
+def test_get_trade_logger_warns_when_dir_not_writable(tmp_path, monkeypatch, caplog):
+    """get_trade_logger warns if parent directory is not writable."""
 
     log_dir = tmp_path / "readonly"
     log_dir.mkdir()
@@ -108,6 +109,9 @@ def test_get_trade_logger_errors_when_dir_not_writable(tmp_path, monkeypatch):
     monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
     bot_engine._TRADE_LOGGER_SINGLETON = None
 
-    with pytest.raises(PermissionError):
+    with caplog.at_level(logging.WARNING):
         bot_engine.get_trade_logger()
+
+    assert "TRADE_LOG_DIR_NOT_WRITABLE" in caplog.text
+    assert not log_path.exists()
 

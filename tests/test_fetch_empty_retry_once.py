@@ -54,6 +54,9 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
     monkeypatch.setattr(fetch, "_sip_fallback_allowed", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_ALLOW_SIP", False)
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 0)
+    monkeypatch.setattr(fetch, "_symbol_exists", lambda *a, **k: True)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "_empty_should_emit", lambda *a, **k: True)
     monkeypatch.setattr(fetch, "_empty_record", lambda *a, **k: 1)
@@ -92,3 +95,4 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     assert calls[1][1] is None
     assert calls[1][2]["correlation_id"] == "id2"
     assert calls[1][2]["previous_correlation_id"] == "id1"
+    assert calls[1][2]["delay"] == sleep_called["delay"]

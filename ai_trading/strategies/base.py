@@ -292,6 +292,10 @@ class StrategyRegistry:
                 logger.warning(f'Strategy {strategy.strategy_id} already registered')
                 return False
             self.strategies[strategy.strategy_id] = strategy
+            pos_size = getattr(strategy, 'max_position_size', 0) or 0
+            if pos_size <= 0:
+                pos_size = 1
+            self.strategy_performance[strategy.strategy_id] = {'position_size': pos_size}
             logger.info(f'Strategy registered: {strategy.name} ({strategy.strategy_id})')
             return True
         except (ValueError, TypeError) as e:

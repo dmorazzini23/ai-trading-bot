@@ -449,7 +449,7 @@ class TradingConfig:
             kelly_fraction_max=_get(
                 "KELLY_FRACTION_MAX",
                 float,
-                default=0.25,
+                default=0.15,
                 aliases=("AI_TRADING_KELLY_FRACTION_MAX",),
             ),
             min_sample_size=_get(

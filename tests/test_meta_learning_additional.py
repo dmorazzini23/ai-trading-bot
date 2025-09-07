@@ -38,6 +38,15 @@ def test_save_and_load_checkpoint(tmp_path):
     assert obj == {"x": 1}
 
 
+def test_load_checkpoint_roundtrip(tmp_path):
+    """`load_checkpoint` returns the stored mapping."""
+    path = tmp_path / "chk.pkl"
+    data = {"foo": 1}
+    meta_learning.save_model_checkpoint(data, str(path))
+    loaded = meta_learning.load_checkpoint(str(path))
+    assert loaded == data
+
+
 def test_retrain_meta_learner(monkeypatch, tmp_path):
     """Meta learner retrains with small dataset."""
     data = Path(tmp_path / "trades.csv")

@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file.
 - Makefile: add `PYTHON ?= python3` and route all invocations through
   `$(PYTHON)` for compatibility on Debian/Ubuntu where `python` shim is
   absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
+- Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
+- Core: gate `ML_MODEL_MISSING` warning behind `AI_TRADING_WARN_IF_MODEL_MISSING` flag.
 
 ### Added
 - Cache fallback data provider usage to skip redundant Alpaca requests
@@ -36,14 +38,18 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Dev deps: align `packaging` version with `constraints.txt` (25.0) to
   resolve resolver conflicts during `ensure-runtime` install.
+- Risk engine now rounds weight limits to one decimal to avoid floating-point precision issues.
 - **Data Fetch**: raise error when configuration unavailable instead of repeated warnings.
 - **Data Fetch**: improve Alpaca empty-bar handling by logging timeframe/feed,
   verifying API credentials and market hours, and attempting feed or window
   fallbacks before resorting to alternate providers.
+- **Execution**: default missing `slice_qty` to `0` and validate `fill_ratio` inputs.
 - **Data Fetch**: retry with SIP feed when initial IEX request returns empty
   for a symbol that may be delisted or on the wrong feed.
 - **Main**: `validate_environment` now raises `RuntimeError` when required
   environment variables are missing.
+- **Main Extended**: `validate_environment` now raises `RuntimeError` when
+  required environment variables are missing.
 - Normalize broker-unavailable contract; remove false PDT warnings; add regression tests.
 - Fix IndentationError in `bot_engine.py` (pybreaker stub); add static compile guard.
 - **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,
@@ -58,6 +64,7 @@ All notable changes to this project will be documented in this file.
 - Replaced test mock imports in sentiment module with local stub to avoid leakage.
   - Supports `register_model`, `load_model`, and `latest_for` operations
   - Maintains JSON index for model metadata
+- **Logging**: handle `PermissionError` when creating log directories by warning and using secure permissions.
   - Includes dataset fingerprint verification for reproducibility
 - **Configuration**: Corrected `DISABLE_DAILY_RETRAIN` environment flag parsing with safe default (`false`)
 - **Import Hardening**: Made `model_pipeline` imports robust in `ai_trading/core/bot_engine.py`

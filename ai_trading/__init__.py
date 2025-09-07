@@ -45,6 +45,11 @@ _PUBLIC_SYMBOLS = {
 __all__ = sorted(set(_PUBLIC_MODULES) | set(_PUBLIC_SYMBOLS))
 
 
+def cli() -> None:  # pragma: no cover - thin wrapper for console script
+    """Console entrypoint that defers heavy CLI imports until invocation."""
+    _import_module("ai_trading.__main__").main()
+
+
 def __getattr__(name: str):  # pragma: no cover - thin lazy loader
     if name in _PUBLIC_MODULES:
         return _import_module(f'ai_trading.{name}')

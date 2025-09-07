@@ -294,10 +294,23 @@ def _fetch_daily_bars(client, symbol, start, end, **kwargs):
         _log.exception('ALPACA_DAILY_FAILED', extra={'symbol': symbol, 'error': str(e)})
         raise
 
-def _get_minute_bars(symbol: str, start_dt: datetime, end_dt: datetime, feed: str) -> pd.DataFrame:
+def _get_minute_bars(
+    symbol: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    feed: str,
+    adjustment: str | None = None,
+) -> pd.DataFrame:
     symbol = _canon_symbol(symbol)
     try:
-        df = get_bars(symbol=symbol, timeframe='1Min', start=start_dt, end=end_dt, feed=feed)
+        df = get_bars(
+            symbol=symbol,
+            timeframe='1Min',
+            start=start_dt,
+            end=end_dt,
+            feed=feed,
+            adjustment=adjustment,
+        )
     except (ValueError, TypeError):
         df = None
     if df is None or not hasattr(df, 'empty') or getattr(df, 'empty', True):
@@ -345,7 +358,7 @@ def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: st
         return df
     try:
         minutes_start = end - timedelta(days=5)
-        mdf = _get_minute_bars(symbol, minutes_start, end, feed=feed)
+        mdf = _get_minute_bars(symbol, minutes_start, end, feed=feed, adjustment=adjustment)
         if mdf is not None and (not mdf.empty):
             rdf = _resample_minutes_to_daily(mdf)
             if rdf is not None and (not rdf.empty):

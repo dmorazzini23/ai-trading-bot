@@ -158,8 +158,22 @@ class SmartOrderRouter:
         Returns:
             Order request dict
         """
+        try:
+            qty = float(quantity)
+        except (TypeError, ValueError):
+            self.logger.warning("Invalid quantity %r for %s; defaulting to 0", quantity, symbol)
+            qty = 0.0
+
         limit_price, order_type = self.calculate_limit_price(market_data, side, urgency)
-        order_request = {'symbol': symbol, 'side': side.lower(), 'quantity': abs(quantity), 'type': order_type.value, 'limit_price': limit_price, 'urgency': urgency.value, 'created_at': datetime.now(UTC).isoformat()}
+        order_request = {
+            'symbol': symbol,
+            'side': side.lower(),
+            'quantity': abs(qty),
+            'type': order_type.value,
+            'limit_price': limit_price,
+            'urgency': urgency.value,
+            'created_at': datetime.now(UTC).isoformat(),
+        }
         params = self.get_order_params(symbol)
         if order_type == OrderType.IOC:
             order_request.update({'time_in_force': 'IOC', 'allow_partial_fill': True, 'min_fill_ratio': params.min_fill_ratio})
@@ -170,10 +184,16 @@ class SmartOrderRouter:
         if custom_params:
             order_request.update(custom_params)
         costs = get_symbol_costs(symbol)
-        position_value = abs(quantity) * market_data.mid
+        position_value = abs(qty) * market_data.mid
         cost_estimate = costs.total_execution_cost_bps(market_data.volume_ratio)
-        order_request['cost_estimate'] = {'cost_bps': cost_estimate, 'cost_dollars': position_value * (cost_estimate / 10000), 'slippage_risk': 'high' if market_data.volume_ratio > 2.0 else 'normal'}
-        self.logger.info(f'Created {order_type.value} order for {symbol}: {side} {quantity} @ ${limit_price:.4f} (est. cost: {cost_estimate:.1f}bps)')
+        order_request['cost_estimate'] = {
+            'cost_bps': cost_estimate,
+            'cost_dollars': position_value * (cost_estimate / 10000),
+            'slippage_risk': 'high' if market_data.volume_ratio > 2.0 else 'normal',
+        }
+        self.logger.info(
+            f'Created {order_type.value} order for {symbol}: {side} {qty} @ ${limit_price:.4f} (est. cost: {cost_estimate:.1f}bps)'
+        )
         return order_request
 
     def should_cancel_and_retry(self, order_id: str, order_info: dict, current_market: MarketData) -> tuple[bool, str]:

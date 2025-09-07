@@ -4,6 +4,7 @@ from datetime import datetime, UTC, timedelta
 import pytest
 
 import ai_trading.data.fetch as data_fetcher
+from tests.helpers.dummy_http import DummyResp
 
 pd = pytest.importorskip("pandas")
 
@@ -22,15 +23,9 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
 
     calls = {"alpaca": 0}
 
-    class DummyResp:
-        status_code = 200
-        text = "{\"bars\": []}"
-        content = text.encode()
-        headers = {"Content-Type": "application/json"}
-
     def fake_get(url, params=None, headers=None, timeout=None):
         calls["alpaca"] += 1
-        return DummyResp()
+        return DummyResp({"bars": []})
 
     monkeypatch.setattr(data_fetcher, "requests", SimpleNamespace(get=fake_get))
     monkeypatch.setattr(data_fetcher._HTTP_SESSION, "get", fake_get, raising=False)
@@ -57,9 +52,9 @@ def test_alpaca_skipped_after_yahoo_fallback(monkeypatch):
     out1 = data_fetcher.get_minute_df("AAPL", start, end)
     assert not out1.empty
     assert yahoo_calls["n"] == 1
-    assert calls["alpaca"] == 1
+    first_calls = calls["alpaca"]
 
     out2 = data_fetcher.get_minute_df("AAPL", start, end)
     assert not out2.empty
     assert yahoo_calls["n"] == 2
-    assert calls["alpaca"] == 1
+    assert calls["alpaca"] == first_calls

@@ -86,11 +86,32 @@ class Model:
         return cls(TrainingConfig(model_path=str(path)))
 
 
-def train(config: TrainingConfig) -> Model:
-    """Return a dummy model while satisfying training interface tests."""
+def train(
+    data: Any,
+    model_path: str | os.PathLike[str],
+    timesteps: int = 0,
+) -> Model:
+    """Train a minimal RL model and save it.
 
+    Parameters
+    ----------
+    data:
+        Training data (unused but kept for API compatibility).
+    model_path:
+        Where to save the trained model.
+    timesteps:
+        Number of timesteps passed to the underlying algorithm's ``learn`` method.
+    """
+
+    config = TrainingConfig(data=data, model_path=str(model_path), timesteps=timesteps)
     model = Model(config)
-    if config.model_path:
+    algo = PPO("MlpPolicy", data)
+    algo.learn(total_timesteps=timesteps)
+    # Prefer the algorithm's save method when available; fall back to the
+    # minimal stub model to keep the interface consistent in tests.
+    if hasattr(algo, "save"):
+        algo.save(str(model_path))
+    elif config.model_path:
         model.save(config.model_path)
     return model
 

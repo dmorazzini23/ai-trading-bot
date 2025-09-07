@@ -1,6 +1,11 @@
 import pytest
 
-from ai_trading.utils.retry import RetryError, retry
+from ai_trading.utils.retry import (
+    RetryError,
+    retry,
+    stop_after_attempt,
+    retry_if_exception_type,
+)
 
 
 def test_retry_reraise_false_wraps_exception():
@@ -34,3 +39,21 @@ def test_retry_reraise_forwards_kwargs():
 
     assert captured["reraise"] == "call"
     assert captured["extra"] == 123
+
+
+def test_retry_reraise_explicit_policy():
+    attempts = {"count": 0}
+
+    @retry(
+        stop=stop_after_attempt(2),
+        retry=retry_if_exception_type(ValueError),
+        reraise=True,
+    )
+    def boom():
+        attempts["count"] += 1
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        boom()
+
+    assert attempts["count"] == 2
