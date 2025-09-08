@@ -12598,8 +12598,23 @@ def _process_symbols(
                 exc_info=True,
             )
 
-    # Use module-level prediction_executor so tests can monkeypatch it
-    futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
+    # Use module-level prediction_executor so tests can monkeypatch it.
+    # When not monkeypatched, initialize it from the shared executors module.
+    _pred = globals().get("prediction_executor")
+    if _pred is None:
+        try:
+            _pred = getattr(executors, "prediction_executor", None)
+            if _pred is not None:
+                globals()["prediction_executor"] = _pred  # seed module alias once
+        except Exception:
+            _pred = None
+    if _pred is None:
+        # Fallback to the general executor if prediction-specific is unavailable
+        _pred = getattr(executors, "executor", None)
+    if _pred is None:
+        raise RuntimeError("ThreadPool executors unavailable after initialization")
+
+    futures = [_pred.submit(process_symbol, s) for s in symbols]
     for f in futures:
         f.result()
     return processed, row_counts
