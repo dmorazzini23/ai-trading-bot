@@ -44,4 +44,3 @@ class BaseModel:
             setattr(self, k, v)
     def model_dump(self) -> dict[str, Any]:  # pragma: no cover
         return self.__dict__.copy()
-

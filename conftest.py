@@ -7,6 +7,30 @@ from pathlib import Path
 
 import pytest
 
+# Ensure optional light-weight stubs are available only when real deps are missing
+def _ensure_test_stubs() -> None:
+    repo = Path(__file__).parent.resolve()
+    stubs = repo / "tests" / "stubs"
+    if not stubs.exists():
+        return
+    def _missing(mod: str) -> bool:
+        try:
+            return importlib.util.find_spec(mod) is None
+        except ValueError:
+            return True
+    need_stubs = any(
+        _missing(m) for m in (
+            "pydantic",
+            "pydantic_settings",
+            # Use a stub for Retry if urllib3 not installed
+            "urllib3",
+        )
+    )
+    if need_stubs and str(stubs) not in sys.path:
+        sys.path.insert(0, str(stubs))
+
+_ensure_test_stubs()
+
 # Provide a lightweight default model so bot initialization can preload it
 _dummy_mod = types.ModuleType("dummy_model")
 

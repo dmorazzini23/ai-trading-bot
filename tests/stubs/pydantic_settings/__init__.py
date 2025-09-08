@@ -10,4 +10,3 @@ class BaseSettings:
     def __init__(self, **data: Any):
         for k, v in data.items():
             setattr(self, k, v)
-
