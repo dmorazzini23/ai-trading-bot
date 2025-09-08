@@ -54,9 +54,14 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
     except KeyboardInterrupt:
         logger.info("%s interrupted", label)
         sys.exit(0)
-    except SystemExit as e:  # AI-AGENT-REF: surface exit codes in logs
-        logger.error("%s exited: %s", label, e, exc_info=True)
-        raise
+    except SystemExit as e:  # AI-AGENT-REF: do not crash the service on exit codes
+        # Log and return to allow the supervisor to decide on restart policy.
+        try:
+            code = int(getattr(e, "code", 1) or 0)
+        except Exception:
+            code = 1
+        logger.error("%s exited with code %s; continuing", label, code, exc_info=True)
+        return
 
 
 class _StartupConfig(BaseModel):
@@ -230,8 +235,13 @@ def main() -> int:
         # Delegate to main; it starts the API server thread and the scheduler loop
         _main.main(mapped_argv)
         return 0
-    except SystemExit:  # allow explicit exits to propagate
-        raise
+    except SystemExit as e:  # AI-AGENT-REF: do not propagate non-zero exits
+        try:
+            code = int(getattr(e, "code", 1) or 0)
+        except Exception:
+            code = 1
+        logger.error("ai_trading.main exited with code %s; degrading to 0 to avoid service crash", code, exc_info=True)
+        return 0
     except (ValueError, HTTPError) as e:
         logger.error("startup error: %s", e, exc_info=True)
         if "--dry-run" in sys.argv:
