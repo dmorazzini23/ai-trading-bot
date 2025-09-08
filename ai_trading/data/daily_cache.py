@@ -9,10 +9,11 @@ emitted instead of raising an exception.  Successful fetches update the cache,
 which is keyed by the function arguments.
 """
 
-from typing import Any, Hashable
+from typing import Any, Hashable, TYPE_CHECKING
 
 import warnings
-import pandas as pd
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 from ai_trading.data.fetch import (
     DataFetchError,
@@ -20,7 +21,7 @@ from ai_trading.data.fetch import (
 )
 
 # Global in-memory cache mapping parameter tuples to DataFrames
-_CACHE: dict[tuple[Hashable, ...], pd.DataFrame | None] = {}
+_CACHE: dict[tuple[Hashable, ...], "pd.DataFrame | None"] = {}
 
 
 def get_daily_df(
@@ -30,7 +31,7 @@ def get_daily_df(
     *,
     feed: str | None = None,
     adjustment: str | None = None,
-) -> pd.DataFrame | None:
+) -> "pd.DataFrame | None":
     """Fetch daily bars with cache fallback.
 
     Parameters mirror :func:`ai_trading.data.fetch.get_daily_df`.  Fresh data is
@@ -38,6 +39,9 @@ def get_daily_df(
     previously cached, the cached DataFrame is returned with a warning instead
     of raising an error.
     """
+
+    # Local import to avoid importing pandas at module import-time
+    import pandas as pd  # type: ignore
 
     key: tuple[Hashable, ...] = (symbol, start, end, feed, adjustment)
     cached = _CACHE.get(key)

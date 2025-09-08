@@ -53,28 +53,27 @@ def _validate_trading_api(api: Any) -> bool:
                 except Exception:
                     pass
 
-                if accepts_status:
+                # Prefer building a filter object when available to be compatible
+                # with newer alpaca-py signatures and tests that assert this path.
+                try:
+                    requests_mod = __import__(
+                        "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
+                    )
+                    GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
+                    filter_obj = GetOrdersRequest(statuses=[enum_val])
+                    return api.get_orders(
+                        *args, filter=filter_obj, **kwargs
+                    )  # type: ignore[attr-defined]
+                except Exception:
+                    if accepts_status:
+                        kwargs["status"] = enum_val
+                        return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+                    # Last resort: pass through status kwarg
                     kwargs["status"] = enum_val
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
-                if accepts_filter:
-                    try:
-                        requests_mod = __import__(
-                            "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
-                        )
-                        GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
-                        filter_obj = GetOrdersRequest(statuses=[enum_val])
-                        return api.get_orders(
-                            *args, filter=filter_obj, **kwargs
-                        )  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-
-                kwargs["status"] = enum_val
-                return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            logger_once.warning(
+            logger_once.info(
                 "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
             )
         else:
@@ -91,7 +90,7 @@ def _validate_trading_api(api: Any) -> bool:
                 return api.get_all_positions()  # type: ignore[attr-defined]
 
             setattr(api, "list_positions", _list_positions_wrapper)  # type: ignore[attr-defined]
-            logger_once.warning(
+            logger_once.info(
                 "API_GET_POSITIONS_MAPPED", key="alpaca_get_positions_mapped"
             )
         except Exception:

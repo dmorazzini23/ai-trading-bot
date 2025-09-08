@@ -119,7 +119,7 @@ def _ensure_repo_on_path() -> None:
     existing = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = repo_str if not existing else f"{repo_str}{os.pathsep}{existing}"
     try:
-        import ai_trading  # type: ignore
+        import ai_trading
 
         logger = logging.getLogger("run_pytest")
         # AI-AGENT-REF: route import diagnostics through logger without polluting smoke output

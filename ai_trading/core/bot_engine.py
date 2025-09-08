@@ -12412,7 +12412,8 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
         )
         runtime.data_fetcher = data_fetcher
         return data_fetcher
-    logger_once.warning("DATA_FETCHER_MISSING", key="data_fetcher_missing")
+    # Do not treat a late-construction as a warning to keep startup logs clean
+    logger.info("DATA_FETCHER_MISSING", extra={"key": "data_fetcher_missing"})
     try:
         fetcher = data_fetcher_module.build_fetcher(getattr(runtime, "params", {}))
     except COMMON_EXC as exc:  # pragma: no cover - best effort during startup
