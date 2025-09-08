@@ -616,6 +616,7 @@ def main(argv: list[str] | None = None) -> None:
     api_error = threading.Event()
     t = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
     t.start()
+    # Make best-effort to bring up the API, but never crash the service if it can't bind.
     try:
         if api_error.wait(timeout=2):
             raise RuntimeError("API failed to start")
@@ -624,8 +625,10 @@ def main(argv: list[str] | None = None) -> None:
                 raise RuntimeError("API thread terminated unexpectedly during startup")
             logger.warning("API startup taking longer than expected, proceeding with degraded functionality")
     except (RuntimeError, TimeoutError, OSError) as e:
-        logger.error("Failed to start API", exc_info=e)
-        raise RuntimeError("API failed to start") from e
+        # Degrade gracefully: log and continue trading without HTTP API.
+        # This avoids unit/service failures when the port is already taken.
+        logger.error("API_STARTUP_DEGRADED", exc_info=e)
+        api_error.set()
     S = get_settings()
     from ai_trading.utils.device import get_device  # AI-AGENT-REF: guard torch import
 

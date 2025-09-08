@@ -2673,13 +2673,35 @@ _PEAK_EQUITY_PERMISSION_LOGGED = False
 
 
 def _log_peak_equity_permission() -> None:
-    """Log a warning once when peak equity file is inaccessible."""
-    global _PEAK_EQUITY_PERMISSION_LOGGED
-    if not _PEAK_EQUITY_PERMISSION_LOGGED:
+    """Log once and switch to a writable fallback for peak equity tracking.
+
+    If the configured data directory is not writable (common on custom
+    deployments), fall back to the cache directory so peak equity tracking
+    continues silently without repeated warnings.
+    """
+    global _PEAK_EQUITY_PERMISSION_LOGGED, PEAK_EQUITY_FILE
+    if _PEAK_EQUITY_PERMISSION_LOGGED:
+        return
+    try:
+        # Attempt to switch to a writable fallback under CACHE_DIR
+        fallback = paths.CACHE_DIR / "peak_equity.txt"
+        try:
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        PEAK_EQUITY_FILE = str(fallback)
+        logger.warning(
+            "PEAK_EQUITY_FILE %s permission denied; using fallback %s",
+            str(paths.DATA_DIR / "peak_equity.txt"),
+            PEAK_EQUITY_FILE,
+        )
+    except Exception:
+        # As a last resort, keep previous behavior but still avoid log spam
         logger.warning(
             "PEAK_EQUITY_FILE %s permission denied; skipping peak equity tracking",
             PEAK_EQUITY_FILE,
         )
+    finally:
         _PEAK_EQUITY_PERMISSION_LOGGED = True
 HALT_FLAG_PATH = abspath(getattr(S, "halt_flag_path", "halt.flag"))  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
