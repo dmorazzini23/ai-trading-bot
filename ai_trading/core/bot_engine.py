@@ -2350,10 +2350,30 @@ def _load_ml_model(symbol: str):
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
-    """Fetch the last day of minute bars and raise on empty."""
-    # AI-AGENT-REF: raise on empty DataFrame
+    """Fetch recent minute bars within the active trading session window.
+
+    Uses Regular Trading Hours (RTH) windows to avoid spanning weekends/holidays,
+    which reduces empty responses and noisy fallbacks from providers.
+    """
+    from ai_trading.utils.base import is_market_open, EASTERN_TZ
+    from ai_trading.data.market_calendar import rth_session_utc, previous_trading_session
+
     now_utc = datetime.now(UTC)
-    start_dt = now_utc - timedelta(days=1)
+    today_et = now_utc.astimezone(EASTERN_TZ).date()
+    try:
+        if is_market_open():
+            session_start, _ = rth_session_utc(today_et)
+            start_dt = session_start
+            end_dt = now_utc
+        else:
+            prev = previous_trading_session(today_et)
+            session_start, session_end = rth_session_utc(prev)
+            start_dt = session_start
+            end_dt = session_end
+    except Exception:
+        # Fallback: retain previous 1-day window behavior
+        start_dt = now_utc - timedelta(days=1)
+        end_dt = now_utc
 
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
@@ -2363,7 +2383,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             cache_key = f"minute:{symbol}:{start_dt.isoformat()}"
             df = _get_or_load(
                 key=cache_key,
-                loader=lambda: get_minute_df(symbol, start_dt, now_utc),
+                loader=lambda: get_minute_df(symbol, start_dt, end_dt),
                 ttl=getattr(S, "market_cache_ttl", 900),
             )
         except (
@@ -2377,9 +2397,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.debug("Cache layer unavailable/failed: %s", e)
-            df = get_minute_df(symbol, start_dt, now_utc)
+            df = get_minute_df(symbol, start_dt, end_dt)
     else:
-        df = get_minute_df(symbol, start_dt, now_utc)
+        df = get_minute_df(symbol, start_dt, end_dt)
 
     # Drop bars with zero volume or from the current (incomplete) minute
     try:

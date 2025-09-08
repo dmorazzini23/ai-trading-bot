@@ -12,11 +12,17 @@ _SENT_DEPS_LOGGED: set[str] = set()
 
 
 class FinnhubAPIException(Exception):
-    """Thin Finnhub API error wrapper used in tests."""
+    """Unified Finnhub API error class.
 
-    def __init__(self, status_code: int):
-        self.status_code = status_code
-        super().__init__(str(status_code))
+    In production, this is rebound to the finnhub-python exception type so
+    callers can catch a single class regardless of whether the optional
+    dependency is installed. In tests (or when the package is missing), this
+    lightweight placeholder is used instead.
+    """
+
+    def __init__(self, status_code: int | None = None):
+        self.status_code = status_code if status_code is not None else 0
+        super().__init__(str(self.status_code))
 
 
 class _FinnhubFetcherStub:
@@ -45,6 +51,17 @@ def _build_fetcher() -> Any:
             )
             _SENT_DEPS_LOGGED.add("finnhub")
         return _FinnhubFetcherStub()
+    # If finnhub is available, rebind our public exception alias to the real
+    # library exception so downstream try/except blocks work uniformly.
+    try:  # pragma: no cover - binding depends on optional dependency
+        # pyright: reportGeneralTypeIssues=false
+        from finnhub.exceptions import FinnhubAPIException as _FHExc  # type: ignore
+
+        globals()["FinnhubAPIException"] = _FHExc  # type: ignore[assignment]
+    except Exception:
+        # Keep the local placeholder if import fails
+        pass
+
     api_key = config.get_env("FINNHUB_API_KEY")
     if not api_key:
         if "finnhub" not in _SENT_DEPS_LOGGED:
@@ -89,6 +106,9 @@ def _build_fetcher() -> Any:
                     resp = func(symbol, resolution, int(start.timestamp()), int(end.timestamp()))
                 else:
                     raise e
+            except Exception:
+                # Any finnhub client/network error results in empty DataFrame
+                return pd.DataFrame()
 
             # Expected shape: { s: 'ok'|'no_data', t: [...], o: [...], h: [...], l: [...], c: [...], v: [...] }
             if not isinstance(resp, dict) or resp.get("s") != "ok":
