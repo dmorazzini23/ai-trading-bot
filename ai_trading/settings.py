@@ -202,8 +202,18 @@ class Settings(BaseSettings):
     @field_validator('model_path', 'halt_flag_path', 'rl_model_path', mode='before')
     @classmethod
     def _empty_to_default(cls, v, info):
+        """Map empty values to the field's declared default (Pydantic v2).
+
+        In Pydantic v2, ``info`` is a ``FieldValidationInfo`` which no longer
+        exposes ``field_info``. Retrieve the default from ``cls.model_fields``
+        using the current ``field_name``.
+        """
         if v in (None, '', 'None'):
-            return info.field_info.default
+            try:
+                # Pydantic v2: defaults are stored on model_fields
+                return cls.model_fields[info.field_name].default  # type: ignore[index]
+            except Exception:
+                return v
         return v
 
     @field_validator('alpaca_data_feed', mode='before')

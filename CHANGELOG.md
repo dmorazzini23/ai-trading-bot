@@ -83,6 +83,9 @@ All notable changes to this project will be documented in this file.
 - **Alpaca API**: provide lightweight fallback for `StockLatestQuoteRequest` to avoid startup ImportError when class is absent
 - **CLI dry-run**: log indicator import confirmation and exit with code 0 before heavy imports.
 - **Settings**: centralize value normalization and eliminate `FieldInfo` leaks
+- **Settings**: fix default handling for empty env values to avoid Pydantic v2
+  `ValidationInfo.field_info` AttributeError during startup; use
+  `model_fields[info.field_name].default`.
 - **Position sizing**: fetch real account equity via Alpaca once and cache it to avoid repeated `EQUITY_MISSING` warnings.
 - **Scheduler**: default to UTC when market calendar lacks timezone info.
 
