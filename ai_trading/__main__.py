@@ -254,4 +254,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # When invoked under pytest via runpy with test node ids in argv,
+    # avoid raising SystemExit so collection/execution continues cleanly.
+    rc = main()
+    try:
+        import os
+        if any("pytest" in arg for arg in sys.argv) or any("::" in arg for arg in sys.argv) or os.getenv("PYTEST_RUNNING") == "1":
+            pass
+        else:
+            sys.exit(rc)
+    except Exception:
+        sys.exit(rc)

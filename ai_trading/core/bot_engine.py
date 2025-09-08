@@ -1097,12 +1097,9 @@ from ai_trading.utils.timefmt import (
     utc_now_iso,  # AI-AGENT-REF: Import UTC timestamp utilities
 )
 
-# AI-AGENT-REF: lazy import expensive modules to speed up import for tests
-if not os.getenv("PYTEST_RUNNING"):
-    from ai_trading.model_loader import ML_MODELS  # AI-AGENT-REF: preloaded models
-else:
-    # AI-AGENT-REF: mock ML_MODELS for test environments to avoid slow imports
-    ML_MODELS = {}
+# AI-AGENT-REF: Avoid importing model_loader (and pandas) at import-time.
+# Always initialize an empty cache; _load_ml_model() lazily imports model_loader.
+ML_MODELS: dict[str, object | None] = {}
 
 
 # AI-AGENT-REF: lazy numpy loader for improved import performance
