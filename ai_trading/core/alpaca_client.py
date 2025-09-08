@@ -18,7 +18,11 @@ logger = get_logger(__name__)
 
 
 def _validate_trading_api(api: Any) -> bool:
-    """Ensure trading api exposes list_orders; adapt legacy get_orders if present."""
+    """Ensure trading api exposes required methods across SDK variants.
+
+    - Guarantees `list_orders` exists, mapping to `get_orders(...)` if needed.
+    - Guarantees `list_positions` exists, mapping to `get_all_positions()` if needed.
+    """
     if api is None:
         logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
         return False
@@ -78,6 +82,21 @@ def _validate_trading_api(api: Any) -> bool:
             if not is_shadow_mode():
                 raise RuntimeError("Alpaca client missing list_orders method")
             return False
+
+    # Map positions accessor for alpaca-py `TradingClient`
+    if not hasattr(api, "list_positions") and hasattr(api, "get_all_positions"):
+        try:
+            def _list_positions_wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
+                # TradingClient.get_all_positions() takes no filters; ignore args
+                return api.get_all_positions()  # type: ignore[attr-defined]
+
+            setattr(api, "list_positions", _list_positions_wrapper)  # type: ignore[attr-defined]
+            logger_once.warning(
+                "API_GET_POSITIONS_MAPPED", key="alpaca_get_positions_mapped"
+            )
+        except Exception:
+            # Non-fatal; caller may handle attribute absence
+            pass
     TradingClient = get_trading_client_cls()
     if not isinstance(api, TradingClient):
         logger_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
