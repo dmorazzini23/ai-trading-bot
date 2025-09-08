@@ -338,6 +338,13 @@ def pov_submit(
     )
     import random
 
+    import os as _os
+    test_mode = _os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+
+    def _sleep(seconds: float) -> None:
+        if not test_mode and seconds > 0:
+            pytime.sleep(seconds)
+
     placed = 0
     retries = 0
     interval = cfg.sleep_interval
@@ -357,7 +364,7 @@ def pov_submit(
                 extra={"symbol": symbol},
             )
             sleep_time = interval * (0.8 + 0.4 * random.random())
-            pytime.sleep(sleep_time)
+            _sleep(sleep_time)
             interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
             continue
         if df is None or df.empty:
@@ -373,7 +380,7 @@ def pov_submit(
                 extra={"symbol": symbol},
             )
             sleep_time = interval * (0.8 + 0.4 * random.random())
-            pytime.sleep(sleep_time)
+            _sleep(sleep_time)
             interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
             continue
         retries = 0
@@ -403,7 +410,7 @@ def pov_submit(
                 f"[pov_submit] slice_qty<1 (vol={vol}), waiting",
                 extra={"symbol": symbol},
             )
-            pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
+            _sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
         try:
             order = submit_order(ctx, symbol, slice_qty, side)
@@ -436,7 +443,7 @@ def pov_submit(
             "POV_SUBMIT_SLICE",
             extra={"symbol": symbol, "slice_qty": slice_qty, "actual_filled": actual_filled, "total_placed": placed},
         )
-        pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
+        _sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
     logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
     return True
 
