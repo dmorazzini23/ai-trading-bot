@@ -68,14 +68,48 @@ def _build_fetcher() -> Any:
             *,
             resolution: str = "1",
         ) -> Any:
+            """Fetch candles from Finnhub and return a normalized DataFrame.
+
+            Output columns: timestamp (UTC tz-aware), open, high, low, close, volume.
+            Returns an empty DataFrame when Finnhub responds with no_data or an error.
+            """
             pd = __import__("pandas")
-            resp = self._client.stock_candle(
-                symbol,
-                resolution,
-                int(start.timestamp()),
-                int(end.timestamp()),
-            )
-            return pd.DataFrame(resp)
+            try:
+                # finnhub-python exposes `stock_candles` (plural)
+                resp = self._client.stock_candles(
+                    symbol,
+                    resolution,
+                    int(start.timestamp()),
+                    int(end.timestamp()),
+                )
+            except AttributeError as e:  # older/newer client mismatch
+                # Fallback to the singular name if present; otherwise re-raise
+                func = getattr(self._client, "stock_candle", None)
+                if callable(func):
+                    resp = func(symbol, resolution, int(start.timestamp()), int(end.timestamp()))
+                else:
+                    raise e
+
+            # Expected shape: { s: 'ok'|'no_data', t: [...], o: [...], h: [...], l: [...], c: [...], v: [...] }
+            if not isinstance(resp, dict) or resp.get("s") != "ok":
+                return pd.DataFrame()
+            try:
+                ts = pd.to_datetime(resp.get("t", []), unit="s", utc=True)
+                df = pd.DataFrame(
+                    {
+                        "timestamp": ts,
+                        "open": resp.get("o", []),
+                        "high": resp.get("h", []),
+                        "low": resp.get("l", []),
+                        "close": resp.get("c", []),
+                        "volume": resp.get("v", []),
+                    }
+                )
+                # Drop obviously invalid rows if lengths were inconsistent
+                df = df.dropna(subset=["timestamp"]).reset_index(drop=True)
+                return df
+            except Exception:
+                return pd.DataFrame()
 
     return FinnhubFetcher(finnhub.Client(api_key))
 
