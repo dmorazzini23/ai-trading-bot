@@ -3993,8 +3993,17 @@ class DataFetcher:
         api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
         # AI-AGENT-REF: use plain secret string
         if not api_key or not api_secret:
-            logger.error(f"Missing Alpaca credentials for {symbol}")
-            return None
+            # Fall back to Yahoo-backed daily fetch when credentials are missing
+            try:
+                from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
+                df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
+            except Exception:
+                logger.warning(f"Missing Alpaca credentials for {symbol}")
+                return None
+            else:
+                with cache_lock:
+                    self._daily_cache[symbol] = (fetch_date, df)
+                return df
 
         logger.info(
             "DAILY_FETCH_REQUEST",

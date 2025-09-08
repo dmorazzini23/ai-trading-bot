@@ -1859,6 +1859,7 @@ def get_bars(
     # If a client-like object is passed for `feed`, route via client helper for tests
     if feed is not None and not isinstance(feed, str):
         return _alpaca_get_bars(feed, symbol, start, end, timeframe=_canon_tf(timeframe))
+    # Resolve feed preference from settings when not explicitly provided
     if feed is None:
         prio = provider_priority(S)
         for prov in prio:
@@ -1867,6 +1868,20 @@ def get_bars(
                 break
         feed = feed or S.alpaca_data_feed
     adjustment = adjustment or S.alpaca_adjustment
+    # If Alpaca credentials are missing, skip direct Alpaca HTTP calls and
+    # fall back to the Yahoo helper to avoid noisy empty/unauthorized logs.
+    if not _has_alpaca_keys():
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d", "1D": "1d", "1H": "60m"}
+        tf_norm = _canon_tf(timeframe)
+        y_int = interval_map.get(tf_norm, None)
+        if y_int is None:
+            # Best effort: daily vs intraday
+            y_int = "1d" if tf_norm.lower() in {"1day", "day", "1d"} else "1m"
+        try:
+            return _backup_get_bars(symbol, ensure_datetime(start), ensure_datetime(end), interval=y_int)
+        except Exception:
+            # Defer to Alpaca path (will return None) to preserve behavior
+            return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
     return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
 
 
