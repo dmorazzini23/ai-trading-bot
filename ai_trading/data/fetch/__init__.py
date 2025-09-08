@@ -199,6 +199,10 @@ _ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() n
 
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
+# Track backup provider log emissions to avoid duplicate INFO spam for the same
+# symbol/timeframe/window. This keeps production logs concise while preserving
+# the first occurrence for observability.
+_BACKUP_USAGE_LOGGED: set[tuple[str, str, int, int]] = set()
 
 # Track consecutive empty Alpaca responses across all symbols to temporarily
 # disable Alpaca fetching when upstream repeatedly returns empty payloads.
@@ -213,14 +217,17 @@ def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.dat
 
 def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> None:
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-    log_backup_provider_used(
-        provider,
-        symbol=symbol,
-        timeframe=timeframe,
-        start=start,
-        end=end,
-    )
-    _FALLBACK_WINDOWS.add(_fallback_key(symbol, timeframe, start, end))
+    key = _fallback_key(symbol, timeframe, start, end)
+    # Emit once per unique (symbol, timeframe, window)
+    if key not in _FALLBACK_WINDOWS:
+        log_backup_provider_used(
+            provider,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+        )
+    _FALLBACK_WINDOWS.add(key)
 
 
 def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
@@ -523,7 +530,15 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     """Route to configured backup provider or return empty DataFrame."""
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
     if provider == "yahoo":
-        logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+        try:
+            _start = ensure_datetime(start)
+            _end = ensure_datetime(end)
+            key = _fallback_key(symbol, interval, _start, _end)
+        except Exception:
+            key = (symbol, interval, 0, 0)
+        if key not in _BACKUP_USAGE_LOGGED:
+            logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+            _BACKUP_USAGE_LOGGED.add(key)
         return _yahoo_get_bars(symbol, start, end, interval)
     pd_local = _ensure_pandas()
     if provider in ("", "none"):

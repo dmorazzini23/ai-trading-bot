@@ -27,7 +27,11 @@ def _apply_library_filters() -> None:
     # ``requests``. Elevate it to WARNING by default so debug logs from that
     # dependency do not clutter our output. Additional filters may be provided
     # via ``LOG_QUIET_LIBRARIES``.
-    filters: dict[str, int] = {"charset_normalizer": logging.WARNING}
+    filters: dict[str, int] = {
+        "charset_normalizer": logging.WARNING,
+        # Peewee SQL debug statements are too verbose for production; keep at WARNING.
+        "peewee": logging.WARNING,
+    }
     raw = config.get_env("LOG_QUIET_LIBRARIES", "")
     for item in raw.split(","):
         name, _, level = item.partition("=")
