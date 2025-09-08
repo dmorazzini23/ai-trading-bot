@@ -211,9 +211,24 @@ def main() -> int:
         _validate_startup_config()
         from ai_trading import main as _main
 
+        # Ensure core imports are healthy before starting
         _main.preflight_import_health()
 
-        _run_loop(_main.run_cycle, args, "Main")
+        # Route through the consolidated scheduler/API entrypoint so
+        # `python -m ai_trading` behaves the same as `python -m ai_trading.main`.
+        # Map flags: --once -> --iterations=1, --interval passthrough.
+        mapped_argv: list[str] = []
+        try:
+            # Tolerate non-float intervals; main() will clamp/parse again
+            if args.interval is not None:
+                mapped_argv.extend(["--interval", str(args.interval)])
+        except Exception:
+            pass
+        if getattr(args, "once", False):
+            mapped_argv.extend(["--iterations", "1"])
+
+        # Delegate to main; it starts the API server thread and the scheduler loop
+        _main.main(mapped_argv)
         return 0
     except SystemExit:  # allow explicit exits to propagate
         raise

@@ -22,9 +22,11 @@ ExecStartPre=/usr/bin/install -d -m 700 -o aiuser -g aiuser \
     /var/lib/ai-trading-bot/output \
     /var/cache/ai-trading-bot \
     /var/log/ai-trading-bot
-ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading.main
-RuntimeMaxSec=23400
-Restart=no
+ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading
+# Allow long-lived process; systemd will supervise restarts
+RuntimeMaxSec=0
+Restart=always
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true

@@ -210,6 +210,10 @@ _ALPACA_DISABLE_THRESHOLD = 3
 _alpaca_empty_streak = 0
 _alpaca_disabled_until: _dt.datetime | None = None
 
+# Emit a one-time explanatory log when Alpaca keys are missing to make
+# backup-provider usage obvious in production logs without spamming.
+_ALPACA_KEYS_MISSING_LOGGED = False
+
 
 def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> tuple[str, str, int, int]:
     return (symbol, timeframe, int(start.timestamp()), int(end.timestamp()))
@@ -1886,6 +1890,20 @@ def get_bars(
     # If Alpaca credentials are missing, skip direct Alpaca HTTP calls and
     # fall back to the Yahoo helper to avoid noisy empty/unauthorized logs.
     if not _has_alpaca_keys():
+        global _ALPACA_KEYS_MISSING_LOGGED
+        if not _ALPACA_KEYS_MISSING_LOGGED:
+            try:
+                logger.warning(
+                    "ALPACA_KEYS_MISSING_USING_BACKUP",
+                    extra={
+                        "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
+                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
+                    },
+                )
+            except Exception:
+                # Never allow diagnostics to break data path
+                pass
+            _ALPACA_KEYS_MISSING_LOGGED = True
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d", "1D": "1d", "1H": "60m"}
         tf_norm = _canon_tf(timeframe)
         y_int = interval_map.get(tf_norm, None)
