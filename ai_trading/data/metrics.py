@@ -14,6 +14,7 @@ class Metrics:
     unauthorized: int = 0
     empty_payload: int = 0
     feed_switch: int = 0
+    empty_fallback: int = 0
 
 
 metrics = Metrics()
