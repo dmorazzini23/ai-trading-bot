@@ -1583,12 +1583,31 @@ def _fetch_bars(
             fallback = (_interval, "sip", _start, _end)
     # Attempt request with bounded retries when empty or transient issues occur
     df = None
+    empty_attempts = 0
     for _ in range(max(1, max_retries)):
         df = _req(session, fallback, headers=headers, timeout=timeout_v)
         # Stop immediately when SIP is unauthorized; further retries won't help.
         if _feed == "sip" and _SIP_UNAUTHORIZED:
             break
         if df is not None and not getattr(df, "empty", True):
+            break
+        empty_attempts += 1
+        if empty_attempts >= 2:
+            metrics.empty_fallback += 1
+            logger.info(
+                "ALPACA_EMPTY_RESPONSE_THRESHOLD",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "attempts": empty_attempts,
+                    }
+                ),
+            )
             break
         # Otherwise, loop to give the provider another chance
     if (df is None or getattr(df, "empty", True)) and _ENABLE_HTTP_FALLBACK:
