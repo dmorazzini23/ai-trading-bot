@@ -9468,7 +9468,10 @@ def _enter_short(
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
-        logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        order_id = order if isinstance(order, str) else getattr(order, "id", order)
+        logger.debug(
+            f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order_id}"
+        )
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
