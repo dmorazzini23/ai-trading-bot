@@ -336,31 +336,11 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         # The effective log level is derived from configuration instead.
         pass
     with _LOGGING_LOCK:
-        # Ensure file handler can be added even if an early return path is taken below
-        if log_file and _LOGGING_CONFIGURED:
-            try:
-                h = get_rotating_handler(log_file)
-                h.setLevel(logging.INFO)
-                logging.getLogger().addHandler(h)
-            except COMMON_EXC:
-                pass
-        if _listener is not None:
-            thread = getattr(_listener, '_thread', None)
-            if thread is not None and thread.is_alive():
-                if _LOGGING_CONFIGURED:
-                    return logging.getLogger()
-            _listener = None
         if _LOGGING_CONFIGURED:
-            # Allow callers to add a file handler even after initial configuration
-            if log_file:
-                try:
-                    h = get_rotating_handler(log_file)
-                    h.setLevel(logging.INFO)
-                    logging.getLogger().addHandler(h)
-                except COMMON_EXC:
-                    pass
-            logging.getLogger(__name__).debug('Logging already configured, skipping duplicate setup')
             return logging.getLogger()
+        if _listener is not None:
+            _listener = None
+        was_configured = _LOGGING_CONFIGURED
         logger = logging.getLogger()
         if _configured:
             return logger
@@ -437,7 +417,8 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             _listener.start()
         atexit.register(_safe_shutdown_logging)
         _LOGGING_CONFIGURED = True
-        logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
+        if not was_configured:
+            logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
         # Apply filters for noisy third-party libraries after configuration is complete.
         from ai_trading.logging.setup import _apply_library_filters
 
