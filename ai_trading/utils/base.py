@@ -494,7 +494,11 @@ def _pid_from_inode(inode: str) -> int | None:
         fd_dir = f"/proc/{pid}/fd"
         if not os.path.isdir(fd_dir):
             continue
-        for fd in os.listdir(fd_dir):
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
             try:
                 if os.readlink(os.path.join(fd_dir, fd)) == f"socket:[{inode}]":
                     return int(pid)
@@ -514,7 +518,7 @@ def get_pid_on_port(port: int) -> int | None:
                 inode = parts[9]
                 if int(local.split(":")[1], 16) == port:
                     return _pid_from_inode(inode)
-    except COMMON_EXC as e:
+    except COMMON_EXC + (OSError,) as e:
         logger.error("get_pid_on_port failed", exc_info=e)
         return None
 
