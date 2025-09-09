@@ -23,7 +23,7 @@ ssh "$SERVER" << EOF
   fi
   source venv/bin/activate
   pip install --upgrade pip setuptools >/dev/null
-  pip install --quiet -r requirements.txt
+  pip install --quiet -e .
   sudo systemctl restart tradingbot
   echo "✅ Bot restarted on $SERVER"
 EOF

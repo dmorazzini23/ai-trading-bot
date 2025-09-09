@@ -55,7 +55,6 @@ from ai_trading.config.management import (
     _resolve_alpaca_env,
 )
 from ai_trading.metrics import get_histogram, get_counter
-from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from time import monotonic as _mono
 
 
@@ -89,6 +88,15 @@ def preflight_import_health() -> None:
             raise SystemExit(1)
     logger.info("IMPORT_PREFLIGHT_OK")
     ensure_trade_log_path()
+
+
+def _check_alpaca_sdk() -> None:
+    """Ensure the Alpaca SDK is installed before continuing."""
+    import importlib.util
+
+    if importlib.util.find_spec("alpaca") is None:
+        logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py is required")
+        raise SystemExit(1)
 
 
 def run_cycle() -> None:
@@ -503,9 +511,7 @@ def parse_cli(argv: list[str] | None = None):
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
     ensure_dotenv_loaded()
-    if not ALPACA_AVAILABLE:
-        logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py is required")
-        raise SystemExit(1)
+    _check_alpaca_sdk()
     _fail_fast_env()
     args = parse_cli(argv)
     global config
