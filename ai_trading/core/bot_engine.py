@@ -131,6 +131,25 @@ except ImportError:  # pragma: no cover
         def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401, ARG002
             raise ImportError("alpaca-py not installed")
 
+_ALPACA_DATA_CLIENT_AVAILABLE = True
+
+
+def _get_data_client_cls_cached():
+    """Return StockHistoricalDataClient class if importable.
+
+    Caches a module-level flag after the first failure so subsequent calls
+    skip repeated import attempts.
+    """
+
+    global _ALPACA_DATA_CLIENT_AVAILABLE
+    if not _ALPACA_DATA_CLIENT_AVAILABLE:
+        raise ImportError("alpaca data client unavailable")
+    try:
+        return get_data_client_cls()
+    except ImportError:
+        _ALPACA_DATA_CLIENT_AVAILABLE = False
+        raise
+
 def _parse_timeframe(tf: Any) -> bars.TimeFrame:
     """Map configuration values to :class:`bars.TimeFrame` enums."""
 
@@ -501,7 +520,7 @@ class BotEngine:
         # Expose the lazily-initialized global context through this engine
         self._ctx = get_ctx()
         self._trading_client_cls = trading_client_cls or get_trading_client_cls()
-        self._data_client_cls = data_client_cls or get_data_client_cls()
+        self._data_client_cls = data_client_cls or _get_data_client_cls_cached()
         global APIError
         if getattr(APIError, "__module__", "") == __name__:
             APIError = get_api_error_cls()
@@ -6165,7 +6184,7 @@ def _initialize_alpaca_clients() -> bool:
             return False
         try:
             AlpacaREST = get_trading_client_cls()
-            stock_client_cls = get_data_client_cls()
+            stock_client_cls = _get_data_client_cls_cached()
 
             logger.debug("Successfully imported Alpaca SDK class")
         except COMMON_EXC as e:
