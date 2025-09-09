@@ -10,7 +10,12 @@ bot_engine while keeping runtime behavior identical.
 from typing import Any
 
 from ai_trading.logging import get_logger, logger_once
-from ai_trading.alpaca_api import get_trading_client_cls, get_data_client_cls, get_api_error_cls
+from ai_trading.alpaca_api import (
+    ALPACA_AVAILABLE,
+    get_trading_client_cls,
+    get_data_client_cls,
+    get_api_error_cls,
+)
 from ai_trading.config.management import is_shadow_mode
 from ai_trading.exc import COMMON_EXC
 
@@ -111,6 +116,8 @@ def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
     if getattr(ctx, "api", None) is not None:
         return
+    if not ALPACA_AVAILABLE:
+        return
     if not _initialize_alpaca_clients():
         return
     # Mirror the global singleton in bot_engine for compatibility
@@ -152,7 +159,17 @@ def _initialize_alpaca_clients() -> bool:
 
     if getattr(be, "trading_client", None) is not None:
         return True
-    APIError = get_api_error_cls()
+    if not ALPACA_AVAILABLE:
+        be.trading_client = None
+        be.data_client = None
+        return False
+    try:
+        APIError = get_api_error_cls()
+    except ImportError as e:  # pragma: no cover - defensive
+        logger.error("ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)})
+        be.trading_client = None
+        be.data_client = None
+        return False
     for attempt in (1, 2):
         try:
             from ai_trading.core.bot_engine import _ensure_alpaca_env_or_raise
