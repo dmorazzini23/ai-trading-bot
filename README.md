@@ -19,6 +19,7 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 ```bash
 python -m pip install -U pip
 pip install -e .  # installs alpaca-py==0.42.0
+python -c "from alpaca.trading.client import TradingClient"  # verify alpaca-py
 python -m ai_trading --dry-run
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
@@ -26,6 +27,8 @@ RUN_HEALTHCHECK=1 python -m ai_trading.app &
 curl -s http://127.0.0.1:9001/healthz
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics
 ```
+
+The import test confirms the Alpaca SDK is ready; if it fails, install it with `pip install alpaca-py`.
 
 The dry run exits with status **0** and prints `INDICATOR_IMPORT_OK`, confirming optional indicator modules are available.
 
