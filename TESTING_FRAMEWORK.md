@@ -427,7 +427,7 @@ import pytest
 import os
 from unittest.mock import patch
 from alpaca.trading.client import TradingClient
-from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 

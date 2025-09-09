@@ -10,7 +10,7 @@ aiohttp==3.12.15
     # via -r requirements.txt
 aiosignal==1.4.0
     # via aiohttp
-alpaca-py==0.42.0
+alpaca-py==0.42.1
     # via -r requirements.txt
 annotated-types==0.7.0
     # via pydantic

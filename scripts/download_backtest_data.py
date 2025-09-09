@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from typing import TYPE_CHECKING
 from ai_trading.utils.lazy_imports import load_pandas
-from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from ai_trading.env import ensure_dotenv_loaded

@@ -123,7 +123,7 @@ def _alpaca_available() -> bool:
 from ai_trading.data import bars
 
 try:  # pragma: no cover
-    from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
+    from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
 except ImportError:  # pragma: no cover
     class StockHistoricalDataClient:  # type: ignore[no-redef]
         """Fallback when alpaca-py is unavailable."""
