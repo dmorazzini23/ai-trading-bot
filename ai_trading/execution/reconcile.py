@@ -9,7 +9,8 @@ Reconciles local trading state with broker truth by:
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from ai_trading.core.interfaces import Order, OrderStatus, Position
+from ai_trading.core.interfaces import Order, OrderStatus, Position, OrderType
+from ai_trading.order.types import OrderSide
 logger = get_logger(__name__)
 
 @dataclass
@@ -238,37 +239,131 @@ def reconcile_with_broker(broker_client, local_positions: dict[str, Position], l
         ReconciliationResult
     """
     reconciler = get_reconciler()
-    broker_positions = {}
-    broker_orders = {}
-    return reconciler.full_reconciliation(local_positions=local_positions, broker_positions=broker_positions, local_orders=local_orders, broker_orders=broker_orders, apply_fixes=apply_fixes)
+    broker_positions: dict[str, Position] = {}
+    broker_orders: dict[str, Order] = {}
 
-def reconcile_positions_and_orders() -> ReconciliationResult:
-    """
-    Convenience function to run reconciliation with current state.
-
-    This function is called from the execution engine to reconcile
-    positions and orders after trading activity.
-
-    Returns:
-        ReconciliationResult with any detected drifts. The timestamp of the
-        reconciliation is available via the result's ``reconciled_at`` field.
-    """
+    # Fetch current broker positions
     try:
-        logger.debug('Position/order reconciliation called (mock implementation)')
-        # ReconciliationResult already tracks when reconciliation happened via
-        # the ``reconciled_at`` field, which callers should use for timestamping
-        # instead of a separate ``timestamp`` parameter.
-        return ReconciliationResult(
-            position_drifts=[],
-            order_drifts=[],
-            actions_taken=[],
-            reconciled_at=datetime.now(UTC),
-        )
-    except (RuntimeError, ValueError) as e:
-        logger.error(f'Error in reconciliation: {e}')
-        return ReconciliationResult(
-            position_drifts=[],
-            order_drifts=[],
-            actions_taken=[],
-            reconciled_at=datetime.now(UTC),
-        )
+        positions = broker_client.list_positions() or []
+        for pos in positions:
+            qty = int(getattr(pos, "qty", getattr(pos, "quantity", 0)))
+            broker_positions[pos.symbol] = Position(
+                symbol=pos.symbol,
+                quantity=qty,
+                market_value=float(getattr(pos, "market_value", 0.0)),
+                cost_basis=float(getattr(pos, "cost_basis", 0.0)),
+                unrealized_pnl=float(getattr(pos, "unrealized_pl", 0.0)),
+                timestamp=datetime.now(UTC),
+            )
+    except Exception as e:  # pragma: no cover - network issues
+        logger.error(f"Failed to fetch broker positions: {e}")
+
+    # Fetch open broker orders if supported
+    try:
+        if hasattr(broker_client, "list_orders"):
+            orders = broker_client.list_orders(status="open") or []
+        else:
+            orders = []
+        for ord_obj in orders:
+            status = OrderStatus(getattr(ord_obj, "status"))
+            qty = int(getattr(ord_obj, "qty", getattr(ord_obj, "quantity", 0)))
+            filled_qty = int(getattr(ord_obj, "filled_qty", getattr(ord_obj, "filled_quantity", 0)))
+            broker_orders[ord_obj.id] = Order(
+                id=ord_obj.id,
+                symbol=getattr(ord_obj, "symbol", ""),
+                side=getattr(ord_obj, "side", OrderSide.BUY),
+                order_type=getattr(ord_obj, "order_type", OrderType.MARKET),
+                status=status,
+                quantity=qty,
+                filled_quantity=filled_qty,
+                price=getattr(ord_obj, "limit_price", getattr(ord_obj, "price", None)),
+                filled_price=getattr(ord_obj, "filled_avg_price", None),
+                timestamp=datetime.now(UTC),
+            )
+    except Exception as e:  # pragma: no cover - network issues
+        logger.error(f"Failed to fetch broker orders: {e}")
+
+    return reconciler.full_reconciliation(
+        local_positions=local_positions,
+        broker_positions=broker_positions,
+        local_orders=local_orders,
+        broker_orders=broker_orders,
+        apply_fixes=apply_fixes,
+    )
+
+def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
+    """Synchronize local state with broker truth.
+
+    Parameters
+    ----------
+    ctx:
+        Optional execution context providing ``api`` (broker client),
+        ``positions`` (``dict[str, float]``) and ``orders`` (``list[Order]``).
+        When ``None`` no reconciliation is performed and an empty result is
+        returned.  This keeps the function safe for callers that do not yet
+        provide a context.
+
+    Returns
+    -------
+    ReconciliationResult
+        Reconciliation outcome including any detected drifts.  The result's
+        ``reconciled_at`` timestamp reflects when the reconciliation occurred.
+    """
+    broker_client = getattr(ctx, "api", None) if ctx else None
+    if broker_client is None:
+        logger.debug("No broker context available for reconciliation")
+        return ReconciliationResult([], [], [], datetime.now(UTC))
+
+    # Extract local state
+    local_positions: dict[str, int] = {}
+    for sym, pos in (getattr(ctx, "positions", {}) or {}).items():
+        qty = pos.quantity if isinstance(pos, Position) else int(pos)
+        local_positions[sym] = qty
+
+    local_orders_list = list(getattr(ctx, "orders", []) or [])
+    local_orders: dict[str, Order] = {o.id: o for o in local_orders_list}
+
+    # Update local orders with broker fill information
+    for order in local_orders.values():
+        try:
+            broker_order = broker_client.get_order(order.id)
+            broker_status = OrderStatus(getattr(broker_order, "status"))
+            filled_qty = int(
+                getattr(broker_order, "filled_qty", getattr(broker_order, "filled_quantity", order.filled_quantity))
+            )
+            if order.status != broker_status or order.filled_quantity != filled_qty:
+                order.status = broker_status
+                order.filled_quantity = filled_qty
+                order.timestamp = datetime.now(UTC)
+                if broker_status == OrderStatus.FILLED:
+                    side_mult = 1 if getattr(order.side, "value", order.side) == OrderSide.BUY.value else -1
+                    local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * filled_qty
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error(f"Failed to update order {order.id}: {e}")
+
+    # Perform reconciliation against broker state
+    result = reconcile_with_broker(
+        broker_client,
+        local_positions={
+            sym: Position(
+                symbol=sym,
+                quantity=qty,
+                market_value=0.0,
+                cost_basis=0.0,
+                unrealized_pnl=0.0,
+                timestamp=datetime.now(UTC),
+            )
+            for sym, qty in local_positions.items()
+        },
+        local_orders=local_orders,
+        apply_fixes=False,
+    )
+
+    # Apply position drift fixes locally
+    for drift in result.position_drifts:
+        local_positions[drift.symbol] = drift.broker_qty
+
+    # Persist updated state back to context
+    ctx.positions = local_positions
+    ctx.orders = list(local_orders.values())
+    return result
