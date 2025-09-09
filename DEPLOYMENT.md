@@ -148,7 +148,7 @@ Group=ai-trading
 WorkingDirectory=/opt/ai-trading-bot
 Environment=PATH=/opt/ai-trading-bot/venv/bin
 ExecStart=/opt/ai-trading-bot/venv/bin/python -m ai_trading
-Restart=always
+Restart=on-failure
 RestartSec=10
 StandardOutput=journal
 StandardError=journal

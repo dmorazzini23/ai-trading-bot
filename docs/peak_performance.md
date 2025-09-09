@@ -295,7 +295,7 @@ Type=simple
 User=trading
 WorkingDirectory=/opt/ai-trading-bot
 ExecStart=/opt/ai-trading-bot/start.sh
-Restart=always
+Restart=on-failure
 RestartSec=10
 
 # Performance environment

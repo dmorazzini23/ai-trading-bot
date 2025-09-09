@@ -235,13 +235,10 @@ def main() -> int:
         # Delegate to main; it starts the API server thread and the scheduler loop
         _main.main(mapped_argv)
         return 0
-    except SystemExit as e:  # AI-AGENT-REF: do not propagate non-zero exits
-        try:
-            code = int(getattr(e, "code", 1) or 0)
-        except Exception:
-            code = 1
-        logger.error("ai_trading.main exited with code %s; degrading to 0 to avoid service crash", code, exc_info=True)
-        return 0
+    except SystemExit as e:
+        code = getattr(e, "code", None)
+        logger.error("ai_trading.main exited with code %s", code, exc_info=True)
+        raise
     except (ValueError, HTTPError) as e:
         logger.error("startup error: %s", e, exc_info=True)
         if "--dry-run" in sys.argv:

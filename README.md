@@ -1113,7 +1113,7 @@ Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 Environment=AI_TRADING_MODELS_DIR=/var/lib/ai-trading-bot/models
 Environment=AI_TRADING_OUTPUT_DIR=/var/lib/ai-trading-bot/output
 ExecStart=/opt/ai-trading-bot/venv/bin/python -m ai_trading
-Restart=always
+Restart=on-failure
 RestartSec=10
 
 [Install]
