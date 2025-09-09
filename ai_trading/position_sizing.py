@@ -10,6 +10,7 @@ from ai_trading.logging import get_logger, logger_once
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
 from ai_trading.exc import HTTPError, RequestException
+from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
 _log = get_logger(__name__)
 
 @dataclass
@@ -139,24 +140,24 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
         _CACHE.equity = 0.0
         return 0.0
 
-    try:  # Prefer alpaca-py when available
-        from alpaca.trading.client import TradingClient  # type: ignore
-
-        is_paper = "paper" in base.lower()
-        client = TradingClient(
-            api_key=key,
-            secret_key=secret,
-            paper=is_paper,
-            url_override=base,
-        )
-        acct = client.get_account()
-        eq = _coerce_float(getattr(acct, "equity", None), 0.0)
-        _CACHE.equity = eq
-        return eq
-    except ModuleNotFoundError:
-        pass
-    except Exception as e:  # noqa: BLE001 - log and fallback to HTTP
-        _log.warning("ALPACA_SDK_ACCOUNT_FAILED", extra={"error": str(e)})
+    if ALPACA_AVAILABLE:
+        try:
+            TradingClient = get_trading_client_cls()
+            is_paper = "paper" in base.lower()
+            client = TradingClient(
+                api_key=key,
+                secret_key=secret,
+                paper=is_paper,
+                url_override=base,
+            )
+            if hasattr(client, "get_account"):
+                acct = client.get_account()
+                eq = _coerce_float(getattr(acct, "equity", None), 0.0)
+                _CACHE.equity = eq
+                return eq
+            _log.warning("ALPACA_CLIENT_NO_GET_ACCOUNT", extra={"client": type(client).__name__})
+        except Exception as e:  # noqa: BLE001 - log and fallback to HTTP
+            _log.warning("ALPACA_SDK_ACCOUNT_FAILED", extra={"error": str(e)})
 
     url = f"{base}/v2/account"
     try:
