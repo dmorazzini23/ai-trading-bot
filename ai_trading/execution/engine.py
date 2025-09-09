@@ -709,12 +709,14 @@ class ExecutionEngine:
             quantity = int(_ensure_positive_qty(quantity))
             kwargs["limit_price"] = _ensure_valid_price(kwargs.get("limit_price"))
             kwargs["stop_price"] = _ensure_valid_price(kwargs.get("stop_price"))
+            # Ensure a sane default for broker-mirrored payload fields
+            tif = (kwargs.get("time_in_force") or "day")
             payload: dict[str, Any] = {
                 "symbol": symbol,
                 "side": getattr(side, "value", side),
                 "qty": quantity,
                 "type": getattr(order_type, "value", order_type),
-                "time_in_force": kwargs.get("time_in_force"),
+                "time_in_force": tif,
                 "limit_price": kwargs.get("limit_price"),
                 "stop_price": kwargs.get("stop_price"),
             }
@@ -750,10 +752,38 @@ class ExecutionEngine:
         """Execute order slices by delegating to execute_order."""
         return self.execute_order(symbol, side, quantity, **kwargs)
 
+    def _guess_price(self, symbol: str) -> float | None:
+        """Best-effort to obtain a reasonable price for simulation.
+
+        Tries (in order):
+        - ai_trading.core.bot_engine.get_latest_price (lazy import)
+        - Returns None if unavailable/fails.
+        """
+        try:
+            # Lazy import to avoid heavy imports at startup
+            import importlib
+            be = importlib.import_module("ai_trading.core.bot_engine")
+            if hasattr(be, "get_latest_price"):
+                p = be.get_latest_price(symbol)
+                try:
+                    return float(p) if p is not None else None
+                except (TypeError, ValueError):
+                    return None
+        except Exception:
+            return None
+        return None
+
     def _simulate_market_execution(self, order: Order):
         """Simulate market order execution (demo purposes)."""
         try:
-            base_price = order.price or 100.0
+            # Prefer provided price; else try to guess; else final fallback
+            if order.price is not None:
+                try:
+                    base_price = float(order.price)
+                except Exception:
+                    base_price = 100.0
+            else:
+                base_price = self._guess_price(order.symbol) or 100.0
             remaining = order.quantity
             while remaining > 0 and order.status != OrderStatus.CANCELED:
                 fill_quantity = min(remaining, max(1, remaining // 3))

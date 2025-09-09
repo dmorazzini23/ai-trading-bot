@@ -7510,7 +7510,8 @@ def get_sector(symbol: str) -> str:
         "GOOGL": "Technology",
         "GOOG": "Technology",
         "AMZN": "Technology",
-        "TSLA": "Technology",
+        # TSLA is Consumer Cyclical (Automobile Manufacturers)
+        "TSLA": "Consumer Cyclical",
         "META": "Technology",
         "NVDA": "Technology",
         "NFLX": "Technology",
@@ -8347,7 +8348,9 @@ def adjust_trailing_stop(position, new_stop: float) -> None:
     wait=wait_exponential(multiplier=1, min=1, max=10),
     retry=retry_if_exception_type(APIError),
 )
-def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | None:
+def submit_order(
+    ctx: BotContext, symbol: str, qty: int, side: str, *, price: float | None = None
+) -> Order | None:
     """Submit an order using the institutional execution engine."""
     if not market_is_open():
         logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
@@ -8392,7 +8395,9 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
             core_side = CoreOrderSide.SELL
         else:
             core_side = CoreOrderSide.BUY
-        return _exec_engine.execute_order(symbol, core_side, qty)
+        # Pass through computed price so the execution engine can simulate
+        # fills around the actual market price rather than a generic fallback.
+        return _exec_engine.execute_order(symbol, core_side, qty, price=price)
     except (APIError, TimeoutError, ConnectionError) as e:
         logger.error(
             "BROKER_OP_FAILED",
@@ -8754,7 +8759,7 @@ def maybe_pyramid(
             pos = ctx.api.get_position(symbol)
             qty = int(abs(int(pos.qty)) * 0.5)
             if qty > 0:
-                submit_order(ctx, symbol, qty, "buy")
+                submit_order(ctx, symbol, qty, "buy", price=current_price)
                 logger.info("PYRAMIDED", extra={"symbol": symbol, "qty": qty})
         except (
             FileNotFoundError,
@@ -9363,7 +9368,7 @@ def _enter_long(
             extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price},
         )
         return True
-    order = submit_order(ctx, symbol, adj_qty, "buy")
+    order = submit_order(ctx, symbol, adj_qty, "buy", price=current_price)
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
@@ -9458,7 +9463,7 @@ def _enter_short(
         )
         return True
     order = submit_order(
-        ctx, symbol, adj_qty, "sell_short"
+        ctx, symbol, adj_qty, "sell_short", price=current_price
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
@@ -9782,6 +9787,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
                 sym,
                 abs(target_shares),
                 "buy" if target_shares > 0 else "sell",
+                price=price,
             )
         except (
             FileNotFoundError,
@@ -12827,7 +12833,19 @@ def pyramid_add_position(
 ) -> None:
     current_qty = _current_qty(ctx, symbol)
     add_qty = max(1, int(abs(current_qty) * fraction))
-    submit_order(ctx, symbol, add_qty, "buy" if side == "long" else "sell")
+    # Try to use a recent price for better simulation fills
+    try:
+        raw = fetch_minute_df_safe(symbol)
+        px = get_latest_close(raw) if raw is not None else None
+    except DataFetchError:
+        px = None
+    submit_order(
+        ctx,
+        symbol,
+        add_qty,
+        "buy" if side == "long" else "sell",
+        price=px,
+    )
     logger.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
 
 
@@ -12835,7 +12853,12 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
     current_qty = _current_qty(ctx, symbol)
     reduce_qty = max(1, int(abs(current_qty) * fraction))
     side = "sell" if current_qty > 0 else "buy"
-    submit_order(ctx, symbol, reduce_qty, side)
+    try:
+        raw = fetch_minute_df_safe(symbol)
+        px = get_latest_close(raw) if raw is not None else None
+    except DataFetchError:
+        px = None
+    submit_order(ctx, symbol, reduce_qty, side, price=px)
     logger.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
 
 
