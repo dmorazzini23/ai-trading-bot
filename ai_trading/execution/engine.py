@@ -794,7 +794,16 @@ class ExecutionEngine:
                     time.sleep(0.1)
             if order.is_filled:
                 self.execution_stats['filled_orders'] += 1
-                self.execution_stats['total_volume'] += order.notional_value
+                # Ensure float accumulation to avoid Decimal/float TypeError
+                try:
+                    nv = float(getattr(order, 'notional_value', 0.0))
+                except Exception:
+                    try:
+                        avg = getattr(order, 'average_fill_price', None)
+                        nv = (float(avg) * float(order.filled_quantity)) if avg is not None else float(base_price) * float(order.quantity)
+                    except Exception:
+                        nv = float(order.quantity) * float(base_price)
+                self.execution_stats['total_volume'] += nv
                 fill_time = (order.executed_at - order.created_at).total_seconds()
                 self.execution_stats['average_fill_time'] = (self.execution_stats['average_fill_time'] * (self.execution_stats['filled_orders'] - 1) + fill_time) / self.execution_stats['filled_orders']
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
