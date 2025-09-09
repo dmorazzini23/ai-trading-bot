@@ -4052,13 +4052,35 @@ class DataFetcher:
         api_key = self.settings.alpaca_api_key
         api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
         # AI-AGENT-REF: use plain secret string
+        if not ALPACA_AVAILABLE:
+            try:
+                from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
+                df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
+            except Exception:
+                logger.warning(
+                    "alpaca-py not installed and Yahoo fallback failed for %s",
+                    symbol,
+                )
+                return None
+            else:
+                logger.warning(
+                    "alpaca-py not installed; using Yahoo fallback for %s",
+                    symbol,
+                )
+                with cache_lock:
+                    self._daily_cache[symbol] = (fetch_date, df)
+                return df
+
         if not api_key or not api_secret:
             # Fall back to Yahoo-backed daily fetch when credentials are missing
             try:
                 from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
                 df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
             except Exception:
-                logger.warning(f"Missing Alpaca credentials for {symbol}")
+                logger.warning(
+                    "Missing Alpaca credentials for %s; using Yahoo fallback",
+                    symbol,
+                )
                 return None
             else:
                 with cache_lock:
@@ -4075,10 +4097,25 @@ class DataFetcher:
             },
         )
 
-        client = StockHistoricalDataClient(
-            api_key=api_key,
-            secret_key=api_secret,
-        )
+        try:
+            client = StockHistoricalDataClient(
+                api_key=api_key,
+                secret_key=api_secret,
+            )
+        except ImportError:
+            logger.warning(
+                "alpaca-py import failed at runtime; using Yahoo fallback for %s",
+                symbol,
+            )
+            try:
+                from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
+                df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
+            except Exception:
+                return None
+            else:
+                with cache_lock:
+                    self._daily_cache[symbol] = (fetch_date, df)
+                return df
 
         # In-memory cache for resampled minute→daily frames
         # Keyed by (symbol, YYYY-MM-DD end date)
