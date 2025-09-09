@@ -1968,6 +1968,8 @@ from ai_trading.metrics import (
 
 # Prometheus metrics - lazy initialization to prevent duplicates
 _METRICS_READY = False
+sentiment_api_failures = None
+sentiment_cb_state = None
 
 
 def _init_metrics() -> None:
@@ -1975,6 +1977,7 @@ def _init_metrics() -> None:
     global _METRICS_READY, orders_total, order_failures, daily_drawdown, signals_evaluated
     global run_all_trades_duration, minute_cache_hit, minute_cache_miss, daily_cache_hit, daily_cache_miss
     global event_cooldown_hits, slippage_total, slippage_count, weekly_drawdown, skipped_duplicates, skipped_cooldown
+    global sentiment_api_failures, sentiment_cb_state
     if _METRICS_READY:
         return
     orders_total = get_counter("bot_orders_total", "Total orders sent")
@@ -2008,6 +2011,15 @@ def _init_metrics() -> None:
         "bot_skipped_cooldown",
         "Trades skipped due to recent execution",
     )
+    sentiment_api_failures = get_counter(
+        "sentiment_api_failures_total",
+        "Total sentiment API call failures",
+    )
+    sentiment_cb_state = get_gauge(
+        "sentiment_circuit_breaker_state",
+        "Sentiment circuit breaker state (0 closed, 1 half-open, 2 open)",
+    )
+    sentiment_cb_state.set(0)
     _METRICS_READY = True
 
 
@@ -5317,6 +5329,7 @@ _SENTIMENT_CIRCUIT_BREAKER = {
     "last_failure": 0,
     "state": "closed",
     "next_retry": 0,
+    "opened_at": 0,
 }  # closed, open, half-open
 # AI-AGENT-REF: Enhanced sentiment circuit breaker thresholds for better resilience
 SENTIMENT_RECOVERY_TIMEOUT = (
@@ -6731,34 +6744,49 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
 def _check_sentiment_circuit_breaker() -> bool:
     """Check if sentiment circuit breaker allows requests."""
     global _SENTIMENT_CIRCUIT_BREAKER
+    _init_metrics()
     now = pytime.time()
     cb = _SENTIMENT_CIRCUIT_BREAKER
 
     if cb["state"] == "open":
-        if now - cb["last_failure"] > SENTIMENT_RECOVERY_TIMEOUT:
+        open_for = now - cb.get("opened_at", cb["last_failure"])
+        if open_for > SENTIMENT_RECOVERY_TIMEOUT:
             cb["state"] = "half-open"
+            sentiment_cb_state.set(1)
             logger.info("Sentiment circuit breaker moved to half-open state")
             return True
+        if open_for > SENTIMENT_RECOVERY_TIMEOUT / 2:
+            logger.warning(
+                "Sentiment circuit breaker still open after %.0fs", open_for
+            )
+        sentiment_cb_state.set(2)
         return False
     if now < cb.get("next_retry", 0):
         logger.debug("Sentiment retry delayed %.1fs", cb["next_retry"] - now)
         return False
+    sentiment_cb_state.set(0)
     return True
 
 
 def _record_sentiment_success():
     """Record successful sentiment API call."""
     global _SENTIMENT_CIRCUIT_BREAKER
-    _SENTIMENT_CIRCUIT_BREAKER["failures"] = 0
-    _SENTIMENT_CIRCUIT_BREAKER["next_retry"] = 0
-    if _SENTIMENT_CIRCUIT_BREAKER["state"] == "half-open":
-        _SENTIMENT_CIRCUIT_BREAKER["state"] = "closed"
+    _init_metrics()
+    cb = _SENTIMENT_CIRCUIT_BREAKER
+    cb["failures"] = 0
+    cb["next_retry"] = 0
+    cb["opened_at"] = 0
+    if cb["state"] == "half-open":
+        cb["state"] = "closed"
         logger.info("Sentiment circuit breaker closed - service recovered")
+    sentiment_cb_state.set(0)
 
 
 def _record_sentiment_failure():
     """Record failed sentiment API call and update circuit breaker."""
     global _SENTIMENT_CIRCUIT_BREAKER
+    _init_metrics()
+    sentiment_api_failures.inc()
     cb = _SENTIMENT_CIRCUIT_BREAKER
     cb["failures"] += 1
     cb["last_failure"] = pytime.time()
@@ -6769,6 +6797,7 @@ def _record_sentiment_failure():
     cb["next_retry"] = cb["last_failure"] + delay
     if cb["failures"] >= SENTIMENT_FAILURE_THRESHOLD:
         cb["state"] = "open"
+        cb["opened_at"] = cb["last_failure"]
         logger.warning(
             f"Sentiment circuit breaker opened after {cb['failures']} failures"
         )
@@ -6776,13 +6805,19 @@ def _record_sentiment_failure():
         logger.debug(
             "Sentiment failure %s; next retry in %.1fs", cb["failures"], delay
         )
+    state_val = {"closed": 0, "half-open": 1, "open": 2}[cb["state"]]
+    sentiment_cb_state.set(state_val)
 
 
 @retry(
-    stop=stop_after_attempt(
-        2
-    ),  # Reduced from 3 to avoid hitting rate limits too quickly
-    wait=wait_exponential(multiplier=1, min=2, max=10),  # Increased delays
+    stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),
+    wait=
+    wait_exponential(
+        multiplier=SENTIMENT_BASE_DELAY,
+        min=SENTIMENT_BASE_DELAY,
+        max=SENTIMENT_RECOVERY_TIMEOUT,
+    )
+    + wait_random(0, SENTIMENT_BASE_DELAY),
     retry=retry_if_exception_type((requests.exceptions.RequestException,)),
 )
 def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
