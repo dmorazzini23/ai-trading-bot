@@ -33,6 +33,7 @@ from ai_trading.data.empty_bar_backoff import (
     record_attempt,
 )
 from ai_trading.data.metrics import metrics, provider_fallback
+from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
@@ -217,6 +218,18 @@ _alpaca_disabled_until: _dt.datetime | None = None
 # Emit a one-time explanatory log when Alpaca keys are missing to make
 # backup-provider usage obvious in production logs without spamming.
 _ALPACA_KEYS_MISSING_LOGGED = False
+
+
+def _disable_alpaca(duration: _dt.timedelta) -> None:
+    """Disable Alpaca as a data source for ``duration``."""
+
+    global _alpaca_disabled_until
+    _alpaca_disabled_until = datetime.now(UTC) + duration
+
+
+# Register disable callback with provider monitor so repeated failures trigger
+# temporary provider deactivation and downstream fallbacks.
+provider_monitor.register_disable_callback("alpaca", _disable_alpaca)
 
 
 def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> tuple[str, str, int, int]:
@@ -407,6 +420,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
                     metrics.unauthorized += 1
                 except Exception:
                     pass
+                provider_monitor.record_failure("alpaca", "unauthorized")
                 logger.warning(
                     "UNAUTHORIZED_SIP",
                     extra=_norm_extra({"provider": "alpaca", "status": "precheck", "feed": "sip", "timeframe": timeframe}),
@@ -434,6 +448,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     if getattr(resp, "status_code", None) in (401, 403):
         _incr("data.fetch.unauthorized", value=1.0, tags={"provider": "alpaca", "feed": "sip", "timeframe": timeframe})
         metrics.unauthorized += 1
+        provider_monitor.record_failure("alpaca", "unauthorized")
         _SIP_UNAUTHORIZED = True
         os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
         logger.warning(
@@ -900,6 +915,7 @@ def _fetch_bars(
     if _feed == "sip" and _SIP_UNAUTHORIZED:
         _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
         metrics.unauthorized += 1
+        provider_monitor.record_failure("alpaca", "unauthorized")
         logger.warning(
             "UNAUTHORIZED_SIP",
             extra=_norm_extra({"provider": "alpaca", "status": "unauthorized", "feed": _feed, "timeframe": _interval}),
@@ -997,6 +1013,7 @@ def _fetch_bars(
             )
             _incr("data.fetch.timeout", value=1.0, tags=_tags())
             metrics.timeout += 1
+            provider_monitor.record_failure("alpaca", "timeout")
             if fallback:
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None:
@@ -1193,6 +1210,7 @@ def _fetch_bars(
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
+            provider_monitor.record_failure("alpaca", "unauthorized")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             logger.warning(
@@ -1213,6 +1231,7 @@ def _fetch_bars(
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             metrics.rate_limit += 1
+            provider_monitor.record_failure("alpaca", "rate_limit")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
@@ -1551,6 +1570,7 @@ def _fetch_bars(
         _IEX_EMPTY_COUNTS.pop((symbol, _interval), None)
         log_extra_success = {"remaining_retries": max_retries - _state["retries"], **log_extra}
         log_fetch_attempt("alpaca", status=status, **log_extra_success)
+        provider_monitor.record_success("alpaca")
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
