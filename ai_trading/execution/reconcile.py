@@ -250,11 +250,25 @@ def reconcile_positions_and_orders() -> ReconciliationResult:
     positions and orders after trading activity.
 
     Returns:
-        ReconciliationResult with any detected drifts
+        ReconciliationResult with any detected drifts. The timestamp of the
+        reconciliation is available via the result's ``reconciled_at`` field.
     """
     try:
         logger.debug('Position/order reconciliation called (mock implementation)')
-        return ReconciliationResult(position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC))
+        # ReconciliationResult already tracks when reconciliation happened via
+        # the ``reconciled_at`` field, which callers should use for timestamping
+        # instead of a separate ``timestamp`` parameter.
+        return ReconciliationResult(
+            position_drifts=[],
+            order_drifts=[],
+            actions_taken=[],
+            reconciled_at=datetime.now(UTC),
+        )
     except (RuntimeError, ValueError) as e:
         logger.error(f'Error in reconciliation: {e}')
-        return ReconciliationResult(position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC))
+        return ReconciliationResult(
+            position_drifts=[],
+            order_drifts=[],
+            actions_taken=[],
+            reconciled_at=datetime.now(UTC),
+        )
