@@ -5695,6 +5695,27 @@ class SignalManager:
         df["sma_50"] = df["close"].rolling(window=50).mean()
         df["sma_200"] = df["close"].rolling(window=200).mean()
 
+        indicator_cols = [
+            c
+            for c in (
+                "rsi",
+                "rsi_14",
+                "ichimoku_conv",
+                "ichimoku_base",
+                "stochrsi",
+                "macd",
+                "vwap",
+                "macds",
+                "atr",
+                "sma_50",
+                "sma_200",
+            )
+            if c in df.columns
+        ]
+        df = df.dropna(subset=indicator_cols)
+        if df.empty:
+            return 0.0, 0.0, "no_data"
+
         raw = [
             self.signal_momentum(df, model),
             self.signal_mean_reversion(df, model),
@@ -10828,8 +10849,8 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         if col not in frame.columns:
             frame[col] = np.nan
 
-    # Only drop rows where all are missing
-    frame.dropna(subset=required, how="all", inplace=True)
+    # Drop rows with any missing indicator values
+    frame.dropna(subset=required, inplace=True)
 
     return frame
 
