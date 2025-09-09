@@ -55,6 +55,7 @@ from ai_trading.config.management import (
     _resolve_alpaca_env,
 )
 from ai_trading.metrics import get_histogram, get_counter
+from ai_trading.alpaca_api import ALPACA_AVAILABLE
 from time import monotonic as _mono
 
 
@@ -502,6 +503,9 @@ def parse_cli(argv: list[str] | None = None):
 def main(argv: list[str] | None = None) -> None:
     """Start the API thread and repeatedly run trading cycles."""
     ensure_dotenv_loaded()
+    if not ALPACA_AVAILABLE:
+        logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py is required")
+        raise SystemExit(1)
     _fail_fast_env()
     args = parse_cli(argv)
     global config
