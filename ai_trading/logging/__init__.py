@@ -342,7 +342,8 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             return logging.getLogger()
         if _listener is not None:
             _listener = None
-        was_configured = _LOGGING_CONFIGURED
+        if _LOGGING_CONFIGURED:
+            return logging.getLogger()
         logger = logging.getLogger()
         if _configured:
             return logger
@@ -419,13 +420,19 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             _listener.start()
         atexit.register(_safe_shutdown_logging)
         _LOGGING_CONFIGURED = True
-        if not was_configured:
-            logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
+        logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
         # Apply filters for noisy third-party libraries after configuration is complete.
         from ai_trading.logging.setup import _apply_library_filters
 
         _apply_library_filters()
         return logger
+
+
+def configure_logging(debug: bool=False, log_file: str | None=None) -> logging.Logger:
+    """Configure logging unless it has already been done."""
+    if _LOGGING_CONFIGURED:
+        return logging.getLogger()
+    return setup_logging(debug=debug, log_file=log_file)
 
 def _safe_shutdown_logging():
     try:
@@ -463,11 +470,13 @@ def _safe_shutdown_logging():
         pass
 
 def get_logger(name: str) -> SanitizingLoggerAdapter:
-    _ensure_single_handler(logging.getLogger())
     "Return a named logger wrapped with :class:`SanitizingLoggerAdapter`."
+    if _LOGGING_CONFIGURED and name in _loggers:
+        return _loggers[name]
+    if not _LOGGING_CONFIGURED:
+        configure_logging()
+    _ensure_single_handler(logging.getLogger())
     if name not in _loggers:
-        if not _LOGGING_CONFIGURED:
-            setup_logging()
         base = logging.getLogger(name or _ROOT_LOGGER_NAME)
         base.propagate = True
         base.setLevel(logging.NOTSET)
@@ -903,4 +912,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_backup_provider_used', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
+__all__ = ['setup_logging', 'configure_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_backup_provider_used', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
