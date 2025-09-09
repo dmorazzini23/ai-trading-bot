@@ -71,6 +71,14 @@ feed and instrument. Query the metric via the `/metrics` endpoint:
 curl -sf http://localhost:$HEALTHCHECK_PORT/metrics | grep backup_provider_used_total
 ```
 
+#### Sentiment API Monitoring
+The bot tracks upstream sentiment failures and circuit breaker state:
+
+- `sentiment_api_failures_total` counts failed sentiment API calls.
+- `sentiment_circuit_breaker_state` is a gauge where `0` means closed,
+  `1` half-open, and `2` open. A warning is logged if the breaker stays
+  open beyond the normal recovery window.
+
 ### Example Usage
 
 ```bash
