@@ -7786,6 +7786,44 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
         return False
 
 
+def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) -> int:
+    """Clamp quantity to sector cap headroom (0 if none).
+
+    When a proposed order would push sector exposure above the configured cap,
+    reduce the order size to the maximum headroom available for the symbol's
+    sector instead of hard-rejecting. Returns the adjusted quantity, which may
+    be zero.
+    """
+    try:
+        total = float(ctx.api.get_account().portfolio_value)
+    except Exception:
+        total = 0.0
+    if total <= 0 or qty <= 0 or price <= 0:
+        return max(0, int(qty))
+
+    sec = get_sector(symbol)
+    exposures = sector_exposure(ctx)  # fraction by sector
+    cap = getattr(ctx, "sector_cap", get_sector_exposure_cap())
+    # Relax cap for Unknown to mirror sector_exposure_ok
+    if sec == "Unknown":
+        cap = min(cap * 2.0, 0.8)
+
+    current_frac = exposures.get(sec, 0.0)
+    headroom_dollars = max(0.0, (cap - current_frac) * total)
+    if headroom_dollars <= 0:
+        return 0
+    max_qty = int(headroom_dollars // price)
+    if max_qty < qty:
+        logger.debug(
+            "SECTOR_CAP_PARTIAL | symbol=%s requested=%d clamped=%d headroom=$%.2f",
+            symbol,
+            qty,
+            max_qty,
+            headroom_dollars,
+        )
+    return max(0, max_qty if max_qty < qty else qty)
+
+
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
@@ -8346,9 +8384,14 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
             logger.warning("Liquidity checks failed open-loop: %s", e)
 
     try:
-        # Use core enums so tests checking call signatures match expected type
-        side_norm = str(side).lower()
-        core_side = CoreOrderSide.BUY if side_norm == "buy" else CoreOrderSide.SELL
+        # Map side to core enums, supporting sell_short/short explicitly
+        side_norm = str(side).lower().strip()
+        if side_norm in ("sell_short", "short"):
+            core_side = CoreOrderSide.SELL_SHORT
+        elif side_norm in ("sell", "exit"):
+            core_side = CoreOrderSide.SELL
+        else:
+            core_side = CoreOrderSide.BUY
         return _exec_engine.execute_order(symbol, core_side, qty)
     except (APIError, TimeoutError, ConnectionError) as e:
         logger.error(
@@ -9261,7 +9304,12 @@ def _enter_long(
             )
             target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
 
-    raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
+    # Use account equity for weight-based sizing to avoid multiplying by buying power
+    try:
+        account_equity = float(ctx.api.get_account().equity)
+    except Exception:
+        account_equity = float(balance)
+    raw_qty = int(account_equity * target_weight / current_price) if current_price > 0 else 0
 
     # AI-AGENT-REF: Position sizing integration (gated by flag)
     if hasattr(S, "sizing_enabled") and CFG.sizing_enabled:
@@ -9304,21 +9352,18 @@ def _enter_long(
                 f"Skipping {symbol}: computed qty <= 0 (balance=${balance:.0f}, weight={target_weight:.4f})"
             )
             return True
+    # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
+    adj_qty = _apply_sector_cap_qty(ctx, symbol, raw_qty, current_price)
     logger.info(
-        f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={raw_qty}"
+        f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
-    if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
+    if adj_qty <= 0:
         logger.info(
             "SKIP_SECTOR_CAP | Buy order skipped due to sector exposure limits",
-            extra={
-                "symbol": symbol,
-                "side": "buy",
-                "qty": raw_qty,
-                "price": current_price,
-            },
+            extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price},
         )
         return True
-    order = submit_order(ctx, symbol, raw_qty, "buy")
+    order = submit_order(ctx, symbol, adj_qty, "buy")
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
@@ -9401,22 +9446,19 @@ def _enter_short(
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return True
+    # Apply sector exposure cap as a size-to-fit clamp (partial instead of hard reject)
+    adj_qty = _apply_sector_cap_qty(ctx, symbol, qty, current_price)
     logger.info(
-        f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={qty}"
+        f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={adj_qty}"
     )
-    if not sector_exposure_ok(ctx, symbol, qty, current_price):
+    if adj_qty <= 0:
         logger.info(
             "SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits",
-            extra={
-                "symbol": symbol,
-                "side": "sell_short",
-                "qty": qty,
-                "price": current_price,
-            },
+            extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price},
         )
         return True
     order = submit_order(
-        ctx, symbol, qty, "sell_short"
+        ctx, symbol, adj_qty, "sell_short"
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")

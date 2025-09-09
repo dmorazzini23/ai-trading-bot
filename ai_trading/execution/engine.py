@@ -470,6 +470,25 @@ class ExecutionEngine:
         """Helper to get :attr:`available_qty`."""
         return self.available_qty
 
+    # Lifecycle hooks to align with bot_engine expectations -----------------
+    def start_cycle(self) -> None:
+        """Hook called at the start of a trading cycle (no-op)."""
+        try:
+            # Best-effort cleanup of very old tracked orders
+            self.cleanup_stale_orders()
+        except Exception:
+            # Never allow lifecycle hooks to raise
+            pass
+
+    def end_cycle(self) -> None:
+        """Hook called at the end of a trading cycle (no-op)."""
+        try:
+            # Run simple post-cycle safety checks
+            self.check_stops()
+        except Exception:
+            # Never allow lifecycle hooks to raise
+            pass
+
     def _track_order(self, order: Order) -> None:
         """Track an order in the shared monitoring structure."""
         _cleanup_stale_orders()

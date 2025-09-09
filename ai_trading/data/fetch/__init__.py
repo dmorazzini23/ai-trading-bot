@@ -199,6 +199,10 @@ _ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() n
 
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
+# Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
+# primary-provider attempts for slightly shifted windows in the same cycle.
+_FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
+_FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
 # symbol/timeframe/window. This keeps production logs concise while preserving
 # the first occurrence for observability.
@@ -232,6 +236,13 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
             end=end,
         )
     _FALLBACK_WINDOWS.add(key)
+    # Also remember at a coarser granularity for a short TTL to avoid
+    # repeated primary-provider retries for small window shifts in the same run.
+    try:
+        now_s = int(_dt.datetime.now(tz=UTC).timestamp())
+    except Exception:
+        now_s = int(time.time())
+    _FALLBACK_UNTIL[(symbol, timeframe)] = now_s + max(30, _FALLBACK_TTL_SECONDS)
 
 
 def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
@@ -857,6 +868,17 @@ def _fetch_bars(
             _mark_fallback(symbol, _interval, _start, _end)
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     if _used_fallback(symbol, _interval, _start, _end):
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_int = interval_map.get(_interval)
+        if fb_int:
+            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+    # Respect recent fallback TTL at coarse granularity
+    try:
+        now_s = int(_dt.datetime.now(tz=UTC).timestamp())
+    except Exception:
+        now_s = int(time.time())
+    until = _FALLBACK_UNTIL.get((symbol, _interval))
+    if until and now_s < until:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:

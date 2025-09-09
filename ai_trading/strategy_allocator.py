@@ -136,8 +136,18 @@ class StrategyAllocator:
                 if not s.symbol or not isinstance(s.symbol, str):
                     logger.warning("Invalid signal symbol: %s", s.symbol)
                     continue
-                if s.side not in ["buy", "sell"]:
-                    logger.warning("Invalid signal side: %s", s.side)
+                # Normalize side to canonical strings and accept common aliases
+                try:
+                    side_norm = str(getattr(s, "side", "")).strip().lower()
+                except Exception:
+                    side_norm = ""
+                # Map aliases
+                if side_norm in ("long", "buy", "enter_long"):
+                    s.side = "buy"
+                elif side_norm in ("short", "sell", "sell_short", "enter_short"):
+                    s.side = "sell"
+                else:
+                    logger.warning("Invalid signal side: %s", getattr(s, "side", side_norm))
                     continue
 
                 try:
@@ -348,4 +358,3 @@ class StrategyAllocator:
 
 
 __all__ = ["StrategyAllocator"]
-
