@@ -522,7 +522,7 @@ class BotEngine:
         self._trading_client_cls = trading_client_cls or get_trading_client_cls()
         self._data_client_cls = data_client_cls or _get_data_client_cls_cached()
         global APIError
-        if getattr(APIError, "__module__", "") == __name__:
+        if getattr(APIError, "__module__", "") == __name__ and ALPACA_AVAILABLE:
             APIError = get_api_error_cls()
         # Load universe tickers once and store on both engine and runtime
         self._tickers = load_universe()
