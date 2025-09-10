@@ -309,10 +309,10 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
         Reconciliation outcome including any detected drifts.  The result's
         ``reconciled_at`` timestamp reflects when the reconciliation occurred.
     """
-    broker_client = getattr(ctx, "api", None) if ctx else None
-    if broker_client is None:
-        logger.debug("No broker context available for reconciliation")
+    if not getattr(ctx, "api", None):
         return ReconciliationResult([], [], [], datetime.now(UTC))
+
+    broker_client = ctx.api
 
     # Extract local state
     local_positions: dict[str, int] = {}
