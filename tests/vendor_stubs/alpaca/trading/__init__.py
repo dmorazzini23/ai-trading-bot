@@ -1,3 +1,5 @@
 """Trading subpackage for alpaca vendor stubs."""
 
-__all__ = []
+from . import client
+
+__all__ = ["client"]
