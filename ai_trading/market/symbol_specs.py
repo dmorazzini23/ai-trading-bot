@@ -38,6 +38,8 @@ DEFAULT_SYMBOL_SPECS: dict[str, SymbolSpec] = {
     "XOM": SymbolSpec(tick=Decimal("0.01"), lot=1, trading_hours="09:30-16:00"),
     "BAC": SymbolSpec(tick=Decimal("0.01"), lot=1, trading_hours="09:30-16:00"),
     "V": SymbolSpec(tick=Decimal("0.01"), lot=1, trading_hours="09:30-16:00"),
+    "COST": SymbolSpec(tick=Decimal("0.01"), lot=1),
+    "NFLX": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "SPY": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "QQQ": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "IWM": SymbolSpec(tick=Decimal("0.01"), lot=1),

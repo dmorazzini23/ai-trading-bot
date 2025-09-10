@@ -20,3 +20,11 @@ def test_unknown_symbol_uses_default_spec() -> None:
     spec = get_symbol_spec("UNKNOWN")
     assert spec is DEFAULT_SPEC
 
+
+@pytest.mark.parametrize("symbol", ["COST", "NFLX"])
+def test_default_specs(symbol: str) -> None:
+    spec = get_symbol_spec(symbol)
+    assert spec is not DEFAULT_SPEC
+    assert spec.tick == Decimal("0.01")
+    assert spec.lot == 1
+
