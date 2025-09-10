@@ -6468,6 +6468,16 @@ class LazyBotContext:
         return self._context.volume_threshold
 
     @property
+    def market_open(self):
+        self._ensure_initialized()
+        return self._context.market_open
+
+    @property
+    def market_close(self):
+        self._ensure_initialized()
+        return self._context.market_close
+
+    @property
     def kelly_fraction(self):
         self._ensure_initialized()
         return self._context.kelly_fraction
@@ -6519,6 +6529,10 @@ class LazyBotContext:
         else:
             self._ensure_initialized()
             setattr(self._context, name, value)
+
+    def __getattr__(self, name):
+        self._ensure_initialized()
+        return getattr(self._context, name)
 
 
 # AI-AGENT-REF: No module-level context creation to prevent import-time side effects
