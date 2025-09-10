@@ -40,9 +40,7 @@ class ProviderMonitor:
         self.disabled_until: dict[str, datetime] = {}
         self._callbacks: dict[str, Callable[[timedelta], None]] = {}
 
-    def register_disable_callback(
-        self, provider: str, cb: Callable[[timedelta], None]
-    ) -> None:
+    def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
 
         The callback receives the cooldown period as a ``timedelta`` so the
@@ -51,22 +49,38 @@ class ProviderMonitor:
 
         self._callbacks[provider] = cb
 
-    def record_failure(self, provider: str, reason: str) -> None:
-        """Record a failure for ``provider`` and alert on threshold."""
+    def record_failure(self, provider: str, reason: str, error: str | None = None) -> None:
+        """Record a failure for ``provider`` and alert on threshold.
+
+        Parameters
+        ----------
+        provider:
+            Name of the failing data provider.
+        reason:
+            High level classification of the failure (``timeout``,
+            ``connection_error`` …).
+        error:
+            Optional detailed error message derived from the underlying
+            exception. When provided it is included in logs and alert metadata
+            to aid debugging of provider outages.
+        """
 
         count = self.fail_counts[provider] + 1
         self.fail_counts[provider] = count
         if count >= self.threshold:
-            logger.error(
-                "DATA_PROVIDER_FAILURE",
-                extra={"provider": provider, "reason": reason, "count": count},
-            )
+            extra = {"provider": provider, "reason": reason, "count": count}
+            if error:
+                extra["error"] = error
+            logger.error("DATA_PROVIDER_FAILURE", extra=extra)
             try:
+                metadata = {"reason": reason, "failures": count}
+                if error:
+                    metadata["error"] = error
                 self.alert_manager.create_alert(
                     AlertType.SYSTEM,
                     AlertSeverity.CRITICAL,
                     f"Data provider {provider} failure",
-                    metadata={"reason": reason, "failures": count},
+                    metadata=metadata,
                 )
             except Exception:  # pragma: no cover - alerting best effort
                 logger.exception("ALERT_FAILURE", extra={"provider": provider})
@@ -87,9 +101,7 @@ class ProviderMonitor:
             try:
                 cb(timedelta(seconds=self.cooldown))
             except Exception:  # pragma: no cover - defensive
-                logger.exception(
-                    "PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider}
-                )
+                logger.exception("PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider})
 
     def is_disabled(self, provider: str) -> bool:
         """Return ``True`` if ``provider`` is currently disabled."""
@@ -101,4 +113,3 @@ class ProviderMonitor:
 provider_monitor = ProviderMonitor()
 
 __all__ = ["provider_monitor", "ProviderMonitor"]
-
