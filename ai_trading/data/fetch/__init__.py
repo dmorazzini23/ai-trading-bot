@@ -384,8 +384,30 @@ _ALLOW_SIP = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower() in {
     "true",
     "yes",
 }
+_HAS_SIP = os.getenv("ALPACA_HAS_SIP", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 _SIP_DISALLOWED_WARNED = False
 _SIP_PRECHECK_DONE = False
+_SIP_UNAVAILABLE_LOGGED: set[str] = set()
+
+
+def _sip_configured() -> bool:
+    return bool(os.getenv("PYTEST_RUNNING")) or (_ALLOW_SIP and _HAS_SIP)
+
+
+def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZED_SIP") -> None:
+    if symbol in _SIP_UNAVAILABLE_LOGGED:
+        return
+    logger.warning(
+        reason,
+        extra=_norm_extra(
+            {"provider": "alpaca", "feed": "sip", "symbol": symbol, "timeframe": timeframe}
+        ),
+    )
+    _SIP_UNAVAILABLE_LOGGED.add(symbol)
 
 
 def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], timeframe: str) -> bool:
@@ -397,39 +419,13 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     # consuming mocked responses intended for the actual fallback request.
     if os.getenv("PYTEST_RUNNING"):
         return True
-    if not _ALLOW_SIP:
-        # Even when SIP is disallowed, perform a one-time precheck to exercise
-        # the authorization path. In tests (PYTEST_RUNNING), allow the fallback
-        # to proceed so metrics and fallback paths can be validated.
-        if not _SIP_DISALLOWED_WARNED:
+    if not _sip_configured():
+        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
             logger.warning(
                 "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe}),
             )
             _SIP_DISALLOWED_WARNED = True
-        try:
-            r = session.get(
-                "https://data.alpaca.markets/v2/stocks/bars",
-                params={"symbols": "AAPL", "timeframe": timeframe, "limit": 1, "feed": "sip"},
-                headers=headers,
-                timeout=clamp_request_timeout(5),
-            )
-            if getattr(r, "status_code", None) in (401, 403):
-                _SIP_UNAUTHORIZED = True
-                os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
-                try:
-                    metrics.unauthorized += 1
-                except Exception:
-                    pass
-                provider_monitor.record_failure("alpaca", "unauthorized")
-                logger.warning(
-                    "UNAUTHORIZED_SIP",
-                    extra=_norm_extra({"provider": "alpaca", "status": "precheck", "feed": "sip", "timeframe": timeframe}),
-                )
-        except Exception:
-            pass
-        if os.getenv("PYTEST_RUNNING"):
-            return True
         return False
     if _SIP_UNAUTHORIZED:
         return False
@@ -900,27 +896,27 @@ def _fetch_bars(
         if fb_int:
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     global _SIP_DISALLOWED_WARNED
-    if _feed == "sip" and not _ALLOW_SIP:
-        if not _SIP_DISALLOWED_WARNED:
+    if _feed == "sip" and not _sip_configured():
+        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
             logger.warning(
                 "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
             )
             _SIP_DISALLOWED_WARNED = True
-        # Do not silently rewrite the requested feed when explicitly set to SIP.
-        # Allow the request to proceed and handle unauthorized gracefully.
-
+        _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_int = interval_map.get(_interval)
+        if fb_int:
+            _mark_fallback(symbol, _interval, _start, _end)
+            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+        return pd.DataFrame()
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
-
     if _feed == "sip" and _SIP_UNAUTHORIZED:
+        _log_sip_unavailable(symbol, _interval)
         _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
         metrics.unauthorized += 1
         provider_monitor.record_failure("alpaca", "unauthorized")
-        logger.warning(
-            "UNAUTHORIZED_SIP",
-            extra=_norm_extra({"provider": "alpaca", "status": "unauthorized", "feed": _feed, "timeframe": _interval}),
-        )
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
@@ -1276,7 +1272,7 @@ def _fetch_bars(
                 cnt = _IEX_EMPTY_COUNTS.get(key, 0) + 1
                 _IEX_EMPTY_COUNTS[key] = cnt
                 prev = _state.get("corr_id")
-                if _ALLOW_SIP and not _SIP_UNAUTHORIZED:
+                if _sip_configured() and not _SIP_UNAUTHORIZED:
                     result = _attempt_fallback((_interval, "sip", _start, _end))
                     sip_corr = _state.get("corr_id")
                     if result is not None and not getattr(result, "empty", True):
@@ -1298,6 +1294,13 @@ def _fetch_bars(
                         ),
                     )
                     return result if result is not None else pd.DataFrame()
+                reason = "UNAUTHORIZED_SIP" if _SIP_UNAUTHORIZED else "SIP_UNAVAILABLE"
+                _log_sip_unavailable(symbol, _interval, reason)
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                fb_int = interval_map.get(_interval)
+                if fb_int:
+                    _mark_fallback(symbol, _interval, _start, _end)
+                    return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 logger.error(
                     "IEX_EMPTY_NO_SIP",
                     extra=_norm_extra(
@@ -1365,7 +1368,7 @@ def _fetch_bars(
             if (
                 _feed == "iex"
                 and _IEX_EMPTY_COUNTS.get(key, 0) >= _IEX_EMPTY_THRESHOLD
-                and _ALLOW_SIP
+                and _sip_configured()
                 and not _SIP_UNAUTHORIZED
                 and _sip_fallback_allowed(session, headers, _interval)
             ):
@@ -1407,7 +1410,7 @@ def _fetch_bars(
                 _state["retries"] == 0
                 and _feed == "iex"
                 and reason in {"symbol_delisted_or_wrong_feed", "feed_error"}
-                and _ALLOW_SIP
+                and _sip_configured()
                 and not _SIP_UNAUTHORIZED
             ):
                 result = _attempt_fallback((_interval, "sip", _start, _end))
@@ -1598,17 +1601,17 @@ def _fetch_bars(
             # Consider both subsequent and preceding providers to find an Alpaca alt feed
             scan = list(priority[idx + 1:]) + list(reversed(priority[: max(0, idx)]))
             for prov in scan:
-                if prov in {"alpaca_iex", "alpaca_sip"}:
-                    candidate = prov.split("_")[1]
-                    if candidate == _feed:
-                        continue
-                    if candidate == "sip" and _SIP_UNAUTHORIZED:
-                        continue
-                    alt_feed = candidate
+                if prov == "alpaca_sip":
+                    if _sip_configured() and not _SIP_UNAUTHORIZED and _feed != "sip":
+                        alt_feed = "sip"
+                        break
+                    continue
+                if prov == "alpaca_iex" and _feed != "iex":
+                    alt_feed = "iex"
                     break
         if alt_feed is not None:
             fallback = (_interval, alt_feed, _start, _end)
-        elif _feed == "iex" and (not _SIP_UNAUTHORIZED):
+        elif _feed == "iex" and _sip_configured() and not _SIP_UNAUTHORIZED:
             # Ensure a SIP fallback candidate exists for tests even when
             # provider priority is customized or empty.
             fallback = (_interval, "sip", _start, _end)
@@ -1645,7 +1648,7 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
         providers_tried = set(_state["providers"])
-        can_use_sip = _ALLOW_SIP and not _SIP_UNAUTHORIZED
+        can_use_sip = _sip_configured() and not _SIP_UNAUTHORIZED
         yahoo_allowed = (
             (can_use_sip and {"iex", "sip"}.issubset(providers_tried) and max_fb >= 2)
             or (not can_use_sip and "iex" in providers_tried and max_fb >= 1)
@@ -1695,12 +1698,18 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
             if (
                 feed_to_use == "iex"
                 and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
-                and _ALLOW_SIP
+                and _sip_configured()
                 and not _SIP_UNAUTHORIZED
             ):
                 feed_to_use = "sip"
                 payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
+            elif (
+                feed_to_use == "iex"
+                and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
+                and not _sip_configured()
+            ):
+                _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
         except (EmptyBarsError, ValueError, RuntimeError) as e:
             if isinstance(e, EmptyBarsError):
@@ -1763,8 +1772,13 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                         cur = feed or _DEFAULT_FEED
                         idx = prio.index(f"alpaca_{cur}") if prio else -1
                         for prov in prio[idx + 1:]:
-                            if prov in {"alpaca_iex", "alpaca_sip"}:
-                                alt_feed = prov.split("_", 1)[1]
+                            if prov == "alpaca_sip":
+                                if _sip_configured() and not _SIP_UNAUTHORIZED:
+                                    alt_feed = "sip"
+                                    break
+                                continue
+                            if prov == "alpaca_iex":
+                                alt_feed = "iex"
                                 break
                     if alt_feed and alt_feed != (feed or _DEFAULT_FEED):
                         try:
@@ -2057,6 +2071,7 @@ __all__ = [
     "_DEFAULT_FEED",
     "_VALID_FEEDS",
     "_ALLOW_SIP",
+    "_HAS_SIP",
     "_SIP_UNAUTHORIZED",
     "ensure_datetime",
     "bars_time_window_day",

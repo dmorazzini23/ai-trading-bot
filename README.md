@@ -741,8 +741,9 @@ exits early with a clear error message when these values are invalid.
    ALPACA_DATA_FEED=iex
    # Set the following only if your Alpaca account has SIP permissions
   # ALPACA_DATA_FEED=sip
-  # ALPACA_ALLOW_SIP=1  # enable SIP feed and SIP fallback (requires SIP subscription)
-  # Without ALPACA_ALLOW_SIP, SIP requests are skipped and a warning is logged
+  # ALPACA_HAS_SIP=1      # set to 1 if your Alpaca account has SIP access
+  # ALPACA_ALLOW_SIP=1    # enable SIP feed and SIP fallback
+  # Without ALPACA_HAS_SIP, the fetcher uses the backup provider instead of SIP
   # ALPACA_SIP_UNAUTHORIZED=1  # legacy flag to suppress SIP after a 403
    ALPACA_ADJUSTMENT=all
    DATA_PROVIDER_PRIORITY=alpaca_iex,alpaca_sip,yahoo

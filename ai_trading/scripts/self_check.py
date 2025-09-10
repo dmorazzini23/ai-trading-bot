@@ -28,7 +28,10 @@ def _bars_time_window(timeframe: "TimeFrame") -> tuple[dt.datetime, dt.datetime]
 
 def main() -> None:
     feed = get_env("ALPACA_DATA_FEED", "iex")
-    if feed.lower() == "sip" and not get_env("ALPACA_ALLOW_SIP", "0", cast=bool):
+    if feed.lower() == "sip" and not (
+        get_env("ALPACA_ALLOW_SIP", "0", cast=bool)
+        and get_env("ALPACA_HAS_SIP", "0", cast=bool)
+    ):
         logger.warning("SIP_FEED_DISABLED", extra={"requested": "sip", "using": "iex"})
         feed = "iex"
     APIError = get_api_error_cls()
