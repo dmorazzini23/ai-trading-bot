@@ -7,6 +7,7 @@ import logging
 from threading import Thread
 import errno
 import signal
+import sys
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -847,4 +848,15 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code != 0:
+            logger.error("SERVICE_EXIT", extra={"code": code})
+        raise
+    except BaseException:  # noqa: BLE001
+        logger.exception("SERVICE_CRASH")
+        sys.exit(1)
+    else:
+        sys.exit(0)
