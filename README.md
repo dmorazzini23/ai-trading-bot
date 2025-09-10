@@ -1541,6 +1541,8 @@ calls suppress further warnings to avoid log spam.
 - Default: packaged `ai_trading/data/tickers.csv` (S&P-100).
 - Symbols are uppercased and normalized for provider quirks.
 - Missing file: logs an error and falls back to `['SPY', 'AAPL', 'MSFT', 'AMZN', 'GOOGL']`.
+- Sector classifications follow the Global Industry Classification Standard (GICS).
+- To add a symbol, append it to `tickers.csv` **and** extend `SECTOR_MAPPINGS` in `ai_trading/core/bot_engine.py` with the verified sector.
 
 Example systemd unit override:
 
