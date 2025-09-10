@@ -9485,11 +9485,14 @@ def _enter_long(
             extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price},
         )
         return True
-    order = submit_order(ctx, symbol, adj_qty, "buy", price=current_price)
-    if order is None:
+    order_id = submit_order(ctx, symbol, adj_qty, "buy", price=current_price)
+    if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
-        logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        order_id = getattr(order_id, "id", order_id)
+        logger.debug(
+            f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order_id}"
+        )
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -9579,13 +9582,13 @@ def _enter_short(
             extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price},
         )
         return True
-    order = submit_order(
+    order_id = submit_order(
         ctx, symbol, adj_qty, "sell_short", price=current_price
     )  # AI-AGENT-REF: Use sell_short for short signals
-    if order is None:
+    if order_id is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
-        order_id = order if isinstance(order, str) else getattr(order, "id", order)
+        order_id = getattr(order_id, "id", order_id)
         logger.debug(
             f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order_id}"
         )
@@ -13816,9 +13819,9 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
                             cid = f"{sym}-{uuid.uuid4().hex[:8]}"
                             ctx.rebalance_ids[sym] = cid
                             ctx.rebalance_attempts[sym] = 0
-                        order = submit_order(ctx, sym, qty_to_buy, "buy")
+                        order_id = submit_order(ctx, sym, qty_to_buy, "buy")
                         # AI-AGENT-REF: confirm order result before logging success
-                        if order:
+                        if order_id:
                             logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
                             ctx.rebalance_buys[sym] = datetime.now(UTC)
                         else:
