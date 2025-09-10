@@ -9,6 +9,8 @@ Reconciles local trading state with broker truth by:
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
+
 from ai_trading.core.interfaces import Order, OrderStatus, Position, OrderType
 from ai_trading.order.types import OrderSide
 logger = get_logger(__name__)
@@ -59,17 +61,18 @@ class PositionReconciler:
     - Order status synchronization
     """
 
-    def __init__(self, tolerance_pct: float=0.01, min_drift_qty: float=0.001):
-        """
-        Initialize reconciler.
+    def __init__(
+        self,
+        broker_client: Any | None = None,
+        tolerance_pct: float = 0.01,
+        min_drift_qty: float = 0.001,
+    ) -> None:
+        """Initialize reconciler."""
 
-        Args:
-            tolerance_pct: Position drift tolerance as percentage
-            min_drift_qty: Minimum quantity drift to trigger reconciliation
-        """
+        self.broker_client = broker_client
         self.tolerance_pct = tolerance_pct
         self.min_drift_qty = min_drift_qty
-        self.logger = get_logger(f'{__name__}.{self.__class__.__name__}')
+        self.logger = get_logger(f"{__name__}.{self.__class__.__name__}")
 
     def reconcile_positions(self, local_positions: dict[str, Position], broker_positions: dict[str, Position]) -> list[PositionDrift]:
         """
@@ -218,33 +221,39 @@ class PositionReconciler:
         return result
 _global_reconciler: PositionReconciler | None = None
 
-def get_reconciler() -> PositionReconciler:
+
+def get_reconciler(broker_client: Any | None = None) -> PositionReconciler:
     """Get or create global reconciler instance."""
+
     global _global_reconciler
     if _global_reconciler is None:
-        _global_reconciler = PositionReconciler()
+        _global_reconciler = PositionReconciler(broker_client)
+    elif broker_client and _global_reconciler.broker_client is None:
+        _global_reconciler.broker_client = broker_client
     return _global_reconciler
 
-def reconcile_with_broker(broker_client, local_positions: dict[str, Position], local_orders: dict[str, Order], apply_fixes: bool=True) -> ReconciliationResult:
-    """
-    Convenience function to reconcile with broker using client.
 
-    Args:
-        broker_client: Broker client to fetch positions/orders
-        local_positions: Local position state
-        local_orders: Local order state
-        apply_fixes: Whether to apply fixes automatically
+def reconcile_with_broker(
+    broker_client: Any | None,
+    *,
+    local_positions: dict[str, Position],
+    local_orders: dict[str, Order],
+    apply_fixes: bool = True,
+) -> ReconciliationResult:
+    """Convenience function to reconcile with broker using client."""
 
-    Returns:
-        ReconciliationResult
-    """
-    reconciler = get_reconciler()
+    reconciler = get_reconciler(broker_client)
+    client = broker_client or reconciler.broker_client
+    if client is None:
+        logger.warning("reconcile_with_broker called without broker client")
+        return ReconciliationResult([], [], [], datetime.now(UTC))
+
     broker_positions: dict[str, Position] = {}
     broker_orders: dict[str, Order] = {}
 
     # Fetch current broker positions
     try:
-        positions = broker_client.list_positions() or []
+        positions = client.list_positions() or []
         for pos in positions:
             qty = int(getattr(pos, "qty", getattr(pos, "quantity", 0)))
             broker_positions[pos.symbol] = Position(
@@ -260,14 +269,16 @@ def reconcile_with_broker(broker_client, local_positions: dict[str, Position], l
 
     # Fetch open broker orders if supported
     try:
-        if hasattr(broker_client, "list_orders"):
-            orders = broker_client.list_orders(status="open") or []
+        if hasattr(client, "list_orders"):
+            orders = client.list_orders(status="open") or []
         else:
             orders = []
         for ord_obj in orders:
             status = OrderStatus(getattr(ord_obj, "status"))
             qty = int(getattr(ord_obj, "qty", getattr(ord_obj, "quantity", 0)))
-            filled_qty = int(getattr(ord_obj, "filled_qty", getattr(ord_obj, "filled_quantity", 0)))
+            filled_qty = int(
+                getattr(ord_obj, "filled_qty", getattr(ord_obj, "filled_quantity", 0))
+            )
             broker_orders[ord_obj.id] = Order(
                 id=ord_obj.id,
                 symbol=getattr(ord_obj, "symbol", ""),

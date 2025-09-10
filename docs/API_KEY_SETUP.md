@@ -86,9 +86,17 @@ ALPACA_SECRET_KEY=SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD
 - These keys allow testing without real money
 
 ### Production
-- Use **Live Trading** keys  
+- Use **Live Trading** keys
 - Set `ALPACA_BASE_URL=https://api.alpaca.markets`
 - ⚠️ **WARNING**: These keys trade with real money!
+
+### Position Reconciliation
+- The bot reconciles local positions with the broker only when valid
+  credentials are provided.
+- In test or development environments, supply **paper trading** keys to
+  enable reconciliation against the paper endpoint.
+- If no broker client is configured, the bot logs a single warning and
+  skips the reconciliation step.
 
 ## 🔧 Alternative Configuration Methods
 
