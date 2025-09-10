@@ -51,6 +51,10 @@ def _force_window(monkeypatch):
 @pytest.mark.parametrize("status_first", [401, 403])
 def test_sip_unauthorized_returns_empty(monkeypatch: pytest.MonkeyPatch, status_first: int):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
     calls = {"count": 0}
 
     def fake_get(url, params=None, headers=None, timeout=None):
@@ -58,9 +62,11 @@ def test_sip_unauthorized_returns_empty(monkeypatch: pytest.MonkeyPatch, status_
         return _Resp(status_first, payload={"message": "auth required"})
 
     monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+    monkeypatch.setattr(df, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
 
     start, end = _dt_range(2)
-    out = df.get_bars("TEST", timeframe="1Min", start=start, end=end, feed="sip", adjustment="raw")
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="sip")
     assert isinstance(out, pd.DataFrame) and out.empty
     assert calls["count"] == 1
     assert df._SIP_UNAUTHORIZED is True
@@ -75,11 +81,55 @@ def test_sip_fallback_skipped_when_marked_unauthorized(monkeypatch: pytest.Monke
         return _Resp(429, payload={"message": "rate limit"})
 
     monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
 
     start, end = _dt_range(2)
     with pytest.raises(ValueError, match="rate_limited"):
         df._fetch_bars("TEST", start, end, "1Min", feed="iex")
     assert calls["count"] == 1
+
+
+def test_no_additional_sip_requests_after_unauthorized(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    feeds: list[str | None] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        feeds.append((params or {}).get("feed"))
+        return _Resp(401, payload={"message": "auth"})
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+
+    backup_calls = {"count": 0}
+
+    def fake_backup(symbol, start, end, interval):
+        backup_calls["count"] += 1
+        ts = datetime.now(UTC)
+        return pd.DataFrame(
+            [
+                {
+                    "timestamp": ts,
+                    "open": 10.0,
+                    "high": 11.0,
+                    "low": 9.5,
+                    "close": 10.5,
+                    "volume": 1000,
+                }
+            ]
+        ).set_index("timestamp")
+
+    monkeypatch.setattr(df, "_backup_get_bars", fake_backup)
+
+    start, end = _dt_range(2)
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="sip")
+
+    assert feeds == ["sip"]
+    assert backup_calls["count"] == 1
+    assert isinstance(out, pd.DataFrame) and not out.empty
+    assert df._SIP_UNAUTHORIZED is True
 
 
 def test_timeout_triggers_fallback(monkeypatch: pytest.MonkeyPatch):

@@ -416,6 +416,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
             )
             if getattr(r, "status_code", None) in (401, 403):
                 _SIP_UNAUTHORIZED = True
+                os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
                 try:
                     metrics.unauthorized += 1
                 except Exception:
@@ -920,6 +921,11 @@ def _fetch_bars(
             "UNAUTHORIZED_SIP",
             extra=_norm_extra({"provider": "alpaca", "status": "unauthorized", "feed": _feed, "timeframe": _interval}),
         )
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_int = interval_map.get(_interval)
+        if fb_int:
+            _mark_fallback(symbol, _interval, _start, _end)
+            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
         return pd.DataFrame()
 
     headers = {
@@ -1222,6 +1228,11 @@ def _fetch_bars(
             if _feed == "sip":
                 _SIP_UNAUTHORIZED = True
                 os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                fb_int = interval_map.get(_interval)
+                if fb_int:
+                    _mark_fallback(symbol, _interval, _start, _end)
+                    return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
             if fallback:
                 result = _attempt_fallback(fallback)
