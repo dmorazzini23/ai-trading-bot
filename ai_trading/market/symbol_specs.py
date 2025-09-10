@@ -20,6 +20,7 @@ class SymbolSpec(NamedTuple):
     lot: int
     multiplier: int = 1
     trading_hours: str = "09:30-16:00"
+    currency: str = "USD"
 
 
 DEFAULT_SYMBOL_SPECS: dict[str, SymbolSpec] = {
@@ -38,6 +39,7 @@ DEFAULT_SYMBOL_SPECS: dict[str, SymbolSpec] = {
     "XOM": SymbolSpec(tick=Decimal("0.01"), lot=1, trading_hours="09:30-16:00"),
     "BAC": SymbolSpec(tick=Decimal("0.01"), lot=1, trading_hours="09:30-16:00"),
     "V": SymbolSpec(tick=Decimal("0.01"), lot=1, trading_hours="09:30-16:00"),
+    "MA": SymbolSpec(tick=Decimal("0.01"), lot=1, currency="USD"),
     "COST": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "NFLX": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "SPY": SymbolSpec(tick=Decimal("0.01"), lot=1),
@@ -61,7 +63,7 @@ DEFAULT_SYMBOL_SPECS: dict[str, SymbolSpec] = {
 }
 
 
-DEFAULT_SPEC = SymbolSpec(tick=Decimal("0.01"), lot=1)
+DEFAULT_SPEC = SymbolSpec(tick=Decimal("0.01"), lot=1, currency="USD")
 
 
 def get_symbol_spec(symbol: str) -> SymbolSpec:
@@ -92,20 +94,26 @@ def add_symbol_spec(
     lot: int,
     multiplier: int = 1,
     trading_hours: str = "09:30-16:00",
+    currency: str = "USD",
 ) -> None:
     """Add or update symbol specification."""
 
     symbol = symbol.upper().strip()
     DEFAULT_SYMBOL_SPECS[symbol] = SymbolSpec(
-        tick=tick, lot=lot, multiplier=multiplier, trading_hours=trading_hours
+        tick=tick,
+        lot=lot,
+        multiplier=multiplier,
+        trading_hours=trading_hours,
+        currency=currency,
     )
     logger.info(
-        "Added/updated spec for %s: tick=%s, lot=%s, multiplier=%s, trading_hours=%s",
+        "Added/updated spec for %s: tick=%s, lot=%s, multiplier=%s, trading_hours=%s, currency=%s",
         symbol,
         tick,
         lot,
         multiplier,
         trading_hours,
+        currency,
     )
 
 
@@ -117,7 +125,8 @@ def update_specs_from_config(specs_config: dict[str, dict]) -> None:
         lot = int(spec_dict["lot"])
         multiplier = int(spec_dict.get("multiplier", 1))
         trading_hours = str(spec_dict.get("trading_hours", "09:30-16:00"))
-        add_symbol_spec(symbol, tick, lot, multiplier, trading_hours)
+        currency = str(spec_dict.get("currency", "USD"))
+        add_symbol_spec(symbol, tick, lot, multiplier, trading_hours, currency)
 
 
 def get_tick_by_symbol() -> dict[str, Decimal]:
