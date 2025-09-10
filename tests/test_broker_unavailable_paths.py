@@ -1,6 +1,5 @@
 import logging
 from types import SimpleNamespace
-import logging
 
 from ai_trading.core import bot_engine
 from ai_trading.core.bot_engine import check_pdt_rule, safe_alpaca_get_account
@@ -37,14 +36,16 @@ def test_run_all_trades_aborts_without_api(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "get_minute_df", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "last_minute_bar_age_seconds", lambda *a, **k: 0)
     monkeypatch.setattr(bot_engine, "get_cached_minute_timestamp", lambda *a, **k: 0)
-    heartbeat = {}
-    monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: heartbeat.setdefault("called", True))
+    hb = {}
+    monkeypatch.setattr(bot_engine, "_log_loop_heartbeat", lambda *a, **k: hb.setdefault("loop", True))
+    monkeypatch.setattr(bot_engine, "_send_heartbeat", lambda: hb.setdefault("halt", True))
+    monkeypatch.setattr(bot_engine, "ensure_data_fetcher", lambda _rt: True)
     def fail(*a, **k):
         raise AssertionError("PDT should not be called")
     monkeypatch.setattr(bot_engine, "check_pdt_rule", fail)
     with caplog.at_level(logging.WARNING):
         bot_engine.run_all_trades_worker(state, runtime)
-    assert heartbeat.get("called")
+    assert hb.get("loop") and not hb.get("halt")
     msgs = [r.getMessage() for r in caplog.records]
     assert any("ALPACA_CLIENT_MISSING" in m for m in msgs)
     assert any(r.levelno == logging.WARNING for r in caplog.records)

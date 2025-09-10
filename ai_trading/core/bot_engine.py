@@ -13213,17 +13213,23 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         if not _is_market_open_base():
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
             return  # skip work when market closed
+        loop_start = time.monotonic()
         ensure_alpaca_attached(runtime)
         api = getattr(runtime, "api", None)
         if not _validate_trading_api(api):
-            _send_heartbeat()
+            try:
+                ensure_data_fetcher(runtime)
+            except DataFetchError:
+                _send_heartbeat()
+            else:
+                logger.warning("ALPACA_CLIENT_MISSING_FALLBACK_ACTIVE")
+                _log_loop_heartbeat(loop_id, loop_start)
             return
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
             return
         state.running = True
         state.last_run_at = now
-        loop_start = time.monotonic()
         if not getattr(state, "_strategies_loaded", False):
             runtime.strategies = get_strategies()
             state._strategies_loaded = True
