@@ -83,8 +83,9 @@ def test_submit_order_successful_execution():
     bot_engine._exec_engine = mock_exec_engine
 
     try:
-        # Mock market_is_open to return True
-        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True):
+        # Mock market_is_open to return True and latest price lookup
+        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True), \
+            patch('ai_trading.core.bot_engine.get_latest_price', return_value=101.0):
             mock_ctx = Mock(spec=BotContext)
 
             # Should successfully execute order
@@ -92,7 +93,7 @@ def test_submit_order_successful_execution():
 
             assert result == mock_order
             mock_exec_engine.execute_order.assert_called_once_with(
-                "AAPL", OrderSide.BUY, 10
+                "AAPL", OrderSide.BUY, 10, price=101.0
             )
 
     finally:
@@ -118,8 +119,9 @@ def test_submit_order_execution_error_propagation():
     bot_engine._exec_engine = mock_exec_engine
 
     try:
-        # Mock market_is_open to return True
-        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True):
+        # Mock market_is_open to return True and latest price lookup
+        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True), \
+            patch('ai_trading.core.bot_engine.get_latest_price', return_value=101.0):
             mock_ctx = Mock(spec=BotContext)
 
             # Should propagate the execution error
