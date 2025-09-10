@@ -2,6 +2,9 @@ import sys
 import types
 from typing import Any
 
+import errno
+import socket
+
 import pytest
 
 flask_mod: Any = types.ModuleType("flask")
@@ -45,18 +48,41 @@ def test_run_flask_app(monkeypatch):
 
 
 def test_run_flask_app_port_in_use(monkeypatch):
-    """Port conflict triggers fallback port."""
+    """OSError EADDRINUSE triggers retry on next port."""
     called = []
 
     class App:
         def run(self, host, port, debug=False, **kwargs):
             called.append(port)
+            if len(called) == 1:
+                raise OSError(errno.EADDRINUSE, "address in use")
+            raise SystemExit
 
     monkeypatch.setattr(app, "create_app", lambda: App())
-    monkeypatch.setattr(main, "get_pid_on_port", lambda p: 111)
-    monkeypatch.setattr(main, "get_free_port", lambda *a, **k: 5678)
-    main.run_flask_app(1234)
-    assert called == [5678]
+    monkeypatch.setattr(main, "get_pid_on_port", lambda p: None)
+    with pytest.raises(SystemExit):
+        main.run_flask_app(1234)
+    assert called == [1234, 1235]
+
+
+def test_run_flask_app_skips_ipv6_port(monkeypatch):
+    """IPv6-bound port is skipped in favor of a free one."""
+    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    s.bind(("::", 0))
+    s.listen(1)
+    port = s.getsockname()[1]
+    called = []
+
+    class App:
+        def run(self, host, port, debug=False, **kwargs):
+            called.append(port)
+            raise SystemExit
+
+    monkeypatch.setattr(app, "create_app", lambda: App())
+    with pytest.raises(SystemExit):
+        main.run_flask_app(port)
+    s.close()
+    assert called == [port + 1]
 
 
 def test_run_bot_calls_cycle(monkeypatch):
