@@ -2501,8 +2501,18 @@ def cancel_all_open_orders(runtime) -> None:
         )
 
 
+_reconcile_warned = False
+
+
 def reconcile_positions(ctx: BotContext) -> None:
-    """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
+    """On startup, fetch live positions and prune stale stop/take targets."""
+
+    global _reconcile_warned
+    if not getattr(ctx, "api", None):
+        if not _reconcile_warned:
+            logger.warning("Skipping reconciliation: no broker client")
+            _reconcile_warned = True
+        return
     try:
         live_positions = {
             pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()
@@ -6215,6 +6225,14 @@ def _initialize_alpaca_clients() -> bool:
                 api_key=key,
                 secret_key=secret,
             )
+            try:
+                from ai_trading.execution.reconcile import get_reconciler
+
+                get_reconciler(trading_client)
+            except Exception as e:  # pragma: no cover - best effort
+                logger.warning(
+                    "POSITION_RECONCILER_INIT_FAILED", extra={"error": str(e)}
+                )
         except (APIError, TypeError, ValueError, OSError) as e:  # AI-AGENT-REF: expose network or auth issues
             logger.error(
                 "ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)}
