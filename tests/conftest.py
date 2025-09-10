@@ -17,7 +17,18 @@ try:
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     from alpaca.data import TimeFrame  # type: ignore  # noqa: F401
 except Exception:  # pragma: no cover - dependency missing
-    pytest.exit("alpaca-py is required for tests", returncode=0)
+    from tests.vendor_stubs import alpaca as _alpaca
+    import sys as _sys
+
+    _sys.modules.setdefault("alpaca", _alpaca)
+    _sys.modules.setdefault("alpaca.trading", _alpaca.trading)
+    _sys.modules.setdefault("alpaca.trading.client", _alpaca.trading.client)
+    _sys.modules.setdefault("alpaca.data", _alpaca.data)
+    _sys.modules.setdefault("alpaca.data.timeframe", _alpaca.data.timeframe)
+    _sys.modules.setdefault("alpaca.data.requests", _alpaca.data.requests)
+
+    from tests.vendor_stubs.alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
+    from tests.vendor_stubs.alpaca.data.timeframe import TimeFrame  # type: ignore  # noqa: F401
 
 try:
     from freezegun import freeze_time  # type: ignore
