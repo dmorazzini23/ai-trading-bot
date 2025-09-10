@@ -41,11 +41,13 @@ from . import fallback_order
 
 logger = get_logger(__name__)
 
+
 # Lightweight indirection to support tests monkeypatching `data_fetcher.get_settings`
 def get_settings():  # pragma: no cover - simple alias for tests
     from ai_trading.config.settings import get_settings as _get
 
     return _get()
+
 
 # Module-level session reused across requests
 _HTTP_SESSION: HTTPSession = get_http_session()
@@ -124,7 +126,6 @@ DataFetchException = DataFetchError
 
 class EmptyBarsError(DataFetchError, ValueError):
     """Raised when a data provider returns no bars for a request."""
-
 
 
 def ensure_datetime(value: Any) -> _dt.datetime:
@@ -266,6 +267,7 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
 def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
 
+
 def _symbol_exists(symbol: str) -> bool:
     """Return True if the symbol exists according to Alpaca or the local list."""
     url = f"https://data.alpaca.markets/v2/stocks/{symbol}/meta"
@@ -286,6 +288,7 @@ def _symbol_exists(symbol: str) -> bool:
     if not path:
         try:
             from importlib.resources import files as pkg_files
+
             p = pkg_files("ai_trading.data").joinpath("tickers.csv")
             path = str(p) if p.is_file() else os.path.join(os.getcwd(), "tickers.csv")
         except Exception:
@@ -295,6 +298,7 @@ def _symbol_exists(symbol: str) -> bool:
             return any(line.strip().upper() == symbol.upper() for line in fh)
     except OSError:
         return False
+
 
 _VALID_FEEDS = {"iex", "sip"}
 _VALID_ADJUSTMENTS = {"raw", "split", "dividend", "all"}
@@ -311,9 +315,7 @@ def _outside_market_hours(start: _dt.datetime, end: _dt.datetime) -> bool:
         return False
 
 
-def _validate_alpaca_params(
-    start: _dt.datetime, end: _dt.datetime, timeframe: str, feed: str, adjustment: str
-) -> None:
+def _validate_alpaca_params(start: _dt.datetime, end: _dt.datetime, timeframe: str, feed: str, adjustment: str) -> None:
     """Raise ``ValueError`` if request parameters are invalid."""
     if start >= end:
         raise ValueError("invalid_time_window")
@@ -408,9 +410,7 @@ def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZE
         return
     logger.warning(
         reason,
-        extra=_norm_extra(
-            {"provider": "alpaca", "feed": "sip", "symbol": symbol, "timeframe": timeframe}
-        ),
+        extra=_norm_extra({"provider": "alpaca", "feed": "sip", "symbol": symbol, "timeframe": timeframe}),
     )
     _SIP_UNAVAILABLE_LOGGED.add(symbol)
 
@@ -915,8 +915,10 @@ def _fetch_bars(
             _mark_fallback(symbol, _interval, _start, _end)
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
         return pd.DataFrame()
+
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
+
     if _feed == "sip" and _SIP_UNAUTHORIZED:
         _log_sip_unavailable(symbol, _interval)
         _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
@@ -954,7 +956,9 @@ def _fetch_bars(
         global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until
         _state["providers"].append(_feed)
 
-        def _attempt_fallback(fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False) -> pd.DataFrame | None:
+        def _attempt_fallback(
+            fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False
+        ) -> pd.DataFrame | None:
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
             if fb_feed == "sip" and (not skip_check) and not _sip_fallback_allowed(session, headers, fb_interval):
@@ -969,6 +973,7 @@ def _fetch_bars(
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
             logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
             return _req(session, None, headers=headers, timeout=timeout)
+
         params = {
             "symbols": symbol,
             "timeframe": _interval,
@@ -1020,7 +1025,7 @@ def _fetch_bars(
             )
             _incr("data.fetch.timeout", value=1.0, tags=_tags())
             metrics.timeout += 1
-            provider_monitor.record_failure("alpaca", "timeout")
+            provider_monitor.record_failure("alpaca", "timeout", str(e))
             if fallback:
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None:
@@ -1081,6 +1086,7 @@ def _fetch_bars(
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval, "error": str(e)}),
             )
             _incr("data.fetch.connection_error", value=1.0, tags=_tags())
+            provider_monitor.record_failure("alpaca", "connection_error", str(e))
             if fallback:
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None:
@@ -1274,9 +1280,7 @@ def _fetch_bars(
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
                 if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
                     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-                    provider_fallback.labels(
-                        from_provider=f"alpaca_{_feed}", to_provider=provider
-                    ).inc()
+                    provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
                     metrics.empty_fallback += 1
                     _mark_fallback(symbol, _interval, _start, _end)
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(key, None)
@@ -1429,10 +1433,7 @@ def _fetch_bars(
                     return result
             reason = (
                 "market_closed"
-                if (
-                    _outside_market_hours(_start, _end)
-                    or not _window_has_trading_session(_start, _end)
-                )
+                if (_outside_market_hours(_start, _end) or not _window_has_trading_session(_start, _end))
                 else "symbol_delisted_or_wrong_feed"
             )
             if reason == "symbol_delisted_or_wrong_feed":
@@ -1481,9 +1482,7 @@ def _fetch_bars(
                     _alpaca_disabled_until = datetime.now(UTC) + _dt.timedelta(minutes=5)
                 remaining_retries = max_retries - _state["retries"]
                 logger.warning(
-                    "ALPACA_FETCH_ABORTED"
-                    if remaining_retries > 0
-                    else "ALPACA_FETCH_RETRY_LIMIT",
+                    "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT",
                     extra=_norm_extra(
                         {
                             "provider": "alpaca",
@@ -1571,6 +1570,7 @@ def _fetch_bars(
                 return None
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
                 from ai_trading.utils.lazy_imports import load_pandas as _lp
+
                 pd_mod = _lp()
                 try:
                     return pd_mod.DataFrame()
@@ -1578,9 +1578,7 @@ def _fetch_bars(
                     return pd.DataFrame()
             remaining_retries = max_retries - _state["retries"]
             logger.warning(
-                "ALPACA_FETCH_ABORTED"
-                if remaining_retries > 0
-                else "ALPACA_FETCH_RETRY_LIMIT",
+                "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT",
                 extra=_norm_extra(
                     {
                         "provider": "alpaca",
@@ -1633,7 +1631,7 @@ def _fetch_bars(
             except ValueError:
                 idx = -1
             # Consider both subsequent and preceding providers to find an Alpaca alt feed
-            scan = list(priority[idx + 1:]) + list(reversed(priority[: max(0, idx)]))
+            scan = list(priority[idx + 1 :]) + list(reversed(priority[: max(0, idx)]))
             for prov in scan:
                 if prov == "alpaca_sip":
                     if _sip_configured() and not _SIP_UNAUTHORIZED and _feed != "sip":
@@ -1688,9 +1686,8 @@ def _fetch_bars(
         y_int = interval_map.get(_interval)
         providers_tried = set(_state["providers"])
         can_use_sip = _sip_configured() and not _SIP_UNAUTHORIZED
-        yahoo_allowed = (
-            (can_use_sip and {"iex", "sip"}.issubset(providers_tried) and max_fb >= 2)
-            or (not can_use_sip and "iex" in providers_tried and max_fb >= 1)
+        yahoo_allowed = (can_use_sip and {"iex", "sip"}.issubset(providers_tried) and max_fb >= 2) or (
+            not can_use_sip and "iex" in providers_tried and max_fb >= 1
         )
         if y_int and yahoo_allowed and "yahoo" in priority:
             fallback_order.mark_yahoo()
@@ -1699,9 +1696,7 @@ def _fetch_bars(
             except Exception:  # pragma: no cover - network variance
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
-                provider_fallback.labels(
-                    from_provider=f"alpaca_{_feed}", to_provider="yahoo"
-                ).inc()
+                provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
@@ -1724,11 +1719,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
     record_attempt(symbol, "1Min")
     used_backup = False
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
-    has_finnhub = (
-        os.getenv("FINNHUB_API_KEY")
-        and fh_fetcher is not None
-        and not getattr(fh_fetcher, "is_stub", False)
-    )
+    has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
     df = None
     if _has_alpaca_keys():
@@ -1743,11 +1734,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 feed_to_use = "sip"
                 payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-            elif (
-                feed_to_use == "iex"
-                and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
-                and not _sip_configured()
-            ):
+            elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
         except (EmptyBarsError, ValueError, RuntimeError) as e:
@@ -1790,9 +1777,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                         retries=cnt,
                     )
                     _SKIPPED_SYMBOLS.add(tf_key)
-                    raise EmptyBarsError(
-                        f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}"
-                    ) from e
+                    raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, max_retries={cnt}") from e
                 if cnt >= _EMPTY_BAR_THRESHOLD:
                     backoff = min(2 ** (cnt - _EMPTY_BAR_THRESHOLD), 60)
                     ctx = {
@@ -1810,7 +1795,7 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                         prio = provider_priority()
                         cur = feed or _DEFAULT_FEED
                         idx = prio.index(f"alpaca_{cur}") if prio else -1
-                        for prov in prio[idx + 1:]:
+                        for prov in prio[idx + 1 :]:
                             if prov == "alpaca_sip":
                                 if _sip_configured() and not _SIP_UNAUTHORIZED:
                                     alt_feed = "sip"
@@ -1825,14 +1810,24 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
                             logger.debug(
                                 "ALPACA_ALT_FEED_FAILED",
-                                extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "err": str(alt_err)},
+                                extra={
+                                    "symbol": symbol,
+                                    "from_feed": feed or _DEFAULT_FEED,
+                                    "to_feed": alt_feed,
+                                    "err": str(alt_err),
+                                },
                             )
                             df_alt = None
                         else:
                             if df_alt is not None and not getattr(df_alt, "empty", True):
                                 logger.info(
                                     "ALPACA_ALT_FEED_SUCCESS",
-                                    extra={"symbol": symbol, "from_feed": feed or _DEFAULT_FEED, "to_feed": alt_feed, "timeframe": "1Min"},
+                                    extra={
+                                        "symbol": symbol,
+                                        "from_feed": feed or _DEFAULT_FEED,
+                                        "to_feed": alt_feed,
+                                        "timeframe": "1Min",
+                                    },
                                 )
                                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
@@ -1893,13 +1888,16 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 else:
                     logger.debug(
                         "ALPACA_EMPTY_BARS",
-                        extra={"symbol": symbol, "timeframe": "1Min", "feed": feed or _DEFAULT_FEED, "occurrences": cnt},
+                        extra={
+                            "symbol": symbol,
+                            "timeframe": "1Min",
+                            "feed": feed or _DEFAULT_FEED,
+                            "occurrences": cnt,
+                        },
                     )
                     df = None
             else:
-                logger.warning(
-                    "ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)}
-                )
+                logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
                 df = None
     else:
         logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
@@ -2058,7 +2056,15 @@ def get_bars(
                 # Never allow diagnostics to break data path
                 pass
             _ALPACA_KEYS_MISSING_LOGGED = True
-        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d", "1D": "1d", "1H": "60m"}
+        interval_map = {
+            "1Min": "1m",
+            "5Min": "5m",
+            "15Min": "15m",
+            "1Hour": "60m",
+            "1Day": "1d",
+            "1D": "1d",
+            "1H": "60m",
+        }
         tf_norm = _canon_tf(timeframe)
         y_int = interval_map.get(tf_norm, None)
         if y_int is None:
