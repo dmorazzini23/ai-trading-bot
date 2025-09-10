@@ -1,3 +1,4 @@
+import importlib
 import logging
 import os
 
@@ -10,32 +11,12 @@ def test_configure_logging_logs_once(capsys):
     try:
         root.handlers.clear()
         os.environ['PYTEST_RUNNING'] = '1'
-        with L._LOGGING_LOCK:
-            L._LOGGING_CONFIGURED = False
-            L._configured = False
-            if L._listener is not None:
-                try:
-                    L._listener.stop()
-                except Exception:
-                    pass
-            L._listener = None
-            L._log_queue = None
-            L._loggers.clear()
-        L.configure_logging()
-        L.configure_logging()
+        log_mod = importlib.reload(L)
+        log_mod.configure_logging()
+        log_mod.configure_logging()
         out = capsys.readouterr().out
         assert out.count('Logging configured successfully - no duplicates possible') == 1
     finally:
         root.handlers = original_handlers
-        with L._LOGGING_LOCK:
-            L._LOGGING_CONFIGURED = False
-            L._configured = False
-            if L._listener is not None:
-                try:
-                    L._listener.stop()
-                except Exception:
-                    pass
-            L._listener = None
-            L._log_queue = None
-            L._loggers.clear()
+        importlib.reload(L)
         os.environ.pop('PYTEST_RUNNING', None)

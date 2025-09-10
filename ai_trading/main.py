@@ -18,22 +18,10 @@ import ai_trading.logging as _logging
 
 # Determine log file from environment
 LOG_FILE = os.getenv("BOT_LOG_FILE", "logs/bot.log")
-
-# Reset any prior logging configuration to apply new settings
-if getattr(_logging, "_listener", None):
-    try:
-        _logging._listener.stop()
-    except Exception:  # pragma: no cover - best effort cleanup
-        pass
-    _logging._listener = None
-_logging._configured = False
-_logging._LOGGING_CONFIGURED = False
-logging.getLogger().handlers.clear()
-
 # Configure logging with the desired file
 # Logging must be initialized once here before importing heavy modules like
 # ``ai_trading.core.bot_engine``.
-_logging.setup_logging(log_file=LOG_FILE)
+_logging.configure_logging(log_file=LOG_FILE)
 
 # Module logger
 logger = _logging.get_logger(__name__)
