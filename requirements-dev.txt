@@ -3,7 +3,7 @@
 -r requirements.txt
 
 # Ensure Alpaca SDK available for tests
-alpaca-py==0.42.1
+alpaca-py[all]==0.42.1
 
 # Lint & format
 ruff==0.5.6

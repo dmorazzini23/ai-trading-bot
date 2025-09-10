@@ -75,8 +75,11 @@ def _module_exists(name: str) -> bool:
 ALPACA_AVAILABLE = (
     _module_exists("alpaca")
     and _module_exists("alpaca.trading.client")
-    and _module_exists("alpaca.data.historical.stock")
-    and _module_exists("alpaca.common.exceptions")
+    and (
+        _module_exists("alpaca.data.historical.stock")
+        or _module_exists("alpaca.data.historical")
+        or _module_exists("alpaca.data")
+    )
 )
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
@@ -90,8 +93,13 @@ def initialize() -> None:
     """
     try:
         importlib.import_module("alpaca.trading.client")
-        importlib.import_module("alpaca.data.historical.stock")
-        importlib.import_module("alpaca.common.exceptions")
+        try:
+            importlib.import_module("alpaca.data.historical.stock")
+        except ModuleNotFoundError:
+            try:
+                importlib.import_module("alpaca.data.historical")
+            except ModuleNotFoundError:
+                importlib.import_module("alpaca.data")
     except Exception as exc:  # pragma: no cover - exercised in tests
         raise RuntimeError("alpaca-py SDK is required") from exc
 
