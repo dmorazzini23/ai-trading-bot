@@ -138,6 +138,8 @@ sys.modules["pybreaker"].CircuitBreaker = _DummyBreaker
 # AI-AGENT-REF: Remove ai_trading.main import that causes deep torch dependency chain
 # from ai_trading.main import main  # Not used in this test, causes torch import issues
 from ai_trading.core.bot_engine import pre_trade_health_check
+import ai_trading.data.fetch as data_fetch
+import ai_trading.alpaca_api as alpaca_api
 
 
 class DummyFetcher:
@@ -159,18 +161,34 @@ class DummyCtx:
 def test_health_check_empty_dataframe(monkeypatch):
     monkeypatch.setenv("HEALTH_MIN_ROWS", "30")
     ctx = DummyCtx(pd.DataFrame())
-    summary = pre_trade_health_check(ctx, ["AAA"])
+    summary = pre_trade_health_check(ctx, ["AAA"], min_rows=30)
     assert summary["failures"] == ["AAA"]
 
 
 def test_health_check_succeeds(monkeypatch):
     monkeypatch.setenv("HEALTH_MIN_ROWS", "30")
-    df = pd.DataFrame({
-        "open": [1] * 30,
-        "high": [1] * 30,
-        "low": [1] * 30,
-        "close": [1] * 30,
-        "volume": [1] * 30,
-    })
+    df = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2020", periods=30, tz="UTC"),
+            "open": [1] * 30,
+            "high": [1] * 30,
+            "low": [1] * 30,
+            "close": [1] * 30,
+            "volume": [1] * 30,
+        }
+    )
     ctx = DummyCtx(df)
-    pre_trade_health_check(ctx, ["AAA"])
+    summary = pre_trade_health_check(ctx, ["AAA"], min_rows=30)
+    assert summary["missing_columns"] == []
+    assert summary["failures"] == []
+    assert summary["checked"] == 1
+
+
+
+
+def test_get_daily_df_normalizes_columns(monkeypatch):
+    df = pd.DataFrame({"t": [0], "o": [1], "h": [1], "l": [1], "c": [1], "v": [1]})
+    monkeypatch.setattr(alpaca_api, "get_bars_df", lambda *a, **k: df)
+    out = data_fetch.get_daily_df("AAA")
+    for col in ["timestamp", "open", "high", "low", "close", "volume"]:
+        assert col in out.columns

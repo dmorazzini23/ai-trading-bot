@@ -1908,13 +1908,13 @@ def get_daily_df(
     feed: str | None = None,
     adjustment: str | None = None,
 ) -> pd.DataFrame:
-    """Thin wrapper around :func:`bars.get_bars_df` for daily bars."""
+    """Fetch daily bars and ensure canonical OHLCV columns."""
     try:
         from ai_trading.alpaca_api import get_bars_df as _get_bars_df
     except Exception as exc:  # pragma: no cover - optional dependency
         raise DataFetchError("Alpaca API unavailable") from exc
 
-    return _get_bars_df(
+    df = _get_bars_df(
         symbol,
         timeframe="1Day",
         start=start,
@@ -1922,6 +1922,35 @@ def get_daily_df(
         feed=feed,
         adjustment=adjustment,
     )
+
+    pd_mod = _ensure_pandas()
+    if pd_mod is None:
+        return df
+
+    # Normalize potential short names from providers
+    rename_map = {
+        "t": "timestamp",
+        "time": "timestamp",
+        "o": "open",
+        "h": "high",
+        "l": "low",
+        "c": "close",
+        "v": "volume",
+    }
+
+    if isinstance(df, pd_mod.DataFrame):
+        if "timestamp" not in df.columns and getattr(df.index, "name", None) in {
+            "t",
+            "time",
+            "timestamp",
+        }:
+            df = df.reset_index().rename(columns={df.index.name: "timestamp"})
+        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+        for col in ("timestamp", "open", "high", "low", "close", "volume"):
+            if col not in df.columns:
+                df[col] = pd_mod.NA
+
+    return df
 
 
 def get_bars(
