@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Config: validate Alpaca data feed entitlement and allow override via `ALPACA_DATA_FEED`, warning if switched.
 - Data fetch: switch to SIP feed after first empty IEX result and record `data.fetch.feed_switch` metric.
-- Data fetch: detect consecutive empty responses and trigger backup provider after two attempts, logging `ALPACA_EMPTY_RESPONSE_THRESHOLD`.
+ - Data fetch: track consecutive `error="empty"` responses per symbol/timeframe and, after `ALPACA_EMPTY_ERROR_THRESHOLD` attempts, switch to the backup provider while recording `data.fetch.empty` metrics.
 - Data fetch: add provider outage monitor that alerts on authentication, rate limit, or timeout failures and temporarily disables the primary feed to enable automatic fallback.
 - Main: finite `SCHEDULER_ITERATIONS` now exits promptly after completing
   the requested cycles instead of keeping the API thread alive. This

@@ -187,6 +187,11 @@ _EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 # allow proactive SIP fallback on subsequent requests.
 _IEX_EMPTY_COUNTS: dict[tuple[str, str], int] = {}
 _IEX_EMPTY_THRESHOLD = 1
+# Track consecutive Alpaca `error="empty"` responses per (symbol, timeframe)
+# to short-circuit further Alpaca requests and fall back to the secondary
+# provider when the upstream repeatedly returns empty payloads.
+_ALPACA_EMPTY_ERROR_COUNTS: dict[tuple[str, str], int] = {}
+_ALPACA_EMPTY_ERROR_THRESHOLD = int(os.getenv("ALPACA_EMPTY_ERROR_THRESHOLD", "2"))
 _EMPTY_BAR_THRESHOLD = 3
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
@@ -1265,8 +1270,37 @@ def _fetch_bars(
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
-            if fallback:
+            if is_empty_error:
+                key = (symbol, _interval)
+                cnt = _ALPACA_EMPTY_ERROR_COUNTS.get(key, 0) + 1
+                _ALPACA_EMPTY_ERROR_COUNTS[key] = cnt
+                provider_monitor.record_failure("alpaca", "empty")
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
+                if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
+                    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+                    provider_fallback.labels(
+                        from_provider=f"alpaca_{_feed}", to_provider=provider
+                    ).inc()
+                    metrics.empty_fallback += 1
+                    _mark_fallback(symbol, _interval, _start, _end)
+                    _ALPACA_EMPTY_ERROR_COUNTS.pop(key, None)
+                    _state["stop"] = True
+                    interval_map = {
+                        "1Min": "1m",
+                        "5Min": "5m",
+                        "15Min": "15m",
+                        "1Hour": "60m",
+                        "1Day": "1d",
+                    }
+                    fb_int = interval_map.get(_interval)
+                    if fb_int:
+                        return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    return pd.DataFrame()
+            else:
+                _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
+            if fallback:
+                if not is_empty_error:
+                    _incr("data.fetch.empty", value=1.0, tags=_tags())
                 # Attempt fallback immediately on empty payloads
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
@@ -1617,6 +1651,8 @@ def _fetch_bars(
     empty_attempts = 0
     for _ in range(max(1, max_retries)):
         df = _req(session, fallback, headers=headers, timeout=timeout_v)
+        if _state.get("stop"):
+            break
         # Stop immediately when SIP is unauthorized; further retries won't help.
         if _feed == "sip" and _SIP_UNAUTHORIZED:
             break
@@ -1641,7 +1677,10 @@ def _fetch_bars(
             )
             break
         # Otherwise, loop to give the provider another chance
-    if (df is None or getattr(df, "empty", True)) and _ENABLE_HTTP_FALLBACK:
+    if df is not None and not getattr(df, "empty", True):
+        _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
+        return df
+    if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
         providers_tried = set(_state["providers"])
