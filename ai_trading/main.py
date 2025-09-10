@@ -5,6 +5,7 @@ import threading
 import time
 import logging
 from threading import Thread
+import errno
 import signal
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
@@ -28,7 +29,7 @@ logger = _logging.get_logger(__name__)
 
 from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
-from ai_trading.utils import get_free_port, get_pid_on_port
+from ai_trading.utils import get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.logging.redact import redact as _redact
 from ai_trading.env.config_redaction import redact_config_env
@@ -390,28 +391,36 @@ def run_flask_app(
     """
     max_attempts = 10
     original_port = port
-    for _attempt in range(max_attempts):
-        if not get_pid_on_port(port):
-            break
-        port += 1
-    else:
-        free_port = get_free_port()
-        if free_port is None:
-            raise RuntimeError(
-                f"Could not find available port starting from {original_port}"
-            )
-        port = free_port
     from ai_trading import app
 
     application = app.create_app()
-    if ready_signal is not None:
-        logger.info(
-            f"Flask app created successfully, signaling ready on port {port}"
-        )
-        ready_signal.set()
-    logger.info(f"Starting Flask app on 0.0.0.0:{port}")
     debug = run_kwargs.pop("debug", False)
-    application.run(host="0.0.0.0", port=port, debug=debug, **run_kwargs)
+
+    for _attempt in range(max_attempts):
+        pid = get_pid_on_port(port)
+        if pid:
+            logger.warning("Port %s in use by pid %s", port, pid)
+            port += 1
+            continue
+        try:
+            if ready_signal is not None:
+                logger.info(
+                    "Flask app created successfully, signaling ready on port %s",
+                    port,
+                )
+                ready_signal.set()
+            logger.info("Starting Flask app on 0.0.0.0:%s", port)
+            application.run(host="0.0.0.0", port=port, debug=debug, **run_kwargs)
+            return
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                logger.warning("Port %s bound during startup, retrying", port)
+                port += 1
+                continue
+            raise
+    raise RuntimeError(
+        f"Could not bind Flask app starting from {original_port}"
+    )
 
 
 def start_api(ready_signal: threading.Event = None) -> None:

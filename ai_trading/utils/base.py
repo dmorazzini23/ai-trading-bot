@@ -508,19 +508,29 @@ def _pid_from_inode(inode: str) -> int | None:
 
 
 def get_pid_on_port(port: int) -> int | None:
-    """Best-effort detection of PID bound to ``port``."""
-    try:
-        with open("/proc/net/tcp") as f:
-            next(f)
-            for line in f:
-                parts = line.split()
-                local = parts[1]
-                inode = parts[9]
-                if int(local.split(":")[1], 16) == port:
-                    return _pid_from_inode(inode)
-    except COMMON_EXC + (OSError,) as e:
-        logger.error("get_pid_on_port failed", exc_info=e)
-        return None
+    """Best-effort detection of PID bound to ``port``.
+
+    Inspects both ``/proc/net/tcp`` and ``/proc/net/tcp6`` to handle
+    IPv4 and IPv6 sockets.
+    """
+    for proc_path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(proc_path) as f:
+                next(f)
+                for line in f:
+                    parts = line.split()
+                    local = parts[1]
+                    inode = parts[9]
+                    try:
+                        if int(local.split(":")[1], 16) == port:
+                            pid = _pid_from_inode(inode)
+                            if pid is not None:
+                                return pid
+                    except (ValueError, IndexError):
+                        continue
+        except COMMON_EXC + (OSError,) as e:
+            logger.error("get_pid_on_port failed for %s", proc_path, exc_info=e)
+    return None
 
 
 def get_rolling_atr(symbol: str, window: int = 14) -> float:
