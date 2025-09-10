@@ -252,9 +252,14 @@ def ensure_alpaca_attached(ctx) -> None:
         return
     global trading_client
     if trading_client is None:
-        logger_once.error(
-            "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
-        )
+        if ALPACA_AVAILABLE and not is_shadow_mode():
+            logger_once.error(
+                "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
+            )
+        else:
+            logger_once.warning(
+                "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
+            )
         if not is_shadow_mode():
             raise RuntimeError("Alpaca client missing after initialization")
         return

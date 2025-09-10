@@ -29,7 +29,10 @@ def _validate_trading_api(api: Any) -> bool:
     - Guarantees `list_positions` exists, mapping to `get_all_positions()` if needed.
     """
     if api is None:
-        logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
+        if ALPACA_AVAILABLE and not is_shadow_mode():
+            logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
+        else:
+            logger_once.warning("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
         return False
     if not hasattr(api, "list_orders"):
         if hasattr(api, "get_orders"):
@@ -124,7 +127,14 @@ def ensure_alpaca_attached(ctx) -> None:
     import ai_trading.core.bot_engine as be
     api = getattr(be, "trading_client", None)
     if api is None:
-        logger_once.error("ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing")
+        if ALPACA_AVAILABLE and not is_shadow_mode():
+            logger_once.error(
+                "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
+            )
+        else:
+            logger_once.warning(
+                "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
+            )
         if not is_shadow_mode():
             raise RuntimeError("Alpaca client missing after initialization")
         return
