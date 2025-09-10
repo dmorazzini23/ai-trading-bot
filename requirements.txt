@@ -7,7 +7,7 @@ charset-normalizer>=3.2,<4
 idna>=3.4,<4
 psutil>=5.9,<6
 portalocker==2.7.0
-alpaca-py[all]==0.42.1  # AI-AGENT-REF: official Alpaca SDK (prod) with historical data extras
+alpaca-py==0.42.1  # AI-AGENT-REF: official Alpaca SDK (prod)
 finnhub-python>=2.4,<3  # AI-AGENT-REF: optional Finnhub provider
 joblib>=1.3,<2
 Flask>=3,<4
