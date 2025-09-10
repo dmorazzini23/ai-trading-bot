@@ -53,6 +53,7 @@ Centralized mapping of symbol trading specifications ensures consistent tick and
 ### Key Features
 - Tick size mapping for price quantization
 - Lot size mapping for quantity rounding
+- Currency mapping for settlement
 - Default specifications for major assets
 - Runtime specification updates
 
@@ -62,8 +63,8 @@ Centralized mapping of symbol trading specifications ensures consistent tick and
 from ai_trading.market.symbol_specs import get_symbol_spec, get_tick_size, get_lot_size
 
 # Get full specification
-spec = get_symbol_spec('AAPL')
-print(f"AAPL tick: {spec.tick}, lot: {spec.lot}")
+spec = get_symbol_spec('MA')
+print(f"MA tick: {spec.tick}, lot: {spec.lot}, currency: {spec.currency}")
 
 # Get individual components
 tick = get_tick_size('SPY')    # Decimal('0.01')
@@ -228,6 +229,7 @@ from ai_trading.market.symbol_specs import update_specs_from_config
 # Bulk update from configuration
 specs_config = {
     'AAPL': {'tick': '0.01', 'lot': 1},
+    'MA': {'tick': '0.01', 'lot': 1, 'currency': 'USD'},
     'BTC-USD': {'tick': '0.01', 'lot': 1},
     'ES': {'tick': '0.25', 'lot': 1, 'multiplier': 50}
 }
