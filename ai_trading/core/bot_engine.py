@@ -8544,6 +8544,16 @@ def submit_order(
             core_side = CoreOrderSide.SELL
         else:
             core_side = CoreOrderSide.BUY
+
+        # If caller didn't supply a price, fetch the most recent quote.
+        if price is None:
+            price = get_latest_price(symbol)
+            if not isinstance(price, (int, float)) or price <= 0:
+                md = getattr(ctx, "market_data", None)
+                try:
+                    price = get_latest_close(md) if md is not None else 0.0
+                except Exception:
+                    price = 0.0
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.
         return _exec_engine.execute_order(symbol, core_side, qty, price=price)

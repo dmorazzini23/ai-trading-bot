@@ -7,6 +7,7 @@ and real-time execution monitoring with institutional controls.
 from __future__ import annotations
 from ai_trading.logging import get_logger
 import math
+import os
 import threading
 import time
 import uuid
@@ -22,6 +23,7 @@ except Exception:  # ImportError
         """Fallback when Alpaca SDK is unavailable."""
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import get_counter
+from ai_trading.config.management import get_env
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
@@ -118,6 +120,7 @@ class Order:
         self.notes = kwargs.get('notes', '')
         self.source_system = kwargs.get('source_system', 'ai_trading')
         self.parent_order_id = kwargs.get('parent_order_id')
+        self.slippage_bps = 0.0
         logger.debug(f'Order created: {self.id} {self.side} {self.quantity} {self.symbol}')
 
     @property
@@ -806,6 +809,30 @@ class ExecutionEngine:
                 self.execution_stats['total_volume'] += nv
                 fill_time = (order.executed_at - order.created_at).total_seconds()
                 self.execution_stats['average_fill_time'] = (self.execution_stats['average_fill_time'] * (self.execution_stats['filled_orders'] - 1) + fill_time) / self.execution_stats['filled_orders']
+
+                # Compare expected vs actual fill price and check slippage
+                try:
+                    expected = float(order.price) if order.price is not None else float(base_price)
+                except Exception:
+                    expected = float(base_price)
+                try:
+                    actual = float(order.average_fill_price) if order.average_fill_price is not None else expected
+                except Exception:
+                    actual = expected
+                slippage_bps = ((actual - expected) / expected) * 10000 if expected else 0.0
+                order.slippage_bps = slippage_bps
+                logger.info(
+                    'SLIPPAGE_DIAGNOSTIC',
+                    extra={
+                        'symbol': order.symbol,
+                        'expected_price': round(expected, 4),
+                        'actual_price': round(actual, 4),
+                        'slippage_bps': round(slippage_bps, 2),
+                    },
+                )
+                threshold = get_env('MAX_SLIPPAGE_BPS', str(order.max_slippage_bps), cast=float)
+                if os.getenv('TESTING', '').lower() == 'true' and abs(slippage_bps) > threshold:
+                    raise AssertionError(f'Slippage {slippage_bps:.2f} bps exceeds threshold {threshold}')
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
             logger.error('SIMULATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
 
