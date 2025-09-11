@@ -29,9 +29,9 @@ if not hasattr(np, 'NaN'):
 # Lazy pandas proxy
 pd = load_pandas()
 try:
-    from alpaca.trading.client import TradingClient
+    from alpaca.data.historical.stock import StockHistoricalDataClient
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
-    TradingClient = object  # type: ignore[assignment]
+    StockHistoricalDataClient = object  # type: ignore[assignment]
 
 
 def _safe_call(fn, *a, **k):
@@ -91,30 +91,20 @@ class RiskEngine:
             s = get_settings()
             secret = get_alpaca_secret_key_plain()
             api_key = getattr(s, 'alpaca_api_key', None)
-            base_url = getattr(s, 'alpaca_base_url', None)
             oauth = get_env('ALPACA_OAUTH')
             has_keypair = bool(api_key and secret)
-            if base_url:
-                if has_keypair and oauth:
-                    raise RuntimeError(
-                        'Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both'
-                    )
-                is_paper = 'paper' in base_url.lower()
-                if has_keypair:
-                    self.data_client = TradingClient(
-                        api_key=api_key,
-                        secret_key=secret,
-                        paper=is_paper,
-                        url_override=base_url,
-                    )
-                elif oauth:
-                    self.data_client = TradingClient(
-                        oauth_token=oauth,
-                        paper=is_paper,
-                        url_override=base_url,
-                    )
+            if has_keypair and oauth:
+                raise RuntimeError(
+                    'Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both'
+                )
+            if has_keypair:
+                self.data_client = StockHistoricalDataClient(
+                    api_key=api_key, secret_key=secret
+                )
+            elif oauth:
+                self.data_client = StockHistoricalDataClient(oauth_token=oauth)
         except (APIError, TypeError, AttributeError, OSError) as e:
-            logger.warning('Could not initialize TradingClient: %s', e)
+            logger.warning('Could not initialize data client: %s', e)
         self._returns: list[float] = []
         self._drawdowns: list[float] = []
         self._last_portfolio_cap: float | None = None
@@ -176,7 +166,11 @@ class RiskEngine:
             if not client:
                 logger.warning('No data client available; skipping historical fetch for %s', symbol)
                 return None
-            bars = client.get_bars(symbol, lookback + 10)
+            get_bars = getattr(client, 'get_bars', None)
+            if not callable(get_bars):
+                logger.warning('Data client missing get_bars; skipping ATR for %s', symbol)
+                return None
+            bars = get_bars(symbol, lookback + 10)
             if len(bars) < lookback:
                 return None
             high = np.array([b.h for b in bars])
