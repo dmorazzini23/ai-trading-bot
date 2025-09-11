@@ -32,7 +32,7 @@ from ai_trading.data.empty_bar_backoff import (
     mark_success,
     record_attempt,
 )
-from ai_trading.data.metrics import metrics, provider_fallback
+from ai_trading.data.metrics import metrics, provider_fallback, provider_disabled
 from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
@@ -221,6 +221,7 @@ _BACKUP_USAGE_LOGGED: set[tuple[str, str, int, int]] = set()
 _ALPACA_DISABLE_THRESHOLD = 3
 _alpaca_empty_streak = 0
 _alpaca_disabled_until: _dt.datetime | None = None
+_ALPACA_DISABLED_ALERTED = False
 
 # Emit a one-time explanatory log when Alpaca keys are missing to make
 # backup-provider usage obvious in production logs without spamming.
@@ -230,8 +231,10 @@ _ALPACA_KEYS_MISSING_LOGGED = False
 def _disable_alpaca(duration: _dt.timedelta) -> None:
     """Disable Alpaca as a data source for ``duration``."""
 
-    global _alpaca_disabled_until
+    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED
     _alpaca_disabled_until = datetime.now(UTC) + duration
+    _ALPACA_DISABLED_ALERTED = False
+    provider_disabled.labels(provider="alpaca").set(1)
 
 
 # Register disable callback with provider monitor so repeated failures trigger
@@ -924,27 +927,62 @@ def _fetch_bars(
             )
             return pd.DataFrame()
         raise
-    global _alpaca_disabled_until
-    if _alpaca_disabled_until and datetime.now(UTC) < _alpaca_disabled_until:
-        try:
-            logger.warning(
-                "PRIMARY_PROVIDER_TEMP_DISABLED",
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "disabled_until": _alpaca_disabled_until.isoformat(),
-                    }
-                ),
-            )
-        except Exception:
-            pass
-        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
-        fb_int = interval_map.get(_interval)
-        if fb_int:
-            _mark_fallback(symbol, _interval, _start, _end)
-            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak
+    if _alpaca_disabled_until:
+        now = datetime.now(UTC)
+        if now < _alpaca_disabled_until:
+            if not _ALPACA_DISABLED_ALERTED:
+                try:
+                    provider_monitor.alert_manager.create_alert(
+                        AlertType.SYSTEM,
+                        AlertSeverity.CRITICAL,
+                        "Primary data provider alpaca disabled",
+                        metadata={
+                            "provider": "alpaca",
+                            "disabled_until": _alpaca_disabled_until.isoformat(),
+                        },
+                    )
+                except Exception:  # pragma: no cover - alerting best effort
+                    logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
+                _ALPACA_DISABLED_ALERTED = True
+            try:
+                logger.warning(
+                    "PRIMARY_PROVIDER_TEMP_DISABLED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "disabled_until": _alpaca_disabled_until.isoformat(),
+                        }
+                    ),
+                )
+            except Exception:
+                pass
+            interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+            fb_int = interval_map.get(_interval)
+            if fb_int:
+                _mark_fallback(symbol, _interval, _start, _end)
+                return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+        else:
+            _alpaca_disabled_until = None
+            _ALPACA_DISABLED_ALERTED = False
+            _alpaca_empty_streak = 0
+            provider_disabled.labels(provider="alpaca").set(0)
+            provider_monitor.record_success("alpaca")
+            try:
+                logger.info(
+                    "PRIMARY_PROVIDER_REENABLED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                        }
+                    ),
+                )
+            except Exception:
+                pass
     if _used_fallback(symbol, _interval, _start, _end):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
@@ -1540,7 +1578,23 @@ def _fetch_bars(
                 )
                 _alpaca_empty_streak += 1
                 if _alpaca_empty_streak > _ALPACA_DISABLE_THRESHOLD:
-                    _alpaca_disabled_until = datetime.now(UTC) + _dt.timedelta(minutes=5)
+                    _disable_alpaca(_dt.timedelta(minutes=5))
+                    _ALPACA_DISABLED_ALERTED = True
+                    try:
+                        provider_monitor.alert_manager.create_alert(
+                            AlertType.SYSTEM,
+                            AlertSeverity.CRITICAL,
+                            "Primary data provider alpaca disabled",
+                            metadata={
+                                "provider": "alpaca",
+                                "disabled_until": _alpaca_disabled_until.isoformat()
+                                if _alpaca_disabled_until
+                                else "",
+                                "reason": "empty",
+                            },
+                        )
+                    except Exception:  # pragma: no cover - alerting best effort
+                        logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                 remaining_retries = max_retries - _state["retries"]
                 logger.warning(
                     "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT",

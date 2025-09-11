@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ai_trading.metrics import get_counter
+from ai_trading.metrics import get_counter, get_gauge
 
 
 @dataclass
@@ -33,4 +33,17 @@ provider_fallback = get_counter(
     ["from_provider", "to_provider"],
 )
 
-__all__ = ["Metrics", "metrics", "backup_provider_used", "provider_fallback"]
+# Gauge indicating whether a primary provider is currently disabled
+provider_disabled = get_gauge(
+    "data_provider_disabled",
+    "Flag set to 1 when a data provider is disabled",
+    ["provider"],
+)
+
+__all__ = [
+    "Metrics",
+    "metrics",
+    "backup_provider_used",
+    "provider_fallback",
+    "provider_disabled",
+]
