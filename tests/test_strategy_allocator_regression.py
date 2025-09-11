@@ -200,3 +200,28 @@ class TestStrategyAllocatorRegression:
 
             assert out1 == [], f"Instance {i}: First call should return empty list"
             assert out2 and out2[0].symbol == "AAPL", f"Instance {i}: Second call should return AAPL signal"
+
+    def test_consecutive_identical_confidences_delta_gating(self):
+        """Consecutive identical confidences should execute once then skip until changed."""
+        alloc = strategy_allocator.StrategyAllocator()
+        alloc.replace_config(
+            delta_threshold=0.05,
+            signal_confirmation_bars=1,
+            min_confidence=0.0,
+        )
+
+        sig = TradeSignal(symbol="AAPL", side="buy", confidence=0.5, strategy="s1")
+        out1 = alloc.select_signals({"s1": [sig]})
+        assert len(out1) == 1, "Initial signal should execute"
+
+        sig2 = TradeSignal(symbol="AAPL", side="buy", confidence=0.5, strategy="s1")
+        out2 = alloc.select_signals({"s1": [sig2]})
+        assert out2 == [], "Identical confidence should be skipped due to delta threshold"
+
+        sig3 = TradeSignal(symbol="AAPL", side="buy", confidence=0.6, strategy="s1")
+        out3 = alloc.select_signals({"s1": [sig3]})
+        assert len(out3) == 1, "Changed confidence should rearm and execute"
+
+        sig4 = TradeSignal(symbol="AAPL", side="buy", confidence=0.6, strategy="s1")
+        out4 = alloc.select_signals({"s1": [sig4]})
+        assert out4 == [], "Repeated confidence should skip again"

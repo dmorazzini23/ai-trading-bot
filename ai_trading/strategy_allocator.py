@@ -257,9 +257,12 @@ class StrategyAllocator:
                 s.strategy = strategy
                 all_signals.append(s)
 
+        prev_conf = self.last_confidence.copy()
+        pending_conf: dict[str, float] = {}
+
         for s in sorted(all_signals, key=lambda x: (x.symbol, -x.confidence)):
             last_dir = self.last_direction.get(s.symbol)
-            last_conf = self.last_confidence.get(s.symbol, 0.0)
+            last_conf = prev_conf.get(s.symbol, 0.0)
             if last_dir and last_dir != s.side:
                 if s.side == "sell" and self.hold_protect.get(s.symbol, 0) > 0:
                     remaining = self.hold_protect.get(s.symbol, 0)
@@ -289,10 +292,13 @@ class StrategyAllocator:
                 continue
 
             self.last_direction[s.symbol] = s.side
-            self.last_confidence[s.symbol] = s.confidence
+            pending_conf[s.symbol] = s.confidence
             if s.side == "buy":
                 self.hold_protect[s.symbol] = 4
             final.append(s)
+
+        if pending_conf:
+            self.last_confidence.update(pending_conf)
 
         self._assign_portfolio_weights(final)
         return final
