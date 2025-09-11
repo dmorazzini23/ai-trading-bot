@@ -222,6 +222,8 @@ _ALPACA_DISABLE_THRESHOLD = 3
 _alpaca_empty_streak = 0
 _alpaca_disabled_until: _dt.datetime | None = None
 _ALPACA_DISABLED_ALERTED = False
+# Track consecutive disable events to apply exponential backoff
+_alpaca_disable_count = 0
 
 # Emit a one-time explanatory log when Alpaca keys are missing to make
 # backup-provider usage obvious in production logs without spamming.
@@ -229,12 +231,35 @@ _ALPACA_KEYS_MISSING_LOGGED = False
 
 
 def _disable_alpaca(duration: _dt.timedelta) -> None:
-    """Disable Alpaca as a data source for ``duration``."""
+    """Disable Alpaca as a data source using exponential backoff.
 
-    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED
-    _alpaca_disabled_until = datetime.now(UTC) + duration
+    Each subsequent disable within a runtime session doubles the cooldown up
+    to a maximum of one hour. This reduces rapid enable/disable cycles when the
+    upstream provider is flaky.
+    """
+
+    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count
+    factor = 2**_alpaca_disable_count
+    max_seconds = 60 * 60  # cap at 1 hour
+    backoff_seconds = min(duration.total_seconds() * factor, max_seconds)
+    _alpaca_disabled_until = datetime.now(UTC) + _dt.timedelta(seconds=backoff_seconds)
     _ALPACA_DISABLED_ALERTED = False
+    _alpaca_disable_count += 1
     provider_disabled.labels(provider="alpaca").set(1)
+    try:
+        logger.warning(
+            "ALPACA_TEMP_DISABLED",
+            extra=_norm_extra(
+                {
+                    "provider": "alpaca",
+                    "disabled_until": _alpaca_disabled_until.isoformat(),
+                    "backoff_seconds": backoff_seconds,
+                    "disable_count": _alpaca_disable_count,
+                }
+            ),
+        )
+    except Exception:
+        pass
 
 
 # Register disable callback with provider monitor so repeated failures trigger
@@ -258,6 +283,7 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
             start=start,
             end=end,
         )
+        provider_monitor.record_switchover("alpaca", provider)
     _FALLBACK_WINDOWS.add(key)
     # Also remember at a coarser granularity for a short TTL to avoid
     # repeated primary-provider retries for small window shifts in the same run.
@@ -927,7 +953,7 @@ def _fetch_bars(
             )
             return pd.DataFrame()
         raise
-    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak
+    global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
         if now < _alpaca_disabled_until:
@@ -970,6 +996,7 @@ def _fetch_bars(
             _alpaca_empty_streak = 0
             provider_disabled.labels(provider="alpaca").set(0)
             provider_monitor.record_success("alpaca")
+            _alpaca_disable_count = 0
             try:
                 logger.info(
                     "PRIMARY_PROVIDER_REENABLED",
@@ -1052,7 +1079,7 @@ def _fetch_bars(
         timeout: float | tuple[float, float],
     ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
-        global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until
+        global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count
         _state["providers"].append(_feed)
 
         def _attempt_fallback(
@@ -1068,6 +1095,9 @@ def _fetch_bars(
                 from_provider=f"alpaca_{from_feed}",
                 to_provider=f"alpaca_{fb_feed}",
             ).inc()
+            provider_monitor.record_switchover(
+                f"alpaca_{from_feed}", f"alpaca_{fb_feed}"
+            )
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
             logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
@@ -1380,6 +1410,9 @@ def _fetch_bars(
                 if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
                     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
                     provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
+                    provider_monitor.record_switchover(
+                        f"alpaca_{_feed}", provider
+                    )
                     metrics.empty_fallback += 1
                     _mark_fallback(symbol, _interval, _start, _end)
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(key, None)
@@ -1732,6 +1765,7 @@ def _fetch_bars(
         log_extra_success = {"remaining_retries": max_retries - _state["retries"], **log_extra}
         log_fetch_attempt("alpaca", status=status, **log_extra_success)
         provider_monitor.record_success("alpaca")
+        _alpaca_disable_count = 0
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df
 
@@ -1812,6 +1846,9 @@ def _fetch_bars(
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
                 provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
+                provider_monitor.record_switchover(
+                    f"alpaca_{_feed}", "yahoo"
+                )
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),

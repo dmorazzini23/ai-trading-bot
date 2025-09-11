@@ -9,6 +9,7 @@ from ai_trading.data.metrics import provider_fallback
 from ai_trading.config.management import MAX_EMPTY_RETRIES
 from ai_trading.config.settings import provider_priority, max_data_fallbacks
 from ai_trading.logging import log_backup_provider_used, get_logger
+from ai_trading.data.provider_monitor import provider_monitor
 
 from . import EmptyBarsError, _fetch_bars
 
@@ -74,6 +75,9 @@ def _fetch_feed(
             provider_fallback.labels(
                 from_provider=f"alpaca_{feed}", to_provider=f"alpaca_{alt_feed}"
             ).inc()
+            provider_monitor.record_switchover(
+                f"alpaca_{feed}", f"alpaca_{alt_feed}"
+            )
             log_backup_provider_used(
                 f"alpaca_{alt_feed}",
                 symbol=symbol,

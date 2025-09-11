@@ -29,3 +29,11 @@ export ENABLE_FINNHUB=1
 - `MAX_DATA_FALLBACKS`: maximum number of fallbacks allowed before giving up. Default is `2` (tries both Alpaca feeds before Yahoo).
 
 Configure these variables in your deployment environment to control provider availability and failover behavior.
+
+## Adaptive Disabling & Switchover Monitoring
+
+When Alpaca repeatedly returns empty data or errors, the bot now applies an
+exponential backoff when disabling the provider. Each consecutive disable
+period doubles, up to one hour, to avoid rapid flip/flop cycles. Whenever the
+system falls back to another provider, a `DATA_PROVIDER_SWITCHOVER` log entry
+is emitted with the running count for that provider pair to aid diagnostics.
