@@ -594,9 +594,12 @@ def _log_finbert_disabled() -> None:
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.signals.indicators import composite_signal_confidence
 import logging
+from collections import OrderedDict
 
 # Lazy pandas proxy
 pd = load_pandas()
+_FEATURE_CACHE: "OrderedDict[tuple[str, pd.Timestamp], pd.DataFrame]" = OrderedDict()
+_FEATURE_CACHE_LIMIT = 128
 logger = get_logger(__name__)
 
 def _alpaca_diag_info() -> dict[str, object]:
@@ -9351,6 +9354,13 @@ def _fetch_feature_data(
     # AI-AGENT-REF: log initial dataframe and monitor row drops
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Initial tail data for %s: %s", symbol, df.tail(5).to_dict(orient="list"))
+
+    cache_key = (symbol, df.index[-1])
+    cached = _FEATURE_CACHE.get(cache_key)
+    if cached is not None:
+        _FEATURE_CACHE.move_to_end(cache_key)
+        return raw_df, cached.copy(), None
+
     initial_len = len(df)
 
     df = compute_macd(df)
@@ -9395,6 +9405,10 @@ def _fetch_feature_data(
     if feat_df.empty:
         logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
         return raw_df, None, True
+    _FEATURE_CACHE[cache_key] = feat_df
+    _FEATURE_CACHE.move_to_end(cache_key)
+    if len(_FEATURE_CACHE) > _FEATURE_CACHE_LIMIT:
+        _FEATURE_CACHE.popitem(last=False)
     return raw_df, feat_df, None
 
 

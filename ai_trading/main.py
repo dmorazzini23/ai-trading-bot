@@ -755,7 +755,10 @@ def main(argv: list[str] | None = None) -> None:
                     _http_closed_profile = closed
                 except Exception:
                     pass
-            raw_fraction = get_env("CYCLE_BUDGET_FRACTION", 0.8)
+            raw_fraction = get_env(
+                "CYCLE_COMPUTE_BUDGET",
+                get_env("CYCLE_BUDGET_FRACTION", 0.8),
+            )
             try:
                 fraction = float(raw_fraction)
             except (TypeError, ValueError):
