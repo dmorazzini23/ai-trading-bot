@@ -5,7 +5,7 @@ from typing import Any
 
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.data.empty_bar_backoff import _SKIPPED_SYMBOLS, record_attempt, mark_success
-from ai_trading.data.metrics import provider_fallback
+from ai_trading.data.metrics import provider_fallback, fetch_retry_total
 from ai_trading.config.management import MAX_EMPTY_RETRIES
 from ai_trading.config.settings import provider_priority, max_data_fallbacks
 from ai_trading.logging import log_backup_provider_used, get_logger
@@ -72,6 +72,7 @@ def _fetch_feed(
             raise
         alt_feed = _next_feed(feed)
         if alt_feed:
+            fetch_retry_total.labels(provider=f"alpaca_{feed}").inc()
             provider_fallback.labels(
                 from_provider=f"alpaca_{feed}", to_provider=f"alpaca_{alt_feed}"
             ).inc()

@@ -18,6 +18,11 @@ from typing import Callable
 
 from ai_trading.logging import get_logger
 from ai_trading.monitoring.alerts import AlertManager, AlertSeverity, AlertType
+from ai_trading.data.metrics import (
+    provider_disabled,
+    provider_disable_total,
+    provider_disable_duration_seconds,
+)
 
 
 logger = get_logger(__name__)
@@ -32,15 +37,19 @@ class ProviderMonitor:
         threshold: int = 3,
         cooldown: int = 300,
         alert_manager: AlertManager | None = None,
+        switchover_threshold: int = 5,
     ) -> None:
         self.threshold = threshold
         self.cooldown = cooldown
         self.alert_manager = alert_manager or AlertManager()
         self.fail_counts: dict[str, int] = defaultdict(int)
         self.disabled_until: dict[str, datetime] = {}
+        self.disabled_since: dict[str, datetime] = {}
         self._callbacks: dict[str, Callable[[timedelta], None]] = {}
         # Track provider switchovers for diagnostics
         self.switch_counts: dict[tuple[str, str], int] = defaultdict(int)
+        self.consecutive_switches = 0
+        self.switchover_threshold = switchover_threshold
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -97,11 +106,14 @@ class ProviderMonitor:
         """Record a switchover from one provider to another.
 
         The call increments an in-memory counter and emits an INFO log with the
-        running count so operators can diagnose frequent provider churn.
+        running count so operators can diagnose frequent provider churn. It also
+        tracks consecutive switchovers and raises an alert when a threshold is
+        exceeded.
         """
 
         key = (from_provider, to_provider)
         self.switch_counts[key] += 1
+        self.consecutive_switches += 1
         logger.info(
             "DATA_PROVIDER_SWITCHOVER",
             extra={
@@ -110,12 +122,27 @@ class ProviderMonitor:
                 "count": self.switch_counts[key],
             },
         )
+        if self.consecutive_switches >= self.switchover_threshold:
+            try:
+                self.alert_manager.create_alert(
+                    AlertType.SYSTEM,
+                    AlertSeverity.WARNING,
+                    "Consecutive provider switchovers",
+                    metadata={"count": self.consecutive_switches},
+                )
+            except Exception:  # pragma: no cover - alerting best effort
+                logger.exception("ALERT_FAILURE", extra={"provider": to_provider})
+            self.consecutive_switches = 0
 
     def disable(self, provider: str) -> None:
         """Disable ``provider`` for the configured cooldown period."""
 
-        until = datetime.now(UTC) + timedelta(seconds=self.cooldown)
+        now = datetime.now(UTC)
+        until = now + timedelta(seconds=self.cooldown)
         self.disabled_until[provider] = until
+        self.disabled_since[provider] = now
+        provider_disable_total.labels(provider=provider).inc()
+        provider_disabled.labels(provider=provider).set(1)
         cb = self._callbacks.get(provider)
         if cb:
             try:
@@ -127,7 +154,16 @@ class ProviderMonitor:
         """Return ``True`` if ``provider`` is currently disabled."""
 
         until = self.disabled_until.get(provider)
-        return bool(until and datetime.now(UTC) < until)
+        if until and datetime.now(UTC) < until:
+            return True
+        if provider in self.disabled_until:
+            self.disabled_until.pop(provider, None)
+            provider_disabled.labels(provider=provider).set(0)
+            since = self.disabled_since.pop(provider, None)
+            if since:
+                duration = (datetime.now(UTC) - since).total_seconds()
+                provider_disable_duration_seconds.labels(provider=provider).inc(duration)
+        return False
 
 
 provider_monitor = ProviderMonitor()
