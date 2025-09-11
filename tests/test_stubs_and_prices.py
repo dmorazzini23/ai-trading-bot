@@ -9,7 +9,7 @@ def test_timeframe_has_basic_members():
 
 
 def test_get_latest_close_handles_empty_and_variants():
-    from ai_trading.utils.base import get_latest_close
+    from ai_trading.utils import get_latest_close
 
     df_empty = pd.DataFrame(columns=["close"])
     assert get_latest_close(df_empty) == 0.0
