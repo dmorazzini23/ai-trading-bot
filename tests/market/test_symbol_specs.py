@@ -8,3 +8,10 @@ def test_ma_symbol_spec() -> None:
     assert spec.tick == Decimal("0.01")
     assert spec.lot == 1
     assert spec.currency == "USD"
+
+
+def test_gs_symbol_spec() -> None:
+    spec = get_symbol_spec("GS")
+    assert spec.tick == Decimal("0.01")
+    assert spec.lot == 1
+    assert spec.currency == "USD"
