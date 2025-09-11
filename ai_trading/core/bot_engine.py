@@ -3333,10 +3333,13 @@ SECONDARY_TRAIL_FACTOR = 1.0
 
 def get_take_profit_factor() -> float:
     """Return configured take-profit factor for ATR stop calculations."""
-    val = config.get_env("TAKE_PROFIT_FACTOR", "2.0", cast=float)
-    if val is None:
-        raise RuntimeError("TAKE_PROFIT_FACTOR must be configured")
-    return val
+    from ai_trading.config.scaling import from_env as scaling_from_env
+
+    cfg = scaling_from_env()
+    val = cfg.max_factor
+    if not isinstance(val, (int, float)) or val <= 0:
+        raise RuntimeError("TAKE_PROFIT_FACTOR must be a positive number")
+    return float(val)
 
 SCALING_FACTOR = params.get(
     "SCALING_FACTOR",
