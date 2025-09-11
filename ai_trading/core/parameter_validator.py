@@ -92,6 +92,10 @@ class ParameterValidator:
         """Validate a group of parameters."""
         result = {'group': group_name, 'status': 'PASS', 'violations': [], 'warnings': [], 'parameters_checked': len(parameters)}
         for param_name, param_value in parameters.items():
+            if param_value is None:
+                result['status'] = 'FAIL'
+                result['violations'].append(f'{param_name} is None')
+                continue
             if param_name in self.safety_bounds:
                 min_bound, max_bound = self.safety_bounds[param_name]
                 if not min_bound <= param_value <= max_bound:

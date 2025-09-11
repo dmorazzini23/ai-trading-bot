@@ -38,7 +38,7 @@ def test_execute_entry_uses_config_max_factor(monkeypatch):
     assert captured["max_factor"] == 3.0
 
 
-def test_get_take_profit_factor_none(monkeypatch):
-    monkeypatch.setattr(bot_engine.config, "get_env", lambda *a, **k: None)
-    with pytest.raises(RuntimeError):
+def test_get_take_profit_factor_invalid(monkeypatch):
+    monkeypatch.setenv("TAKE_PROFIT_FACTOR", "not-a-number")
+    with pytest.raises(ValueError):
         bot_engine.get_take_profit_factor()

@@ -6,12 +6,17 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+# Default maximum factor applied to ATR-based scaling.  Deployments may
+# override via the ``TAKE_PROFIT_FACTOR`` environment variable.
+DEFAULT_MAX_FACTOR: float = 2.0
+
 
 @dataclass
 class ScalingConfig:
     """Minimal subset of trading config used for sizing helpers."""
 
     capital_cap: float = 0.04
+    max_factor: float = DEFAULT_MAX_FACTOR
     extras: dict[str, Any] | None = None
 
     def derive_cap_from_settings(self, equity: float, fallback: float = 8000.0) -> float:
@@ -43,6 +48,7 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
     env_map = {k.upper(): v for k, v in (env or os.environ).items()}
 
     capital_cap = float(env_map.get("CAPITAL_CAP", "0.04"))
+    max_factor = float(env_map.get("TAKE_PROFIT_FACTOR", str(DEFAULT_MAX_FACTOR)))
 
     extras: dict[str, Any] = {}
     extras_raw = env_map.get("TRADING_CONFIG_EXTRAS")
@@ -54,12 +60,12 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
         if isinstance(parsed, dict):
             extras.update(parsed)
 
-    known = {"CAPITAL_CAP", "TRADING_CONFIG_EXTRAS"}
+    known = {"CAPITAL_CAP", "TRADING_CONFIG_EXTRAS", "TAKE_PROFIT_FACTOR"}
     for k, v in env_map.items():
         if k not in known:
             extras[k] = _coerce(v)
 
-    return ScalingConfig(capital_cap=capital_cap, extras=extras)
+    return ScalingConfig(capital_cap=capital_cap, max_factor=max_factor, extras=extras)
 
 
-__all__ = ["ScalingConfig", "from_env"]
+__all__ = ["ScalingConfig", "from_env", "DEFAULT_MAX_FACTOR"]
