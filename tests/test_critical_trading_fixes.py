@@ -52,7 +52,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         self.assertEqual(sentiment.SENTIMENT_FAILURE_THRESHOLD, 15)
         self.assertEqual(sentiment.SENTIMENT_RECOVERY_TIMEOUT, 1800)  # 30 minutes
         self.assertEqual(sentiment.SENTIMENT_MAX_RETRIES, 5)
-        self.assertEqual(sentiment.SENTIMENT_BASE_DELAY, 5)
+        self.assertEqual(sentiment.SENTIMENT_BACKOFF_BASE, 5)
 
     @patch('ai_trading.analysis.sentiment._http_session.get')
     def test_enhanced_fallback_strategies(self, mock_get):
