@@ -1,9 +1,14 @@
 from types import SimpleNamespace
 from datetime import time
 import threading
+import os
+
 import pandas as pd
+import pytest
 
 from ai_trading.core import bot_engine, execution_flow
+from ai_trading.execution import ExecutionEngine
+from ai_trading.core.enums import OrderSide, OrderType
 
 
 def test_execute_entry_logs_trade(tmp_path, monkeypatch):
@@ -47,3 +52,25 @@ def test_execute_entry_logs_trade(tmp_path, monkeypatch):
     lines = log_path.read_text().splitlines()
     assert len(lines) == 2
     assert "AAPL" in lines[1]
+
+
+def test_slippage_converts_market_to_limit(monkeypatch):
+    os.environ["TESTING"] = "true"
+    monkeypatch.setenv("MAX_SLIPPAGE_BPS", "10")
+    monkeypatch.setenv("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5")
+    monkeypatch.setattr("ai_trading.execution.engine.hash", lambda x: 99, raising=False)
+    engine = ExecutionEngine()
+    oid = engine.execute_order("AAPL", OrderSide.BUY, 10, expected_price=100.0)
+    order = engine.order_manager.orders[oid]
+    assert order.order_type == OrderType.LIMIT
+    assert float(order.price) == pytest.approx(100.0 + (100.0 * 5 / 10000))
+
+
+def test_slippage_reduces_order_size(monkeypatch):
+    os.environ["TESTING"] = "true"
+    monkeypatch.setenv("MAX_SLIPPAGE_BPS", "10")
+    monkeypatch.setattr("ai_trading.execution.engine.hash", lambda x: 99, raising=False)
+    engine = ExecutionEngine()
+    oid = engine.execute_order("AAPL", OrderSide.BUY, 10)
+    order = engine.order_manager.orders[oid]
+    assert order.quantity < 10
