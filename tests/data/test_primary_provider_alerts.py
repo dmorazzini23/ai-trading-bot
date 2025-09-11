@@ -82,10 +82,10 @@ def test_primary_provider_missing_keys_alert(monkeypatch):
     assert "credentials" in args[2].lower()
 
 
-def test_primary_provider_disabled_no_alert(monkeypatch):
+def test_primary_provider_disabled_alert(monkeypatch):
     start, end = _dt_range()
     monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
-    monkeypatch.setattr(fetch, "_alpaca_disabled_until", datetime.now(UTC) + timedelta(minutes=1), raising=False)
+    fetch._disable_alpaca(timedelta(minutes=1))
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
@@ -102,4 +102,4 @@ def test_primary_provider_disabled_no_alert(monkeypatch):
     df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 
     assert not df.empty
-    assert alerts.calls == []
+    assert alerts.calls
