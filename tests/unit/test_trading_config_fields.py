@@ -13,6 +13,7 @@ def test_defaults_present():
     assert cfg.signal_confirmation_bars == 2
     assert cfg.delta_threshold == 0.02
     assert cfg.min_confidence == 0.6
+    assert cfg.position_size_min_usd == 0.0
 
 
 def test_env_overrides_and_defaults(monkeypatch):
@@ -22,6 +23,7 @@ def test_env_overrides_and_defaults(monkeypatch):
     monkeypatch.setenv('SIGNAL_CONFIRMATION_BARS', '3')
     monkeypatch.setenv('DELTA_THRESHOLD', '0.05')
     monkeypatch.setenv('MIN_CONFIDENCE', '0.75')
+    monkeypatch.setenv('POSITION_SIZE_MIN_USD', '50')
     cfg = TradingConfig.from_env()
     assert cfg.kelly_fraction_max == 0.20
     assert cfg.min_sample_size == 12
@@ -29,6 +31,7 @@ def test_env_overrides_and_defaults(monkeypatch):
     assert cfg.signal_confirmation_bars == 3
     assert cfg.delta_threshold == 0.05
     assert cfg.min_confidence == 0.75
+    assert cfg.position_size_min_usd == 50.0
 
 
 def test_update_and_to_dict():
@@ -43,6 +46,7 @@ def test_update_and_to_dict():
     assert "signal_confirmation_bars" in snap
     assert "delta_threshold" in snap
     assert "min_confidence" in snap
+    assert "position_size_min_usd" in snap
 
 
 def test_update_unknown_key():

@@ -255,6 +255,7 @@ class TradingConfig:
     daily_loss_limit: Optional[float] = 0.03
     max_position_size: Optional[float] = None
     max_position_equity_fallback: float = 200000.0
+    position_size_min_usd: float | None = 0.0
     sector_exposure_cap: Optional[float] = None
     max_drawdown_threshold: Optional[float] = None
     trailing_factor: Optional[float] = None
@@ -338,6 +339,7 @@ class TradingConfig:
             "daily_loss_limit",
             "max_position_size",
             "max_position_equity_fallback",
+            "position_size_min_usd",
             "sector_exposure_cap",
             "max_drawdown_threshold",
             "trailing_factor",
@@ -435,6 +437,12 @@ class TradingConfig:
             max_position_size=mps,
             max_position_equity_fallback=_get(
                 "MAX_POSITION_EQUITY_FALLBACK", float, default=200000.0
+            ),
+            position_size_min_usd=_get(
+                "POSITION_SIZE_MIN_USD",
+                float,
+                default=0.0,
+                aliases=("AI_TRADING_POSITION_SIZE_MIN_USD",),
             ),
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
             max_drawdown_threshold=_get("MAX_DRAWDOWN_THRESHOLD", float),
