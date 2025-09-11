@@ -12,10 +12,18 @@ import ai_trading.data.fetch as df
 
 
 class _Resp:
-    def __init__(self, status_code: int, payload: dict | None = None, content_type: str = "application/json"):
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict | None = None,
+        content_type: str = "application/json",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self._payload = payload or {}
         self.headers = {"Content-Type": content_type}
+        if headers:
+            self.headers.update(headers)
         self.text = json.dumps(self._payload)
 
     def json(self):
@@ -214,3 +222,94 @@ def test_sip_fallback_precheck_skips_request(monkeypatch: pytest.MonkeyPatch, ca
     assert feeds == ["iex", "sip"]
     assert df._SIP_UNAUTHORIZED is True
     assert "UNAUTHORIZED_SIP" in caplog.text
+
+
+def test_rate_limit_backoff(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 0)
+    monkeypatch.setattr(df, "provider_priority", lambda: ["alpaca_iex"])
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(df.time, "sleep", lambda s: sleep_calls.append(s))
+    resp_iter = iter(
+        [
+            _Resp(429, payload={"message": "rate limit"}),
+            _Resp(200, payload=_bars_payload(datetime.now(UTC).isoformat())),
+        ]
+    )
+    monkeypatch.setattr(df._HTTP_SESSION, "get", lambda *a, **k: next(resp_iter))
+    start, end = _dt_range(2)
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert isinstance(out, pd.DataFrame) and not out.empty
+    assert sleep_calls and sleep_calls[0] >= 1.0
+
+
+def test_rate_limit_disable_and_recover(monkeypatch: pytest.MonkeyPatch):
+    from ai_trading.data.metrics import provider_disable_total, provider_disabled
+    from ai_trading.config import settings as config_settings
+
+    monkeypatch.setenv("BACKUP_DATA_PROVIDER", "yahoo")
+    config_settings.get_settings.cache_clear()
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(df.provider_monitor, "threshold", 1, raising=False)
+    monkeypatch.setattr(df.provider_monitor, "cooldown", 1, raising=False)
+    df.provider_monitor.fail_counts.clear()
+    df.provider_monitor.disabled_until.clear()
+    calls = {"alpaca": 0, "backup": 0}
+
+    def rate_limit_resp(url, params=None, headers=None, timeout=None):
+        calls["alpaca"] += 1
+        return _Resp(429, payload={"message": "rate limit"}, headers={"Retry-After": "1"})
+
+    def backup_resp(symbol, start, end, interval):
+        calls["backup"] += 1
+        ts = datetime.now(UTC)
+        return pd.DataFrame(
+            {
+                "timestamp": [ts],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [0],
+            }
+        ).set_index("timestamp")
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", rate_limit_resp)
+    monkeypatch.setattr(df, "_backup_get_bars", backup_resp)
+    start, end = _dt_range(2)
+    before = provider_disable_total.labels(provider="alpaca")._value.get()
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert calls["alpaca"] == 1
+    assert calls["backup"] == 1
+    assert provider_disabled.labels(provider="alpaca")._value.get() == 1.0
+    assert provider_disable_total.labels(provider="alpaca")._value.get() == before + 1
+    assert isinstance(out, pd.DataFrame) and not out.empty
+    assert df._alpaca_disabled_until is not None
+
+    # Subsequent call while disabled uses backup without hitting alpaca
+    calls["backup"] = 0
+    out2 = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert calls["alpaca"] == 1
+    assert calls["backup"] == 1
+    assert isinstance(out2, pd.DataFrame)
+
+    # Simulate cooldown expiry and ensure provider re-enables
+    df._FALLBACK_WINDOWS.clear()
+    df._FALLBACK_UNTIL.clear()
+    df._alpaca_disabled_until = datetime.now(UTC) - timedelta(seconds=1)
+
+    def ok_resp(url, params=None, headers=None, timeout=None):
+        calls["alpaca"] += 1
+        ts_iso = datetime.now(UTC).isoformat()
+        return _Resp(200, payload=_bars_payload(ts_iso))
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", ok_resp)
+    out3 = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert calls["alpaca"] == 2
+    assert provider_disabled.labels(provider="alpaca")._value.get() == 0.0
+    assert df._alpaca_disabled_until is None
+    assert isinstance(out3, pd.DataFrame) and not out3.empty
