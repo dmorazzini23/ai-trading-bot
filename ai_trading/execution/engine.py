@@ -100,6 +100,8 @@ class Order:
         self.order_type = order_type
         tick = TICK_BY_SYMBOL.get(symbol)
         self.price = Money(price, tick) if price is not None else None
+        exp = kwargs.get('expected_price')
+        self.expected_price = Money(exp, tick) if exp is not None else None
         self.status = OrderStatus.PENDING
         self.filled_quantity = 0
         self.average_fill_price = Money(0)
@@ -182,7 +184,27 @@ class Order:
 
     def to_dict(self) -> dict:
         """Convert order to dictionary representation."""
-        return {'id': self.id, 'symbol': self.symbol, 'side': self.side.value if isinstance(self.side, OrderSide) else self.side, 'quantity': self.quantity, 'order_type': self.order_type.value if isinstance(self.order_type, OrderType) else self.order_type, 'price': self.price, 'status': self.status.value if isinstance(self.status, OrderStatus) else self.status, 'filled_quantity': self.filled_quantity, 'average_fill_price': self.average_fill_price, 'created_at': self.created_at.isoformat(), 'updated_at': self.updated_at.isoformat(), 'executed_at': self.executed_at.isoformat() if self.executed_at else None, 'client_order_id': self.client_order_id, 'strategy_id': self.strategy_id, 'fills': self.fills, 'notional_value': self.notional_value, 'fill_percentage': self.fill_percentage}
+        return {
+            'id': self.id,
+            'symbol': self.symbol,
+            'side': self.side.value if isinstance(self.side, OrderSide) else self.side,
+            'quantity': self.quantity,
+            'order_type': self.order_type.value if isinstance(self.order_type, OrderType) else self.order_type,
+            'price': self.price,
+            'expected_price': self.expected_price,
+            'status': self.status.value if isinstance(self.status, OrderStatus) else self.status,
+            'filled_quantity': self.filled_quantity,
+            'average_fill_price': self.average_fill_price,
+            'slippage_bps': self.slippage_bps,
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+            'executed_at': self.executed_at.isoformat() if self.executed_at else None,
+            'client_order_id': self.client_order_id,
+            'strategy_id': self.strategy_id,
+            'fills': self.fills,
+            'notional_value': self.notional_value,
+            'fill_percentage': self.fill_percentage,
+        }
 
 class OrderManager:
     """
@@ -266,6 +288,15 @@ class OrderManager:
             if not self._monitor_running:
                 self.start_monitoring()
             logger.info(f'Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}')
+            if getattr(order, 'expected_price', None) is not None:
+                logger.debug(
+                    'ORDER_EXPECTED_PRICE',
+                    extra={
+                        'order_id': order.id,
+                        'symbol': order.symbol,
+                        'expected_price': float(order.expected_price),
+                    },
+                )
             self._notify_callbacks(order, 'submitted')
 
             # Mimic a broker-style response object even when running without a
@@ -760,6 +791,23 @@ class ExecutionEngine:
                     "stop_price",
                 )},
             )
+            if order_type == OrderType.MARKET:
+                try:
+                    import importlib
+                    be = importlib.import_module("ai_trading.core.bot_engine")
+                    if hasattr(be, "get_latest_price"):
+                        exp_price = be.get_latest_price(symbol)
+                        if exp_price is not None:
+                            kwargs["expected_price"] = exp_price
+                            logger.debug(
+                                "EXPECTED_PRICE_FETCHED",
+                                extra={"symbol": symbol, "expected_price": float(exp_price)},
+                            )
+                except Exception as e:  # pragma: no cover - diagnostics only
+                    logger.debug(
+                        "EXPECTED_PRICE_FETCH_FAILED",
+                        extra={"symbol": symbol, "cause": e.__class__.__name__},
+                    )
             order = Order(symbol, side, quantity, order_type, **kwargs)
             if self.order_manager.submit_order(order):
                 self.execution_stats["total_orders"] += 1
@@ -837,7 +885,12 @@ class ExecutionEngine:
 
                 # Compare expected vs actual fill price and check slippage
                 try:
-                    expected = float(order.price) if order.price is not None else float(base_price)
+                    if getattr(order, 'expected_price', None) is not None:
+                        expected = float(order.expected_price)
+                    elif order.price is not None:
+                        expected = float(order.price)
+                    else:
+                        expected = float(base_price)
                 except Exception:
                     expected = float(base_price)
                 try:
