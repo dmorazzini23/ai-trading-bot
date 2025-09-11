@@ -347,6 +347,7 @@ __all__ = [
     "prediction_executor",
     "ctx",
     "check_alpaca_available",
+    "to_trade_signal",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -3836,6 +3837,32 @@ def asset_class_for(symbol: str) -> str:
     if sym.startswith(("BTC", "ETH")):
         return "crypto"
     return "equity"
+
+
+def to_trade_signal(sig: Any):
+    """Return a :class:`TradeSignal` for ``sig``.
+
+    Converts strategy-level signal objects into the risk-engine
+    :class:`TradeSignal` dataclass so that risk checks can operate on a
+    consistent schema.
+    """
+    from ai_trading.risk.engine import TradeSignal as RiskTradeSignal
+
+    if isinstance(sig, RiskTradeSignal):
+        return sig
+    return RiskTradeSignal(
+        symbol=getattr(sig, "symbol", ""),
+        side=str(getattr(sig, "side", "")).lower(),
+        confidence=float(getattr(sig, "confidence", 0.0)),
+        strategy=getattr(sig, "strategy", ""),
+        weight=float(getattr(sig, "weight", 0.0)),
+        asset_class=getattr(
+            sig,
+            "asset_class",
+            asset_class_for(getattr(sig, "symbol", "")),
+        ),
+        strength=float(getattr(sig, "strength", 1.0)),
+    )
 
 
 MAX_VOL_FETCH_RETRIES = 3
@@ -12566,6 +12593,7 @@ def run_multi_strategy(ctx) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
+        sig = to_trade_signal(sig)
         retries = 0
         price = 0.0
         data = None
