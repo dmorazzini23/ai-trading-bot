@@ -227,7 +227,7 @@ _ALPACA_DISABLE_THRESHOLD = 3
 _alpaca_empty_streak = 0
 _alpaca_disabled_until: _dt.datetime | None = None
 _ALPACA_DISABLED_ALERTED = False
-# Track consecutive disable events to apply exponential backoff
+# Track consecutive disable events for logging purposes
 _alpaca_disable_count = 0
 
 # Emit a one-time explanatory log when Alpaca keys are missing to make
@@ -236,22 +236,12 @@ _ALPACA_KEYS_MISSING_LOGGED = False
 
 
 def _disable_alpaca(duration: _dt.timedelta) -> None:
-    """Disable Alpaca as a data source using exponential backoff.
-
-    Each subsequent disable within a runtime session doubles the cooldown up
-    to a maximum of one hour. This reduces rapid enable/disable cycles when the
-    upstream provider is flaky.
-    """
+    """Disable Alpaca as a data source for ``duration``."""
 
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count
-    factor = 2**_alpaca_disable_count
-    max_seconds = 60 * 60  # cap at 1 hour
-    backoff_seconds = min(duration.total_seconds() * factor, max_seconds)
-    _alpaca_disabled_until = datetime.now(UTC) + _dt.timedelta(seconds=backoff_seconds)
+    _alpaca_disabled_until = datetime.now(UTC) + duration
     _ALPACA_DISABLED_ALERTED = False
     _alpaca_disable_count += 1
-    provider_disabled.labels(provider="alpaca").set(1)
-    provider_disable_total.labels(provider="alpaca").inc()
     try:
         logger.warning(
             "ALPACA_TEMP_DISABLED",
@@ -259,7 +249,7 @@ def _disable_alpaca(duration: _dt.timedelta) -> None:
                 {
                     "provider": "alpaca",
                     "disabled_until": _alpaca_disabled_until.isoformat(),
-                    "backoff_seconds": backoff_seconds,
+                    "backoff_seconds": duration.total_seconds(),
                     "disable_count": _alpaca_disable_count,
                 }
             ),
@@ -1403,7 +1393,7 @@ def _fetch_bars(
             except Exception:
                 retry_after = 0
             if retry_after > 0:
-                _disable_alpaca(_dt.timedelta(seconds=retry_after))
+                provider_monitor.disable("alpaca", duration=retry_after)
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
@@ -1663,7 +1653,7 @@ def _fetch_bars(
                 )
                 _alpaca_empty_streak += 1
                 if _alpaca_empty_streak > _ALPACA_DISABLE_THRESHOLD:
-                    _disable_alpaca(_dt.timedelta(minutes=5))
+                    provider_monitor.disable("alpaca", duration=300)
                     _ALPACA_DISABLED_ALERTED = True
                     try:
                         provider_monitor.alert_manager.create_alert(

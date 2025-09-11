@@ -1,8 +1,9 @@
 import json
 from datetime import UTC, datetime, timedelta
 
-import pandas as pd
 import pytest
+
+pd = pytest.importorskip("pandas")
 
 import ai_trading.data.fetch as fetch
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
@@ -85,7 +86,11 @@ def test_primary_provider_missing_keys_alert(monkeypatch):
 def test_primary_provider_disabled_alert(monkeypatch):
     start, end = _dt_range()
     monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
-    fetch._disable_alpaca(timedelta(minutes=1))
+    fetch.provider_monitor.disable_counts.clear()
+    fetch.provider_monitor.disabled_until.clear()
+    fetch.provider_monitor.outage_start.clear()
+    fetch.provider_monitor.disabled_since.clear()
+    fetch.provider_monitor.disable("alpaca", duration=60)
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)

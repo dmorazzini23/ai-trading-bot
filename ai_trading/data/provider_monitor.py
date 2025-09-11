@@ -16,6 +16,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Callable
 
+from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
 from ai_trading.monitoring.alerts import AlertManager, AlertSeverity, AlertType
 from ai_trading.data.metrics import (
@@ -38,6 +39,8 @@ class ProviderMonitor:
         cooldown: int = 300,
         alert_manager: AlertManager | None = None,
         switchover_threshold: int = 5,
+        backoff_factor: float | None = None,
+        max_cooldown: int | None = None,
     ) -> None:
         self.threshold = threshold
         self.cooldown = cooldown
@@ -45,11 +48,23 @@ class ProviderMonitor:
         self.fail_counts: dict[str, int] = defaultdict(int)
         self.disabled_until: dict[str, datetime] = {}
         self.disabled_since: dict[str, datetime] = {}
+        self.disable_counts: dict[str, int] = defaultdict(int)
+        self.outage_start: dict[str, datetime] = {}
         self._callbacks: dict[str, Callable[[timedelta], None]] = {}
         # Track provider switchovers for diagnostics
         self.switch_counts: dict[tuple[str, str], int] = defaultdict(int)
         self.consecutive_switches = 0
         self.switchover_threshold = switchover_threshold
+        self.backoff_factor = (
+            backoff_factor
+            if backoff_factor is not None
+            else float(get_env("DATA_PROVIDER_BACKOFF_FACTOR", "2", cast=float))
+        )
+        self.max_cooldown = (
+            max_cooldown
+            if max_cooldown is not None
+            else int(get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int))
+        )
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -98,9 +113,11 @@ class ProviderMonitor:
             self.disable(provider)
 
     def record_success(self, provider: str) -> None:
-        """Reset failure counter for ``provider``."""
+        """Reset failure counter and backoff state for ``provider``."""
 
         self.fail_counts.pop(provider, None)
+        self.disable_counts.pop(provider, None)
+        self.outage_start.pop(provider, None)
 
     def record_switchover(self, from_provider: str, to_provider: str) -> None:
         """Record a switchover from one provider to another.
@@ -134,21 +151,39 @@ class ProviderMonitor:
                 logger.exception("ALERT_FAILURE", extra={"provider": to_provider})
             self.consecutive_switches = 0
 
-    def disable(self, provider: str) -> None:
-        """Disable ``provider`` for the configured cooldown period."""
+    def disable(self, provider: str, *, duration: float | None = None) -> None:
+        """Disable ``provider`` for ``duration`` seconds with exponential backoff.
+
+        When ``duration`` is ``None`` the base cooldown is used and scaled by
+        ``backoff_factor`` for consecutive disables. The cooldown is capped by
+        ``max_cooldown`` so a flapping provider eventually gets a longer
+        recovery window but never exceeds the configured limit.
+        """
 
         now = datetime.now(UTC)
-        until = now + timedelta(seconds=self.cooldown)
+        count = self.disable_counts[provider] + 1
+        self.disable_counts[provider] = count
+        self.outage_start.setdefault(provider, now)
+        if duration is None:
+            duration = self.cooldown * (self.backoff_factor ** (count - 1))
+        cooldown_s = min(duration, self.max_cooldown)
+        until = now + timedelta(seconds=cooldown_s)
         self.disabled_until[provider] = until
         self.disabled_since[provider] = now
         provider_disable_total.labels(provider=provider).inc()
         provider_disabled.labels(provider=provider).set(1)
+        logger.warning(
+            "DATA_PROVIDER_DISABLED",
+            extra={"provider": provider, "cooldown": cooldown_s, "disable_count": count},
+        )
         cb = self._callbacks.get(provider)
         if cb:
             try:
-                cb(timedelta(seconds=self.cooldown))
+                cb(timedelta(seconds=cooldown_s))
             except Exception:  # pragma: no cover - defensive
-                logger.exception("PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider})
+                logger.exception(
+                    "PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider}
+                )
 
     def is_disabled(self, provider: str) -> bool:
         """Return ``True`` if ``provider`` is currently disabled."""
@@ -163,6 +198,31 @@ class ProviderMonitor:
             if since:
                 duration = (datetime.now(UTC) - since).total_seconds()
                 provider_disable_duration_seconds.labels(provider=provider).inc(duration)
+            total_count = self.disable_counts.get(provider, 0)
+            start = self.outage_start.pop(provider, since or datetime.now(UTC))
+            outage_dur = (datetime.now(UTC) - start).total_seconds()
+            if total_count:
+                try:
+                    self.alert_manager.create_alert(
+                        AlertType.SYSTEM,
+                        AlertSeverity.WARNING,
+                        f"Data provider {provider} restored",
+                        metadata={
+                            "duration": round(outage_dur, 2),
+                            "disable_count": total_count,
+                        },
+                    )
+                except Exception:  # pragma: no cover - alerting best effort
+                    logger.exception("ALERT_FAILURE", extra={"provider": provider})
+            logger.info(
+                "DATA_PROVIDER_RECOVERED",
+                extra={
+                    "provider": provider,
+                    "duration": outage_dur,
+                    "disable_count": total_count,
+                },
+            )
+            self.disable_counts.pop(provider, None)
         return False
 
 

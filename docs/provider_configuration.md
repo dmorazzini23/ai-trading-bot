@@ -37,3 +37,17 @@ exponential backoff when disabling the provider. Each consecutive disable
 period doubles, up to one hour, to avoid rapid flip/flop cycles. Whenever the
 system falls back to another provider, a `DATA_PROVIDER_SWITCHOVER` log entry
 is emitted with the running count for that provider pair to aid diagnostics.
+
+### Tuning
+
+Two environment variables control the backoff behaviour:
+
+- `DATA_PROVIDER_BACKOFF_FACTOR`: multiplier applied to each successive
+  disable. Defaults to `2`.
+- `DATA_PROVIDER_MAX_COOLDOWN`: maximum cooldown in seconds before a provider
+  is reconsidered. Defaults to `3600` (one hour).
+
+When a provider recovers after being disabled, the monitor emits a
+`DATA_PROVIDER_RECOVERED` log with the total outage duration and disable
+frequency and raises a warning alert with the same metadata. These signals can
+be scraped by external monitoring to surface provider flapping.
