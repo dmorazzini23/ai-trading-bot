@@ -5425,8 +5425,13 @@ class SignalManager:
                 self.momentum_lookback, fill_method=None
             )
             val = df["momentum"].iloc[-1]
+            if math.isnan(val):
+                logger.warning("Momentum indicator NaN, skipping")
+                return -1, 0.0, "momentum"
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
+            if math.isnan(w):
+                return -1, 0.0, "momentum"
             return s, w, "momentum"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_momentum")
@@ -5440,14 +5445,22 @@ class SignalManager:
         try:
             ma = df["close"].rolling(self.mean_rev_lookback).mean()
             sd = df["close"].rolling(self.mean_rev_lookback).std()
+            if sd.iloc[-1] == 0 or math.isnan(sd.iloc[-1]):
+                logger.warning("Mean reversion invalid rolling stats, skipping")
+                return -1, 0.0, "mean_reversion"
             df["zscore"] = (df["close"] - ma) / sd
             val = df["zscore"].iloc[-1]
+            if math.isnan(val):
+                logger.warning("Mean reversion zscore NaN, skipping")
+                return -1, 0.0, "mean_reversion"
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
                 else 1 if val < -self.mean_rev_zscore_threshold else -1
             )
             w = min(abs(val) / 3, 1.0)
+            if math.isnan(w):
+                return -1, 0.0, "mean_reversion"
             return s, w, "mean_reversion"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_mean_reversion")
@@ -5797,8 +5810,15 @@ class SignalManager:
             self.signal_obv(df, model),
             self.signal_vsa(df, model),
         ]
-        # drop skipped signals
-        signals = [s for s in raw if s is not None]
+        # drop skipped signals and those with NaN confidence
+        signals: list[tuple[int, float, str]] = []
+        for s in raw:
+            if s is None:
+                continue
+            if math.isnan(s[1]):
+                logger.warning("NaN confidence from %s signal - skipping", s[2])
+                continue
+            signals.append(s)
         if not signals:
             return 0.0, 0.0, "no_signals"
         self.last_components = signals
@@ -10682,6 +10702,19 @@ def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
         close_series = df["close"].dropna()
         if close_series.empty:
             raise ValueError("No close price data available for MACD")
+        min_len = 26 + 9  # slow period + signal period
+        if len(close_series) < min_len:
+            logger.warning(
+                "MACD window too small for %s: need %s bars, have %s",
+                symbol,
+                min_len,
+                len(close_series),
+            )
+            df["macd"] = np.nan
+            df["macds"] = np.nan
+            if state:
+                state.indicator_failures += 1
+            return
         macd_df = signals_calculate_macd(close_series)
         if macd_df is None:
             logger.warning("MACD returned None for %s", symbol)

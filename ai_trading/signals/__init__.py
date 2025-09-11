@@ -237,7 +237,12 @@ def _validate_macd_input(close_prices, min_len):
         return False
     if close_prices.isna().any() or np.isinf(close_prices).any():
         return False
-    return not len(close_prices) < min_len
+    if len(close_prices) < min_len:
+        logger.warning(
+            "MACD input length %s below minimum %s", len(close_prices), min_len
+        )
+        return False
+    return True
 
 
 def _compute_macd_df(close_prices, fast_period: int, slow_period: int, signal_period: int):
