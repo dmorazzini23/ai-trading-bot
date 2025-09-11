@@ -60,3 +60,75 @@ def test_analyze_text_neutral(monkeypatch):
     res = sentiment.analyze_text("anything")
     assert res == {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
 
+
+def test_neutral_caching_after_failure(monkeypatch):
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+
+    calls = {"count": 0}
+
+    class Resp:
+        status_code = 500
+
+        def json(self):
+            return {}
+
+    def fake_get(*_a, **_k):
+        calls["count"] += 1
+        return Resp()
+
+    monkeypatch.setattr(sentiment._http_session, "get", fake_get)
+    monkeypatch.setattr(sentiment.pytime, "time", lambda: 0)
+
+    score1 = sentiment.fetch_sentiment(None, "MSFT")
+    score2 = sentiment.fetch_sentiment(None, "MSFT")
+
+    assert score1 == 0.0
+    assert score2 == 0.0
+    assert calls["count"] == 1
+
+
+def test_circuit_breaker_recovers(monkeypatch):
+    class DummySettings:
+        sentiment_api_url = "http://example.com"
+
+    monkeypatch.setattr(sentiment, "get_settings", lambda: DummySettings())
+
+    def fake_analyze(_text: str):
+        return {"available": True, "pos": 0.7, "neg": 0.1, "neu": 0.2}
+
+    monkeypatch.setattr(sentiment, "analyze_text", fake_analyze)
+    monkeypatch.setattr(sentiment, "fetch_form4_filings", lambda _t: [])
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"articles": [{"title": "t", "description": "d"}]}
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(sentiment._http_session, "get", lambda *a, **k: Resp())
+
+    # Open circuit breaker and advance time beyond recovery timeout
+    sentiment._sentiment_circuit_breaker = {
+        "failures": sentiment.SENTIMENT_FAILURE_THRESHOLD,
+        "last_failure": 0,
+        "state": "open",
+        "next_retry": 0,
+    }
+
+    monkeypatch.setattr(
+        sentiment.pytime, "time", lambda: sentiment.SENTIMENT_RECOVERY_TIMEOUT + 1
+    )
+
+    score = sentiment.fetch_sentiment(None, "AAPL")
+
+    assert score != 0.0
+    cb = sentiment._sentiment_circuit_breaker
+    assert cb["state"] == "closed"
+    assert cb["failures"] == 0
+
