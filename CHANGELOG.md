@@ -24,6 +24,7 @@ All notable changes to this project will be documented in this file.
   absent. Supports using a venv via `make ... PYTHON=.venv/bin/python`.
 - Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
 - Core: gate `ML_MODEL_MISSING` warning behind `AI_TRADING_WARN_IF_MODEL_MISSING` flag.
+- Data fetch: enforce rate limiter in `fetch.core` to comply with Alpaca quotas.
 
 ### Added
 - Cache fallback data provider usage to skip redundant Alpaca requests
@@ -36,6 +37,8 @@ All notable changes to this project will be documented in this file.
 - **Data Fetch**: validate Alpaca request parameters, check trading windows
   against the market calendar, retry up to 5 times, and optionally fall back to
   Yahoo when IEX returns empty.
+- Metrics: track data fetch retries and provider disable durations.
+- Monitoring: alert when consecutive provider switchovers exceed threshold.
 
 ### Fixed
 - Dev deps: align `packaging` version with `constraints.txt` (25.0) to

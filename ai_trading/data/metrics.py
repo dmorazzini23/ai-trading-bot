@@ -47,6 +47,20 @@ provider_disable_total = get_counter(
     ["provider"],
 )
 
+# Counter tracking data fetch retries per provider
+fetch_retry_total = get_counter(
+    "data_fetch_retry_total",
+    "Count of data fetch retries",
+    ["provider"],
+)
+
+# Counter tracking total duration a provider stays disabled
+provider_disable_duration_seconds = get_counter(
+    "data_provider_disable_duration_seconds_total",
+    "Total seconds providers remained disabled",
+    ["provider"],
+)
+
 __all__ = [
     "Metrics",
     "metrics",
@@ -54,4 +68,6 @@ __all__ = [
     "provider_fallback",
     "provider_disabled",
     "provider_disable_total",
+    "fetch_retry_total",
+    "provider_disable_duration_seconds",
 ]
