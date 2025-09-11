@@ -1253,6 +1253,7 @@ if not os.getenv("PYTEST_RUNNING"):
         compute_macds,
         compute_vwap,
         compute_atr,
+        compute_sma,
         ensure_columns,
     )
 else:
@@ -1262,6 +1263,9 @@ else:
 
     def compute_atr(*args, **kwargs):
         return [1.0] * 20  # Mock ATR values
+
+    def compute_sma(*args, **kwargs):
+        return [1.0] * 20  # Mock SMA values
 
     def compute_vwap(*args, **kwargs):
         return [100.0] * 20  # Mock VWAP values
@@ -9344,10 +9348,15 @@ def _fetch_feature_data(
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[%s] Post VWAP: last closes: %s", symbol, df["close"].tail(5).tolist())
 
+    df = compute_sma(df)
+    assert_row_integrity(initial_len, len(df), "compute_sma", symbol)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("[%s] Post SMA: last closes: %s", symbol, df["close"].tail(5).tolist())
+
     df = compute_macds(df)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("%s dataframe columns after indicators: %s", symbol, df.columns.tolist())
-    df = ensure_columns(df, ["macd", "vwap", "macds"], symbol)
+    df = ensure_columns(df, ["macd", "atr", "vwap", "macds", "sma_50", "sma_200"], symbol)
     if df.empty and raw_df is not None:
         df = raw_df.copy()
 
@@ -9845,7 +9854,7 @@ def trade_logic(
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
-    for col in ["macd", "atr", "vwap", "macds"]:
+    for col in ["macd", "atr", "vwap", "macds", "sma_50", "sma_200"]:
         if col not in feat_df.columns:
             feat_df[col] = 0.0
 
@@ -9853,7 +9862,7 @@ def trade_logic(
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
         logger.debug(
-            f"Feature snapshot for {symbol}: macd={feat_df['macd'].iloc[-1]}, atr={feat_df['atr'].iloc[-1]}, vwap={feat_df['vwap'].iloc[-1]}, macds={feat_df['macds'].iloc[-1]}"
+            f"Feature snapshot for {symbol}: macd={feat_df['macd'].iloc[-1]}, atr={feat_df['atr'].iloc[-1]}, vwap={feat_df['vwap'].iloc[-1]}, macds={feat_df['macds'].iloc[-1]}, sma_50={feat_df['sma_50'].iloc[-1]}, sma_200={feat_df['sma_200'].iloc[-1]}"
         )
         logger.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
         return True
