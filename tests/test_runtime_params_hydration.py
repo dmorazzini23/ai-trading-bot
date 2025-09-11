@@ -20,11 +20,13 @@ def test_trading_config_has_required_parameters():
     assert hasattr(cfg, 'capital_cap')
     assert hasattr(cfg, 'dollar_risk_limit')
     assert hasattr(cfg, 'max_position_size')
+    assert hasattr(cfg, 'position_size_min_usd')
 
     # Verify default values
     assert cfg.capital_cap == 0.04
     assert cfg.dollar_risk_limit == 0.05
     assert cfg.max_position_size == 8000.0
+    assert cfg.position_size_min_usd == 0.0
 
 
 def test_trading_config_from_env_loads_parameters():
@@ -36,6 +38,7 @@ def test_trading_config_from_env_loads_parameters():
         'CAPITAL_CAP': '0.06',
         'DOLLAR_RISK_LIMIT': '0.08',
         'MAX_POSITION_SIZE': '2.0',
+        'POSITION_SIZE_MIN_USD': '25',
     }
 
     with patch.dict(os.environ, env_vars):
@@ -44,6 +47,7 @@ def test_trading_config_from_env_loads_parameters():
         assert cfg.capital_cap == 0.06
         assert cfg.dollar_risk_limit == 0.08
         assert cfg.max_position_size == 2.0
+        assert cfg.position_size_min_usd == 25.0
 
 
 def test_trading_config_from_env_market_calendar(monkeypatch):
@@ -170,6 +174,7 @@ def test_build_runtime_ignores_none_values(monkeypatch):
         dollar_risk_limit=None,
         max_position_size=None,
         kelly_fraction_max=None,  # unrelated field to ensure None doesn't break
+        buy_threshold=None,
     )
 
     runtime = build_runtime(cfg)
