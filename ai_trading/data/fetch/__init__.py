@@ -595,6 +595,52 @@ def _post_process(df: pd.DataFrame) -> pd.DataFrame:
     return _flatten_and_normalize_ohlcv(df)
 
 
+def _verify_minute_continuity(
+    df: pd.DataFrame, symbol: str, backfill: str | None = None
+) -> pd.DataFrame:
+    """Verify 1-minute bar continuity and optionally backfill gaps."""
+
+    pd_local = _ensure_pandas()
+    if (
+        pd_local is None
+        or df is None
+        or getattr(df, "empty", True)
+        or "timestamp" not in df.columns
+    ):
+        return df
+
+    df = df.sort_values("timestamp")
+    ts = pd_local.DatetimeIndex(df["timestamp"])
+    diffs = ts.to_series().diff().dt.total_seconds().iloc[1:]
+    missing = diffs[diffs > 60]
+    if missing.empty:
+        return df
+
+    warnings.warn(f"{symbol} minute data has {len(missing)} gaps", RuntimeWarning)
+    if not backfill:
+        return df
+
+    full_index = pd_local.date_range(ts.min(), ts.max(), freq="1min", tz=ts.tz)
+    df = df.set_index("timestamp").reindex(full_index)
+    df.index.name = "timestamp"
+
+    if backfill == "ffill":
+        df["close"] = df["close"].ffill()
+        df["open"] = df["open"].fillna(df["close"])
+        df["high"] = df["high"].fillna(df["close"])
+        df["low"] = df["low"].fillna(df["close"])
+        if "volume" in df.columns:
+            df["volume"] = df["volume"].fillna(0)
+    elif backfill == "interpolate":
+        cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+        df[cols] = df[cols].interpolate(method="time")  # type: ignore[assignment]
+        if "volume" in df.columns:
+            df["volume"] = df["volume"].fillna(0)
+        df[cols] = df[cols].ffill().bfill()
+
+    return df.reset_index()
+
+
 def _ensure_http_client():
     try:
         from importlib import import_module
@@ -1721,8 +1767,16 @@ def _fetch_bars(
     return df
 
 
-def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) -> pd.DataFrame:
-    """Minute bars fetch with provider fallback and downgraded errors.
+def get_minute_df(
+    symbol: str,
+    start: Any,
+    end: Any,
+    feed: str | None = None,
+    *,
+    backfill: str | None = None,
+) -> pd.DataFrame:
+    """Minute bars fetch with provider fallback and gap handling.
+
     Also updates in-memory minute cache for freshness checks."""
     pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
@@ -1847,6 +1901,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
+                                df_alt = _post_process(df_alt)
+                                df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
                                 return df_alt
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
@@ -1879,6 +1935,8 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
+                                df_short = _post_process(df_short)
+                                df_short = _verify_minute_continuity(df_short, symbol, backfill=backfill)
                                 return df_short
                     try:
                         df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
@@ -1974,7 +2032,9 @@ def get_minute_df(symbol: str, start: Any, end: Any, feed: str | None = None) ->
                 _mark_fallback(symbol, "1Min", start_dt, end_dt)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
-    return _post_process(df)
+    df = _post_process(df)
+    df = _verify_minute_continuity(df, symbol, backfill=backfill)
+    return df
 
 
 def get_daily_df(
