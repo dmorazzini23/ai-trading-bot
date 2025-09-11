@@ -1,7 +1,9 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-import pandas as pd
+import pytest
+
+pd = pytest.importorskip("pandas")
 
 from ai_trading.data import fetch
 from ai_trading.data.provider_monitor import provider_monitor
@@ -38,6 +40,8 @@ def _setup_common(monkeypatch):
     provider_monitor.cooldown = 0
     provider_monitor.fail_counts.clear()
     provider_monitor.disabled_until.clear()
+    provider_monitor.disable_counts.clear()
+    provider_monitor.outage_start.clear()
     monkeypatch.setattr(fetch, "_alpaca_disabled_until", None, raising=False)
 
 
