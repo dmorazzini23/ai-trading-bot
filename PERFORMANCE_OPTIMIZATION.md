@@ -865,3 +865,7 @@ This comprehensive performance optimization guide provides:
 3. **Low Impact**: JIT compilation, advanced profiling (for debugging)
 
 Regular performance monitoring and optimization should be part of the development workflow to maintain efficient trading operations.
+
+## Indicator Caching and Compute Budget
+
+The trading loop caches feature-engineered DataFrames by symbol and last bar timestamp to avoid repeating indicator calculations when market data is unchanged. To extend the compute window for heavier cycles, set the environment variable `CYCLE_COMPUTE_BUDGET` to a higher fraction (default inherits `CYCLE_BUDGET_FRACTION`).
