@@ -39,6 +39,8 @@ class ProviderMonitor:
         self.fail_counts: dict[str, int] = defaultdict(int)
         self.disabled_until: dict[str, datetime] = {}
         self._callbacks: dict[str, Callable[[timedelta], None]] = {}
+        # Track provider switchovers for diagnostics
+        self.switch_counts: dict[tuple[str, str], int] = defaultdict(int)
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -90,6 +92,24 @@ class ProviderMonitor:
         """Reset failure counter for ``provider``."""
 
         self.fail_counts.pop(provider, None)
+
+    def record_switchover(self, from_provider: str, to_provider: str) -> None:
+        """Record a switchover from one provider to another.
+
+        The call increments an in-memory counter and emits an INFO log with the
+        running count so operators can diagnose frequent provider churn.
+        """
+
+        key = (from_provider, to_provider)
+        self.switch_counts[key] += 1
+        logger.info(
+            "DATA_PROVIDER_SWITCHOVER",
+            extra={
+                "from_provider": from_provider,
+                "to_provider": to_provider,
+                "count": self.switch_counts[key],
+            },
+        )
 
     def disable(self, provider: str) -> None:
         """Disable ``provider`` for the configured cooldown period."""
