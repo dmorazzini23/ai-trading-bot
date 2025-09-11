@@ -3329,14 +3329,15 @@ TRAILING_FACTOR = params.get(
     ),
 )
 SECONDARY_TRAIL_FACTOR = 1.0
-TAKE_PROFIT_FACTOR = params.get(
-    "TAKE_PROFIT_FACTOR",
-    getattr(
-        S,
-        "take_profit_factor",
-        getattr(state.mode_obj.config, "take_profit_factor", 2.0),
-    ),
-)
+
+
+def get_take_profit_factor() -> float:
+    """Return configured take-profit factor for ATR stop calculations."""
+    val = config.get_env("TAKE_PROFIT_FACTOR", "2.0", cast=float)
+    if val is None:
+        raise RuntimeError("TAKE_PROFIT_FACTOR must be configured")
+    return val
+
 SCALING_FACTOR = params.get(
     "SCALING_FACTOR",
     getattr(S, "scaling_factor", getattr(state.mode_obj.config, "scaling_factor", 1.0)),
@@ -9653,9 +9654,8 @@ def _enter_long(
         now_pac = datetime.now(UTC).astimezone(PACIFIC)
         mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-        tp_factor = (
-            TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
-        )
+        tp_base = get_take_profit_factor()
+        tp_factor = tp_base * 1.1 if is_high_vol_regime() else tp_base
         stop, take = scaled_atr_stop(
             entry_price=current_price,
             atr=feat_df["atr"].iloc[-1],
@@ -9752,9 +9752,8 @@ def _enter_short(
         now_pac = datetime.now(UTC).astimezone(PACIFIC)
         mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-        tp_factor = (
-            TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
-        )
+        tp_base = get_take_profit_factor()
+        tp_factor = tp_base * 1.1 if is_high_vol_regime() else tp_base
         long_stop, long_take = scaled_atr_stop(
             entry_price=current_price,
             atr=atr,
