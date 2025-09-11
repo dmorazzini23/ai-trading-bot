@@ -32,7 +32,12 @@ from ai_trading.data.empty_bar_backoff import (
     mark_success,
     record_attempt,
 )
-from ai_trading.data.metrics import metrics, provider_fallback, provider_disabled
+from ai_trading.data.metrics import (
+    metrics,
+    provider_fallback,
+    provider_disabled,
+    provider_disable_total,
+)
 from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
@@ -246,6 +251,7 @@ def _disable_alpaca(duration: _dt.timedelta) -> None:
     _ALPACA_DISABLED_ALERTED = False
     _alpaca_disable_count += 1
     provider_disabled.labels(provider="alpaca").set(1)
+    provider_disable_total.labels(provider="alpaca").inc()
     try:
         logger.warning(
             "ALPACA_TEMP_DISABLED",
@@ -994,6 +1000,7 @@ def _fetch_bars(
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
             _alpaca_empty_streak = 0
+            prev_disable_count = _alpaca_disable_count
             provider_disabled.labels(provider="alpaca").set(0)
             provider_monitor.record_success("alpaca")
             _alpaca_disable_count = 0
@@ -1005,6 +1012,7 @@ def _fetch_bars(
                             "provider": "alpaca",
                             "feed": _feed,
                             "timeframe": _interval,
+                            "disable_count": prev_disable_count,
                         }
                     ),
                 )
@@ -1380,18 +1388,62 @@ def _fetch_bars(
             metrics.rate_limit += 1
             provider_monitor.record_failure("alpaca", "rate_limit")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
-            log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
+            log_fetch_attempt(
+                "alpaca", status=status, error="rate_limited", **log_extra_with_remaining
+            )
             logger.warning(
                 "DATA_SOURCE_RATE_LIMITED",
                 extra=_norm_extra(
                     {"provider": "alpaca", "status": "rate_limited", "feed": _feed, "timeframe": _interval}
                 ),
             )
-            if fallback:
-                result = _attempt_fallback(fallback)
-                if result is not None:
-                    return result
-            raise ValueError("rate_limited")
+            retry_after = 0
+            try:
+                retry_after = int(float(resp.headers.get("Retry-After", "0")))
+            except Exception:
+                retry_after = 0
+            if retry_after > 0:
+                _disable_alpaca(_dt.timedelta(seconds=retry_after))
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                fb_int = interval_map.get(_interval)
+                if fb_int:
+                    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+                    provider_fallback.labels(
+                        from_provider=f"alpaca_{_feed}", to_provider=provider
+                    ).inc()
+                    provider_monitor.record_switchover(
+                        f"alpaca_{_feed}", provider
+                    )
+                    _mark_fallback(symbol, _interval, _start, _end)
+                    return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                return pd.DataFrame()
+            attempt = _state["retries"] + 1
+            if attempt >= max_retries:
+                if fallback:
+                    result = _attempt_fallback(fallback)
+                    if result is not None:
+                        return result
+                raise ValueError("rate_limited")
+            _state["retries"] = attempt
+            backoff = min(
+                _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP
+            )
+            logger.debug(
+                "RETRY_AFTER_RATE_LIMIT",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "retry_delay": backoff,
+                        "attempt": _state["retries"],
+                        "remaining_retries": max_retries - _state["retries"],
+                    }
+                ),
+            )
+            time.sleep(backoff)
+            return _req(session, fallback, headers=headers, timeout=timeout)
         df = pd.DataFrame(data)
         if df.empty:
             attempt = _state["retries"] + 1

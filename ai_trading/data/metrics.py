@@ -40,10 +40,18 @@ provider_disabled = get_gauge(
     ["provider"],
 )
 
+# Counter tracking how often a provider is disabled
+provider_disable_total = get_counter(
+    "data_provider_disable_total",
+    "Times a data provider was disabled",
+    ["provider"],
+)
+
 __all__ = [
     "Metrics",
     "metrics",
     "backup_provider_used",
     "provider_fallback",
     "provider_disabled",
+    "provider_disable_total",
 ]
