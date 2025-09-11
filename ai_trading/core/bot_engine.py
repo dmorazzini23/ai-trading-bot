@@ -9381,7 +9381,8 @@ def _fetch_feature_data(
         df = raw_df.copy()
 
     try:
-        feat_df = prepare_indicators(df)
+        with StageTimer(logger, "prepare_indicators", symbol=symbol):
+            feat_df = prepare_indicators(df)
         if feat_df is None:
             return raw_df, None, True
         # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
@@ -11008,32 +11009,53 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
 
 @profile
 def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
-    # Calculate RSI and assign to both rsi and rsi_14
-    frame["rsi"] = ta.rsi(frame["close"], length=14)
-    frame["rsi_14"] = frame["rsi"]
+    """Add core technical indicators to ``frame``.
 
-    # Ichimoku conversion and base lines
-    frame["ichimoku_conv"] = (
-        frame["high"].rolling(window=9).max() + frame["low"].rolling(window=9).min()
-    ) / 2
-    frame["ichimoku_base"] = (
-        frame["high"].rolling(window=26).max() + frame["low"].rolling(window=26).min()
-    ) / 2
+    This implementation avoids repeated pandas operations by reusing rolling
+    windows and computing multiple aggregates in a single pass. It falls back to
+    a vectorized RSI calculation when ``pandas_ta`` is unavailable.
+    """
 
-    # Stochastic RSI calculation
-    rsi_min = frame["rsi_14"].rolling(window=14).min()
-    rsi_max = frame["rsi_14"].rolling(window=14).max()
-    frame["stochrsi"] = (frame["rsi_14"] - rsi_min) / (rsi_max - rsi_min)
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    for col in ("close", "high", "low"):
+        if col not in frame:
+            return pd.DataFrame()
 
-    # Guarantee all required columns exist
+    close = frame["close"].astype(float)
+    hl = frame[["high", "low"]].astype(float)
+
+    # RSI calculation (vectorized fallback when pandas_ta is missing)
+    try:
+        rsi = ta.rsi(close, length=14)
+        if rsi is None or rsi.empty:
+            raise ValueError
+    except Exception:
+        delta = close.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        avg_gain = gain.rolling(14).mean()
+        avg_loss = loss.rolling(14).mean()
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+    frame["rsi"] = rsi
+    frame["rsi_14"] = rsi
+
+    # Ichimoku conversion and base lines using aggregated rolling ops
+    conv = hl.rolling(9).agg({"high": "max", "low": "min"})
+    base = hl.rolling(26).agg({"high": "max", "low": "min"})
+    frame["ichimoku_conv"] = (conv["high"] + conv["low"]) / 2
+    frame["ichimoku_base"] = (base["high"] + base["low"]) / 2
+
+    # Stochastic RSI using single rolling aggregation
+    rsi_bounds = rsi.rolling(14).agg(["min", "max"])
+    frame["stochrsi"] = (rsi - rsi_bounds["min"]) / (
+        rsi_bounds["max"] - rsi_bounds["min"]
+    )
+
     required = ["ichimoku_conv", "ichimoku_base", "stochrsi"]
-    for col in required:
-        if col not in frame.columns:
-            frame[col] = np.nan
-
-    # Drop rows with any missing indicator values
     frame.dropna(subset=required, inplace=True)
-
     return frame
 
 
