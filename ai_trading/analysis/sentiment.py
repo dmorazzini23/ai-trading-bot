@@ -18,12 +18,18 @@ from ai_trading.utils.retry import (
 )
 from ai_trading.logging import logger
 from ai_trading.settings import get_news_api_key
-from ai_trading.config import get_settings
+from ai_trading.config.settings import (
+    get_settings,
+    sentiment_backoff_base,
+    sentiment_backoff_strategy,
+    sentiment_retry_max,
+)
 from ai_trading.utils.timing import HTTP_TIMEOUT
 from ai_trading.config.management import get_env, validate_required_env
 from ai_trading.utils.device import get_device, tensors_to_device  # AI-AGENT-REF: guard torch import
 from ai_trading.exc import RequestException, HTTPError
 from ai_trading.metrics import get_counter, get_gauge
+from ai_trading.data.provider_monitor import provider_monitor
 
 SENTIMENT_API_KEY = get_env("SENTIMENT_API_KEY", "")
 _http_session: HTTPSession = get_http_session()
@@ -84,8 +90,18 @@ SENTIMENT_TTL_SEC = 600
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200
 SENTIMENT_FAILURE_THRESHOLD = 15
 SENTIMENT_RECOVERY_TIMEOUT = 1800
-SENTIMENT_MAX_RETRIES = get_env("SENTIMENT_MAX_RETRIES", 5, cast=int)
-SENTIMENT_BASE_DELAY = get_env("SENTIMENT_BASE_DELAY", 5, cast=int)
+_settings = get_settings()
+SENTIMENT_MAX_RETRIES = sentiment_retry_max(_settings)
+SENTIMENT_BACKOFF_BASE = sentiment_backoff_base(_settings)
+SENTIMENT_BACKOFF_STRATEGY = sentiment_backoff_strategy(_settings)
+if SENTIMENT_BACKOFF_STRATEGY.lower() == 'fixed':
+    _SENTIMENT_WAIT = wait_random(SENTIMENT_BACKOFF_BASE, SENTIMENT_BACKOFF_BASE * 2)
+else:
+    _SENTIMENT_WAIT = wait_exponential(
+        multiplier=SENTIMENT_BACKOFF_BASE,
+        min=SENTIMENT_BACKOFF_BASE,
+        max=180,
+    ) + wait_random(0, SENTIMENT_BACKOFF_BASE)
 SENTIMENT_NEWS_WEIGHT = 0.8
 SENTIMENT_FORM4_WEIGHT = 0.2
 _sentiment_cache: dict[str, tuple[float, float]] = {}
@@ -150,7 +166,7 @@ def _check_sentiment_circuit_breaker() -> bool:
     sentiment_cb_state.set(0)
     return True
 
-def _record_sentiment_success():
+def _record_sentiment_success() -> None:
     """Record successful sentiment API call."""
     global _sentiment_circuit_breaker
     _init_metrics()
@@ -162,8 +178,9 @@ def _record_sentiment_success():
         cb['state'] = 'closed'
         logger.info('Sentiment circuit breaker closed - service recovered')
     sentiment_cb_state.set(0)
+    provider_monitor.record_success('sentiment')
 
-def _record_sentiment_failure():
+def _record_sentiment_failure(reason: str = 'error', error: str | None = None) -> None:
     """Record failed sentiment API call and update circuit breaker."""
     global _sentiment_circuit_breaker
     _init_metrics()
@@ -172,7 +189,7 @@ def _record_sentiment_failure():
     cb['failures'] += 1
     cb['last_failure'] = pytime.time()
     delay = min(
-        SENTIMENT_BASE_DELAY * (2 ** (cb['failures'] - 1)),
+        SENTIMENT_BACKOFF_BASE * (2 ** (cb['failures'] - 1)),
         SENTIMENT_RECOVERY_TIMEOUT,
     )
     cb['next_retry'] = cb['last_failure'] + delay
@@ -187,8 +204,9 @@ def _record_sentiment_failure():
         )
     state_val = {'closed': 0, 'half-open': 1, 'open': 2}[cb['state']]
     sentiment_cb_state.set(state_val)
+    provider_monitor.record_failure('sentiment', reason, error)
 
-@retry(stop=stop_after_attempt(SENTIMENT_MAX_RETRIES), wait=wait_exponential(multiplier=SENTIMENT_BASE_DELAY, min=SENTIMENT_BASE_DELAY, max=180) + wait_random(0, 5), retry=retry_if_exception_type((Exception,)))
+@retry(stop=stop_after_attempt(SENTIMENT_MAX_RETRIES), wait=_SENTIMENT_WAIT, retry=retry_if_exception_type((Exception,)))
 def fetch_sentiment(ctx, ticker: str) -> float:
     """
     Fetch sentiment via NewsAPI + FinBERT + Form 4 signal.
@@ -245,11 +263,11 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             return _handle_rate_limit_with_enhanced_strategies(ticker)
         elif resp.status_code == 403:
             logger.warning(f'fetch_sentiment({ticker}) forbidden (403) - possible API key issue → using fallback')
-            _record_sentiment_failure()
+            _record_sentiment_failure('forbidden')
             return _get_cached_or_neutral_sentiment(ticker)
         elif resp.status_code >= 500:
             logger.warning(f'fetch_sentiment({ticker}) server error ({resp.status_code}) → using fallback')
-            _record_sentiment_failure()
+            _record_sentiment_failure('server_error', str(resp.status_code))
             return _get_cached_or_neutral_sentiment(ticker)
         resp.raise_for_status()
         payload = resp.json()
@@ -286,7 +304,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         return final_score
     except (ValueError, TypeError) as e:
         logger.warning(f'Sentiment API request failed for {ticker}: {e}')
-        _record_sentiment_failure()
+        _record_sentiment_failure('api_error', str(e))
         with sentiment_lock:
             cached = _sentiment_cache.get(ticker)
             if cached:
@@ -297,7 +315,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             return 0.0
     except (ValueError, TypeError) as e:
         logger.error(f'Unexpected error fetching sentiment for {ticker}: {e}')
-        _record_sentiment_failure()
+        _record_sentiment_failure('unexpected_error', str(e))
         with sentiment_lock:
             _sentiment_cache[ticker] = (now_ts, 0.0)
         return 0.0
@@ -308,7 +326,7 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
 
     AI-AGENT-REF: Implements exponential backoff and multiple fallback data sources for critical sentiment rate limiting fix.
     """
-    _record_sentiment_failure()
+    _record_sentiment_failure('rate_limit')
     fallback_sources = [
         _try_alternative_sentiment_sources,
         _try_cached_similar_symbols,

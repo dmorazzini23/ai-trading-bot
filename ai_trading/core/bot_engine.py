@@ -295,13 +295,21 @@ from ai_trading.core.alpaca_client import (  # noqa: E402
     _initialize_alpaca_clients as _initialize_alpaca_clients,
 )
 
+from ai_trading.config.settings import (
+    sentiment_retry_max,
+    sentiment_backoff_base,
+    sentiment_backoff_strategy,
+)
+from ai_trading.data.provider_monitor import provider_monitor
+
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
 _SENTIMENT_FAILURES: int = 0
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 SENTIMENT_SUCCESS_TTL_SEC: int = int(os.getenv("SENTIMENT_SUCCESS_TTL_SEC", "900"))
-SENTIMENT_MAX_RETRIES: int = int(os.getenv("SENTIMENT_MAX_RETRIES", "3"))
-SENTIMENT_BACKOFF_BASE: float = float(os.getenv("SENTIMENT_BACKOFF_BASE", "1"))
+SENTIMENT_MAX_RETRIES: int = sentiment_retry_max()
+SENTIMENT_BACKOFF_BASE: float = sentiment_backoff_base()
+SENTIMENT_BACKOFF_STRATEGY: str = sentiment_backoff_strategy()
 SENTIMENT_MAX_CALLS_PER_MIN: int = int(os.getenv("SENTIMENT_MAX_CALLS_PER_MIN", "0"))
 _SENTIMENT_CALL_TIMES: deque[float] = deque()
 
@@ -5441,7 +5449,14 @@ _SENTIMENT_CIRCUIT_BREAKER = {
 SENTIMENT_RECOVERY_TIMEOUT = (
     1800  # Extended to 30 minutes (1800s) for better recovery per problem statement
 )
-SENTIMENT_BASE_DELAY = int(os.getenv("SENTIMENT_BASE_DELAY", "5"))
+if SENTIMENT_BACKOFF_STRATEGY.lower() == "fixed":
+    _SENTIMENT_WAIT = wait_random(SENTIMENT_BACKOFF_BASE, SENTIMENT_BACKOFF_BASE * 2)
+else:
+    _SENTIMENT_WAIT = wait_exponential(
+        multiplier=SENTIMENT_BACKOFF_BASE,
+        min=SENTIMENT_BACKOFF_BASE,
+        max=SENTIMENT_RECOVERY_TIMEOUT,
+    ) + wait_random(0, SENTIMENT_BACKOFF_BASE)
 
 
 class SignalManager:
@@ -6937,7 +6952,7 @@ def _check_sentiment_circuit_breaker() -> bool:
     return True
 
 
-def _record_sentiment_success():
+def _record_sentiment_success() -> None:
     """Record successful sentiment API call."""
     global _SENTIMENT_CIRCUIT_BREAKER
     _init_metrics()
@@ -6950,9 +6965,12 @@ def _record_sentiment_success():
         cb["state"] = "closed"
         logger.info("Sentiment circuit breaker closed - service recovered")
     sentiment_cb_state.set(0)
+    provider_monitor.record_success("sentiment")
 
 
-def _record_sentiment_failure():
+def _record_sentiment_failure(
+    reason: str = "error", error: str | None = None
+) -> None:
     """Record failed sentiment API call and update circuit breaker."""
     global _SENTIMENT_CIRCUIT_BREAKER
     _init_metrics()
@@ -6961,7 +6979,7 @@ def _record_sentiment_failure():
     cb["failures"] += 1
     cb["last_failure"] = pytime.time()
     delay = min(
-        SENTIMENT_BASE_DELAY * (2 ** (cb["failures"] - 1)),
+        SENTIMENT_BACKOFF_BASE * (2 ** (cb["failures"] - 1)),
         SENTIMENT_RECOVERY_TIMEOUT,
     )
     cb["next_retry"] = cb["last_failure"] + delay
@@ -6977,17 +6995,12 @@ def _record_sentiment_failure():
         )
     state_val = {"closed": 0, "half-open": 1, "open": 2}[cb["state"]]
     sentiment_cb_state.set(state_val)
+    provider_monitor.record_failure("sentiment", reason, error)
 
 
 @retry(
     stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),
-    wait=
-    wait_exponential(
-        multiplier=SENTIMENT_BASE_DELAY,
-        min=SENTIMENT_BASE_DELAY,
-        max=SENTIMENT_RECOVERY_TIMEOUT,
-    )
-    + wait_random(0, SENTIMENT_BASE_DELAY),
+    wait=_SENTIMENT_WAIT,
     retry=retry_if_exception_type((requests.exceptions.RequestException,)),
 )
 def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
@@ -7062,7 +7075,7 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
             logger.warning(
                 f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL"
             )
-            _record_sentiment_failure()
+            _record_sentiment_failure("rate_limit")
             with sentiment_lock:
                 # Cache neutral score with extended TTL during rate limiting
                 _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
@@ -7113,7 +7126,7 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
 
     except requests.exceptions.RequestException as e:
         logger.warning(f"Sentiment API request failed for {ticker}: {e}")
-        _record_sentiment_failure()
+        _record_sentiment_failure("api_error", str(e))
 
         # AI-AGENT-REF: Fallback to cached data or neutral if no cache
         with sentiment_lock:
@@ -7136,7 +7149,7 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
         OSError,
     ) as e:  # AI-AGENT-REF: narrow exception
         logger.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
-        _record_sentiment_failure()
+        _record_sentiment_failure("unexpected_error", str(e))
         with sentiment_lock:
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
         return 0.0
