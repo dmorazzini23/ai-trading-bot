@@ -462,7 +462,7 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         DataFetchError,
         prepare_indicators,
         get_latest_close,
-        TAKE_PROFIT_FACTOR,
+        get_take_profit_factor,
         is_high_vol_regime,
         scaled_atr_stop,
         targets_lock,
@@ -526,7 +526,8 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
     now_pac = datetime.now(UTC).astimezone(PACIFIC)
     mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
     mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-    tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
+    tp_base = get_take_profit_factor()
+    tp_factor = tp_base * 1.1 if is_high_vol_regime() else tp_base
     stop, take = scaled_atr_stop(
         entry_price,
         df_ind["atr"].iloc[-1],
