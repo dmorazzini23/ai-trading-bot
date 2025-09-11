@@ -491,6 +491,12 @@ class ExecutionEngine:
         except Exception:
             # Never allow lifecycle hooks to raise
             pass
+        try:
+            # Trailing-stop checks are best-effort
+            self.check_trailing_stops()
+        except Exception:
+            # Never allow lifecycle hooks to raise
+            pass
 
     def _track_order(self, order: Order) -> None:
         """Track an order in the shared monitoring structure."""
@@ -574,6 +580,25 @@ class ExecutionEngine:
             logger.debug('check_stops: inspected %d positions', len(positions))
         except (ValueError, TypeError) as e:
             logger.info('check_stops: suppressed exception: %s', e)
+
+    def check_trailing_stops(self) -> None:
+        """Evaluate any active trailing-stop handlers.
+
+        This is a best-effort hook used by the trading loop to ensure any
+        attached trailing-stop logic runs after a cycle. If no trailing-stop
+        handler is configured, this method simply returns. Any exceptions from
+        the handler are suppressed so callers may invoke this method
+        unconditionally.
+        """
+        try:
+            handler = getattr(self, 'trailing_stop_handler', None)
+            if handler is None:
+                return
+            check_fn = getattr(handler, 'check', None)
+            if callable(check_fn):
+                check_fn()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug('check_trailing_stops: suppressed exception: %s', e)
 
     def _validate_short_selling(
         self, _api, symbol: str, qty: float, price: float | None = None
