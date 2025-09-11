@@ -5440,7 +5440,7 @@ _SENTIMENT_CIRCUIT_BREAKER = {
 SENTIMENT_RECOVERY_TIMEOUT = (
     1800  # Extended to 30 minutes (1800s) for better recovery per problem statement
 )
-SENTIMENT_BASE_DELAY = 5
+SENTIMENT_BASE_DELAY = int(os.getenv("SENTIMENT_BASE_DELAY", "5"))
 
 
 class SignalManager:
@@ -6944,7 +6944,8 @@ def _record_sentiment_success():
     cb["failures"] = 0
     cb["next_retry"] = 0
     cb["opened_at"] = 0
-    if cb["state"] == "half-open":
+    cb["last_failure"] = 0
+    if cb["state"] != "closed":
         cb["state"] = "closed"
         logger.info("Sentiment circuit breaker closed - service recovered")
     sentiment_cb_state.set(0)

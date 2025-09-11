@@ -78,6 +78,8 @@ The bot tracks upstream sentiment failures and circuit breaker state:
 - `sentiment_circuit_breaker_state` is a gauge where `0` means closed,
   `1` half-open, and `2` open. A warning is logged if the breaker stays
   open beyond the normal recovery window.
+- Backoff behaviour can be tuned with `SENTIMENT_MAX_RETRIES` and
+  `SENTIMENT_BASE_DELAY` (seconds) environment variables.
 
 ### Example Usage
 
