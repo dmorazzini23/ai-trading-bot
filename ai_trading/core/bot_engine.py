@@ -13098,16 +13098,31 @@ def _check_runtime_stops(runtime) -> None:
     exec_engine = getattr(runtime, "exec_engine", None) or getattr(
         runtime, "execution_engine", None
     )
-    if exec_engine is not None and hasattr(exec_engine, "check_stops"):
+    if exec_engine is None:
+        logger.warning(
+            "Execution engine missing check_stops; risk-stop checks skipped",
+        )
+        return
+    if hasattr(exec_engine, "check_stops"):
         try:
             exec_engine.check_stops()
         except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard check_stops
             logger.info("check_stops raised but was suppressed: %s", e)
     else:
         logger.warning(
-            "Execution engine missing check_stops; risk-stop checks skipped"
+            "Execution engine missing check_stops; risk-stop checks skipped",
         )
-
+    if hasattr(exec_engine, "check_trailing_stops"):
+        try:
+            exec_engine.check_trailing_stops()
+        except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
+            logger.info(
+                "check_trailing_stops raised but was suppressed: %s", e
+            )
+    else:
+        logger.debug(
+            "Execution engine missing check_trailing_stops; trailing-stop checks skipped"
+        )
 
 _LAST_MARKET_CLOSED_LOG = 0.0
 
