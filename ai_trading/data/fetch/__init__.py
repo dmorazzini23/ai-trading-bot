@@ -34,6 +34,7 @@ from ai_trading.data.empty_bar_backoff import (
 )
 from ai_trading.data.metrics import metrics, provider_fallback
 from ai_trading.data.provider_monitor import provider_monitor
+from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
@@ -879,6 +880,20 @@ def _fetch_bars(
         raise
     global _alpaca_disabled_until
     if _alpaca_disabled_until and datetime.now(UTC) < _alpaca_disabled_until:
+        try:
+            logger.warning(
+                "PRIMARY_PROVIDER_TEMP_DISABLED",
+                extra=_norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "disabled_until": _alpaca_disabled_until.isoformat(),
+                    }
+                ),
+            )
+        except Exception:
+            pass
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
@@ -2051,6 +2066,12 @@ def get_bars(
                         "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
                         "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
                     },
+                )
+                provider_monitor.alert_manager.create_alert(
+                    AlertType.SYSTEM,
+                    AlertSeverity.CRITICAL,
+                    "Alpaca credentials missing; using backup provider",
+                    metadata={"provider": getattr(get_settings(), "backup_data_provider", "yahoo")},
                 )
             except Exception:
                 # Never allow diagnostics to break data path
