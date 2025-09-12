@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 - Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
 - Core: gate `ML_MODEL_MISSING` warning behind `AI_TRADING_WARN_IF_MODEL_MISSING` flag.
 - Data fetch: enforce rate limiter in `fetch.core` to comply with Alpaca quotas.
+- Utils: `safe_subprocess_run` now returns a result object exposing `stdout`, `returncode`, and `timeout` flag.
 
 ### Added
 - Cache fallback data provider usage to skip redundant Alpaca requests
