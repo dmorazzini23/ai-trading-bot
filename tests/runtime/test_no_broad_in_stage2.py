@@ -14,6 +14,7 @@ PATHS = [
     "ai_trading/position/correlation_analyzer.py",
     "ai_trading/position/profit_taking.py",
     "ai_trading/production_system.py",
+    "ai_trading/data/bars.py",
     "ai_trading/rl_trading/train.py",
     "ai_trading/utils/base.py",
     "ai_trading/position/intelligent_manager.py",
