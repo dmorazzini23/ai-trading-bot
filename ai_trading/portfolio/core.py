@@ -113,8 +113,34 @@ def log_portfolio_summary(ctx) -> None:
             signal.alarm(0)
         cash = float(acct.cash)
         equity = float(acct.equity)
-        logger.debug('Raw Alpaca positions: %s', positions)
-        exposure = sum((abs(float(p.market_value)) for p in positions)) / equity * 100 if equity > 0 else 0.0
+
+        position_source = 'broker'
+        if not positions:
+            risk_engine = getattr(ctx, 'risk_engine', None)
+            ledger = getattr(getattr(risk_engine, '_positions', None), 'items', lambda: [])()
+            if not ledger:
+                engine = getattr(ctx, 'execution_engine', None)
+                ledger = getattr(getattr(engine, 'position_ledger', None), 'items', lambda: [])()
+            if ledger:
+                from types import SimpleNamespace
+                positions = [SimpleNamespace(symbol=s, qty=q) for s, q in ledger]
+                position_source = 'ledger'
+
+        if position_source == 'broker':
+            logger.debug('Raw Alpaca positions: %s', positions)
+            exposure = (
+                sum((abs(float(p.market_value)) for p in positions)) / equity * 100
+                if equity > 0
+                else 0.0
+            )
+        else:
+            logger.debug('Ledger positions: %s', {p.symbol: int(p.qty) for p in positions})
+            total = 0.0
+            for p in positions:
+                price = get_latest_price(ctx, p.symbol)
+                if isinstance(price, (int, float)):
+                    total += abs(price * int(p.qty))
+            exposure = (total / equity * 100) if equity > 0 else 0.0
         try:
             adaptive_cap = ctx.risk_engine._adaptive_global_cap()
         except AttributeError:
@@ -122,8 +148,21 @@ def log_portfolio_summary(ctx) -> None:
         except (TypeError, ValueError) as e:
             logger.debug('Risk engine calculation error: %s', e)
             adaptive_cap = 0.0
-        logger.info('Portfolio summary: cash=$%.2f, equity=$%.2f, exposure=%.2f%%, positions=%d', cash, equity, exposure, len(positions))
-        logger.info('Weights vs positions: weights=%s, positions=%s, cash=$%.2f', getattr(ctx, 'portfolio_weights', {}), {p.symbol: int(p.qty) for p in positions}, cash)
+        logger.info(
+            'Portfolio summary (%s): cash=$%.2f, equity=$%.2f, exposure=%.2f%%, positions=%d',
+            position_source,
+            cash,
+            equity,
+            exposure,
+            len(positions),
+        )
+        logger.info(
+            'Weights vs positions (%s): weights=%s, positions=%s, cash=$%.2f',
+            position_source,
+            getattr(ctx, 'portfolio_weights', {}),
+            {p.symbol: int(p.qty) for p in positions},
+            cash,
+        )
         logger.info('CYCLE SUMMARY adaptive_cap=%.1f', adaptive_cap)
     except TimeoutError:
         logger.error('Portfolio summary timed out', extra={'component': 'portfolio_summary', 'error_type': 'timeout'})
@@ -132,4 +171,8 @@ def log_portfolio_summary(ctx) -> None:
     except (ValueError, TypeError) as exc:
         logger.warning('Portfolio summary failed - data conversion error: %s', exc, extra={'component': 'portfolio_summary', 'error_type': 'data'})
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, OSError) as exc:
-        logger.warning('Portfolio summary failed - unexpected error: %s', exc, extra={'component': 'portfolio_summary', 'error_type': 'unexpected'})
+        logger.warning(
+            'Portfolio summary failed - unexpected error: %s',
+            exc,
+            extra={'component': 'portfolio_summary', 'error_type': 'unexpected'},
+        )
