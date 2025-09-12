@@ -252,9 +252,35 @@ class OrderManager:
             ``SimpleNamespace`` mirroring a broker response with fields like
             ``id`` and ``filled_qty`` when accepted, ``None`` if rejected.
             Returning an object keeps behaviour consistent with external
-            broker APIs and provides useful metadata even in dry‑run tests.
+        broker APIs and provides useful metadata even in dry‑run tests.
         """
         try:
+            if getattr(order, "order_type", None) == OrderType.MARKET:
+                try:
+                    import importlib
+                    be = importlib.import_module("ai_trading.core.bot_engine")
+                    if hasattr(be, "get_latest_price"):
+                        quote = be.get_latest_price(order.symbol)
+                        if quote is not None:
+                            tick = TICK_BY_SYMBOL.get(order.symbol)
+                            order.expected_price = Money(quote, tick)
+                            logger.debug(
+                                "EXPECTED_PRICE_REFRESHED",
+                                extra={
+                                    "order_id": order.id,
+                                    "symbol": order.symbol,
+                                    "expected_price": float(order.expected_price),
+                                },
+                            )
+                except Exception as e:  # pragma: no cover - diagnostics only
+                    logger.debug(
+                        "EXPECTED_PRICE_REFRESH_FAILED",
+                        extra={
+                            "order_id": order.id,
+                            "symbol": order.symbol,
+                            "cause": e.__class__.__name__,
+                        },
+                    )
             if not self._validate_order(order):
                 try:
                     _orders_rejected_total.inc()
@@ -866,6 +892,18 @@ class ExecutionEngine:
             return None
         return None
 
+    def _adaptive_slippage_threshold(self, symbol: str, base_bps: float) -> float:
+        """Return slippage threshold scaled for symbol volatility."""
+        try:
+            if self.market_data_feed and hasattr(self.market_data_feed, "get_volatility"):
+                vol = self.market_data_feed.get_volatility(symbol)
+                if isinstance(vol, (int, float)) and vol > 0:
+                    factor = max(0.5, min(3.0, vol / 0.02))
+                    return base_bps * factor
+        except Exception:
+            pass
+        return base_bps
+
     def _simulate_market_execution(self, order: Order):
         """Simulate market order execution (demo purposes)."""
         try:
@@ -888,7 +926,10 @@ class ExecutionEngine:
                 expected = float(base_price)
 
             predicted_fill = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
-            threshold = get_env("MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float)
+            base_threshold = get_env(
+                "MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float
+            )
+            threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
             predicted_slippage_bps = (
                 ((predicted_fill - expected) / expected) * 10000 if expected else 0.0
             )
@@ -979,6 +1020,7 @@ class ExecutionEngine:
                         'slippage_bps': round(slippage_bps, 2),
                     },
                 )
+                threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
                 if abs(slippage_bps) > threshold:
                     logger.warning(
                         'SLIPPAGE_THRESHOLD_EXCEEDED',
