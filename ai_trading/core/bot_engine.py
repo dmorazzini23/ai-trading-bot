@@ -825,7 +825,7 @@ def _load_required_model() -> Any:
                 logger.warning(
                     "MODEL_PLACEHOLDER_CREATED", extra={"path": path}
                 )
-            except Exception as e:  # pragma: no cover - unexpected I/O failures
+            except OSError as e:  # pragma: no cover - unexpected I/O failures
                 logger.error(
                     "MODEL_PATH_INVALID",
                     extra={"path": path, "error": str(e)},
@@ -2423,7 +2423,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             session_start, session_end = rth_session_utc(prev)
             start_dt = session_start
             end_dt = session_end
-    except Exception:
+    except COMMON_EXC:
         # Fallback: retain previous 1-day window behavior
         start_dt = now_utc - timedelta(days=1)
         end_dt = now_utc
@@ -2770,7 +2770,7 @@ def _log_peak_equity_permission() -> None:
         fallback = paths.CACHE_DIR / "peak_equity.txt"
         try:
             fallback.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
+        except OSError:
             pass
         PEAK_EQUITY_FILE = str(fallback)
         logger.warning(
@@ -2778,7 +2778,7 @@ def _log_peak_equity_permission() -> None:
             str(paths.DATA_DIR / "peak_equity.txt"),
             PEAK_EQUITY_FILE,
         )
-    except Exception:
+    except OSError:
         # As a last resort, keep previous behavior but still avoid log spam
         logger.warning(
             "PEAK_EQUITY_FILE %s permission denied; skipping peak equity tracking",
@@ -3381,7 +3381,7 @@ try:
         POV_SLICE_PCT = 0.05
     else:
         POV_SLICE_PCT = _p
-except Exception:
+except (TypeError, ValueError):
     POV_SLICE_PCT = 0.05
 DAILY_LOSS_LIMIT = params.get(
     "get_daily_loss_limit()",
@@ -4140,7 +4140,7 @@ class DataFetcher:
             try:
                 from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
                 df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
-            except Exception:
+            except COMMON_EXC:
                 logger.warning(
                     "alpaca-py not installed and Yahoo fallback failed for %s",
                     symbol,
@@ -4160,7 +4160,7 @@ class DataFetcher:
             try:
                 from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
                 df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
-            except Exception:
+            except COMMON_EXC:
                 logger.warning(
                     "Missing Alpaca credentials for %s; using Yahoo fallback",
                     symbol,
@@ -4194,7 +4194,7 @@ class DataFetcher:
             try:
                 from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
                 df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
-            except Exception:
+            except COMMON_EXC:
                 return None
             else:
                 with cache_lock:
@@ -5984,7 +5984,7 @@ def get_trade_logger() -> TradeLogger:
         groups: set[int]
         try:
             groups = set(os.getgroups())
-        except Exception:
+        except OSError:
             groups = {gid}
         import stat as _stat
         if uid == st.st_uid:
@@ -6306,7 +6306,7 @@ def _initialize_alpaca_clients() -> bool:
                 from ai_trading.execution.reconcile import get_reconciler
 
                 get_reconciler(trading_client)
-            except Exception as e:  # pragma: no cover - best effort
+            except (ImportError, RuntimeError, AttributeError) as e:  # pragma: no cover - best effort
                 logger.warning(
                     "POSITION_RECONCILER_INIT_FAILED", extra={"error": str(e)}
                 )
@@ -8056,7 +8056,7 @@ def _apply_sector_cap_qty(ctx: BotContext, symbol: str, qty: int, price: float) 
     """
     try:
         total = float(ctx.api.get_account().portfolio_value)
-    except Exception:
+    except (APIError, RequestException, AttributeError, ValueError):
         total = 0.0
     if total <= 0 or qty <= 0 or price <= 0:
         return max(0, int(qty))
@@ -8660,10 +8660,7 @@ def submit_order(
             price = get_latest_price(symbol)
             if not isinstance(price, (int, float)) or price <= 0:
                 md = getattr(ctx, "market_data", None)
-                try:
-                    price = get_latest_close(md) if md is not None else 0.0
-                except Exception:
-                    price = 0.0
+                price = get_latest_close(md) if md is not None else 0.0
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.
         return _exec_engine.execute_order(symbol, core_side, qty, price=price)
@@ -9598,7 +9595,7 @@ def _enter_long(
     # Use account equity for weight-based sizing to avoid multiplying by buying power
     try:
         account_equity = float(ctx.api.get_account().equity)
-    except Exception:
+    except (APIError, RequestException, AttributeError, ValueError):
         account_equity = float(balance)
     raw_qty = int(account_equity * target_weight / current_price) if current_price > 0 else 0
 
@@ -11091,7 +11088,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         rsi = ta.rsi(close, length=14)
         if rsi is None or rsi.empty:
             raise ValueError
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         delta = close.diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
@@ -13047,12 +13044,9 @@ def _process_symbols(
     # When not monkeypatched, initialize it from the shared executors module.
     _pred = globals().get("prediction_executor")
     if _pred is None:
-        try:
-            _pred = getattr(executors, "prediction_executor", None)
-            if _pred is not None:
-                globals()["prediction_executor"] = _pred  # seed module alias once
-        except Exception:
-            _pred = None
+        _pred = getattr(executors, "prediction_executor", None)
+        if _pred is not None:
+            globals()["prediction_executor"] = _pred  # seed module alias once
     if _pred is None:
         # Fallback to the general executor if prediction-specific is unavailable
         _pred = getattr(executors, "executor", None)

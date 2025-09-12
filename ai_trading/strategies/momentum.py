@@ -126,7 +126,7 @@ class MomentumStrategy(BaseStrategy):
             df = fetcher.get_daily_df(ctx, sym)
             try:
                 series = df["close"]
-            except Exception:  # pragma: no cover - defensive
+            except KeyError:  # pragma: no cover - missing close column
                 logger.warning("Insufficient data")
                 return []
             if df is None or len(series) <= self.lookback:
