@@ -14767,13 +14767,16 @@ def _record_trade_in_frequency_tracker(
 
 
 def get_latest_price(symbol: str):
+    """Return the most recent quote price with provider fallbacks."""
+
+    price: float | None = None
     try:
         alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
         data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
-        price = float(data.get("ap", 0)) if data else None
+        raw = data.get("ap") if data else None
+        price = float(raw) if raw is not None else None
         if price is None:
-            raise ValueError(f"Price returned None for symbol {symbol}")
-        return price
+            logger.warning("ALPACA_PRICE_NONE", extra={"symbol": symbol})
     except (
         FileNotFoundError,
         PermissionError,
@@ -14784,8 +14787,29 @@ def get_latest_price(symbol: str):
         TypeError,
         OSError,
     ) as e:  # AI-AGENT-REF: narrow exception
-        logger.error("Failed to get latest price for %s: %s", symbol, e, exc_info=True)
-        return None
+        logger.warning("ALPACA_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
+
+    if price is None:
+        try:
+            from datetime import UTC, datetime, timedelta
+            from ai_trading.data.fetch import _backup_get_bars as _yahoo_get_bars
+
+            start = datetime.now(UTC) - timedelta(days=5)
+            end = datetime.now(UTC)
+            df = _yahoo_get_bars(symbol, start, end, interval="1d")
+            price = get_latest_close(df)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("YAHOO_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
+
+    if price is None:
+        try:
+            df = get_bars_df(symbol)
+            price = get_latest_close(df)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("LATEST_PRICE_FALLBACK_FAILED", extra={"symbol": symbol, "error": str(e)})
+            price = None
+
+    return price
 
 
 def initialize_bot(api=None, data_loader=None):
