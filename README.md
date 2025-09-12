@@ -1378,6 +1378,12 @@ python performance_optimizer.py --monitor --duration 3600
    CLEANUP_INTERVAL_MINUTES=60
    ```
 
+4. **Symbol Limit**
+   ```python
+   # Cap symbols processed each cycle (default 50)
+   MAX_SYMBOLS_PER_CYCLE=25
+   ```
+
 ### Performance Metrics
 
 Monitor key performance indicators:

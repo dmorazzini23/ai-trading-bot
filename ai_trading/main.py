@@ -786,12 +786,12 @@ def main(argv: list[str] | None = None) -> None:
                     pass
             raw_fraction = get_env(
                 "CYCLE_COMPUTE_BUDGET",
-                get_env("CYCLE_BUDGET_FRACTION", 0.8),
+                get_env("CYCLE_BUDGET_FRACTION", 0.9),
             )
             try:
                 fraction = float(raw_fraction)
             except (TypeError, ValueError):
-                fraction = 0.8
+                fraction = 0.9
             # Dynamic interval: slow down when closed
             effective_interval = int(closed_interval if closed else interval)
             budget = SoftBudget(interval_sec=float(effective_interval), fraction=fraction)

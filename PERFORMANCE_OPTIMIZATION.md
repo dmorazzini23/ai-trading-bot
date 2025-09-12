@@ -868,4 +868,9 @@ Regular performance monitoring and optimization should be part of the developmen
 
 ## Indicator Caching and Compute Budget
 
-The trading loop caches feature-engineered DataFrames by symbol and last bar timestamp to avoid repeating indicator calculations when market data is unchanged. To extend the compute window for heavier cycles, set the environment variable `CYCLE_COMPUTE_BUDGET` to a higher fraction (default inherits `CYCLE_BUDGET_FRACTION`).
+The trading loop caches feature-engineered DataFrames by symbol and last bar timestamp to avoid repeating indicator calculations when market data is unchanged. To extend the compute window for heavier cycles, set the environment variable `CYCLE_COMPUTE_BUDGET` to a higher fraction (default inherits `CYCLE_BUDGET_FRACTION`, now `0.9`).
+
+## Per-cycle Symbol Limit
+
+Use `MAX_SYMBOLS_PER_CYCLE` to cap how many tickers are processed each run. Lowering this value reduces per-cycle latency at the cost of coverage. The default limit is 50 symbols.
+
