@@ -49,39 +49,21 @@ async def run_with_concurrency(
     FAILED_SYMBOLS.clear()
 
     results: dict[str, T | None] = {}
-    iterator = iter(symbols)
-    running: set[asyncio.Task[tuple[str, T | None]]] = set()
+    sem = asyncio.Semaphore(max_concurrency)
 
-    async def _run(sym: str) -> tuple[str, T | None]:
-        try:
-            return sym, await worker(sym)
-        except Exception:  # pragma: no cover - worker errors become None
-            return sym, None
-
-    def _schedule_next() -> bool:
-        try:
-            sym = next(iterator)
-        except StopIteration:
-            return False
-        running.add(asyncio.create_task(_run(sym)))
-        return True
-
-    for _ in range(max_concurrency):
-        if not _schedule_next():
-            break
-
-    while running:
-        done, _ = await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            running.remove(task)
-            sym, res = task.result()
+    async def _run(sym: str) -> None:
+        async with sem:
+            try:
+                res = await worker(sym)
+            except Exception:  # pragma: no cover - worker errors become None
+                res = None
             results[sym] = res
             if res is None:
                 FAILED_SYMBOLS.add(sym)
             else:
                 SUCCESSFUL_SYMBOLS.add(sym)
-            _schedule_next()
 
+    await asyncio.gather(*(_run(s) for s in symbols))
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 
 

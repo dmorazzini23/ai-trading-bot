@@ -370,16 +370,25 @@ class TradingConfig:
 
     @classmethod
     def from_env(
-        cls, env_or_mode: Any | None = None
+        cls,
+        env_or_mode: Any | None = None,
+        *,
+        allow_missing_drawdown: bool = False,
     ) -> "TradingConfig":
-        # Allow either a mode string ("balanced"/"conservative"/"aggressive")
-        # or a mapping of environment variables for compatibility with tests.
+        """Build TradingConfig from environment.
+
+        ``env_or_mode`` may be a mapping of env vars or a mode string. When a
+        mapping is provided, ``TRADING_MODE`` may be present to influence
+        overrides. ``allow_missing_drawdown`` bypasses the otherwise strict
+        requirement for ``MAX_DRAWDOWN_THRESHOLD``.
+        """
         mode: str | None = None
         if isinstance(env_or_mode, str):
             mode = env_or_mode.strip().lower()
             env_map = {k.upper(): v for k, v in os.environ.items()}
         else:
             env_map = {k.upper(): v for k, v in (env_or_mode or os.environ).items()}
+            mode = env_map.get("TRADING_MODE", "").strip().lower() or None
 
         def _get(
             key: str,
@@ -448,7 +457,6 @@ class TradingConfig:
             max_drawdown_threshold=_get(
                 "MAX_DRAWDOWN_THRESHOLD",
                 float,
-                default=None,
                 aliases=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
             ),
             trailing_factor=_get("TRAILING_FACTOR", float),
@@ -509,7 +517,8 @@ class TradingConfig:
             pov_slice_pct=_get("POV_SLICE_PCT", float),
             order_timeout_seconds=_get("ORDER_TIMEOUT_SECONDS", int),
         )
-        # Apply mode presets when explicitly requested (test-only contract).
+        # Apply mode presets when requested (either via explicit mode argument or
+        # TRADING_MODE environment variable).
         if mode in {"balanced", "conservative", "aggressive"}:
             presets = {
                 "balanced": dict(
@@ -548,7 +557,10 @@ class TradingConfig:
                     object.__setattr__(cfg, k, v)
                 except Exception:
                     pass
-        # Optional threshold; runtime consumers should validate when used
+
+        if cfg.max_drawdown_threshold is None and not allow_missing_drawdown:
+            raise RuntimeError("Missing required environment variable: MAX_DRAWDOWN_THRESHOLD")
+
         return cfg
 
     def snapshot_sanitized(self) -> Dict[str, Any]:
@@ -607,3 +619,16 @@ def derive_cap_from_settings(settings_obj, equity: Optional[float], fallback: fl
     `settings_obj` is accepted for API compatibility but unused.
     """
     return float(_derive_cap_from_settings(equity, capital_cap, fallback))
+
+
+def from_env_relaxed(env_or_mode: Any | None = None) -> TradingConfig:
+    """Non-raising variant of :meth:`TradingConfig.from_env` used for lazy imports.
+
+    Missing ``MAX_DRAWDOWN_THRESHOLD`` is tolerated; other validation errors
+    still surface. Mode overrides via ``TRADING_MODE`` are applied the same as
+    ``from_env``.
+    """
+    return TradingConfig.from_env(env_or_mode, allow_missing_drawdown=True)
+
+
+__all__.append("from_env_relaxed")

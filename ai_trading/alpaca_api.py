@@ -112,6 +112,7 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
         Minute = "Min"
         Hour = "Hour"
         Day = "Day"
+        Week = "Week"
 
     @dataclass(frozen=True)
     class TimeFrame:
@@ -125,6 +126,7 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
     TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
     TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
+    TimeFrame.Week = TimeFrame(1, TimeFrameUnit.Week)  # type: ignore[attr-defined]
 
     @dataclass
     class StockBarsRequest:
@@ -196,38 +198,24 @@ def get_api_error_cls():
 def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
     """Adapter for ``get_orders`` methods lacking ``list_orders``.
 
-    Parameters
-    ----------
-    api:
-        Client exposing ``get_orders``.
-    *args, **kwargs:
-        Forwarded to ``get_orders`` with the ``status`` keyword preserved.
+    ``status`` is forwarded as a top-level keyword to preserve compatibility
+    with SDKs expecting a simple string or enum. Other parameters are passed
+    through unchanged.
     """
     status = kwargs.pop("status", None)
-    if status is None:
-        return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
-
-    enum_val: Any = status
-    try:  # optional enum mapping for alpaca-py
-        enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-        enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-            enums_mod, "OrderStatus", None
-        )
-        if enum_cls is not None:
-            enum_val = getattr(enum_cls, str(status).upper(), status)
-    except Exception:
-        pass
-
-    try:  # build filter object when request class available
-        requests_mod = __import__(
-            "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
-        )
-        GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
-        filter_obj = GetOrdersRequest(statuses=[enum_val])
-        return api.get_orders(*args, filter=filter_obj, **kwargs)  # type: ignore[attr-defined]
-    except Exception:
+    if status is not None:
+        enum_val: Any = status
+        try:  # optional enum mapping for alpaca-py
+            enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
+            enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
+                enums_mod, "OrderStatus", None
+            )
+            if enum_cls is not None:
+                enum_val = getattr(enum_cls, str(status).upper(), status)
+        except Exception:
+            pass
         kwargs["status"] = enum_val
-        return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
+    return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
 
 def _data_classes():
