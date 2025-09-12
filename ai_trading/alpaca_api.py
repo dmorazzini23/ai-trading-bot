@@ -669,11 +669,11 @@ def _http_submit(
 
 def submit_order(
     symbol: str,
-    qty: int | float | str,
     side: str,
+    *,
+    qty: int | float | str,
     type: str = "market",
     time_in_force: str = "day",
-    *,
     limit_price: float | None = None,
     stop_price: float | None = None,
     shadow: bool | None = None,
@@ -687,10 +687,10 @@ def submit_order(
     ----------
     symbol:
         Asset ticker to trade.
-    qty:
-        Quantity of shares to submit.
     side:
         ``"buy"`` or ``"sell"`` direction for the order.
+    qty:
+        Quantity of shares to submit (keyword-only).
 
     Notes
     -----
