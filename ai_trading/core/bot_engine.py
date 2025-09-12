@@ -2255,12 +2255,17 @@ def compute_current_positions(ctx: BotContext) -> dict[str, int]:
     try:
         if hasattr(ctx.api, "list_positions"):
             positions = ctx.api.list_positions()
-        elif hasattr(ctx.api, "get_all_positions"):
+            logger.debug("Raw Alpaca positions: %s", positions)
+            return {p.symbol: int(p.qty) for p in positions}
+        if hasattr(ctx.api, "get_all_positions"):
             positions = ctx.api.get_all_positions()
-        else:
-            return {}
-        logger.debug("Raw Alpaca positions: %s", positions)
-        return {p.symbol: int(p.qty) for p in positions}
+            logger.debug("Raw Alpaca positions: %s", positions)
+            return {p.symbol: int(p.qty) for p in positions}
+        engine = getattr(ctx, "execution_engine", None)
+        if engine is not None:
+            ledger = getattr(engine, "position_ledger", {})
+            return ledger.copy()
+        return {}
     except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
         logger.warning("compute_current_positions failed: %s", e, exc_info=True)
         return {}

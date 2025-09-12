@@ -471,6 +471,8 @@ class ExecutionEngine:
         self.logger = logger
         self._open_orders: dict[str, OrderInfo] = {}
         self._available_qty: float = 0
+        # In-memory fallback for position tracking when broker data is unavailable
+        self._position_ledger: dict[str, int] = {}
         self.execution_stats = {
             'total_orders': 0,
             'filled_orders': 0,
@@ -503,6 +505,20 @@ class ExecutionEngine:
     def get_available_qty(self) -> float:
         """Helper to get :attr:`available_qty`."""
         return self.available_qty
+
+    @property
+    def position_ledger(self) -> dict[str, int]:
+        """Return a copy of the tracked positions."""
+        return self._position_ledger.copy()
+
+    def _update_position(self, symbol: str, side: OrderSide, quantity: int) -> None:
+        """Update in-memory position ledger for a fill event."""
+        delta = quantity if side == OrderSide.BUY else -quantity
+        new_qty = self._position_ledger.get(symbol, 0) + delta
+        if new_qty:
+            self._position_ledger[symbol] = new_qty
+        else:
+            self._position_ledger.pop(symbol, None)
 
     # Lifecycle hooks to align with bot_engine expectations -----------------
     def start_cycle(self) -> None:
@@ -604,11 +620,12 @@ class ExecutionEngine:
         """
         try:
             broker = getattr(self, 'broker', None) or getattr(self, 'broker_interface', None)
-            if broker is None or not hasattr(broker, 'list_positions'):
-                logger.debug('check_stops: no broker/list_positions; skipping')
-                return
-            positions = broker.list_positions() or []
-            logger.debug('check_stops: inspected %d positions', len(positions))
+            if broker is not None and hasattr(broker, 'list_positions'):
+                positions = broker.list_positions() or []
+                logger.debug('check_stops: inspected %d positions', len(positions))
+            else:
+                positions = [SimpleNamespace(symbol=s, qty=q) for s, q in self._position_ledger.items()]
+                logger.debug('check_stops: inspected %d positions (ledger)', len(positions))
         except (ValueError, TypeError) as e:
             logger.info('check_stops: suppressed exception: %s', e)
 
@@ -918,6 +935,7 @@ class ExecutionEngine:
                 fill_quantity = min(remaining, max(1, remaining // 3))
                 fill_price = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
                 order.add_fill(fill_quantity, fill_price)
+                self._update_position(order.symbol, order.side, fill_quantity)
                 remaining -= fill_quantity
                 if remaining > 0:
                     time.sleep(0.1)
