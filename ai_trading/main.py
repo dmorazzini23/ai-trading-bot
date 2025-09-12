@@ -6,6 +6,7 @@ import time
 import logging
 from threading import Thread
 import errno
+import socket
 import signal
 import sys
 from datetime import datetime, UTC
@@ -429,12 +430,35 @@ def run_flask_app(
     )
 
 
-def start_api(ready_signal: threading.Event = None) -> None:
-    """Spin up the Flask API server."""
+def start_api(ready_signal: threading.Event | None = None) -> None:
+    """Spin up the Flask API server.
+
+    This checks port availability by attempting to bind a temporary socket
+    before delegating to :func:`run_flask_app`. If the port is busy, it
+    increments and retries up to ``max_attempts``.
+    """
     ensure_dotenv_loaded()
     settings = get_settings()
     port = int(settings.api_port or 9001)
-    run_flask_app(port, ready_signal)
+    max_attempts = 10
+    original_port = port
+
+    for _attempt in range(max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
+            try:
+                test_socket.bind(("0.0.0.0", port))
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    logger.warning("Port %s bound during startup, retrying", port)
+                    port += 1
+                    continue
+                raise
+        run_flask_app(port, ready_signal)
+        return
+
+    raise RuntimeError(
+        f"Could not bind Flask app starting from {original_port}"
+    )
 
 
 def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event) -> None:
