@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import ai_trading.data.fetch as fetch
-from ai_trading.data.metrics import provider_fallback
+from ai_trading.data.fetch.metrics import provider_fallback
 
 
 def test_iex_empty_switches_to_sip(monkeypatch, caplog):
@@ -44,14 +44,10 @@ def test_iex_empty_switches_to_sip(monkeypatch, caplog):
 
     monkeypatch.setattr(fetch, "_sip_fallback_allowed", sip_allowed)
 
-    before = provider_fallback.labels(
-        from_provider="alpaca_iex", to_provider="alpaca_sip"
-    )._value.get()
+    before = provider_fallback("alpaca_iex", "alpaca_sip")
     with caplog.at_level("INFO"):
         df = fetch._fetch_bars(symbol, start, end, "1Min", feed="iex")
-    after = provider_fallback.labels(
-        from_provider="alpaca_iex", to_provider="alpaca_sip"
-    )._value.get()
+    after = provider_fallback("alpaca_iex", "alpaca_sip")
 
     assert feeds == ["iex", "sip"]
     assert not df.empty
