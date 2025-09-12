@@ -23,11 +23,11 @@ def test_lazy_alpaca_api_behavior_switch(monkeypatch):
             raise AssertionError("called real submit")
 
     monkeypatch.setenv("SHADOW_MODE", "1")
-    res = api.submit_order("AAPL", 1, "buy", client=Dummy())
+    res = api.submit_order("AAPL", "buy", qty=1, client=Dummy())
     assert res["id"].startswith("shadow-")
 
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     importlib.reload(sys.modules["ai_trading.alpaca_api"])
 
     with pytest.raises(AssertionError):
-        sys.modules["ai_trading.alpaca_api"].submit_order("AAPL", 1, "buy", client=Dummy())
+        sys.modules["ai_trading.alpaca_api"].submit_order("AAPL", "buy", qty=1, client=Dummy())

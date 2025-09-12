@@ -33,7 +33,7 @@ def test_submit_order_shadow(monkeypatch):
             raise AssertionError("should not call in shadow")
 
     monkeypatch.setenv("SHADOW_MODE", "1")
-    resp = alpaca_api.submit_order("AAPL", 1, "buy", client=DummyAPI())
+    resp = alpaca_api.submit_order("AAPL", "buy", qty=1, client=DummyAPI())
     assert resp["status"] == "accepted"
 
 

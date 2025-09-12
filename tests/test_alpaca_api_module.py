@@ -21,7 +21,7 @@ class DummyAPI:
 def test_submit_order_shadow(monkeypatch):
     api = DummyAPI()
     monkeypatch.setenv("SHADOW_MODE", "1")
-    res = alpaca_api.submit_order("AAPL", 1, "buy", client=api)
+    res = alpaca_api.submit_order("AAPL", "buy", qty=1, client=api)
     assert res["id"].startswith("shadow-")
     assert api.calls == 0
 
@@ -30,13 +30,13 @@ def test_submit_order_missing_submit(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     api = object()
     with pytest.raises(AttributeError):
-        alpaca_api.submit_order("AAPL", 1, "buy", client=api)
+        alpaca_api.submit_order("AAPL", "buy", qty=1, client=api)
 
 
 def test_submit_order_rate_limit(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     api = DummyAPI(fail_status=429)
     with pytest.raises(Exception) as e:
-        alpaca_api.submit_order("AAPL", 1, "buy", client=api)
+        alpaca_api.submit_order("AAPL", "buy", qty=1, client=api)
     assert getattr(e.value, "status", None) == 429
     assert api.calls == 1
