@@ -23,8 +23,9 @@ import time
 # Alpaca SDK APIError (optional during tests)
 try:  # pragma: no cover - alpaca may be missing
     from alpaca.common.exceptions import APIError
-except Exception:  # pragma: no cover - define fallback
+except (ImportError, AttributeError):  # pragma: no cover - define fallback
     class APIError(Exception):
+        """Fallback APIError when Alpaca SDK is unavailable."""
         pass
 
 __all__ = ["TimeFrame", "StockBarsRequest"]
@@ -104,7 +105,7 @@ def _get_entitled_feeds(client: Any) -> set[str]:
                 feeds = {sub.lower()}
             elif isinstance(sub, (set, list, tuple)):
                 feeds = {str(x).lower() for x in sub}
-        except Exception as e:  # pragma: no cover - network
+        except COMMON_EXC as e:  # pragma: no cover - network
             _log.debug('FEED_ENTITLE_CHECK_FAIL', extra={'error': str(e)})
     _ENTITLE_CACHE[key] = (now, feeds)
     return feeds
@@ -155,7 +156,7 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
             request.symbol_or_symbols = [_canon_symbol(sym_attr[0])]
         elif isinstance(sym_attr, str):
             request.symbol_or_symbols = _canon_symbol(sym_attr)
-    except Exception:
+    except (TypeError, AttributeError, ValueError):
         pass
     now = now_utc()
     prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
@@ -386,14 +387,14 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     feed_str = 'iex'
     try:
         df = _get_minute_bars(symbol, start_u, end_u, feed=feed_str)
-    except Exception:
+    except (KeyError, ValueError):
         df = empty_bars_dataframe()
     rows = len(df)
     if rows < 300:
         _log.warning('DATA_HEALTH_MINUTE_INCOMPLETE', extra={'rows': rows, 'expected': expected_regular_minutes(), 'start': start_u.astimezone(UTC).isoformat(), 'end': end_u.astimezone(UTC).isoformat(), 'feed': feed_str})
         try:
             df_sip = _get_minute_bars(symbol, start_u, end_u, feed='sip')
-        except Exception:
+        except (KeyError, ValueError):
             df_sip = empty_bars_dataframe()
         if len(df_sip) > rows:
             df = df_sip

@@ -18,6 +18,7 @@ MODULES = [
     "ai_trading/portfolio/risk_parity.py",
     "ai_trading/portfolio/turnover.py",
     "ai_trading/data/cleanroom.py",
+    "ai_trading/data/bars.py",
     "ai_trading/data/pipeline.py",
 ]
 
