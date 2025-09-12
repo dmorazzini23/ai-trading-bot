@@ -474,7 +474,7 @@ from ai_trading.core.alpaca_client import (
     ensure_alpaca_attached,
     _initialize_alpaca_clients,
 )
-from ai_trading.utils.prof import StageTimer
+from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.guards.staleness import _ensure_data_fresh
 
 # AI-AGENT-REF: optional pipeline import
@@ -9414,27 +9414,32 @@ def _fetch_feature_data(
 
     initial_len = len(df)
 
-    df = compute_macd(df)
+    with StageTimer(logger, "compute_macd", symbol=symbol):
+        df = compute_macd(df)
     assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[%s] Post MACD: last closes: %s", symbol, df["close"].tail(5).tolist())
 
-    df = compute_atr(df)
+    with StageTimer(logger, "compute_atr", symbol=symbol):
+        df = compute_atr(df)
     assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[%s] Post ATR: last closes: %s", symbol, df["close"].tail(5).tolist())
 
-    df = compute_vwap(df)
+    with StageTimer(logger, "compute_vwap", symbol=symbol):
+        df = compute_vwap(df)
     assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[%s] Post VWAP: last closes: %s", symbol, df["close"].tail(5).tolist())
 
-    df = compute_sma(df)
+    with StageTimer(logger, "compute_sma", symbol=symbol):
+        df = compute_sma(df)
     assert_row_integrity(initial_len, len(df), "compute_sma", symbol)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[%s] Post SMA: last closes: %s", symbol, df["close"].tail(5).tolist())
 
-    df = compute_macds(df)
+    with StageTimer(logger, "compute_macds", symbol=symbol):
+        df = compute_macds(df)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("%s dataframe columns after indicators: %s", symbol, df.columns.tolist())
     df = ensure_columns(df, ["macd", "atr", "vwap", "macds", "sma_50", "sma_200"], symbol)
@@ -9934,7 +9939,8 @@ def trade_logic(
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
 
-    raw_df, feat_df, skip_flag = _fetch_feature_data(ctx, state, symbol)
+    with StageTimer(logger, "FETCH_FEATURE_DATA", symbol=symbol):
+        raw_df, feat_df, skip_flag = _fetch_feature_data(ctx, state, symbol)
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
@@ -12917,7 +12923,13 @@ def _process_symbols(
         _max_syms = 50
     max_symbols_per_cycle = min(_max_syms, len(symbols))
     processed_symbols = 0
-    processing_start_time = time.monotonic()
+
+    _budget_sec = get_env("SYMBOL_PROCESS_BUDGET", 300)
+    try:
+        _budget_sec = float(_budget_sec)  # type: ignore[arg-type]
+    except (TypeError, ValueError):  # pragma: no cover - defensive cast
+        _budget_sec = 300.0
+    proc_budget = SoftBudget(interval_sec=float(_budget_sec), fraction=1.0)
 
     for symbol in symbols:
         # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
@@ -12936,14 +12948,12 @@ def _process_symbols(
                 },
             )
             break
-
-        # Check processing time limit (max 5 minutes per cycle)
-        if time.monotonic() - processing_start_time > 300:
+        if proc_budget.over():
             logger.warning(
                 "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
                 extra={
                     "processed_count": processed_symbols,
-                    "elapsed_seconds": time.monotonic() - processing_start_time,
+                    "elapsed_seconds": proc_budget.elapsed_ms() / 1000,
                     "reason": "time_limit_reached",
                 },
             )
