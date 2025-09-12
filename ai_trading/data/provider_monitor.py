@@ -23,6 +23,7 @@ from ai_trading.data.metrics import (
     provider_disabled,
     provider_disable_total,
     provider_disable_duration_seconds,
+    provider_failure_duration_seconds,
 )
 
 
@@ -54,6 +55,10 @@ class ProviderMonitor:
         # Track provider switchovers for diagnostics
         self.switch_counts: dict[tuple[str, str], int] = defaultdict(int)
         self.consecutive_switches = 0
+        self._last_switch_time: datetime | None = None
+        self._alert_cooldown_until: datetime | None = None
+        self._switchover_disable_count = 0
+        self._current_switch_cooldown = cooldown
         self.switchover_threshold = switchover_threshold
         self.backoff_factor = (
             backoff_factor
@@ -128,6 +133,20 @@ class ProviderMonitor:
         exceeded.
         """
 
+        now = datetime.now(UTC)
+        if self._last_switch_time:
+            elapsed = (now - self._last_switch_time).total_seconds()
+            if elapsed >= self._current_switch_cooldown:
+                self.consecutive_switches = 0
+                self._switchover_disable_count = 0
+                self._current_switch_cooldown = self.cooldown
+                self._alert_cooldown_until = None
+        self._last_switch_time = now
+        self._switchover_disable_count += 1
+        self._current_switch_cooldown = min(
+            self.cooldown * (self.backoff_factor ** (self._switchover_disable_count - 1)),
+            self.max_cooldown,
+        )
         key = (from_provider, to_provider)
         self.switch_counts[key] += 1
         self.consecutive_switches += 1
@@ -139,7 +158,18 @@ class ProviderMonitor:
                 "count": self.switch_counts[key],
             },
         )
-        if self.consecutive_switches >= self.switchover_threshold:
+        disabled_since = self.disabled_since.get(from_provider)
+        if disabled_since:
+            duration = (now - disabled_since).total_seconds()
+            provider_failure_duration_seconds.labels(provider=from_provider).inc(duration)
+            logger.info(
+                "DATA_PROVIDER_FAILURE_DURATION",
+                extra={"provider": from_provider, "duration": duration},
+            )
+        if (
+            self.consecutive_switches >= self.switchover_threshold
+            and (not self._alert_cooldown_until or now >= self._alert_cooldown_until)
+        ):
             try:
                 self.alert_manager.create_alert(
                     AlertType.SYSTEM,
@@ -149,7 +179,9 @@ class ProviderMonitor:
                 )
             except Exception:  # pragma: no cover - alerting best effort
                 logger.exception("ALERT_FAILURE", extra={"provider": to_provider})
-            self.consecutive_switches = 0
+            self._alert_cooldown_until = now + timedelta(
+                seconds=self._current_switch_cooldown
+            )
 
     def disable(self, provider: str, *, duration: float | None = None) -> None:
         """Disable ``provider`` for ``duration`` seconds with exponential backoff.

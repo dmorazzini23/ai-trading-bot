@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 - Data fetch: switch to SIP feed after first empty IEX result and record `data.fetch.feed_switch` metric.
  - Data fetch: track consecutive `error="empty"` responses per symbol/timeframe and, after `ALPACA_EMPTY_ERROR_THRESHOLD` attempts, switch to the backup provider while recording `data.fetch.empty` metrics.
 - Data fetch: add provider outage monitor that alerts on authentication, rate limit, or timeout failures and temporarily disables the primary feed to enable automatic fallback.
+- Monitoring: provider switchover alerting now applies exponential cooldown with backoff and logs failure durations for tuning.
 - Main: finite `SCHEDULER_ITERATIONS` now exits promptly after completing
   the requested cycles instead of keeping the API thread alive. This
   avoids test/CI hangs; production runs continue to use infinite iterations.
