@@ -163,19 +163,42 @@ class RiskEngine:
                     return val
             ctx = getattr(self, 'ctx', None)
             client = getattr(ctx, 'data_client', None) or self.data_client or getattr(ctx, 'api', None)
-            if not client:
-                logger.warning('No data client available; skipping historical fetch for %s', symbol)
+            high = low = close = None
+            if client:
+                get_bars = getattr(client, 'get_bars', None)
+                if callable(get_bars):
+                    bars = get_bars(symbol, lookback + 10)
+                    if len(bars) >= lookback + 1:
+                        high = np.array([b.h for b in bars])
+                        low = np.array([b.l for b in bars])
+                        close = np.array([b.c for b in bars])
+                else:
+                    logger.info('Data client missing get_bars; attempting to use context data for %s', symbol)
+            else:
+                logger.warning('No data client available; attempting to use context data for %s', symbol)
+            if any(x is None for x in (high, low, close)):
+                data = None
+                if ctx is not None:
+                    data = getattr(ctx, 'minute_data', {}).get(symbol)
+                    if data is None:
+                        data = getattr(ctx, 'daily_data', {}).get(symbol)
+                if data is not None:
+                    df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+
+                    def _series(df: 'pd.DataFrame', names: Sequence[str]) -> np.ndarray | None:
+                        for n in names:
+                            if n in df:
+                                return df[n].to_numpy()
+                        return None
+
+                    high = _series(df, ('high', 'High'))
+                    low = _series(df, ('low', 'Low'))
+                    close = _series(df, ('close', 'Close'))
+            if any(x is None for x in (high, low, close)):
+                logger.warning('Insufficient OHLC data for ATR calculation for %s', symbol)
                 return None
-            get_bars = getattr(client, 'get_bars', None)
-            if not callable(get_bars):
-                logger.warning('Data client missing get_bars; skipping ATR for %s', symbol)
+            if len(high) < lookback + 1 or len(low) < lookback + 1 or len(close) < lookback + 1:
                 return None
-            bars = get_bars(symbol, lookback + 10)
-            if len(bars) < lookback:
-                return None
-            high = np.array([b.h for b in bars])
-            low = np.array([b.l for b in bars])
-            close = np.array([b.c for b in bars])
             tr1 = np.abs(high[1:] - low[1:])
             tr2 = np.abs(high[1:] - close[:-1])
             tr3 = np.abs(low[1:] - close[:-1])
