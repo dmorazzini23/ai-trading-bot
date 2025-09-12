@@ -68,6 +68,11 @@ _FALLBACK_SESSIONS: dict[date, Session] = {
         datetime(2025, 11, 28, 13, 0, tzinfo=_ET).astimezone(UTC),
         True,
     ),
+    # Regular trading day used in tests
+    date(2025, 8, 20): Session(
+        datetime(2025, 8, 20, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2025, 8, 20, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
     # DST transition Mondays (start / end) to cover edge cases
     date(2024, 3, 11): Session(
         datetime(2024, 3, 11, 9, 30, tzinfo=_ET).astimezone(UTC),

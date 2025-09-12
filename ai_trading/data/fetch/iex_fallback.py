@@ -20,6 +20,7 @@ from typing import Any
 
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.logging import get_logger
+from .metrics import empty_payload, mark_skipped, unauthorized_sip
 
 # Import shared state from the package's ``__init__``.  These variables are
 # defined there and are re-used across modules.
@@ -97,15 +98,16 @@ def fetch_bars(
         payload = resp.json()
         bars = payload.get("bars") or []
         if bars:
-            # Successful IEX fetch resets the counter; SIP responses retain history
-            if feed == "iex":
-                _IEX_EMPTY_COUNTS.pop(key, None)
+            # Successful fetch from either feed resets the empty counter
+            _IEX_EMPTY_COUNTS.pop(key, None)
             return _to_df(payload)
 
         # Empty response handling
         if feed == "iex":
             attempts += 1
             _IEX_EMPTY_COUNTS[key] = _IEX_EMPTY_COUNTS.get(key, 0) + 1
+            empty_payload(symbol, tf)
+            mark_skipped(symbol, tf)
             if _ALLOW_SIP and not _SIP_UNAUTHORIZED:
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
@@ -119,6 +121,8 @@ def fetch_bars(
                 )
                 feed = "sip"
                 continue
+            if _SIP_UNAUTHORIZED:
+                unauthorized_sip("alpaca")
             return _to_df({})
 
         # If we get here the SIP request was also empty

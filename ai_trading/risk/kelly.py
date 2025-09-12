@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Optional
 
-from ai_trading.config.management import TradingConfig
+from ai_trading.config.management import TradingConfig, from_env_relaxed
 from ai_trading.logging import logger
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ def get_default_config() -> TradingConfig:
     if _DEFAULT_CONFIG is not None:
         return _DEFAULT_CONFIG
     try:
-        _DEFAULT_CONFIG = TradingConfig.from_env()
+        _DEFAULT_CONFIG = from_env_relaxed()
     except Exception:
         _DEFAULT_CONFIG = TradingConfig(
             seed=42,

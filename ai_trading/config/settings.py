@@ -38,13 +38,13 @@ def max_data_fallbacks(s: Settings | None = None) -> int:
 def sentiment_retry_max(s: Settings | None = None) -> int:
     """Return maximum sentiment fetch retry count."""
     s = s or get_settings()
-    return int(getattr(s, 'sentiment_max_retries', 3))
+    return int(getattr(s, 'sentiment_max_retries', 5))
 
 
 def sentiment_backoff_base(s: Settings | None = None) -> float:
     """Return base delay for sentiment fetch backoff."""
     s = s or get_settings()
-    return float(getattr(s, 'sentiment_backoff_base', 1.0))
+    return float(getattr(s, 'sentiment_backoff_base', 5.0))
 
 
 def sentiment_backoff_strategy(s: Settings | None = None) -> str:

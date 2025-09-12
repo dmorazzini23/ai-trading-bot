@@ -14818,14 +14818,14 @@ def get_latest_price(symbol: str):
             end = datetime.now(UTC)
             df = _yahoo_get_bars(symbol, start, end, interval="1d")
             price = get_latest_close(df)
-        except Exception as e:  # pragma: no cover - defensive
+        except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.warning("YAHOO_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
 
     if price is None:
         try:
             df = get_bars_df(symbol)
             price = get_latest_close(df)
-        except Exception as e:  # pragma: no cover - defensive
+        except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.error("LATEST_PRICE_FALLBACK_FAILED", extra={"symbol": symbol, "error": str(e)})
             price = None
 
