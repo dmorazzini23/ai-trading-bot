@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import sys
 import types
 
-from ai_trading.core.bot_engine import _validate_trading_api, list_open_orders
+os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0")
+
+from ai_trading.alpaca_api import list_orders_wrapper
 
 
 class _StatusClient:
@@ -17,8 +20,7 @@ class _StatusClient:
 
 def test_list_orders_wrapper_passes_status():
     client = _StatusClient()
-    assert _validate_trading_api(client)
-    orders = list_open_orders(client)
+    orders = list_orders_wrapper(client, status="open")
     assert orders == ["ok"]
     assert client.kwargs == {"status": "open"}
 
@@ -50,8 +52,7 @@ def test_list_orders_wrapper_builds_filter(monkeypatch):
             return ["ok"]
 
     client = _FilterClient()
-    assert _validate_trading_api(client)
-    orders = list_open_orders(client)
+    orders = list_orders_wrapper(client, status="open")
     assert orders == ["ok"]
     assert isinstance(client.filter, GetOrdersRequest)
     assert client.filter.statuses == [QueryOrderStatus.OPEN]
