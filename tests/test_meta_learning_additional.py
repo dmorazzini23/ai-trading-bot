@@ -9,6 +9,18 @@ import sklearn.linear_model
 from ai_trading import meta_learning
 
 
+def _stub_ridge(*args, **kwargs):
+    """Return a simple object with ``fit`` and ``predict`` methods."""
+
+    def fit(X, y, sample_weight=None):
+        return None
+
+    def predict(X):
+        return [0] * len(X)
+
+    return types.SimpleNamespace(fit=fit, predict=predict)
+
+
 def test_load_weights_save_fail(monkeypatch, tmp_path, caplog):
     """Failure to write default weights is logged and default returned."""
     p = tmp_path / "w.csv"
@@ -59,7 +71,7 @@ def test_retrain_meta_learner(monkeypatch, tmp_path):
     df.to_csv(data, index=False)
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(sklearn.linear_model, "Ridge", lambda *a, **k: types.SimpleNamespace(fit=lambda X,y, sample_weight=None: None, predict=lambda X:[0]*len(X)))
+    monkeypatch.setattr(sklearn.linear_model, "Ridge", _stub_ridge)
     ok = meta_learning.retrain_meta_learner(str(data), str(tmp_path/"m.pkl"), str(tmp_path/"hist.pkl"), min_samples=1)
     assert ok
 
@@ -82,14 +94,7 @@ def test_retrain_meta_learner_handles_non_iterable_columns(monkeypatch, tmp_path
     monkeypatch.setattr(meta_learning, "getattr", fake_getattr)
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
-    monkeypatch.setattr(
-        sklearn.linear_model,
-        "Ridge",
-        lambda *a, **k: types.SimpleNamespace(
-            fit=lambda X, y, sample_weight=None: None,
-            predict=lambda X: [0] * len(X),
-        ),
-    )
+    monkeypatch.setattr(sklearn.linear_model, "Ridge", _stub_ridge)
     result = meta_learning.retrain_meta_learner(
         str(path), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
     )
