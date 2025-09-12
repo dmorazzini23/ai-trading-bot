@@ -18,8 +18,10 @@ sudo systemctl status ai-trading.service
 The timer schedules the bot to start at market open and the service exits automatically after 6.5 hours (16:00 US/Eastern). On normal completion the process returns exit code `0` so systemd records a clean shutdown.
 
 If the bot is started manually outside regular hours, it waits until the next
-NYSE session before trading. Set `ALLOW_AFTER_HOURS=1` to disable this wait
-when running tests or after-hours experiments.
+NYSE session before trading, and run cycles invoked while the market is closed
+exit immediately without fetching data or computing indicators. Set
+`ALLOW_AFTER_HOURS=1` to disable these guards when running tests or after-hours
+experiments.
 
 Check logs and health:
 

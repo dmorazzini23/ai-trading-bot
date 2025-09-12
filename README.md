@@ -104,9 +104,11 @@ These map to `ai_trading.settings.Settings` and are applied at startup by `main.
 
 ### Market hours
 
-The bot checks NYSE trading hours at startup. If launched while the market is
-closed, it sleeps until the next session begins. Set `ALLOW_AFTER_HOURS=1` to
-skip this guard for testing or after-hours experimentation.
+The bot checks NYSE trading hours at startup and before each trading cycle. If
+launched while the market is closed, it sleeps until the next session begins,
+and any cycles triggered during closed hours exit immediately without fetching
+data or computing indicators. Set `ALLOW_AFTER_HOURS=1` to skip these guards for
+testing or after-hours experimentation.
 
 ## Timezones
 
