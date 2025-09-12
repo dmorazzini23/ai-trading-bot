@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ai_trading.data import fetch
+from ai_trading.data.fetch import iex_fallback as fallback
 
 
 class _Resp:
@@ -40,119 +40,67 @@ def _dt_range():
 
 
 def test_iex_bars_empty_retries_sip(monkeypatch):
-    fetch._IEX_EMPTY_COUNTS.clear()
+    fallback._IEX_EMPTY_COUNTS.clear()
     start, end = _dt_range()
-    sess = _Session(
-        [
-            _Resp({"bars": []}, corr="iex1"),
-            _Resp({"bars": []}, corr="pre"),
-            _Resp(
-                {
-                    "bars": [
-                        {"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
-                    ]
-                },
-                corr="sip1",
-            ),
-        ]
-    )
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
-    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
-    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
-    monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 0)
-    monkeypatch.setattr(fetch, "_SIP_PRECHECK_DONE", False)
-    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
-    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
-    monkeypatch.setattr(fetch, "is_market_open", lambda: True)
+    sess = _Session([
+        _Resp({"bars": []}, corr="iex1"),
+        _Resp(
+            {
+                "bars": [
+                    {"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+                ]
+            },
+            corr="sip1",
+        ),
+    ])
+    monkeypatch.setattr(fallback, "_HTTP_SESSION", sess)
+    monkeypatch.setattr(fallback, "_ALLOW_SIP", True)
+    monkeypatch.setattr(fallback, "_SIP_UNAUTHORIZED", False)
 
-    df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+    df = fallback.fetch_bars("AAPL", start, end, "1Min")
 
-    assert len(sess.calls) == 3
+    assert len(sess.calls) == 2
     assert sess.calls[0]["feed"] == "iex"
     assert sess.calls[1]["feed"] == "sip"
-    assert sess.calls[2]["feed"] == "sip"
     assert not df.empty
-
-
-def test_iex_empty_falls_back_to_sip(monkeypatch, caplog):
-    fetch._IEX_EMPTY_COUNTS.clear()
-    start, end = _dt_range()
-    sess = _Session(
-        [
-            _Resp({"error": "empty"}, corr="iex1"),
-            _Resp({"bars": []}, corr="pre"),
-            _Resp(
-                {
-                    "bars": [
-                        {"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
-                    ]
-                },
-                corr="sip1",
-            ),
-        ]
-    )
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
-    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
-    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
-    monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 0)
-    monkeypatch.setattr(fetch, "_SIP_PRECHECK_DONE", False)
-
-    with caplog.at_level(logging.INFO):
-        df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-
-    assert len(sess.calls) == 3
-    assert sess.calls[0]["feed"] == "iex"
-    assert sess.calls[1]["feed"] == "sip"
-    assert sess.calls[2]["feed"] == "sip"
-    assert not df.empty
-    assert any(r.message == "DATA_SOURCE_FALLBACK_ATTEMPT" for r in caplog.records)
-    assert fetch._IEX_EMPTY_COUNTS == {}
+    assert fallback._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
 
 
 def test_iex_empty_sip_empty_logs_error(monkeypatch, caplog):
-    fetch._IEX_EMPTY_COUNTS.clear()
+    fallback._IEX_EMPTY_COUNTS.clear()
     start, end = _dt_range()
-    sess = _Session(
-        [
-            _Resp({"error": "empty"}, corr="iex1"),
-            _Resp({"bars": []}, corr="pre"),
-            _Resp({"error": "empty"}, corr="sip1"),
-        ]
-    )
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
-    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
-    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
-    monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 0)
-    monkeypatch.setattr(fetch, "_SIP_PRECHECK_DONE", False)
-
-    with caplog.at_level(logging.ERROR):
-        df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-
-    assert len(sess.calls) == 3
-    assert sess.calls[0]["feed"] == "iex"
-    assert sess.calls[1]["feed"] == "sip"
-    assert sess.calls[2]["feed"] == "sip"
-    assert df is None or getattr(df, "empty", True)
-    assert any(r.message == "IEX_EMPTY_SIP_EMPTY" for r in caplog.records)
-    assert fetch._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
-
-
-def test_get_minute_df_skips_iex_after_empty(monkeypatch, caplog):
-    fetch._IEX_EMPTY_COUNTS.clear()
-    start, end = _dt_range()
-    # First attempt: IEX empty then SIP empty to prime the counter
-    sess1 = _Session([
+    sess = _Session([
         _Resp({"error": "empty"}, corr="iex1"),
-        _Resp({"bars": []}, corr="pre"),
         _Resp({"error": "empty"}, corr="sip1"),
     ])
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess1)
-    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
-    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
-    monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 0)
-    monkeypatch.setattr(fetch, "_SIP_PRECHECK_DONE", False)
-    fetch.get_minute_df("AAPL", start, end)
-    assert fetch._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
+    monkeypatch.setattr(fallback, "_HTTP_SESSION", sess)
+    monkeypatch.setattr(fallback, "_ALLOW_SIP", True)
+    monkeypatch.setattr(fallback, "_SIP_UNAUTHORIZED", False)
+
+    with caplog.at_level(logging.ERROR):
+        df = fallback.fetch_bars("AAPL", start, end, "1Min")
+
+    assert len(sess.calls) == 2
+    assert sess.calls[0]["feed"] == "iex"
+    assert sess.calls[1]["feed"] == "sip"
+    assert getattr(df, "empty", True)
+    assert any(r.message == "IEX_EMPTY_SIP_EMPTY" for r in caplog.records)
+    assert fallback._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
+
+
+def test_skip_iex_after_empty(monkeypatch, caplog):
+    fallback._IEX_EMPTY_COUNTS.clear()
+    start, end = _dt_range()
+    # Prime counter with an empty IEX then empty SIP
+    sess1 = _Session([
+        _Resp({"error": "empty"}, corr="iex1"),
+        _Resp({"error": "empty"}, corr="sip1"),
+    ])
+    monkeypatch.setattr(fallback, "_HTTP_SESSION", sess1)
+    monkeypatch.setattr(fallback, "_ALLOW_SIP", True)
+    monkeypatch.setattr(fallback, "_SIP_UNAUTHORIZED", False)
+    fallback.fetch_bars("AAPL", start, end, "1Min")
+    assert fallback._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
 
     # Second attempt should bypass IEX and hit SIP directly
     sess2 = _Session([
@@ -165,14 +113,14 @@ def test_get_minute_df_skips_iex_after_empty(monkeypatch, caplog):
             corr="sip2",
         )
     ])
-    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess2)
+    monkeypatch.setattr(fallback, "_HTTP_SESSION", sess2)
 
     with caplog.at_level(logging.INFO):
-        df = fetch.get_minute_df("AAPL", start, end)
+        df = fallback.fetch_bars("AAPL", start, end, "1Min")
 
     assert len(sess2.calls) == 1
     assert sess2.calls[0]["feed"] == "sip"
     assert not df.empty
     assert any(r.message == "DATA_SOURCE_FALLBACK_ATTEMPT" for r in caplog.records)
-    assert fetch._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 0
-
+    # Counter persists to ensure future calls continue hitting SIP
+    assert fallback._IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
