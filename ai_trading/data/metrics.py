@@ -61,6 +61,13 @@ provider_disable_duration_seconds = get_counter(
     ["provider"],
 )
 
+# Counter tracking duration from disable to switchover
+provider_failure_duration_seconds = get_counter(
+    "data_provider_failure_duration_seconds_total",
+    "Seconds from disable until switchover",
+    ["provider"],
+)
+
 __all__ = [
     "Metrics",
     "metrics",
@@ -70,4 +77,5 @@ __all__ = [
     "provider_disable_total",
     "fetch_retry_total",
     "provider_disable_duration_seconds",
+    "provider_failure_duration_seconds",
 ]
