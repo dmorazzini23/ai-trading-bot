@@ -23,4 +23,23 @@ def reset_registry(registry: CollectorRegistry | None = None) -> CollectorRegist
     return _REGISTRY
 
 
-__all__ = ["get_registry", "reset_registry"]
+def register(metric) -> object:
+    """Register ``metric`` in the global registry if not already present.
+
+    ``prometheus_client`` will raise ``ValueError`` when attempting to register
+    a metric with a name that already exists.  Older versions expose a
+    ``_names_to_collectors`` mapping that we can query directly.  This helper
+    checks for an existing collector with the same name and returns it instead
+    of re-registering, preventing duplicate metrics and avoiding exceptions.
+    """
+
+    registry = _REGISTRY
+    name = getattr(metric, "_name", getattr(metric, "name", None))
+    existing = getattr(registry, "_names_to_collectors", {}).get(name) if name else None
+    if existing is not None:
+        return existing
+    registry.register(metric)
+    return metric
+
+
+__all__ = ["get_registry", "reset_registry", "register"]
