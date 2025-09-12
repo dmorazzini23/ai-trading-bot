@@ -12910,7 +12910,12 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion
-    max_symbols_per_cycle = min(50, len(symbols))  # Limit to 50 symbols per cycle
+    _max_syms = get_env("MAX_SYMBOLS_PER_CYCLE", 50)
+    try:
+        _max_syms = int(_max_syms)  # type: ignore[arg-type]
+    except (TypeError, ValueError):  # pragma: no cover - defensive cast
+        _max_syms = 50
+    max_symbols_per_cycle = min(_max_syms, len(symbols))
     processed_symbols = 0
     processing_start_time = time.monotonic()
 
