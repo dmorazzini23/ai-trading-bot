@@ -26,6 +26,16 @@ def _make_valid_client():
     return types.SimpleNamespace(get_bars=get_bars)
 
 
+def _make_df(rows: int = 30) -> pd.DataFrame:
+    data = {
+        "open": [1.0] * rows,
+        "high": [2.0] * rows,
+        "low": [1.0] * rows,
+        "close": [1.5] * rows,
+    }
+    return pd.DataFrame(data)
+
+
 def test_get_atr_data_with_valid_client():
     eng = RiskEngine()
     eng.ctx = types.SimpleNamespace(data_client=_make_valid_client())
@@ -33,13 +43,29 @@ def test_get_atr_data_with_valid_client():
     assert atr == 1.0
 
 
-def test_get_atr_data_missing_get_bars(caplog: pytest.LogCaptureFixture):
+def test_get_atr_data_missing_get_bars_no_data(caplog: pytest.LogCaptureFixture):
     eng = RiskEngine()
     eng.ctx = types.SimpleNamespace(data_client=object())
     caplog.set_level(logging.WARNING)
     atr = eng._get_atr_data("AAPL", lookback=14)
     assert atr is None
     assert "missing get_bars" in caplog.text.lower()
+
+
+def test_get_atr_data_uses_ctx_minute_data():
+    eng = RiskEngine()
+    df = _make_df()
+    eng.ctx = types.SimpleNamespace(data_client=object(), minute_data={"AAPL": df})
+    atr = eng._get_atr_data("AAPL", lookback=14)
+    assert atr == 1.0
+
+
+def test_get_atr_data_uses_ctx_daily_data():
+    eng = RiskEngine()
+    df = _make_df()
+    eng.ctx = types.SimpleNamespace(data_client=object(), daily_data={"AAPL": df})
+    atr = eng._get_atr_data("AAPL", lookback=14)
+    assert atr == 1.0
 
 
 def test_get_atr_data_with_yfinance(monkeypatch: pytest.MonkeyPatch):
