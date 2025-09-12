@@ -9,7 +9,7 @@
 - **`LOG_MARKET_FETCH`** (default: `false`): When enabled, logs periodic market fetch heartbeats at INFO level. When disabled, these messages are demoted to DEBUG level to reduce noise.
 
 - **`LOG_LEVEL_YFINANCE`** (default: `WARNING`): Controls the log level for the `yfinance` package. Set to `INFO` or another level to troubleshoot provider interactions.
-- **`LOG_QUIET_LIBRARIES`** (default: `charset_normalizer=INFO`): Comma-separated `logger=LEVEL` pairs used to suppress noisy third-party libraries.
+- **`LOG_QUIET_LIBRARIES`** (default: `charset_normalizer=WARNING,peewee=WARNING`): Comma-separated `logger=LEVEL` pairs used to suppress noisy third-party libraries. Library loggers are kept at `DEBUG` and filtered to drop messages below the specified level.
 - **`AI_TRADING_WARN_IF_MODEL_MISSING`** (default: `false`): When set, emits an `ML_MODEL_MISSING` warning if a configured model path cannot be found.
 
 ### Features

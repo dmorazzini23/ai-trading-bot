@@ -37,8 +37,12 @@ def _apply_library_filters() -> None:
         name, _, level = item.partition("=")
         if name.strip() and level.strip():
             filters[name.strip()] = getattr(logging, level.strip().upper(), logging.INFO)
+    from ai_trading.utils.logging import SuppressBelowLevelFilter
+
     for name, level in filters.items():
-        logging.getLogger(name).setLevel(level)
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.DEBUG)
+        logger.addFilter(SuppressBelowLevelFilter(level))
 
 
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:

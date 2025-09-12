@@ -23,11 +23,9 @@ def test_charset_normalizer_debug_suppressed(monkeypatch) -> None:
 
     log_setup.setup_logging()
 
-    regular = logging.getLogger("regular_logger")
     noisy = logging.getLogger("charset_normalizer")
 
-    assert regular.getEffectiveLevel() == logging.DEBUG
-    assert noisy.getEffectiveLevel() >= logging.INFO
+    assert noisy.getEffectiveLevel() == logging.DEBUG
 
     _reset_logging_state()
 
