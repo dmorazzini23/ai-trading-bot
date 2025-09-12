@@ -12,6 +12,7 @@ np.random.seed(0)
 
 from ai_trading import meta_learning
 from ai_trading.meta_learning import MetaLearning
+from ai_trading.meta import checkpoint
 
 
 def test_meta_learning_instantiation():
@@ -40,22 +41,13 @@ def test_update_signal_weights_normal():
     assert round(res["b"], 2) == 0.75
 
 
-def test_save_and_load_checkpoint(monkeypatch):
-    data = {}
-    buf = {}
-
-    def fake_dump(obj, fh):
-        buf["v"] = obj
-
-    def fake_load(fh):
-        return buf["v"]
-
-    monkeypatch.setattr(meta_learning.pickle, "dump", fake_dump)
-    monkeypatch.setattr(meta_learning.pickle, "load", fake_load)
-    monkeypatch.setattr(meta_learning, "open", lambda *a, **k: open("/dev/null", "wb"))
-    meta_learning.save_model_checkpoint(data, "x.pkl")
-    obj = meta_learning.load_model_checkpoint("x.pkl")
-    assert obj is data
+def test_save_and_load_checkpoint(tmp_path):
+    path = tmp_path / "x.pkl"
+    data = {"x": 1}
+    saved = checkpoint.save_checkpoint(data, str(path))
+    assert saved == data
+    loaded = checkpoint.load_checkpoint(str(path))
+    assert loaded == data
 
 
 def test_optimize_signals(monkeypatch):
