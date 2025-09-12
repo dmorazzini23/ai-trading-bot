@@ -20,3 +20,18 @@ def test_registry_instance_persists_across_reloads():
     mod = importlib.reload(registry)
     second = mod.get_registry()
     assert first is second
+
+
+def test_register_checks_existing_keys():
+    registry.reset_registry()
+    reg = registry.get_registry()
+
+    first = metrics.Counter("dup_total", "Doc", registry=reg)
+    # registering the same metric again should simply return the existing instance
+    same = registry.register(first)
+    assert same is first
+
+    # registering a different metric with the same name should also return the existing one
+    second = metrics.Counter("dup_total", "Doc")
+    retrieved = registry.register(second)
+    assert retrieved is first
