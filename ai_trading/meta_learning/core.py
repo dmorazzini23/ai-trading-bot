@@ -1,8 +1,9 @@
 """Meta-learning utilities and weight management helpers.
 
-This module uses ``pickle`` for model checkpoints and weights; paths are
-resolved and constrained before deserialization. Prefer :mod:`joblib` or
-``json`` for simple structures when possible.
+File operations are limited to a small set of safe directories to prevent
+arbitrary file access. This module uses ``pickle`` for model checkpoints and
+weights; paths are resolved and constrained before deserialization. Prefer
+:mod:`joblib` or ``json`` for simple structures when possible.
 """
 
 from importlib.util import find_spec
