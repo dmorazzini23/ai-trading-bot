@@ -6,8 +6,10 @@ This module implements a very small subset of the logic that the main
 ``ai_trading.data.fetch`` package provides.  It focuses on situations where the
 Alpaca IEX feed returns an empty payload.  When that occurs we record the
 attempt, increment the global ``_IEX_EMPTY_COUNTS`` tracker and, when allowed,
-retry the request against the SIP feed.  If both feeds return empty results an
-error is logged so callers can react accordingly.
+retry the request against the SIP feed.  The counter persists even when the
+SIP feed succeeds so future calls can skip the IEX feed until it provides
+data again.  If both feeds return empty results an error is logged so callers
+can react accordingly.
 
 The functions here are intentionally lightweight so that they can be imported in
 isolation for unit tests without pulling in the entire ``fetch`` module.
@@ -95,8 +97,9 @@ def fetch_bars(
         payload = resp.json()
         bars = payload.get("bars") or []
         if bars:
-            # Successful fetch resets counter
-            _IEX_EMPTY_COUNTS.pop(key, None)
+            # Successful IEX fetch resets the counter; SIP responses retain history
+            if feed == "iex":
+                _IEX_EMPTY_COUNTS.pop(key, None)
             return _to_df(payload)
 
         # Empty response handling
