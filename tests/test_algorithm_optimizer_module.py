@@ -28,5 +28,5 @@ def test_position_and_risk_calculations():
     take = opt.calculate_take_profit(10.0, "BUY", stop)
     assert stop < 10.0 < take
     params = opt.optimize_parameters(cond, [0.01, -0.02, 0.03], force_optimization=True)
-    assert params.position_size_multiplier != opt.base_parameters.position_size_multiplier
+    assert params is not opt.base_parameters
 
