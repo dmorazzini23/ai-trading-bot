@@ -453,7 +453,7 @@ class TradingConfig:
             min_profit_factor=_get("MIN_PROFIT_FACTOR", float),
             min_sharpe_ratio=_get("MIN_SHARPE_RATIO", float),
             min_win_rate=_get("MIN_WIN_RATE", float),
-            kelly_fraction=_get("KELLY_FRACTION", float),
+            kelly_fraction=_get("KELLY_FRACTION", float, default=0.6),
             kelly_fraction_max=_get(
                 "KELLY_FRACTION_MAX",
                 float,
@@ -487,6 +487,15 @@ class TradingConfig:
             ),
             data_feed=_get("DATA_FEED", str),
             data_provider=_get("DATA_PROVIDER", str),
+            buy_threshold=_get("BUY_THRESHOLD", float),
+            signal_period=_get("SIGNAL_PERIOD", int),
+            fast_period=_get("FAST_PERIOD", int),
+            slow_period=_get("SLOW_PERIOD", int),
+            limit_order_slippage=_get("LIMIT_ORDER_SLIPPAGE", float),
+            max_slippage_bps=_get("MAX_SLIPPAGE_BPS", int),
+            participation_rate=_get("PARTICIPATION_RATE", float),
+            pov_slice_pct=_get("POV_SLICE_PCT", float),
+            order_timeout_seconds=_get("ORDER_TIMEOUT_SECONDS", int),
         )
         # Apply mode presets when explicitly requested (test-only contract).
         if mode in {"balanced", "conservative", "aggressive"}:
@@ -520,10 +529,15 @@ class TradingConfig:
                 ),
             }
             for k, v in presets[mode].items():
+                env_key = k.upper()
+                if env_key in env_map and env_map[env_key] != "":
+                    continue
                 try:
                     object.__setattr__(cfg, k, v)
                 except Exception:
                     pass
+        if cfg.max_drawdown_threshold is None:
+            raise RuntimeError("MAX_DRAWDOWN_THRESHOLD environment variable is required")
         return cfg
 
     def snapshot_sanitized(self) -> Dict[str, Any]:

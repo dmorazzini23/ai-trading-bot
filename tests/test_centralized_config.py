@@ -11,6 +11,8 @@ import os
 import pytest
 
 os.environ["TESTING"] = "1"
+os.environ["MAX_DRAWDOWN_THRESHOLD"] = "0.2"
+os.environ.pop("MAX_POSITION_SIZE", None)
 
 from ai_trading.config import TradingConfig
 from ai_trading.core.bot_engine import BotMode
@@ -19,25 +21,40 @@ from ai_trading.core.bot_engine import BotMode
 class TestCentralizedConfig:
     """Test the centralized trading configuration system."""
 
-    def test_trading_config_initialization(self):
-        """Test that TradingConfig initializes correctly."""
-        config = TradingConfig()
+    def test_trading_config_initialization(self, monkeypatch):
+        """Test that TradingConfig initializes correctly from environment."""
+        monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+        config = TradingConfig.from_env()
 
         # Test default values are set
         assert config.kelly_fraction == 0.6
-        assert config.conf_threshold == 0.75
         assert config.daily_loss_limit == 0.03
-        assert config.capital_cap == 0.25
+        assert config.capital_cap == 0.04
         assert config.max_position_size == 8000
 
     def test_trading_config_from_env(self):
-        """Test loading configuration from environment."""
-        config = TradingConfig.from_env()
+        """Test loading configuration from environment with type casting."""
+        os.environ["BUY_THRESHOLD"] = "0.5"
+        os.environ["SIGNAL_PERIOD"] = "10"
+        try:
+            config = TradingConfig.from_env()
+        finally:
+            del os.environ["BUY_THRESHOLD"]
+            del os.environ["SIGNAL_PERIOD"]
 
-        # Should load successfully
+        # Should load successfully with proper defaults and casting
         assert isinstance(config, TradingConfig)
-        assert config.kelly_fraction is not None
-        assert config.conf_threshold is not None
+        assert config.kelly_fraction == 0.6
+        assert config.max_drawdown_threshold == 0.2
+        assert config.buy_threshold == 0.5
+        assert config.signal_period == 10
+
+    def test_missing_drawdown_threshold_raises(self, monkeypatch):
+        """Critical fields must be present."""
+        monkeypatch.delenv("MAX_DRAWDOWN_THRESHOLD", raising=False)
+        with pytest.raises(RuntimeError):
+            TradingConfig.from_env({})
+        monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
 
     def test_mode_specific_configurations(self):
         """Test that each mode has appropriate parameter values."""
@@ -55,8 +72,9 @@ class TestCentralizedConfig:
         assert aggressive.conf_threshold < balanced.conf_threshold
         assert aggressive.confirmation_count < balanced.confirmation_count
 
-    def test_conservative_mode_parameters(self):
+    def test_conservative_mode_parameters(self, monkeypatch):
         """Test conservative mode specific values."""
+        monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
         config = TradingConfig.from_env("conservative")
 
         assert config.kelly_fraction == 0.25
@@ -67,8 +85,9 @@ class TestCentralizedConfig:
         assert config.take_profit_factor == 1.5
         assert config.max_position_size == 5000
 
-    def test_balanced_mode_parameters(self):
+    def test_balanced_mode_parameters(self, monkeypatch):
         """Test balanced mode specific values."""
+        monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
         config = TradingConfig.from_env("balanced")
 
         assert config.kelly_fraction == 0.6
@@ -79,8 +98,9 @@ class TestCentralizedConfig:
         assert config.take_profit_factor == 1.8
         assert config.max_position_size == 8000
 
-    def test_aggressive_mode_parameters(self):
+    def test_aggressive_mode_parameters(self, monkeypatch):
         """Test aggressive mode specific values."""
+        monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
         config = TradingConfig.from_env("aggressive")
 
         assert config.kelly_fraction == 0.75
@@ -97,6 +117,7 @@ class TestCentralizedConfig:
             "CAPITAL_CAP": "0.5",
             "DOLLAR_RISK_LIMIT": "0.2",
             "MAX_POSITION_SIZE": "1000",
+            "MAX_DRAWDOWN_THRESHOLD": "0.2",
         }
         config = TradingConfig.from_env(env)
         assert config.capital_cap == 0.5
