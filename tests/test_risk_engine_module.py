@@ -6,12 +6,13 @@ import types
 import numpy as np
 import os
 import types
+import logging
+os.environ.setdefault("PYTEST_RUNNING", "1")
+os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
     sys.modules.pop(m, None)
 sys.modules.pop("risk_engine", None)
 from ai_trading.risk.engine import RiskEngine, TradeSignal  # AI-AGENT-REF: normalized import
-
-os.environ.setdefault("PYTEST_RUNNING", "1")
 
 
 class DummyAPI:
@@ -61,6 +62,19 @@ def test_register_and_position_size(monkeypatch):
     sell = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s", weight=sig.weight, asset_class="equity")
     eng.register_fill(sell)
     assert round(eng.exposure["equity"], 6) == 0
+
+
+def test_position_size_zero_raw_qty_defaults_to_min(caplog):
+    eng = RiskEngine()
+    sig = make_signal()
+    sig.weight = 0.0
+    eng.asset_limits["equity"] = 1.0
+    eng.strategy_limits["s"] = 1.0
+    eng.config = types.SimpleNamespace(position_size_min_usd=100, atr_multiplier=1.0)
+    with caplog.at_level(logging.WARNING):
+        qty = eng.position_size(sig, cash=1000, price=10)
+    assert qty == 10
+    assert any("falling back to minimum position size" in rec.message for rec in caplog.records)
 
 
 def test_check_max_drawdown():
