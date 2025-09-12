@@ -59,9 +59,8 @@ def validate_alpaca_credentials() -> None:
     """Ensure required Alpaca credentials are present."""
     if TESTING:
         return
-    validate_required_env(
-        ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL")
-    )
+    url_key = "ALPACA_API_URL" if os.getenv("ALPACA_API_URL") else "ALPACA_BASE_URL"
+    validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", url_key))
 
 T = TypeVar("T")
 
@@ -445,7 +444,11 @@ class TradingConfig:
                 aliases=("AI_TRADING_POSITION_SIZE_MIN_USD",),
             ),
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
-            max_drawdown_threshold=_get("MAX_DRAWDOWN_THRESHOLD", float),
+            max_drawdown_threshold=_get(
+                "MAX_DRAWDOWN_THRESHOLD",
+                float,
+                aliases=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
+            ),
             trailing_factor=_get("TRAILING_FACTOR", float),
             take_profit_factor=_get("TAKE_PROFIT_FACTOR", float),
             max_position_size_pct=_get("MAX_POSITION_SIZE_PCT", float),
@@ -472,7 +475,12 @@ class TradingConfig:
                 default=0.90,
                 aliases=("AI_TRADING_CONFIDENCE_LEVEL",),
             ),
-            conf_threshold=_get("CONF_THRESHOLD", float),
+            conf_threshold=_get(
+                "CONF_THRESHOLD",
+                float,
+                default=0.6,
+                aliases=("AI_TRADING_CONF_THRESHOLD",),
+            ),
             lookback_periods=_get("LOOKBACK_PERIODS", int),
             market_calendar=_get("MARKET_CALENDAR", str),
             score_confidence_min=_get("SCORE_CONFIDENCE_MIN", float),
@@ -487,7 +495,9 @@ class TradingConfig:
             ),
             data_feed=_get("DATA_FEED", str),
             data_provider=_get("DATA_PROVIDER", str),
-            buy_threshold=_get("BUY_THRESHOLD", float),
+            buy_threshold=_get(
+                "BUY_THRESHOLD", float, aliases=("AI_TRADING_BUY_THRESHOLD",)
+            ),
             signal_period=_get("SIGNAL_PERIOD", int),
             fast_period=_get("FAST_PERIOD", int),
             slow_period=_get("SLOW_PERIOD", int),
