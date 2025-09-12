@@ -106,7 +106,7 @@ def test_composite_signal_confidence(monkeypatch):
     monkeypatch.setattr(sm, 'signal_stochrsi', lambda df, model=None: (1, 0.1, 'stochrsi'))
     monkeypatch.setattr(sm, 'signal_obv', lambda df, model=None: (1, 0.1, 'obv'))
     monkeypatch.setattr(sm, 'signal_vsa', lambda df, model=None: (1, 0.1, 'vsa'))
-    df = pd.DataFrame({'close': np.linspace(1,2,60)})
+    df = pd.DataFrame({'close': np.linspace(1, 2, 210)})
     ctx = types.SimpleNamespace()
     state = types.SimpleNamespace(current_regime='trending', no_signal_events=0)
     model = types.SimpleNamespace(predict=lambda x: [1], predict_proba=lambda x: [[0.4,0.6]], feature_names_in_=['rsi','macd','atr','vwap','sma_50','sma_200'])
@@ -126,6 +126,15 @@ def test_psar_wrapper(sample_df, monkeypatch):
     out = ind.psar(sample_df)
     assert out["psar_long"].iloc[0] == 1.0
     assert out["psar_short"].iloc[0] == 2.0
+
+
+def test_psar_raises_on_invalid_data(sample_df):
+    """psar raises ValueError when data missing required columns or empty."""
+    with pytest.raises(ValueError, match="missing required column"):
+        ind.psar(sample_df.drop(columns=["high"]))
+    empty = pd.DataFrame(columns=["high", "low", "close"])
+    with pytest.raises(ValueError, match="empty"):
+        ind.psar(empty)
 
 
 def test_composite_signal_confidence_dict_and_list():
