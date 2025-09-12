@@ -24,6 +24,15 @@ def psar(df: Any) -> Any:
         Copy of ``df`` with ``psar_long`` and ``psar_short`` columns.
     """
     pd = load_pandas()
+    required = {"high", "low", "close"}
+    cols = set(getattr(df, "columns", []))
+    missing = required - cols
+    if missing:
+        missing_cols = ", ".join(sorted(missing))
+        raise ValueError(f"DataFrame missing required column(s): {missing_cols}")
+    if len(df) == 0:
+        raise ValueError("DataFrame is empty")
+
     ta = load_pandas_ta()
     if pd is None or ta is None:
         logger.warning("PANDAS_TA_PSAR_MISSING")
