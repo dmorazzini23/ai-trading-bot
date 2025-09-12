@@ -4,20 +4,20 @@ from pathlib import Path
 from unittest.mock import Mock
 import logging
 
-from ai_trading.run_all_trades import run_all_trades
+from ai_trading.core.run_all_trades import run_all_trades
 
 
 def test_api_exception_logs_warning(tmp_path, caplog):
     """API errors should be logged as warnings and skipped."""
 
-    def boom(_symbol: str) -> None:
-        raise RuntimeError("boom")
+    api_mock = Mock(side_effect=RuntimeError("boom"))
 
     caplog.set_level(logging.WARNING)
     log = tmp_path / "trades.csv"
-    run_all_trades(["AAPL"], boom, trade_log=log)
+    run_all_trades(["AAPL"], api_mock, trade_log=log)
 
     assert any("API_ERROR" in r.message for r in caplog.records)
+    api_mock.assert_called_once_with("AAPL")
     assert log.exists()
 
 
@@ -32,6 +32,7 @@ def test_empty_symbols_calls_sleep_once(tmp_path):
 
     sleep_mock.assert_called_once_with(1.0)
     api_mock.assert_not_called()
+    assert log.exists()
 
 
 def test_creates_trade_log(tmp_path):
@@ -41,6 +42,7 @@ def test_creates_trade_log(tmp_path):
     log = tmp_path / "trades.csv"
     run_all_trades(["AAPL"], api_mock, trade_log=log)
 
+    api_mock.assert_called_once_with("AAPL")
     assert log.exists()
     first_line = log.read_text().splitlines()[0]
     assert (
