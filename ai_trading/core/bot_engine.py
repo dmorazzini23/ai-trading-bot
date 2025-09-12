@@ -8662,7 +8662,7 @@ def submit_order(
                 md = getattr(ctx, "market_data", None)
                 try:
                     price = get_latest_close(md) if md is not None else 0.0
-                except Exception:
+                except (KeyError, ValueError):
                     price = 0.0
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.

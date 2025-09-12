@@ -16,6 +16,7 @@ def test_max_position_size_consistency(monkeypatch, caplog):
     monkeypatch.setenv("CAPITAL_CAP", "0.04")
     monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")
     monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.05")
     monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
     monkeypatch.delenv("AI_TRADING_MAX_POSITION_SIZE", raising=False)
 
@@ -45,10 +46,10 @@ def test_max_position_size_consistency(monkeypatch, caplog):
         if mps is not None:
             try:
                 object.__setattr__(cfg, "max_position_size", float(mps))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 try:
                     setattr(cfg, "max_position_size", float(mps))
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
         runtime = build_runtime(cfg)
         captured["runtime"] = runtime

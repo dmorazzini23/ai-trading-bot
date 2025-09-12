@@ -18,7 +18,7 @@ def test_retry_mode_fixed_and_linear():
     for fn in (fixed, linear):
         try:
             fn()
-        except Exception:
+        except RetryError:
             pass
 
     assert calls["fixed"] == 2
