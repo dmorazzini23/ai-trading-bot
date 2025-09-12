@@ -3,7 +3,6 @@ import pytest
 from tests.optdeps import require
 
 require("requests")
-require("alpaca")
 
 
 def test_clients_built_once(monkeypatch):
@@ -11,38 +10,33 @@ def test_clients_built_once(monkeypatch):
 
     calls = {"trade": 0, "data": 0}
 
-    class _T:
-        pass
+    class MockTradingClient:
+        def __init__(self, *a, **k):
+            calls["trade"] += 1
 
-    class _D:
-        pass
-
-    def fake_trading_client(*a, **k):
-        calls["trade"] += 1
-        return _T()
-
-    def fake_rest(*a, **k):
-        calls["data"] += 1
-        return _D()
+    class MockDataClient:
+        def __init__(self, *a, **k):
+            calls["data"] += 1
 
     monkeypatch.setenv("ALPACA_API_KEY", "x")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "y")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("ALPACA_API_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("WEBHOOK_SECRET", "s")
+    monkeypatch.setenv("CAPITAL_CAP", "0.05")
+    monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.05")
 
-    monkeypatch.setattr(
-        be,
-        "TradingClient",
-        fake_trading_client,
-        raising=False,
+    engine = be.BotEngine(
+        trading_client_cls=MockTradingClient, data_client_cls=MockDataClient
     )
-    import alpaca
-    monkeypatch.setattr(alpaca.trading.client, "TradingClient", fake_rest, raising=True)
+    calls["trade"] = 0
+    calls["data"] = 0
+    tc1 = engine.trading_client
+    tc2 = engine.trading_client
+    dc1 = engine.data_client
+    dc2 = engine.data_client
 
-    engine = be.BotEngine()
-    _ = engine.trading_client
-    _ = engine.trading_client
-    _ = engine.data_client
-    _ = engine.data_client
-
+    assert tc1 is tc2
+    assert dc1 is dc2
     assert calls["trade"] == 1
     assert calls["data"] == 1

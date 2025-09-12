@@ -569,21 +569,25 @@ class BotEngine:
         api_key = _get_env_str("ALPACA_API_KEY")
         secret_key = _get_env_str("ALPACA_SECRET_KEY")
         cls = self._trading_client_cls
-        return cls(
-            api_key=api_key,
-            secret_key=secret_key,
-            paper="paper" in base_url.lower(),
-            url_override=base_url,
-        )
+        if callable(cls):
+            return cls(
+                api_key=api_key,
+                secret_key=secret_key,
+                paper="paper" in base_url.lower(),
+                url_override=base_url,
+            )
+        return cls
 
     @cached_property
     def data_client(self):
         """Alpaca StockHistoricalDataClient for historical/market data."""
         cls = self._data_client_cls
-        return cls(
-            api_key=_get_env_str("ALPACA_API_KEY"),
-            secret_key=_get_env_str("ALPACA_SECRET_KEY"),
-        )
+        if callable(cls):
+            return cls(
+                api_key=_get_env_str("ALPACA_API_KEY"),
+                secret_key=_get_env_str("ALPACA_SECRET_KEY"),
+            )
+        return cls
 
     @property
     def tickers(self) -> list[str]:
