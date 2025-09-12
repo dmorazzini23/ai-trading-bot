@@ -11,6 +11,7 @@ import sys
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
+import importlib.util
 from ai_trading.env import ensure_dotenv_loaded
 
 # Ensure environment variables are loaded before any logging configuration
@@ -27,6 +28,12 @@ _logging.configure_logging(log_file=LOG_FILE)
 
 # Module logger
 logger = _logging.get_logger(__name__)
+
+# Detect Alpaca SDK availability without importing heavy modules
+ALPACA_AVAILABLE = (
+    importlib.util.find_spec("alpaca") is not None
+    and importlib.util.find_spec("alpaca.trading.client") is not None
+)
 
 from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
@@ -82,9 +89,7 @@ def preflight_import_health() -> None:
 
 def _check_alpaca_sdk() -> None:
     """Ensure the Alpaca SDK is installed before continuing."""
-    import importlib.util
-
-    if importlib.util.find_spec("alpaca") is None:
+    if not ALPACA_AVAILABLE:
         logger.error("ALPACA_PY_REQUIRED: pip install alpaca-py is required")
         raise SystemExit(1)
 

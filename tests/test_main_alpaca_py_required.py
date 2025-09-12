@@ -4,6 +4,7 @@ import pytest
 def test_main_exits_when_alpaca_sdk_missing(monkeypatch, caplog):
     import ai_trading.main as m
 
+    assert hasattr(m, "ALPACA_AVAILABLE")
     monkeypatch.setattr(m, "ALPACA_AVAILABLE", False)
     with caplog.at_level("ERROR"):
         with pytest.raises(SystemExit) as excinfo:
