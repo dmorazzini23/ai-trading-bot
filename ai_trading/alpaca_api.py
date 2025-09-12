@@ -683,6 +683,17 @@ def submit_order(
 ) -> dict[str, Any]:
     """Submit an order via Alpaca SDK or HTTP.
 
+    Parameters
+    ----------
+    symbol:
+        Asset ticker to trade.
+    qty:
+        Quantity of shares to submit.
+    side:
+        ``"buy"`` or ``"sell"`` direction for the order.
+
+    Notes
+    -----
     - Supports shadow mode for offline testing.
     - Raises :class:`AttributeError` if a provided client lacks ``submit_order``.
     - Maps HTTP errors (incl. 429) to :class:`AlpacaOrderHTTPError`.
@@ -692,12 +703,13 @@ def submit_order(
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
     q_int = _as_int(qty)
     timeout = clamp_request_timeout(timeout)
+    idempotency_key = idempotency_key or generate_client_order_id()
 
     if do_shadow:
         oid = f"shadow-{uuid.uuid4().hex[:16]}"
         return {
             "id": oid,
-            "client_order_id": idempotency_key or oid,
+            "client_order_id": idempotency_key,
             "symbol": symbol,
             "qty": str(q_int),
             "side": side,
