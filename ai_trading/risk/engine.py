@@ -494,10 +494,26 @@ class RiskEngine:
             except (AttributeError, TypeError):
                 is_raw_qty_finite = isinstance(raw_qty, int | float) and raw_qty == raw_qty and (abs(raw_qty) != float('inf'))
                 is_min_qty_finite = isinstance(min_qty, int | float) and min_qty == min_qty and (abs(min_qty) != float('inf'))
-            if not is_raw_qty_finite or raw_qty <= 0:
-                logger.warning('Invalid or negative raw_qty %s for %s, returning 0', raw_qty, getattr(signal, 'symbol', 'UNKNOWN'))
+            if not is_raw_qty_finite or raw_qty == 0:
+                if is_min_qty_finite and min_qty > 0:
+                    logger.warning(
+                        'Non-finite or zero raw_qty %s for %s; falling back to minimum position size',
+                        raw_qty,
+                        getattr(signal, 'symbol', 'UNKNOWN'),
+                    )
+                    qty = int(min_qty)
+                else:
+                    logger.warning(
+                        'Invalid raw_qty %s and min_qty %s for %s, returning 0',
+                        raw_qty,
+                        min_qty,
+                        getattr(signal, 'symbol', 'UNKNOWN'),
+                    )
+                    return 0
+            elif raw_qty < 0:
+                logger.warning('Negative raw_qty %s for %s, returning 0', raw_qty, getattr(signal, 'symbol', 'UNKNOWN'))
                 return 0
-            if not is_min_qty_finite:
+            elif not is_min_qty_finite or min_qty <= 0:
                 logger.warning('Invalid min_qty %s, using raw_qty only', min_qty)
                 qty = int(raw_qty)
             else:
