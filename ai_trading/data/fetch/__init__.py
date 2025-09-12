@@ -239,9 +239,20 @@ def _disable_alpaca(duration: _dt.timedelta) -> None:
     """Disable Alpaca as a data source for ``duration``."""
 
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_disable_count
-    _alpaca_disabled_until = datetime.now(UTC) + duration
+
+    # Exponential backoff to avoid rapid flip/flop between providers. Each
+    # consecutive disable doubles the cooldown window up to the monitor's
+    # ``max_cooldown`` ceiling.
+    count = _alpaca_disable_count + 1
+    backoff = duration * (2 ** (count - 1))
+    max_cooldown = getattr(provider_monitor, "max_cooldown", None)
+    if max_cooldown is not None:
+        cap = _dt.timedelta(seconds=max_cooldown)
+        if backoff > cap:
+            backoff = cap
+    _alpaca_disabled_until = datetime.now(UTC) + backoff
     _ALPACA_DISABLED_ALERTED = False
-    _alpaca_disable_count += 1
+    _alpaca_disable_count = count
     try:
         logger.warning(
             "ALPACA_TEMP_DISABLED",
@@ -249,7 +260,7 @@ def _disable_alpaca(duration: _dt.timedelta) -> None:
                 {
                     "provider": "alpaca",
                     "disabled_until": _alpaca_disabled_until.isoformat(),
-                    "backoff_seconds": duration.total_seconds(),
+                    "backoff_seconds": backoff.total_seconds(),
                     "disable_count": _alpaca_disable_count,
                 }
             ),
@@ -1807,6 +1818,7 @@ def _fetch_bars(
         log_extra_success = {"remaining_retries": max_retries - _state["retries"], **log_extra}
         log_fetch_attempt("alpaca", status=status, **log_extra_success)
         provider_monitor.record_success("alpaca")
+        _ALPACA_DISABLED_ALERTED = False
         _alpaca_disable_count = 0
         _incr("data.fetch.success", value=1.0, tags=_tags())
         return df

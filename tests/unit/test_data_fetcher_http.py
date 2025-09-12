@@ -316,3 +316,32 @@ def test_rate_limit_disable_and_recover(monkeypatch: pytest.MonkeyPatch):
     assert provider_disabled("alpaca") == 0
     assert df._alpaca_disabled_until is None
     assert isinstance(out3, pd.DataFrame) and not out3.empty
+
+
+def test_disable_exponential_backoff(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disable_count", 0, raising=False)
+    base = timedelta(seconds=1)
+    df._disable_alpaca(base)
+    first_until = df._alpaca_disabled_until
+    df._disable_alpaca(base)
+    second_until = df._alpaca_disabled_until
+    assert second_until - first_until >= base
+
+
+def test_success_resets_alert_flag(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_ALPACA_DISABLED_ALERTED", True, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+
+    def ok_resp(url, params=None, headers=None, timeout=None):
+        ts_iso = datetime.now(UTC).isoformat()
+        return _Resp(200, payload=_bars_payload(ts_iso))
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", ok_resp)
+
+    start, end = _dt_range(2)
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert isinstance(out, pd.DataFrame) and not out.empty
+    assert df._ALPACA_DISABLED_ALERTED is False

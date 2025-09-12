@@ -50,4 +50,6 @@ Two environment variables control the backoff behaviour:
 When a provider recovers after being disabled, the monitor emits a
 `DATA_PROVIDER_RECOVERED` log with the total outage duration and disable
 frequency and raises a warning alert with the same metadata. These signals can
-be scraped by external monitoring to surface provider flapping.
+be scraped by external monitoring to surface provider flapping. On recovery,
+the internal disable alert flag is cleared so subsequent outages trigger fresh
+alerts.
