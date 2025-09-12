@@ -9,6 +9,7 @@ def test_trading_config_env_aliases():
         "DATA_FEED": "iex",
         "DATA_PROVIDER": "alpaca",
         "PAPER": "true",
+        "MAX_DRAWDOWN_THRESHOLD": "0.15",
         "KELLY_FRACTION_MAX": "0.2",
         "MIN_SAMPLE_SIZE": "50",
         "CONFIDENCE_LEVEL": "0.9",
@@ -26,7 +27,10 @@ def test_trading_config_env_aliases():
 
 
 def test_paper_inferred_from_base_url():
-    env = {"ALPACA_BASE_URL": "https://paper-api.alpaca.markets"}
+    env = {
+        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+        "MAX_DRAWDOWN_THRESHOLD": "0.15",
+    }
     cfg = TradingConfig.from_env(env)
     assert cfg.paper is True
 
@@ -35,6 +39,7 @@ def test_paper_false_when_live_prod():
     env = {
         "ALPACA_BASE_URL": "https://api.alpaca.markets",
         "APP_ENV": "prod",
+        "MAX_DRAWDOWN_THRESHOLD": "0.15",
     }
     cfg = TradingConfig.from_env(env)
     assert cfg.paper is False

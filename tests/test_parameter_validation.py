@@ -67,11 +67,11 @@ def test_parameter_change_validation():
         validator = ParameterValidator()
 
         # Test valid parameter change
-        result = validator.validate_parameter_change("MAX_KELLY_FRACTION", 0.25, 0.15)
+        result = validator.validate_parameter_change("MAX_KELLY_FRACTION", 0.15, 0.25)
         assert result["status"] == "PASS", f"Valid parameter change should pass: {result}"
         assert result["parameter"] == "MAX_KELLY_FRACTION"
-        assert result["old_value"] == 0.25
-        assert result["new_value"] == 0.15
+        assert result["old_value"] == 0.15
+        assert result["new_value"] == 0.25
 
         # Test invalid parameter change (outside bounds)
         result = validator.validate_parameter_change("MAX_KELLY_FRACTION", 0.25, 0.80)
