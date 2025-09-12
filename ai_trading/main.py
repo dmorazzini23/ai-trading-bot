@@ -97,6 +97,16 @@ def _check_alpaca_sdk() -> None:
 
 def run_cycle() -> None:
     """Execute a single trading cycle using the core bot engine."""
+
+    allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
+    if not allow_after_hours:
+        try:
+            if not _is_market_open_base():
+                logger.info("MARKET_CLOSED_SKIP_CYCLE")
+                return
+        except Exception:
+            logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
+
     from ai_trading.core.bot_engine import (
         BotState,
         run_all_trades_worker,

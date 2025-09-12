@@ -542,7 +542,9 @@ HEALTH_CHECK_INTERVAL=30
 ```
 
 The service waits for the next NYSE session if it starts outside regular market
-hours. Set `ALLOW_AFTER_HOURS=1` to bypass this check during testing.
+hours, and run cycles triggered while the market is closed exit immediately
+without data or indicator work. Set `ALLOW_AFTER_HOURS=1` to bypass these
+checks during testing.
 
 ### Configuration Validation
 
