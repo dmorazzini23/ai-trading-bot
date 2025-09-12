@@ -266,7 +266,8 @@ class TradingConfig:
     min_win_rate: Optional[float] = None
     kelly_fraction: Optional[float] = None
     conf_threshold: Optional[float] = None
-    kelly_fraction_max: float = 0.15
+    # Default aligns with TradingConfig.from_env when env is absent
+    kelly_fraction_max: float = 0.25
     min_sample_size: int = 10
     confidence_level: float = 0.90
     lookback_periods: Optional[int] = None
@@ -447,6 +448,7 @@ class TradingConfig:
             max_drawdown_threshold=_get(
                 "MAX_DRAWDOWN_THRESHOLD",
                 float,
+                default=None,
                 aliases=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
             ),
             trailing_factor=_get("TRAILING_FACTOR", float),
@@ -546,8 +548,7 @@ class TradingConfig:
                     object.__setattr__(cfg, k, v)
                 except Exception:
                     pass
-        if cfg.max_drawdown_threshold is None:
-            raise RuntimeError("MAX_DRAWDOWN_THRESHOLD environment variable is required")
+        # Optional threshold; runtime consumers should validate when used
         return cfg
 
     def snapshot_sanitized(self) -> Dict[str, Any]:

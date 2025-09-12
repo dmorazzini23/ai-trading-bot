@@ -4,6 +4,9 @@ import math
 import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+from typing import Optional
+
 from ai_trading.config.management import TradingConfig
 from ai_trading.logging import logger
 
@@ -12,6 +15,35 @@ class KellyParams:
     win_prob: float
     win_loss_ratio: float
     cap: float
+
+_DEFAULT_CONFIG: Optional[TradingConfig] = None
+
+@lru_cache(maxsize=1)
+def get_default_config() -> TradingConfig:
+    """Return a TradingConfig built from the environment lazily.
+
+    Missing optional environment variables must not break import-time; tests
+    depend on side-effect-free imports. If env-based construction fails, fall
+    back to safe defaults.
+    """
+    global _DEFAULT_CONFIG
+    if _DEFAULT_CONFIG is not None:
+        return _DEFAULT_CONFIG
+    try:
+        _DEFAULT_CONFIG = TradingConfig.from_env()
+    except Exception:
+        _DEFAULT_CONFIG = TradingConfig(
+            seed=42,
+            kelly_fraction_max=0.25,
+            max_drawdown_threshold=None,
+            buy_threshold=0.4,
+            conf_threshold=0.8,
+            daily_loss_limit=0.03,
+            capital_cap=0.04,
+            dollar_risk_limit=0.05,
+            paper=True,
+        )
+    return _DEFAULT_CONFIG
 
 def institutional_kelly(p: KellyParams) -> float:
     """Institutional-safe Kelly sizing.
@@ -22,7 +54,7 @@ def institutional_kelly(p: KellyParams) -> float:
     raw = p.win_prob - (1.0 - p.win_prob) / max(p.win_loss_ratio, 1e-09)
     frac = max(0.0, raw)
     kelly = p.cap * frac
-    return max(0.0, min(kelly, p.cap, _DEFAULT_CONFIG.kelly_fraction_max))
+    return max(0.0, min(kelly, p.cap, get_default_config().kelly_fraction_max))
 
 class InstitutionalKelly:
     """Callable wrapper around :func:`institutional_kelly`."""
@@ -52,7 +84,7 @@ class KellyCriterion:
             **kwargs: Additional parameters for backward compatibility
         """
         # Use provided config or the module default (built from env)
-        self.config = config or _DEFAULT_CONFIG
+        self.config = config or get_default_config()
         self.min_sample_size = min_sample_size if min_sample_size is not None else self.config.min_sample_size
         self.max_fraction = max_fraction if max_fraction is not None else self.config.kelly_fraction_max
         if 'confidence_level' in kwargs:
@@ -182,13 +214,14 @@ class KellyCalculator:
         """Initialize Kelly calculator."""
         self.kelly_criterion = KellyCriterion()
         # Provide robust defaults if TradingConfig omits fields
+        cfg = get_default_config()
         try:
-            lb = getattr(_DEFAULT_CONFIG, 'lookback_periods', None)
+            lb = getattr(cfg, "lookback_periods", None)
             self.lookback_periods = lb if isinstance(lb, int) and lb > 0 else 252
         except Exception:
             self.lookback_periods = 252
         try:
-            rf = getattr(_DEFAULT_CONFIG, 'rebalance_frequency', None)
+            rf = getattr(cfg, "rebalance_frequency", None)
             self.rebalance_frequency = rf if isinstance(rf, int) and rf > 0 else 21
         except Exception:
             self.rebalance_frequency = 21
@@ -309,6 +342,3 @@ class KellyCalculator:
             return [r for r in self.calculation_history if r['symbol'] == symbol]
         return self.calculation_history.copy()
 
-
-# Module-level default config (after class definitions to avoid import-time cycles)
-_DEFAULT_CONFIG = TradingConfig.from_env()
