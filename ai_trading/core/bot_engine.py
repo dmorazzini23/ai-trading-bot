@@ -2741,8 +2741,8 @@ def get_git_hash() -> str:
         from ai_trading.utils import SUBPROCESS_TIMEOUT_DEFAULT, safe_subprocess_run
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
-        out = safe_subprocess_run(cmd, timeout=SUBPROCESS_TIMEOUT_DEFAULT)
-        return out.strip() or "unknown"
+        res = safe_subprocess_run(cmd, timeout=SUBPROCESS_TIMEOUT_DEFAULT)
+        return res.stdout.strip() or "unknown"
     except COMMON_EXC:
         return "unknown"
 
