@@ -21,7 +21,7 @@ def test_charset_normalizer_default_suppressed(monkeypatch, caplog) -> None:
     log_setup.setup_logging()
 
     noisy = logging.getLogger("charset_normalizer")
-    assert noisy.getEffectiveLevel() == logging.WARNING
+    assert noisy.getEffectiveLevel() == logging.DEBUG
     with caplog.at_level(logging.DEBUG):
         noisy.debug("noisy debug")
     assert "noisy debug" not in caplog.text
