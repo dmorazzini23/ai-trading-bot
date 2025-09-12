@@ -136,7 +136,30 @@ class ParameterValidator:
 
     def _generate_optimization_summary(self) -> dict[str, Any]:
         """Generate summary of current parameter optimizations."""
-        return {'kelly_optimization': {'max_kelly_fraction': 'Reduced to 15% for better risk-adjusted returns', 'min_sample_size': 'Reduced to 20 for faster adaptation', 'confidence_level': 'Reduced to 90% for less conservative sizing'}, 'risk_optimization': {'max_portfolio_risk': 'Increased to 2.5% for higher profit potential', 'max_position_size': 'Reduced to 8% for better diversification', 'stop_loss_multiplier': 'Tightened to 1.8x for capital preservation', 'take_profit_multiplier': 'Reduced to 2.5x for frequent profit taking', 'max_correlation_exposure': 'Reduced to 15% for better diversification'}, 'execution_optimization': {'participation_rate': 'Increased to 15% for faster fills', 'max_slippage_bps': 'Tightened to 15 bps for better execution quality', 'order_timeout': 'Reduced to 180s for faster adaptation'}, 'performance_optimization': {'min_sharpe_ratio': 'Increased to 1.2 for higher quality strategies', 'max_drawdown': 'Reduced to 15% for better capital preservation', 'min_win_rate': 'Increased to 48% for quality trade filtering'}}
+        return {
+            'kelly_optimization': {
+                'max_kelly_fraction': 'Increased to 25% for stronger capital deployment',
+                'min_sample_size': 'Reduced to 20 for faster adaptation',
+                'confidence_level': 'Reduced to 90% for less conservative sizing',
+            },
+            'risk_optimization': {
+                'max_portfolio_risk': 'Increased to 2.5% for higher profit potential',
+                'max_position_size': 'Reduced to 8% for better diversification',
+                'stop_loss_multiplier': 'Tightened to 1.8x for capital preservation',
+                'take_profit_multiplier': 'Reduced to 2.5x for frequent profit taking',
+                'max_correlation_exposure': 'Reduced to 15% for better diversification',
+            },
+            'execution_optimization': {
+                'participation_rate': 'Increased to 15% for faster fills',
+                'max_slippage_bps': 'Tightened to 15 bps for better execution quality',
+                'order_timeout': 'Reduced to 180s for faster adaptation',
+            },
+            'performance_optimization': {
+                'min_sharpe_ratio': 'Increased to 1.2 for higher quality strategies',
+                'max_drawdown': 'Reduced to 15% for better capital preservation',
+                'min_win_rate': 'Increased to 48% for quality trade filtering',
+            },
+        }
 
     def _log_validation_results(self, validation_result: dict[str, Any]):
         """Log parameter validation results."""
@@ -169,7 +192,9 @@ def log_parameter_changes():
     """Log summary of parameter optimization changes."""
     logger.info('=== Trading Parameter Optimization Summary ===')
     logger.info('Kelly Criterion optimizations:')
-    logger.info(f"  MAX_KELLY_FRACTION: 0.25 → {KELLY_PARAMETERS['MAX_KELLY_FRACTION']} (better risk-adjusted returns)")
+    logger.info(
+        f"  MAX_KELLY_FRACTION: 0.15 → {KELLY_PARAMETERS['MAX_KELLY_FRACTION']} (stronger capital deployment)"
+    )
     logger.info(f"  MIN_SAMPLE_SIZE: 30 → {KELLY_PARAMETERS['MIN_SAMPLE_SIZE']} (faster adaptation)")
     logger.info(f"  CONFIDENCE_LEVEL: 0.95 → {KELLY_PARAMETERS['CONFIDENCE_LEVEL']} (less conservative sizing)")
     logger.info('Risk management optimizations:')

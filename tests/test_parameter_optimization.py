@@ -13,7 +13,7 @@ def test_kelly_parameters_optimization():
     from ai_trading.core.constants import KELLY_PARAMETERS
 
     # Verify optimized Kelly parameters
-    assert KELLY_PARAMETERS["MAX_KELLY_FRACTION"] == 0.15, f"Expected 0.15, got {KELLY_PARAMETERS['MAX_KELLY_FRACTION']}"
+    assert KELLY_PARAMETERS["MAX_KELLY_FRACTION"] == 0.25, f"Expected 0.25, got {KELLY_PARAMETERS['MAX_KELLY_FRACTION']}"
     assert KELLY_PARAMETERS["MIN_SAMPLE_SIZE"] == 20, f"Expected 20, got {KELLY_PARAMETERS['MIN_SAMPLE_SIZE']}"
     assert KELLY_PARAMETERS["CONFIDENCE_LEVEL"] == 0.90, f"Expected 0.90, got {KELLY_PARAMETERS['CONFIDENCE_LEVEL']}"
 
@@ -131,8 +131,8 @@ def test_kelly_fraction_capped_by_max():
     from ai_trading.risk.kelly import KellyCriterion
 
     kelly = KellyCriterion()
-    # Raw Kelly calculation would yield 0.4; capped at 0.15
-    assert kelly.calculate_kelly_fraction(0.6, 0.02, 0.01) == 0.15
+    # Raw Kelly calculation would yield 0.4; capped at 0.25
+    assert kelly.calculate_kelly_fraction(0.6, 0.02, 0.01) == 0.25
 
 
 def test_constants_backward_compatibility():
