@@ -63,6 +63,8 @@ DEFAULT_SYMBOL_SPECS: dict[str, SymbolSpec] = {
     "XLV": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "TMO": SymbolSpec(tick=Decimal("0.01"), lot=1),
     "CAT": SymbolSpec(tick=Decimal("0.01"), lot=1),
+    "GD": SymbolSpec(tick=Decimal("0.01"), lot=1),
+    "ORCL": SymbolSpec(tick=Decimal("0.01"), lot=1),
 }
 
 
