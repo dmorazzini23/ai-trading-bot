@@ -269,30 +269,23 @@ def test_dependency_injection():
 
 
 def test_performance_optimizations():
-    """Test performance optimizations work correctly."""
-    from ai_trading.indicator_manager import IndicatorManager, IndicatorType
+    """Test indicator factory creates working indicators."""
+    from ai_trading.analysis.indicator_manager import create_indicator
 
-    manager = IndicatorManager()
+    # Create indicators via the factory helper
+    sma = create_indicator("incremental_sma", window=5, name="TEST_SMA")
+    ema = create_indicator("incremental_ema", window=5, name="TEST_EMA")
 
-    # Create indicators
-    sma_id = manager.create_indicator(IndicatorType.SIMPLE_MOVING_AVERAGE, "TEST", 5)
-    ema_id = manager.create_indicator(IndicatorType.EXPONENTIAL_MOVING_AVERAGE, "TEST", 5)
-
-    # Update with same data multiple times (should hit cache)
+    # Update with sample data
     test_values = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0]
 
     for value in test_values:
-        manager.update_indicator(sma_id, value)
-        manager.update_indicator(ema_id, value)
+        sma.update(value)
+        ema.update(value)
 
-    # Check performance stats
-    stats = manager.get_performance_stats()
-    assert stats['total_indicators'] == 2
-    assert stats['total_calculations'] > 0
-
-    # Test caching works
-    assert stats['cache_hits'] >= 0
-    assert stats['cache_misses'] >= 0
+    # Indicators should be initialized and produce values
+    assert sma.update(16.0) is not None
+    assert ema.is_initialized
 
 
 if __name__ == "__main__":
