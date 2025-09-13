@@ -51,7 +51,6 @@ import warnings
 
 import ai_trading.data.fetch as data_fetcher_module
 from ai_trading.data.fetch import (
-    DataFetchError,
     get_bars,
     get_bars_batch,
     get_minute_df,
@@ -3720,10 +3719,6 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
 
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
-class DataFetchError(Exception):
-    """Raised when expected market data is missing or unusable."""
-
-
 class OrderExecutionError(Exception):
     """Raised when an Alpaca order fails after submission."""
 
