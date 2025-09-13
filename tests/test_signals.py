@@ -25,10 +25,11 @@ def sample_df():
     """Create simple OHLCV data for indicator tests."""
     n = 30
     data = {
+        'open': np.linspace(9, 14, n),
         'high': np.linspace(10, 15, n),
         'low': np.linspace(9, 14, n),
         'close': np.linspace(9.5, 14.5, n),
-        'volume': np.linspace(100, 130, n)
+        'volume': np.linspace(100, 130, n),
     }
     return pd.DataFrame(data)
 
@@ -128,13 +129,24 @@ def test_psar_wrapper(sample_df, monkeypatch):
     assert out["psar_short"].iloc[0] == 2.0
 
 
-def test_psar_raises_on_invalid_data(sample_df):
-    """psar raises ValueError when data missing required columns or empty."""
-    with pytest.raises(ValueError, match="missing required column"):
+def test_psar_validation(sample_df):
+    """psar enforces required columns and handles empty/invalid data."""
+    with pytest.raises(KeyError, match="missing required column"):
         ind.psar(sample_df.drop(columns=["high"]))
-    empty = pd.DataFrame(columns=["high", "low", "close"])
-    with pytest.raises(ValueError, match="empty"):
-        ind.psar(empty)
+    empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    out = ind.psar(empty)
+    assert out.empty
+
+
+def test_psar_close_numeric(sample_df):
+    bad = sample_df.copy()
+    bad["close"] = ["foo"] * len(bad)
+    with pytest.raises(ValueError, match="numeric"):
+        ind.psar(bad)
+    good = sample_df.copy()
+    good["close"] = good["close"].astype(str)
+    out = ind.psar(good)
+    assert "psar_long" in out.columns
 
 
 def test_composite_signal_confidence_dict_and_list():
