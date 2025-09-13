@@ -12,6 +12,7 @@ from datetime import UTC
 from pathlib import Path
 
 import joblib
+from ai_trading.utils.lazy_imports import load_pandas
 
 logger = get_logger(__name__)
 ML_MODELS: dict[str, object | None] = {}
@@ -26,7 +27,9 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     from datetime import datetime, timedelta
 
     import numpy as np
-    import pandas as pd
+    pd = load_pandas()
+    if pd is None or not hasattr(pd, "DataFrame"):
+        raise ImportError("pandas is required for train_and_save_model")
     from sklearn.dummy import DummyClassifier
     from sklearn.linear_model import LogisticRegression
 
@@ -38,9 +41,15 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
         df = get_daily_df(symbol, start, end)
     except (ValueError, TypeError) as exc:
         logger.warning("Data fetch failed for %s: %s", symbol, exc)
-        df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
+        try:
+            df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
+        except AttributeError as exc:
+            raise ImportError("pandas DataFrame unavailable") from exc
     if df is None or df.empty or "close" not in df:
-        df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
+        try:
+            df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
+        except AttributeError as exc:
+            raise ImportError("pandas DataFrame unavailable") from exc
 
     X = np.arange(len(df)).reshape(-1, 1)
     y = (df["close"].diff().fillna(0) > 0).astype(int).values
