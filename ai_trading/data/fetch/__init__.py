@@ -2091,26 +2091,7 @@ def get_minute_df(
                                 df_short = _post_process(df_short)
                                 df_short = _verify_minute_continuity(df_short, symbol, backfill=backfill)
                                 return df_short
-                    try:
-                        df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
-                        used_backup = True
-                    except Exception as alt_err:  # pragma: no cover - network failure
-                        logger.warning(
-                            "ALT_PROVIDER_FAILED",
-                            extra={"symbol": symbol, "err": str(alt_err)},
-                        )
-                        df = None
-                    if df is None or getattr(df, "empty", True):
-                        _SKIPPED_SYMBOLS.add(tf_key)
-                        logger.warning(
-                            "ALPACA_EMPTY_BAR_SKIP",
-                            extra={
-                                "symbol": symbol,
-                                "timeframe": "1Min",
-                                "occurrences": cnt,
-                            },
-                        )
-                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                    df = None
                 else:
                     logger.debug(
                         "ALPACA_EMPTY_BARS",
@@ -2135,6 +2116,9 @@ def get_minute_df(
             except (FinnhubAPIException, ValueError, NotImplementedError) as e:
                 logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
                 df = None
+            else:
+                if df is not None and not getattr(df, "empty", True):
+                    used_backup = True
         elif not enable_finnhub:
             warn_finnhub_disabled_no_data(symbol)
         else:
