@@ -3461,7 +3461,7 @@ def _env_float(default: float, *keys: str) -> float:
     return default
 
 
-CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
+CAPITAL_CAP = _env_float(0.25, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
 _cfg = TradingConfig.from_env()
 # Align default MAX_POSITION_SIZE with configuration at import time. Runtime
 # may update this later when dynamic sizing is resolved.
@@ -12829,7 +12829,7 @@ def _prepare_run(
         )
         equity = 0.0
     update_if_present(runtime, equity)
-    params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.04)
+    params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.25)
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_candidate_universe(runtime, tickers)

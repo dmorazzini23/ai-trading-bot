@@ -71,7 +71,7 @@ def test_prepare_run_signature():
             def __init__(self):
                 self.api = MockAPI()
                 self.capital_scaler = MockCapitalScaler()
-                self.params = {'CAPITAL_CAP': 0.04, 'DOLLAR_RISK_LIMIT': 0.05, 'MAX_POSITION_SIZE': 1000}
+                self.params = {'CAPITAL_CAP': 0.25, 'DOLLAR_RISK_LIMIT': 0.05, 'MAX_POSITION_SIZE': 1000}
         runtime = MockRuntime()
         state = BotState()
         try:

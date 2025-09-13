@@ -23,7 +23,7 @@ def test_trading_config_has_required_parameters():
     assert hasattr(cfg, 'position_size_min_usd')
 
     # Verify default values
-    assert cfg.capital_cap == 0.04
+    assert cfg.capital_cap == 0.25
     assert cfg.dollar_risk_limit == 0.05
     assert cfg.max_position_size == 8000.0
     assert cfg.position_size_min_usd == 0.0
@@ -77,7 +77,7 @@ def test_build_runtime_hydrates_all_parameters(monkeypatch):
         assert key in runtime.params, f"Missing required parameter: {key}"
 
     # Verify specific values
-    assert runtime.params['CAPITAL_CAP'] == 0.04
+    assert runtime.params['CAPITAL_CAP'] == 0.25
     assert runtime.params['DOLLAR_RISK_LIMIT'] == 0.05
     assert runtime.params['MAX_POSITION_SIZE'] == 8000.0
 
@@ -122,7 +122,7 @@ def test_param_helper_fallback_logic():
         return default
 
     # Test parameter access
-    assert _param(runtime, 'CAPITAL_CAP', 0.04) == 0.08
+    assert _param(runtime, 'CAPITAL_CAP', 0.25) == 0.08
     assert _param(runtime, 'MISSING_KEY', 999.0) == 999.0
 
     # Test with runtime that has no params
@@ -131,7 +131,7 @@ def test_param_helper_fallback_logic():
             self.cfg = cfg
 
     mock_runtime = MockRuntime(cfg)
-    assert _param(mock_runtime, 'CAPITAL_CAP', 0.04) == 0.08  # Falls back to cfg
+    assert _param(mock_runtime, 'CAPITAL_CAP', 0.25) == 0.08  # Falls back to cfg
     assert _param(mock_runtime, 'MISSING_KEY', 999.0) == 999.0  # Falls back to default
 
 

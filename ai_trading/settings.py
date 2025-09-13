@@ -119,9 +119,6 @@ class Settings(BaseSettings):
     score_size_max_boost: float = Field(1.0, alias='SCORE_SIZE_MAX_BOOST', description='Upper bound of raw size multiplier at confidence=1.0')
     score_size_gamma: float = Field(1.0, alias='SCORE_SIZE_GAMMA', description='Shape parameter: 1.0 linear, <1 concave, >1 convex')
     buy_threshold: float = Field(default=0.4, env='AI_TRADING_BUY_THRESHOLD')
-    daily_loss_limit: float = Field(default=0.03, env='AI_TRADING_DAILY_LOSS_LIMIT')
-    max_drawdown_threshold: float = Field(default=0.08, env='AI_TRADING_MAX_DRAWDOWN_THRESHOLD')
-    portfolio_drift_threshold: float = Field(default=0.15, env='AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD')
     sector_exposure_cap: float = Field(default=0.33, env='AI_TRADING_SECTOR_EXPOSURE_CAP')
     max_portfolio_positions: int = Field(default=10, env='AI_TRADING_MAX_PORTFOLIO_POSITIONS')
     disaster_dd_limit: float = Field(default=0.25, env='AI_TRADING_DISASTER_DD_LIMIT')
@@ -140,8 +137,11 @@ class Settings(BaseSettings):
         ('alpaca_iex', 'alpaca_sip', 'yahoo'), env='DATA_PROVIDER_PRIORITY'
     )
     max_data_fallbacks: int = Field(2, env='MAX_DATA_FALLBACKS')
+    daily_loss_limit: float = Field(default=0.05, env='AI_TRADING_DAILY_LOSS_LIMIT')
+    max_drawdown_threshold: float = Field(default=0.08, env='AI_TRADING_MAX_DRAWDOWN_THRESHOLD')
+    portfolio_drift_threshold: float = Field(default=0.15, env='AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD')
     capital_cap: float = Field(
-        0.04,
+        0.25,
         validation_alias=AliasChoices('capital_cap', 'CAPITAL_CAP', 'AI_TRADING_CAPITAL_CAP'),
     )
     dollar_risk_limit: float = Field(
@@ -149,7 +149,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices('dollar_risk_limit', 'DOLLAR_RISK_LIMIT'),
     )
     max_position_size: float | None = Field(
-        5000.0,
+        8000.0,
         description=(
             'Absolute max dollars per position. If None, derive from equity * '
             'capital_cap; if equity unknown, use static fallback.'
@@ -357,7 +357,7 @@ def get_sector_exposure_cap() -> float:
     return _to_float(getattr(get_settings(), 'sector_exposure_cap', 0.33), 0.33)
 
 def get_capital_cap() -> float:
-    return _to_float(getattr(get_settings(), 'capital_cap', 0.04), 0.04)
+    return _to_float(getattr(get_settings(), 'capital_cap', 0.25), 0.25)
 
 def get_dollar_risk_limit() -> float:
     return _to_float(getattr(get_settings(), 'dollar_risk_limit', 0.05), 0.05)
@@ -369,7 +369,7 @@ def get_max_drawdown_threshold() -> float:
     return _to_float(getattr(get_settings(), 'max_drawdown_threshold', 0.08), 0.08)
 
 def get_daily_loss_limit() -> float:
-    return _to_float(getattr(get_settings(), 'daily_loss_limit', 0.03), 0.03)
+    return _to_float(getattr(get_settings(), 'daily_loss_limit', 0.05), 0.05)
 
 def get_buy_threshold() -> float:
     return _to_float(getattr(get_settings(), 'buy_threshold', 0.4), 0.4)

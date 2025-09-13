@@ -15,7 +15,7 @@ DEFAULT_MAX_FACTOR: float = 2.0
 class ScalingConfig:
     """Minimal subset of trading config used for sizing helpers."""
 
-    capital_cap: float = 0.04
+    capital_cap: float = 0.25
     max_factor: float = DEFAULT_MAX_FACTOR
     extras: dict[str, Any] | None = None
 
@@ -47,7 +47,7 @@ def from_env(env: Mapping[str, str] | None = None) -> ScalingConfig:
     """
     env_map = {k.upper(): v for k, v in (env or os.environ).items()}
 
-    capital_cap = float(env_map.get("CAPITAL_CAP", "0.04"))
+    capital_cap = float(env_map.get("CAPITAL_CAP", "0.25"))
     max_factor = float(env_map.get("TAKE_PROFIT_FACTOR", str(DEFAULT_MAX_FACTOR)))
 
     extras: dict[str, Any] = {}

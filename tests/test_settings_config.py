@@ -18,7 +18,7 @@ def test_settings_defaults(monkeypatch):
     s = Settings()
     assert s.alpaca_data_feed == "iex"
     assert s.alpaca_adjustment == "all"
-    assert s.capital_cap == 0.04
+    assert s.capital_cap == 0.25
     assert s.dollar_risk_limit == 0.05
 
 

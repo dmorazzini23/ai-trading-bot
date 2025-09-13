@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 
-DEFAULT_CAPITAL_CAP = 0.04
+DEFAULT_CAPITAL_CAP = 0.25
 DEFAULT_MAX_POSITION_FALLBACK = 8000.0
 
 

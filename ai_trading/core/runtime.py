@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
 REQUIRED_PARAM_DEFAULTS = {
-    'CAPITAL_CAP': 0.04,
+    'CAPITAL_CAP': 0.25,
     'DOLLAR_RISK_LIMIT': 0.05,
     'MAX_POSITION_SIZE': 8000.0,
     'KELLY_FRACTION': 0.6,
