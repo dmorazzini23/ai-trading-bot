@@ -377,19 +377,31 @@ class TradingConfig:
     ) -> "TradingConfig":
         """Build TradingConfig from environment.
 
-        ``env_or_mode`` may be a mapping of env vars or a mode string. When a
-        mapping is provided, ``TRADING_MODE`` may be present to influence
+        ``env_or_mode`` may be a mode string or a mapping of env vars that
+        supplements ``os.environ``. Mapping keys override any existing process
+        environment values and ``TRADING_MODE`` may be present to influence
         overrides. ``MAX_DRAWDOWN_THRESHOLD`` defaults to ``0.08`` when unset.
         ``allow_missing_drawdown`` is retained for backward compatibility but
         has no effect.
         """
         mode: str | None = None
-        if isinstance(env_or_mode, str):
-            mode = env_or_mode.strip().lower()
-            env_map = {k.upper(): v for k, v in os.environ.items()}
-        else:
-            env_map = {k.upper(): v for k, v in (env_or_mode or os.environ).items()}
+        env_map = {k.upper(): v for k, v in os.environ.items()}
+        if isinstance(env_or_mode, Mapping):
+            env_map.update({k.upper(): v for k, v in env_or_mode.items()})
             mode = env_map.get("TRADING_MODE", "").strip().lower() or None
+        elif isinstance(env_or_mode, str):
+            mode = env_or_mode.strip().lower()
+        else:
+            mode = env_map.get("TRADING_MODE", "").strip().lower() or None
+
+        alias_map = {
+            "AI_TRADING_BUY_THRESHOLD": "BUY_THRESHOLD",
+            "AI_TRADING_CONF_THRESHOLD": "CONF_THRESHOLD",
+            "AI_TRADING_MAX_DRAWDOWN_THRESHOLD": "MAX_DRAWDOWN_THRESHOLD",
+        }
+        for alias, canon in alias_map.items():
+            if alias in env_map:
+                env_map[canon] = env_map[alias]
 
         from .aliases import resolve_trading_mode
 
