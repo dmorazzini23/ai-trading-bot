@@ -91,7 +91,7 @@ extend-exclude = ["**/.venv", "**/venv", "build", "dist", "notebooks", "artifact
 
 # Focus on safe mechanical families only.
 [tool.ruff.lint]
-select = ["E", "F", "UP", "DTZ", "T201", "TID"]  # AI-AGENT-REF: safe lint families
+select = ["E", "F", "W", "B", "I", "UP", "DTZ", "T201", "TID"]  # AI-AGENT-REF: safe lint families
 ignore = ["E501"]
 
 # Allow prints in tests/tools; allow re-export F401 in package __init__ files.
@@ -107,6 +107,9 @@ ignore = ["E501"]
 "requests.put" = "use ai_trading.utils.http.put"
 "requests.delete" = "use ai_trading.utils.http.delete"
 "requests.request" = "use ai_trading.utils.http.request"
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"

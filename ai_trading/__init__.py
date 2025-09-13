@@ -27,29 +27,47 @@ except Exception:
     pass
 
 # AI-AGENT-REF: public surface allowlist
-_PUBLIC_MODULES = {
-    'config', 'logging', 'utils', 'data',
-    'alpaca_api', 'data_validation', 'indicators', 'rebalancer', 'audit',
-    'core', 'strategy_allocator', 'predict', 'meta_learning',
-    'signals', 'settings', 'portfolio', 'app', 'ml_model',
-    'paths', 'main', 'position_sizing', 'capital_scaling', 'indicator_manager',
-    'execution', 'production_system', 'trade_logic',
-}
-
-_PUBLIC_SYMBOLS = {
+_EXPORTS = {
+    'alpaca_api': 'ai_trading.alpaca_api',
+    'app': 'ai_trading.app',
+    'audit': 'ai_trading.audit',
+    'capital_scaling': 'ai_trading.capital_scaling',
+    'config': 'ai_trading.config',
+    'core': 'ai_trading.core',
+    'data': 'ai_trading.data',
+    'data_validation': 'ai_trading.data_validation',
+    'execution': 'ai_trading.execution',
+    'indicator_manager': 'ai_trading.indicator_manager',
+    'indicators': 'ai_trading.indicators',
+    'logging': 'ai_trading.logging',
+    'main': 'ai_trading.main',
+    'meta_learning': 'ai_trading.meta_learning',
+    'ml_model': 'ai_trading.ml_model',
+    'paths': 'ai_trading.paths',
+    'portfolio': 'ai_trading.portfolio',
+    'position_sizing': 'ai_trading.position_sizing',
+    'predict': 'ai_trading.predict',
+    'production_system': 'ai_trading.production_system',
+    'rebalancer': 'ai_trading.rebalancer',
+    'settings': 'ai_trading.settings',
+    'signals': 'ai_trading.signals',
+    'strategy_allocator': 'ai_trading.strategy_allocator',
+    'trade_logic': 'ai_trading.trade_logic',
+    'utils': 'ai_trading.utils',
     'ExecutionEngine': 'ai_trading.execution.engine:ExecutionEngine',
     'DataFetchError': 'ai_trading.data.fetch:DataFetchError',
     'DataFetchException': 'ai_trading.data.fetch:DataFetchException',
 }
 
-__all__ = sorted(set(_PUBLIC_MODULES) | set(_PUBLIC_SYMBOLS))
+__all__ = sorted(_EXPORTS)
 
 
 def __getattr__(name: str):  # pragma: no cover - thin lazy loader
-    if name in _PUBLIC_MODULES:
-        return _import_module(f'ai_trading.{name}')
-    target = _PUBLIC_SYMBOLS.get(name)
-    if target:
-        mod_name, _, sym = target.partition(':')
-        return getattr(_import_module(mod_name), sym)
-    raise AttributeError(name)
+    target = _EXPORTS.get(name)
+    if not target:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    mod_name, _, attr = target.partition(':')
+    mod = _import_module(mod_name)
+    obj = getattr(mod, attr) if attr else mod
+    globals()[name] = obj
+    return obj

@@ -16,6 +16,7 @@ from ai_trading.logging import get_logger
 from ai_trading.config.management import is_shadow_mode
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.metrics import get_counter, get_histogram
+from ai_trading.utils.optional_dep import missing
 from time import monotonic as _mono
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -64,27 +65,8 @@ def _unit_from_norm(tf_norm: str) -> tuple[str, str]:
         if tf_norm.endswith(suffix):
             return name, suffix
     return "Day", "Day"
-def _module_exists(name: str) -> bool:
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ModuleNotFoundError, ValueError):
-        return False
-
-
-# Detect SDK availability without importing heavy modules at import time
-ALPACA_AVAILABLE = (
-    _module_exists("alpaca")
-    and _module_exists("alpaca.trading.client")
-    and (
-        _module_exists("alpaca.data.historical.stock")
-        or _module_exists("alpaca.data.historical")
-        or _module_exists("alpaca.data")
-    )
-)
-HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
-
-if not ALPACA_AVAILABLE:
-    _log.warning("Optional feature 'alpaca' disabled: missing alpaca-py")
+ALPACA_AVAILABLE = not missing("alpaca", "alpaca")
+HAS_PANDAS: bool = not missing("pandas", "pandas")
 
 
 def initialize() -> None:
