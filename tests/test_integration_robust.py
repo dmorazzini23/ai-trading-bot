@@ -172,6 +172,7 @@ class _TF:
     Hour = "1Hour"
     Day = "1Day"
     Week = "1Week"
+    Month = "1Month"
 
     def __init__(self, *a, **k):
         pass
@@ -182,6 +183,7 @@ class _TFUnit:
     Hour = "Hour"
     Day = "Day"
     Week = "Week"
+    Month = "Month"
 
 
 
@@ -189,6 +191,7 @@ class _TFUnit:
 sys.modules["alpaca.data.timeframe"].TimeFrame = _TF
 sys.modules["alpaca.data.timeframe"].TimeFrameUnit = _TFUnit
 sys.modules["alpaca.data"].TimeFrame = _TF
+sys.modules["alpaca.data"].TimeFrameUnit = _TFUnit
 
 
 class _FClient:

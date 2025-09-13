@@ -7,6 +7,7 @@ class TimeFrameUnit(Enum):
     Hour = "Hour"
     Day = "Day"
     Week = "Week"
+    Month = "Month"
 
 @dataclass(frozen=True)
 class TimeFrame:
@@ -22,5 +23,6 @@ TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defin
 TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
 TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
 TimeFrame.Week = TimeFrame(1, TimeFrameUnit.Week)  # type: ignore[attr-defined]
+TimeFrame.Month = TimeFrame(1, TimeFrameUnit.Month)  # type: ignore[attr-defined]
 
 __all__ = ["TimeFrame", "TimeFrameUnit"]

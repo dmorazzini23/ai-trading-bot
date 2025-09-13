@@ -103,6 +103,7 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
         Hour = "Hour"
         Day = "Day"
         Week = "Week"
+        Month = "Month"
 
     @dataclass(frozen=True)
     class TimeFrame:
@@ -119,6 +120,9 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     _week_unit = getattr(TimeFrameUnit, "Week", None)
     if _week_unit is not None:
         TimeFrame.Week = TimeFrame(1, _week_unit)  # type: ignore[attr-defined]
+    _month_unit = getattr(TimeFrameUnit, "Month", None)
+    if _month_unit is not None:
+        TimeFrame.Month = TimeFrame(1, _month_unit)  # type: ignore[attr-defined]
 
     @dataclass
     class StockBarsRequest:
