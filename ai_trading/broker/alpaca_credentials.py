@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -43,18 +42,17 @@ def check_alpaca_available() -> bool:
 def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
     """Return an :class:`alpaca.trading.client.TradingClient` instance.
 
-    If *shadow* is ``True``, a simple ``object`` stub is returned even
-    when the SDK is missing. Otherwise, a :class:`RuntimeError` is raised when
-    the ``alpaca`` package cannot be imported.
+    If the SDK is missing and *shadow* is ``True``, a simple ``object`` stub is
+    returned. Otherwise, a :class:`RuntimeError` is raised when the ``alpaca``
+    package cannot be imported.
     """
 
     creds = resolve_alpaca_credentials(env)
-    if shadow:
-        return object()
     try:  # pragma: no cover - optional dependency
-        importlib.import_module("alpaca")
         from alpaca.trading.client import TradingClient  # type: ignore
     except ModuleNotFoundError as exc:  # pragma: no cover - tested via unit test
+        if shadow:
+            return object()
         raise RuntimeError("alpaca package is required") from exc
     return TradingClient(
         api_key=creds.api_key,
