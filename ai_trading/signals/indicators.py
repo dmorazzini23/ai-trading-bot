@@ -9,6 +9,32 @@ from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 
 logger = get_logger(__name__)
 
+REQUIRED_COLS = {"open", "high", "low", "close", "volume"}
+
+
+def _validate_ohlcv(df: Any):
+    """Validate OHLCV DataFrame structure and types.
+
+    Raises ``KeyError`` if required columns are missing and ``ValueError`` if
+    the ``close`` column contains non-numeric data.
+    """
+
+    pd = load_pandas()
+    cols = set(getattr(df, "columns", []))
+    missing = REQUIRED_COLS - cols
+    if missing:
+        missing_cols = ", ".join(sorted(missing))
+        raise KeyError(f"DataFrame missing required column(s): {missing_cols}")
+    if getattr(df, "empty", False):
+        logger.warning("EMPTY_DATAFRAME_FOR_INDICATOR")
+        return df
+    try:
+        df = df.copy()
+        df["close"] = pd.to_numeric(df["close"], errors="raise")
+    except Exception as exc:
+        raise ValueError("Column 'close' must be numeric") from exc
+    return df
+
 
 def psar(df: Any) -> Any:
     """Compute Parabolic SAR indicator columns.
@@ -16,22 +42,18 @@ def psar(df: Any) -> Any:
     Parameters
     ----------
     df : Any
-        DataFrame with ``high``, ``low`` and ``close`` columns.
+        DataFrame with ``open``, ``high``, ``low``, ``close`` and ``volume`` columns.
 
     Returns
     -------
     Any
         Copy of ``df`` with ``psar_long`` and ``psar_short`` columns.
     """
+
     pd = load_pandas()
-    required = {"high", "low", "close"}
-    cols = set(getattr(df, "columns", []))
-    missing = required - cols
-    if missing:
-        missing_cols = ", ".join(sorted(missing))
-        raise ValueError(f"DataFrame missing required column(s): {missing_cols}")
-    if len(df) == 0:
-        raise ValueError("DataFrame is empty")
+    df = _validate_ohlcv(df)
+    if df.empty:
+        return df
 
     ta = load_pandas_ta()
     if pd is None or ta is None:
