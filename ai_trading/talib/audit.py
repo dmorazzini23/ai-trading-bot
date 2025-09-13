@@ -6,6 +6,8 @@ import os
 import uuid
 from pathlib import Path
 
+from ai_trading.audit import fix_file_permissions
+
 _LOG_DIR = Path("data")
 _LOG_FILE = _LOG_DIR / "trades.csv"
 _HEADERS = [
@@ -33,28 +35,69 @@ def log_trade(
     """Append a trade record to ``data/trades.csv`` ensuring directory exists.
 
     Creates the ``data`` directory on first use and writes a header if the file
-    is new. File permissions are set to ``0o664`` when the file is created.
+    is new. File permissions are set to ``0o600`` when the file is created.
+    On ``PermissionError`` the helper ``fix_file_permissions`` is invoked and
+    the operation retried once.
     """
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
-    file_exists = _LOG_FILE.exists()
-    with open(_LOG_FILE, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_HEADERS)
-        if not file_exists:
-            writer.writeheader()
+    if not _LOG_FILE.exists():
+        try:
+            with open(
+                _LOG_FILE,
+                "x",
+                newline="",
+                opener=lambda path, flags: os.open(path, flags, 0o600),
+            ) as f:
+                writer = csv.DictWriter(f, fieldnames=_HEADERS)
+                writer.writeheader()
+        except PermissionError:
+            if fix_file_permissions(_LOG_FILE):
+                try:
+                    with open(
+                        _LOG_FILE,
+                        "x",
+                        newline="",
+                        opener=lambda path, flags: os.open(path, flags, 0o600),
+                    ) as f:
+                        writer = csv.DictWriter(f, fieldnames=_HEADERS)
+                        writer.writeheader()
+                except PermissionError:
+                    return
+        except FileExistsError:
+            pass
+    try:
+        with open(_LOG_FILE, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=_HEADERS)
+            writer.writerow(
+                {
+                    "id": str(uuid.uuid4()),
+                    "timestamp": timestamp,
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": str(qty),
+                    "price": str(fill_price),
+                    "exposure": "" if exposure is None else str(exposure),
+                    "mode": extra_info,
+                    "result": "",
+                }
+            )
+    except PermissionError:
+        if fix_file_permissions(_LOG_FILE):
             try:
-                os.chmod(_LOG_FILE, 0o664)
-            except OSError:
+                with open(_LOG_FILE, "a", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=_HEADERS)
+                    writer.writerow(
+                        {
+                            "id": str(uuid.uuid4()),
+                            "timestamp": timestamp,
+                            "symbol": symbol,
+                            "side": side,
+                            "qty": str(qty),
+                            "price": str(fill_price),
+                            "exposure": "" if exposure is None else str(exposure),
+                            "mode": extra_info,
+                            "result": "",
+                        }
+                    )
+            except PermissionError:
                 pass
-        writer.writerow(
-            {
-                "id": str(uuid.uuid4()),
-                "timestamp": timestamp,
-                "symbol": symbol,
-                "side": side,
-                "qty": str(qty),
-                "price": str(fill_price),
-                "exposure": "" if exposure is None else str(exposure),
-                "mode": extra_info,
-                "result": "",
-            }
-        )

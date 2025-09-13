@@ -68,10 +68,10 @@ def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
         # Verify file was created
         assert trade_log_path.exists()
 
-        # Verify file permissions (0o664)
+        # Verify file permissions (0o600)
         file_stat = trade_log_path.stat()
         file_mode = oct(file_stat.st_mode)[-3:]
-        assert file_mode == "664", f"Expected file permissions 664, got {file_mode}"
+        assert file_mode == "600", f"Expected file permissions 600, got {file_mode}"
 
         # Verify file contents
         with open(trade_log_path) as f:

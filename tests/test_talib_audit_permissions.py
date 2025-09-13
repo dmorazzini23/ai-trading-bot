@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_talib_audit_creates_data_dir_and_file(tmp_path, monkeypatch):
-    """ai_trading.talib.audit.log_trade should create data/trades.csv with 664 perms."""
+    """ai_trading.talib.audit.log_trade should create data/trades.csv with 600 perms."""
     monkeypatch.chdir(tmp_path)
     from ai_trading.talib import audit
 
@@ -22,7 +22,7 @@ def test_talib_audit_creates_data_dir_and_file(tmp_path, monkeypatch):
     assert log_path.parent.exists()
 
     mode = oct(log_path.stat().st_mode)[-3:]
-    assert mode == "664", f"Expected file permissions 664, got {mode}"
+    assert mode == "600", f"Expected file permissions 600, got {mode}"
 
     with open(log_path) as f:
         rows = list(csv.DictReader(f))

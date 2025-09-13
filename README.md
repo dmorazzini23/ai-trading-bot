@@ -1076,7 +1076,7 @@ WEBHOOK_ON_SYSTEM_EVENTS=true
 
 The bot automatically initializes required files and directories on first run:
 
-- **Trade Log**: Creates `data/trades.csv` with proper permissions (0o664) for trade auditing
+- **Trade Log**: Creates `data/trades.csv` with strict permissions (0o600) for trade auditing
 - **Data Directory**: Auto-creates the `data/` directory if it doesn't exist
 - **Permissions**: Ensures the bot user can read/write trade logs for audit compliance
 
