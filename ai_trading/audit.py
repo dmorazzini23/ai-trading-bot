@@ -77,15 +77,29 @@ def _ensure_parent_dir(p: Path) -> None:
 
 
 def _ensure_file_header(p: Path, headers: list[str]) -> None:
-    new = not p.exists() or p.stat().st_size == 0
-    if new:
-        with open(p, "a", newline="") as f:  # use built-in open for test patching
+    """Create *p* with a header if missing or empty.
+
+    Files are created with ``0o600`` permissions via ``open(..., 'x', opener=...)``
+    to restrict access. A ``FileExistsError`` is ignored to handle race
+    conditions where another writer created the file first.
+    """
+    if not p.exists():
+        try:
+            with open(
+                p,
+                "x",
+                newline="",
+                opener=lambda path, flags: os.open(path, flags, 0o600),
+            ) as f:
+                writer = csv.DictWriter(f, fieldnames=headers)
+                writer.writeheader()
+            return
+        except FileExistsError:
+            pass
+    if p.stat().st_size == 0:
+        with open(p, "a", newline="") as f:  # built-in open for test patching
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
-        try:
-            os.chmod(p, 0o664)
-        except OSError:
-            pass
 
 
 def _find_pytest_tmpdir() -> Path | None:
