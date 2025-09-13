@@ -137,11 +137,9 @@ class TestOrderExecutionTracking(unittest.TestCase):
             if hasattr(bot_engine, 'safe_submit_order'):
                 result = bot_engine.safe_submit_order(self.mock_ctx.api, mock_req)
 
-                # The issue: function returns the order but doesn't validate
-                # that filled_qty (50) matches intended qty (100)
-                self.assertEqual(result.filled_qty, "50")
-                self.assertEqual(result.qty, "100")
-                # This exposes the quantity mismatch issue
+                # The order should expose numeric quantity fields
+                self.assertEqual(result.filled_qty, 50.0)
+                self.assertEqual(result.qty, 100.0)
 
 
 class TestMetaLearningLogFormat(unittest.TestCase):
