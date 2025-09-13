@@ -15,7 +15,9 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
-    import pandas as pd
+    from ai_trading.utils.lazy_imports import load_pandas
+
+    pd = load_pandas()
 
 from ai_trading.order.types import OrderSide
 

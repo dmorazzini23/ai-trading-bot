@@ -14,7 +14,9 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - used for type hints
     import numpy as np  # type: ignore
-    import pandas as pd  # type: ignore
+    from ai_trading.utils.lazy_imports import load_pandas
+
+    pd = load_pandas()
 
 try:  # pragma: no cover - alpaca may be missing in tests
     from alpaca.common.exceptions import APIError
@@ -48,8 +50,12 @@ from ai_trading.utils import http
 from ai_trading.utils.time import utcnow
 from ai_trading.config import get_settings
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
+from ai_trading.utils.lazy_imports import load_pandas
 
 # Heavy imports are loaded lazily within functions
+
+
+pd = load_pandas()
 
 
 def _get_numpy():
@@ -62,12 +68,12 @@ def _get_numpy():
 
 
 def _get_pandas():
-    try:  # pragma: no cover - import is tested indirectly
-        import pandas as pd  # type: ignore
-
-        return pd
-    except ImportError:
+    try:
+        if pd is None or not hasattr(pd, "DataFrame"):
+            return None
+    except Exception:
         return None
+    return pd
 
 
 def _get_pandas_ta():
@@ -96,11 +102,11 @@ _LAST_SIGNAL_MATRIX = None
 def robust_signal_price(df) -> float:
     """Get closing price from dataframe with fallback."""
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         return 0.001
     try:
         return df["close"].iloc[-1]
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+    except (ValueError, KeyError, TypeError, ZeroDivisionError, AttributeError) as e:
         logger.warning("DATA_MUNGING_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return 0.001
 
@@ -156,13 +162,13 @@ def generate() -> int:
 def fetch_history(symbols: Iterable[str], start, end, source: str = "alpaca") -> Any:
     """Fetch historical data for symbols between start and end."""
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         logger.warning("Pandas not available, returning None from fetch_history")
         return None
     try:
         df = pd.DataFrame()
         return df
-    except (APIError, ConnectionError, TimeoutError, KeyError, ValueError, TypeError) as e:
+    except (APIError, ConnectionError, TimeoutError, KeyError, ValueError, TypeError, AttributeError) as e:
         _log.error(
             "FETCH_HISTORY_FAILED",
             extra={"symbol_count": len(symbols), "cause": e.__class__.__name__, "detail": str(e)},
@@ -172,7 +178,7 @@ def fetch_history(symbols: Iterable[str], start, end, source: str = "alpaca") ->
 
 def compute_indicators(df: pd.DataFrame) -> Any:
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         return df
     try:
         out = df.copy()
@@ -184,12 +190,12 @@ def compute_indicators(df: pd.DataFrame) -> Any:
 
 def build_feature_matrix(df: pd.DataFrame) -> Any:
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         return df
     try:
         X = df.copy()
         return X
-    except (KeyError, ValueError, TypeError, IndexError) as e:
+    except (KeyError, ValueError, TypeError, IndexError, AttributeError) as e:
         _log.error("FEATURE_MATRIX_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         raise
 
@@ -197,7 +203,7 @@ def build_feature_matrix(df: pd.DataFrame) -> Any:
 def score_candidates(X: pd.DataFrame, model) -> Any:
     """Attach model-derived score column in [0, 1] to ``X``."""
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         logger.warning("Pandas not available, skipping score_candidates")
         return X
     try:
@@ -221,12 +227,12 @@ def score_candidates(X: pd.DataFrame, model) -> Any:
 
 def generate_signals(scored: pd.DataFrame, buy_threshold: float) -> Any:
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         return scored
     try:
         signals = scored.copy()
         return signals
-    except (KeyError, ValueError, TypeError) as e:
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
         _log.error("SIGNAL_GEN_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         raise
 
@@ -248,22 +254,28 @@ def _validate_macd_input(close_prices, min_len):
 def _compute_macd_df(close_prices, fast_period: int, slow_period: int, signal_period: int):
     """Compute MACD dataframe with graceful fallback."""
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         return None
     fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
     slow_ema = close_prices.ewm(span=slow_period, adjust=False).mean()
     macd_line = fast_ema - slow_ema
     signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
     histogram = macd_line - signal_line
-    return pd.DataFrame({"macd": macd_line, "signal": signal_line, "histogram": histogram})
+    try:
+        return pd.DataFrame({"macd": macd_line, "signal": signal_line, "histogram": histogram})
+    except AttributeError:
+        return None
 
 
 @lru_cache(maxsize=128)
 def _cached_macd(prices_tuple: tuple, fast_period: int, slow_period: int, signal_period: int) -> Any | None:
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "Series"):
         return None
-    series = pd.Series(prices_tuple)
+    try:
+        series = pd.Series(prices_tuple)
+    except AttributeError:
+        return None
     return _compute_macd_df(series, fast_period, slow_period, signal_period)
 
 
@@ -288,7 +300,7 @@ def calculate_macd(close_prices, fast_period: int = 12, slow_period: int = 26, s
         ``None`` if the calculation fails.
     """
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         logger.warning("Pandas not available, cannot calculate MACD")
         return None
     try:
@@ -301,7 +313,7 @@ def calculate_macd(close_prices, fast_period: int = 12, slow_period: int = 26, s
             logger.warning("MACD calculation returned NaNs in the result")
             return None
         return macd_df
-    except (KeyError, ValueError, TypeError) as e:
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
         logger.error("MACD_CALCULATION_FAILED", exc_info=True, extra={"cause": e.__class__.__name__, "detail": str(e)})
         return None
 
@@ -310,7 +322,7 @@ def _validate_input_df(data) -> None:
     pd = _get_pandas()
     if data is None:
         raise ValueError("Input must be a DataFrame")
-    if pd is not None and (not isinstance(data, pd.DataFrame)):
+    if pd is not None and hasattr(pd, "DataFrame") and (not isinstance(data, pd.DataFrame)):
         raise ValueError("Input must be a DataFrame")
     required = ["open", "high", "low", "close", "volume"]
     if hasattr(data, "columns"):
@@ -321,7 +333,7 @@ def _validate_input_df(data) -> None:
 
 def _apply_macd(data) -> Any | None:
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         logger.warning("Pandas not available for MACD application")
         return None
     macd_df = calculate_macd(data["close"])
@@ -338,7 +350,7 @@ def _apply_macd(data) -> Any | None:
 
 def _apply_psar(data) -> Any:
     pd = _get_pandas()
-    if pd is None:
+    if pd is None or not hasattr(pd, "DataFrame"):
         logger.warning("Pandas not available for PSAR application")
         return data
     from .indicators import psar as _psar
@@ -370,8 +382,16 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     cache_path = Path(f"cache_{ticker}.parquet") if ticker else None
     if os.getenv("DISABLE_PARQUET"):
         cache_path = None
-    if pd is not None and cache_path and cache_path.exists():
-        return pd.read_parquet(cache_path)
+    if (
+        pd is not None
+        and hasattr(pd, "DataFrame")
+        and cache_path
+        and cache_path.exists()
+    ):
+        try:
+            return pd.read_parquet(cache_path)
+        except AttributeError:
+            logger.warning("pandas lacks read_parquet; ignoring cache")
     data = _apply_macd(data.copy())
     data = _apply_psar(data)
     if pd is not None:
@@ -479,9 +499,13 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     """
     pd = _get_pandas()
     np = _get_numpy()
-    if pd is None or np is None:
+    if pd is None or not hasattr(pd, "Series") or np is None:
         logger.warning("numpy or pandas not available for generate_signal")
-        return pd.Series(dtype=int, name="signal") if pd is not None else []
+        return (
+            pd.Series(dtype=int, name="signal")
+            if pd is not None and hasattr(pd, "Series")
+            else []
+        )
     if df is None:
         logger.error("Dataframe is None in generate_signal")
         raise ValueError("df cannot be None")
@@ -527,7 +551,7 @@ def detect_market_regime_hmm(df, n_components: int = 3, window_size: int = 1000,
     np = _get_numpy()
     pd = _get_pandas()
     GaussianHMM = _get_gaussian_hmm()
-    if np is None or pd is None or GaussianHMM is None:
+    if np is None or pd is None or not hasattr(pd, "DataFrame") or GaussianHMM is None:
         return np.zeros(len(df), dtype=int) if np is not None else [0] * len(df)
     col = "close" if "close" in df.columns else "Close"
     if col not in df:
@@ -560,9 +584,9 @@ def compute_signal_matrix(df) -> Any | None:
     """Return a matrix of z-scored indicator signals."""
     pd = _get_pandas()
     np = _get_numpy()
-    if pd is None or np is None:
+    if pd is None or not hasattr(pd, "DataFrame") or np is None:
         logger.warning("numpy or pandas not available for compute_signal_matrix")
-        return pd.DataFrame() if pd is not None else None
+        return pd.DataFrame() if pd is not None and hasattr(pd, "DataFrame") else None
     if df is None or df.empty:
         logger.warning("compute_signal_matrix received empty dataframe")
         return pd.DataFrame()
@@ -634,8 +658,10 @@ def ensemble_vote_signals(signal_matrix) -> Any:
     """Return voting-based entry signals from ``signal_matrix``."""
     pd = _get_pandas()
     np = _get_numpy()
-    if pd is None or np is None or signal_matrix is None or signal_matrix.empty:
-        return pd.Series(dtype=int) if pd is not None else []
+    if pd is None or not hasattr(pd, "Series") or np is None or signal_matrix is None or signal_matrix.empty:
+        return (
+            pd.Series(dtype=int) if pd is not None and hasattr(pd, "Series") else []
+        )
     pos = (signal_matrix > 0.5).sum(axis=1)
     neg = (signal_matrix < -0.5).sum(axis=1)
     votes = np.where(pos >= 2, 1, np.where(neg >= 2, -1, 0))
@@ -646,8 +672,15 @@ def classify_regime(df, window: int = 20) -> Any:
     """Classify each row as 'trend' or 'mean_revert' based on volatility."""
     pd = _get_pandas()
     np = _get_numpy()
-    if pd is None or np is None or df is None or df.empty or "close" not in df:
-        return pd.Series(dtype=object) if pd is not None else []
+    if (
+        pd is None
+        or not hasattr(pd, "Series")
+        or np is None
+        or df is None
+        or df.empty
+        or "close" not in df
+    ):
+        return pd.Series(dtype=object) if pd is not None and hasattr(pd, "Series") else []
     returns = df["close"].pct_change()
     vol = returns.rolling(window).std()
     med = vol.rolling(window).median()
@@ -659,7 +692,7 @@ def classify_regime(df, window: int = 20) -> Any:
 def generate_ensemble_signal(df) -> int:
     pd = _get_pandas()
     np = _get_numpy()
-    if pd is None or np is None:
+    if pd is None or not hasattr(pd, "Series") or np is None:
         return 0
 
     def last(col: str) -> float:
@@ -1182,7 +1215,7 @@ class SignalDecisionPipeline:
     def _calculate_current_atr(self, df: pd.DataFrame, period: int = 14) -> float:
         """Calculate current ATR value."""
         pd = _get_pandas()
-        if pd is None:
+        if pd is None or not hasattr(pd, "DataFrame"):
             return 0.0
         try:
             if len(df) < period:
@@ -1197,7 +1230,7 @@ class SignalDecisionPipeline:
         """Analyze current market regime characteristics."""
         pd = _get_pandas()
         np = _get_numpy()
-        if pd is None or np is None:
+        if pd is None or not hasattr(pd, "DataFrame") or np is None:
             return {
                 "recent_volatility": 0.0,
                 "is_high_volatility": False,
@@ -1229,7 +1262,7 @@ class SignalDecisionPipeline:
     def _passes_ensemble_gating(self, df: pd.DataFrame) -> bool:
         """Check if signal passes ensemble gating requirements."""
         pd = _get_pandas()
-        if pd is None:
+        if pd is None or not hasattr(pd, "DataFrame"):
             return False
         try:
             signals = []
