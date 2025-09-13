@@ -49,6 +49,7 @@ def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
 
     creds = resolve_alpaca_credentials(env)
     try:  # pragma: no cover - optional dependency
+        __import__("alpaca")
         from alpaca.trading.client import TradingClient  # type: ignore
     except ModuleNotFoundError as exc:  # pragma: no cover - tested via unit test
         if shadow:
