@@ -196,7 +196,7 @@ Feature availability flags have been replaced with configuration-based checks:
 - `PORTFOLIO_FIRST_AVAILABLE` → `settings.ENABLE_PORTFOLIO_FEATURES`
 - `PORTFOLIO_OPTIMIZATION_AVAILABLE` → `settings.ENABLE_PORTFOLIO_FEATURES`
 
-**Action Required**: Set `ENABLE_PORTFOLIO_FEATURES=true` in your environment if you use advanced portfolio features.
+**Action Required**: Set `ENABLE_PORTFOLIO_FEATURES=false` to disable advanced portfolio features (defaults to True).
 
 ### 5. Alpaca SDK Import Changes
 Alpaca SDK imports are now at module top level in `ai_trading/execution/live_trading.py`:

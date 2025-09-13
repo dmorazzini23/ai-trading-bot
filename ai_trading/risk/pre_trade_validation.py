@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas_market_calendars
 from ..core.constants import EXECUTION_PARAMETERS, MARKET_HOURS, RISK_PARAMETERS
 from ..core.enums import RiskLevel
+from ai_trading.config import get_settings
 
 class ValidationStatus(Enum):
     """Pre-trade validation status."""
@@ -205,6 +206,8 @@ class RiskValidator:
     def __init__(self, risk_level: RiskLevel=RiskLevel.MODERATE):
         """Initialize risk validator."""
         self.risk_level = risk_level
+        settings = get_settings()
+        self.enable_portfolio_features = settings.ENABLE_PORTFOLIO_FEATURES
         self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.max_position_size = RISK_PARAMETERS['MAX_POSITION_SIZE']
         self.max_correlation_exposure = RISK_PARAMETERS['MAX_CORRELATION_EXPOSURE']
@@ -262,6 +265,15 @@ class RiskValidator:
         Returns:
             ValidationResult for portfolio risk check
         """
+        if not self.enable_portfolio_features:
+            return ValidationResult(
+                category=ValidationCategory.RISK_LIMITS,
+                status=ValidationStatus.APPROVED,
+                message='Portfolio risk checks disabled',
+                details={},
+                score=1.0,
+                recommendations=[],
+            )
         try:
             symbol = proposed_trade.get('symbol')
             quantity = proposed_trade.get('quantity', 0)
@@ -388,8 +400,9 @@ class PreTradeValidator:
             current_positions = portfolio_data.get('current_positions', {})
             position_risk_result = self.risk_validator.validate_position_risk(symbol, quantity, price, account_equity, current_positions)
             validation_results.append(position_risk_result)
-            portfolio_risk_result = self.risk_validator.validate_portfolio_risk(trade_request, portfolio_data)
-            validation_results.append(portfolio_risk_result)
+            if self.risk_validator.enable_portfolio_features:
+                portfolio_risk_result = self.risk_validator.validate_portfolio_risk(trade_request, portfolio_data)
+                validation_results.append(portfolio_risk_result)
             system_health_result = self._validate_system_health()
             validation_results.append(system_health_result)
             overall_status, overall_score = self._calculate_overall_result(validation_results)

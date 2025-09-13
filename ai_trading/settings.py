@@ -86,7 +86,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices('WEBHOOK_SECRET', 'AI_TRADING_WEBHOOK_SECRET'),
     )
     ENABLE_PORTFOLIO_FEATURES: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices(
             'ENABLE_PORTFOLIO_FEATURES', 'AI_TRADING_ENABLE_PORTFOLIO_FEATURES'
         ),
