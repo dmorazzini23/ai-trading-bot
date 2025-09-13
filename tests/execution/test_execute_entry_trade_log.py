@@ -63,7 +63,8 @@ def test_slippage_converts_market_to_limit(monkeypatch):
     oid = engine.execute_order("AAPL", OrderSide.BUY, 10, expected_price=100.0)
     order = engine.order_manager.orders[oid]
     assert order.order_type == OrderType.LIMIT
-    assert float(order.price) == pytest.approx(100.0 + (100.0 * 5 / 10000))
+    expected_price = round(100.0 + (100.0 * 5 / 10000), 4)
+    assert round(float(order.price), 4) == expected_price
 
 
 def test_slippage_reduces_order_size(monkeypatch):

@@ -904,6 +904,34 @@ class ExecutionEngine:
             pass
         return base_bps
 
+    def _apply_slippage(
+        self,
+        order: Order,
+        delayed_price: float,
+        reference_price: float,
+        threshold_bps: float,
+    ) -> float:
+        """Validate delayed price against reference price.
+
+        Records slippage in basis points and raises ``AssertionError`` when the
+        deviation between ``delayed_price`` and ``reference_price`` exceeds
+        ``threshold_bps``.
+        """
+        try:
+            diff_bps = (
+                ((delayed_price - reference_price) / reference_price) * 10000
+                if reference_price
+                else 0.0
+            )
+        except Exception:
+            diff_bps = 0.0
+        order.slippage_bps = diff_bps
+        if abs(diff_bps) > threshold_bps:
+            raise AssertionError(
+                f"delayed price {delayed_price} deviates {diff_bps:.2f} bps from reference"
+            )
+        return delayed_price
+
     def _simulate_market_execution(self, order: Order):
         """Simulate market order execution (demo purposes)."""
         try:
@@ -925,11 +953,12 @@ class ExecutionEngine:
             except Exception:
                 expected = float(base_price)
 
-            predicted_fill = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
             base_threshold = get_env(
                 "MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float
             )
             threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
+            base_price = self._apply_slippage(order, base_price, expected, threshold)
+            predicted_fill = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
             predicted_slippage_bps = (
                 ((predicted_fill - expected) / expected) * 10000 if expected else 0.0
             )
