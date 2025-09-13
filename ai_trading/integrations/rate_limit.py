@@ -124,15 +124,7 @@ class RateLimiter:
 
     def _setup_default_routes(self) -> None:
         """Setup default rate limit configurations."""
-        default_routes = {
-            "orders": RateLimitConfig(capacity=50, refill_rate=10.0),
-            "bars": RateLimitConfig(capacity=200, refill_rate=50.0),
-            "quotes": RateLimitConfig(capacity=100, refill_rate=20.0),
-            "positions": RateLimitConfig(capacity=20, refill_rate=5.0),
-            "account": RateLimitConfig(capacity=10, refill_rate=2.0),
-        }
-        for route, config in default_routes.items():
-            self.configure_route(route, config)
+        configure_rate_limits(limiter=self)
 
     def configure_route(self, route: str, config: RateLimitConfig) -> None:
         """
@@ -324,6 +316,38 @@ class RateLimiter:
                     self._metrics[route] = {"requests": 0, "denials": 0, "wait_time_total": 0.0, "max_wait_time": 0.0}
             else:
                 self._metrics.clear()
+
+
+def configure_rate_limits(
+    *,
+    orders_capacity: int = 50,
+    orders_refill_rate: float = 10.0,
+    bars_capacity: int = 200,
+    bars_refill_rate: float = 50.0,
+    quotes_capacity: int = 100,
+    quotes_refill_rate: float = 20.0,
+    positions_capacity: int = 20,
+    positions_refill_rate: float = 5.0,
+    account_capacity: int = 10,
+    account_refill_rate: float = 2.0,
+    limiter: RateLimiter | None = None,
+) -> RateLimiter:
+    """Configure default rate limits for core routes.
+
+    Parameters may be overridden, allowing tests to customize limits.
+    """
+
+    limiter = limiter or get_rate_limiter()
+    configs = {
+        "orders": RateLimitConfig(capacity=orders_capacity, refill_rate=orders_refill_rate),
+        "bars": RateLimitConfig(capacity=bars_capacity, refill_rate=bars_refill_rate),
+        "quotes": RateLimitConfig(capacity=quotes_capacity, refill_rate=quotes_refill_rate),
+        "positions": RateLimitConfig(capacity=positions_capacity, refill_rate=positions_refill_rate),
+        "account": RateLimitConfig(capacity=account_capacity, refill_rate=account_refill_rate),
+    }
+    for route, config in configs.items():
+        limiter.configure_route(route, config)
+    return limiter
 
 
 _global_rate_limiter: RateLimiter | None = None
