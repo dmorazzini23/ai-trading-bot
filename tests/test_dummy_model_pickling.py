@@ -1,6 +1,9 @@
 """Tests for dummy model pickling functionality."""
+
 import pickle
 import sys
+
+from tests.dummy_model_util import _DummyModel, _get_model
 
 
 def test_dummy_model_function_picklable(tmp_path):
@@ -11,8 +14,8 @@ def test_dummy_model_function_picklable(tmp_path):
         pickle.dump(get_model, fh)
     with path.open("rb") as fh:
         loaded = pickle.load(fh)
-    assert callable(loaded)
-    assert loaded().__class__.__name__ == "_DummyModel"
+    assert loaded is _get_model
+    assert isinstance(loaded(), _DummyModel)
 
 
 def test_dummy_model_instance_picklable(tmp_path):
@@ -23,4 +26,5 @@ def test_dummy_model_instance_picklable(tmp_path):
         pickle.dump(model, fh)
     with path.open("rb") as fh:
         loaded = pickle.load(fh)
+    assert isinstance(loaded, _DummyModel)
     assert loaded.predict([0]) == [0]
