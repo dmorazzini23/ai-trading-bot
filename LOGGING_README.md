@@ -19,6 +19,8 @@ Startup banners and environment setup messages use emit-once logging to prevent 
 
 - "Alpaca SDK is available" (or a warning if the SDK is missing)
 - "FinBERT loaded successfully"
+- "SENTIMENT_FALLBACK_STUB" when FinBERT cannot be loaded and neutral
+  sentiment is used instead
 - Configuration verification messages
 
 #### Compact JSON Format
