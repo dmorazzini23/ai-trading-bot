@@ -770,10 +770,10 @@ exits early with a clear error message when these values are invalid.
    ENABLE_STOP_LOSS=true               # Enable stop-loss orders
 
   # Risk parameters
-  CAPITAL_CAP=0.04                    # Fraction of equity usable per cycle
+  CAPITAL_CAP=0.25                    # Fraction of equity usable per cycle
   DOLLAR_RISK_LIMIT=0.05              # Max fraction of equity at risk per position
-  MAX_POSITION_SIZE=5000              # Static USD cap per position (1-10000). Ignored when AUTO sizing is active.
-  AI_TRADING_MAX_POSITION_SIZE=5000   # Hard override; takes precedence over dynamic sizing and is required by deploy scripts
+  MAX_POSITION_SIZE=8000              # Static USD cap per position (1-10000). Ignored when AUTO sizing is active.
+  AI_TRADING_MAX_POSITION_SIZE=8000   # Hard override; takes precedence over dynamic sizing and is required by deploy scripts
   ```
 
 Repeated empty responses from Alpaca are retried up to `MAX_EMPTY_RETRIES`

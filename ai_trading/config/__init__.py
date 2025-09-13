@@ -8,6 +8,7 @@ from .locks import LockWithTimeout
 from .management import TradingConfig, derive_cap_from_settings
 from .settings import Settings, broker_keys, get_settings
 from .alpaca import AlpacaConfig, get_alpaca_config
+from .aliases import resolve_trading_mode
 from ai_trading.validation.require_env import _require_env_vars, require_env_vars
 logger = get_logger(__name__)
 _LOCK_TIMEOUT = 30
@@ -57,21 +58,27 @@ MODE_PRESETS = {
     "conservative": {
         "kelly_fraction": 0.25,
         "conf_threshold": 0.85,
+        "daily_loss_limit": 0.03,
+        "capital_cap": 0.20,
         "max_position_size": 5000.0,
     },
     "balanced": {
         "kelly_fraction": 0.6,
         "conf_threshold": 0.75,
+        "daily_loss_limit": 0.05,
+        "capital_cap": 0.25,
         "max_position_size": 8000.0,
     },
     "aggressive": {
         "kelly_fraction": 0.75,
         "conf_threshold": 0.65,
+        "daily_loss_limit": 0.08,
+        "capital_cap": 0.30,
         "max_position_size": 12000.0,
     },
 }
 
-TRADING_MODE = os.getenv("TRADING_MODE", "balanced").lower()
+TRADING_MODE = resolve_trading_mode("balanced").lower()
 if TRADING_MODE not in MODE_PRESETS:
     raise RuntimeError(f"Invalid TRADING_MODE: {TRADING_MODE}")
 
@@ -81,6 +88,10 @@ CONF_THRESHOLD = _optional_float_env("CONF_THRESHOLD", _mode_defaults["conf_thre
 MAX_POSITION_SIZE = _optional_float_env(
     "MAX_POSITION_SIZE", _mode_defaults["max_position_size"]
 )
+DAILY_LOSS_LIMIT = _optional_float_env(
+    "DAILY_LOSS_LIMIT", _mode_defaults["daily_loss_limit"]
+)
+CAPITAL_CAP = _optional_float_env("CAPITAL_CAP", _mode_defaults["capital_cap"])
 
 MODE_PARAMETERS = {k: v["conf_threshold"] for k, v in MODE_PRESETS.items()}
 SENTIMENT_API_KEY = os.getenv('SENTIMENT_API_KEY')
@@ -178,4 +189,4 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
             if key in conf:
                 conf[key] = '***'
     return conf
-__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PRESETS', 'TRADING_MODE', 'KELLY_FRACTION', 'CONF_THRESHOLD', 'MAX_POSITION_SIZE', 'MODE_PARAMETERS', 'SENTIMENT_API_KEY', 'SENTIMENT_API_URL', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']
+__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PRESETS', 'TRADING_MODE', 'KELLY_FRACTION', 'CONF_THRESHOLD', 'MAX_POSITION_SIZE', 'DAILY_LOSS_LIMIT', 'CAPITAL_CAP', 'MODE_PARAMETERS', 'SENTIMENT_API_KEY', 'SENTIMENT_API_URL', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']

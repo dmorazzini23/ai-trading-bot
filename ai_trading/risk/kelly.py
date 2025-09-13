@@ -38,8 +38,8 @@ def get_default_config() -> TradingConfig:
             max_drawdown_threshold=None,
             buy_threshold=0.4,
             conf_threshold=0.8,
-            daily_loss_limit=0.03,
-            capital_cap=0.04,
+            daily_loss_limit=0.05,
+            capital_cap=0.25,
             dollar_risk_limit=0.05,
             paper=True,
         )

@@ -297,8 +297,8 @@ class TradingConfig:
         # Normalize defaults without impacting production behavior.
         # When TESTING=1 (as set by unit tests), provide test-friendly defaults
         # expected by the contract; otherwise keep runtime defaults lean.
-        if capital := getattr(self, "capital_cap") is None:
-            object.__setattr__(self, "capital_cap", 0.25 if TESTING else 0.04)
+        if (capital := getattr(self, "capital_cap")) is None:
+            object.__setattr__(self, "capital_cap", 0.25)
         if mps := getattr(self, "max_position_size") is None:
             object.__setattr__(self, "max_position_size", 8000.0)
         if TESTING and getattr(self, "kelly_fraction") is None:
@@ -391,6 +391,10 @@ class TradingConfig:
             env_map = {k.upper(): v for k, v in (env_or_mode or os.environ).items()}
             mode = env_map.get("TRADING_MODE", "").strip().lower() or None
 
+        from .aliases import resolve_trading_mode
+
+        mode = resolve_trading_mode(mode or "balanced").lower()
+
         def _get(
             key: str,
             cast: Callable[[str], Any] | type = str,
@@ -432,7 +436,7 @@ class TradingConfig:
                 ) from exc
 
         cfg = cls(
-            capital_cap=_get("CAPITAL_CAP", float, default=0.04),
+            capital_cap=_get("CAPITAL_CAP", float, default=0.25),
             dollar_risk_limit=_get(
                 "DOLLAR_RISK_LIMIT",
                 float,
@@ -526,8 +530,8 @@ class TradingConfig:
                 "balanced": dict(
                     kelly_fraction=0.6,
                     conf_threshold=0.75,
-                    daily_loss_limit=0.03,
-                    capital_cap=0.04,
+                    daily_loss_limit=0.05,
+                    capital_cap=0.25,
                     signal_confirmation_bars=2,
                     take_profit_factor=1.8,
                     max_position_size=8000.0,
@@ -536,7 +540,7 @@ class TradingConfig:
                     kelly_fraction=0.25,
                     conf_threshold=0.85,
                     daily_loss_limit=0.03,
-                    capital_cap=0.04,
+                    capital_cap=0.20,
                     signal_confirmation_bars=3,
                     take_profit_factor=1.5,
                     max_position_size=5000.0,
@@ -544,8 +548,8 @@ class TradingConfig:
                 "aggressive": dict(
                     kelly_fraction=0.75,
                     conf_threshold=0.65,
-                    daily_loss_limit=0.03,
-                    capital_cap=0.04,
+                    daily_loss_limit=0.08,
+                    capital_cap=0.30,
                     signal_confirmation_bars=1,
                     take_profit_factor=2.5,
                     max_position_size=12000.0,

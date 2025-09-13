@@ -28,8 +28,8 @@ class TestCentralizedConfig:
 
         # Test default values are set
         assert config.kelly_fraction == 0.6
-        assert config.daily_loss_limit == 0.03
-        assert config.capital_cap == 0.04
+        assert config.daily_loss_limit == 0.05
+        assert config.capital_cap == 0.25
         assert config.max_position_size == 8000
 
     def test_trading_config_from_env(self):
@@ -80,7 +80,7 @@ class TestCentralizedConfig:
         assert config.kelly_fraction == 0.25
         assert config.conf_threshold == 0.85
         assert config.daily_loss_limit == 0.03
-        assert config.capital_cap == 0.04
+        assert config.capital_cap == 0.20
         assert config.confirmation_count == 3
         assert config.take_profit_factor == 1.5
         assert config.max_position_size == 5000
@@ -92,8 +92,8 @@ class TestCentralizedConfig:
 
         assert config.kelly_fraction == 0.6
         assert config.conf_threshold == 0.75
-        assert config.daily_loss_limit == 0.03
-        assert config.capital_cap == 0.04
+        assert config.daily_loss_limit == 0.05
+        assert config.capital_cap == 0.25
         assert config.confirmation_count == 2
         assert config.take_profit_factor == 1.8
         assert config.max_position_size == 8000
@@ -105,8 +105,8 @@ class TestCentralizedConfig:
 
         assert config.kelly_fraction == 0.75
         assert config.conf_threshold == 0.65
-        assert config.daily_loss_limit == 0.03
-        assert config.capital_cap == 0.04
+        assert config.daily_loss_limit == 0.08
+        assert config.capital_cap == 0.30
         assert config.confirmation_count == 1
         assert config.take_profit_factor == 2.5
         assert config.max_position_size == 12000

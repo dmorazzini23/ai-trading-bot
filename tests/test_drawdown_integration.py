@@ -93,12 +93,12 @@ class TestDrawdownIntegration(unittest.TestCase):
     def test_configuration_values(self):
         """Test that configuration values are correctly set."""
         self.assertEqual(get_max_drawdown_threshold(), 0.15)
-        self.assertEqual(get_daily_loss_limit(), 0.03)
+        self.assertEqual(get_daily_loss_limit(), 0.05)
 
         # Test TradingConfig
         tc = TradingConfig.from_env()
         self.assertEqual(tc.max_drawdown_threshold, 0.15)
-        self.assertEqual(tc.daily_loss_limit, 0.03)
+        self.assertEqual(tc.daily_loss_limit, 0.05)
 
     @patch('ai_trading.core.bot_engine.ctx')
     def test_bot_context_integration(self, mock_ctx):
