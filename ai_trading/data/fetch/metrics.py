@@ -8,6 +8,7 @@ from ai_trading.data.metrics import (
     backup_provider_used as _backup_provider_used_counter,
     metrics as _metrics,
     provider_disable_total as _provider_disable_total_counter,
+    provider_disabled as _provider_disabled_gauge,
     provider_fallback as _provider_fallback_counter,
 )
 
@@ -20,6 +21,14 @@ _UNAUTH_SIP: Counter[str] = Counter()
 _EMPTY: Counter[tuple[str, str]] = Counter()
 _FETCH_ATTEMPTS: Counter[str] = Counter()
 _ALPACA_FAILED: int = 0
+
+# Module-level gauges mirroring ``ai_trading.data.metrics.metrics`` values.
+rate_limit: int = 0
+timeout: int = 0
+unauthorized: int = 0
+empty_payload: int = 0
+feed_switch: int = 0
+empty_fallback: int = 0
 
 _SKIPPED_LOCK = Lock()
 _RATE_LIMIT_LOCK = Lock()
@@ -42,6 +51,8 @@ def inc_rate_limit(host: str) -> int:
     """Increment rate-limit counter for ``host`` and return the total."""
     with _RATE_LIMIT_LOCK:
         _RATE_LIMITS[host] += 1
+        global rate_limit
+        rate_limit += 1
         _metrics.rate_limit += 1
         return _RATE_LIMITS[host]
 
@@ -50,6 +61,8 @@ def inc_timeout(host: str) -> int:
     """Increment timeout counter for ``host`` and return the total."""
     with _TIMEOUT_LOCK:
         _TIMEOUTS[host] += 1
+        global timeout
+        timeout += 1
         _metrics.timeout += 1
         return _TIMEOUTS[host]
 
@@ -58,6 +71,8 @@ def inc_unauthorized_sip(host: str) -> int:
     """Increment unauthorized SIP counter for ``host`` and return the total."""
     with _UNAUTH_LOCK:
         _UNAUTH_SIP[host] += 1
+        global unauthorized
+        unauthorized += 1
         _metrics.unauthorized += 1
         return _UNAUTH_SIP[host]
 
@@ -67,6 +82,8 @@ def inc_empty_payload(symbol: str, timeframe: str) -> int:
     key = (symbol, timeframe)
     with _EMPTY_LOCK:
         _EMPTY[key] += 1
+        global empty_payload
+        empty_payload += 1
         _metrics.empty_payload += 1
         return _EMPTY[key]
 
@@ -99,6 +116,11 @@ def _current_value(metric: object) -> int:
 
 def inc_provider_fallback(from_provider: str, to_provider: str) -> int:
     """Increment fallback counter and return the current value."""
+    global feed_switch, empty_fallback
+    feed_switch += 1
+    empty_fallback += 1
+    _metrics.feed_switch += 1
+    _metrics.empty_fallback += 1
     metric = _provider_fallback_counter.labels(
         from_provider=from_provider, to_provider=to_provider
     )
@@ -117,6 +139,12 @@ def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
     metric = _provider_disable_total_counter.labels(provider=provider)
     metric.inc()
+    return _current_value(metric)
+
+
+def provider_disabled(provider: str) -> int:
+    """Return the current disabled gauge value for ``provider``."""
+    metric = _provider_disabled_gauge.labels(provider=provider)
     return _current_value(metric)
 
 
@@ -142,6 +170,13 @@ def reset() -> None:
     _FETCH_ATTEMPTS.clear()
     global _ALPACA_FAILED
     _ALPACA_FAILED = 0
+    global rate_limit, timeout, unauthorized, empty_payload, feed_switch, empty_fallback
+    rate_limit = 0
+    timeout = 0
+    unauthorized = 0
+    empty_payload = 0
+    feed_switch = 0
+    empty_fallback = 0
     _metrics.rate_limit = 0
     _metrics.timeout = 0
     _metrics.unauthorized = 0
@@ -159,8 +194,15 @@ __all__ = [
     "inc_provider_fallback",
     "inc_backup_provider_used",
     "inc_provider_disable_total",
+    "provider_disabled",
     "snapshot",
     "reset",
+    "rate_limit",
+    "timeout",
+    "unauthorized",
+    "empty_payload",
+    "feed_switch",
+    "empty_fallback",
     "_SKIPPED_SYMBOLS",
     "_RATE_LIMITS",
     "_TIMEOUTS",
