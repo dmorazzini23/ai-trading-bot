@@ -12871,7 +12871,14 @@ def _prepare_run(
         raise DataFetchError("api error during pre-run") from e
     try:
         acct = safe_alpaca_get_account(runtime)
-        equity = float(acct.equity) if acct else 0.0
+        if acct:
+            current_cash = float(
+                getattr(acct, "buying_power", getattr(acct, "cash", 0.0))
+            )
+            equity = float(getattr(acct, "equity", current_cash))
+        else:
+            current_cash = 0.0
+            equity = 0.0
     except (
         APIError,
         TimeoutError,
@@ -12881,6 +12888,7 @@ def _prepare_run(
             "ACCOUNT_INFO_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
+        current_cash = 0.0
         equity = 0.0
     update_if_present(runtime, equity)
     params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.25)
@@ -12891,7 +12899,7 @@ def _prepare_run(
         pretrade_data_health(runtime, full_watchlist)
     except DataFetchError:
         time.sleep(1.0)
-        return 0.0, False, []
+        return current_cash, False, []
     symbols = screen_candidates(runtime, full_watchlist)
     logger.info(
         "Number of screened candidates: %s", len(symbols)
@@ -12921,17 +12929,19 @@ def _prepare_run(
             "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
-        return 0.0, False, []
+        return current_cash, False, []
     with portfolio_lock:
         runtime.portfolio_weights = portfolio.compute_portfolio_weights(
             runtime, symbols
         )
     acct = safe_alpaca_get_account(runtime)
     if acct:
-        current_cash = float(getattr(acct, "buying_power", acct.cash))
+        current_cash = float(
+            getattr(acct, "buying_power", getattr(acct, "cash", 0.0))
+        )
     else:
         logger.error("Failed to get account information from Alpaca")
-        return 0.0, False, []
+        return current_cash, False, []
     regime_ok = check_market_regime(
         runtime, state
     )  # AI-AGENT-REF: runtime flows into regime check
