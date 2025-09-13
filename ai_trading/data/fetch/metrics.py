@@ -1,7 +1,8 @@
 """Lightweight in-memory counters for data-fetch operations."""
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter
+from threading import Lock
 
 from ai_trading.data.metrics import (
     backup_provider_used as _backup_provider_used_counter,
@@ -10,32 +11,75 @@ from ai_trading.data.metrics import (
     provider_fallback as _provider_fallback_counter,
 )
 
-_SKIPPED_SYMBOLS: dict[tuple[str, str], int] = {}
-_RATE_LIMITS = defaultdict(int)
-_TIMEOUTS = defaultdict(int)
-_UNAUTH_SIP = defaultdict(int)
-_EMPTY = defaultdict(int)
+# In-memory counters.  We use ``Counter`` for automatic zero initialization and
+# guard updates with simple locks to ensure thread safety.
+_SKIPPED_SYMBOLS: Counter[tuple[str, str]] = Counter()
+_RATE_LIMITS: Counter[str] = Counter()
+_TIMEOUTS: Counter[str] = Counter()
+_UNAUTH_SIP: Counter[str] = Counter()
+_EMPTY: Counter[tuple[str, str]] = Counter()
+_FETCH_ATTEMPTS: Counter[str] = Counter()
+_ALPACA_FAILED: int = 0
+
+_SKIPPED_LOCK = Lock()
+_RATE_LIMIT_LOCK = Lock()
+_TIMEOUT_LOCK = Lock()
+_UNAUTH_LOCK = Lock()
+_EMPTY_LOCK = Lock()
+_FETCH_ATTEMPT_LOCK = Lock()
+_ALPACA_FAILED_LOCK = Lock()
 
 
-def mark_skipped(symbol: str, timeframe: str) -> None:
+def mark_skipped(symbol: str, timeframe: str) -> int:
+    """Record that ``symbol``/``timeframe`` was skipped and return the count."""
     key = (symbol, timeframe)
-    _SKIPPED_SYMBOLS[key] = _SKIPPED_SYMBOLS.get(key, 0) + 1
+    with _SKIPPED_LOCK:
+        _SKIPPED_SYMBOLS[key] += 1
+        return _SKIPPED_SYMBOLS[key]
 
 
-def rate_limit(host: str) -> None:
-    _RATE_LIMITS[host] += 1
+def rate_limit(host: str) -> int:
+    """Increment rate-limit counter for ``host`` and return the total."""
+    with _RATE_LIMIT_LOCK:
+        _RATE_LIMITS[host] += 1
+        return _RATE_LIMITS[host]
 
 
-def timeout(host: str) -> None:
-    _TIMEOUTS[host] += 1
+def timeout(host: str) -> int:
+    """Increment timeout counter for ``host`` and return the total."""
+    with _TIMEOUT_LOCK:
+        _TIMEOUTS[host] += 1
+        return _TIMEOUTS[host]
 
 
-def unauthorized_sip(host: str) -> None:
-    _UNAUTH_SIP[host] += 1
+def unauthorized_sip(host: str) -> int:
+    """Increment unauthorized SIP counter for ``host`` and return the total."""
+    with _UNAUTH_LOCK:
+        _UNAUTH_SIP[host] += 1
+        return _UNAUTH_SIP[host]
 
 
-def empty_payload(symbol: str, timeframe: str) -> None:
-    _EMPTY[(symbol, timeframe)] += 1
+def empty_payload(symbol: str, timeframe: str) -> int:
+    """Increment empty-payload counter for ``symbol``/``timeframe``."""
+    key = (symbol, timeframe)
+    with _EMPTY_LOCK:
+        _EMPTY[key] += 1
+        return _EMPTY[key]
+
+
+def fetch_attempt(provider: str) -> int:
+    """Record a fetch attempt for ``provider`` and return the running total."""
+    with _FETCH_ATTEMPT_LOCK:
+        _FETCH_ATTEMPTS[provider] += 1
+        return _FETCH_ATTEMPTS[provider]
+
+
+def alpaca_failed() -> int:
+    """Increment and return the Alpaca failure count."""
+    global _ALPACA_FAILED
+    with _ALPACA_FAILED_LOCK:
+        _ALPACA_FAILED += 1
+        return _ALPACA_FAILED
 
 
 def _current_value(metric: object) -> int:
@@ -108,5 +152,9 @@ __all__ = [
     "_TIMEOUTS",
     "_UNAUTH_SIP",
     "_EMPTY",
+    "_FETCH_ATTEMPTS",
+    "_ALPACA_FAILED",
+    "fetch_attempt",
+    "alpaca_failed",
 ]
 
