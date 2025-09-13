@@ -226,21 +226,20 @@ def get_stock_bars_request_cls():
 
 
 def get_timeframe_cls():
-    if ALPACA_AVAILABLE:
-        _, cls, unit_cls = _data_classes()
+    """Return the package-level :class:`TimeFrame` wrapper.
 
-        class _TF(cls):  # type: ignore[misc]
-            def __init__(self, amount: int = 1, unit=unit_cls.Day):  # type: ignore[assignment]
-                super().__init__(amount, unit)
+    The wrapper guarantees that ``TimeFrame()`` defaults to ``1 Day`` and that
+    ``amount`` and ``unit`` attributes are always present.
+    """
+    from .timeframe import TimeFrame
 
-        return _TF
     return TimeFrame
 
 
 def get_timeframe_unit_cls():
-    if ALPACA_AVAILABLE:
-        _, _, cls = _data_classes()
-        return cls
+    """Return the package-level ``TimeFrameUnit`` enum."""
+    from .timeframe import TimeFrameUnit
+
     return TimeFrameUnit
 
 
