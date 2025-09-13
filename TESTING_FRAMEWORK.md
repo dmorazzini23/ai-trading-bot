@@ -132,7 +132,7 @@ skipped.
 | Reinforcement learning | `stable_baselines3`, `gymnasium`, `torch` | `tests/test_rl_import_performance.py` |
 | Alpaca SDK | `alpaca-py`, `alpaca_api` | `tests/unit/test_alpaca_api.py` |
 | Retry utilities | optional `tenacity` via `ai_trading.utils.retry` | `tests/test_tenacity_import.py` |
-| Calendars | `pandas_market_calendars` | `tests/test_market_calendar_wrapper.py` |
+| Calendars | `trading_calendars` | `tests/test_market_calendar_wrapper.py` |
 
 ## Unit Testing
 
