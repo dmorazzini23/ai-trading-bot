@@ -11115,10 +11115,13 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     """
 
     if frame is None or frame.empty:
-        return pd.DataFrame()
-    for col in ("close", "high", "low"):
-        if col not in frame:
-            return pd.DataFrame()
+        logger.warning("Input dataframe is None or empty in prepare_indicators.")
+        raise RuntimeError("Input dataframe is empty")
+    required_cols = ("close", "high", "low")
+    missing = [col for col in required_cols if col not in frame]
+    if missing:
+        logger.warning("Missing required columns in prepare_indicators: %s", missing)
+        raise KeyError(f"Missing required columns: {', '.join(missing)}")
 
     close = frame["close"].astype(float)
     hl = frame[["high", "low"]].astype(float)
@@ -11152,8 +11155,12 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         rsi_bounds["max"] - rsi_bounds["min"]
     )
 
-    required = ["ichimoku_conv", "ichimoku_base", "stochrsi"]
-    frame.dropna(subset=required, inplace=True)
+    frame.dropna(inplace=True)
+    if frame.empty:
+        logger.warning(
+            "prepare_indicators produced empty dataframe after dropping NaNs.",
+        )
+        raise RuntimeError("No data available after indicator computation")
     return frame
 
 
