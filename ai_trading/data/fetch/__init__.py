@@ -1049,19 +1049,20 @@ def _fetch_bars(
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
-        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
-            logger.warning(
-                "SIP_FEED_DISABLED",
-                extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
-            )
-            _SIP_DISALLOWED_WARNED = True
-        _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
-        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
-        fb_int = interval_map.get(_interval)
-        if fb_int:
-            _mark_fallback(symbol, _interval, _start, _end)
-            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
-        return pd.DataFrame()
+        if not _ALLOW_SIP:
+            if not _SIP_DISALLOWED_WARNED:
+                logger.warning(
+                    "SIP_FEED_DISABLED",
+                    extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
+                )
+                _SIP_DISALLOWED_WARNED = True
+            _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
+            interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+            fb_int = interval_map.get(_interval)
+            if fb_int:
+                _mark_fallback(symbol, _interval, _start, _end)
+                return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            return pd.DataFrame()
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -1100,7 +1101,7 @@ def _fetch_bars(
         timeout: float | tuple[float, float],
     ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
-        global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count
+        global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count, _ALPACA_DISABLED_ALERTED
         _state["providers"].append(_feed)
 
         def _attempt_fallback(
@@ -1142,10 +1143,10 @@ def _fetch_bars(
             "adjustment": adjustment,
         }
         url = "https://data.alpaca.markets/v2/stocks/bars"
-        # Prefer an instance-level patched session.get when present (tests),
-        # otherwise route through the module-level `requests.get` so tests that
-        # monkeypatch `df.requests.get` can intercept deterministically.
-        use_session_get = hasattr(session, "__dict__") and ("get" in getattr(session, "__dict__", {}))
+        # Prefer an instance-level patched ``session.get`` when present (tests);
+        # otherwise route through the module-level ``requests.get`` so tests
+        # that monkeypatch ``df.requests.get`` can intercept deterministically.
+        use_session_get = hasattr(session, "get")
         prev_corr = _state.get("corr_id")
         try:
             if use_session_get:
@@ -1163,6 +1164,8 @@ def _fetch_bars(
                 or resp.headers.get("x-correlation-id")
             )
             _state["corr_id"] = corr_id
+            if status < 400:
+                _ALPACA_DISABLED_ALERTED = False
         except Timeout as e:
             log_extra = {
                 "url": url,
