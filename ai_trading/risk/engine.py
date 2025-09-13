@@ -168,12 +168,14 @@ class RiskEngine:
                 get_bars = getattr(client, 'get_bars', None)
                 if callable(get_bars):
                     bars = get_bars(symbol, lookback + 10)
-                    if len(bars) >= lookback + 1:
+                    if not bars:
+                        logger.warning('missing get_bars for %s', symbol)
+                    elif len(bars) >= lookback + 1:
                         high = np.array([b.h for b in bars])
                         low = np.array([b.l for b in bars])
                         close = np.array([b.c for b in bars])
                 else:
-                    logger.info('Data client missing get_bars; attempting to use context data for %s', symbol)
+                    logger.warning('missing get_bars for %s', symbol)
             else:
                 logger.warning('No data client available; attempting to use context data for %s', symbol)
             if any(x is None for x in (high, low, close)):
