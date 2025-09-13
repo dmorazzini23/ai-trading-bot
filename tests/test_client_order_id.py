@@ -1,4 +1,5 @@
 import types
+import pytest
 
 from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
 
@@ -8,16 +9,21 @@ class DummyAPI:
         self.ids: list[str] = []
 
     def submit_order(self, **order_data):
-        self.ids.append(order_data["client_order_id"])
-        return types.SimpleNamespace(id=len(self.ids), **order_data)
+        return types.SimpleNamespace(id=len(self.ids) + 1, **order_data)
 
 
 def make_req(symbol="AAPL"):
     return types.SimpleNamespace(symbol=symbol, qty=1, side="buy", time_in_force="day")
 
 
-def test_unique_client_order_id():
+@pytest.fixture
+def api():
     api = DummyAPI()
+    yield api
+    api.ids.clear()
+
+
+def test_unique_client_order_id(api):
     req1 = make_req()
     req2 = make_req()
     alpaca_api.submit_order(
