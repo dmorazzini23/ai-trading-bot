@@ -364,3 +364,20 @@ class ProductionExecutionCoordinator:
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'cancel', 'order_id': order_id})
             raise
+
+
+async def run(
+    account_equity: float = 100_000.0,
+    risk_level: RiskLevel = RiskLevel.MODERATE,
+) -> "ProductionExecutionCoordinator":
+    """Create and return a :class:`ProductionExecutionCoordinator` instance.
+
+    The coroutine performs a tiny ``await`` so callers can drive it using
+    :func:`asyncio.run` or ``await`` the result in tests without triggering
+    "coroutine was never awaited" warnings.
+    """
+    await asyncio.sleep(0)
+    return ProductionExecutionCoordinator(account_equity, risk_level)
+
+
+__all__ = ["ProductionExecutionCoordinator", "run"]

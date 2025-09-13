@@ -9,7 +9,10 @@ import asyncio
 
 try:
     from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
-    from ai_trading.execution.production_engine import ProductionExecutionCoordinator
+    from ai_trading.execution.production_engine import (
+        ProductionExecutionCoordinator,
+        run,
+    )
     from ai_trading.monitoring.alerting import AlertManager, AlertSeverity
     from ai_trading.risk.circuit_breakers import (
         DrawdownCircuitBreaker,
@@ -176,13 +179,15 @@ async def test_production_execution_coordinator():
         from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
         from ai_trading.execution.production_engine import (
             ProductionExecutionCoordinator,
+            run,
         )
 
-        # Initialize coordinator
-        coordinator = ProductionExecutionCoordinator(
+        # Initialize coordinator via async run helper
+        coordinator = await run(
             account_equity=100000,
-            risk_level=RiskLevel.MODERATE
+            risk_level=RiskLevel.MODERATE,
         )
+        assert isinstance(coordinator, ProductionExecutionCoordinator)
 
         # Test order submission
         result = await coordinator.submit_order(
