@@ -17,7 +17,7 @@ def test_trading_client_api_key_only(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.delenv("ALPACA_OAUTH", raising=False)
-    monkeypatch.setattr("ai_trading.risk.engine.TradingClient", Dummy)
+    monkeypatch.setattr("ai_trading.risk.engine.StockHistoricalDataClient", Dummy)
     get_settings.cache_clear()
 
     RiskEngine()
@@ -38,7 +38,7 @@ def test_trading_client_oauth_only(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     monkeypatch.setenv("ALPACA_OAUTH", "tok")
-    monkeypatch.setattr("ai_trading.risk.engine.TradingClient", Dummy)
+    monkeypatch.setattr("ai_trading.risk.engine.StockHistoricalDataClient", Dummy)
     get_settings.cache_clear()
 
     RiskEngine()
