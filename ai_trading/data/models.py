@@ -31,6 +31,8 @@ try:  # best-effort: some SDK versions already provide these
             setattr(TimeFrame, "Minute", TimeFrame(1, getattr(unit_cls, "Minute", "Minute")))  # type: ignore[arg-type]
         if not hasattr(TimeFrame, "Hour"):
             setattr(TimeFrame, "Hour", TimeFrame(1, getattr(unit_cls, "Hour", "Hour")))  # type: ignore[arg-type]
+        if not hasattr(TimeFrame, "Week"):
+            setattr(TimeFrame, "Week", TimeFrame(1, getattr(unit_cls, "Week", "Week")))  # type: ignore[arg-type]
 except Exception:
     pass
 _BaseStockBarsRequest = get_stock_bars_request_cls()
