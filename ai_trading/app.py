@@ -12,6 +12,12 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
 
 _log = get_logger(__name__)
 
+try:  # optional metrics exposure
+    from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK, REGISTRY as _PROM_REG
+except ImportError:
+    _PROM_OK, _PROM_REG = False, None
+    _log.warning("Optional feature 'metrics' disabled: missing dependencies")
+
 
 def create_app():
     """Create and configure the Flask application."""
@@ -91,14 +97,10 @@ def create_app():
     @app.route('/metrics')
     def metrics():
         """Expose Prometheus metrics if available."""
-        try:
-            from ai_trading.metrics import PROMETHEUS_AVAILABLE, REGISTRY
-        except ImportError:
-            PROMETHEUS_AVAILABLE, REGISTRY = False, None
-        if not PROMETHEUS_AVAILABLE:
+        if not _PROM_OK:
             return ('metrics unavailable', 501)
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-        return generate_latest(REGISTRY), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+        return generate_latest(_PROM_REG), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
     return app
 
@@ -117,6 +119,7 @@ def get_test_client():
         try:
             flask_testing = import_module("flask.testing")
         except ImportError:
+            _log.warning("Optional feature 'flask.testing' disabled: missing dependencies")
             return None
 
     app = create_app()

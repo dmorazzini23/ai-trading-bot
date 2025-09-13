@@ -349,8 +349,6 @@ __all__ = [
     "_alpaca_available",
     "FINNHUB_AVAILABLE",
     "DataFetchError",
-    "MockSignal",
-    "MockContext",
     "StockHistoricalDataClient",
     "prediction_executor",
     "ctx",
@@ -370,20 +368,6 @@ COMMON_EXC = COMMON_EXC + (DataFetchError,)  # AI-AGENT-REF: broaden common exce
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
-
-
-class MockSignal:
-    """Simple signal container for tests."""  # AI-AGENT-REF
-
-    def __init__(self, score: float):
-        self.score = score
-
-
-class MockContext:
-    """Lightweight context object for tests."""  # AI-AGENT-REF
-
-    def __init__(self, **kw):
-        self.__dict__.update(kw)
 
 
 def pretrade_data_health(runtime, universe) -> None:  # AI-AGENT-REF: data gate

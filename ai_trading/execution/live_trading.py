@@ -79,8 +79,8 @@ class AlpacaExecutionEngine:
             import os
             if os.environ.get('PYTEST_RUNNING'):
                 try:
-                    from ai_trading.execution.mocks import MockTradingClient
-                except (ValueError, TypeError):
+                    from tests.support.mocks import MockTradingClient  # type: ignore
+                except (ModuleNotFoundError, ImportError, ValueError, TypeError):
                     MockTradingClient = None
                 if MockTradingClient:
                     self.trading_client = MockTradingClient(paper=True)
