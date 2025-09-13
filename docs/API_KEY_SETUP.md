@@ -21,6 +21,11 @@ This trading bot requires API keys from Alpaca Markets to function. This guide e
 - `WEBHOOK_SECRET`: Secret for webhook authentication
 - Alternatively, set `ALPACA_OAUTH` with an OAuth token instead of the API key and secret. **Do not** set both.
 
+> **Note:** The configuration loader trims surrounding whitespace and
+> normalizes common environment prefixes (e.g. `DEV_ALPACA_API_KEY`) to
+> their standard names, so you can keep environment-specific variables
+> without additional code changes.
+
 ### Optional
 - `FINNHUB_API_KEY`: For additional market data
 - `NEWS_API_KEY`: For news sentiment analysis
