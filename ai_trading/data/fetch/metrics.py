@@ -38,7 +38,7 @@ def mark_skipped(symbol: str, timeframe: str) -> int:
         return _SKIPPED_SYMBOLS[key]
 
 
-def rate_limit(host: str) -> int:
+def inc_rate_limit(host: str) -> int:
     """Increment rate-limit counter for ``host`` and return the total."""
     with _RATE_LIMIT_LOCK:
         _RATE_LIMITS[host] += 1
@@ -46,7 +46,7 @@ def rate_limit(host: str) -> int:
         return _RATE_LIMITS[host]
 
 
-def timeout(host: str) -> int:
+def inc_timeout(host: str) -> int:
     """Increment timeout counter for ``host`` and return the total."""
     with _TIMEOUT_LOCK:
         _TIMEOUTS[host] += 1
@@ -54,7 +54,7 @@ def timeout(host: str) -> int:
         return _TIMEOUTS[host]
 
 
-def unauthorized_sip(host: str) -> int:
+def inc_unauthorized_sip(host: str) -> int:
     """Increment unauthorized SIP counter for ``host`` and return the total."""
     with _UNAUTH_LOCK:
         _UNAUTH_SIP[host] += 1
@@ -62,7 +62,7 @@ def unauthorized_sip(host: str) -> int:
         return _UNAUTH_SIP[host]
 
 
-def empty_payload(symbol: str, timeframe: str) -> int:
+def inc_empty_payload(symbol: str, timeframe: str) -> int:
     """Increment empty-payload counter for ``symbol``/``timeframe``."""
     key = (symbol, timeframe)
     with _EMPTY_LOCK:
@@ -71,14 +71,14 @@ def empty_payload(symbol: str, timeframe: str) -> int:
         return _EMPTY[key]
 
 
-def fetch_attempt(provider: str) -> int:
+def inc_fetch_attempt(provider: str) -> int:
     """Record a fetch attempt for ``provider`` and return the running total."""
     with _FETCH_ATTEMPT_LOCK:
         _FETCH_ATTEMPTS[provider] += 1
         return _FETCH_ATTEMPTS[provider]
 
 
-def alpaca_failed() -> int:
+def inc_alpaca_failed() -> int:
     """Increment and return the Alpaca failure count."""
     global _ALPACA_FAILED
     with _ALPACA_FAILED_LOCK:
@@ -97,7 +97,7 @@ def _current_value(metric: object) -> int:
         return 0
 
 
-def provider_fallback(from_provider: str, to_provider: str) -> int:
+def inc_provider_fallback(from_provider: str, to_provider: str) -> int:
     """Increment fallback counter and return the current value."""
     metric = _provider_fallback_counter.labels(
         from_provider=from_provider, to_provider=to_provider
@@ -106,14 +106,14 @@ def provider_fallback(from_provider: str, to_provider: str) -> int:
     return _current_value(metric)
 
 
-def backup_provider_used(provider: str, symbol: str) -> int:
+def inc_backup_provider_used(provider: str, symbol: str) -> int:
     """Increment backup-provider counter and return the current value."""
     metric = _backup_provider_used_counter.labels(provider=provider, symbol=symbol)
     metric.inc()
     return _current_value(metric)
 
 
-def provider_disable_total(provider: str) -> int:
+def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
     metric = _provider_disable_total_counter.labels(provider=provider)
     metric.inc()
@@ -152,13 +152,13 @@ def reset() -> None:
 
 __all__ = [
     "mark_skipped",
-    "rate_limit",
-    "timeout",
-    "unauthorized_sip",
-    "empty_payload",
-    "provider_fallback",
-    "backup_provider_used",
-    "provider_disable_total",
+    "inc_rate_limit",
+    "inc_timeout",
+    "inc_unauthorized_sip",
+    "inc_empty_payload",
+    "inc_provider_fallback",
+    "inc_backup_provider_used",
+    "inc_provider_disable_total",
     "snapshot",
     "reset",
     "_SKIPPED_SYMBOLS",
@@ -168,7 +168,7 @@ __all__ = [
     "_EMPTY",
     "_FETCH_ATTEMPTS",
     "_ALPACA_FAILED",
-    "fetch_attempt",
-    "alpaca_failed",
+    "inc_fetch_attempt",
+    "inc_alpaca_failed",
 ]
 

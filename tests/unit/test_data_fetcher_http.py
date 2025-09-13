@@ -247,7 +247,7 @@ def test_rate_limit_backoff(monkeypatch: pytest.MonkeyPatch):
 
 def test_rate_limit_disable_and_recover(monkeypatch: pytest.MonkeyPatch):
     from ai_trading.data.fetch.metrics import (
-        provider_disable_total,
+        inc_provider_disable_total,
         provider_disabled,
     )
     from ai_trading.config import settings as config_settings
@@ -284,12 +284,12 @@ def test_rate_limit_disable_and_recover(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(df._HTTP_SESSION, "get", rate_limit_resp)
     monkeypatch.setattr(df, "_backup_get_bars", backup_resp)
     start, end = _dt_range(2)
-    before = provider_disable_total("alpaca")
+    before = inc_provider_disable_total("alpaca")
     out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
     assert calls["alpaca"] == 1
     assert calls["backup"] == 1
     assert provider_disabled("alpaca") == 1
-    assert provider_disable_total("alpaca") == before + 1
+    assert inc_provider_disable_total("alpaca") == before + 1
     assert isinstance(out, pd.DataFrame) and not out.empty
     assert df._alpaca_disabled_until is not None
 
