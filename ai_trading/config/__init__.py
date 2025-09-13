@@ -23,13 +23,19 @@ ORDER_STALE_CLEANUP_INTERVAL = 60
 ORDER_FILL_RATE_TARGET = 0.8
 
 
+def _parse_float_env(val: str) -> float:
+    """Parse a float environment value, ignoring inline comments."""
+    token = val.split("#", 1)[0].strip()
+    return float(token)
+
+
 def _require_float_env(name: str) -> float:
     """Fetch a required environment variable and convert to float."""
     val = os.getenv(name)
     if val is None or val == "":
         raise RuntimeError(f"Missing required env var: {name}")
     try:
-        return float(val)
+        return _parse_float_env(val)
     except ValueError as e:
         raise RuntimeError(f"Invalid value for {name}: {val}") from e
 
@@ -40,7 +46,7 @@ def _optional_float_env(name: str, default: float) -> float:
     if val is None or val == "":
         return default
     try:
-        return float(val)
+        return _parse_float_env(val)
     except ValueError as e:
         raise RuntimeError(f"Invalid value for {name}: {val}") from e
 

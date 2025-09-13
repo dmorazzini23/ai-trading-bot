@@ -85,6 +85,8 @@ config.reload_env()
 
 `.env` at the repo root is reloaded at startup with `override=True`; if configuration
 cannot be loaded, the bot exits early with a critical log.
+Float environment values ignore inline comments after `#`, allowing declarations like
+`MAX_DRAWDOWN_THRESHOLD="0.08  # 8% limit"`.
 Rebalance frequency defaults to 60 minutes; override with `AI_TRADING_REBALANCE_INTERVAL_MIN`
 (minutes) or `AI_TRADING_REBALANCE_INTERVAL_HOURS` (hours). The smallest positive value
 is used when multiple sources are set.
