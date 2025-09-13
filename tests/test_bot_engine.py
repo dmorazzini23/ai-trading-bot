@@ -57,8 +57,7 @@ def test_prepare_indicators_creates_required_columns():
 
 
 def test_prepare_indicators_insufficient_data():
-    """prepare_indicators should return an empty DataFrame when there is
-    insufficient historical data for rolling calculations."""
+    """prepare_indicators should raise when there is insufficient historical data."""
 
     df = pd.DataFrame({
         'open': np.random.uniform(100, 200, 5),
@@ -68,9 +67,8 @@ def test_prepare_indicators_insufficient_data():
         'volume': np.random.randint(1_000_000, 5_000_000, 5),
     })
 
-    result = prepare_indicators(df.copy())
-
-    assert result.empty or result.shape[0] == 0
+    with pytest.raises(RuntimeError):
+        prepare_indicators(df.copy())
 
 
 @pytest.mark.parametrize("attr", ["trading_client", "data_client"])
@@ -97,7 +95,7 @@ def test_bot_engine_missing_env(monkeypatch, caplog, attr, missing_key):
 
 
 def test_prepare_indicators_all_nan_columns():
-    """prepare_indicators should drop all rows when input columns are entirely NaN."""
+    """prepare_indicators should raise when input columns are entirely NaN."""
 
     df = pd.DataFrame({
         'open': [np.nan] * 30,
@@ -112,8 +110,7 @@ def test_prepare_indicators_all_nan_columns():
     original_rsi = bot_engine.ta.rsi
     bot_engine.ta.rsi = lambda close, length=14: pd.Series([np.nan] * len(close))
     try:
-        result = prepare_indicators(df.copy())
+        with pytest.raises(RuntimeError):
+            prepare_indicators(df.copy())
     finally:
         bot_engine.ta.rsi = original_rsi
-
-    assert result.empty or result.shape[0] == 0

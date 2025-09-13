@@ -24,13 +24,13 @@ def test_prepare_indicators_non_numeric_close(monkeypatch):
 
     monkeypatch.setattr(bot_engine.ta, 'rsi', fake_rsi)
     df = pd.DataFrame({'open': [1, 2], 'high': [1, 2], 'low': [1, 2], 'close': ['a', 'b']})
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
         prepare_indicators(df)
 
 
 def test_prepare_indicators_empty_dataframe():
     df = pd.DataFrame()
-    with pytest.raises(KeyError):
+    with pytest.raises(RuntimeError):
         prepare_indicators(df)
 
 
@@ -42,5 +42,5 @@ def test_prepare_indicators_single_row():
         'close': [100.5],
         'volume': [1000]
     })
-    result = prepare_indicators(df.copy())
-    assert result.empty
+    with pytest.raises(RuntimeError):
+        prepare_indicators(df.copy())
