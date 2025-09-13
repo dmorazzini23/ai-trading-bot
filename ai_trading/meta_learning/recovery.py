@@ -4,8 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import UTC, datetime
 from typing import Iterable
+from types import ModuleType
 
-from ai_trading.meta_learning import pd
+from ai_trading.utils.lazy_imports import load_pandas
+
+pd: ModuleType | None = load_pandas()
 
 _COLUMNS: Iterable[str] = [
     "timestamp",
@@ -19,17 +22,31 @@ _COLUMNS: Iterable[str] = [
 ]
 
 
+def _require_pandas() -> ModuleType:
+    """Return :mod:`pandas` or raise if unavailable."""
+    if pd is None:
+        raise RuntimeError("pandas is required for meta-learning recovery")
+    return pd
+
+
+def recover_dataframe(path: str | Path) -> "pd.DataFrame":
+    """Load a DataFrame from ``path`` ensuring pandas is available."""
+    pandas = _require_pandas()
+    return pandas.read_csv(path)
+
+
 def _implement_fallback_data_recovery(path: str | Path, min_samples: int = 0) -> None:
     """Ensure a trade log exists with at least ``min_samples`` rows."""
+    pandas = _require_pandas()
     p = Path(path)
     if not p.exists():
-        df = pd.DataFrame(columns=list(_COLUMNS))
+        df = pandas.DataFrame(columns=list(_COLUMNS))
         df.to_csv(p, index=False)
         return
     try:
-        df = pd.read_csv(p)
+        df = pandas.read_csv(p)
     except Exception:
-        df = pd.DataFrame(columns=list(_COLUMNS))
+        df = pandas.DataFrame(columns=list(_COLUMNS))
     if len(df) >= min_samples:
         return
     # Append placeholder rows to reach the threshold
@@ -49,11 +66,11 @@ def _implement_fallback_data_recovery(path: str | Path, min_samples: int = 0) ->
         for _ in range(rows_needed)
     ]
     try:
-        df = pd.concat([df, pd.DataFrame(placeholders)], ignore_index=True)
+        df = pandas.concat([df, pandas.DataFrame(placeholders)], ignore_index=True)
     except Exception:
-        df = pd.DataFrame(placeholders)
+        df = pandas.DataFrame(placeholders)
     df.to_csv(p, index=False)
 
 
-__all__ = ["_implement_fallback_data_recovery"]
+__all__ = ["recover_dataframe", "_implement_fallback_data_recovery"]
 
