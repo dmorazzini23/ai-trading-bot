@@ -37,15 +37,17 @@ def safe_subprocess_run(
     """
     t = float(timeout) if timeout is not None else SUBPROCESS_TIMEOUT_DEFAULT
     try:
-        res = subprocess.run(list(cmd), timeout=t, check=True, capture_output=True)
+        res = subprocess.run(list(cmd), timeout=t, check=False, capture_output=True)
     except subprocess.TimeoutExpired:
         logger.warning("safe_subprocess_run(%s) timed out after %.2f seconds", cmd, t)
         return SafeSubprocessResult(stdout="", returncode=-1, timeout=True)
-    except subprocess.CalledProcessError as exc:
-        logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
-        return SafeSubprocessResult(stdout="", returncode=exc.returncode, timeout=False)
     except (subprocess.SubprocessError, OSError) as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
         return SafeSubprocessResult(stdout="", returncode=getattr(exc, "returncode", -1))
+    if res.returncode != 0:
+        logger.warning(
+            "safe_subprocess_run(%s) failed: return code %s", cmd, res.returncode
+        )
+        return SafeSubprocessResult(stdout="", returncode=res.returncode, timeout=False)
     stdout = (res.stdout or b"").decode(errors="ignore").strip()
     return SafeSubprocessResult(stdout=stdout, returncode=res.returncode)
