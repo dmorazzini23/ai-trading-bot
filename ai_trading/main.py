@@ -311,6 +311,8 @@ def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
     from ai_trading.config.management import get_env, _resolve_alpaca_env
 
+    global config
+
     missing: list[str] = []
     key, secret, base_url = _resolve_alpaca_env()
     if not key:
@@ -319,9 +321,15 @@ def validate_environment() -> None:
         missing.append("ALPACA_SECRET_KEY")
     if not base_url:
         missing.append("ALPACA_API_URL")
-    for var in ("WEBHOOK_SECRET", "CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
+
+    webhook_secret = getattr(config, "WEBHOOK_SECRET", "") or get_env("WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        missing.append("WEBHOOK_SECRET")
+
+    for var in ("CAPITAL_CAP", "DOLLAR_RISK_LIMIT"):
         if not get_env(var):
             missing.append(var)
+
     if missing:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)
