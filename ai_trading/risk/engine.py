@@ -14,6 +14,10 @@ try:
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
     class APIError(Exception):
         pass
+try:
+    from alpaca.trading.client import TradingClient
+except ImportError:  # pragma: no cover - allow import without alpaca for tests
+    TradingClient = object  # type: ignore[assignment]
 from ai_trading.config.management import (
     SEED,
     TradingConfig,
