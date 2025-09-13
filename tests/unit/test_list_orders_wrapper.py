@@ -56,3 +56,23 @@ def test_list_orders_wrapper_builds_filter(monkeypatch):
     assert orders == ["ok"]
     assert isinstance(client.filter, GetOrdersRequest)
     assert client.filter.statuses == [QueryOrderStatus.OPEN]
+
+
+def test_list_orders_wrapper_fallback_on_missing_modules(monkeypatch):
+    monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    monkeypatch.setitem(sys.modules, "alpaca.trading", types.ModuleType("alpaca.trading"))
+    monkeypatch.delitem(sys.modules, "alpaca.trading.enums", raising=False)
+    monkeypatch.delitem(sys.modules, "alpaca.trading.requests", raising=False)
+
+    class _FilterClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def get_orders(self, *args, filter=None, **kwargs):
+            self.kwargs = {"filter": filter, **kwargs}
+            return ["ok"]
+
+    client = _FilterClient()
+    orders = list_orders_wrapper(client, status="open")
+    assert orders == ["ok"]
+    assert client.kwargs == {"filter": None, "status": "open"}
