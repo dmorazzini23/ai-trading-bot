@@ -6,13 +6,73 @@ and other institutional-grade position sizing methodologies.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 import numpy as np
 from json import JSONDecodeError
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.logging import logger
+from ai_trading.logging import logger, logger_once
 from ai_trading.exc import RequestException
+
+@dataclass
+class _EquityCache:
+    ts: datetime | None = None
+    equity: float | None = None
+
+
+_equity_cache = _EquityCache()
+
+
+def _now() -> datetime:
+    return datetime.now(tz=UTC)
+
+
+def _fetch_equity(ctx, *, force_refresh: bool = False, ttl_seconds: int = 3600) -> float:
+    """Fetch account equity once and cache with timestamp.
+
+    Parameters
+    ----------
+    ctx:
+        Runtime context expected to expose ``api`` with ``get_account``.
+    force_refresh:
+        When ``True`` ignore any cached value and refresh from the API.
+    ttl_seconds:
+        Maximum age of a cached value before a refresh is attempted.
+    """
+
+    now = _now()
+    if (
+        not force_refresh
+        and _equity_cache.equity is not None
+        and _equity_cache.ts is not None
+        and now - _equity_cache.ts < timedelta(seconds=ttl_seconds)
+    ):
+        return _equity_cache.equity
+
+    api = getattr(ctx, "api", None)
+    try:
+        acct = api.get_account()
+        eq = float(getattr(acct, "equity", 0.0) or 0.0)
+        _equity_cache.equity = eq
+        _equity_cache.ts = now
+        try:  # set paper flag if available
+            base = getattr(ctx, "alpaca_base_url", None) or getattr(api, "base_url", "")
+            api.paper = "paper" in str(base).lower()
+        except Exception:  # noqa: BLE001 - best effort only
+            pass
+        try:  # reset global disabled alert
+            import ai_trading.data.fetch as _df
+
+            _df._ALPACA_DISABLED_ALERTED = False
+        except Exception:  # pragma: no cover - defensive
+            pass
+        return eq
+    except Exception:
+        _equity_cache.equity = 0.0
+        _equity_cache.ts = now
+        logger_once.warning("EQUITY_MISSING", key="equity_missing")
+        return 0.0
 
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 
