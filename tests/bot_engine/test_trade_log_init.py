@@ -113,5 +113,24 @@ def test_get_trade_logger_warns_when_dir_not_writable(tmp_path, monkeypatch, cap
         bot_engine.get_trade_logger()
 
     assert "TRADE_LOG_DIR_NOT_WRITABLE" in caplog.text
+    assert str(log_dir) in caplog.text
     assert not log_path.exists()
+
+
+def test_get_trade_logger_warns_on_dir_creation_permission_error(tmp_path, monkeypatch, caplog):
+    """get_trade_logger warns when os.makedirs raises PermissionError."""
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    parent.chmod(0o555)
+    log_path = parent / "child" / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+
+    with caplog.at_level(logging.WARNING):
+        bot_engine.get_trade_logger()
+
+    assert "TRADE_LOG_DIR_NOT_WRITABLE" in caplog.text
+    assert str(log_path.parent) in caplog.text
+    assert not log_path.parent.exists()
 

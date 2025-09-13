@@ -5949,8 +5949,9 @@ def get_trade_logger() -> TradeLogger:
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
     except PermissionError as exc:
         logger.warning(
-            "TRADE_LOG_DIR_CREATE_FAILED",
-            extra={"dir": log_dir, "cause": "PermissionError", "detail": str(exc)},
+            "TRADE_LOG_DIR_NOT_WRITABLE %s",
+            log_dir,
+            extra={"dir": log_dir, "detail": str(exc)},
         )
         return _TRADE_LOGGER_SINGLETON
     except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
@@ -5983,7 +5984,11 @@ def get_trade_logger() -> TradeLogger:
         return bool(mode & _stat.S_IWOTH)
 
     if not _is_dir_writable(log_dir):
-        logger.warning("TRADE_LOG_DIR_NOT_WRITABLE", extra={"dir": log_dir})
+        logger.warning(
+            "TRADE_LOG_DIR_NOT_WRITABLE %s",
+            log_dir,
+            extra={"dir": log_dir},
+        )
         return _TRADE_LOGGER_SINGLETON
 
     if not os.path.exists(path) or os.path.getsize(path) == 0:
@@ -6009,8 +6014,12 @@ def get_trade_logger() -> TradeLogger:
                     )
                 finally:
                     portalocker.unlock(f)
-        except PermissionError:
-            logger.debug("TradeLogger init path not writable: %s", path)
+        except PermissionError as exc:
+            logger.warning(
+                "TRADE_LOG_DIR_NOT_WRITABLE %s",
+                log_dir,
+                extra={"dir": log_dir, "detail": str(exc)},
+            )
     return _TRADE_LOGGER_SINGLETON
 
 
