@@ -196,7 +196,16 @@ def log_trade(
     main_path = Path(TRADE_LOG_FILE)
     targets = _compute_targets(main_path)
     for p in targets:
-        _ensure_parent_dir(p)
+        try:
+            _ensure_parent_dir(p)
+        except PermissionError as exc:
+            logger.error("audit.log directory permission denied %s: %s", p, exc)
+            if fix_file_permissions(p):
+                try:
+                    _ensure_parent_dir(p)
+                except PermissionError:
+                    pass
+            return
 
     # Use a compact schema for TEST/AUDIT modes to satisfy test expectations
     use_simple = str(extra_info).upper().find("TEST") >= 0 or str(extra_info).upper().find(
