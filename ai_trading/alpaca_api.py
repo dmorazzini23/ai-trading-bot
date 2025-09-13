@@ -83,6 +83,9 @@ ALPACA_AVAILABLE = (
 )
 HAS_PANDAS: bool = _module_exists("pandas")  # AI-AGENT-REF: expose pandas availability
 
+if not ALPACA_AVAILABLE:
+    _log.warning("Optional feature 'alpaca' disabled: missing alpaca-py")
+
 
 def initialize() -> None:
     """Ensure required Alpaca SDK modules are importable.

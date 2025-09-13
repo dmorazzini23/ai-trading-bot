@@ -34,6 +34,29 @@ class MockOrderManager:
     def submit_order(self, order):
         return True
 
+
+class MockTradingClient:
+    """Minimal trading client mock with failure injection."""
+
+    def __init__(self, fail_count: int = 0, *_, **__):
+        self.fail_count = fail_count
+        self.call_count = 0
+        self.submitted_orders: list[dict] = []
+
+    def submit_order(self, order):
+        self.call_count += 1
+        if self.fail_count > 0:
+            self.fail_count -= 1
+            raise ConnectionError("mock submit failure")
+        self.submitted_orders.append(order)
+        return {"id": str(self.call_count), **order}
+
+    def get_account(self):  # pragma: no cover - basic mock
+        return {"status": "ACTIVE", "buying_power": "100000"}
+
+    def list_positions(self):  # pragma: no cover - basic mock
+        return []
+
 __all__ = [
     "MockSignal",
     "MockModel",
@@ -41,4 +64,5 @@ __all__ = [
     "MockContextShortSelling",
     "MockOrder",
     "MockOrderManager",
+    "MockTradingClient",
 ]
