@@ -6,7 +6,7 @@ Prefer :mod:`joblib` or :mod:`json` for simple objects.  These helpers
 validate model paths, log absolute paths, and raise ``RuntimeError`` on
 failure."""
 
-import pickle
+import pickle as _pickle
 from pathlib import Path
 from typing import Iterable, Any
 
@@ -33,7 +33,7 @@ def safe_pickle_load(path: Path, allowed_dirs: Iterable[Path]) -> Any:
         )
     try:
         with abs_path.open("rb") as fh:
-            return pickle.load(fh)
-    except (OSError, pickle.PickleError, ValueError, TypeError) as exc:
+            return _pickle.load(fh)
+    except (OSError, _pickle.PickleError, ValueError, TypeError) as exc:
         logger.error("Pickle load failed for %s: %s", abs_path, exc)
         raise RuntimeError(f"Failed to load pickle at '{abs_path}': {exc}") from exc

@@ -102,7 +102,7 @@ else:
     # Provide a placeholder TradingClient so tests can import the symbol when
     # Alpaca SDK is not installed.
     class TradingClient:  # type: ignore[empty-body]
-        ...
+        pass
 
 from ai_trading.config.management import (
     get_env,

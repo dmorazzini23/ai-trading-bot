@@ -58,10 +58,11 @@ class TimeoutSession(_SessionBase):
         """
         if os.getenv("TESTING", "0") == "1":
             if "timeout" not in kwargs or kwargs["timeout"] is None:
-                kwargs["timeout"] = self._default_timeout
+                timeout = self._default_timeout
             else:
-                kwargs["timeout"] = clamp_request_timeout(kwargs["timeout"])
-            return requests.get(url, **kwargs)
+                timeout = clamp_request_timeout(kwargs["timeout"])
+            kwargs.pop("timeout", None)
+            return requests.get(url, timeout=timeout, **kwargs)
         return super().get(url, **kwargs)
 
 
