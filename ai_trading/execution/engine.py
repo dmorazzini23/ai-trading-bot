@@ -985,20 +985,47 @@ class ExecutionEngine:
                             "limit_price": round(limit_price, 4),
                         },
                     )
+                reduced = max(
+                    1, int(order.quantity * threshold / abs(predicted_slippage_bps))
+                )
+                if reduced < order.quantity:
+                    order.quantity = reduced
+                    logger.warning(
+                        "SLIPPAGE_QTY_REDUCED",
+                        extra={"order_id": order.id, "new_qty": reduced},
+                    )
                 else:
-                    reduced = max(1, int(order.quantity * threshold / abs(predicted_slippage_bps)))
-                    if reduced < order.quantity:
-                        order.quantity = reduced
-                        logger.warning(
-                            "SLIPPAGE_QTY_REDUCED",
-                            extra={"order_id": order.id, "new_qty": reduced},
-                        )
-                    else:
-                        order.status = OrderStatus.REJECTED
-                        logger.warning(
-                            "SLIPPAGE_ORDER_REJECTED", extra={"order_id": order.id}
-                        )
-                        return
+                    order.status = OrderStatus.REJECTED
+                    logger.warning(
+                        "SLIPPAGE_ORDER_REJECTED", extra={"order_id": order.id}
+                    )
+                    return
+                try:
+                    from ai_trading.core.bot_engine import get_trade_logger
+
+                    tl = get_trade_logger()
+                    strategy = getattr(order, "strategy_id", None) or "slippage_adjust"
+                    side_val = (
+                        order.side.value if isinstance(order.side, OrderSide) else order.side
+                    )
+                    price_for_log = (
+                        float(order.price)
+                        if order.price is not None
+                        else float(base_price)
+                    )
+                    tl.log_entry(
+                        order.symbol,
+                        price_for_log,
+                        order.quantity,
+                        side_val,
+                        strategy,
+                        signal_tags="slippage_adjust",
+                    )
+                except Exception as exc:  # pragma: no cover - best effort logging
+                    logger.warning(
+                        "SLIPPAGE_LOG_FAILED",
+                        extra={"order_id": order.id, "detail": str(exc)},
+                    )
 
             remaining = order.quantity
             while remaining > 0 and order.status != OrderStatus.CANCELED:

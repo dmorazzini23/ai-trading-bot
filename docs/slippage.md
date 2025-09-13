@@ -27,5 +27,6 @@ After each order is filled, the engine logs a `SLIPPAGE_DIAGNOSTIC` entry compar
 submission price with the average fill price. This aids in monitoring execution quality and ensures
 that excessive slippage is detected early. When the calculated slippage exceeds the configured
 threshold the engine converts market orders to limit orders at
-`expected_price ± tolerance` or reduces the order quantity. When volatility is
-high this threshold is automatically increased to avoid unnecessary rejections.
+`expected_price ± tolerance` and proportionally reduces the order quantity. The
+adjustments are written to the trade log for auditing. When volatility is high
+this threshold is automatically increased to avoid unnecessary rejections.
