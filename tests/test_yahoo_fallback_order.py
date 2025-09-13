@@ -6,7 +6,7 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 import ai_trading.data.fetch as fetch
-from ai_trading.data.fetch.metrics import provider_fallback
+from ai_trading.data.fetch.metrics import inc_provider_fallback
 import ai_trading.data.fetch.fallback_order as fo
 
 
@@ -51,11 +51,11 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
     monkeypatch.setattr(fetch, "_yahoo_get_bars", fake_yahoo)
     fo.reset()
 
-    before = provider_fallback("alpaca_sip", "yahoo")
+    before = inc_provider_fallback("alpaca_sip", "yahoo")
 
     df = fetch._fetch_bars(symbol, start, end, "1Min", feed="iex")
 
-    after = provider_fallback("alpaca_sip", "yahoo")
+    after = inc_provider_fallback("alpaca_sip", "yahoo")
 
     assert called.get("yahoo")
     assert not df.empty
