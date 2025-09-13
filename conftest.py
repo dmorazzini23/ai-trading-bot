@@ -48,6 +48,7 @@ setattr(_dummy_mod, "get_model", _get_model)
 setattr(_dummy_mod, "_DummyModel", _DummyModel)
 sys.modules["dummy_model"] = _dummy_mod
 os.environ.setdefault("AI_TRADING_MODEL_MODULE", "dummy_model")
+os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.1")
 
 
 def _missing(mod: str) -> bool:

@@ -16,12 +16,14 @@
 
 2. **Mode-Specific Parameters** ✅
    - Conservative: Lower risk (kelly_fraction=0.25, conf_threshold=0.85, daily_loss_limit=0.03)
-   - Balanced: Moderate risk (kelly_fraction=0.6, conf_threshold=0.75, daily_loss_limit=0.05) 
+   - Balanced: Moderate risk (kelly_fraction=0.6, conf_threshold=0.75, daily_loss_limit=0.05)
    - Aggressive: Higher risk (kelly_fraction=0.75, conf_threshold=0.65, daily_loss_limit=0.08)
+   - Presets also set `max_position_size` to **5000**, **8000**, and **12000** shares respectively.
 
 3. **Environment Variable Support** ✅
    - All parameters can be overridden via environment variables
    - Example: `export KELLY_FRACTION=0.5` works across entire system
+   - `MAX_DRAWDOWN_THRESHOLD` is now **required**; startup fails fast if missing.
    - Runtime configuration without code changes
 
 4. **Backward Compatibility** ✅
