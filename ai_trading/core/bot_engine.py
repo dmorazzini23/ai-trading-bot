@@ -8826,7 +8826,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 f"Order status for {order_args.get('symbol')}: {getattr(order, 'status', '')}"
             )
             status = getattr(order, "status", "")
-            filled_qty = getattr(order, "filled_qty", "0")
+            filled_qty = getattr(order, "filled_qty", 0) or 0
             if status == "filled":
                 logger.info(
                     "ORDER_ACK",
@@ -8909,7 +8909,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
         try:
             od = ctx.api.get_order(order_id)
             status = getattr(od, "status", "")
-            filled = getattr(od, "filled_qty", "0")
+            filled = getattr(od, "filled_qty", 0) or 0
             if status not in {"new", "accepted", "partially_filled"}:
                 logger.info(
                     "ORDER_FINAL_STATUS",
