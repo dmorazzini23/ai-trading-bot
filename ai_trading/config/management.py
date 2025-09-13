@@ -379,8 +379,9 @@ class TradingConfig:
 
         ``env_or_mode`` may be a mapping of env vars or a mode string. When a
         mapping is provided, ``TRADING_MODE`` may be present to influence
-        overrides. ``allow_missing_drawdown`` bypasses the otherwise strict
-        requirement for ``MAX_DRAWDOWN_THRESHOLD``.
+        overrides. ``MAX_DRAWDOWN_THRESHOLD`` defaults to ``0.08`` when unset.
+        ``allow_missing_drawdown`` is retained for backward compatibility but
+        has no effect.
         """
         mode: str | None = None
         if isinstance(env_or_mode, str):
@@ -457,6 +458,7 @@ class TradingConfig:
             max_drawdown_threshold=_get(
                 "MAX_DRAWDOWN_THRESHOLD",
                 float,
+                default=0.08,
                 aliases=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
             ),
             trailing_factor=_get("TRAILING_FACTOR", float),
@@ -558,8 +560,10 @@ class TradingConfig:
                 except Exception:
                     pass
 
-        if cfg.max_drawdown_threshold is None and not allow_missing_drawdown:
-            raise RuntimeError("Missing required environment variable: MAX_DRAWDOWN_THRESHOLD")
+        if allow_missing_drawdown:
+            logger.debug(
+                "allow_missing_drawdown is deprecated; max_drawdown_threshold defaults to 0.08"
+            )
 
         return cfg
 
