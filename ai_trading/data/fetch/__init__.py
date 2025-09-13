@@ -279,8 +279,19 @@ def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.dat
 
 
 def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> None:
+    """Record usage of the configured backup provider.
+
+    Side effects
+    -----------
+    * Logs a "backup provider used" message once per unique window.
+    * Notifies the :mod:`provider_monitor` of the switchover.
+    * Appends ``(provider, symbol)`` to the shared registries in
+      :mod:`ai_trading.data.fetch.fallback_order` for test introspection.
+    """
+
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
     key = _fallback_key(symbol, timeframe, start, end)
+    fallback_order.register_fallback(provider, symbol)
     # Emit once per unique (symbol, timeframe, window)
     if key not in _FALLBACK_WINDOWS:
         log_backup_provider_used(
@@ -1094,6 +1105,15 @@ def _fetch_bars(
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False
         ) -> pd.DataFrame | None:
+            """Execute a provider fallback attempt.
+
+            Side effects
+            -----------
+            * Increments the ``provider_fallback`` metric.
+            * Records the switchover with the provider monitor.
+            * Appends the target provider and symbol to the shared registries.
+            """
+
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
             if fb_feed == "sip" and (not skip_check) and not _sip_fallback_allowed(session, headers, fb_interval):
@@ -1107,6 +1127,7 @@ def _fetch_bars(
             provider_monitor.record_switchover(
                 f"alpaca_{from_feed}", f"alpaca_{fb_feed}"
             )
+            fallback_order.register_fallback(f"alpaca_{fb_feed}", symbol)
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
             logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
@@ -1893,7 +1914,6 @@ def _fetch_bars(
             not can_use_sip and "iex" in providers_tried and max_fb >= 1
         )
         if y_int and yahoo_allowed and "yahoo" in priority:
-            fallback_order.mark_yahoo()
             try:
                 alt_df = _yahoo_get_bars(symbol, _start, _end, interval=y_int)
             except Exception:  # pragma: no cover - network variance
