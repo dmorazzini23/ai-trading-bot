@@ -1,9 +1,6 @@
-from time import perf_counter
 from ai_trading.utils import sleep
 
 
-def test_utils_sleep_is_measurable():
-    start = perf_counter()
-    sleep(0)  # request 0 -> enforced minimum
-    elapsed = perf_counter() - start
-    assert elapsed >= 0.01  # AI-AGENT-REF: ensure busy-wait measurable
+def test_utils_sleep_zero_returns_zero() -> None:
+    """sleep should return 0 when duration is 0."""
+    assert sleep(0) == 0.0

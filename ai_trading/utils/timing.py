@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import time as _time
+from time import perf_counter as _perf
 from typing import Optional, Union
 
-from .sleep import _perf, _real_sleep, _time, sleep
+from .sleep import _real_sleep, sleep
 
 # Prefer AI_HTTP_TIMEOUT when present (tests set this); fallback to HTTP_TIMEOUT env
 HTTP_TIMEOUT: Union[int, float] = float(
