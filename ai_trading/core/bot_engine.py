@@ -79,8 +79,8 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
+from ai_trading.logging import logger_once
 from ai_trading.alpaca_api import (
-    ALPACA_AVAILABLE,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
     get_trading_client_cls,
     get_data_client_cls,
@@ -89,6 +89,18 @@ from ai_trading.alpaca_api import (
 from ai_trading.utils.pickle_safe import safe_pickle_load
 from ai_trading.utils.base import is_market_open as _is_market_open_base
 from ai_trading.core.enums import OrderSide as CoreOrderSide
+
+try:
+    importlib.import_module("alpaca.trading.client")
+    importlib.import_module("alpaca.data.historical.stock")
+    ALPACA_AVAILABLE = True
+except ImportError as exc:  # pragma: no cover - log once when SDK missing
+    ALPACA_AVAILABLE = False
+    logger_once.warning(
+        "ALPACA_SDK_IMPORT_FAILED - %s",
+        exc,
+        key="alpaca_sdk_import_failed",
+    )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -692,7 +704,6 @@ from ai_trading.indicators import (
 )
 from ai_trading.logging import (
     info_kv,
-    logger_once,
     warning_kv,
 )  # AI-AGENT-REF: structured logging helper
 from ai_trading.utils.safe_cast import as_float, as_int
