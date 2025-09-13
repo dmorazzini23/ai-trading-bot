@@ -835,22 +835,23 @@ class ExecutionEngine:
                 )},
             )
             if order_type == OrderType.MARKET:
-                try:
-                    import importlib
-                    be = importlib.import_module("ai_trading.core.bot_engine")
-                    if hasattr(be, "get_latest_price"):
-                        exp_price = be.get_latest_price(symbol)
-                        if exp_price is not None:
-                            kwargs["expected_price"] = exp_price
-                            logger.debug(
-                                "EXPECTED_PRICE_FETCHED",
-                                extra={"symbol": symbol, "expected_price": float(exp_price)},
-                            )
-                except Exception as e:  # pragma: no cover - diagnostics only
-                    logger.debug(
-                        "EXPECTED_PRICE_FETCH_FAILED",
-                        extra={"symbol": symbol, "cause": e.__class__.__name__},
-                    )
+                if not get_env("TESTING", "false", cast=bool):
+                    try:
+                        import importlib
+                        be = importlib.import_module("ai_trading.core.bot_engine")
+                        if hasattr(be, "get_latest_price"):
+                            exp_price = be.get_latest_price(symbol)
+                            if exp_price is not None:
+                                kwargs["expected_price"] = exp_price
+                                logger.debug(
+                                    "EXPECTED_PRICE_FETCHED",
+                                    extra={"symbol": symbol, "expected_price": float(exp_price)},
+                                )
+                    except Exception as e:  # pragma: no cover - diagnostics only
+                        logger.debug(
+                            "EXPECTED_PRICE_FETCH_FAILED",
+                            extra={"symbol": symbol, "cause": e.__class__.__name__},
+                        )
             order = Order(symbol, side, quantity, order_type, **kwargs)
             if self.order_manager.submit_order(order):
                 self.execution_stats["total_orders"] += 1
@@ -964,15 +965,12 @@ class ExecutionEngine:
             )
             if abs(predicted_slippage_bps) > threshold:
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
-                if (
-                    order.order_type == OrderType.MARKET
-                    and getattr(order, "expected_price", None) is not None
-                ):
-                    adj = float(order.expected_price) * (tol_bps / 10000.0)
+                if order.order_type == OrderType.MARKET:
+                    adj = float(expected) * (tol_bps / 10000.0)
                     limit_price = (
-                        float(order.expected_price) + adj
+                        float(expected) + adj
                         if order.side == OrderSide.BUY
-                        else float(order.expected_price) - adj
+                        else float(expected) - adj
                     )
                     order.order_type = OrderType.LIMIT
                     tick = TICK_BY_SYMBOL.get(order.symbol)
