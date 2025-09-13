@@ -73,7 +73,8 @@ async def run_with_concurrency(
             else:
                 SUCCESSFUL_SYMBOLS.add(sym)
 
-    await asyncio.gather(*(_run(s) for s in symbols), return_exceptions=True)
+    tasks = [asyncio.create_task(_run(s)) for s in symbols]
+    await asyncio.gather(*tasks, return_exceptions=True)
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 
 
