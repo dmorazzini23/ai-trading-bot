@@ -98,8 +98,11 @@ def fetch_bars(
         payload = resp.json()
         bars = payload.get("bars") or []
         if bars:
-            # Successful fetch from either feed resets the empty counter
-            _IEX_EMPTY_COUNTS.pop(key, None)
+            # Only reset the empty counter when IEX returns data.  Successful
+            # SIP responses keep the counter intact so later calls continue to
+            # bypass IEX until it provides data again.
+            if feed == "iex":
+                _IEX_EMPTY_COUNTS.pop(key, None)
             return _to_df(payload)
 
         # Empty response handling

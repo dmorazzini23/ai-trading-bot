@@ -55,7 +55,7 @@ def test_iex_empty_switches_to_sip(monkeypatch, caplog):
         df = iex_fallback.fetch_bars("AAPL", start, end, "1Min", session=sess)
     assert [c["feed"] for c in sess.calls] == ["iex", "sip"]
     assert not df.empty
-    assert _IEX_EMPTY_COUNTS == {}
+    assert _IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
     assert any(r.message == "DATA_SOURCE_FALLBACK_ATTEMPT" for r in caplog.records)
 
 
@@ -98,5 +98,5 @@ def test_skip_iex_after_threshold(monkeypatch, caplog):
     assert len(sess2.calls) == 1
     assert sess2.calls[0]["feed"] == "sip"
     assert not df.empty
-    assert _IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 0
+    assert _IEX_EMPTY_COUNTS.get(("AAPL", "1Min"), 0) == 1
     assert any(r.message == "DATA_SOURCE_FALLBACK_ATTEMPT" for r in caplog.records)
