@@ -17,6 +17,7 @@ from ai_trading.alpaca_api import (
     get_timeframe_cls,
     get_timeframe_unit_cls,
 )
+from ai_trading.timeframe import canonicalize_timeframe
 
 # Resolve the Alpaca classes lazily at import time while tolerating the SDK
 # being unavailable during tests.
@@ -41,61 +42,7 @@ _BaseStockBarsRequest = get_stock_bars_request_cls()
 def _coerce_timeframe(tf: Any) -> Any:
     """Return ``tf`` as an instance of the active ``TimeFrame`` class."""
 
-    try:
-        if isinstance(tf, TimeFrame) and tf.__class__ is TimeFrame:
-            return tf
-    except Exception:  # pragma: no cover - defensive
-        pass
-
-    try:
-        unit_cls = get_timeframe_unit_cls()
-    except Exception:  # pragma: no cover - optional SDK
-        unit_cls = None
-
-    # Accept objects with ``amount`` and ``unit`` attributes
-    amount = getattr(tf, "amount", None)
-    unit = getattr(tf, "unit", None)
-    if amount is not None and unit is not None and unit_cls is not None:
-        try:
-            if not isinstance(unit, unit_cls):
-                name = getattr(unit, "name", str(unit)).capitalize()
-                unit = getattr(unit_cls, name, getattr(unit_cls, "Day"))
-            return TimeFrame(int(amount), unit)  # type: ignore[arg-type]
-        except Exception:
-            pass
-
-    # Fallback: parse string representations like "1Day" or "minute"
-    try:
-        s = str(tf).strip()
-        if s:
-            import re
-
-            m = re.match(r"(\d+)?\s*(\w+)", s)
-            if m:
-                amt = int(m.group(1) or 1)
-                unit_name = m.group(2).capitalize()
-                # Map common abbreviations like "Min" -> "Minute"
-                unit_name = {
-                    "Min": "Minute",
-                    "Hour": "Hour",
-                    "Day": "Day",
-                    "Week": "Week",
-                    "Month": "Month",
-                }.get(unit_name, unit_name)
-                if unit_cls is not None:
-                    unit = getattr(unit_cls, unit_name, getattr(unit_cls, "Day"))
-                    return TimeFrame(amt, unit)  # type: ignore[arg-type]
-    except Exception:
-        pass
-
-    # As a last resort ensure we return the active ``TimeFrame`` type
-    if unit_cls is not None:
-        try:
-            return TimeFrame(1, getattr(unit_cls, "Day"))
-        except Exception:
-            pass
-    # Fall back to default timeframe (1 Day)
-    return TimeFrame()
+    return canonicalize_timeframe(tf)
 
 
 # When the real SDK is available the base request class derives from Pydantic's
