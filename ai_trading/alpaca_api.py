@@ -252,7 +252,15 @@ def _normalize_timeframe_for_tradeapi(tf_raw):
         TimeFrame = None
     if isinstance(tf_raw, str):
         s = tf_raw.strip()
-        return s if s[:1].isdigit() else f"1{s.capitalize()}"
+        if s[:1].isdigit():
+            import re
+
+            m = re.match(r"(\d+)(\w+)", s)
+            if m:
+                amt, unit = m.groups()
+                return f"{amt}{unit.capitalize()}"
+            return s
+        return f"1{s.capitalize()}"
     if TimeFrame is not None and isinstance(tf_raw, TimeFrame):
         unit = getattr(tf_raw.unit, "name", str(tf_raw.unit)).title()
         return f"{tf_raw.amount}{unit}"

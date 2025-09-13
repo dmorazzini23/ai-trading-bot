@@ -6,6 +6,7 @@ def test_timeframe_has_basic_members():
     assert hasattr(TimeFrame, "Day")
     assert hasattr(TimeFrame, "Minute")
     assert hasattr(TimeFrame, "Hour")
+    assert hasattr(TimeFrame, "Week")
 
 
 def test_get_latest_close_handles_empty_and_variants():

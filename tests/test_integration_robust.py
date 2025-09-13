@@ -171,6 +171,7 @@ class _TF:
     Minute = "1Min"
     Hour = "1Hour"
     Day = "1Day"
+    Week = "1Week"
 
     def __init__(self, *a, **k):
         pass
@@ -180,6 +181,7 @@ class _TFUnit:
     Minute = "Minute"
     Hour = "Hour"
     Day = "Day"
+    Week = "Week"
 
 
 

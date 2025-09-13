@@ -21,5 +21,6 @@ class TimeFrame:
 TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
 TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
 TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
+TimeFrame.Week = TimeFrame(1, TimeFrameUnit.Week)  # type: ignore[attr-defined]
 
 __all__ = ["TimeFrame", "TimeFrameUnit"]
