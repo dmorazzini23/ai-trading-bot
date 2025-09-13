@@ -1,4 +1,4 @@
-from ai_trading.config.management import TradingConfig
+from ai_trading.config import TradingConfig
 
 
 def test_trading_config_accepts_known_callsites():
