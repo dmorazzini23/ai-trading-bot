@@ -1,9 +1,9 @@
-from ai_trading.alpaca_api import get_timeframe_cls, get_timeframe_unit_cls
+from ai_trading.timeframe import TimeFrame, TimeFrameUnit
 
 
 def test_timeframe_zero_arg_defaults():
-    TimeFrame = get_timeframe_cls()
-    unit_cls = get_timeframe_unit_cls()
     tf = TimeFrame()
-    assert tf.amount == 1
-    assert getattr(tf.unit, "name", "") == getattr(unit_cls.Day, "name", "Day")
+    assert hasattr(tf, "amount")
+    assert getattr(tf, "amount", None) == 1
+    assert hasattr(tf, "unit")
+    assert getattr(tf.unit, "name", "") == getattr(TimeFrameUnit.Day, "name", "Day")
