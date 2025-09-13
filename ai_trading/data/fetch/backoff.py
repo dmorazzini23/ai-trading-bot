@@ -4,9 +4,14 @@ import datetime as _dt
 from typing import Any
 
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.data.empty_bar_backoff import _SKIPPED_SYMBOLS, record_attempt, mark_success
+from ai_trading.data.empty_bar_backoff import (
+    _SKIPPED_SYMBOLS,
+    _EMPTY_BAR_COUNTS,
+    MAX_EMPTY_RETRIES,
+    record_attempt,
+    mark_success,
+)
 from ai_trading.data.metrics import provider_fallback, fetch_retry_total
-from ai_trading.config.management import MAX_EMPTY_RETRIES
 from ai_trading.config.settings import provider_priority, max_data_fallbacks
 from ai_trading.logging import log_backup_provider_used, get_logger
 from ai_trading.data.provider_monitor import provider_monitor
@@ -16,7 +21,6 @@ from . import EmptyBarsError, _fetch_bars
 pd = load_pandas()
 logger = get_logger(__name__)
 
-_EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 _EMPTY_BAR_MAX_RETRIES = MAX_EMPTY_RETRIES
 
 
@@ -61,8 +65,7 @@ def _fetch_feed(
     try:
         df = _fetch_bars(symbol, start, end, timeframe, feed=feed)
     except EmptyBarsError:
-        cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
-        _EMPTY_BAR_COUNTS[tf_key] = cnt
+        cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0)
         if cnt >= _EMPTY_BAR_MAX_RETRIES:
             _SKIPPED_SYMBOLS.add(tf_key)
             logger.error(
