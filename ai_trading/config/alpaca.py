@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 import logging
 import os
+
 from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
 from .settings import broker_keys, get_settings
 
@@ -16,14 +17,57 @@ class AlpacaConfig:
     rate_limit_per_min: int | None = None
     data_feed: str = "iex"
 
+    @property
+    def key(self) -> str:
+        """Return the standard key alias.
+
+        Some callers expect a generic ``key`` attribute rather than
+        ``key_id``.  Exposing this property keeps backwards compatibility
+        while allowing ``ALPACA_API_KEY`` to map to a consistent field.
+        """
+
+        return self.key_id
+
+ENV_PREFIXES = (
+    "DEV_",
+    "PROD_",
+    "TEST_",
+    "STAGING_",
+    "STAGE_",
+    "PAPER_",
+    "LIVE_",
+)
+
+
+def _normalize_key_name(name: str) -> str:
+    name = name.strip().upper()
+    for prefix in ENV_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def get_alpaca_config() -> AlpacaConfig:
     s = get_settings()
     keys: Any = broker_keys()
     if isinstance(keys, Mapping):
-        key_id = keys.get('ALPACA_KEY_ID') or keys.get('ALPACA_API_KEY') or ''
-        secret = keys.get('ALPACA_SECRET_KEY', '')
+        normalized: dict[str, str] = {}
+        for k, v in keys.items():
+            nk = _normalize_key_name(str(k))
+            normalized[nk] = str(v).strip()
+        if "ALPACA_API_KEY" in normalized and "KEY" not in normalized:
+            normalized["KEY"] = normalized["ALPACA_API_KEY"]
+        if "ALPACA_SECRET_KEY" in normalized and "SECRET" not in normalized:
+            normalized["SECRET"] = normalized["ALPACA_SECRET_KEY"]
+        key_id = (
+            normalized.get("KEY")
+            or normalized.get("ALPACA_KEY_ID")
+            or normalized.get("ALPACA_API_KEY")
+            or ""
+        )
+        secret = normalized.get("SECRET") or normalized.get("ALPACA_SECRET_KEY", "")
     else:
-        key_id, secret = keys
+        key_id, secret = [str(x).strip() for x in keys]
     use_paper = getattr(s, 'env', 'dev') != 'prod'
     base_url = getattr(s, 'alpaca_base_url', None)
     if not base_url:
