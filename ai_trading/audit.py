@@ -200,12 +200,11 @@ def log_trade(
             _ensure_parent_dir(p)
         except PermissionError as exc:
             logger.error("audit.log directory permission denied %s: %s", p, exc)
-            if fix_file_permissions(p):
-                try:
-                    _ensure_parent_dir(p)
-                except PermissionError:
-                    pass
-            return
+            fix_file_permissions(p)
+            try:
+                _ensure_parent_dir(p)
+            except PermissionError:
+                return
 
     # Use a compact schema for TEST/AUDIT modes to satisfy test expectations
     use_simple = str(extra_info).upper().find("TEST") >= 0 or str(extra_info).upper().find(
@@ -265,18 +264,14 @@ def log_trade(
         }
 
     for path in targets:
-        header_perm_error = False
         try:
             _ensure_file_header(path, headers)
         except PermissionError as exc:
-            header_perm_error = True
             logger.error("audit.log permission denied %s: %s", path, exc)
-            if fix_file_permissions(path):
-                try:
-                    _ensure_file_header(path, headers)
-                except PermissionError:
-                    return
-            else:
+            fix_file_permissions(path)
+            try:
+                _ensure_file_header(path, headers)
+            except PermissionError:
                 return
         try:
             with open(path, "a", newline="") as f:  # built-in open for patch compatibility
@@ -284,13 +279,10 @@ def log_trade(
                 writer.writerow(row)
         except PermissionError as exc:
             logger.error("audit.log permission denied %s: %s", path, exc)
-            if fix_file_permissions(path):
-                try:
-                    with open(path, "a", newline="") as f:
-                        writer = csv.DictWriter(f, fieldnames=headers)
-                        writer.writerow(row)
-                except PermissionError:
-                    pass
-            return
-        if header_perm_error:
-            return
+            fix_file_permissions(path)
+            try:
+                with open(path, "a", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=headers)
+                    writer.writerow(row)
+            except PermissionError:
+                return
