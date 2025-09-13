@@ -5,7 +5,8 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 import pytest
 
-from ai_trading.data import fetch
+from ai_trading.data import empty_bar_backoff as ebb, fetch
+from ai_trading.data.fetch import EmptyBarsError
 
 
 def _dt_range():
@@ -17,6 +18,28 @@ def _dt_range():
 @pytest.fixture(autouse=True)
 def _force_window(monkeypatch):
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+
+
+def test_record_attempt_limits_and_skips():
+    ebb._SKIPPED_SYMBOLS.clear()
+    ebb._EMPTY_BAR_COUNTS.clear()
+    key = ("TST", "1Min")
+    for _ in range(ebb.MAX_EMPTY_RETRIES):
+        ebb.record_attempt(*key)
+        assert key in ebb._SKIPPED_SYMBOLS
+    with pytest.raises(EmptyBarsError):
+        ebb.record_attempt(*key)
+    assert key in ebb._SKIPPED_SYMBOLS
+
+
+def test_mark_success_clears_state():
+    ebb._SKIPPED_SYMBOLS.clear()
+    ebb._EMPTY_BAR_COUNTS.clear()
+    key = ("GOOD", "1Min")
+    ebb.record_attempt(*key)
+    ebb.mark_success(*key)
+    assert key not in ebb._SKIPPED_SYMBOLS
+    assert key not in ebb._EMPTY_BAR_COUNTS
 
 
 def test_backoff_uses_alternate_provider(monkeypatch, caplog):

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pandas as pd
 import pytest
 
+from ai_trading.data import fetch
 from ai_trading.data.fetch import backoff as fb
 
 
@@ -27,6 +28,7 @@ def test_fetch_feed_switches_to_alternate_and_shrinks_window(monkeypatch):
     monkeypatch.setattr(fb, "_fetch_bars", fake_fetch)
     fb._EMPTY_BAR_COUNTS.clear()
     fb._SKIPPED_SYMBOLS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
 
     out = fb._fetch_feed("TEST", start, end, "1Min", feed="iex")
     assert not out.empty
@@ -34,6 +36,7 @@ def test_fetch_feed_switches_to_alternate_and_shrinks_window(monkeypatch):
     assert calls[1][0] == "sip"
     assert calls[1][1] > start  # window shrunk
     assert ("TEST", "1Min") not in fb._SKIPPED_SYMBOLS
+    assert ("TEST", "1Min") not in fetch._SKIPPED_SYMBOLS
 
 
 def test_fetch_feed_adds_skip_list_after_max_retries(monkeypatch):
@@ -44,6 +47,7 @@ def test_fetch_feed_adds_skip_list_after_max_retries(monkeypatch):
 
     monkeypatch.setattr(fb, "_fetch_bars", always_empty)
     fb._SKIPPED_SYMBOLS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
     key = ("FAIL", "1Min")
     fb._EMPTY_BAR_COUNTS[key] = fb._EMPTY_BAR_MAX_RETRIES - 1
 
@@ -51,3 +55,4 @@ def test_fetch_feed_adds_skip_list_after_max_retries(monkeypatch):
         fb._fetch_feed("FAIL", start, end, "1Min", feed="iex")
 
     assert key in fb._SKIPPED_SYMBOLS
+    assert key in fetch._SKIPPED_SYMBOLS
