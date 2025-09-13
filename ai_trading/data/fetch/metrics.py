@@ -42,6 +42,7 @@ def rate_limit(host: str) -> int:
     """Increment rate-limit counter for ``host`` and return the total."""
     with _RATE_LIMIT_LOCK:
         _RATE_LIMITS[host] += 1
+        _metrics.rate_limit += 1
         return _RATE_LIMITS[host]
 
 
@@ -49,6 +50,7 @@ def timeout(host: str) -> int:
     """Increment timeout counter for ``host`` and return the total."""
     with _TIMEOUT_LOCK:
         _TIMEOUTS[host] += 1
+        _metrics.timeout += 1
         return _TIMEOUTS[host]
 
 
@@ -56,6 +58,7 @@ def unauthorized_sip(host: str) -> int:
     """Increment unauthorized SIP counter for ``host`` and return the total."""
     with _UNAUTH_LOCK:
         _UNAUTH_SIP[host] += 1
+        _metrics.unauthorized += 1
         return _UNAUTH_SIP[host]
 
 
@@ -64,6 +67,7 @@ def empty_payload(symbol: str, timeframe: str) -> int:
     key = (symbol, timeframe)
     with _EMPTY_LOCK:
         _EMPTY[key] += 1
+        _metrics.empty_payload += 1
         return _EMPTY[key]
 
 
@@ -116,8 +120,9 @@ def provider_disable_total(provider: str) -> int:
     return _current_value(metric)
 
 
-def snapshot(metrics_state: object = _metrics) -> dict[str, int]:
+def snapshot(metrics_state: object | None = None) -> dict[str, int]:
     """Return a snapshot of high level data-fetch metrics."""
+    metrics_state = _metrics if metrics_state is None else metrics_state
     return {
         "rate_limit": getattr(metrics_state, "rate_limit", 0),
         "timeout": getattr(metrics_state, "timeout", 0),
@@ -134,6 +139,15 @@ def reset() -> None:
     _TIMEOUTS.clear()
     _UNAUTH_SIP.clear()
     _EMPTY.clear()
+    _FETCH_ATTEMPTS.clear()
+    global _ALPACA_FAILED
+    _ALPACA_FAILED = 0
+    _metrics.rate_limit = 0
+    _metrics.timeout = 0
+    _metrics.unauthorized = 0
+    _metrics.empty_payload = 0
+    _metrics.feed_switch = 0
+    _metrics.empty_fallback = 0
 
 
 __all__ = [
