@@ -54,7 +54,7 @@ def _optional_float_env(name: str, default: float) -> float:
 
 MAX_DRAWDOWN_THRESHOLD = _require_float_env("MAX_DRAWDOWN_THRESHOLD")
 
-MODE_PRESETS = {
+_MODE_PRESETS = {
     "conservative": {
         "kelly_fraction": 0.25,
         "conf_threshold": 0.85,
@@ -79,10 +79,10 @@ MODE_PRESETS = {
 }
 
 TRADING_MODE = resolve_trading_mode("balanced").lower()
-if TRADING_MODE not in MODE_PRESETS:
+if TRADING_MODE not in _MODE_PRESETS:
     raise RuntimeError(f"Invalid TRADING_MODE: {TRADING_MODE}")
 
-_mode_defaults = MODE_PRESETS[TRADING_MODE]
+_mode_defaults = _MODE_PRESETS[TRADING_MODE]
 KELLY_FRACTION = _optional_float_env("KELLY_FRACTION", _mode_defaults["kelly_fraction"])
 CONF_THRESHOLD = _optional_float_env("CONF_THRESHOLD", _mode_defaults["conf_threshold"])
 MAX_POSITION_SIZE = _optional_float_env(
@@ -93,7 +93,7 @@ DAILY_LOSS_LIMIT = _optional_float_env(
 )
 CAPITAL_CAP = _optional_float_env("CAPITAL_CAP", _mode_defaults["capital_cap"])
 
-MODE_PARAMETERS = {k: v["conf_threshold"] for k, v in MODE_PRESETS.items()}
+MODE_PARAMETERS = {k: v["conf_threshold"] for k, v in _MODE_PRESETS.items()}
 SENTIMENT_API_KEY = os.getenv('SENTIMENT_API_KEY')
 SENTIMENT_API_URL = os.getenv('SENTIMENT_API_URL')
 SENTIMENT_ENHANCED_CACHING = True
@@ -189,4 +189,34 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
             if key in conf:
                 conf[key] = '***'
     return conf
-__all__ = ['Settings', 'get_settings', 'broker_keys', 'get_alpaca_config', 'AlpacaConfig', 'TradingConfig', 'derive_cap_from_settings', 'get_env', '_require_env_vars', 'require_env_vars', 'reload_env', 'validate_environment', 'validate_alpaca_credentials', 'validate_env_vars', 'log_config', 'ORDER_FILL_RATE_TARGET', 'MAX_DRAWDOWN_THRESHOLD', 'MODE_PRESETS', 'TRADING_MODE', 'KELLY_FRACTION', 'CONF_THRESHOLD', 'MAX_POSITION_SIZE', 'DAILY_LOSS_LIMIT', 'CAPITAL_CAP', 'MODE_PARAMETERS', 'SENTIMENT_API_KEY', 'SENTIMENT_API_URL', 'SENTIMENT_ENHANCED_CACHING', 'SENTIMENT_RECOVERY_TIMEOUT_SECS', 'SENTIMENT_FALLBACK_SOURCES', 'META_LEARNING_BOOTSTRAP_ENABLED', 'META_LEARNING_MIN_TRADES_REDUCED', 'SENTIMENT_SUCCESS_RATE_TARGET', 'META_LEARNING_BOOTSTRAP_WIN_RATE']
+# Public API surface intentionally small; rarely used constants remain module attrs
+# but are omitted here to discourage imports from this namespace.
+__all__ = [
+    '_require_env_vars',
+    'AlpacaConfig',
+    'MAX_DRAWDOWN_THRESHOLD',
+    'META_LEARNING_BOOTSTRAP_ENABLED',
+    'META_LEARNING_BOOTSTRAP_WIN_RATE',
+    'META_LEARNING_MIN_TRADES_REDUCED',
+    'MODE_PARAMETERS',
+    'ORDER_FILL_RATE_TARGET',
+    'SENTIMENT_API_KEY',
+    'SENTIMENT_API_URL',
+    'SENTIMENT_ENHANCED_CACHING',
+    'SENTIMENT_FALLBACK_SOURCES',
+    'SENTIMENT_RECOVERY_TIMEOUT_SECS',
+    'SENTIMENT_SUCCESS_RATE_TARGET',
+    'Settings',
+    'TradingConfig',
+    'broker_keys',
+    'derive_cap_from_settings',
+    'get_alpaca_config',
+    'get_env',
+    'get_settings',
+    'log_config',
+    'reload_env',
+    'require_env_vars',
+    'validate_alpaca_credentials',
+    'validate_environment',
+    'validate_env_vars',
+]
