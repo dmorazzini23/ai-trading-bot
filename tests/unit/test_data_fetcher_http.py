@@ -345,3 +345,53 @@ def test_success_resets_alert_flag(monkeypatch: pytest.MonkeyPatch):
     out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
     assert isinstance(out, pd.DataFrame) and not out.empty
     assert df._ALPACA_DISABLED_ALERTED is False
+
+
+def test_unauthorized_sip_only_attempts_once(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+
+    calls = {"count": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls["count"] += 1
+        return _Resp(401, payload={"message": "auth"})
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+    monkeypatch.setattr(df, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
+
+    start, end = _dt_range(2)
+    df._fetch_bars("TEST", start, end, "1Min", feed="sip")
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="sip")
+
+    assert calls["count"] == 1
+    assert isinstance(out, pd.DataFrame) and out.empty
+    assert df._SIP_UNAUTHORIZED is True
+
+
+def test_empty_success_resets_alert_flag(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_ALPACA_DISABLED_ALERTED", True, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_FETCH_BARS_MAX_RETRIES", 1, raising=False)
+    monkeypatch.setattr(df, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(df, "_sip_configured", lambda: False, raising=False)
+    monkeypatch.setattr(df.provider_monitor, "record_failure", lambda *a, **k: None)
+    monkeypatch.setattr(df.provider_monitor, "record_success", lambda *a, **k: None)
+    monkeypatch.setattr(df, "provider_priority", lambda: ["alpaca_iex"], raising=False)
+    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 0, raising=False)
+
+    def ok_resp(url, params=None, headers=None, timeout=None):
+        return _Resp(200, payload={"bars": []})
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", ok_resp)
+    monkeypatch.setattr(df.requests, "get", ok_resp, raising=False)
+
+    start, end = _dt_range(2)
+    df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert df._ALPACA_DISABLED_ALERTED is False
