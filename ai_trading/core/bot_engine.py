@@ -5958,22 +5958,6 @@ def get_trade_logger() -> TradeLogger:
     path = _TRADE_LOGGER_SINGLETON.path
     log_dir = os.path.dirname(path) or "."
 
-    try:
-        os.makedirs(log_dir, mode=0o700, exist_ok=True)
-    except PermissionError as exc:
-        logger.warning(
-            "TRADE_LOG_DIR_NOT_WRITABLE %s",
-            log_dir,
-            extra={"dir": log_dir, "detail": str(exc)},
-        )
-        return _TRADE_LOGGER_SINGLETON
-    except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
-        logger.error(
-            "TRADE_LOG_DIR_CREATE_FAILED",
-            extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
-        )
-        return _TRADE_LOGGER_SINGLETON
-
     # Determine writability using POSIX permission bits rather than os.access.
     # This avoids root bypass so tests that change mode to read-only still fail.
     def _is_dir_writable(str_path: str) -> bool:
@@ -5995,6 +5979,31 @@ def get_trade_logger() -> TradeLogger:
         if st.st_gid == gid or st.st_gid in groups:
             return bool(mode & _stat.S_IWGRP)
         return bool(mode & _stat.S_IWOTH)
+
+    parent_dir = os.path.dirname(log_dir) or "."
+    if not _is_dir_writable(parent_dir):
+        logger.warning(
+            "TRADE_LOG_DIR_NOT_WRITABLE %s",
+            parent_dir,
+            extra={"dir": parent_dir},
+        )
+        return _TRADE_LOGGER_SINGLETON
+
+    try:
+        os.makedirs(log_dir, mode=0o700, exist_ok=True)
+    except PermissionError as exc:
+        logger.warning(
+            "TRADE_LOG_DIR_NOT_WRITABLE %s",
+            log_dir,
+            extra={"dir": log_dir, "detail": str(exc)},
+        )
+        return _TRADE_LOGGER_SINGLETON
+    except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
+        logger.error(
+            "TRADE_LOG_DIR_CREATE_FAILED",
+            extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
+        )
+        return _TRADE_LOGGER_SINGLETON
 
     if not _is_dir_writable(log_dir):
         logger.warning(
