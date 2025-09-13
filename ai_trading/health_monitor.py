@@ -21,6 +21,17 @@ from typing import Any
 from ai_trading.monitoring.system_health import _HAS_PSUTIL, snapshot_basic
 from ai_trading.config import get_settings
 
+try:  # pragma: no cover - flask.testing is optional
+    from flask.testing import FlaskClient
+    FLASK_TESTING_AVAILABLE = True
+except Exception:  # ImportError, AttributeError, etc.
+    FLASK_TESTING_AVAILABLE = False
+
+    class FlaskClient:  # type: ignore[no-redef]
+        """Minimal stub used when Flask's testing utilities are unavailable."""
+
+        pass
+
 if _HAS_PSUTIL:
     import psutil
 else:
