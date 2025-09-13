@@ -432,11 +432,25 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         return logger
 
 
-def configure_logging(debug: bool=False, log_file: str | None=None) -> logging.Logger:
-    """Configure logging unless it has already been done."""
+def configure_logging(debug: bool=False, log_file: str | None=None) -> SanitizingLoggerAdapter:
+    """Configure logging and return a sanitizing adapter.
+
+    The function is resilient to configuration/setting import failures and
+    guarantees that both global configuration flags are set.  The returned
+    logger is always wrapped with :class:`SanitizingLoggerAdapter` so callers
+    can safely attach structured extras.
+    """
+    global _configured, _LOGGING_CONFIGURED
     if _LOGGING_CONFIGURED:
-        return logging.getLogger()
-    return setup_logging(debug=debug, log_file=log_file)
+        _configured = True
+        return get_logger(_ROOT_LOGGER_NAME)
+    try:
+        setup_logging(debug=debug, log_file=log_file)
+    except COMMON_EXC:
+        ensure_logging_configured()
+    _configured = True
+    _LOGGING_CONFIGURED = True
+    return get_logger(_ROOT_LOGGER_NAME)
 
 def _safe_shutdown_logging():
     try:
@@ -488,6 +502,16 @@ def get_logger(name: str) -> SanitizingLoggerAdapter:
     return _loggers[name]
 logger = SanitizingLoggerAdapter(logging.getLogger(__name__), {})
 logger_once = EmitOnceLogger(logger)
+
+
+def log_compact_json(*_a: Any, **_k: Any) -> None:  # pragma: no cover - stub
+    """Stub to avoid ``AttributeError`` when compact JSON logging is disabled."""
+    return None
+
+
+def log_market_fetch(*_a: Any, **_k: Any) -> None:  # pragma: no cover - stub
+    """Stub to avoid ``AttributeError`` when market fetch logging is disabled."""
+    return None
 
 
 def log_finnhub_disabled(symbol: str) -> None:
@@ -916,4 +940,4 @@ def validate_logging_setup(logger: logging.Logger | None=None, *, dedupe: bool=F
     else:
         get_logger(__name__).error('Logging validation failed: %s', validation_result['issues'])
     return validation_result
-__all__ = ['setup_logging', 'configure_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_backup_provider_used', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
+__all__ = ['setup_logging', 'configure_logging', 'get_logger', 'get_phase_logger', 'init_logger', 'logger', 'logger_once', 'log_fetch_attempt', 'log_backup_provider_used', 'log_empty_retries_exhausted', 'log_performance_metrics', 'log_trading_event', 'log_finnhub_disabled', 'warn_finnhub_disabled_no_data', 'log_compact_json', 'log_market_fetch', 'setup_enhanced_logging', 'validate_logging_setup', 'dedupe_stream_handlers', 'EmitOnceLogger', 'CompactJsonFormatter', 'with_extra', 'info_kv', 'warning_kv', 'error_kv', 'SanitizingLoggerAdapter', 'sanitize_extra']
