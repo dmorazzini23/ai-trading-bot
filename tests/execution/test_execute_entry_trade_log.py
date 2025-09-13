@@ -6,13 +6,14 @@ import os
 import pandas as pd
 import pytest
 
-from ai_trading.core import bot_engine, execution_flow
 from ai_trading.execution import ExecutionEngine
 from ai_trading.core.enums import OrderSide, OrderType
 
 
 def test_execute_entry_logs_trade(tmp_path, monkeypatch):
     """execute_entry should create trade log and append entry."""
+
+    from ai_trading.core import bot_engine, execution_flow
 
     log_path = tmp_path / "trades.jsonl"
     monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
@@ -60,11 +61,11 @@ def test_slippage_converts_market_to_limit(monkeypatch):
     monkeypatch.setenv("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5")
     monkeypatch.setattr("ai_trading.execution.engine.hash", lambda x: 99, raising=False)
     engine = ExecutionEngine()
-    oid = engine.execute_order("AAPL", OrderSide.BUY, 10, expected_price=100.0)
+    monkeypatch.setattr(engine, "_guess_price", lambda symbol: 100.0)
+    oid = engine.execute_order("AAPL", OrderSide.BUY, 10)
     order = engine.order_manager.orders[oid]
     assert order.order_type == OrderType.LIMIT
-    expected_price = round(100.0 + (100.0 * 5 / 10000), 4)
-    assert round(float(order.price), 4) == expected_price
+    assert round(float(order.price), 2) == 100.05
 
 
 def test_slippage_reduces_order_size(monkeypatch):
