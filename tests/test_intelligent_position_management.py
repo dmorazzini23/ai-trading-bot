@@ -13,6 +13,7 @@ AI-AGENT-REF: Comprehensive tests for intelligent position management
 """
 
 import importlib.util
+import math
 from unittest.mock import Mock
 
 import pytest
@@ -89,7 +90,16 @@ class TestIntelligentPositionManager:
         # Verify component extraction from mocked data
         close_series = self.mock_ctx.data_fetcher.get_daily_df.return_value.close
         assert isinstance(close_series, MockSeries)
-        assert close_series.diff() is close_series
+
+        # ``diff`` should yield numeric differences with ``NaN`` for the first
+        # element to mirror pandas semantics.
+        diff_values = close_series.diff().tolist()
+        assert math.isnan(diff_values[0])
+        assert diff_values[1:] == [1] * (len(self.mock_daily_data["close"]) - 1)
+
+        # ``isna`` should report no missing values for this dataset.
+        assert not close_series.isna().any()
+
         assert close_series.tail().tolist() == self.mock_daily_data["close"][-5:]
 
     def test_should_hold_position_integration(self):
