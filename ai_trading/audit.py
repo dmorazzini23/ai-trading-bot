@@ -265,23 +265,32 @@ def log_trade(
         }
 
     for path in targets:
+        header_perm_error = False
         try:
             _ensure_file_header(path, headers)
+        except PermissionError as exc:
+            header_perm_error = True
+            logger.error("audit.log permission denied %s: %s", path, exc)
+            if fix_file_permissions(path):
+                try:
+                    _ensure_file_header(path, headers)
+                except PermissionError:
+                    return
+            else:
+                return
+        try:
             with open(path, "a", newline="") as f:  # built-in open for patch compatibility
                 writer = csv.DictWriter(f, fieldnames=headers)
                 writer.writerow(row)
         except PermissionError as exc:
             logger.error("audit.log permission denied %s: %s", path, exc)
-            # Invoke repair hook then retry once; swallow if still failing (tests
-            # only assert that the repair was attempted).
             if fix_file_permissions(path):
                 try:
-                    _ensure_file_header(path, headers)
                     with open(path, "a", newline="") as f:
                         writer = csv.DictWriter(f, fieldnames=headers)
                         writer.writerow(row)
                 except PermissionError:
                     pass
-            # Do not attempt additional targets on permission errors to avoid
-            # duplicate repair attempts in unit tests.
+            return
+        if header_perm_error:
             return
