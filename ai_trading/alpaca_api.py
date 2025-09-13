@@ -47,28 +47,6 @@ def eastern_tz() -> ZoneInfo:
 
 EASTERN_TZ = eastern_tz()
 
-
-def _is_intraday_unit(unit_tok: str) -> bool:
-    """Return True for minute or hour-based timeframes."""
-    return unit_tok in ("Min", "Hour")
-
-
-def _unit_from_norm(tf_norm: str) -> tuple[str, str]:
-    """Return (unit_name, suffix) from a normalized timeframe string."""
-    mapping = {
-        "Min": "Minute",
-        "Minute": "Minute",
-        "Hour": "Hour",
-        "Day": "Day",
-        "Week": "Week",
-        "Month": "Month",
-    }
-    for suffix, name in mapping.items():
-        if tf_norm.endswith(suffix):
-            return name, suffix
-    return "Day", "Day"
-
-
 ALPACA_AVAILABLE = not missing("alpaca", "alpaca")
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 
@@ -248,26 +226,12 @@ def get_timeframe_unit_cls():
 
 
 def _normalize_timeframe_for_tradeapi(tf_raw):
-    """Support string pass-through and alpaca TimeFrame objects."""
-    try:
-        TimeFrame = get_timeframe_cls()
-    except Exception:
-        TimeFrame = None
-    if isinstance(tf_raw, str):
-        s = tf_raw.strip()
-        if s[:1].isdigit():
-            import re
+    """Return (canonical_string, TimeFrame) for ``tf_raw`` input."""
+    from ai_trading.timeframe import canonicalize_timeframe
 
-            m = re.match(r"(\d+)(\w+)", s)
-            if m:
-                amt, unit = m.groups()
-                return f"{amt}{unit.capitalize()}"
-            return s
-        return f"1{s.capitalize()}"
-    if TimeFrame is not None and isinstance(tf_raw, TimeFrame):
-        unit = getattr(tf_raw.unit, "name", str(tf_raw.unit)).title()
-        return f"{tf_raw.amount}{unit}"
-    return str(tf_raw)
+    tf_obj = canonicalize_timeframe(tf_raw)
+    unit = getattr(tf_obj.unit, "name", str(tf_obj.unit)).title()
+    return f"{tf_obj.amount}{unit}", tf_obj
 
 
 def _to_utc(dtobj: dt.datetime) -> dt.datetime:
@@ -413,25 +377,13 @@ def get_bars_df(
     symbol = _canon_symbol(symbol)
     APIError = get_api_error_cls()
     StockBarsRequest = get_stock_bars_request_cls()
-    TimeFrame = get_timeframe_cls()
-    TimeFrameUnit = get_timeframe_unit_cls()
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest(bars=True)
     feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
     adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
     tf_raw = timeframe
-    tf_norm = _normalize_timeframe_for_tradeapi(tf_raw)
-    unit_name, suffix = _unit_from_norm(tf_norm)
-    try:
-        amount = int(tf_norm[: len(tf_norm) - len(suffix)])
-    except ValueError:
-        amount = 1
-    try:
-        unit_enum = getattr(TimeFrameUnit, unit_name)
-    except AttributeError:
-        unit_enum = TimeFrameUnit.Day
-    tf_obj = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(amount, unit_enum)
+    tf_norm, tf_obj = _normalize_timeframe_for_tradeapi(tf_raw)
     if end is not None:
         from ai_trading.utils.datetime import ensure_datetime
 
