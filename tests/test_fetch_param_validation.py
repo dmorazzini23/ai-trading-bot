@@ -38,6 +38,30 @@ def test_missing_session_raises(monkeypatch):
         fetch._fetch_bars("AAPL", start, end, "1Min")
 
 
+def test_missing_start_raises():
+    _, end = _trading_range()
+    with pytest.raises(ValueError):
+        fetch._fetch_bars("AAPL", None, end, "1Min")
+
+
+def test_missing_end_raises():
+    start, _ = _trading_range()
+    with pytest.raises(ValueError):
+        fetch._fetch_bars("AAPL", start, None, "1Min")
+
+
+def test_fetch_daily_async_requires_start():
+    _, end = _trading_range()
+    with pytest.raises(ValueError):
+        fetch.fetch_daily_data_async(["AAPL"], None, end)
+
+
+def test_fetch_daily_async_requires_end():
+    start, _ = _trading_range()
+    with pytest.raises(ValueError):
+        fetch.fetch_daily_data_async(["AAPL"], start, None)
+
+
 def test_sip_fallback_requires_session():
     with pytest.raises(ValueError):
         fetch._sip_fallback_allowed(None, {}, "1Min")
