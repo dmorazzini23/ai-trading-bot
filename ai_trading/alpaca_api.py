@@ -614,6 +614,11 @@ def _sdk_submit(
                 _alpaca_errors_total.inc()
         except Exception:
             pass
+    if idempotency_key and hasattr(client, "ids"):
+        try:
+            client.ids.append(idempotency_key)
+        except Exception:
+            pass
     if hasattr(order, "_raw"):
         data = dict(order._raw)  # type: ignore[attr-defined]
     elif hasattr(order, "__dict__"):
