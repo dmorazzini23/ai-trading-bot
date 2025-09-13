@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+import inspect
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -177,13 +178,33 @@ def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
 
     ``status`` is forwarded as a top-level keyword to preserve compatibility
     with SDKs expecting a simple string or enum. Other parameters are passed
-    through unchanged.
+    through unchanged. For newer SDKs accepting a ``filter`` object, this
+    constructs :class:`GetOrdersRequest` when available.
     """
     status = kwargs.pop("status", None)
+
+    try:
+        use_filter = "filter" in inspect.signature(api.get_orders).parameters
+    except Exception:  # pragma: no cover - defensive
+        use_filter = False
+
+    if use_filter and status is not None:
+        try:
+            requests_mod = importlib.import_module("alpaca.trading.requests")
+            enums_mod = importlib.import_module("alpaca.trading.enums")
+            req_cls = getattr(requests_mod, "GetOrdersRequest")
+            enum_cls = getattr(enums_mod, "QueryOrderStatus")
+            enum_val = getattr(enum_cls, str(status).upper(), status)
+            filt = req_cls(statuses=[enum_val])
+        except Exception:
+            pass
+        else:
+            return api.get_orders(*args, filter=filt, **kwargs)
+
     if status is not None:
         enum_val: Any = status
         try:  # optional enum mapping for alpaca-py
-            enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
+            enums_mod = importlib.import_module("alpaca.trading.enums")
             enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(enums_mod, "OrderStatus", None)
             if enum_cls is not None:
                 enum_val = getattr(enum_cls, str(status).upper(), status)
