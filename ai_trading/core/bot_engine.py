@@ -98,8 +98,8 @@ except ImportError as exc:  # pragma: no cover - log once when SDK missing
     ALPACA_AVAILABLE = False
     logger_once.warning(
         "ALPACA_SDK_IMPORT_FAILED - %s",
+        "alpaca_sdk_import_failed",
         exc,
-        key="alpaca_sdk_import_failed",
     )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -1112,10 +1112,17 @@ from ai_trading.settings import (
 )  # AI-AGENT-REF: runtime env settings
 
 # Refresh environment variables on startup for reliability
-_reload_env()
-
 # Initialize settings once for global use
-CFG = get_settings()
+_reload_env()
+try:
+    CFG = get_settings()
+except Exception:  # pragma: no cover - defensive fallback
+    CFG = None
+if CFG is None:
+    CFG = types.SimpleNamespace(
+        log_market_fetch=True,
+        max_drawdown_threshold=0.0,
+    )
 # Backward-compat constants for risk thresholds used throughout this module
 # AI-AGENT-REF: restored weekly drawdown limit
 WEEKLY_DRAWDOWN_LIMIT = getattr(CFG, "weekly_drawdown_limit", 0.10)
@@ -1393,7 +1400,7 @@ if getattr(S, "use_rl_agent", False) and RL_MODEL_PATH:
             extra={"hint": "ai_trading.rl_trading import failed"},
         )
 
-_DEFAULT_FEED = CFG.alpaca_data_feed or "iex"
+_DEFAULT_FEED = getattr(CFG, "alpaca_data_feed", "iex") or "iex"
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
@@ -1878,7 +1885,7 @@ def _require_cfg(value: str | None, name: str) -> str:
         return value
 
     # In testing mode, return a dummy value
-    if CFG.testing:
+    if getattr(CFG, "testing", False):
         dummy_values = {
             "ALPACA_API_KEY": "test_api_key",
             "ALPACA_SECRET_KEY": "test_secret_key",
@@ -1949,7 +1956,7 @@ def init_runtime_config():
     try:
         ALPACA_API_KEY, ALPACA_SECRET_KEY, _ = _ensure_alpaca_env_or_raise()
     except RuntimeError as e:
-        if not CFG.testing:  # Allow missing credentials in test mode
+        if not getattr(CFG, "testing", False):  # Allow missing credentials in test mode
             raise e
         # AI-AGENT-REF: Use environment variables even in test mode to avoid hardcoded secrets
         ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
@@ -3694,7 +3701,7 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
         )
     try:
         df = runtime.data_fetcher.get_minute_df(
-            runtime, REGIME_SYMBOLS[0], lookback_minutes=CFG.min_health_rows
+            runtime, REGIME_SYMBOLS[0], lookback_minutes=getattr(CFG, "min_health_rows", 120)
         )
         rows = len(df)
         last_time = df.index[-1].isoformat() if not df.empty else "n/a"
@@ -6005,7 +6012,8 @@ def get_trade_logger() -> TradeLogger:
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         try:
             with open(path, "w", newline="") as f:
-                portalocker.lock(f, portalocker.LOCK_EX)
+                if hasattr(portalocker, "lock"):
+                    portalocker.lock(f, portalocker.LOCK_EX)
                 try:
                     csv.writer(f).writerow(
                         [
@@ -6024,7 +6032,8 @@ def get_trade_logger() -> TradeLogger:
                         ]
                     )
                 finally:
-                    portalocker.unlock(f)
+                    if hasattr(portalocker, "unlock"):
+                        portalocker.unlock(f)
         except PermissionError as exc:
             logger.warning(
                 "TRADE_LOG_DIR_NOT_WRITABLE %s",
@@ -8694,7 +8703,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
     ``bypass_market_check`` is explicitly set to ``True``.
     """
 
-    if not (CFG.testing or bypass_market_check):
+    if not (getattr(CFG, "testing", False) or bypass_market_check):
         if not market_is_open():
             logger.warning(
                 "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
@@ -12832,8 +12841,9 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     if fetcher is not None:
         return fetcher
     if data_fetcher is not None:
-        logger_once.warning(
-            "DATA_FETCHER_ATTACHED_LATE", key="data_fetcher_attached_late"
+        logger.warning(
+            "DATA_FETCHER_ATTACHED_LATE",
+            extra={"key": "data_fetcher_attached_late"},
         )
         runtime.data_fetcher = data_fetcher
         return data_fetcher
@@ -13491,7 +13501,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         ):
             logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
             return
-        if not _is_market_open_base():
+        if not is_market_open():
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
             return  # skip work when market closed
         loop_start = time.monotonic()
@@ -13524,9 +13534,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 ConnectionError,
                 AttributeError,
             ) as e:  # AI-AGENT-REF: tighten order check errors
-                logger_once.warning(
+                logger.warning(
                     "api.list_orders failed during order check",
-                    key="alpaca_list_orders_failed",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
                 open_orders = []
@@ -13548,6 +13557,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             if ctx and getattr(runtime, "data_fetcher", None) is None:
                 runtime.data_fetcher = getattr(ctx, "data_fetcher", None)
             ensure_data_fetcher(runtime)
+            get_trade_logger()
 
             for attempt in range(3):
                 try:
@@ -13605,17 +13615,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     )
 
             # AI-AGENT-REF: Update drawdown circuit breaker with current equity
-            if runtime.drawdown_circuit_breaker:
+            dbc = getattr(runtime, "drawdown_circuit_breaker", None)
+            if dbc:
                 try:
                     acct = runtime.api.get_account()
                     current_equity = float(acct.equity) if acct else 0.0
-                    trading_allowed = runtime.drawdown_circuit_breaker.update_equity(
-                        current_equity
-                    )
-
+                    trading_allowed = dbc.update_equity(current_equity)
                     # AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block
-                    status = runtime.drawdown_circuit_breaker.get_status()
-
+                    status = dbc.get_status()
                     if not trading_allowed:
                         logger.critical(
                             "TRADING_HALTED_DRAWDOWN_PROTECTION",
@@ -13990,7 +13997,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
 def schedule_run_all_trades(runtime):
     """Spawn run_all_trades_worker if market is open."""
-    if not _is_market_open_base():
+    if not is_market_open():
         _log_market_closed("Market closed—skipping run_all_trades.")
         return
     global _LAST_MARKET_CLOSED_LOG
@@ -14404,7 +14411,7 @@ def main() -> None:
             for sym in initial_list:
                 try:
                     ctx.data_fetcher.get_minute_df(
-                        ctx, sym, lookback_minutes=CFG.min_health_rows
+                        ctx, sym, lookback_minutes=getattr(CFG, "min_health_rows", 120)
                     )
                 except (
                     FileNotFoundError,
