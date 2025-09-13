@@ -51,8 +51,7 @@ def _init_sentiment() -> None:
     logger.debug("SENTIMENT_INIT")
 _bs4 = None
 _transformers_bundle = None
-_sentiment_deps_logged: set[str] = set()
-_SENT_DEPS_LOGGED = False
+_SENT_DEPS_LOGGED: set[str] = set()
 _SENTIMENT_STUB_LOGGED = False
 
 def _load_bs4(log=logger):
@@ -63,10 +62,9 @@ def _load_bs4(log=logger):
         from bs4 import BeautifulSoup
         _bs4 = BeautifulSoup
     except (ImportError, ValueError, TypeError):
-        if 'bs4' not in _sentiment_deps_logged:
-            log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'bs4'})
-            _sentiment_deps_logged.add('bs4')
-            _SENT_DEPS_LOGGED = True
+        if "bs4" not in _SENT_DEPS_LOGGED:
+            log.warning("SENTIMENT_OPTIONAL_DEP_MISSING", extra={"package": "bs4"})
+            _SENT_DEPS_LOGGED.add("bs4")
         _bs4 = None
     return _bs4
 
@@ -83,10 +81,11 @@ def _load_transformers(log=logger):
         model.eval()
         _transformers_bundle = (torch, tokenizer, model)
     except (ImportError, ValueError, TypeError):
-        if 'transformers' not in _sentiment_deps_logged:
-            log.warning('SENTIMENT_OPTIONAL_DEP_MISSING', extra={'package': 'transformers'})
-            _sentiment_deps_logged.add('transformers')
-            _SENT_DEPS_LOGGED = True
+        if "transformers" not in _SENT_DEPS_LOGGED:
+            log.warning(
+                "SENTIMENT_OPTIONAL_DEP_MISSING", extra={"package": "transformers"}
+            )
+            _SENT_DEPS_LOGGED.add("transformers")
         _transformers_bundle = None
     return _transformers_bundle
 SENTIMENT_TTL_SEC = 600
