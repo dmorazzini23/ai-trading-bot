@@ -354,7 +354,12 @@ def _require_pandas(consumer: str = "this function"):
 
 
 # Optional retry/backoff support using tenacity
-try:  # pragma: no cover - optional dependency wrapper
+if missing("tenacity", "retry"):
+    retry = None  # type: ignore
+
+    def _with_retry(callable_):  # type: ignore
+        return callable_
+else:  # pragma: no cover - optional dependency wrapper
     from tenacity import (
         retry,
         stop_after_attempt,
@@ -369,12 +374,6 @@ try:  # pragma: no cover - optional dependency wrapper
             wait=wait_exponential(multiplier=0.25, max=2.0),
             retry=retry_if_exception_type(Exception),
         )(callable_)
-
-except Exception:  # pragma: no cover - absent tenacity
-    retry = None  # type: ignore
-
-    def _with_retry(callable_):  # type: ignore
-        return callable_
 
 
 def get_bars_df(
