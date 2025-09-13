@@ -332,18 +332,18 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
     environment variable.
     """
     global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
-    if _LOGGING_CONFIGURED:
+    if _LOGGING_CONFIGURED and _configured:
         return logging.getLogger()
     if debug:
         # Deprecated: retain for callers that still pass ``debug=True``.
         # The effective log level is derived from configuration instead.
         pass
     with _LOGGING_LOCK:
-        if _LOGGING_CONFIGURED:
+        if _LOGGING_CONFIGURED and _configured:
             return logging.getLogger()
         if _listener is not None:
             _listener = None
-        if _LOGGING_CONFIGURED:
+        if _LOGGING_CONFIGURED and _configured:
             return logging.getLogger()
         logger = logging.getLogger()
         if _configured:
