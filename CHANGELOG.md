@@ -98,6 +98,7 @@ All notable changes to this project will be documented in this file.
   `model_fields[info.field_name].default`.
 - **Position sizing**: fetch real account equity via Alpaca once and cache it to avoid repeated `EQUITY_MISSING` warnings.
 - **Scheduler**: default to UTC when market calendar lacks timezone info.
+- Models: re-registering with the same path returns the existing entry; conflicting paths still raise.
 
 ### Added
 - **Parallel Predictions**: Replaced single-threaded prediction executor with auto-sized thread pool

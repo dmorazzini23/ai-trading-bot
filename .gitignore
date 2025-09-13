@@ -66,6 +66,7 @@ peak_equity.txt
 metrics/
 !ai_trading/metrics/
 models/
+!ai_trading/models/
 regime_model.pkl
 sklearn_fix_summary.md
 test_critical_type_fix.py
