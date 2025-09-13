@@ -47,9 +47,11 @@ def eastern_tz() -> ZoneInfo:
 
 EASTERN_TZ = eastern_tz()
 
+
 def _is_intraday_unit(unit_tok: str) -> bool:
     """Return True for minute or hour-based timeframes."""
-    return unit_tok in ('Min', 'Hour')
+    return unit_tok in ("Min", "Hour")
+
 
 def _unit_from_norm(tf_norm: str) -> tuple[str, str]:
     """Return (unit_name, suffix) from a normalized timeframe string."""
@@ -65,6 +67,8 @@ def _unit_from_norm(tf_norm: str) -> tuple[str, str]:
         if tf_norm.endswith(suffix):
             return name, suffix
     return "Day", "Day"
+
+
 ALPACA_AVAILABLE = not missing("alpaca", "alpaca")
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 
@@ -87,6 +91,7 @@ def initialize() -> None:
                 importlib.import_module("alpaca.data")
     except Exception as exc:  # pragma: no cover - exercised in tests
         raise RuntimeError("alpaca-py SDK is required") from exc
+
 
 if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     from dataclasses import dataclass
@@ -111,7 +116,9 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
     TimeFrame.Minute = TimeFrame(1, TimeFrameUnit.Minute)  # type: ignore[attr-defined]
     TimeFrame.Hour = TimeFrame(1, TimeFrameUnit.Hour)  # type: ignore[attr-defined]
     TimeFrame.Day = TimeFrame()  # type: ignore[attr-defined]
-    TimeFrame.Week = TimeFrame(1, TimeFrameUnit.Week)  # type: ignore[attr-defined]
+    _week_unit = getattr(TimeFrameUnit, "Week", None)
+    if _week_unit is not None:
+        TimeFrame.Week = TimeFrame(1, _week_unit)  # type: ignore[attr-defined]
 
     @dataclass
     class StockBarsRequest:
@@ -154,8 +161,11 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
             for k, v in extra.items():
                 setattr(self, k, v)
 
-def _make_client_order_id(prefix: str='ai') -> str:
-    return f'{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}'
+
+def _make_client_order_id(prefix: str = "ai") -> str:
+    return f"{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
+
 generate_client_order_id = _make_client_order_id
 
 
@@ -192,9 +202,7 @@ def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
         enum_val: Any = status
         try:  # optional enum mapping for alpaca-py
             enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
-            enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
-                enums_mod, "OrderStatus", None
-            )
+            enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(enums_mod, "OrderStatus", None)
             if enum_cls is not None:
                 enum_val = getattr(enum_cls, str(status).upper(), status)
         except Exception:
@@ -235,6 +243,7 @@ def get_timeframe_unit_cls():
         return cls
     return TimeFrameUnit
 
+
 def _normalize_timeframe_for_tradeapi(tf_raw):
     """Support string pass-through and alpaca TimeFrame objects."""
     try:
@@ -243,11 +252,12 @@ def _normalize_timeframe_for_tradeapi(tf_raw):
         TimeFrame = None
     if isinstance(tf_raw, str):
         s = tf_raw.strip()
-        return s if s[:1].isdigit() else f'1{s.capitalize()}'
+        return s if s[:1].isdigit() else f"1{s.capitalize()}"
     if TimeFrame is not None and isinstance(tf_raw, TimeFrame):
-        unit = getattr(tf_raw.unit, 'name', str(tf_raw.unit)).title()
-        return f'{tf_raw.amount}{unit}'
+        unit = getattr(tf_raw.unit, "name", str(tf_raw.unit)).title()
+        return f"{tf_raw.amount}{unit}"
     return str(tf_raw)
+
 
 def _to_utc(dtobj: dt.datetime) -> dt.datetime:
     """Ensure a ``datetime`` is timezone-aware and in UTC."""
@@ -255,19 +265,23 @@ def _to_utc(dtobj: dt.datetime) -> dt.datetime:
         return dtobj.replace(tzinfo=dt.timezone.utc)
     return dtobj.astimezone(dt.timezone.utc)
 
+
 def _fmt_rfc3339_z(dtobj: dt.datetime) -> str:
     """Format a UTC datetime to RFC3339 ``YYYY-MM-DDTHH:MM:SSZ``."""
     d = _to_utc(dtobj).replace(microsecond=0)
-    return d.strftime('%Y-%m-%dT%H:%M:%SZ')
+    return d.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def _format_start_end_for_tradeapi(timeframe: str, start, end):
     """Daily => YYYY-MM-DD; intraday => RFC3339Z in UTC."""
     from ai_trading.utils.datetime import compose_daily_params, compose_intraday_params, ensure_datetime
+
     sd = ensure_datetime(start) if start is not None else None
     ed = ensure_datetime(end) if end is not None else None
-    is_daily = str(timeframe).lower() in {'1day', 'day', 'daily'}
+    is_daily = str(timeframe).lower() in {"1day", "day", "daily"}
     params = compose_daily_params(sd, ed) if is_daily else compose_intraday_params(sd, ed)
-    return (params['start'], params['end'])
+    return (params["start"], params["end"])
+
 
 def _get_rest(*, bars: bool = False) -> Any:
     """Return a new `alpaca-py` client instance.
@@ -284,9 +298,7 @@ def _get_rest(*, bars: bool = False) -> Any:
     oauth = os.getenv("ALPACA_OAUTH")
     base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     if oauth and (key or secret):
-        raise RuntimeError(
-            "Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both"
-        )
+        raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
 
     if bars:
         StockHistoricalDataClient = get_data_client_cls()
@@ -315,6 +327,7 @@ def _get_rest(*, bars: bool = False) -> Any:
         paper=is_paper,
         url_override=base_url,
     )
+
 
 def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     now = dt.datetime.now(tz=_UTC)
@@ -359,6 +372,7 @@ if missing("tenacity", "retry"):
 
     def _with_retry(callable_):  # type: ignore
         return callable_
+
 else:  # pragma: no cover - optional dependency wrapper
     from tenacity import (
         retry,
@@ -393,8 +407,8 @@ def get_bars_df(
 
     _pd = _require_pandas("get_bars_df")
     rest = _get_rest(bars=True)
-    feed = feed or os.getenv('ALPACA_DATA_FEED', 'iex')
-    adjustment = adjustment or os.getenv('ALPACA_ADJUSTMENT', 'all')
+    feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
+    adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
     tf_raw = timeframe
     tf_norm = _normalize_timeframe_for_tradeapi(tf_raw)
     unit_name, suffix = _unit_from_norm(tf_norm)
@@ -409,6 +423,7 @@ def get_bars_df(
     tf_obj = tf_raw if isinstance(tf_raw, TimeFrame) else TimeFrame(amount, unit_enum)
     if end is not None:
         from ai_trading.utils.datetime import ensure_datetime
+
         try:
             end_dt = ensure_datetime(end)
             if end_dt.date() > dt.date.today():
@@ -745,6 +760,7 @@ def submit_order(
 
     try:
         from alpaca.trading.client import TradingClient as _REST
+
         rest = _REST(
             api_key=cfg.key_id,
             secret_key=cfg.secret_key,
@@ -778,25 +794,29 @@ def submit_order(
         timeout=timeout,
     )
 
+
 def alpaca_get(*_a, **_k):
     return None
 
+
 def start_trade_updates_stream(*_a, **_k):
     return None
+
+
 __all__ = [
-    'ALPACA_AVAILABLE',
-    'is_shadow_mode',
-    'RETRY_HTTP_CODES',
-    'RETRYABLE_HTTP_STATUSES',
-    'submit_order',
-    'AlpacaOrderError',
-    'AlpacaOrderHTTPError',
-    'AlpacaOrderNetworkError',
-    'generate_client_order_id',
-    'list_orders_wrapper',
-    '_bars_time_window',
-    'get_bars_df',
-    'alpaca_get',
-    'start_trade_updates_stream',
-    'initialize',
+    "ALPACA_AVAILABLE",
+    "is_shadow_mode",
+    "RETRY_HTTP_CODES",
+    "RETRYABLE_HTTP_STATUSES",
+    "submit_order",
+    "AlpacaOrderError",
+    "AlpacaOrderHTTPError",
+    "AlpacaOrderNetworkError",
+    "generate_client_order_id",
+    "list_orders_wrapper",
+    "_bars_time_window",
+    "get_bars_df",
+    "alpaca_get",
+    "start_trade_updates_stream",
+    "initialize",
 ]
