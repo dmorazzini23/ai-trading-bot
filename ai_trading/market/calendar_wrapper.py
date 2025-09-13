@@ -1,10 +1,10 @@
-"""Minimal trading calendar wrapper backed by ``trading_calendars``.
+"""Minimal trading calendar wrapper backed by ``exchange_calendars``.
 
 The real NYSE calendar is loaded on import when available.  When the
-``trading_calendars`` package is missing or fails to initialize, a small
-fallback table provides deterministic sessions for tests, including
-known early closes (e.g., Black Friday) and daylight-saving transition
-Mondays for 2024–2025.
+canonical :mod:`exchange_calendars` package is missing or fails to
+initialize, a small fallback table provides deterministic sessions for
+tests, including known early closes (e.g., Black Friday) and
+daylight-saving transition Mondays for 2024–2025.
 """
 
 from __future__ import annotations
@@ -15,13 +15,23 @@ from zoneinfo import ZoneInfo
 
 
 def load_trading_calendars():
-    """Return :mod:`trading_calendars` if available, else ``None``."""
+    """Return :mod:`exchange_calendars` if available, else ``None``."""
 
     try:  # pragma: no cover - optional dependency
-        import trading_calendars as tc  # type: ignore
+        import exchange_calendars as ec  # type: ignore
     except Exception:  # library missing or incompatible
         return None
-    return tc
+    return ec
+
+
+def load_pandas_market_calendars():
+    """Return :mod:`pandas_market_calendars` if available."""
+
+    try:  # pragma: no cover - optional dependency
+        import pandas_market_calendars as pmc  # type: ignore
+    except Exception:
+        return None
+    return pmc
 
 
 _ET = ZoneInfo("America/New_York")
@@ -30,7 +40,7 @@ _tc = load_trading_calendars()
 if _tc is not None:  # pragma: no branch - small init
     try:  # pragma: no cover - best effort
         _CAL = _tc.get_calendar("XNYS")
-        # Preload sessions so holiday data is available without I/O.
+        # Preload sessions so holiday and early-close data is available without I/O.
         _CAL.sessions_in_range("2024-01-01", "2025-12-31")
     except Exception:  # pragma: no cover - fall back to stubs
         _CAL = None
@@ -127,7 +137,10 @@ def session_info(d: date) -> Session:
                 prev = previous_trading_session(d)
                 open_et = _CAL.session_open(prev).tz_convert(_ET).to_pydatetime()
                 close_et = _CAL.session_close(prev).tz_convert(_ET).to_pydatetime()
-            early = close_et.hour < 16
+            if hasattr(_CAL, "is_early_close"):
+                early = bool(_CAL.is_early_close(d))
+            else:
+                early = close_et.hour < 16
             return Session(open_et.astimezone(UTC), close_et.astimezone(UTC), early)
         except Exception:  # pragma: no cover - fall back
             pass
@@ -141,6 +154,19 @@ def rth_session_utc(d: date) -> tuple[datetime, datetime]:
 
     s = session_info(d)
     return s.start_utc, s.end_utc
+
+
+def rth_dst_summer_standard_times() -> tuple[tuple[datetime, datetime], tuple[datetime, datetime]]:
+    """Return representative DST and standard-time RTH windows in UTC.
+
+    Uses the first Monday after the 2025 DST transitions to sample
+    canonical summer and winter session times.  Falls back to
+    known-good static dates if the calendar is unavailable.
+    """
+
+    summer = date(2025, 3, 10)
+    winter = date(2025, 11, 3)
+    return rth_session_utc(summer), rth_session_utc(winter)
 
 
 def is_early_close(d: date) -> bool:
@@ -177,6 +203,7 @@ __all__ = [
     "Session",
     "is_trading_day",
     "rth_session_utc",
+    "rth_dst_summer_standard_times",
     "session_info",
     "is_early_close",
     "previous_trading_session",

@@ -8,19 +8,19 @@ from tests.optdeps import require
 from ai_trading.market.calendar_wrapper import (
     is_trading_day,
     rth_session_utc,
+    rth_dst_summer_standard_times,
 )
 
 pmc = require("pandas_market_calendars")
 
 
 def test_rth_dst_summer_standard_times() -> None:
+    (s, e), (s2, e2) = rth_dst_summer_standard_times()
     # Summer (DST): 09:30 ET -> 13:30 UTC
-    s, e = rth_session_utc(date(2025, 8, 20))
     assert s.hour == 13 and s.minute == 30
     assert e.hour == 20 and e.minute == 0
 
     # Winter (standard): 09:30 ET -> 14:30 UTC
-    s2, e2 = rth_session_utc(date(2025, 1, 6))
     assert s2.hour == 14 and s2.minute == 30
     assert e2.hour == 21 and e2.minute == 0
 
