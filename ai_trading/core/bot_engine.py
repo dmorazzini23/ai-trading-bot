@@ -470,7 +470,7 @@ from ai_trading.core.alpaca_client import (
     _initialize_alpaca_clients,
 )
 from ai_trading.utils.prof import StageTimer, SoftBudget
-from ai_trading.guards.staleness import _ensure_data_fresh
+from ai_trading.guards import staleness
 
 # AI-AGENT-REF: optional pipeline import
 try:
@@ -2484,7 +2484,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     # Check data freshness before proceeding with trading logic
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
-        _ensure_data_fresh(df, 600, symbol=symbol)
+        staleness._ensure_data_fresh(df, 600, symbol=symbol)
     except RuntimeError as e:
         logger.warning(f"Data staleness check failed for {symbol}: {e}")
         # Still return the data but log the staleness issue
