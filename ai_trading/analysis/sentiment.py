@@ -7,6 +7,8 @@ extracted from bot_engine.py to enable standalone imports and testing.
 import time as pytime
 from datetime import datetime
 from threading import Lock
+
+import requests
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.retry import (
@@ -51,6 +53,7 @@ _bs4 = None
 _transformers_bundle = None
 _sentiment_deps_logged: set[str] = set()
 _SENT_DEPS_LOGGED = False
+_SENTIMENT_STUB_LOGGED = False
 
 def _load_bs4(log=logger):
     global _bs4, _SENT_DEPS_LOGGED
@@ -429,11 +432,28 @@ def _get_cached_or_neutral_sentiment(ticker: str) -> float:
 def analyze_text(text: str, logger=logger) -> dict:
     """Return sentiment probabilities for ``text``.
 
-    Falls back to neutral if transformers are unavailable.
+    Falls back to neutral if transformers are unavailable. Raises a
+    ``RuntimeError`` with offline instructions if an SSL handshake fails
+    while fetching model weights.
     """
     _init_sentiment()
-    deps = _load_transformers(logger)
+    global _SENTIMENT_STUB_LOGGED
+    try:
+        deps = _load_transformers(logger)
+    except requests.exceptions.SSLError as exc:
+        raise RuntimeError(
+            "SSL error loading FinBERT; download the model and set "
+            "TRANSFORMERS_OFFLINE=1 to run without internet"
+        ) from exc
+    except (requests.exceptions.RequestException, OSError) as exc:
+        if not _SENTIMENT_STUB_LOGGED:
+            logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': type(exc).__name__})
+            _SENTIMENT_STUB_LOGGED = True
+        return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
     if deps is None:
+        if not _SENTIMENT_STUB_LOGGED:
+            logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': 'missing_dependencies'})
+            _SENTIMENT_STUB_LOGGED = True
         return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
     torch, tokenizer, model = deps
     try:
@@ -447,6 +467,9 @@ def analyze_text(text: str, logger=logger) -> dict:
         return {'available': True, 'pos': pos, 'neg': neg, 'neu': neu}
     except (ValueError, TypeError) as exc:
         logger.warning('analyze_text inference failed: %s', exc)
+        if not _SENTIMENT_STUB_LOGGED:
+            logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': type(exc).__name__})
+            _SENTIMENT_STUB_LOGGED = True
         return {'available': False, 'pos': 0.0, 'neg': 0.0, 'neu': 1.0}
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
