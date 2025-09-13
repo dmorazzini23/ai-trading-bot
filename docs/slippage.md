@@ -6,6 +6,10 @@ of basis points (bps) to simulate execution friction. Before an order is
 submitted a fresh quote is fetched to align the expected price with current
 market conditions, reducing mismatches during fast moves.
 
+If the delayed quote diverges from the reference price by more than the
+configured threshold the engine now raises an assertion, preventing execution
+against stale data.
+
 ## Configuration
 
 - `EXECUTION_PARAMETERS["MAX_SLIPPAGE_BPS"]` sets the maximum allowed slippage.

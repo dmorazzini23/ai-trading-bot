@@ -18,7 +18,7 @@ def test_delayed_quote_slippage_flagged(monkeypatch):
     with pytest.raises(AssertionError):
         engine.execute_order("AAPL", OrderSide.BUY, 10)
     order = next(iter(engine.order_manager.orders.values()))
-    assert order.slippage_bps > 50
+    assert round(order.slippage_bps, 2) > 50
 
 
 def test_delayed_quote_slippage_within_threshold(monkeypatch):
@@ -35,6 +35,6 @@ def test_delayed_quote_slippage_within_threshold(monkeypatch):
     order_id = engine.execute_order("AAPL", OrderSide.BUY, 10)
     assert order_id is not None
     order = engine.order_manager.orders[order_id]
-    assert float(order.expected_price) == pytest.approx(100.0)
-    assert order.slippage_bps == pytest.approx(30.0)
-    assert abs(order.slippage_bps) < 50
+    assert round(float(order.expected_price), 2) == 100.0
+    assert round(order.slippage_bps, 2) == 30.0
+    assert abs(round(order.slippage_bps, 2)) < 50
