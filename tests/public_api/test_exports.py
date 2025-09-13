@@ -1,30 +1,110 @@
-"""Ensure package exports are explicit and stable."""
+from importlib import import_module
+
+EXPECTED = {
+    'ai_trading': [
+        'DataFetchError',
+        'DataFetchException',
+        'ExecutionEngine',
+        'alpaca_api',
+        'app',
+        'audit',
+        'capital_scaling',
+        'config',
+        'core',
+        'data',
+        'data_validation',
+        'execution',
+        'indicator_manager',
+        'indicators',
+        'logging',
+        'main',
+        'meta_learning',
+        'ml_model',
+        'paths',
+        'portfolio',
+        'position_sizing',
+        'predict',
+        'production_system',
+        'rebalancer',
+        'settings',
+        'signals',
+        'strategy_allocator',
+        'trade_logic',
+        'utils',
+    ],
+    'ai_trading.config': sorted([
+        '_require_env_vars',
+        'AlpacaConfig',
+        'MAX_DRAWDOWN_THRESHOLD',
+        'META_LEARNING_BOOTSTRAP_ENABLED',
+        'META_LEARNING_BOOTSTRAP_WIN_RATE',
+        'META_LEARNING_MIN_TRADES_REDUCED',
+        'MODE_PARAMETERS',
+        'ORDER_FILL_RATE_TARGET',
+        'SENTIMENT_API_KEY',
+        'SENTIMENT_API_URL',
+        'SENTIMENT_ENHANCED_CACHING',
+        'SENTIMENT_FALLBACK_SOURCES',
+        'SENTIMENT_RECOVERY_TIMEOUT_SECS',
+        'SENTIMENT_SUCCESS_RATE_TARGET',
+        'Settings',
+        'TradingConfig',
+        'broker_keys',
+        'derive_cap_from_settings',
+        'get_alpaca_config',
+        'get_env',
+        'get_settings',
+        'log_config',
+        'reload_env',
+        'require_env_vars',
+        'validate_alpaca_credentials',
+        'validate_environment',
+        'validate_env_vars',
+    ]),
+    'ai_trading.core': [
+        'AssetClass',
+        'OrderSide',
+        'OrderStatus',
+        'OrderType',
+        'RiskLevel',
+        'TRADING_CONSTANTS',
+        'TimeFrame',
+    ],
+    'ai_trading.utils': [
+        'EASTERN_TZ',
+        'HTTP_TIMEOUT',
+        'OptionalDependencyError',
+        'SUBPROCESS_TIMEOUT_DEFAULT',
+        'capital_scaling',
+        'clamp_request_timeout',
+        'clamp_timeout',
+        'datetime',
+        'device',
+        'ensure_utc',
+        'get_free_port',
+        'get_latest_close',
+        'get_pid_on_port',
+        'health_check',
+        'http',
+        'is_market_open',
+        'log_warning',
+        'market_open_between',
+        'model_lock',
+        'module_ok',
+        'paths',
+        'portfolio_lock',
+        'retry',
+        'safe_subprocess_run',
+        'safe_to_datetime',
+        'sleep',
+        'timing',
+        'validate_ohlcv',
+    ],
+}
 
 
-def test_root_exports():
-    import ai_trading
-
-    assert 'config' in ai_trading.__all__
-    assert 'ExecutionEngine' in ai_trading.__all__
-
-
-def test_config_exports():
-    import ai_trading.config as config
-
-    assert 'TradingConfig' in config.__all__
-    assert 'get_env' in config.__all__
-
-
-def test_core_exports():
-    import ai_trading.core as core
-
-    assert 'OrderSide' in core.__all__
-    assert 'TRADING_CONSTANTS' in core.__all__
-
-
-def test_utils_exports():
-    import ai_trading.utils as utils
-
-    assert 'sleep' in utils.__all__
-    assert 'http' in utils.__all__
-
+def test_exports_lists_are_stable():
+    for module_name, expected in EXPECTED.items():
+        mod = import_module(module_name)
+        assert hasattr(mod, '__all__')
+        assert sorted(mod.__all__) == expected

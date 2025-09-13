@@ -6,6 +6,8 @@ from typing import Any
 from .locks import LockWithTimeout
 # AI-AGENT-REF: re-export config management helpers without triggering optional deps
 from .management import TradingConfig, derive_cap_from_settings
+from .settings import Settings, broker_keys, get_settings
+from .alpaca import AlpacaConfig, get_alpaca_config
 from ai_trading.validation.require_env import _require_env_vars, require_env_vars
 logger = get_logger(__name__)
 _LOCK_TIMEOUT = 30
@@ -30,20 +32,6 @@ META_LEARNING_BOOTSTRAP_ENABLED = True
 META_LEARNING_MIN_TRADES_REDUCED = 10
 SENTIMENT_SUCCESS_RATE_TARGET = 0.90
 META_LEARNING_BOOTSTRAP_WIN_RATE = 0.55
-
-def __getattr__(name: str):
-    if name == 'TradingConfig':
-        from .management import TradingConfig as _TC
-        return _TC
-    if name in {'Settings', 'broker_keys', 'get_settings'}:
-        from .settings import Settings as _S, broker_keys as _bk, get_settings as _gs
-
-        return {'Settings': _S, 'broker_keys': _bk, 'get_settings': _gs}[name]
-    if name in {'AlpacaConfig', 'get_alpaca_config'}:
-        from .alpaca import AlpacaConfig as _AC, get_alpaca_config as _gac
-
-        return {'AlpacaConfig': _AC, 'get_alpaca_config': _gac}[name]
-    raise AttributeError(name)
 
 def _is_lock_held_by_current_thread() -> bool:
     return bool(getattr(_lock_state, 'held', False))

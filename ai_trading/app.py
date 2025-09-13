@@ -5,6 +5,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 from ai_trading.logging import get_logger
+from ai_trading.utils.optional_dep import missing
 from flask import jsonify
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
@@ -12,11 +13,10 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
 
 _log = get_logger(__name__)
 
-try:  # optional metrics exposure
-    from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK, REGISTRY as _PROM_REG
-except ImportError:
+if missing("ai_trading.metrics", "metrics"):
     _PROM_OK, _PROM_REG = False, None
-    _log.warning("Optional feature 'metrics' disabled: missing dependencies")
+else:
+    from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK, REGISTRY as _PROM_REG
 
 
 def create_app():
@@ -113,14 +113,9 @@ def get_test_client():
     gracefully when the testing utilities are missing.
     """
 
-    try:  # Prefer attribute import to avoid accidentally pulling in a top-level
-        from flask import testing as flask_testing  # type: ignore
-    except ImportError:
-        try:
-            flask_testing = import_module("flask.testing")
-        except ImportError:
-            _log.warning("Optional feature 'flask.testing' disabled: missing dependencies")
-            return None
+    if missing("flask.testing", "flask.testing"):
+        return None
+    flask_testing = import_module("flask.testing")
 
     app = create_app()
     return flask_testing.FlaskClient(app)
