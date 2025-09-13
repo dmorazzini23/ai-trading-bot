@@ -8737,8 +8737,14 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
     # Ensure client_order_id present for idempotency across retries
     if not order_args.get("client_order_id"):
         try:
-            from ai_trading.alpaca_api import generate_client_order_id as _gen_id
-            order_args["client_order_id"] = _gen_id("ai")
+            from ai_trading.core.order_ids import generate_client_order_id as _gen_id
+            cid = _gen_id("ai")
+            order_args["client_order_id"] = cid
+            ids = getattr(api, "client_order_ids", None)
+            if ids is None:
+                setattr(api, "client_order_ids", [])
+                ids = api.client_order_ids
+            ids.append(cid)
         except (ImportError, AttributeError):
             pass
 
