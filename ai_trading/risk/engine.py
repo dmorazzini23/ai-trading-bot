@@ -74,6 +74,8 @@ class RiskEngine:
         self.hard_stop = False
         self.max_trades = 10
         self.current_trades = 0
+        settings = get_settings()
+        self.enable_portfolio_features = settings.ENABLE_PORTFOLIO_FEATURES
         try:
             exposure_cap = getattr(self.config, 'exposure_cap_aggressive', 0.8)
             if not isinstance(exposure_cap, int | float) or not 0 < exposure_cap <= 1.0:
@@ -92,9 +94,8 @@ class RiskEngine:
         self._volatility_cache: dict[str, tuple] = {}
         self.data_client = None
         try:
-            s = get_settings()
             secret = get_alpaca_secret_key_plain()
-            api_key = getattr(s, 'alpaca_api_key', None)
+            api_key = getattr(settings, 'alpaca_api_key', None)
             oauth = get_env('ALPACA_OAUTH')
             has_keypair = bool(api_key and secret)
             if has_keypair and oauth:
@@ -241,6 +242,8 @@ class RiskEngine:
         return np.clip(adaptive_cap, base_cap * 0.3, base_cap * 1.5)
 
     def update_portfolio_metrics(self, returns: list[float] | None=None, drawdown: float | None=None) -> None:
+        if not self.enable_portfolio_features:
+            return
         if returns:
             self._returns.extend(list(returns))
         if drawdown is not None:

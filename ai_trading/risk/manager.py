@@ -12,6 +12,7 @@ from ai_trading.logging import logger
 from ..core.constants import RISK_PARAMETERS
 from ..core.enums import RiskLevel
 from .kelly import KellyCalculator
+from ai_trading.config import get_settings
 
 class RiskManager:
     """
@@ -24,7 +25,9 @@ class RiskManager:
     def __init__(self, risk_level: RiskLevel=RiskLevel.MODERATE):
         """Initialize risk manager with specified risk level."""
         self.risk_level = risk_level
-        self.kelly_calculator = KellyCalculator()
+        settings = get_settings()
+        self.enable_portfolio_features = settings.ENABLE_PORTFOLIO_FEATURES
+        self.kelly_calculator = KellyCalculator() if self.enable_portfolio_features else None
         self.max_portfolio_risk = RISK_PARAMETERS['MAX_PORTFOLIO_RISK']
         self.max_position_size = risk_level.max_position_size
         self.max_drawdown_threshold = risk_level.max_drawdown_threshold
@@ -63,14 +66,22 @@ class RiskManager:
             estimated_portfolio_risk = self.current_portfolio_risk + position_size_pct * 0.5
             if estimated_portfolio_risk > self.max_portfolio_risk:
                 assessment['warnings'].append(f'Estimated portfolio risk {estimated_portfolio_risk:.2%} exceeds maximum {self.max_portfolio_risk:.2%}')
-            if position_history:
-                kelly_fraction, kelly_stats = self.kelly_calculator.kelly_criterion.calculate_from_returns([p.get('return', 0.0) for p in position_history[-30:]])
+            if (
+                self.enable_portfolio_features
+                and position_history
+                and self.kelly_calculator is not None
+            ):
+                kelly_fraction, kelly_stats = self.kelly_calculator.kelly_criterion.calculate_from_returns(
+                    [p.get('return', 0.0) for p in position_history[-30:]]
+                )
                 kelly_size = int(portfolio_value * kelly_fraction / price)
                 assessment['metrics']['kelly_recommended_size'] = kelly_size
                 assessment['metrics']['kelly_fraction'] = kelly_fraction
                 if kelly_size < assessment['recommended_size']:
                     assessment['recommended_size'] = kelly_size
-                    assessment['warnings'].append(f'Kelly criterion recommends smaller position: {kelly_size}')
+                    assessment['warnings'].append(
+                        f'Kelly criterion recommends smaller position: {kelly_size}'
+                    )
             risk_score = 0
             risk_score += min(position_size_pct * 500, 50)
             risk_score += len(assessment['warnings']) * 10
@@ -93,6 +104,14 @@ class RiskManager:
         Returns:
             Portfolio risk assessment
         """
+        if not self.enable_portfolio_features:
+            return {
+                'overall_risk_level': 'Unknown',
+                'risk_score': 0.0,
+                'alerts': [],
+                'metrics': {},
+                'recommendations': [],
+            }
         try:
             assessment = {'overall_risk_level': 'Unknown', 'risk_score': 0.0, 'alerts': [], 'metrics': {}, 'recommendations': []}
             if not positions:
