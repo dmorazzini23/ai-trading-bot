@@ -9,6 +9,7 @@ import socket
 import sys
 from datetime import datetime, timezone
 import pathlib
+import types
 
 import pytest
 import ai_trading.data.fetch as data_fetcher
@@ -155,3 +156,19 @@ def _sanitize_executor_env(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_fallback_cache(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
+
+
+@pytest.fixture
+def dummy_order():
+    """Provide a minimal order-like object for tests.
+
+    Ensures required attributes are present and ``filled_qty`` defaults to ``0``
+    so that code paths handling numeric comparisons do not encounter ``None``.
+    """
+
+    return types.SimpleNamespace(
+        id="1",
+        status="filled",
+        filled_qty=0,
+        symbol="TEST",
+    )
