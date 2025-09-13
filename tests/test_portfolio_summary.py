@@ -1,9 +1,11 @@
 import logging
 import os
 from types import SimpleNamespace
-import sys
+
+import pytest
 
 os.environ.setdefault('MAX_DRAWDOWN_THRESHOLD', '0.2')
+pd = pytest.importorskip("pandas")
 import ai_trading.portfolio.core as core
 
 
@@ -15,11 +17,6 @@ def test_log_portfolio_summary_uses_ledger_when_broker_empty(monkeypatch, caplog
         ),
         risk_engine=SimpleNamespace(_positions={'AAPL': 10}, _adaptive_global_cap=lambda: 0.0),
     )
-    class _Pandas:
-        class errors(Exception):
-            class EmptyDataError(Exception):
-                pass
-    sys.modules['pandas'] = _Pandas
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(core, 'get_latest_price', lambda ctx, symbol: 100.0)
     core.log_portfolio_summary(ctx)
