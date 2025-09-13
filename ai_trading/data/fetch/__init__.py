@@ -642,18 +642,11 @@ def _post_process(df: pd.DataFrame) -> pd.DataFrame:
     return _flatten_and_normalize_ohlcv(df)
 
 
-def _verify_minute_continuity(
-    df: pd.DataFrame, symbol: str, backfill: str | None = None
-) -> pd.DataFrame:
+def _verify_minute_continuity(df: pd.DataFrame, symbol: str, backfill: str | None = None) -> pd.DataFrame:
     """Verify 1-minute bar continuity and optionally backfill gaps."""
 
     pd_local = _ensure_pandas()
-    if (
-        pd_local is None
-        or df is None
-        or getattr(df, "empty", True)
-        or "timestamp" not in df.columns
-    ):
+    if pd_local is None or df is None or getattr(df, "empty", True) or "timestamp" not in df.columns:
         return df
 
     df = df.sort_values("timestamp")
@@ -832,6 +825,10 @@ def fetch_daily_data_async(
     pd = _ensure_pandas()
     if pd is None:
         raise DataFetchError("pandas not available")
+    if start is None:
+        raise ValueError("start_required")
+    if end is None:
+        raise ValueError("end_required")
     http = _ensure_http_client()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
@@ -940,6 +937,10 @@ def _fetch_bars(
     _ensure_requests()
     if pd is None:
         raise RuntimeError("pandas not available")
+    if start is None:
+        raise ValueError("start_required")
+    if end is None:
+        raise ValueError("end_required")
     _start = ensure_datetime(start)
     _end = ensure_datetime(end)
     # Normalize timestamps to the minute to avoid querying empty slices
@@ -1124,9 +1125,7 @@ def _fetch_bars(
                 from_provider=f"alpaca_{from_feed}",
                 to_provider=f"alpaca_{fb_feed}",
             ).inc()
-            provider_monitor.record_switchover(
-                f"alpaca_{from_feed}", f"alpaca_{fb_feed}"
-            )
+            provider_monitor.record_switchover(f"alpaca_{from_feed}", f"alpaca_{fb_feed}")
             fallback_order.register_fallback(f"alpaca_{fb_feed}", symbol)
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
@@ -1410,9 +1409,7 @@ def _fetch_bars(
             metrics.rate_limit += 1
             provider_monitor.record_failure("alpaca", "rate_limit")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
-            log_fetch_attempt(
-                "alpaca", status=status, error="rate_limited", **log_extra_with_remaining
-            )
+            log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
                 "DATA_SOURCE_RATE_LIMITED",
                 extra=_norm_extra(
@@ -1430,12 +1427,8 @@ def _fetch_bars(
                 fb_int = interval_map.get(_interval)
                 if fb_int:
                     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-                    provider_fallback.labels(
-                        from_provider=f"alpaca_{_feed}", to_provider=provider
-                    ).inc()
-                    provider_monitor.record_switchover(
-                        f"alpaca_{_feed}", provider
-                    )
+                    provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
+                    provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
                     _mark_fallback(symbol, _interval, _start, _end)
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
@@ -1447,9 +1440,7 @@ def _fetch_bars(
                         return result
                 raise ValueError("rate_limited")
             _state["retries"] = attempt
-            backoff = min(
-                _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP
-            )
+            backoff = min(_FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1), _FETCH_BARS_BACKOFF_CAP)
             logger.debug(
                 "RETRY_AFTER_RATE_LIMIT",
                 extra=_norm_extra(
@@ -1484,9 +1475,7 @@ def _fetch_bars(
                 if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
                     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
                     provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
-                    provider_monitor.record_switchover(
-                        f"alpaca_{_feed}", provider
-                    )
+                    provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
                     metrics.empty_fallback += 1
                     _mark_fallback(symbol, _interval, _start, _end)
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(key, None)
@@ -1694,9 +1683,7 @@ def _fetch_bars(
                             "Primary data provider alpaca disabled",
                             metadata={
                                 "provider": "alpaca",
-                                "disabled_until": _alpaca_disabled_until.isoformat()
-                                if _alpaca_disabled_until
-                                else "",
+                                "disabled_until": _alpaca_disabled_until.isoformat() if _alpaca_disabled_until else "",
                                 "reason": "empty",
                             },
                         )
@@ -1920,9 +1907,7 @@ def _fetch_bars(
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
                 provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
-                provider_monitor.record_switchover(
-                    f"alpaca_{_feed}", "yahoo"
-                )
+                provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
