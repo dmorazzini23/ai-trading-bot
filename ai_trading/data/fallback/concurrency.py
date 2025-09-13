@@ -24,6 +24,7 @@ async def run_with_concurrency(
     worker: Callable[[str], Awaitable[T]],
     *,
     max_concurrency: int = 4,
+    timeout: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with a concurrency limit.
 
@@ -37,6 +38,8 @@ async def run_with_concurrency(
         ``None`` entries.
     max_concurrency:
         Maximum number of tasks scheduled at any time.
+    timeout:
+        Optional per-task timeout in seconds. ``None`` disables the timeout.
 
     Returns
     -------
@@ -52,18 +55,25 @@ async def run_with_concurrency(
     sem = asyncio.Semaphore(max_concurrency)
 
     async def _run(sym: str) -> None:
-        async with sem:
-            try:
-                res = await worker(sym)
-            except Exception:  # pragma: no cover - worker errors become None
-                res = None
+        res: T | None = None
+        try:
+            async with sem:
+                coro = worker(sym)
+                if timeout is not None:
+                    coro = asyncio.wait_for(coro, timeout)
+                res = await coro
+        except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
+            res = None
+        except Exception:  # pragma: no cover - worker errors become None
+            res = None
+        finally:
             results[sym] = res
             if res is None:
                 FAILED_SYMBOLS.add(sym)
             else:
                 SUCCESSFUL_SYMBOLS.add(sym)
 
-    await asyncio.gather(*(_run(s) for s in symbols))
+    await asyncio.gather(*(_run(s) for s in symbols), return_exceptions=True)
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 
 
