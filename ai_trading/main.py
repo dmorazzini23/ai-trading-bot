@@ -228,7 +228,7 @@ def _fail_fast_env() -> None:
         "DOLLAR_RISK_LIMIT",
     )
     try:
-        loaded = reload_env()
+        loaded = reload_env(override=False)
         validate_required_env(required)
         snapshot = {k: get_env(k, "") or "" for k in required}
         _, _, base_url = _resolve_alpaca_env()
