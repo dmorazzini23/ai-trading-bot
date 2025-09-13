@@ -8688,7 +8688,13 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             logger.warning(
                 "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
             )
-            return None
+            return types.SimpleNamespace(
+                id=None,
+                status="market_closed",
+                filled_qty=0,
+                qty=0,
+                symbol=getattr(req, "symbol", ""),
+            )
 
     def _req_to_args(r):
         side = getattr(r, "side", "")
@@ -8717,6 +8723,17 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         return args
 
     order_args = _req_to_args(req)
+
+    def _dummy_order(status: str) -> Any:
+        """Return a placeholder order object with minimal attributes."""
+        return types.SimpleNamespace(
+            id=None,
+            status=status,
+            filled_qty=0,
+            qty=0,
+            symbol=order_args.get("symbol", ""),
+        )
+
     # Ensure client_order_id present for idempotency across retries
     if not order_args.get("client_order_id"):
         try:
@@ -8747,7 +8764,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     "qty": order_args.get("qty", 0),
                 },
             )
-            return None
+            return _dummy_order("duplicate")
 
     for attempt in range(2):
         try:
@@ -8776,7 +8793,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                         order_args.get("qty"),
                         getattr(acct, "buying_power", 0),
                     )
-                    return None
+                    return _dummy_order("insufficient_funds")
             if order_args.get("side") == "sell":
                 try:
                     positions = api.list_positions()
@@ -8798,7 +8815,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     logger.warning(
                         f"insufficient qty available for {order_args.get('symbol')}: requested {order_args.get('qty')}, available {avail}"
                     )
-                    return None
+                    return _dummy_order("insufficient_position")
 
             try:
                 order = api.submit_order(**order_args)
@@ -8868,13 +8885,26 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     _idem_cache.mark_submitted(_idem_key, getattr(order, "id"))
             except (AttributeError, KeyError):
                 pass
+            def _coerce_numeric(o: Any, attr: str, default: float = 0.0) -> None:
+                val = getattr(o, attr, None)
+                if val is None:
+                    setattr(o, attr, default)
+                    return
+                try:
+                    num = float(val)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"order.{attr} must be numeric") from exc
+                setattr(o, attr, num)
+
+            _coerce_numeric(order, "qty", float(order_args.get("qty", 0) or 0))
+            _coerce_numeric(order, "filled_qty", 0.0)
             return order
         except APIError as e:
             if "insufficient qty" in str(e).lower():
                 logger.warning(
                     f"insufficient qty available for {order_args.get('symbol')}: {e}"
                 )
-                return None
+                return _dummy_order("insufficient_qty")
             time.sleep(1)
             if attempt == 1:
                 logger.error(
@@ -8900,7 +8930,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     },
                 )
                 raise
-    return None
+    return _dummy_order("failed")
 
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:

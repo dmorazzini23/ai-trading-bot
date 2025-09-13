@@ -1,4 +1,5 @@
 import types
+import pytest
 
 
 class DummyAPI:
@@ -24,14 +25,13 @@ def test_safe_submit_order_pending_new(monkeypatch):
 
     try:
         order = bot_engine.safe_submit_order(api, req)
-        # Handle case where order submission returns None (degraded mode)
-        if order is not None:
-            assert order.status == "pending_new"
-        else:
-            assert order is None  # Acceptable in degraded mode
+        assert order is not None
+        assert order.status == "pending_new"
+        assert isinstance(order.filled_qty, (int, float))
+        assert isinstance(order.qty, (int, float))
+        assert order.filled_qty == 0
+        assert order.qty == 1
     except ImportError:
-        # If imports fail due to missing dependencies, the test still passes
-        # as we've verified the core import structure works
         pass
 
 
@@ -49,3 +49,43 @@ def test_safe_submit_order_pending_new_symbol(monkeypatch):
 
     order = bot_engine.safe_submit_order(api, req)
     assert order.symbol == "MSFT"
+    assert isinstance(order.filled_qty, (int, float))
+    assert isinstance(order.qty, (int, float))
+
+
+class MissingFieldsAPI:
+    def __init__(self):
+        self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
+        self.list_positions = lambda: []
+        self.submit_order = lambda **_kwargs: types.SimpleNamespace(id=1, status="filled")
+        self.get_order = lambda oid: types.SimpleNamespace(id=1, status="filled")
+
+
+def test_safe_submit_order_defaults_missing_fields(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda x: True)
+
+    api = MissingFieldsAPI()
+    req = types.SimpleNamespace(symbol="GOOG", qty=2, side="buy")
+    order = bot_engine.safe_submit_order(api, req)
+    assert order.qty == 2
+    assert order.filled_qty == 0
+
+
+class NonNumericAPI(DummyAPI):
+    def submit_order(self, **_kwargs):  # type: ignore[override]
+        return types.SimpleNamespace(id=1, status="filled", filled_qty="abc", qty="xyz")
+
+
+def test_safe_submit_order_raises_on_non_numeric(monkeypatch):
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda x: True)
+
+    api = NonNumericAPI()
+    req = types.SimpleNamespace(symbol="TSLA", qty=1, side="buy")
+    with pytest.raises(ValueError):
+        bot_engine.safe_submit_order(api, req)
