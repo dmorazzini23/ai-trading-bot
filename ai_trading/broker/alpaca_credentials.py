@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -51,6 +52,7 @@ def initialize(env: Mapping[str, str] | None = None, *, shadow: bool = False):
     if shadow:
         return object()
     try:  # pragma: no cover - optional dependency
+        importlib.import_module("alpaca")
         from alpaca.trading.client import TradingClient  # type: ignore
     except ModuleNotFoundError as exc:  # pragma: no cover - tested via unit test
         raise RuntimeError("alpaca package is required") from exc
