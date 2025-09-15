@@ -289,6 +289,22 @@ class Settings(BaseSettings):
     def _force_trades_cast(cls, v):
         return _to_bool(v, False)
 
+    @field_validator('alpaca_base_url', mode='after')
+    @classmethod
+    def _validate_alpaca_base_url(cls, value: str) -> str:
+        """Ensure Alpaca base URL is normalized and explicitly https://."""
+
+        from ai_trading.config import management as config_management
+
+        env_key = 'ALPACA_API_URL' if os.getenv('ALPACA_API_URL') else 'ALPACA_BASE_URL'
+        normalized, message = config_management._normalize_alpaca_base_url(
+            value, source_key=env_key
+        )
+        if normalized:
+            return normalized
+        guidance = message or config_management.ALPACA_URL_GUIDANCE
+        raise ValueError(guidance)
+
     @computed_field
     @property
     def alpaca_secret_key_plain(self) -> str | None:
