@@ -9,7 +9,7 @@ def test_ticker_loading():
     logging.info('🔍 Testing ticker loading functionality...')
     os.environ.setdefault('ALPACA_API_KEY', 'dummy')
     os.environ.setdefault('ALPACA_SECRET_KEY', 'dummy')
-    os.environ.setdefault('ALPACA_BASE_URL', 'paper')
+    os.environ.setdefault('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
     os.environ.setdefault('WEBHOOK_SECRET', 'dummy')
     os.environ.setdefault('FLASK_PORT', '5000')
     try:

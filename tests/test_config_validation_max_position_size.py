@@ -39,7 +39,7 @@ def test_no_mutation_of_settings(monkeypatch):  # AI-AGENT-REF: ensure env fallb
     m.logger = getattr(m, "logger", None) or importlib.import_module("logging").getLogger(__name__)
 
     class CfgDummy:  # AI-AGENT-REF: minimal cfg for validation
-        alpaca_base_url = "paper"
+        alpaca_base_url = "https://paper-api.alpaca.markets"
         paper = True
 
     with _temp_env("AI_TRADING_MAX_POSITION_SIZE", None):

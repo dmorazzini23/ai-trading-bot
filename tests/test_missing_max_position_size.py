@@ -24,7 +24,7 @@ def test_startup_without_max_position_size(monkeypatch, caplog):
     assert snapshot["ALPACA_SECRET_KEY"] == "***"
 
     class DummyCfg:
-        alpaca_base_url = "paper"
+        alpaca_base_url = "https://paper-api.alpaca.markets"
         paper = True
 
     class DummySettings:

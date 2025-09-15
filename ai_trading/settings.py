@@ -289,6 +289,25 @@ class Settings(BaseSettings):
     def _force_trades_cast(cls, v):
         return _to_bool(v, False)
 
+    @field_validator('alpaca_base_url', mode='before')
+    @classmethod
+    def _validate_alpaca_base_url(cls, v):
+        if isinstance(v, FieldInfo):
+            v = getattr(v, 'default', None)
+        if v is not None and not isinstance(v, str):
+            v = str(v)
+        from ai_trading.config.management import (
+            ALPACA_URL_GUIDANCE,
+            _normalize_alpaca_base_url,
+        )
+
+        normalized, message = _normalize_alpaca_base_url(
+            v, source_key='ALPACA_API_URL/ALPACA_BASE_URL'
+        )
+        if normalized is None:
+            raise ValueError(message or ALPACA_URL_GUIDANCE)
+        return normalized
+
     @computed_field
     @property
     def alpaca_secret_key_plain(self) -> str | None:

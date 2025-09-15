@@ -25,6 +25,14 @@ def test_max_position_size_positive():
     assert s.max_position_size == 1000
 
 
+def test_alpaca_base_url_requires_full_endpoint(monkeypatch):
+    monkeypatch.delenv("ALPACA_BASE_URL", raising=False)
+    monkeypatch.delenv("ALPACA_API_URL", raising=False)
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.1")
+    with pytest.raises(ValueError, match="must include an HTTP scheme"):
+        Settings(ALPACA_API_URL="paper")
+
+
 def test_missing_risk_parameter():
     with pytest.raises(ValidationError, match="Input should be a valid number"):
         Settings(capital_cap=None)
