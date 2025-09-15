@@ -594,6 +594,17 @@ if __name__ == "__main__":
 
 ## Monitoring and Logging
 
+### Trade Log Path
+
+- Override the trade log location with `TRADE_LOG_PATH` (or
+  `AI_TRADING_TRADE_LOG_PATH` for backward compatibility).
+- Without an override the service attempts to write to
+  `/var/log/ai-trading-bot/trades.jsonl`; when that directory is not writable it
+  automatically falls back to `./logs/trades.jsonl` inside the working
+  directory.
+- Startup emits a `TRADE_LOG_PATH_READY` log entry with the resolved path so you
+  can verify where JSONL trade records are written.
+
 ### Log Aggregation
 
 ```yaml

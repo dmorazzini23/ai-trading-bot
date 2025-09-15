@@ -364,6 +364,11 @@ def ensure_trade_log_path() -> None:
             extra={"path": str(path), "error": str(exc)},
         )
         raise SystemExit(1) from exc
+    else:
+        logger.info(
+            "TRADE_LOG_PATH_READY",
+            extra={"path": str(path)},
+        )
 
 
 def run_bot(*_a, **_k) -> int:
