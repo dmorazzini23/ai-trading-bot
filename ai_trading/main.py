@@ -462,20 +462,48 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     ensure_dotenv_loaded()
     settings = get_settings()
     port = int(settings.api_port or 9001)
+    wait_seconds = max(0.0, float(getattr(settings, "api_port_wait_seconds", 0.0)))
+    deadline = time.monotonic() + wait_seconds
+    attempt = 0
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
-        test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            test_socket.bind(("0.0.0.0", port))
-        except OSError as exc:
-            if exc.errno == errno.EADDRINUSE:
-                pid = get_pid_on_port(port)
-                logger.error(
-                    "API_PORT_PRECHECK_FAILED",
-                    extra={"port": port, "pid": pid},
-                )
-                raise PortInUseError(port, pid) from exc
-            raise
+    while True:
+        attempt += 1
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
+            test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                test_socket.bind(("0.0.0.0", port))
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    pid = get_pid_on_port(port)
+                    if pid:
+                        logger.error(
+                            "API_PORT_PRECHECK_FAILED",
+                            extra={"port": port, "pid": pid},
+                        )
+                        raise PortInUseError(port, pid) from exc
+
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        logger.error(
+                            "API_PORT_PRECHECK_FAILED",
+                            extra={"port": port, "pid": None},
+                        )
+                        raise PortInUseError(port) from exc
+
+                    sleep_for = min(1.0, max(0.1, remaining))
+                    logger.warning(
+                        "API_PORT_WAITING_FOR_RELEASE",
+                        extra={
+                            "port": port,
+                            "attempt": attempt,
+                            "sleep_seconds": round(sleep_for, 2),
+                            "remaining_seconds": round(remaining, 2),
+                        },
+                    )
+                    time.sleep(sleep_for)
+                    continue
+                raise
+            break
 
     run_flask_app(port, ready_signal)
 

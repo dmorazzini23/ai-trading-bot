@@ -19,14 +19,38 @@ else:  # pragma: no cover - exercised when SDK missing
     from ai_trading.alpaca_api import TimeFrame as _BaseTimeFrame, TimeFrameUnit  # type: ignore
 
 
+def _safe_setattr(obj: object, name: str, value: object) -> None:
+    """Best-effort setattr that tolerates read-only descriptors."""
+
+    try:
+        object.__setattr__(obj, name, value)
+    except (AttributeError, TypeError):
+        # Some SDK versions expose ``amount``/``unit`` as read-only properties.
+        # When that happens we rely on their getters without mutating state.
+        return
+
+
 class TimeFrame(_BaseTimeFrame):  # type: ignore[misc]
     """Timeframe with safe defaults and attribute accessors."""
 
     def __init__(self, amount: int = 1, unit=TimeFrameUnit.Day):  # type: ignore[assignment]
         super().__init__(amount, unit)
         # Guarantee ``amount`` and ``unit`` attributes for downstream code
-        object.__setattr__(self, "amount", getattr(self, "amount", amount))
-        object.__setattr__(self, "unit", getattr(self, "unit", unit))
+        try:
+            current_amount = getattr(self, "amount")
+        except AttributeError:
+            current_amount = None
+        if current_amount is None:
+            current_amount = amount
+        _safe_setattr(self, "amount", current_amount)
+
+        try:
+            current_unit = getattr(self, "unit")
+        except AttributeError:
+            current_unit = None
+        if current_unit is None:
+            current_unit = unit
+        _safe_setattr(self, "unit", current_unit)
 
 
 def canonicalize_timeframe(tf: Any) -> TimeFrame:

@@ -106,6 +106,10 @@ class Settings(BaseSettings):
         9001,
         validation_alias=AliasChoices('API_PORT', 'AI_TRADING_API_PORT'),
     )
+    api_port_wait_seconds: float = Field(
+        5.0,
+        validation_alias=AliasChoices('API_PORT_WAIT_SECONDS', 'AI_TRADING_API_PORT_WAIT_SECONDS'),
+    )
     # Support AUTO sizing mode from either MAX_POSITION_MODE or AI_TRADING_MAX_POSITION_MODE
     max_position_mode: str = Field(
         'STATIC',
