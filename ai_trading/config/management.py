@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, TypeVar
 
@@ -27,16 +28,76 @@ from ai_trading.settings import Settings
 derive_cap_from_settings = _derive_cap_from_settings
 
 
+ALPACA_URL_GUIDANCE = (
+    "Set ALPACA_API_URL or ALPACA_BASE_URL to a full https://... endpoint."
+)
+
+
+def _normalize_alpaca_base_url(
+    value: str | None, *, source_key: str
+) -> tuple[str | None, str | None]:
+    """Validate Alpaca base URL strings returning sanitized value and error."""
+
+    if value is None:
+        return None, None
+
+    raw = value.strip()
+    if not raw:
+        return None, None
+
+    if "${" in raw:
+        return None, (
+            f"{source_key} looks like an unresolved placeholder ({raw}). "
+            f"{ALPACA_URL_GUIDANCE}"
+        )
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, (
+            f"{source_key} must include an HTTP scheme (got {raw}). "
+            f"{ALPACA_URL_GUIDANCE}"
+        )
+
+    return raw, None
+
+
+def _select_alpaca_base_url(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str | None, str | None, list[tuple[str, str, str]]]:
+    """Return the first valid Alpaca base URL and any invalid entries."""
+
+    env_map = env or os.environ
+    invalid_entries: list[tuple[str, str, str]] = []
+
+    for env_key in ("ALPACA_BASE_URL", "ALPACA_API_URL", "APCA_API_BASE_URL"):
+        raw = env_map.get(env_key)
+        normalized, message = _normalize_alpaca_base_url(raw, source_key=env_key)
+        if normalized:
+            return normalized, raw, invalid_entries
+        if raw and message:
+            invalid_entries.append((env_key, raw, message))
+
+    fallback_raw = (
+        env_map.get("ALPACA_BASE_URL")
+        or env_map.get("ALPACA_API_URL")
+        or env_map.get("APCA_API_BASE_URL")
+    )
+    return None, fallback_raw, invalid_entries
+
+
 def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     """Return Alpaca credentials resolving ALPACA_* and APCA_* variants."""
+
     key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
     secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
-    base_url = (
-        os.getenv("ALPACA_BASE_URL")
-        or os.getenv("ALPACA_API_URL")
-        or os.getenv("APCA_API_BASE_URL")
-        or "https://paper-api.alpaca.markets"
-    )
+
+    base_url, _raw_base_url, invalid_entries = _select_alpaca_base_url()
+    for env_key, raw, message in invalid_entries:
+        logger.error(message, extra={"env_key": env_key, "value": raw})
+
+    if base_url is None:
+        base_url = "https://paper-api.alpaca.markets"
+
     return key, secret, base_url
 
 
@@ -170,12 +231,25 @@ def validate_required_env(
 
     missing: list[str] = []
     snapshot: Dict[str, str] = {}
+    error_hints: list[str] = []
+
+    base_url_value, base_url_raw, invalid_entries = _select_alpaca_base_url(env)
+    alias_raw = env.get("ALPACA_API_URL") or env.get("ALPACA_BASE_URL", "")
+    if not alias_raw and base_url_raw:
+        alias_raw = base_url_raw
+    base_url_hint_recorded = False
+
     for k in required:
         if k in {"ALPACA_API_URL", "ALPACA_BASE_URL"}:
-            val = env.get("ALPACA_API_URL") or env.get("ALPACA_BASE_URL", "")
-            if not val.strip():
+            if base_url_value is None:
                 missing.append(k)
-            snapshot[k] = _mask(val)
+                if not base_url_hint_recorded:
+                    if invalid_entries:
+                        error_hints.extend(message for _, _, message in invalid_entries)
+                    else:
+                        error_hints.append(ALPACA_URL_GUIDANCE)
+                    base_url_hint_recorded = True
+            snapshot[k] = _mask(alias_raw)
             continue
         val = env.get(k, "")
         if not val.strip():
@@ -186,9 +260,12 @@ def validate_required_env(
         snapshot["ALPACA_OAUTH"] = _mask(oauth)
 
     if missing:
-        raise RuntimeError(
-            "Missing required environment variables: " + ", ".join(missing)
-        )
+        message = "Missing required environment variables: " + ", ".join(missing)
+        if error_hints:
+            # Preserve insertion order while deduplicating
+            ordered_hints = dict.fromkeys(error_hints)
+            message += ". " + " ".join(ordered_hints)
+        raise RuntimeError(message)
     return snapshot
 
 
