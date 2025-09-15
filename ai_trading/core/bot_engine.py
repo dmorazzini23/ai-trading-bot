@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import os
 import stat
+import tempfile
 import sys
 from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
 from collections import deque
@@ -691,6 +692,13 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
         candidates.append(home_dir / ".local" / "state" / "ai-trading-bot")
 
     try:
+        tmp_root = Path(tempfile.gettempdir())
+    except (OSError, RuntimeError):
+        tmp_root = None
+    if tmp_root and tmp_root.is_absolute():
+        candidates.append(tmp_root / "ai-trading-bot")
+
+    try:
         cwd = Path.cwd()
     except OSError:
         cwd = Path(BASE_DIR)
@@ -708,9 +716,18 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
     fallback_dir = candidates[-1] if candidates else Path(BASE_DIR)
     try:
         fallback_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if _is_dir_writable(str(fallback_dir)):
+            return str((fallback_dir / basename).resolve(strict=False))
     except OSError:
         pass
-    return str((fallback_dir / basename).resolve(strict=False))
+
+    temp_parent = Path(tempfile.mkdtemp(prefix="ai-trading-", dir=tempfile.gettempdir()))
+    try:
+        temp_parent.chmod(0o700)
+    except OSError:
+        # Best effort: permissions may already be restrictive enough
+        pass
+    return str(temp_parent / basename)
 
 
 def _emit_trade_log_fallback(

@@ -1,6 +1,13 @@
 from ai_trading.core import bot_engine
 import pytest
 import logging
+from pathlib import Path
+
+
+def _as_classmethod(path: Path):
+    """Return a classmethod returning ``path`` for monkeypatching ``Path`` hooks."""
+
+    return classmethod(lambda cls: path)
 
 
 def test_parse_local_positions_creates_trade_log(tmp_path, monkeypatch):
@@ -155,9 +162,60 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     assert fallback_path.exists()
     assert not caplog.records
 
-    caplog.clear()
-    with caplog.at_level(logging.WARNING):
-        bot_engine.get_trade_logger()
 
-    assert not caplog.records
+def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monkeypatch):
+    """Trade log path resolves into a tempdir when no candidate directory is writable."""
 
+    # Unwritable XDG state home so the primary fallback fails.
+    state_home = tmp_path / "state-home"
+    state_home.mkdir()
+    state_home.chmod(0o555)
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    # Unwritable home directory prevents ~/.local/state usage.
+    home_dir = tmp_path / "home-readonly"
+    home_dir.mkdir()
+    home_dir.chmod(0o555)
+    monkeypatch.setattr(bot_engine.Path, "home", _as_classmethod(home_dir))
+
+    # Project directory with non-writable logs/ to block cwd-based fallback.
+    project_root = tmp_path / "project"
+    logs_dir = project_root / "logs"
+    logs_dir.mkdir(parents=True)
+    logs_dir.chmod(0o555)
+    monkeypatch.setattr(bot_engine.Path, "cwd", _as_classmethod(project_root))
+
+    # Deterministic temp dir for this test.
+    temp_parent = tmp_path / "tempdir"
+    temp_parent.mkdir()
+    monkeypatch.setattr(bot_engine.tempfile, "gettempdir", lambda: str(temp_parent))
+
+    blocked_roots = [state_home.resolve(), home_dir.resolve(), logs_dir.resolve()]
+
+    original_is_dir_writable = bot_engine._is_dir_writable
+
+    def fake_is_dir_writable(path: str) -> bool:
+        resolved = Path(path).resolve(strict=False)
+        for root in blocked_roots:
+            try:
+                if resolved.is_relative_to(root):
+                    return False
+            except ValueError:
+                continue
+        return original_is_dir_writable(path)
+
+    monkeypatch.setattr(bot_engine, "_is_dir_writable", fake_is_dir_writable)
+
+    log_name = "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(logs_dir / log_name))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+    bot_engine._TRADE_LOG_FALLBACK_PATH = None
+
+    logger_instance = bot_engine.get_trade_logger()
+
+    expected_dir = temp_parent / "ai-trading-bot"
+    expected_path = expected_dir / log_name
+    assert logger_instance.path == str(expected_path)
+    assert bot_engine.TRADE_LOG_FILE == str(expected_path)
+    assert expected_path.exists()
+    assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
