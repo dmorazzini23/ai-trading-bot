@@ -10116,15 +10116,22 @@ def _evaluate_trade_signal(
     logger.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
     confidence = sum(w for _, w, _ in ctx.signal_manager.last_components)
-    strat = "+".join(lab for _, _, lab in ctx.signal_manager.last_components)
+    strat_components = [lab for _, _, lab in ctx.signal_manager.last_components]
+    strat = "+".join(strat_components) if strat_components else "HOLD"
     logger.info(
         "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
         symbol,
         final_score,
         confidence,
     )
-    if final_score is None or not np.isfinite(final_score) or final_score == 0:
+    if final_score is None or not np.isfinite(final_score):
         raise ValueError("Invalid or empty signal")
+    if math.isclose(final_score, 0.0, abs_tol=1e-9):
+        logger.info(
+            "SIGNAL_HOLD",
+            extra={"symbol": symbol, "confidence": confidence},
+        )
+        return 0.0, confidence, "HOLD"
     return final_score, confidence, strat
 
 
