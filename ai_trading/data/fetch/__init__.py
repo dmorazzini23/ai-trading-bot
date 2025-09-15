@@ -1435,14 +1435,23 @@ def _fetch_bars(
                     payload = resp.json()
                 except ValueError:
                     payload = {}
-        data = []
+        data: list[Any] = []
         if isinstance(payload, dict):
-            if "bars" in payload and isinstance(payload["bars"], list):
-                data = payload["bars"]
+            bars_payload = payload.get("bars")
+            if isinstance(bars_payload, list):
+                data = bars_payload
+            elif isinstance(bars_payload, dict):
+                # Alpaca v2 multi-symbol payload nests bars under the symbol key.
+                for sym_key, sym_bars in bars_payload.items():
+                    if isinstance(sym_key, str) and sym_key.upper() == symbol.upper():
+                        data = sym_bars
+                        break
             elif symbol in payload and isinstance(payload[symbol], dict) and ("bars" in payload[symbol]):
                 data = payload[symbol]["bars"]
         elif isinstance(payload, list):
             data = payload
+        if data is None:
+            data = []
         log_extra = {
             "url": url,
             "symbol": symbol,
