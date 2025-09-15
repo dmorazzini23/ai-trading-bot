@@ -3982,10 +3982,21 @@ def compute_spy_vol_stats(runtime) -> None:
     else:
         logger.info("SPY_VOL_FETCH_REQUEST", extra={"symbol": symbol})
         backoff = 1
+        manual_backfill_hint = "historical data not available; manual backfill required"
         for attempt in range(1, MAX_VOL_FETCH_RETRIES + 1):
             try:
                 df = runtime.data_fetcher.get_daily_df(runtime, symbol)
                 row_count = 0 if df is None else len(df)
+                if row_count == 0:
+                    logger.warning(
+                        "SPY_VOL_FETCH_ABORT",
+                        extra={
+                            "symbol": symbol,
+                            "attempt": attempt,
+                            "hint": manual_backfill_hint,
+                        },
+                    )
+                    break
                 if row_count < required_rows:
                     logger.error(
                         "SPY_VOL_FETCH_INSUFFICIENT",
@@ -3998,10 +4009,17 @@ def compute_spy_vol_stats(runtime) -> None:
                     break
                 break
             except DataFetchError as e:
-                logger.warning(
-                    "SPY_VOL_FETCH_RETRY",
-                    extra={"attempt": attempt, "symbol": symbol, "cause": str(e)},
-                )
+                message = str(e).strip()
+                warn_extra: dict[str, Any] = {"attempt": attempt, "symbol": symbol}
+                if message.upper() == "DATA_FETCHER_UNAVAILABLE":
+                    warn_extra["hint"] = manual_backfill_hint
+                    logger.warning("SPY_VOL_FETCH_ABORT", extra=warn_extra)
+                    break
+                if message:
+                    warn_extra["cause"] = message
+                else:
+                    warn_extra["hint"] = manual_backfill_hint
+                logger.warning("SPY_VOL_FETCH_RETRY", extra=warn_extra)
                 if attempt == MAX_VOL_FETCH_RETRIES:
                     logger.error(
                         "SPY_VOL_DATA_UNAVAILABLE",
