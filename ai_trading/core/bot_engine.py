@@ -10221,6 +10221,13 @@ def trade_logic(
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
 
+    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
+        logger.warning(
+            "SKIP_PRIMARY_PROVIDER_DISABLED",
+            extra={"symbol": symbol},
+        )
+        return False
+
     with StageTimer(logger, "FETCH_FEATURE_DATA", symbol=symbol):
         raw_df, feat_df, skip_flag = _fetch_feature_data(ctx, state, symbol)
     if feat_df is None:
