@@ -488,7 +488,12 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                             "API_PORT_PRECHECK_FAILED",
                             extra={"port": port, "pid": None},
                         )
-                        raise PortInUseError(port) from exc
+                        logger.warning(
+                            "API_PORT_RELEASE_TIMEOUT", extra={"port": port}
+                        )
+                        if ready_signal is not None:
+                            ready_signal.set()
+                        return
 
                     sleep_for = min(1.0, max(0.1, remaining))
                     logger.warning(
