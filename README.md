@@ -67,9 +67,12 @@ permissions during startup.
 
 Trade logs write to the path resolved by `TRADE_LOG_PATH` (or the legacy
 `AI_TRADING_TRADE_LOG_PATH`). When unset, the bot prefers
-`/var/log/ai-trading-bot/trades.jsonl`; if that directory—or an explicit
-override—cannot be created or written, it falls back to `./logs/trades.jsonl`
-next to the working directory.
+`/var/log/ai-trading-bot/trades.jsonl`. If that directory—or an explicit
+override—cannot be created or written, the engine emits a once-per-process
+warning and falls back to a user-writable state directory such as
+`$XDG_STATE_HOME/ai-trading-bot/trades.jsonl` (or
+`~/.local/state/ai-trading-bot/trades.jsonl` when `XDG_STATE_HOME` is unset),
+preserving the configured filename.
 Startup logs the final trade log location via `ensure_trade_log_path()` so
 operators can confirm where records are stored.
 
