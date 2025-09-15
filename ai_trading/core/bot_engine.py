@@ -10126,7 +10126,11 @@ def _evaluate_trade_signal(
     )
     if final_score is None or not np.isfinite(final_score):
         raise ValueError("Invalid or empty signal")
-    if math.isclose(final_score, 0.0, abs_tol=1e-9):
+    try:
+        hold_eps = float(get_env("AI_TRADING_SIGNAL_HOLD_EPS", "0.001", cast=float))
+    except Exception:
+        hold_eps = 1e-3
+    if math.isclose(final_score, 0.0, abs_tol=hold_eps):
         logger.info(
             "SIGNAL_HOLD",
             extra={"symbol": symbol, "confidence": confidence},
