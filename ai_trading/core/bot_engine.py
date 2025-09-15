@@ -644,15 +644,66 @@ def abspath_safe(fname: str | Path | None) -> str:
 
 def default_trade_log_path() -> str:
     """Resolve trade log path from env vars or fallback."""  # AI-AGENT-REF: ensure trade log exists
+
+    def _emit_local_fallback(
+        *, preferred_path: str, reason: str, extra: dict[str, object] | None = None
+    ) -> str:
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            cwd = BASE_DIR
+        local_fallback = os.path.abspath(os.path.join(cwd, "logs", "trades.jsonl"))
+        local_dir = os.path.dirname(local_fallback)
+        os.makedirs(local_dir, exist_ok=True)
+        payload: dict[str, object] = {
+            "preferred_path": preferred_path,
+            "fallback_path": local_fallback,
+            "reason": reason,
+        }
+        if extra:
+            payload.update(extra)
+        logger_once.warning(
+            "TRADE_LOG_FALLBACK_LOCAL",
+            key="trade_log_fallback_local",
+            extra=payload,
+        )
+        return local_fallback
+
     env_candidates = [
-        os.getenv("TRADE_LOG_PATH"),
-        os.getenv("AI_TRADING_TRADE_LOG_PATH"),
+        ("TRADE_LOG_PATH", os.getenv("TRADE_LOG_PATH")),
+        ("AI_TRADING_TRADE_LOG_PATH", os.getenv("AI_TRADING_TRADE_LOG_PATH")),
     ]
-    for candidate in env_candidates:
+    env_failures: list[dict[str, str]] = []
+    had_env_override = False
+    for env_name, candidate in env_candidates:
         cand = abspath_safe(candidate)
-        if cand:
-            os.makedirs(os.path.dirname(cand), exist_ok=True)
+        if not cand:
+            continue
+        had_env_override = True
+        env_dir = os.path.dirname(cand)
+        try:
+            os.makedirs(env_dir, exist_ok=True)
+            if not os.access(env_dir, os.W_OK | os.X_OK):
+                raise PermissionError("directory_not_writable")
+            with open(cand, "a"):
+                pass
+        except OSError as exc:
+            env_failures.append(
+                {
+                    "env": env_name,
+                    "path": cand,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+        else:
             return cand
+
+    if had_env_override and env_failures:
+        return _emit_local_fallback(
+            preferred_path="",
+            reason="env_override_unwritable",
+            extra={"env_failures": env_failures},
+        )
 
     preferred = "/var/log/ai-trading-bot/trades.jsonl"
     preferred_dir = os.path.dirname(preferred)
@@ -666,26 +717,10 @@ def default_trade_log_path() -> str:
             return preferred
         preferred_error = "directory_not_writable"
 
-    try:
-        cwd = os.getcwd()
-    except OSError:
-        cwd = BASE_DIR
-    local_fallback = os.path.abspath(os.path.join(cwd, "logs", "trades.jsonl"))
-    local_dir = os.path.dirname(local_fallback)
-    os.makedirs(local_dir, exist_ok=True)
-
-    if preferred_error:
-        logger_once.warning(
-            "TRADE_LOG_FALLBACK_LOCAL",
-            key="trade_log_fallback_local",
-            extra={
-                "preferred_path": preferred,
-                "fallback_path": local_fallback,
-                "reason": preferred_error,
-            },
-        )
-
-    return local_fallback
+    return _emit_local_fallback(
+        preferred_path=preferred,
+        reason=preferred_error or "unknown_error",
+    )
 
 
 # Delayed import: not all environments have pandas-market-calendars

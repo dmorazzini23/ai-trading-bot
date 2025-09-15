@@ -17,7 +17,8 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics  # 200 if e
 Set `RUN_HEALTHCHECK=1` in the environment to enable the Flask endpoints.
 
 ### Paths & default files
-- Trade log location is controlled by `TRADE_LOG_PATH` (or the legacy `AI_TRADING_TRADE_LOG_PATH`). Without an override the bot prefers `/var/log/ai-trading-bot/trades.jsonl`; if that directory cannot be created or written it automatically falls back to `./logs/trades.jsonl` relative to the working directory. The chosen directory is auto-created.
+- Trade log location is controlled by `TRADE_LOG_PATH` (or the legacy `AI_TRADING_TRADE_LOG_PATH`). The packaged systemd unit pins it to `/home/aiuser/ai-trading-bot/logs/trades.jsonl` and creates that directory with `0700` permissions for `aiuser`.
+- Without an override the bot prefers `/var/log/ai-trading-bot/trades.jsonl`; if that directory—or an explicit override—cannot be created or written it automatically falls back to `./logs/trades.jsonl` relative to the working directory. The chosen directory is auto-created.
 - The application initializes this trade log on startup via `ai_trading.core.bot_engine.get_trade_logger()` and trade execution lazily creates it if missing. Custom deployments should call it once if they bypass the standard entrypoint.
 - Startup verifies this trade log path is writable, logs `TRADE_LOG_PATH_READY` with the resolved location, and exits if it cannot be created.
 - Empty model path disables ML quietly. Set `MODEL_PATH` to enable.
