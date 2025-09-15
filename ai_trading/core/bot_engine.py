@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import stat
 import sys
 from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
 from collections import deque
@@ -642,32 +643,111 @@ def abspath_safe(fname: str | Path | None) -> str:
     return os.path.join(BASE_DIR, s)
 
 
+def _is_dir_writable(str_path: str) -> bool:
+    """Return ``True`` if the directory is writable by the current user."""
+
+    try:
+        st = os.stat(str_path)
+    except OSError:
+        return False
+
+    geteuid = getattr(os, "geteuid", None)
+    getegid = getattr(os, "getegid", None)
+    getgroups = getattr(os, "getgroups", None)
+
+    if not callable(geteuid) or not callable(getegid) or not callable(getgroups):
+        return os.access(str_path, os.W_OK | os.X_OK)
+
+    uid = geteuid()
+    gid = getegid()
+    try:
+        groups = set(getgroups())
+    except OSError:
+        groups = {gid}
+
+    mode = st.st_mode
+    if uid == st.st_uid:
+        return bool(mode & stat.S_IWUSR)
+    if st.st_gid == gid or st.st_gid in groups:
+        return bool(mode & stat.S_IWGRP)
+    return bool(mode & stat.S_IWOTH)
+
+
+def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
+    """Return a user-writable trade log path under the state directory."""
+
+    candidates: list[Path] = []
+    env_state = os.getenv("XDG_STATE_HOME")
+    if env_state:
+        expanded = Path(env_state).expanduser()
+        if expanded.is_absolute():
+            candidates.append(expanded / "ai-trading-bot")
+
+    try:
+        home_dir = Path.home()
+    except (OSError, RuntimeError):
+        home_dir = None
+    if home_dir:
+        candidates.append(home_dir / ".local" / "state" / "ai-trading-bot")
+
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path(BASE_DIR)
+    candidates.append(cwd / "logs")
+
+    basename = Path(filename).name or "trades.jsonl"
+    for directory in candidates:
+        try:
+            directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        except OSError:
+            continue
+        if _is_dir_writable(str(directory)):
+            return str(directory / basename)
+
+    fallback_dir = candidates[-1] if candidates else Path(BASE_DIR)
+    try:
+        fallback_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+    except OSError:
+        pass
+    return str((fallback_dir / basename).resolve(strict=False))
+
+
+def _emit_trade_log_fallback(
+    *, preferred_path: str, reason: str, detail: str | None = None, extra: dict[str, object] | None = None
+) -> str:
+    """Log a once-per-process warning and return the state-directory fallback path."""
+
+    basename = Path(preferred_path).name if preferred_path else "trades.jsonl"
+    fallback_path = _compute_user_state_trade_log_path(basename)
+    payload: dict[str, object] = {
+        "preferred_path": preferred_path,
+        "fallback_path": fallback_path,
+        "reason": reason,
+    }
+    if detail:
+        payload["detail"] = detail
+    if extra:
+        payload.update(extra)
+    logger_once.warning(
+        "TRADE_LOG_FALLBACK_USER_STATE",
+        key="trade_log_fallback_user_state",
+        extra=payload,
+    )
+    return fallback_path
+
+
 def default_trade_log_path() -> str:
     """Resolve trade log path from env vars or fallback."""  # AI-AGENT-REF: ensure trade log exists
 
     def _emit_local_fallback(
         *, preferred_path: str, reason: str, extra: dict[str, object] | None = None
     ) -> str:
-        try:
-            cwd = os.getcwd()
-        except OSError:
-            cwd = BASE_DIR
-        local_fallback = os.path.abspath(os.path.join(cwd, "logs", "trades.jsonl"))
-        local_dir = os.path.dirname(local_fallback)
-        os.makedirs(local_dir, exist_ok=True)
-        payload: dict[str, object] = {
-            "preferred_path": preferred_path,
-            "fallback_path": local_fallback,
-            "reason": reason,
-        }
-        if extra:
-            payload.update(extra)
-        logger_once.warning(
-            "TRADE_LOG_FALLBACK_LOCAL",
-            key="trade_log_fallback_local",
-            extra=payload,
+        return _emit_trade_log_fallback(
+            preferred_path=preferred_path,
+            reason=reason,
+            extra=extra,
         )
-        return local_fallback
 
     env_candidates = [
         ("TRADE_LOG_PATH", os.getenv("TRADE_LOG_PATH")),
@@ -699,8 +779,9 @@ def default_trade_log_path() -> str:
             return cand
 
     if had_env_override and env_failures:
+        first_failed = env_failures[0]["path"] if env_failures else ""
         return _emit_local_fallback(
-            preferred_path="",
+            preferred_path=first_failed,
             reason="env_override_unwritable",
             extra={"env_failures": env_failures},
         )
@@ -6009,72 +6090,64 @@ data_fetcher: DataFetcher | None = None
 signal_manager = SignalManager()
 # AI-AGENT-REF: Singleton initialized at import to ensure trade log availability
 _TRADE_LOGGER_SINGLETON = None
+_TRADE_LOG_FALLBACK_PATH: str | None = None
 
 
 def get_trade_logger() -> TradeLogger:
     """Get trade logger singleton and ensure CSV headers exist."""  # AI-AGENT-REF: ensure default path resolution
 
-    global _TRADE_LOGGER_SINGLETON
+    global _TRADE_LOGGER_SINGLETON, _TRADE_LOG_FALLBACK_PATH, TRADE_LOG_FILE
     if _TRADE_LOGGER_SINGLETON is None:
         # AI-AGENT-REF: respect configured trade log path
         _TRADE_LOGGER_SINGLETON = TradeLogger(TRADE_LOG_FILE)
 
+    for _ in range(2):
+        path = _TRADE_LOGGER_SINGLETON.path
+        log_dir = os.path.dirname(path) or "."
+        parent_dir = os.path.dirname(log_dir) or "."
+        fallback_reason: str | None = None
+        fallback_detail: str | None = None
+
+        if not _is_dir_writable(parent_dir):
+            fallback_reason = "parent_dir_not_writable"
+            fallback_detail = parent_dir
+        else:
+            try:
+                os.makedirs(log_dir, mode=0o700, exist_ok=True)
+            except PermissionError as exc:
+                fallback_reason = "permission_error"
+                fallback_detail = str(exc)
+            except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
+                logger.error(
+                    "TRADE_LOG_DIR_CREATE_FAILED",
+                    extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
+                )
+                fallback_reason = "dir_create_failed"
+                fallback_detail = str(exc)
+            else:
+                if not _is_dir_writable(log_dir):
+                    fallback_reason = "log_dir_not_writable"
+                    fallback_detail = log_dir
+
+        if fallback_reason:
+            current_path = os.path.abspath(path)
+            if _TRADE_LOG_FALLBACK_PATH and os.path.abspath(_TRADE_LOG_FALLBACK_PATH) == current_path:
+                break
+            new_path = _emit_trade_log_fallback(
+                preferred_path=path,
+                reason=fallback_reason,
+                detail=fallback_detail,
+            )
+            TRADE_LOG_FILE = new_path
+            _TRADE_LOG_FALLBACK_PATH = new_path
+            _TRADE_LOGGER_SINGLETON = TradeLogger(new_path)
+            continue
+        break
+
     path = _TRADE_LOGGER_SINGLETON.path
     log_dir = os.path.dirname(path) or "."
 
-    # Determine writability using POSIX permission bits rather than os.access.
-    # This avoids root bypass so tests that change mode to read-only still fail.
-    def _is_dir_writable(str_path: str) -> bool:
-        try:
-            st = os.stat(str_path)
-        except OSError:
-            return False
-        mode = st.st_mode
-        uid = os.geteuid()
-        gid = os.getegid()
-        groups: set[int]
-        try:
-            groups = set(os.getgroups())
-        except OSError:
-            groups = {gid}
-        import stat as _stat
-        if uid == st.st_uid:
-            return bool(mode & _stat.S_IWUSR)
-        if st.st_gid == gid or st.st_gid in groups:
-            return bool(mode & _stat.S_IWGRP)
-        return bool(mode & _stat.S_IWOTH)
-
-    parent_dir = os.path.dirname(log_dir) or "."
-    if not _is_dir_writable(parent_dir):
-        logger.warning(
-            "TRADE_LOG_DIR_NOT_WRITABLE %s",
-            parent_dir,
-            extra={"dir": parent_dir},
-        )
-        return _TRADE_LOGGER_SINGLETON
-
-    try:
-        os.makedirs(log_dir, mode=0o700, exist_ok=True)
-    except PermissionError as exc:
-        logger.warning(
-            "TRADE_LOG_DIR_NOT_WRITABLE %s",
-            log_dir,
-            extra={"dir": log_dir, "detail": str(exc)},
-        )
-        return _TRADE_LOGGER_SINGLETON
-    except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
-        logger.error(
-            "TRADE_LOG_DIR_CREATE_FAILED",
-            extra={"dir": log_dir, "cause": exc.__class__.__name__, "detail": str(exc)},
-        )
-        return _TRADE_LOGGER_SINGLETON
-
     if not _is_dir_writable(log_dir):
-        logger.warning(
-            "TRADE_LOG_DIR_NOT_WRITABLE %s",
-            log_dir,
-            extra={"dir": log_dir},
-        )
         return _TRADE_LOGGER_SINGLETON
 
     if not os.path.exists(path) or os.path.getsize(path) == 0:
