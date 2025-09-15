@@ -610,6 +610,7 @@ from collections import OrderedDict
 pd = load_pandas()
 _FEATURE_CACHE: "OrderedDict[tuple[str, pd.Timestamp], pd.DataFrame]" = OrderedDict()
 _FEATURE_CACHE_LIMIT = 128
+_PRICE_SOURCE: dict[str, str] = {}
 logger = get_logger(__name__)
 
 def _alpaca_diag_info() -> dict[str, object]:
@@ -9787,6 +9788,21 @@ def _enter_long(
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
 
+    quote_price = get_latest_price(symbol)
+    price_source = _PRICE_SOURCE.get(symbol, "unknown")
+    if quote_price is None:
+        logger.warning(
+            "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}
+        )
+        return True
+    if price_source != "alpaca":
+        logger.warning(
+            "SKIP_ORDER_PRICE_SOURCE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
+        return True
+    current_price = float(quote_price)
+
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     if target_weight == 0.0:
@@ -9946,6 +9962,21 @@ def _enter_short(
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
+
+    quote_price = get_latest_price(symbol)
+    price_source = _PRICE_SOURCE.get(symbol, "unknown")
+    if quote_price is None:
+        logger.warning(
+            "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}
+        )
+        return True
+    if price_source != "alpaca":
+        logger.warning(
+            "SKIP_ORDER_PRICE_SOURCE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
+        return True
+    current_price = float(quote_price)
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
     try:
@@ -10127,15 +10158,16 @@ def _evaluate_trade_signal(
     if final_score is None or not np.isfinite(final_score):
         raise ValueError("Invalid or empty signal")
     try:
-        hold_eps = float(get_env("AI_TRADING_SIGNAL_HOLD_EPS", "0.001", cast=float))
+        hold_eps = float(get_env("AI_TRADING_SIGNAL_HOLD_EPS", "0.01", cast=float))
     except Exception:
-        hold_eps = 1e-3
-    if math.isclose(final_score, 0.0, abs_tol=hold_eps):
+        hold_eps = 1e-2
+    if not np.isfinite(final_score) or abs(final_score) <= hold_eps:
+        final_score = 0.0
         logger.info(
             "SIGNAL_HOLD",
             extra={"symbol": symbol, "confidence": confidence},
         )
-        return 0.0, confidence, "HOLD"
+        return final_score, confidence, "HOLD"
     return final_score, confidence, strat
 
 
@@ -10198,7 +10230,10 @@ def trade_logic(
             ctx, state, feat_df, symbol, model
         )
     except ValueError as exc:
-        logger.error("%s", exc)
+        logger.info(
+            "SKIP_SIGNAL_INVALID",
+            extra={"symbol": symbol, "reason": str(exc)},
+        )
         return True
     if pd.isna(final_score) or pd.isna(conf):
         logger.warning(f"Skipping {symbol}: model returned NaN prediction")
@@ -15055,6 +15090,7 @@ def get_latest_price(symbol: str):
     """Return the most recent quote price with provider fallbacks."""
 
     price: float | None = None
+    price_source = "unknown"
     try:
         alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
         data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
@@ -15062,6 +15098,8 @@ def get_latest_price(symbol: str):
         price = float(raw) if raw is not None else None
         if price is None:
             logger.warning("ALPACA_PRICE_NONE", extra={"symbol": symbol})
+        else:
+            price_source = "alpaca"
     except (
         FileNotFoundError,
         PermissionError,
@@ -15083,6 +15121,8 @@ def get_latest_price(symbol: str):
             end = datetime.now(UTC)
             df = _yahoo_get_bars(symbol, start, end, interval="1d")
             price = get_latest_close(df)
+            if price is not None:
+                price_source = "yahoo"
         except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.warning("YAHOO_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
 
@@ -15090,10 +15130,15 @@ def get_latest_price(symbol: str):
         try:
             df = get_bars_df(symbol)
             price = get_latest_close(df)
+            if price is not None:
+                price_source = "bars"
         except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.error("LATEST_PRICE_FALLBACK_FAILED", extra={"symbol": symbol, "error": str(e)})
             price = None
 
+    if price is None:
+        price_source = "unknown"
+    _PRICE_SOURCE[symbol] = price_source
     return price
 
 

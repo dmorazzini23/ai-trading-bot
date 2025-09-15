@@ -170,6 +170,14 @@ class ProviderMonitor:
             self.consecutive_switches >= self.switchover_threshold
             and (not self._alert_cooldown_until or now >= self._alert_cooldown_until)
         ):
+            logger.warning(
+                "PRIMARY_DATA_FEED_UNAVAILABLE",
+                extra={
+                    "from_provider": from_provider,
+                    "to_provider": to_provider,
+                    "consecutive": self.consecutive_switches,
+                },
+            )
             try:
                 self.alert_manager.create_alert(
                     AlertType.SYSTEM,
