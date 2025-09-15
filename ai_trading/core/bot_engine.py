@@ -12975,9 +12975,21 @@ def run_multi_strategy(ctx) -> None:
             extra={"symbol": sig.symbol, "side": sig.side, "qty": qty, "price": price},
         )
 
-        ctx.execution_engine.execute_order(
-            sig.symbol, sig.side, qty, asset_class=sig.asset_class
-        )
+        try:
+            ctx.execution_engine.execute_order(
+                sig.symbol, sig.side, qty, asset_class=sig.asset_class
+            )
+        except AssertionError as exc:
+            logger.warning(
+                "ORDER_EXECUTION_ABORTED",
+                extra={
+                    "symbol": sig.symbol,
+                    "side": sig.side,
+                    "qty": qty,
+                    "reason": str(exc),
+                },
+            )
+            continue
         ctx.risk_engine.register_fill(sig)
 
     # At the end of the strategy cycle, trigger trailing-stop checks if an ExecutionEngine is present.

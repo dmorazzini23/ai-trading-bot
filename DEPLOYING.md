@@ -106,7 +106,7 @@ Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on the port defined 
 
 ### API port fail-fast semantics
 
-The primary Flask API binds to `settings.api_port` (default **9001**). Startup now waits up to `API_PORT_WAIT_SECONDS` (default **5s**) for the socket to become free to smooth rapid restarts where the kernel still owns the port. After that window expires, the process raises an error and exits with status **98** instead of probing other ports. The systemd unit is configured with `RestartPreventExitStatus=98`, so the service will stay stopped until the conflict is resolved. Free the port, increase `API_PORT_WAIT_SECONDS`, or update `API_PORT` before restarting.
+The primary Flask API binds to `settings.api_port` (default **9001**). Startup now waits up to `API_PORT_WAIT_SECONDS` (default **15s**) for the socket to become free to smooth rapid restarts where the kernel still owns the port. After that window expires, the process raises an error and exits with status **98** instead of probing other ports. The systemd unit is configured with `RestartPreventExitStatus=98`, so the service will stay stopped until the conflict is resolved. Free the port, increase `API_PORT_WAIT_SECONDS`, or update `API_PORT` before restarting.
 
 ### CLI
 

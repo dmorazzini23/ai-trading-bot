@@ -928,6 +928,17 @@ class ExecutionEngine:
             diff_bps = 0.0
         order.slippage_bps = diff_bps
         if abs(diff_bps) > threshold_bps:
+            logger.warning(
+                "SLIPPAGE_PRECHECK_THRESHOLD_EXCEEDED",
+                extra={
+                    "symbol": order.symbol,
+                    "order_id": order.id,
+                    "delayed_price": round(delayed_price, 6),
+                    "reference_price": round(reference_price, 6),
+                    "slippage_bps": round(diff_bps, 2),
+                    "threshold_bps": round(threshold_bps, 2),
+                },
+            )
             raise AssertionError(
                 f"delayed price {delayed_price} deviates {diff_bps:.2f} bps from reference"
             )
@@ -936,12 +947,14 @@ class ExecutionEngine:
     def _simulate_market_execution(self, order: Order):
         """Simulate market order execution (demo purposes)."""
         try:
+            had_manual_price = False
             # Prefer provided price; else try to guess; else final fallback
             if order.price is not None:
                 try:
                     base_price = float(order.price)
                 except Exception:
                     base_price = 100.0
+                had_manual_price = True
             else:
                 base_price = self._guess_price(order.symbol) or 100.0
             try:
@@ -959,10 +972,31 @@ class ExecutionEngine:
             )
             threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
             base_price = self._apply_slippage(order, base_price, expected, threshold)
+            if getattr(order, "expected_price", None) is None and base_price:
+                try:
+                    tick = TICK_BY_SYMBOL.get(order.symbol)
+                    order.expected_price = Money(base_price, tick)
+                except Exception:
+                    pass
+            try:
+                if getattr(order, "expected_price", None) is not None:
+                    expected = float(order.expected_price)
+                else:
+                    expected = float(base_price)
+            except Exception:
+                expected = float(base_price)
+            if not math.isfinite(expected) or expected <= 0:
+                expected = float(base_price or 1.0)
             predicted_fill = base_price * (1 + (hash(order.id) % 100 - 50) / 10000)
-            predicted_slippage_bps = (
-                ((predicted_fill - expected) / expected) * 10000 if expected else 0.0
-            )
+            if expected:
+                predicted_slippage_bps = (
+                    (predicted_fill - expected) / expected
+                ) * 10000
+            else:
+                base_ref = float(base_price) if base_price else 1.0
+                predicted_slippage_bps = (
+                    (predicted_fill - base_ref) / base_ref
+                ) * 10000
             if abs(predicted_slippage_bps) > threshold:
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
                 if order.order_type == OrderType.MARKET:
@@ -992,11 +1026,19 @@ class ExecutionEngine:
                         "SLIPPAGE_QTY_REDUCED",
                         extra={"order_id": order.id, "new_qty": reduced},
                     )
+                    if had_manual_price:
+                        raise AssertionError(
+                            f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
+                        )
                 else:
                     order.status = OrderStatus.REJECTED
                     logger.warning(
                         "SLIPPAGE_ORDER_REJECTED", extra={"order_id": order.id}
                     )
+                    if had_manual_price:
+                        raise AssertionError(
+                            f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
+                        )
                     return
                 try:
                     from ai_trading.core.bot_engine import get_trade_logger
@@ -1059,11 +1101,17 @@ class ExecutionEngine:
                         expected = float(base_price)
                 except Exception:
                     expected = float(base_price)
+                if not math.isfinite(expected) or expected <= 0:
+                    expected = float(base_price or 1.0)
                 try:
                     actual = float(order.average_fill_price) if order.average_fill_price is not None else expected
                 except Exception:
                     actual = expected
-                slippage_bps = ((actual - expected) / expected) * 10000 if expected else 0.0
+                if expected:
+                    slippage_bps = ((actual - expected) / expected) * 10000
+                else:
+                    ref = float(base_price) if base_price else 1.0
+                    slippage_bps = ((actual - ref) / ref) * 10000
                 order.slippage_bps = slippage_bps
                 logger.info(
                     'SLIPPAGE_DIAGNOSTIC',
