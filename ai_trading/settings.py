@@ -132,6 +132,8 @@ class Settings(BaseSettings):
     position_size_min_usd: float = Field(default=0.0, env='AI_TRADING_POSITION_SIZE_MIN_USD')
     volume_threshold: float = Field(default=0.0, env='AI_TRADING_VOLUME_THRESHOLD')
     alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
+    alpaca_feed_failover: tuple[str, ...] = Field(('sip',), env='ALPACA_FEED_FAILOVER')
+    alpaca_empty_to_backup: bool = Field(True, env='ALPACA_EMPTY_TO_BACKUP')
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
     data_provider_priority: tuple[str, ...] = Field(
         ('alpaca_iex', 'alpaca_sip', 'yahoo'), env='DATA_PROVIDER_PRIORITY'
@@ -237,6 +239,36 @@ class Settings(BaseSettings):
             logger.warning('SIP_FEED_DISABLED', extra={'requested': 'sip', 'using': 'iex'})
             return 'iex'
         return v
+
+    @field_validator('alpaca_feed_failover', mode='before')
+    @classmethod
+    def _split_feed_failover(cls, v):
+        if isinstance(v, FieldInfo) or v is None:
+            return tuple()
+        if isinstance(v, str):
+            if not v.strip():
+                return tuple()
+            return tuple(i.strip() for i in v.split(',') if i.strip())
+        return tuple(v)
+
+    @field_validator('alpaca_feed_failover', mode='after')
+    @classmethod
+    def _normalize_feed_failover(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        allow_sip = os.getenv('ALPACA_ALLOW_SIP', '').strip().lower() in {
+            '1',
+            'true',
+            'yes',
+        }
+        normalized: list[str] = []
+        for feed in v:
+            feed_norm = str(feed).lower().strip()
+            if feed_norm not in {'iex', 'sip'}:
+                continue
+            if feed_norm == 'sip' and not allow_sip:
+                continue
+            if feed_norm not in normalized:
+                normalized.append(feed_norm)
+        return tuple(normalized)
 
     @field_validator('alpaca_adjustment', mode='before')
     @classmethod

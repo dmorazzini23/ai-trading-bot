@@ -7,7 +7,10 @@ import sys
 import time
 
 import pytest
-import requests
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in CI
+    requests = None
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -34,12 +37,14 @@ def _short_sleep(monkeypatch):
 
 def _resolve_requests_session():
     """Locate requests.Session in a robust way."""  # AI-AGENT-REF: fallback lookup
+    if requests is None:
+        return None, None
     Session = getattr(requests, "Session", None)
     if Session is None:
         try:
             sess_mod = importlib.import_module("requests.sessions")
             Session = getattr(sess_mod, "Session", None)
-        except (requests.RequestException, TimeoutError):  # pragma: no cover - defensive
+        except (TimeoutError, Exception):  # pragma: no cover - defensive
             Session = None
     return Session, requests
 
@@ -57,7 +62,10 @@ def _requests_default_timeout():
 
     default_timeout = float(os.getenv("AI_HTTP_TIMEOUT", "10") or 10)
 
-    orig_request = Session.request
+    orig_request = getattr(Session, "request", None)
+    if orig_request is None:
+        yield
+        return
 
     def request_with_default_timeout(self, method, url, **kwargs):
         if "timeout" not in kwargs or kwargs["timeout"] is None:

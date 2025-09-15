@@ -35,6 +35,21 @@ def max_data_fallbacks(s: Settings | None = None) -> int:
     return int(getattr(s, 'max_data_fallbacks', 2))
 
 
+def alpaca_feed_failover(s: Settings | None = None) -> tuple[str, ...]:
+    """Return preferred Alpaca feed fallback order."""
+    s = s or get_settings()
+    feeds = getattr(s, 'alpaca_feed_failover', ())
+    if isinstance(feeds, tuple):
+        return feeds
+    return tuple(feeds or ())
+
+
+def alpaca_empty_to_backup(s: Settings | None = None) -> bool:
+    """Return whether to route empty payloads to the backup provider."""
+    s = s or get_settings()
+    return bool(getattr(s, 'alpaca_empty_to_backup', True))
+
+
 def sentiment_retry_max(s: Settings | None = None) -> int:
     """Return maximum sentiment fetch retry count."""
     s = s or get_settings()
@@ -52,4 +67,15 @@ def sentiment_backoff_strategy(s: Settings | None = None) -> str:
     s = s or get_settings()
     return str(getattr(s, 'sentiment_backoff_strategy', 'exponential'))
 
-__all__ = ['Settings', 'get_settings', 'broker_keys', 'provider_priority', 'max_data_fallbacks', 'sentiment_retry_max', 'sentiment_backoff_base', 'sentiment_backoff_strategy']
+__all__ = [
+    'Settings',
+    'get_settings',
+    'broker_keys',
+    'provider_priority',
+    'max_data_fallbacks',
+    'alpaca_feed_failover',
+    'alpaca_empty_to_backup',
+    'sentiment_retry_max',
+    'sentiment_backoff_base',
+    'sentiment_backoff_strategy',
+]

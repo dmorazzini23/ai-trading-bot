@@ -755,6 +755,8 @@ exits early with a clear error message when these values are invalid.
   # ALPACA_DATA_FEED=sip
   # ALPACA_HAS_SIP=1      # set to 1 if your Alpaca account has SIP access
   # ALPACA_ALLOW_SIP=1    # enable SIP feed and SIP fallback
+  # ALPACA_FEED_FAILOVER=sip,iex  # retry SIP first when Alpaca returns an empty payload
+  # ALPACA_EMPTY_TO_BACKUP=1      # hop straight to the backup provider after empty Alpaca responses
   # Without ALPACA_HAS_SIP, the fetcher uses the backup provider instead of SIP
   # ALPACA_SIP_UNAUTHORIZED=1  # legacy flag to suppress SIP after a 403
    ALPACA_ADJUSTMENT=all

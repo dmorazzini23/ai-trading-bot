@@ -26,7 +26,12 @@ from ai_trading.logging import (
     get_logger,
 )
 from ai_trading.config.management import MAX_EMPTY_RETRIES
-from ai_trading.config.settings import provider_priority, max_data_fallbacks
+from ai_trading.config.settings import (
+    provider_priority,
+    max_data_fallbacks,
+    alpaca_feed_failover,
+    alpaca_empty_to_backup,
+)
 from ai_trading.data.empty_bar_backoff import (
     _SKIPPED_SYMBOLS,
     mark_success,
@@ -220,6 +225,72 @@ _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # symbol/timeframe/window. This keeps production logs concise while preserving
 # the first occurrence for observability.
 _BACKUP_USAGE_LOGGED: set[tuple[str, str, int, int]] = set()
+
+# Track feed failovers so we avoid redundant retries for the same symbol/timeframe.
+_FEED_OVERRIDE_BY_TF: dict[tuple[str, str], str] = {}
+_FEED_SWITCH_LOGGED: set[tuple[str, str, str]] = set()
+_FEED_FAILOVER_ATTEMPTS: dict[tuple[str, str], set[str]] = {}
+
+
+def _preferred_feed_failover() -> tuple[str, ...]:
+    try:
+        feeds = alpaca_feed_failover()
+    except Exception:
+        return ()
+    return tuple(feeds or ())
+
+
+def _should_use_backup_on_empty() -> bool:
+    try:
+        return bool(alpaca_empty_to_backup())
+    except Exception:
+        return True
+
+
+def _iter_preferred_feeds(symbol: str, timeframe: str, current_feed: str) -> tuple[str, ...]:
+    key = (symbol, timeframe)
+    attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
+    feeds = _preferred_feed_failover()
+    out: list[str] = []
+    for raw in feeds:
+        try:
+            candidate = _to_feed_str(raw)
+        except ValueError:
+            continue
+        if candidate == current_feed:
+            continue
+        if candidate in attempted:
+            continue
+        if candidate == "sip" and _SIP_UNAUTHORIZED:
+            attempted.add(candidate)
+            continue
+        attempted.add(candidate)
+        out.append(candidate)
+    return tuple(out)
+
+
+def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: str) -> None:
+    key = (symbol, timeframe)
+    _FEED_OVERRIDE_BY_TF[key] = to_feed
+    attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
+    attempted.add(to_feed)
+    if from_feed == "iex":
+        _IEX_EMPTY_COUNTS.pop(key, None)
+    log_key = (symbol, timeframe, to_feed)
+    if log_key not in _FEED_SWITCH_LOGGED:
+        logger.info(
+            "ALPACA_FEED_SWITCH",
+            extra=_norm_extra(
+                {
+                    "provider": "alpaca",
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "from_feed": from_feed,
+                    "to_feed": to_feed,
+                }
+            ),
+        )
+        _FEED_SWITCH_LOGGED.add(log_key)
 
 # Track consecutive empty Alpaca responses across all symbols to temporarily
 # disable Alpaca fetching when upstream repeatedly returns empty payloads.
@@ -1469,10 +1540,23 @@ def _fetch_bars(
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
+            base_interval = _interval
+            base_feed = _feed
+            base_start = _start
+            base_end = _end
+            tf_key = (symbol, base_interval)
+            if status == 200:
+                for alt_feed in _iter_preferred_feeds(symbol, base_interval, base_feed):
+                    result = _attempt_fallback((base_interval, alt_feed, base_start, base_end))
+                    if result is None or getattr(result, "empty", True):
+                        _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
+                        continue
+                    _record_feed_switch(symbol, base_interval, base_feed, alt_feed)
+                    return result
+                _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
             if is_empty_error:
-                key = (symbol, _interval)
-                cnt = _ALPACA_EMPTY_ERROR_COUNTS.get(key, 0) + 1
-                _ALPACA_EMPTY_ERROR_COUNTS[key] = cnt
+                cnt = _ALPACA_EMPTY_ERROR_COUNTS.get(tf_key, 0) + 1
+                _ALPACA_EMPTY_ERROR_COUNTS[tf_key] = cnt
                 provider_monitor.record_failure("alpaca", "empty")
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
                 if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
@@ -1481,7 +1565,7 @@ def _fetch_bars(
                     provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
                     metrics.empty_fallback += 1
                     _mark_fallback(symbol, _interval, _start, _end)
-                    _ALPACA_EMPTY_ERROR_COUNTS.pop(key, None)
+                    _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
                     _state["stop"] = True
                     interval_map = {
                         "1Min": "1m",
@@ -1495,24 +1579,45 @@ def _fetch_bars(
                         return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                     return pd.DataFrame()
             else:
-                _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
+                _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
+            if fallback:
+                fb_interval, fb_feed, fb_start, fb_end = fallback
+                if fb_feed in _FEED_FAILOVER_ATTEMPTS.get(tf_key, set()):
+                    fallback = None
             if fallback:
                 if not is_empty_error:
                     _incr("data.fetch.empty", value=1.0, tags=_tags())
-                # Attempt fallback immediately on empty payloads
+                fb_interval, fb_feed, fb_start, fb_end = fallback
+                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fb_feed)
+                from_feed = base_feed
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
+                    _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
                     return result
+                _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
             if _feed == "iex" and is_empty_error:
-                key = (symbol, _interval)
-                cnt = _IEX_EMPTY_COUNTS.get(key, 0) + 1
-                _IEX_EMPTY_COUNTS[key] = cnt
+                cnt = _IEX_EMPTY_COUNTS.get(tf_key, 0) + 1
+                _IEX_EMPTY_COUNTS[tf_key] = cnt
                 prev = _state.get("corr_id")
+                if (
+                    "sip" not in _FEED_FAILOVER_ATTEMPTS.get(tf_key, set())
+                    and _sip_configured()
+                    and not _SIP_UNAUTHORIZED
+                ):
+                    _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add("sip")
+                    result = _attempt_fallback((base_interval, "sip", base_start, base_end))
+                    sip_corr = _state.get("corr_id")
+                    if result is not None and not getattr(result, "empty", True):
+                        _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                        _record_feed_switch(symbol, base_interval, base_feed, "sip")
+                        return result
+                    _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
                 if _sip_configured() and not _SIP_UNAUTHORIZED:
                     result = _attempt_fallback((_interval, "sip", _start, _end))
                     sip_corr = _state.get("corr_id")
                     if result is not None and not getattr(result, "empty", True):
-                        _IEX_EMPTY_COUNTS.pop(key, None)
+                        _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                        _record_feed_switch(symbol, base_interval, base_feed, "sip")
                         return result
                     msg = "IEX_EMPTY_SIP_UNAUTHORIZED" if _SIP_UNAUTHORIZED else "IEX_EMPTY_SIP_EMPTY"
                     logger.error(
@@ -1545,12 +1650,18 @@ def _fetch_bars(
                             "symbol": symbol,
                             "timeframe": _interval,
                             "feed": "iex",
-                            "occurrences": _IEX_EMPTY_COUNTS[key],
+                            "occurrences": _IEX_EMPTY_COUNTS[tf_key],
                             "correlation_id": prev,
                         }
                     ),
                 )
                 return pd.DataFrame()
+            if status == 200 and _should_use_backup_on_empty():
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                fb_int = interval_map.get(base_interval)
+                if fb_int:
+                    _mark_fallback(symbol, base_interval, base_start, base_end)
+                    return _backup_get_bars(symbol, base_start, base_end, interval=fb_int)
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
                     mdf = _fetch_bars(symbol, _start, _end, "1Min", feed=_feed, adjustment=adjustment)
@@ -1946,7 +2057,11 @@ def get_minute_df(
     df = None
     if _has_alpaca_keys():
         try:
-            feed_to_use = feed or _DEFAULT_FEED
+            requested_feed = feed or _DEFAULT_FEED
+            override_feed = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
+            feed_to_use = override_feed or requested_feed
+            initial_feed = requested_feed
+            proactive_switch = False
             if (
                 feed_to_use == "iex"
                 and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0
@@ -1956,9 +2071,17 @@ def get_minute_df(
                 feed_to_use = "sip"
                 payload = _format_fallback_payload_df("1Min", "sip", start_dt, end_dt)
                 logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
+                proactive_switch = True
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
+            if (
+                proactive_switch
+                and feed_to_use != initial_feed
+                and df is not None
+                and not getattr(df, "empty", True)
+            ):
+                _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
         except (EmptyBarsError, ValueError, RuntimeError) as e:
             if isinstance(e, EmptyBarsError):
                 now = datetime.now(UTC)
@@ -2027,6 +2150,7 @@ def get_minute_df(
                                 alt_feed = "iex"
                                 break
                     if alt_feed and alt_feed != (feed or _DEFAULT_FEED):
+                        _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(alt_feed)
                         try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
@@ -2051,6 +2175,7 @@ def get_minute_df(
                                         "timeframe": "1Min",
                                     },
                                 )
+                                _record_feed_switch(symbol, "1Min", cur, alt_feed)
                                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
@@ -2188,6 +2313,12 @@ def get_daily_df(
     except Exception as exc:  # pragma: no cover - optional dependency
         raise DataFetchError("Alpaca API unavailable") from exc
 
+    if feed is None:
+        tf_key = (symbol, _canon_tf("1Day"))
+        override = _FEED_OVERRIDE_BY_TF.get(tf_key)
+        if override:
+            feed = override
+
     df = _get_bars_df(
         symbol,
         timeframe="1Day",
@@ -2243,7 +2374,11 @@ def get_bars(
     if feed is not None and not isinstance(feed, str):
         return _alpaca_get_bars(feed, symbol, start, end, timeframe=_canon_tf(timeframe))
     # Resolve feed preference from settings when not explicitly provided
+    tf_norm = _canon_tf(timeframe)
     if feed is None:
+        override = _FEED_OVERRIDE_BY_TF.get((symbol, tf_norm))
+        if override:
+            feed = override
         prio = provider_priority(S)
         for prov in prio:
             if prov.startswith("alpaca_"):
@@ -2274,20 +2409,19 @@ def get_bars(
                 # Never allow diagnostics to break data path
                 pass
             _ALPACA_KEYS_MISSING_LOGGED = True
-        interval_map = {
-            "1Min": "1m",
-            "5Min": "5m",
-            "15Min": "15m",
-            "1Hour": "60m",
-            "1Day": "1d",
-            "1D": "1d",
-            "1H": "60m",
-        }
-        tf_norm = _canon_tf(timeframe)
-        y_int = interval_map.get(tf_norm, None)
-        if y_int is None:
-            # Best effort: daily vs intraday
-            y_int = "1d" if tf_norm.lower() in {"1day", "day", "1d"} else "1m"
+    interval_map = {
+        "1Min": "1m",
+        "5Min": "5m",
+        "15Min": "15m",
+        "1Hour": "60m",
+        "1Day": "1d",
+        "1D": "1d",
+        "1H": "60m",
+    }
+    y_int = interval_map.get(tf_norm, None)
+    if y_int is None:
+        # Best effort: daily vs intraday
+        y_int = "1d" if tf_norm.lower() in {"1day", "day", "1d"} else "1m"
         try:
             return _backup_get_bars(symbol, ensure_datetime(start), ensure_datetime(end), interval=y_int)
         except Exception:

@@ -70,6 +70,15 @@ startup the validation result is cached and `/healthz` reuses it, returning
 | --- | --- | --- |
 | `AI_TRADING_CONF_THRESHOLD` | Minimum model confidence required before acting | 0.75 |
 
+### Feed tuning
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `ALPACA_FEED_FAILOVER` | Ordered Alpaca feeds to try when a 200 OK response is empty (comma separated) | `sip`* |
+| `ALPACA_EMPTY_TO_BACKUP` | Route empty Alpaca responses straight to the backup provider when set to `1` | `1` |
+
+\* `sip` is honoured only when the account has SIP access (`ALPACA_ALLOW_SIP=1`).
+
 ### Persistent directories
 
 The service writes state, cache, logs, models, and run outputs to paths governed by the environment variables `AI_TRADING_DATA_DIR`, `AI_TRADING_CACHE_DIR`, `AI_TRADING_LOG_DIR`, `AI_TRADING_MODELS_DIR`, and `AI_TRADING_OUTPUT_DIR`.
