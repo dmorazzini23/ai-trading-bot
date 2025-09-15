@@ -1,5 +1,6 @@
 """Test ALPACA_* credential handling."""
 
+import logging
 import os
 from unittest.mock import patch
 
@@ -68,6 +69,23 @@ class TestAlpacaCredentials:
             assert secret_key == "partial_secret"
             assert base_url == "https://paper-api.alpaca.markets"
 
+    def test_resolve_placeholder_base_url_logs_and_defaults(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env_vars = {
+            "ALPACA_API_KEY": "key",
+            "ALPACA_SECRET_KEY": "secret",
+            "ALPACA_BASE_URL": "${ALPACA_BASE_URL}",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            with caplog.at_level(logging.ERROR):
+                _, _, base_url = _resolve_alpaca_env()
+        assert base_url == "https://paper-api.alpaca.markets"
+        assert any(
+            "Set ALPACA_API_URL or ALPACA_BASE_URL" in record.message
+            for record in caplog.records
+        )
+
     @patch("ai_trading.config.management.TESTING", True)
     def test_validate_skip_in_testing(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -103,3 +121,29 @@ class TestAlpacaCredentials:
         with patch.dict(os.environ, env_vars, clear=True):
             with pytest.raises(RuntimeError):
                 validate_alpaca_credentials()
+
+    @patch("ai_trading.config.management.TESTING", False)
+    def test_validate_placeholder_base_url(self) -> None:
+        env_vars = {
+            "ALPACA_API_KEY": "valid_key",
+            "ALPACA_SECRET_KEY": "valid_secret",
+            "ALPACA_BASE_URL": "${ALPACA_BASE_URL}",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                validate_alpaca_credentials()
+        assert "Set ALPACA_API_URL or ALPACA_BASE_URL" in str(exc_info.value)
+
+    @patch("ai_trading.config.management.TESTING", False)
+    def test_validate_base_url_missing_scheme(self) -> None:
+        env_vars = {
+            "ALPACA_API_KEY": "valid_key",
+            "ALPACA_SECRET_KEY": "valid_secret",
+            "ALPACA_API_URL": "paper-api.alpaca.markets",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            with pytest.raises(RuntimeError) as exc_info:
+                validate_alpaca_credentials()
+        message = str(exc_info.value)
+        assert "must include an HTTP scheme" in message
+        assert "https://" in message

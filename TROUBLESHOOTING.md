@@ -8,6 +8,7 @@ This guide provides comprehensive troubleshooting procedures, common issues, deb
 
 - [Quick Diagnostic Checklist](#quick-diagnostic-checklist)
 - [Common Issues](#common-issues)
+- [Unresolved Environment Placeholders](#unresolved-environment-placeholders)
 - [Debugging Procedures](#debugging-procedures)
 - [Error Code Reference](#error-code-reference)
 - [Performance Issues](#performance-issues)
@@ -125,6 +126,35 @@ except Exception as e:
 **Error:** `module 'ai_trading.config.management' has no attribute 'get_env'` (or `reload_env`).
 
 **Fix:** Update to the latest code and ensure `ai_trading/config/management.py` exports both helpers.
+
+### Unresolved Environment Placeholders
+
+**Symptoms:**
+
+- Runtime crash with `Missing required environment variables` mentioning `ALPACA_API_URL` or `ALPACA_BASE_URL` even though you set them.
+- Logs show `Set ALPACA_API_URL or ALPACA_BASE_URL to a full https://... endpoint`.
+- `_resolve_alpaca_env` falls back to the paper trading URL despite custom settings.
+
+**Why it happens:**
+
+- The config loader now rejects values that contain unresolved `${VAR}` placeholders or omit the HTTP scheme.
+- `systemd` does **not** expand shell-style placeholders in `Environment=` or `EnvironmentFile=` entries. If you ship a line such as `ALPACA_API_URL=${ALPACA_HOST}`, the literal string `${ALPACA_HOST}` is passed to the bot.
+- `.env` files read by `python-dotenv` also treat `${VAR}` literally unless you pre-render them.
+
+**Fixes:**
+
+1. Define the full endpoint explicitly, e.g. `ALPACA_API_URL=https://api.alpaca.markets` (production) or `https://paper-api.alpaca.markets` (paper trading).
+2. When using systemd:
+   - Prefer direct assignments inside the unit file or a drop-in: `Environment="ALPACA_API_URL=https://api.alpaca.markets"`.
+   - If you must load from an `EnvironmentFile`, pre-process it (e.g. with `envsubst` or a templating step) so that only concrete `KEY=value` lines remain.
+   - Reload systemd after editing: `sudo systemctl daemon-reload && sudo systemctl restart ai-trading.service`.
+3. For local `.env` workflows, avoid template placeholders; run `python -m ai_trading.tools.env_validate` to confirm the resolved URL is a full `https://...` endpoint.
+
+**Verification:**
+
+- `journalctl -u ai-trading.service | grep ALPACA_API_URL`
+- `systemctl show ai-trading.service -p Environment`
+- `grep -n '\${' /etc/ai-trading/ai-trading.env`
 
 ### Health endpoint returns 500
 
