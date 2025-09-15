@@ -182,6 +182,19 @@ def optimize_memory():
 
 from typing import Any
 
+
+class PortInUseError(RuntimeError):
+    """Raised when the API server cannot bind to the requested port."""
+
+    def __init__(self, port: int, pid: int | None = None):
+        self.port = port
+        self.pid = pid
+        if pid:
+            message = f"Port {port} is already in use by pid {pid}"
+        else:
+            message = f"Port {port} is already in use"
+        super().__init__(message)
+
 config: Any | None = None
 _SHUTDOWN = threading.Event()
 
@@ -415,81 +428,68 @@ def run_flask_app(
     ready_signal: threading.Event | None = None,
     **run_kwargs,
 ) -> None:
-    """Launch Flask API on an available port.
+    """Launch Flask API on the requested port or fail immediately."""
 
-    Extra keyword arguments are forwarded to :func:`flask.Flask.run`.
-    """
-    max_attempts = 10
-    original_port = port
     from ai_trading import app
 
     application = app.create_app()
     debug = run_kwargs.pop("debug", False)
 
-    for _attempt in range(max_attempts):
-        pid = get_pid_on_port(port)
-        if pid:
-            logger.warning("Port %s in use by pid %s", port, pid)
-            port += 1
-            continue
-        try:
-            if ready_signal is not None:
-                logger.info(
-                    "Flask app created successfully, signaling ready on port %s",
-                    port,
-                )
-                ready_signal.set()
-            logger.info("Starting Flask app on 0.0.0.0:%s", port)
-            application.run(host="0.0.0.0", port=port, debug=debug, **run_kwargs)
-            return
-        except OSError as exc:
-            if exc.errno == errno.EADDRINUSE:
-                logger.warning("Port %s bound during startup, retrying", port)
-                port += 1
-                continue
-            raise
-    raise RuntimeError(
-        f"Could not bind Flask app starting from {original_port}"
-    )
+    pid = get_pid_on_port(port)
+    if pid:
+        logger.error("API_PORT_OCCUPIED", extra={"port": port, "pid": pid})
+        raise PortInUseError(port, pid)
+
+    try:
+        if ready_signal is not None:
+            logger.info(
+                "Flask app created successfully, signaling ready on port %s",
+                port,
+            )
+            ready_signal.set()
+        logger.info("Starting Flask app on 0.0.0.0:%s", port)
+        application.run(host="0.0.0.0", port=port, debug=debug, **run_kwargs)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            logger.error("API_PORT_BOUND_DURING_START", extra={"port": port})
+            raise PortInUseError(port) from exc
+        raise
 
 
 def start_api(ready_signal: threading.Event | None = None) -> None:
-    """Spin up the Flask API server.
+    """Spin up the Flask API server or raise if the port is unavailable."""
 
-    This checks port availability by attempting to bind a temporary socket
-    before delegating to :func:`run_flask_app`. If the port is busy, it
-    increments and retries up to ``max_attempts``.
-    """
     ensure_dotenv_loaded()
     settings = get_settings()
     port = int(settings.api_port or 9001)
-    max_attempts = 10
-    original_port = port
 
-    for _attempt in range(max_attempts):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
-            try:
-                test_socket.bind(("0.0.0.0", port))
-            except OSError as exc:
-                if exc.errno == errno.EADDRINUSE:
-                    logger.warning("Port %s bound during startup, retrying", port)
-                    port += 1
-                    continue
-                raise
-        run_flask_app(port, ready_signal)
-        return
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
+        test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            test_socket.bind(("0.0.0.0", port))
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                pid = get_pid_on_port(port)
+                logger.error(
+                    "API_PORT_PRECHECK_FAILED",
+                    extra={"port": port, "pid": pid},
+                )
+                raise PortInUseError(port, pid) from exc
+            raise
 
-    raise RuntimeError(
-        f"Could not bind Flask app starting from {original_port}"
-    )
+    run_flask_app(port, ready_signal)
 
 
 def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event) -> None:
     """Start API server and signal readiness/errors."""
     try:
         start_api(api_ready)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         logger.error("Failed to start API", exc_info=True)
+        try:
+            setattr(api_error, "exception", exc)
+        except Exception:
+            pass
         api_error.set()
 
 
@@ -676,17 +676,22 @@ def main(argv: list[str] | None = None) -> None:
     api_error = threading.Event()
     t = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
     t.start()
-    # Make best-effort to bring up the API, but never crash the service if it can't bind.
+    # Wait for the API to bind; treat configured port conflicts as fatal.
     try:
         if api_error.wait(timeout=2):
-            raise RuntimeError("API failed to start")
+            raise getattr(api_error, "exception", RuntimeError("API failed to start"))
         if not api_ready.wait(timeout=10):
             if not t.is_alive():
                 raise RuntimeError("API thread terminated unexpectedly during startup")
             logger.warning("API startup taking longer than expected, proceeding with degraded functionality")
+    except PortInUseError as exc:
+        logger.critical(
+            "API_PORT_CONFLICT_FATAL",
+            extra={"port": exc.port, "pid": exc.pid},
+        )
+        raise SystemExit(errno.EADDRINUSE) from exc
     except (RuntimeError, TimeoutError, OSError) as e:
-        # Degrade gracefully: log and continue trading without HTTP API.
-        # This avoids unit/service failures when the port is already taken.
+        # Degrade gracefully for other failures so trading can continue.
         logger.error("API_STARTUP_DEGRADED", exc_info=e)
         api_error.set()
     S = get_settings()

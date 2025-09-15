@@ -30,6 +30,7 @@ ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading
 RuntimeMaxSec=0
 Restart=on-failure
 RestartSec=10
+RestartPreventExitStatus=98
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true
