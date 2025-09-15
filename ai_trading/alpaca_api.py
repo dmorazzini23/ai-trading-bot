@@ -84,7 +84,7 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
         Week = "Week"
         Month = "Month"
 
-    @dataclass(frozen=True)
+    @dataclass
     class TimeFrame:
         amount: int = 1
         unit: TimeFrameUnit = TimeFrameUnit.Day
