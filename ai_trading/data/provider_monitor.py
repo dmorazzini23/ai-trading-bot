@@ -190,6 +190,14 @@ class ProviderMonitor:
             self._alert_cooldown_until = now + timedelta(
                 seconds=self._current_switch_cooldown
             )
+            # Back off the failing provider more aggressively to avoid thrashing
+            try:
+                self.disable(from_provider, duration=self.max_cooldown)
+            except Exception:  # pragma: no cover - defensive disable
+                logger.exception(
+                    "PROVIDER_DISABLE_FAILED",
+                    extra={"provider": from_provider},
+                )
 
     def disable(self, provider: str, *, duration: float | None = None) -> None:
         """Disable ``provider`` for ``duration`` seconds with exponential backoff.
