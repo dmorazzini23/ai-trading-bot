@@ -15,13 +15,15 @@ Environment=AI_TRADING_CACHE_DIR=/var/cache/ai-trading-bot
 Environment=AI_TRADING_LOG_DIR=/var/log/ai-trading-bot
 Environment=AI_TRADING_MODELS_DIR=/var/lib/ai-trading-bot/models
 Environment=AI_TRADING_OUTPUT_DIR=/var/lib/ai-trading-bot/output
+Environment=TRADE_LOG_PATH=/home/aiuser/ai-trading-bot/logs/trades.jsonl
 EnvironmentFile=-/home/aiuser/ai-trading-bot/.env
 ExecStartPre=/usr/bin/install -d -m 700 -o aiuser -g aiuser \
     /var/lib/ai-trading-bot \
     /var/lib/ai-trading-bot/models \
     /var/lib/ai-trading-bot/output \
     /var/cache/ai-trading-bot \
-    /var/log/ai-trading-bot
+    /var/log/ai-trading-bot \
+    /home/aiuser/ai-trading-bot/logs
 ExecStart=/home/aiuser/ai-trading-bot/venv/bin/python -m ai_trading
 # Allow long-lived process; systemd will supervise restarts
 RuntimeMaxSec=0
