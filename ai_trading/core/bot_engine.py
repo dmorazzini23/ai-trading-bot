@@ -654,9 +654,38 @@ def default_trade_log_path() -> str:
             os.makedirs(os.path.dirname(cand), exist_ok=True)
             return cand
 
-    fallback = "/var/log/ai-trading-bot/trades.jsonl"
-    os.makedirs(os.path.dirname(fallback), exist_ok=True)
-    return fallback
+    preferred = "/var/log/ai-trading-bot/trades.jsonl"
+    preferred_dir = os.path.dirname(preferred)
+    preferred_error: str | None = None
+    try:
+        os.makedirs(preferred_dir, exist_ok=True)
+    except OSError as exc:
+        preferred_error = f"{exc.__class__.__name__}: {exc}"
+    else:
+        if os.access(preferred_dir, os.W_OK | os.X_OK):
+            return preferred
+        preferred_error = "directory_not_writable"
+
+    try:
+        cwd = os.getcwd()
+    except OSError:
+        cwd = BASE_DIR
+    local_fallback = os.path.abspath(os.path.join(cwd, "logs", "trades.jsonl"))
+    local_dir = os.path.dirname(local_fallback)
+    os.makedirs(local_dir, exist_ok=True)
+
+    if preferred_error:
+        logger_once.warning(
+            "TRADE_LOG_FALLBACK_LOCAL",
+            key="trade_log_fallback_local",
+            extra={
+                "preferred_path": preferred,
+                "fallback_path": local_fallback,
+                "reason": preferred_error,
+            },
+        )
+
+    return local_fallback
 
 
 # Delayed import: not all environments have pandas-market-calendars

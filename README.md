@@ -65,6 +65,13 @@ the default `~/.cache/ai-trading-bot` is unavailable (for example, if the home
 directory is mounted read-only). The directory is created with `0700`
 permissions during startup.
 
+Trade logs write to the path resolved by `TRADE_LOG_PATH` (or the legacy
+`AI_TRADING_TRADE_LOG_PATH`). When unset, the bot prefers
+`/var/log/ai-trading-bot/trades.jsonl`; if that directory cannot be created or
+written, it falls back to `./logs/trades.jsonl` next to the working directory.
+Startup logs the final trade log location via `ensure_trade_log_path()` so
+operators can confirm where records are stored.
+
 To load ML models from a custom location, set `AI_TRADING_MODELS_DIR` before
 startup. The path may reside outside the repository; each model file is
 validated to stay within this directory to guard against path traversal.
