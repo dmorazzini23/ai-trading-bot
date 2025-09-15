@@ -95,6 +95,10 @@ Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on the port defined 
 | `RUN_HEALTHCHECK` | Enable lightweight Flask health server |
 | `HEALTHCHECK_PORT` | Port for `/healthz` and `/metrics` |
 
+### API port fail-fast semantics
+
+The primary Flask API binds to `settings.api_port` (default **9001**). If that port is already in use the process now raises an error and exits with status **98** instead of retrying higher ports. The systemd unit is configured with `RestartPreventExitStatus=98`, so the service will stay stopped until the conflict is resolved. Free the port or update `API_PORT` before restarting.
+
 ### CLI
 
 `ai-trade`, `ai-backtest`, and `ai-health` share flags:

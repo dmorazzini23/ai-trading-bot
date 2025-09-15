@@ -1,25 +1,20 @@
 import socket
 
-from ai_trading import main, app
+import pytest
+
+from ai_trading import main
 
 
-def test_start_api_increments_port_when_busy(monkeypatch):
-    # Find an unused port and occupy it to simulate a busy port
+def test_start_api_raises_when_port_busy(monkeypatch):
+    """Configured API port conflicts should raise an error instead of retrying."""
     probe = socket.socket()
     probe.bind(("0.0.0.0", 0))
     start_port = probe.getsockname()[1]
     probe.close()
+
     blocker = socket.socket()
     blocker.bind(("0.0.0.0", start_port))
     blocker.listen(1)
-
-    captured = {}
-
-    class DummyApp:
-        def run(self, host, port, debug=False, **kwargs):
-            captured["host"] = host
-            captured["port"] = port
-            captured["debug"] = debug
 
     class DummySettings:
         def __init__(self, api_port):
@@ -27,11 +22,15 @@ def test_start_api_increments_port_when_busy(monkeypatch):
 
     monkeypatch.setattr(main, "get_settings", lambda: DummySettings(start_port))
     monkeypatch.setattr(main, "ensure_dotenv_loaded", lambda: None)
-    monkeypatch.setattr(app, "create_app", lambda: DummyApp())
+    def _fail(*_args, **_kwargs):
+        raise AssertionError("run should not be invoked")
+
+    monkeypatch.setattr(main, "run_flask_app", _fail)
 
     try:
-        main.start_api()
+        with pytest.raises(main.PortInUseError) as excinfo:
+            main.start_api()
     finally:
         blocker.close()
 
-    assert captured["port"] == start_port + 1
+    assert excinfo.value.port == start_port
