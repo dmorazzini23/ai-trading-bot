@@ -17,6 +17,14 @@ export ENABLE_FINNHUB=1
 ## Alpaca Feed
 
 - `ALPACA_DATA_FEED`: choose `iex` (default) or `sip`. The `sip` option requires a SIP-enabled Alpaca account.
+- `ALPACA_FEED_FAILOVER`: comma-separated Alpaca feeds to try when a 200 OK response is empty. Example: `sip,iex` tells the bot to
+  retry SIP first, then fall back to IEX if SIP is also empty or unavailable. Feeds that are not permitted by entitlement are
+  ignored.
+- `ALPACA_EMPTY_TO_BACKUP`: when set to `1`, the bot will jump directly to the configured backup provider if every preferred
+  Alpaca feed responds with an empty payload.
+
+When a fallback feed returns usable data, the system records the switch per `(symbol, timeframe)` and logs `ALPACA_FEED_SWITCH`
+once. Future requests for the same pair use the working feed immediately, eliminating redundant retries against an empty feed.
 
 ## Backup Provider
 
