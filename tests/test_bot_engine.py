@@ -57,7 +57,7 @@ def test_prepare_indicators_creates_required_columns():
 
 
 def test_prepare_indicators_insufficient_data():
-    """prepare_indicators should raise when there is insufficient historical data."""
+    """prepare_indicators returns an empty frame when history is too short."""
 
     df = pd.DataFrame({
         'open': np.random.uniform(100, 200, 5),
@@ -67,8 +67,10 @@ def test_prepare_indicators_insufficient_data():
         'volume': np.random.randint(1_000_000, 5_000_000, 5),
     })
 
-    with pytest.raises(RuntimeError):
-        prepare_indicators(df.copy())
+    result = prepare_indicators(df.copy())
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
 
 
 @pytest.mark.parametrize("attr", ["trading_client", "data_client"])
@@ -83,6 +85,39 @@ def test_bot_engine_missing_env(monkeypatch, caplog, attr, missing_key):
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
     monkeypatch.delenv(missing_key, raising=False)
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.get_data_client_cls",
+        lambda: DummyClient,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.get_trading_client_cls",
+        lambda: DummyClient,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine._ensure_alpaca_env_or_raise",
+        lambda: ("key", "secret", "https://example.com"),
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine._initialize_alpaca_clients",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.ensure_data_fetcher",
+        lambda runtime=None: None,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine._load_required_model",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.data_fetcher_module.build_fetcher",
+        lambda config=None: None,
+    )
+
     engine = BotEngine()
     caplog.set_level("ERROR")
 
@@ -110,7 +145,9 @@ def test_prepare_indicators_all_nan_columns():
     original_rsi = bot_engine.ta.rsi
     bot_engine.ta.rsi = lambda close, length=14: pd.Series([np.nan] * len(close))
     try:
-        with pytest.raises(RuntimeError):
-            prepare_indicators(df.copy())
+        result = prepare_indicators(df.copy())
     finally:
         bot_engine.ta.rsi = original_rsi
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty

@@ -11319,6 +11319,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         logger.warning("Missing required columns in prepare_indicators: %s", missing)
         raise KeyError(f"Missing required columns: {', '.join(missing)}")
 
+    frame = frame.copy()
     close = frame["close"].astype(float)
     hl = frame[["high", "low"]].astype(float)
 
@@ -11355,8 +11356,9 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         logger.warning(
             "prepare_indicators produced empty dataframe after dropping NaNs.",
+            extra={"reason": "insufficient_indicator_history"},
         )
-        raise RuntimeError("No data available after indicator computation")
+        return frame
     return frame
 
 

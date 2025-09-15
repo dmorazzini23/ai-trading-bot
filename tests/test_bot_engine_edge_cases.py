@@ -42,5 +42,7 @@ def test_prepare_indicators_single_row():
         'close': [100.5],
         'volume': [1000]
     })
-    with pytest.raises(RuntimeError):
-        prepare_indicators(df.copy())
+    result = prepare_indicators(df.copy())
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
