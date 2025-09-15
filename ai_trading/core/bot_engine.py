@@ -9780,6 +9780,13 @@ def _enter_long(
     conf: float,
     strat: str,
 ) -> bool:
+    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
+        logger.warning(
+            "SKIP_PRIMARY_PROVIDER_DISABLED",
+            extra={"symbol": symbol, "reason": "alpaca_disabled"},
+        )
+        return True
+
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Latest 5 rows for %s: %s", symbol, feat_df.tail(5).to_dict(orient="list"))
@@ -9955,6 +9962,13 @@ def _enter_short(
     conf: float,
     strat: str,
 ) -> bool:
+    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
+        logger.warning(
+            "SKIP_PRIMARY_PROVIDER_DISABLED",
+            extra={"symbol": symbol, "reason": "alpaca_disabled"},
+        )
+        return True
+
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Latest 5 rows for %s: %s", symbol, feat_df.tail(5).to_dict(orient="list"))

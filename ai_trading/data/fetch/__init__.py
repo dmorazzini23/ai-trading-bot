@@ -301,6 +301,14 @@ _ALPACA_DISABLED_ALERTED = False
 # Track consecutive disable events for logging purposes
 _alpaca_disable_count = 0
 
+
+def is_primary_provider_enabled() -> bool:
+    """Return ``True`` when Alpaca minute data is not in a cooldown window."""
+
+    if _alpaca_disabled_until is None:
+        return True
+    return _dt.datetime.now(UTC) >= _alpaca_disabled_until
+
 # Emit a one-time explanatory log when Alpaca keys are missing to make
 # backup-provider usage obvious in production logs without spamming.
 _ALPACA_KEYS_MISSING_LOGGED = False
@@ -2499,4 +2507,5 @@ __all__ = [
     "last_minute_bar_age_seconds",
     "_build_daily_url",
     "retry_empty_fetch_once",
+    "is_primary_provider_enabled",
 ]
