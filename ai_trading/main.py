@@ -120,11 +120,17 @@ def run_cycle() -> None:
     )
     from ai_trading.config.management import TradingConfig
     from ai_trading.config import get_settings
+    from ai_trading.data import fetch as data_fetcher_module
 
     # Ensure trade log file exists before any trade-log reads occur. The
     # ``get_trade_logger`` helper lazily creates the log and writes the header on
     # first use so downstream components can safely read from it during startup.
     get_trade_logger()
+
+    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
+        logger.info("PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP")
+        time.sleep(5.0)
+        return
 
     state = BotState()
     cfg = TradingConfig.from_env()
