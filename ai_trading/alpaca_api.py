@@ -784,8 +784,88 @@ def submit_order(
     )
 
 
-def alpaca_get(*_a, **_k):
-    return None
+def alpaca_get(
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout: float | int | tuple[float | int, float | int] | None = None,
+) -> dict[str, Any]:
+    """Perform a GET request against the Alpaca REST API.
+
+    Parameters
+    ----------
+    path:
+        Endpoint path (``/v2/...``) or fully-qualified URL.
+    params:
+        Optional query string parameters to include with the request.
+    timeout:
+        Optional override for the request timeout in seconds. Values are
+        clamped using :func:`ai_trading.utils.http.clamp_request_timeout` to
+        match :func:`_http_submit`.
+    """
+
+    cfg = _AlpacaConfig.from_env()
+    if path.startswith(("http://", "https://")):
+        url = path
+    else:
+        url = f"{cfg.base_url}/{path.lstrip('/')}"
+
+    headers = {
+        "APCA-API-KEY-ID": cfg.key_id or "",
+        "APCA-API-SECRET-KEY": cfg.secret_key or "",
+        "Accept": "application/json",
+    }
+
+    _start_t = _mono()
+    _err: Exception | None = None
+    resp: Any | None = None
+    try:
+        timeout_v = clamp_request_timeout(timeout or 10)
+        call = _HTTP.get
+        if retry is not None:
+            call = _with_retry(call)
+        resp = call(url, headers=headers, params=params, timeout=timeout_v)
+    except RequestException as exc:  # pragma: no cover - network error path
+        _err = exc
+        raise RequestException(f"Network error calling {url}: {exc}") from exc
+    finally:
+        try:
+            _alpaca_calls_total.inc()
+            _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+            status = getattr(resp, "status_code", 0) if resp is not None else 0
+            if _err is not None or status >= 400:
+                _alpaca_errors_total.inc()
+        except Exception:
+            pass
+
+    try:
+        content = resp.json() if resp is not None else None
+    except Exception:
+        content = None
+
+    status_code = getattr(resp, "status_code", 0)
+    text = getattr(resp, "text", "") if resp is not None else ""
+
+    if status_code >= 400:
+        payload = content if isinstance(content, dict) else {}
+        message = ""
+        if isinstance(payload, dict):
+            message = str(payload.get("message") or text)
+        else:
+            message = text
+        raise AlpacaOrderHTTPError(status_code, message or "Alpaca request failed", payload=payload)
+
+    if not isinstance(content, dict):
+        if content is None:
+            return {}
+        return {"data": content}
+
+    for key in ("quote", "trade", "bar"):
+        value = content.get(key)
+        if isinstance(value, dict):
+            return value
+
+    return content
 
 
 def start_trade_updates_stream(*_a, **_k):
