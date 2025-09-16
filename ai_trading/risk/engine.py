@@ -4,11 +4,12 @@ import random
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
 import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
+from ai_trading.data.fetch import normalize_ohlcv_columns
 try:
     from alpaca.common.exceptions import APIError
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
@@ -163,7 +164,6 @@ class RiskEngine:
         try:
             if symbol in self._atr_cache:
                 ts, val = self._atr_cache[symbol]
-                from datetime import datetime, timedelta
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
             ctx = getattr(self, 'ctx', None)
@@ -172,13 +172,20 @@ class RiskEngine:
             if client:
                 get_bars = getattr(client, 'get_bars', None)
                 if callable(get_bars):
-                    bars = get_bars(symbol, lookback + 10)
+                    try:
+                        bars = get_bars(symbol, lookback + 10)
+                    except Exception as exc:  # pragma: no cover - provider variance
+                        logger.warning('ATR client fetch failed for %s: %s', symbol, exc)
+                        bars = None
                     if not bars:
                         logger.warning('missing get_bars for %s', symbol)
                     elif len(bars) >= lookback + 1:
-                        high = np.array([b.h for b in bars])
-                        low = np.array([b.l for b in bars])
-                        close = np.array([b.c for b in bars])
+                        try:
+                            high = np.array([b.h for b in bars])
+                            low = np.array([b.l for b in bars])
+                            close = np.array([b.c for b in bars])
+                        except AttributeError:
+                            high = low = close = None
                 else:
                     logger.warning('missing get_bars for %s', symbol)
             else:
@@ -189,21 +196,39 @@ class RiskEngine:
                     data = getattr(ctx, 'minute_data', {}).get(symbol)
                     if data is None:
                         data = getattr(ctx, 'daily_data', {}).get(symbol)
+                df = None
                 if data is not None:
                     df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+                if df is None:
+                    fetcher = getattr(ctx, 'data_fetcher', None)
+                    if fetcher is not None and hasattr(fetcher, 'get_daily_df'):
+                        try:
+                            df = fetcher.get_daily_df(ctx, symbol)
+                        except Exception as exc:  # pragma: no cover - defensive
+                            logger.debug('ATR fetcher fallback failed for %s: %s', symbol, exc)
+                            df = None
+                if df is not None and getattr(df, 'empty', False) is False:
+                    df = normalize_ohlcv_columns(df)
+                    if pd is not None and hasattr(pd, 'RangeIndex') and isinstance(df.index, pd.RangeIndex):
+                        df = df.reset_index(drop=True)
 
-                    def _series(df: 'pd.DataFrame', names: Sequence[str]) -> np.ndarray | None:
-                        for n in names:
-                            if n in df:
-                                return df[n].to_numpy()
+                    def _series(df_in: 'pd.DataFrame', name: str) -> np.ndarray | None:
+                        if name in df_in:
+                            return df_in[name].dropna().to_numpy()
                         return None
 
-                    high = _series(df, ('high', 'High'))
-                    low = _series(df, ('low', 'Low'))
-                    close = _series(df, ('close', 'Close'))
+                    high = _series(df, 'high')
+                    low = _series(df, 'low')
+                    close = _series(df, 'close')
             if any(x is None for x in (high, low, close)):
                 logger.warning('Insufficient OHLC data for ATR calculation for %s', symbol)
                 return None
+            min_len = min(len(high), len(low), len(close))
+            if min_len == 0:
+                return None
+            high = high[-min_len:]
+            low = low[-min_len:]
+            close = close[-min_len:]
             if len(high) < lookback + 1 or len(low) < lookback + 1 or len(close) < lookback + 1:
                 return None
             tr1 = np.abs(high[1:] - low[1:])
@@ -211,7 +236,6 @@ class RiskEngine:
             tr3 = np.abs(low[1:] - close[:-1])
             tr = np.maximum(tr1, np.maximum(tr2, tr3))
             atr = float(np.mean(tr[-lookback:]))
-            from datetime import datetime
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
         except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
