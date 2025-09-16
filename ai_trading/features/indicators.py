@@ -25,10 +25,14 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
             logger.error("Missing 'close' column for MACD calculation")
             return df
         close_series = df["close"]
-        if close_series.count() == 0:
-            logger.debug("Skipping MACD computation: close column has no valid values")
+        close_numeric = pd.to_numeric(close_series, errors="coerce")
+        valid_count = int(close_numeric.notna().sum())
+        if valid_count == 0:
+            logger.warning(
+                "Skipping MACD computation: close column has no numeric values after coercion"
+            )
             return df
-        close = tuple(close_series.astype(float))
+        close = tuple(close_numeric)
 
         def _aligned(values: pd.Series | pd.Index | tuple[float, ...] | list[float]) -> pd.Series:
             if isinstance(values, pd.Series):
