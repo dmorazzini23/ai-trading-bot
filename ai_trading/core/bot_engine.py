@@ -4321,6 +4321,37 @@ class DataFetcher:
             pass
         logger.warning(msg)
 
+    def _prepare_daily_dataframe(
+        self, df: "pd.DataFrame | None", _symbol: str
+    ) -> "pd.DataFrame | None":
+        """Normalize OHLCV columns and ensure a timestamp column is present."""
+
+        if df is None or not hasattr(df, "columns"):
+            return df
+        try:
+            df = data_fetcher_module.normalize_ohlcv_columns(df)
+        except AttributeError:
+            pass
+        try:
+            import pandas as _pd  # type: ignore
+        except ImportError:  # pragma: no cover - pandas is a hard dependency in prod
+            _pd = None  # type: ignore[assignment]
+        if _pd is None:
+            return df
+        idx = getattr(df, "index", None)
+        cols = getattr(df, "columns", [])
+        if isinstance(idx, _pd.DatetimeIndex) and "timestamp" not in cols:
+            df = df.copy()
+            try:
+                ts_series = _pd.Series(idx, index=df.index, name="timestamp")
+            except Exception:  # pragma: no cover - defensive fallback
+                ts_series = idx
+            try:
+                df.insert(0, "timestamp", ts_series)
+            except Exception:  # pragma: no cover - final fallback to assignment
+                df["timestamp"] = ts_series
+        return df
+
     def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
@@ -4402,6 +4433,7 @@ class DataFetcher:
                     "alpaca-py not installed; using Yahoo fallback for %s",
                     symbol,
                 )
+                df = self._prepare_daily_dataframe(df, symbol)
                 with cache_lock:
                     self._daily_cache[symbol] = (fetch_date, df)
                 return df
@@ -4418,6 +4450,7 @@ class DataFetcher:
                 )
                 return None
             else:
+                df = self._prepare_daily_dataframe(df, symbol)
                 with cache_lock:
                     self._daily_cache[symbol] = (fetch_date, df)
                 return df
@@ -4448,6 +4481,7 @@ class DataFetcher:
             except COMMON_EXC:
                 return None
             else:
+                df = self._prepare_daily_dataframe(df, symbol)
                 with cache_lock:
                     self._daily_cache[symbol] = (fetch_date, df)
                 return df
@@ -4705,6 +4739,7 @@ class DataFetcher:
             logger.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
             raise DataFetchError(f"failed to fetch daily data for {symbol}") from e
 
+        df = self._prepare_daily_dataframe(df, symbol)
         with cache_lock:
             self._daily_cache[symbol] = (fetch_date, df)
         if daily_cache_miss:
@@ -7127,10 +7162,32 @@ def pre_trade_health_check(
 def _validate_columns(df, required, results, symbol):
     """Helper to validate required columns are present."""
     try:
-        data_fetcher_module.normalize_ohlcv_columns(df)
+        df = data_fetcher_module.normalize_ohlcv_columns(df)
     except AttributeError:
         pass
-    missing = [c for c in required if c not in df.columns]
+    columns = getattr(df, "columns", [])
+    missing: list[str] = []
+    idx = getattr(df, "index", None)
+    has_datetime_index = False
+    if idx is not None:
+        pd_mod = sys.modules.get("pandas")
+        if pd_mod is None:
+            try:
+                import pandas as pd_mod  # type: ignore
+            except ImportError:
+                pd_mod = None  # type: ignore[assignment]
+        if pd_mod is not None:
+            try:
+                has_datetime_index = isinstance(idx, pd_mod.DatetimeIndex)
+            except AttributeError:
+                has_datetime_index = False
+        elif getattr(idx, "__class__", None) is not None:
+            has_datetime_index = idx.__class__.__name__ == "DatetimeIndex"
+    for column in required:
+        if column == "timestamp" and has_datetime_index and column not in columns:
+            continue
+        if column not in columns:
+            missing.append(column)
     if missing:
         results["missing_columns"].append(symbol)
 
