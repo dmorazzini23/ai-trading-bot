@@ -643,6 +643,20 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
     for col in required:
         if col not in df.columns:
             df[col] = pd.Series(dtype="float64")
+
+    # Avoid timestamp being simultaneously a column and an index label.
+    try:
+        index_names = list(getattr(df.index, "names", []) or [])
+    except TypeError:  # pragma: no cover - non-list names container
+        index_names = []
+    if "timestamp" in df.columns and index_names and any(name == "timestamp" for name in index_names):
+        new_names = [None if name == "timestamp" else name for name in index_names]
+        try:
+            df.index = df.index.set_names(new_names)
+        except AttributeError:  # e.g. DatetimeIndex with single name attribute
+            if getattr(df.index, "name", None) == "timestamp":
+                df.index = df.index.rename(None)
+
     return df
 
 
