@@ -24,7 +24,11 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         if "close" not in df.columns:
             logger.error("Missing 'close' column for MACD calculation")
             return df
-        close = tuple(df["close"].astype(float))
+        close_series = df["close"]
+        if close_series.count() == 0:
+            logger.debug("Skipping MACD computation: close column has no valid values")
+            return df
+        close = tuple(close_series.astype(float))
         df["ema12"] = ema(close, 12)
         df["ema26"] = ema(close, 26)
         df["macd"] = df["ema12"] - df["ema26"]

@@ -2656,6 +2656,30 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         raise err
 
     close_series = df["close"]
+    dropped_rows = 0
+    initial_rows = len(df)
+    try:
+        mask = close_series.notna()
+        df = df[mask]
+        dropped_rows = initial_rows - len(df)
+        if df.empty:
+            logger.warning(
+                "FETCH_MINUTE_CLOSE_ALL_NAN_AFTER_FILTER",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "initial_rows": initial_rows,
+                    "dropped_rows": initial_rows,
+                },
+            )
+            err = DataFetchError("close_column_all_nan")
+            setattr(err, "fetch_reason", "close_column_all_nan")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            raise err
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.debug("close filter failed: %s", exc)
+    close_series = df["close"]
     try:
         non_null_count = int(close_series.count())
     except Exception:  # pragma: no cover - defensive fallback
@@ -2666,7 +2690,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     if non_null_count == 0:
         logger.error(
             "FETCH_MINUTE_CLOSE_ALL_NAN",
-            extra={"symbol": symbol, "timeframe": "1Min", "rows": len(df)},
+            extra={
+                "symbol": symbol,
+                "timeframe": "1Min",
+                "rows": len(df),
+                "initial_rows": initial_rows,
+                "dropped_rows": dropped_rows,
+            },
         )
         err = DataFetchError("close_column_all_nan")
         setattr(err, "fetch_reason", "close_column_all_nan")
