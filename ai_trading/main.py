@@ -51,6 +51,7 @@ from ai_trading.config.management import (
     validate_required_env,
     reload_env,
     _resolve_alpaca_env,
+    TradingConfig,
 )
 from ai_trading.metrics import get_histogram, get_counter
 from time import monotonic as _mono
@@ -254,13 +255,41 @@ def _fail_fast_env() -> None:
         if not base_url:
             raise RuntimeError("Missing required environment variable: ALPACA_API_URL or ALPACA_BASE_URL")
         snapshot["ALPACA_API_URL"] = base_url
-    except RuntimeError as e:
+        trading_cfg = TradingConfig.from_env()
+    except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
     logger.info(
         "ENV_CONFIG_LOADED",
         extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
     )
+
+    raw_risk_limit = get_env("DOLLAR_RISK_LIMIT")
+    cfg_risk_limit = getattr(trading_cfg, "dollar_risk_limit", None)
+    if raw_risk_limit not in (None, "") and cfg_risk_limit is not None:
+        mismatch = False
+        try:
+            raw_risk_as_float = float(raw_risk_limit)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            raw_risk_as_float = None
+        try:
+            cfg_risk_as_float = float(cfg_risk_limit)
+        except (TypeError, ValueError):
+            cfg_risk_as_float = None
+
+        if raw_risk_as_float is not None and cfg_risk_as_float is not None:
+            mismatch = raw_risk_as_float != cfg_risk_as_float
+        else:
+            mismatch = str(cfg_risk_limit) != str(raw_risk_limit)
+
+        if mismatch:
+            logger.warning(
+                "DOLLAR_RISK_LIMIT_ALIAS_OVERRIDE",
+                extra={
+                    "env_value": raw_risk_limit,
+                    "trading_config_value": cfg_risk_limit,
+                },
+            )
 
 
 def _validate_runtime_config(cfg, tcfg) -> None:
