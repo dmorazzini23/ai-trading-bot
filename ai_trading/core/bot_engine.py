@@ -7058,6 +7058,10 @@ def pre_trade_health_check(
 
 def _validate_columns(df, required, results, symbol):
     """Helper to validate required columns are present."""
+    try:
+        data_fetcher_module.normalize_ohlcv_columns(df)
+    except AttributeError:
+        pass
     missing = [c for c in required if c not in df.columns]
     if missing:
         results["missing_columns"].append(symbol)

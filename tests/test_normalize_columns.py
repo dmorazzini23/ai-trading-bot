@@ -1,5 +1,5 @@
 import pandas as pd
-from ai_trading.data.fetch import _flatten_and_normalize_ohlcv
+from ai_trading.data.fetch import _flatten_and_normalize_ohlcv, normalize_ohlcv_columns
 
 def test_normalize_adds_timestamp_and_volume():
     df = pd.DataFrame(
@@ -53,3 +53,9 @@ def test_normalize_maps_provider_aliases():
     assert not {"t", "o", "h", "l", "c", "v"} & set(out.columns)
     pd.testing.assert_series_equal(out["open"], pd.Series([10.0, 10.5, 10.75]), check_names=False)
     pd.testing.assert_series_equal(out["close"], pd.Series([10.1, 10.6, 10.8]), check_names=False)
+
+
+def test_normalize_alias_helper_exposed():
+    df = pd.DataFrame({"O": [1], "H": [2], "L": [0], "C": [1.5], "V": [100], "T": ["2024-01-01"]})
+    out = normalize_ohlcv_columns(df.copy())
+    assert {"open", "high", "low", "close", "volume", "timestamp"}.issubset(out.columns)

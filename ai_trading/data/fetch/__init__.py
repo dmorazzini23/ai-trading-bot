@@ -606,26 +606,12 @@ def _default_window_for(timeframe: Any) -> tuple[_dt.datetime, _dt.datetime]:
     return (start, end)
 
 
-def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) -> pd.DataFrame:
-    """Make YF/other OHLCV DataFrames uniform.
+def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename provider-specific OHLCV aliases to canonical column names."""
+    pd_local = _ensure_pandas()
+    if pd_local is None or df is None or not hasattr(df, "columns"):
+        return df
 
-    - flatten MultiIndex columns
-    - lower/snake columns
-    - ensure 'close' exists (fallback to 'adj_close')
-    - de-duplicate & sort index, convert index to UTC and tz-naive
-    """
-    pd = _ensure_pandas()
-    if pd is None:
-        return []  # type: ignore[return-value]
-    if isinstance(df.columns, pd.MultiIndex):
-        try:
-            lvl0 = set(map(str, df.columns.get_level_values(0)))
-            if {"Open", "High", "Low", "Close", "Adj Close", "Volume"} & lvl0:
-                df.columns = df.columns.get_level_values(0)
-            else:
-                df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
-        except (AttributeError, IndexError, TypeError):
-            df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
     alias_groups = {
@@ -648,6 +634,30 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
                 df = df.drop(columns=[alias])
             else:
                 df = df.rename(columns={alias: canonical})
+    return df
+
+
+def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) -> pd.DataFrame:
+    """Make YF/other OHLCV DataFrames uniform.
+
+    - flatten MultiIndex columns
+    - lower/snake columns
+    - ensure 'close' exists (fallback to 'adj_close')
+    - de-duplicate & sort index, convert index to UTC and tz-naive
+    """
+    pd = _ensure_pandas()
+    if pd is None:
+        return []  # type: ignore[return-value]
+    if isinstance(df.columns, pd.MultiIndex):
+        try:
+            lvl0 = set(map(str, df.columns.get_level_values(0)))
+            if {"Open", "High", "Low", "Close", "Adj Close", "Volume"} & lvl0:
+                df.columns = df.columns.get_level_values(0)
+            else:
+                df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
+        except (AttributeError, IndexError, TypeError):
+            df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
+    df = normalize_ohlcv_columns(df)
 
     if "close" not in df.columns and "adj_close" in df.columns:
         df["close"] = df["adj_close"]
