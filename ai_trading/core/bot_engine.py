@@ -2644,6 +2644,36 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         )
         raise DataFetchError(msg)
 
+    if "close" not in df.columns:
+        logger.error(
+            "FETCH_MINUTE_CLOSE_MISSING",
+            extra={"symbol": symbol, "timeframe": "1Min", "rows": len(df)},
+        )
+        err = DataFetchError("close_column_missing")
+        setattr(err, "fetch_reason", "close_column_missing")
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", "1Min")
+        raise err
+
+    close_series = df["close"]
+    try:
+        non_null_count = int(close_series.count())
+    except Exception:  # pragma: no cover - defensive fallback
+        try:
+            non_null_count = int(close_series.dropna().shape[0])  # type: ignore[attr-defined]
+        except Exception:
+            non_null_count = 0
+    if non_null_count == 0:
+        logger.error(
+            "FETCH_MINUTE_CLOSE_ALL_NAN",
+            extra={"symbol": symbol, "timeframe": "1Min", "rows": len(df)},
+        )
+        err = DataFetchError("close_column_all_nan")
+        setattr(err, "fetch_reason", "close_column_all_nan")
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", "1Min")
+        raise err
+
     # Check data freshness before proceeding with trading logic
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
@@ -9560,8 +9590,16 @@ def _fetch_feature_data(
 
     try:
         raw_df = fetch_minute_df_safe(symbol)
-    except DataFetchError:
-        _halt("minute_data_unavailable")
+    except DataFetchError as exc:
+        reason = getattr(exc, "fetch_reason", "")
+        if reason in {
+            "close_column_all_nan",
+            "close_column_missing",
+            "ohlcv_columns_missing",
+        }:
+            _halt("empty_frame")
+        else:
+            _halt("minute_data_unavailable")
         return None, None, False
     except APIError as e:
         msg = str(e).lower()
@@ -13380,8 +13418,16 @@ def _process_symbols(
                         logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
             try:
                 price_df = fetch_minute_df_safe(symbol)
-            except DataFetchError:
-                _halt("minute_data_unavailable")
+            except DataFetchError as exc:
+                reason = getattr(exc, "fetch_reason", "")
+                if reason in {
+                    "close_column_all_nan",
+                    "close_column_missing",
+                    "ohlcv_columns_missing",
+                }:
+                    _halt("empty_frame")
+                else:
+                    _halt("minute_data_unavailable")
                 return
             # AI-AGENT-REF: record raw row count before validation
             row_counts[symbol] = len(price_df)
@@ -13389,6 +13435,18 @@ def _process_symbols(
             if price_df.empty or "close" not in price_df.columns:
                 _halt("empty_frame")
                 return
+            close_series = price_df["close"] if "close" in price_df.columns else None
+            if close_series is not None:
+                try:
+                    non_null_count = int(close_series.count())
+                except Exception:  # pragma: no cover - defensive fallback
+                    try:
+                        non_null_count = int(close_series.dropna().shape[0])  # type: ignore[attr-defined]
+                    except Exception:
+                        non_null_count = 0
+                if non_null_count == 0:
+                    _halt("empty_frame")
+                    return
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)

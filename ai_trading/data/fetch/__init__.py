@@ -637,7 +637,11 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) -> pd.DataFrame:
+def _flatten_and_normalize_ohlcv(
+    df: pd.DataFrame,
+    symbol: str | None = None,
+    timeframe: str | None = None,
+) -> pd.DataFrame:
     """Make YF/other OHLCV DataFrames uniform.
 
     - flatten MultiIndex columns
@@ -661,6 +665,50 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
 
     if "close" not in df.columns and "adj_close" in df.columns:
         df["close"] = df["adj_close"]
+
+    required = ["open", "high", "low", "close", "volume"]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        extra = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "missing_columns": missing,
+            "columns": [str(col) for col in getattr(df, "columns", [])],
+            "rows": int(getattr(df, "shape", (0, 0))[0]),
+        }
+        extra = {k: v for k, v in extra.items() if v is not None}
+        logger.error("OHLCV_COLUMNS_MISSING", extra=extra)
+        reason = "close_column_missing" if "close" in missing else "ohlcv_columns_missing"
+        err = DataFetchError(reason)
+        setattr(err, "fetch_reason", reason)
+        setattr(err, "missing_columns", tuple(missing))
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", timeframe)
+        raise err
+
+    close_series = df.get("close")
+    if close_series is not None:
+        try:
+            all_nan = bool(pd.isna(close_series).all())
+        except Exception:  # pragma: no cover - defensive fallback
+            try:
+                all_nan = bool(close_series.isna().all())  # type: ignore[attr-defined]
+            except Exception:
+                all_nan = False
+        if all_nan:
+            extra = {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "rows": int(getattr(df, "shape", (0, 0))[0]),
+            }
+            extra = {k: v for k, v in extra.items() if v is not None}
+            logger.error("OHLCV_CLOSE_ALL_NAN", extra=extra)
+            err = DataFetchError("close_column_all_nan")
+            setattr(err, "fetch_reason", "close_column_all_nan")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", timeframe)
+            raise err
+
     if isinstance(df.index, pd.DatetimeIndex):
         try:
             tz = df.index.tz
@@ -671,10 +719,6 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
         df = df[~df.index.duplicated(keep="last")].sort_index()
     if "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
         df = df.reset_index().rename(columns={df.index.name or "index": "timestamp"})
-    required = ["open", "high", "low", "close", "volume"]
-    for col in required:
-        if col not in df.columns:
-            df[col] = pd.Series(dtype="float64")
 
     # Avoid timestamp being simultaneously a column and an index label.
     try:
@@ -727,7 +771,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             if c.lower() in ("date", "datetime"):
                 df = df.rename(columns={c: "timestamp"})
                 break
-    df = _flatten_and_normalize_ohlcv(df, symbol)
+    df = _flatten_and_normalize_ohlcv(df, symbol, interval)
     return df
 
 
@@ -757,14 +801,19 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     return pd_local.DataFrame(columns=cols, index=idx).reset_index()
 
 
-def _post_process(df: pd.DataFrame) -> pd.DataFrame:
+def _post_process(
+    df: pd.DataFrame,
+    *,
+    symbol: str | None = None,
+    timeframe: str | None = None,
+) -> pd.DataFrame:
     """Normalize OHLCV DataFrame or return empty."""
     pd = _ensure_pandas()
     if pd is None:
         return []  # type: ignore[return-value]
     if df is None or getattr(df, "empty", True):
         return pd.DataFrame()
-    return _flatten_and_normalize_ohlcv(df)
+    return _flatten_and_normalize_ohlcv(df, symbol, timeframe)
 
 
 def _verify_minute_continuity(df: pd.DataFrame, symbol: str, backfill: str | None = None) -> pd.DataFrame:
@@ -913,9 +962,9 @@ def _alpaca_get_bars(
     except Exception as exc:  # pragma: no cover - client variability
         raise DataFetchError(str(exc)) from exc
     if isinstance(bars, pd.DataFrame):
-        return _flatten_and_normalize_ohlcv(bars, symbol)
+        return _flatten_and_normalize_ohlcv(bars, symbol, timeframe)
     try:
-        return _flatten_and_normalize_ohlcv(pd.DataFrame(bars), symbol)
+        return _flatten_and_normalize_ohlcv(pd.DataFrame(bars), symbol, timeframe)
     except Exception as exc:  # pragma: no cover - conversion failure
         raise DataFetchError(f"invalid bars: {exc}") from exc
 
@@ -2245,7 +2294,7 @@ def get_minute_df(
                                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
-                                df_alt = _post_process(df_alt)
+                                df_alt = _post_process(df_alt, symbol=symbol, timeframe="1Min")
                                 df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
                                 return df_alt
                     if end_dt - start_dt > _dt.timedelta(days=1):
@@ -2279,7 +2328,7 @@ def get_minute_df(
                                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
-                                df_short = _post_process(df_short)
+                                df_short = _post_process(df_short, symbol=symbol, timeframe="1Min")
                                 df_short = _verify_minute_continuity(df_short, symbol, backfill=backfill)
                                 return df_short
                     df = None
@@ -2360,7 +2409,7 @@ def get_minute_df(
                 _mark_fallback(symbol, "1Min", start_dt, end_dt)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
-    df = _post_process(df)
+    df = _post_process(df, symbol=symbol, timeframe="1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
     return df
 
@@ -2506,7 +2555,7 @@ def get_bars_batch(
 def fetch_minute_yfinance(symbol: str, start_dt: _dt.datetime, end_dt: _dt.datetime) -> pd.DataFrame:
     """Explicit helper for tests and optional direct Yahoo minute fetch."""
     df = _yahoo_get_bars(symbol, start_dt, end_dt, interval="1m")
-    return _post_process(df)
+    return _post_process(df, symbol=symbol, timeframe="1m")
 
 
 def is_market_open() -> bool:

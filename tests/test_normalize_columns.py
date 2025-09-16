@@ -1,7 +1,9 @@
 import pandas as pd
-from ai_trading.data.fetch import _flatten_and_normalize_ohlcv, normalize_ohlcv_columns
+import pytest
 
-def test_normalize_adds_timestamp_and_volume():
+from ai_trading.data.fetch import DataFetchError, _flatten_and_normalize_ohlcv, normalize_ohlcv_columns
+
+def test_normalize_requires_volume_column():
     df = pd.DataFrame(
         {
             "open": [1.0],
@@ -11,9 +13,13 @@ def test_normalize_adds_timestamp_and_volume():
         },
         index=pd.DatetimeIndex([pd.Timestamp("2024-01-01")], name="date"),
     )
-    out = _flatten_and_normalize_ohlcv(df)
-    for col in ["timestamp", "open", "high", "low", "close", "volume"]:
-        assert col in out.columns
+    with pytest.raises(DataFetchError) as excinfo:
+        _flatten_and_normalize_ohlcv(df, symbol="AAPL", timeframe="1Min")
+
+    assert getattr(excinfo.value, "fetch_reason", "") in {
+        "ohlcv_columns_missing",
+        "close_column_missing",
+    }
 
 
 def test_normalize_removes_timestamp_index_conflict():
