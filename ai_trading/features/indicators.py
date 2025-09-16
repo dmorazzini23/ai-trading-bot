@@ -35,9 +35,16 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         close = tuple(close_numeric)
 
 
-        valid_close = close_numeric.dropna()
-        valid_index = valid_close.index
-        close_tuple = tuple(valid_close.astype(float))
+        close_series = close_numeric.dropna()
+        if close_series.empty:
+            logger.debug("Skipping MACD computation: close column has no finite values after dropping NaNs")
+            return df
+
+        valid_index = close_series.index
+        close_tuple = tuple(close_series.astype(float))
+        if not close_tuple:
+            logger.debug("Skipping MACD computation: close column has no usable samples")
+            return df
 
         ema12_raw = ema(close_tuple, 12)
         ema26_raw = ema(close_tuple, 26)
@@ -57,11 +64,20 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
 
         macd_valid = macd_aligned.loc[valid_index].dropna()
         signal_aligned = pd.Series(index=df.index, dtype=float)
-        if not macd_valid.empty:
-            macd_tuple = tuple(macd_valid.astype(float))
-            signal_raw = ema(macd_tuple, 9)
-            signal_series = pd.Series(signal_raw.to_numpy(), index=macd_valid.index, dtype=float)
-            signal_aligned.loc[signal_series.index] = signal_series
+        if macd_valid.empty:
+            df["signal"] = signal_aligned
+            df["histogram"] = df["macd"] - df["signal"]
+            return df
+
+        macd_tuple = tuple(macd_valid.astype(float))
+        if not macd_tuple:
+            df["signal"] = signal_aligned
+            df["histogram"] = df["macd"] - df["signal"]
+            return df
+
+        signal_raw = ema(macd_tuple, 9)
+        signal_series = pd.Series(signal_raw.to_numpy(), index=macd_valid.index, dtype=float)
+        signal_aligned.loc[signal_series.index] = signal_series
         df["signal"] = signal_aligned
         df["histogram"] = df["macd"] - df["signal"]
         return df
