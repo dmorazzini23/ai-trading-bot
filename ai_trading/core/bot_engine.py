@@ -9708,6 +9708,12 @@ def _fetch_feature_data(
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning("Corp actions adjust failed: %s", e)
 
+    close_numeric = pd.to_numeric(df["close"], errors="coerce")
+    finite_close = close_numeric.replace([np.inf, -np.inf], np.nan).dropna()
+    if finite_close.empty:
+        logger.debug("SKIP_FEATURES_NO_FINITE_CLOSES", extra={"symbol": symbol})
+        return raw_df, None, True
+
     # AI-AGENT-REF: log initial dataframe and monitor row drops
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Initial tail data for %s: %s", symbol, df.tail(5).to_dict(orient="list"))
