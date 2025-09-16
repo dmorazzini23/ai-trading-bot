@@ -34,19 +34,35 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
             return df
         close = tuple(close_numeric)
 
-        def _aligned(values: pd.Series | pd.Index | tuple[float, ...] | list[float]) -> pd.Series:
-            if isinstance(values, pd.Series):
-                raw = values.to_numpy()
-            else:
-                raw = pd.Series(values).to_numpy()
-            if len(raw) != len(df.index):
-                return pd.Series([float("nan")] * len(df.index), index=df.index, dtype=float)
-            return pd.Series(raw, index=df.index)
 
-        df["ema12"] = _aligned(ema(close, 12))
-        df["ema26"] = _aligned(ema(close, 26))
-        df["macd"] = df["ema12"] - df["ema26"]
-        df["signal"] = _aligned(ema(tuple(df["macd"].astype(float)), 9))
+        valid_close = close_numeric.dropna()
+        valid_index = valid_close.index
+        close_tuple = tuple(valid_close.astype(float))
+
+        ema12_raw = ema(close_tuple, 12)
+        ema26_raw = ema(close_tuple, 26)
+
+        ema12_series = pd.Series(ema12_raw.to_numpy(), index=valid_index, dtype=float)
+        ema26_series = pd.Series(ema26_raw.to_numpy(), index=valid_index, dtype=float)
+
+        ema12_aligned = pd.Series(index=df.index, dtype=float)
+        ema26_aligned = pd.Series(index=df.index, dtype=float)
+        ema12_aligned.loc[ema12_series.index] = ema12_series
+        ema26_aligned.loc[ema26_series.index] = ema26_series
+        df["ema12"] = ema12_aligned
+        df["ema26"] = ema26_aligned
+
+        macd_aligned = df["ema12"] - df["ema26"]
+        df["macd"] = macd_aligned
+
+        macd_valid = macd_aligned.loc[valid_index].dropna()
+        signal_aligned = pd.Series(index=df.index, dtype=float)
+        if not macd_valid.empty:
+            macd_tuple = tuple(macd_valid.astype(float))
+            signal_raw = ema(macd_tuple, 9)
+            signal_series = pd.Series(signal_raw.to_numpy(), index=macd_valid.index, dtype=float)
+            signal_aligned.loc[signal_series.index] = signal_series
+        df["signal"] = signal_aligned
         df["histogram"] = df["macd"] - df["signal"]
         return df
     except (KeyError, ValueError, TypeError):
