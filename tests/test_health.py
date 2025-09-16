@@ -184,6 +184,23 @@ def test_health_check_succeeds(monkeypatch):
     assert summary["checked"] == 1
 
 
+def test_health_check_accepts_datetime_index(monkeypatch):
+    monkeypatch.setenv("HEALTH_MIN_ROWS", "5")
+    df = pd.DataFrame(
+        {
+            "open": [1] * 5,
+            "high": [1] * 5,
+            "low": [1] * 5,
+            "close": [1] * 5,
+            "volume": [1] * 5,
+        },
+        index=pd.date_range("2024-01-01", periods=5, tz="UTC"),
+    )
+    ctx = DummyCtx(df)
+    summary = pre_trade_health_check(ctx, ["AAA"], min_rows=5)
+    assert summary["missing_columns"] == []
+    assert summary["failures"] == []
+    assert summary["checked"] == 1
 
 
 def test_get_daily_df_normalizes_columns(monkeypatch):
