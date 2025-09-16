@@ -475,6 +475,8 @@ class TradingConfig:
             "AI_TRADING_BUY_THRESHOLD": "BUY_THRESHOLD",
             "AI_TRADING_CONF_THRESHOLD": "CONF_THRESHOLD",
             "AI_TRADING_MAX_DRAWDOWN_THRESHOLD": "MAX_DRAWDOWN_THRESHOLD",
+            # Ensure legacy daily loss limit inputs override canonical dollar risk limits
+            "DAILY_LOSS_LIMIT": "DOLLAR_RISK_LIMIT",
         }
         for alias, canon in alias_map.items():
             if alias in env_map:
