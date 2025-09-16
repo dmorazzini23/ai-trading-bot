@@ -2655,6 +2655,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         setattr(err, "timeframe", "1Min")
         raise err
 
+    # Normalize OHLCV numeric types so placeholder strings become NaN prior to filtering
+    for col in ("open", "high", "low", "close", "volume"):
+        if col in df.columns:
+            try:
+                df.loc[:, col] = pd.to_numeric(df[col], errors="coerce")
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.debug("minute bar %s coercion failed: %s", col, exc)
+
     close_series = df["close"]
     dropped_rows = 0
     initial_rows = len(df)

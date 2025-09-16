@@ -44,3 +44,44 @@ def test_fetch_minute_df_safe_filters_current_and_zero_volume(monkeypatch):
     assert list(result.index) == [pd.Timestamp("2024-01-01 12:03:00+00:00")]
     assert (result["volume"] > 0).all()
 
+
+def test_fetch_minute_df_safe_drops_string_nan_rows(monkeypatch):
+    pd = load_pandas()
+    idx = pd.to_datetime(
+        [
+            "2024-01-01 12:02:00+00:00",
+            "2024-01-01 12:03:00+00:00",
+            "2024-01-01 12:04:00+00:00",
+        ]
+    )
+    df = pd.DataFrame(
+        {
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.0, 1.1, 1.2],
+            "low": [1.0, 1.1, 1.2],
+            "close": ["nan", 1.1, 1.2],
+            "volume": [100, 150, 200],
+            "timestamp": idx,
+        },
+        index=idx,
+    )
+    monkeypatch.setattr(bot_engine, "datetime", _FixedDatetime)
+    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+
+    result = bot_engine.fetch_minute_df_safe("AAPL")
+    assert list(result.index) == [
+        pd.Timestamp("2024-01-01 12:03:00+00:00"),
+        pd.Timestamp("2024-01-01 12:04:00+00:00"),
+    ]
+    assert result["close"].tolist() == [1.1, 1.2]
+    assert result["close"].isna().sum() == 0
+    fast_ema = result["close"].ewm(span=12, min_periods=1, adjust=False).mean()
+    slow_ema = result["close"].ewm(span=26, min_periods=1, adjust=False).mean()
+    assert not fast_ema.dropna().empty
+    assert not slow_ema.dropna().empty
+
