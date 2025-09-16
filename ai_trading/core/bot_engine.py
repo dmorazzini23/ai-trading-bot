@@ -9603,6 +9603,8 @@ def _safe_trade(
     model: Any,
     regime_ok: bool,
     side: OrderSide | None = None,
+    *,
+    price_df: pd.DataFrame | None = None,
 ) -> bool:
     try:
         # Real-time position check to prevent buy/sell flip-flops
@@ -9630,7 +9632,15 @@ def _safe_trade(
                         "detail": str(e),
                     },
                 )
-        return trade_logic(ctx, state, symbol, balance, model, regime_ok)
+        return trade_logic(
+            ctx,
+            state,
+            symbol,
+            balance,
+            model,
+            regime_ok,
+            price_df=price_df,
+        )
     except RetryError as e:
         logger.warning(
             f"[trade_logic] retries exhausted for {symbol}: {e}",
@@ -9667,12 +9677,16 @@ def _fetch_feature_data(
     ctx: BotContext,
     state: BotState,
     symbol: str,
+    price_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame | None, pd.DataFrame | None, bool | None]:
     """Fetch raw price data and compute indicators.
 
     Returns ``(raw_df, feat_df, skip_flag)``. When data is missing returns
     ``(None, None, False)``; when indicators are insufficient returns
     ``(raw_df, None, True)``.
+
+    When ``price_df`` is provided, it is treated as the raw minute-bar data and
+    no additional fetch is attempted.
     """
     def _halt(reason: str) -> None:
         logger.error("DATA_FETCH_EMPTY", extra={"symbol": symbol, "reason": reason})
@@ -9683,30 +9697,32 @@ def _fetch_feature_data(
             except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
                 logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
 
-    try:
-        raw_df = fetch_minute_df_safe(symbol)
-    except DataFetchError as exc:
-        reason = getattr(exc, "fetch_reason", "")
-        if reason in {
-            "close_column_all_nan",
-            "close_column_missing",
-            "ohlcv_columns_missing",
-        }:
-            _halt("empty_frame")
-        else:
-            _halt("minute_data_unavailable")
-        return None, None, False
-    except APIError as e:
-        msg = str(e).lower()
-        if "subscription does not permit querying recent sip data" in msg:
-            logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
-            raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
-            if raw_df is None or raw_df.empty:
-                logger.debug(f"{symbol}: no daily data either; skipping.")
-                _halt("daily_data_unavailable")
-                return None, None, False
-        else:
-            raise
+    raw_df = price_df
+    if raw_df is None:
+        try:
+            raw_df = fetch_minute_df_safe(symbol)
+        except DataFetchError as exc:
+            reason = getattr(exc, "fetch_reason", "")
+            if reason in {
+                "close_column_all_nan",
+                "close_column_missing",
+                "ohlcv_columns_missing",
+            }:
+                _halt("empty_frame")
+            else:
+                _halt("minute_data_unavailable")
+            return None, None, False
+        except APIError as e:
+            msg = str(e).lower()
+            if "subscription does not permit querying recent sip data" in msg:
+                logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
+                raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
+                if raw_df is None or raw_df.empty:
+                    logger.debug(f"{symbol}: no daily data either; skipping.")
+                    _halt("daily_data_unavailable")
+                    return None, None, False
+            else:
+                raise
     if raw_df is None or raw_df.empty:
         _halt("empty_frame")
         return None, None, False
@@ -10382,6 +10398,8 @@ def trade_logic(
     balance: float,
     model: Any,
     regime_ok: bool,
+    *,
+    price_df: pd.DataFrame | None = None,
     now_provider: Callable[[], datetime] | None = None,
 ) -> bool:
     """
@@ -10401,7 +10419,9 @@ def trade_logic(
         return False
 
     with StageTimer(logger, "FETCH_FEATURE_DATA", symbol=symbol):
-        raw_df, feat_df, skip_flag = _fetch_feature_data(ctx, state, symbol)
+        raw_df, feat_df, skip_flag = _fetch_feature_data(
+            ctx, state, symbol, price_df=price_df
+        )
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
@@ -13564,7 +13584,15 @@ def _process_symbols(
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
-            _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
+            _safe_trade(
+                ctx,
+                state,
+                symbol,
+                current_cash,
+                model,
+                regime_ok,
+                price_df=price_df,
+            )
         except (
             KeyError,
             ValueError,
