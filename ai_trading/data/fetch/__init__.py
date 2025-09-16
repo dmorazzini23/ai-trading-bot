@@ -627,6 +627,28 @@ def _flatten_and_normalize_ohlcv(df: pd.DataFrame, symbol: str | None = None) ->
         except (AttributeError, IndexError, TypeError):
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+    alias_groups = {
+        "timestamp": {"timestamp", "time", "t", "ts"},
+        "open": {"open", "o"},
+        "high": {"high", "h"},
+        "low": {"low", "l"},
+        "close": {"close", "c", "price"},
+        "volume": {"volume", "v"},
+    }
+    for canonical, aliases in alias_groups.items():
+        for alias in list(aliases):
+            if alias not in df.columns or alias == canonical:
+                continue
+            if canonical in df.columns:
+                try:
+                    df[canonical] = df[canonical].combine_first(df[alias])
+                except AttributeError:  # pragma: no cover - non-Series columns
+                    pass
+                df = df.drop(columns=[alias])
+            else:
+                df = df.rename(columns={alias: canonical})
+
     if "close" not in df.columns and "adj_close" in df.columns:
         df["close"] = df["adj_close"]
     if isinstance(df.index, pd.DatetimeIndex):
