@@ -24,10 +24,16 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         if "close" not in df.columns:
             logger.error("Missing 'close' column for MACD calculation")
             return df
-        close_numeric = pd.to_numeric(df["close"], errors="coerce")
-        if close_numeric.count() == 0:
-            logger.debug("Skipping MACD computation: close column has no numeric values")
+        close_series = df["close"]
+        close_numeric = pd.to_numeric(close_series, errors="coerce")
+        valid_count = int(close_numeric.notna().sum())
+        if valid_count == 0:
+            logger.warning(
+                "Skipping MACD computation: close column has no numeric values after coercion"
+            )
             return df
+        close = tuple(close_numeric)
+
 
         valid_close = close_numeric.dropna()
         valid_index = valid_close.index

@@ -117,3 +117,42 @@ def test_fetch_minute_df_nan_closes_triggers_guard(monkeypatch, caplog):
         for rec in caplog.records
     )
     assert not any("Error calculating EMA" in rec.getMessage() for rec in caplog.records)
+
+
+def test_fetch_feature_data_skips_when_macd_missing(monkeypatch, caplog):
+    from ai_trading.core import bot_engine
+
+    timestamps = pd.date_range("2024-01-01", periods=3, freq="T", tz="UTC")
+    raw = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [10.0, 10.5, 11.0],
+            "high": [10.2, 10.7, 11.2],
+            "low": [9.8, 10.3, 10.8],
+            "close": ["bad", "worse", "??"],
+            "volume": [1_000, 1_100, 1_200],
+        }
+    )
+
+    monkeypatch.setattr(
+        bot_engine,
+        "fetch_minute_df_safe",
+        lambda symbol: raw.copy(),
+    )
+
+    def fail_prepare(_frame):
+        raise AssertionError("prepare_indicators should not run when MACD is missing")
+
+    monkeypatch.setattr(bot_engine, "prepare_indicators", fail_prepare)
+
+    caplog.set_level("DEBUG", logger="ai_trading.core.bot_engine")
+
+    ctx = type("Ctx", (), {})()
+
+    raw_df, feat_df, skip_flag = bot_engine._fetch_feature_data(ctx, None, "BAD")
+
+    pd.testing.assert_frame_equal(raw_df.reset_index(drop=True), raw.reset_index(drop=True))
+    assert feat_df is None
+    assert skip_flag is True
+    assert any("MACD indicators unavailable" in rec.getMessage() for rec in caplog.records)
+    assert not any("Parsed feature DataFrame is empty" in rec.getMessage() for rec in caplog.records)

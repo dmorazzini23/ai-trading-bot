@@ -9723,6 +9723,15 @@ def _fetch_feature_data(
     with StageTimer(logger, "compute_macd", symbol=symbol):
         df = compute_macd(df)
     assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
+    macd_missing = "macd" not in df.columns
+    if not macd_missing:
+        macd_missing = int(df["macd"].notna().sum()) == 0
+    if macd_missing:
+        logger.warning(
+            "MACD indicators unavailable for %s; skipping indicator preparation",
+            symbol,
+        )
+        return raw_df, None, True
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("[%s] Post MACD: last closes: %s", symbol, df["close"].tail(5).tolist())
 
