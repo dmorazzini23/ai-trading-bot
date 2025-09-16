@@ -686,6 +686,19 @@ def _flatten_and_normalize_ohlcv(
         setattr(err, "timeframe", timeframe)
         raise err
 
+    # Ensure the primary OHLCV columns are numeric before downstream checks.
+    for col in required:
+        if col in df.columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            except Exception:  # pragma: no cover - defensive fallback
+                try:
+                    df[col] = pd.Series(df[col]).apply(lambda value: pd.to_numeric(value, errors="coerce"))
+                except Exception:
+                    # Leave the column as-is if coercion repeatedly fails; the
+                    # downstream NaN guard will handle missing values.
+                    pass
+
     close_series = df.get("close")
     if close_series is not None:
         try:

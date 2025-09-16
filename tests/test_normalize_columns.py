@@ -61,6 +61,25 @@ def test_normalize_maps_provider_aliases():
     pd.testing.assert_series_equal(out["close"], pd.Series([10.1, 10.6, 10.8]), check_names=False)
 
 
+def test_normalize_rejects_string_nan_close_values():
+    ts = pd.date_range("2024-01-01 09:30", periods=2, freq="1min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": ["1.0", "1.1"],
+            "high": ["1.1", "1.2"],
+            "low": ["0.9", "1.0"],
+            "close": ["nan", "nan"],
+            "volume": ["100", "120"],
+        },
+        index=ts,
+    )
+
+    with pytest.raises(DataFetchError) as excinfo:
+        _flatten_and_normalize_ohlcv(df.copy())
+
+    assert getattr(excinfo.value, "fetch_reason", "") == "close_column_all_nan"
+
+
 def test_normalize_alias_helper_exposed():
     df = pd.DataFrame({"O": [1], "H": [2], "L": [0], "C": [1.5], "V": [100], "T": ["2024-01-01"]})
     out = normalize_ohlcv_columns(df.copy())
