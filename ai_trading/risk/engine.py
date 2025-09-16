@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
+from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
 from ai_trading.data.fetch import normalize_ohlcv_columns
 try:
     from alpaca.common.exceptions import APIError
@@ -162,6 +163,7 @@ class RiskEngine:
     def _get_atr_data(self, symbol: str, lookback: int=14) -> float | None:
         """Return ATR value for ``symbol``."""
         try:
+            lookback = max(int(lookback), 1)
             if symbol in self._atr_cache:
                 ts, val = self._atr_cache[symbol]
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
@@ -169,57 +171,155 @@ class RiskEngine:
             ctx = getattr(self, 'ctx', None)
             client = getattr(ctx, 'data_client', None) or self.data_client or getattr(ctx, 'api', None)
             high = low = close = None
+            df = None
+            bars_sequence: Sequence[Any] | None = None
             if client:
-                get_bars = getattr(client, 'get_bars', None)
-                if callable(get_bars):
+                has_stock_bars = callable(getattr(client, 'get_stock_bars', None)) or callable(getattr(client, 'get_bars', None))
+                if has_stock_bars:
+                    feed = getattr(get_settings(), 'alpaca_data_feed', None)
+                    limit = max(lookback + 10, lookback + 1, 2)
+                    timeframe = getattr(TimeFrame, 'Day', '1Day')
                     try:
-                        bars = get_bars(symbol, lookback + 10)
+                        request = StockBarsRequest(
+                            symbol_or_symbols=symbol,
+                            timeframe=timeframe,
+                            limit=limit,
+                            feed=feed,
+                        )
+                        bars_df = safe_get_stock_bars(client, request, symbol, context='risk_engine_atr')
+                        if hasattr(bars_df, 'empty'):
+                            if not bars_df.empty:
+                                df = bars_df.copy()
+                        elif bars_df is not None and pd is not None:
+                            df = pd.DataFrame(bars_df)
                     except Exception as exc:  # pragma: no cover - provider variance
                         logger.warning('ATR client fetch failed for %s: %s', symbol, exc)
-                        bars = None
-                    if not bars:
-                        logger.warning('missing get_bars for %s', symbol)
-                    elif len(bars) >= lookback + 1:
-                        try:
-                            high = np.array([b.h for b in bars])
-                            low = np.array([b.l for b in bars])
-                            close = np.array([b.c for b in bars])
-                        except AttributeError:
-                            high = low = close = None
+                        simple_get = getattr(client, 'get_bars', None)
+                        if callable(simple_get):
+                            try:
+                                candidate = simple_get(symbol, limit)
+                            except TypeError:
+                                candidate = None
+                            except Exception as fallback_exc:  # pragma: no cover - provider variance
+                                logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
+                                candidate = None
+                            if candidate:
+                                if isinstance(candidate, (str, bytes, bytearray)):
+                                    candidate = None
+                                elif not isinstance(candidate, Sequence):
+                                    try:
+                                        candidate = list(candidate)
+                                    except TypeError:
+                                        candidate = None
+                                if isinstance(candidate, Sequence) and candidate:
+                                    bars_sequence = candidate
                 else:
-                    logger.warning('missing get_bars for %s', symbol)
+                    logger.warning('missing stock bars fetch for %s', symbol)
             else:
                 logger.warning('No data client available; attempting to use context data for %s', symbol)
+            def _safe_bar_value(bar: Any, names: Sequence[str]) -> Any:
+                if isinstance(bar, dict):
+                    for name in names:
+                        if name in bar and bar[name] is not None:
+                            return bar[name]
+                for name in names:
+                    if hasattr(bar, name):
+                        value = getattr(bar, name)
+                        if value is not None:
+                            return value
+                return None
+
+            def _extract_arrays(df_in) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+                if df_in is None:
+                    return (None, None, None)
+                try:
+                    if pd is not None and not isinstance(df_in, pd.DataFrame):
+                        df_local = pd.DataFrame(df_in)
+                    else:
+                        df_local = df_in.copy() if isinstance(df_in, pd.DataFrame) else df_in
+                except Exception:
+                    return (None, None, None)
+                if getattr(df_local, 'empty', True):
+                    return (None, None, None)
+                df_local = normalize_ohlcv_columns(df_local)
+                if pd is not None and hasattr(pd, 'RangeIndex') and isinstance(df_local.index, pd.RangeIndex):
+                    df_local = df_local.reset_index(drop=True)
+
+                def _series(df_obj: 'pd.DataFrame', name: str) -> np.ndarray | None:
+                    if name in df_obj:
+                        try:
+                            return df_obj[name].dropna().to_numpy()
+                        except AttributeError:
+                            return None
+                    return None
+
+                return (
+                    _series(df_local, 'high'),
+                    _series(df_local, 'low'),
+                    _series(df_local, 'close'),
+                )
+
+            if df is not None:
+                high, low, close = _extract_arrays(df)
+            if any(x is None for x in (high, low, close)) and bars_sequence:
+                df_from_seq = None
+                if pd is not None:
+                    try:
+                        records = []
+                        for bar in bars_sequence:
+                            if isinstance(bar, dict):
+                                records.append(bar)
+                            elif hasattr(bar, '__dict__'):
+                                records.append(vars(bar))
+                            else:
+                                record = {}
+                                for attr in ('open', 'high', 'low', 'close', 'o', 'h', 'l', 'c'):
+                                    if hasattr(bar, attr):
+                                        record[attr] = getattr(bar, attr)
+                                if record:
+                                    records.append(record)
+                        if records:
+                            df_from_seq = pd.DataFrame(records)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug('ATR bars sequence conversion failed for %s: %s', symbol, exc)
+                if df_from_seq is not None and getattr(df_from_seq, 'empty', True) is False:
+                    high, low, close = _extract_arrays(df_from_seq)
+                elif bars_sequence:
+                    highs: list[float] = []
+                    lows: list[float] = []
+                    closes: list[float] = []
+                    for bar in bars_sequence:
+                        high_val = _safe_bar_value(bar, ('high', 'h'))
+                        low_val = _safe_bar_value(bar, ('low', 'l'))
+                        close_val = _safe_bar_value(bar, ('close', 'c'))
+                        if None in (high_val, low_val, close_val):
+                            continue
+                        highs.append(float(high_val))
+                        lows.append(float(low_val))
+                        closes.append(float(close_val))
+                    if highs and lows and closes:
+                        high = np.asarray(highs)
+                        low = np.asarray(lows)
+                        close = np.asarray(closes)
             if any(x is None for x in (high, low, close)):
                 data = None
                 if ctx is not None:
                     data = getattr(ctx, 'minute_data', {}).get(symbol)
                     if data is None:
                         data = getattr(ctx, 'daily_data', {}).get(symbol)
-                df = None
+                df_fallback = None
                 if data is not None:
-                    df = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
-                if df is None:
+                    df_fallback = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+                if df_fallback is None:
                     fetcher = getattr(ctx, 'data_fetcher', None)
                     if fetcher is not None and hasattr(fetcher, 'get_daily_df'):
                         try:
-                            df = fetcher.get_daily_df(ctx, symbol)
+                            df_fallback = fetcher.get_daily_df(ctx, symbol)
                         except Exception as exc:  # pragma: no cover - defensive
                             logger.debug('ATR fetcher fallback failed for %s: %s', symbol, exc)
-                            df = None
-                if df is not None and getattr(df, 'empty', False) is False:
-                    df = normalize_ohlcv_columns(df)
-                    if pd is not None and hasattr(pd, 'RangeIndex') and isinstance(df.index, pd.RangeIndex):
-                        df = df.reset_index(drop=True)
-
-                    def _series(df_in: 'pd.DataFrame', name: str) -> np.ndarray | None:
-                        if name in df_in:
-                            return df_in[name].dropna().to_numpy()
-                        return None
-
-                    high = _series(df, 'high')
-                    low = _series(df, 'low')
-                    close = _series(df, 'close')
+                            df_fallback = None
+                if df_fallback is not None and getattr(df_fallback, 'empty', False) is False:
+                    high, low, close = _extract_arrays(df_fallback)
             if any(x is None for x in (high, low, close)):
                 logger.warning('Insufficient OHLC data for ATR calculation for %s', symbol)
                 return None

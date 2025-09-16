@@ -8,22 +8,19 @@ os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
 import pandas as pd
 import pytest
 
+from ai_trading.config.settings import get_settings
 from ai_trading.data.providers import yfinance_provider
 from ai_trading.risk.engine import RiskEngine
 
 
-class DummyBar:
-    def __init__(self, h: float, l: float, c: float) -> None:
-        self.h = h
-        self.l = l
-        self.c = c
+class _StockBarsClient:
+    def __init__(self, bars: pd.DataFrame) -> None:
+        self._bars = bars
+        self.requests: list[object] = []
 
-
-def _make_valid_client():
-    def get_bars(symbol: str, limit: int):
-        return [DummyBar(2.0, 1.0, 1.5) for _ in range(limit)]
-
-    return types.SimpleNamespace(get_bars=get_bars)
+    def get_stock_bars(self, request):
+        self.requests.append(request)
+        return self._bars
 
 
 def _make_df(rows: int = 30) -> pd.DataFrame:
@@ -36,11 +33,23 @@ def _make_df(rows: int = 30) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def test_get_atr_data_with_valid_client():
+def test_get_atr_data_with_stock_bars_client(caplog: pytest.LogCaptureFixture):
     eng = RiskEngine()
-    eng.ctx = types.SimpleNamespace(data_client=_make_valid_client())
+    client = _StockBarsClient(_make_df())
+    eng.ctx = types.SimpleNamespace(data_client=client)
+    caplog.set_level(logging.WARNING)
     atr = eng._get_atr_data("AAPL", lookback=14)
     assert atr == 1.0
+    assert "missing stock bars fetch" not in caplog.text.lower()
+    assert client.requests, "expected get_stock_bars to be invoked"
+    request = client.requests[-1]
+    assert getattr(request, "limit", None) == 24
+    timeframe = getattr(request, "timeframe", None)
+    if timeframe is not None:
+        assert "day" in str(timeframe).lower()
+    expected_feed = getattr(get_settings(), "alpaca_data_feed", None)
+    if expected_feed:
+        assert getattr(request, "feed", None) == expected_feed
 
 
 def test_get_atr_data_missing_get_bars_no_data(caplog: pytest.LogCaptureFixture):
@@ -49,7 +58,7 @@ def test_get_atr_data_missing_get_bars_no_data(caplog: pytest.LogCaptureFixture)
     caplog.set_level(logging.WARNING)
     atr = eng._get_atr_data("AAPL", lookback=14)
     assert atr is None
-    assert "missing get_bars" in caplog.text.lower()
+    assert "missing stock bars fetch" in caplog.text.lower()
 
 
 def test_get_atr_data_uses_ctx_minute_data():
