@@ -20,6 +20,16 @@ def test_macd_pipeline_produces_macds():
     assert df["macds"].notna().any()
 
 
+def test_compute_macd_ignores_string_nan(caplog):
+    df = pd.DataFrame({"close": ["nan", "nan", "nan"]})
+
+    with caplog.at_level("ERROR"):
+        result = compute_macd(df.copy())
+
+    assert not any("Error calculating EMA" in message for message in caplog.messages)
+    assert list(result.columns) == ["close"]
+
+
 def test_position_none_safe(monkeypatch):
     class Dummy:
         def get_position(self, symbol):
