@@ -29,10 +29,20 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
             logger.debug("Skipping MACD computation: close column has no valid values")
             return df
         close = tuple(close_series.astype(float))
-        df["ema12"] = ema(close, 12)
-        df["ema26"] = ema(close, 26)
+
+        def _aligned(values: pd.Series | pd.Index | tuple[float, ...] | list[float]) -> pd.Series:
+            if isinstance(values, pd.Series):
+                raw = values.to_numpy()
+            else:
+                raw = pd.Series(values).to_numpy()
+            if len(raw) != len(df.index):
+                return pd.Series([float("nan")] * len(df.index), index=df.index, dtype=float)
+            return pd.Series(raw, index=df.index)
+
+        df["ema12"] = _aligned(ema(close, 12))
+        df["ema26"] = _aligned(ema(close, 26))
         df["macd"] = df["ema12"] - df["ema26"]
-        df["signal"] = ema(tuple(df["macd"]), 9)
+        df["signal"] = _aligned(ema(tuple(df["macd"].astype(float)), 9))
         df["histogram"] = df["macd"] - df["signal"]
         return df
     except (KeyError, ValueError, TypeError):
