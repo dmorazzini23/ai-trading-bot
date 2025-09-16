@@ -472,6 +472,36 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     deadline = time.monotonic() + wait_seconds
     attempt = 0
 
+    def _existing_api_healthy() -> bool:
+        """Return True if another process is already serving the API health endpoint."""
+        try:
+            import http.client as _http
+            import json as _json
+        except Exception:  # pragma: no cover - fallback if stdlib import fails
+            return False
+
+        resp = None
+        try:
+            conn = _http.HTTPConnection("127.0.0.1", port, timeout=1.5)
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            payload = resp.read()  # must consume response before closing
+        except Exception:
+            return False
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        if resp is None or resp.status != 200:
+            return False
+        try:
+            data = _json.loads(payload.decode("utf-8"))
+        except Exception:
+            return False
+        return bool(data) and data.get("service") == "ai-trading"
+
     while True:
         attempt += 1
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
@@ -487,6 +517,15 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                             extra={"port": port, "pid": pid},
                         )
                         raise PortInUseError(port, pid) from exc
+
+                    if _existing_api_healthy():
+                        logger.info(
+                            "API_PORT_ALIVE_ELSEWHERE",
+                            extra={"port": port},
+                        )
+                        if ready_signal is not None:
+                            ready_signal.set()
+                        return
 
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:

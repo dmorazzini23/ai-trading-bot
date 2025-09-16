@@ -1444,7 +1444,10 @@ def _fetch_bars(
                 # Alpaca v2 multi-symbol payload nests bars under the symbol key.
                 for sym_key, sym_bars in bars_payload.items():
                     if isinstance(sym_key, str) and sym_key.upper() == symbol.upper():
-                        data = sym_bars
+                        if isinstance(sym_bars, dict) and isinstance(sym_bars.get("bars"), list):
+                            data = sym_bars.get("bars", [])
+                        else:
+                            data = sym_bars
                         break
             elif symbol in payload and isinstance(payload[symbol], dict) and ("bars" in payload[symbol]):
                 data = payload[symbol]["bars"]
