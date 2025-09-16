@@ -6243,19 +6243,24 @@ def get_trade_logger() -> TradeLogger:
     for _ in range(2):
         path = _TRADE_LOGGER_SINGLETON.path
         log_dir = os.path.dirname(path) or "."
-        parent_dir = os.path.dirname(log_dir) or "."
         fallback_reason: str | None = None
         fallback_detail: str | None = None
 
-        if not _is_dir_writable(parent_dir):
-            fallback_reason = "parent_dir_not_writable"
-            fallback_detail = parent_dir
+        if os.path.isdir(log_dir):
+            if not _is_dir_writable(log_dir):
+                fallback_reason = "log_dir_not_writable"
+                fallback_detail = log_dir
         else:
+            parent_dir = os.path.dirname(log_dir) or "."
             try:
                 os.makedirs(log_dir, mode=0o700, exist_ok=True)
             except PermissionError as exc:
-                fallback_reason = "permission_error"
-                fallback_detail = str(exc)
+                if not _is_dir_writable(parent_dir):
+                    fallback_reason = "parent_dir_not_writable"
+                    fallback_detail = parent_dir
+                else:
+                    fallback_reason = "permission_error"
+                    fallback_detail = str(exc)
             except OSError as exc:  # AI-AGENT-REF: ensure trade log dir exists
                 logger.error(
                     "TRADE_LOG_DIR_CREATE_FAILED",
