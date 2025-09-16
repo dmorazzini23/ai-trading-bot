@@ -140,6 +140,37 @@ def test_get_trade_logger_falls_back_when_dir_not_writable(tmp_path, monkeypatch
     assert not any(record.message == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
 
 
+def test_get_trade_logger_keeps_child_dir_when_parent_readonly(tmp_path, monkeypatch, caplog, request):
+    """Existing writable child directories should not trigger fallback when parent is read-only."""
+
+    parent_dir = tmp_path / "readonly-parent"
+    log_dir = parent_dir / "child"
+    log_dir.mkdir(parents=True)
+    log_dir.chmod(0o700)
+    parent_dir.chmod(0o555)
+
+    def _restore_parent_permissions() -> None:
+        if parent_dir.exists():
+            parent_dir.chmod(0o755)
+
+    request.addfinalizer(_restore_parent_permissions)
+    log_path = log_dir / "trades.jsonl"
+
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+    bot_engine._TRADE_LOG_FALLBACK_PATH = None
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        logger_instance = bot_engine.get_trade_logger()
+
+    assert logger_instance.path == str(log_path)
+    assert bot_engine.TRADE_LOG_FILE == str(log_path)
+    assert bot_engine._TRADE_LOG_FALLBACK_PATH is None
+    assert log_path.exists()
+    assert not any(record.message == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
+
+
 def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, monkeypatch, caplog):
     """get_trade_logger falls back when os.makedirs raises PermissionError."""
 
@@ -149,6 +180,24 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     parent.mkdir()
     parent.chmod(0o555)
     log_path = parent / "child" / "trades.jsonl"
+    log_dir = log_path.parent
+    original_makedirs = bot_engine.os.makedirs
+
+    def fake_makedirs(path: str, mode: int = 0o777, exist_ok: bool = False) -> None:
+        if bot_engine.os.path.abspath(path) == bot_engine.os.path.abspath(str(log_dir)):
+            raise PermissionError("mocked permission error")
+        return original_makedirs(path, mode=mode, exist_ok=exist_ok)
+
+    monkeypatch.setattr(bot_engine.os, "makedirs", fake_makedirs)
+
+    class _StubTradeLogger:
+        def __init__(self, path: str | Path | None = None, *args, **kwargs) -> None:  # noqa: D401, ARG002
+            self.path = bot_engine.abspath_safe(path)
+
+        def log_entry(self, *args, **kwargs) -> None:  # noqa: D401, ARG002
+            return None
+
+    monkeypatch.setattr(bot_engine, "TradeLogger", _StubTradeLogger)
     monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
     bot_engine._TRADE_LOGGER_SINGLETON = None
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
