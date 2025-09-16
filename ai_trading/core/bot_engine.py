@@ -13144,7 +13144,11 @@ def run_multi_strategy(ctx) -> None:
 
         try:
             ctx.execution_engine.execute_order(
-                sig.symbol, sig.side, qty, asset_class=sig.asset_class
+                sig.symbol,
+                sig.side,
+                qty,
+                price=price,
+                asset_class=sig.asset_class,
             )
         except AssertionError as exc:
             logger.warning(
