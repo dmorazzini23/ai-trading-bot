@@ -475,12 +475,19 @@ class TradingConfig:
             "AI_TRADING_BUY_THRESHOLD": "BUY_THRESHOLD",
             "AI_TRADING_CONF_THRESHOLD": "CONF_THRESHOLD",
             "AI_TRADING_MAX_DRAWDOWN_THRESHOLD": "MAX_DRAWDOWN_THRESHOLD",
-            # Ensure legacy daily loss limit inputs override canonical dollar risk limits
+            # Legacy daily loss limit alias: backfills ``DOLLAR_RISK_LIMIT`` when absent.
             "DAILY_LOSS_LIMIT": "DOLLAR_RISK_LIMIT",
         }
+        # Aliases are a legacy backfill mechanism: only populate canonicals when
+        # the operator did not provide an explicit canonical value.
         for alias, canon in alias_map.items():
-            if alias in env_map:
-                env_map[canon] = env_map[alias]
+            alias_value = env_map.get(alias)
+            if alias_value in (None, ""):
+                continue
+            canonical_value = env_map.get(canon)
+            if canonical_value is not None and str(canonical_value).strip() != "":
+                continue
+            env_map[canon] = alias_value
 
         from .aliases import resolve_trading_mode
 
