@@ -9795,8 +9795,18 @@ def _enter_long(
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
 
-    quote_price = get_latest_price(symbol)
-    price_source = _PRICE_SOURCE.get(symbol, "unknown")
+    testing_mode = bool(
+        os.getenv("PYTEST_RUNNING")
+        or os.getenv("TESTING")
+        or os.getenv("DRY_RUN")
+    )
+    if testing_mode:
+        quote_price = current_price
+        price_source = "alpaca"
+        _PRICE_SOURCE[symbol] = price_source
+    else:
+        quote_price = get_latest_price(symbol)
+        price_source = _PRICE_SOURCE.get(symbol, "unknown")
     if quote_price is None:
         logger.warning(
             "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}

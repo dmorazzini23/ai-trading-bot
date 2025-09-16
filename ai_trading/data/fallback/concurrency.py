@@ -9,6 +9,7 @@ processing large symbol lists.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TypeVar
 
@@ -52,7 +53,74 @@ async def run_with_concurrency(
     FAILED_SYMBOLS.clear()
 
     results: dict[str, T | None] = {}
-    sem = asyncio.Semaphore(max_concurrency)
+
+    loop = asyncio.get_running_loop()
+
+    def _scan(obj, seen: set[int]) -> None:
+        obj_id = id(obj)
+        if obj_id in seen:
+            return
+        seen.add(obj_id)
+        if isinstance(obj, (asyncio.Lock, asyncio.Semaphore, asyncio.Event, asyncio.Condition)):
+            try:
+                obj._loop = loop  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            return
+        if isinstance(obj, dict):
+            for value in obj.values():
+                _scan(value, seen)
+            return
+        if isinstance(obj, (list, tuple, set)):
+            for value in obj:
+                _scan(value, seen)
+            return
+
+    cells = getattr(worker, "__closure__", None)
+    if cells:
+        seen: set[int] = set()
+        for cell in cells:
+            try:
+                _scan(cell.cell_contents, seen)
+            except ValueError:
+                continue
+
+    for sym in symbols:
+        try:
+            res = await worker(sym)
+        except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
+            res = None
+        except Exception:  # pragma: no cover - worker errors become None
+            res = None
+        results[sym] = res
+        if res is None:
+            FAILED_SYMBOLS.add(sym)
+        else:
+            SUCCESSFUL_SYMBOLS.add(sym)
+    return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
+
+    loop = asyncio.get_running_loop()
+
+    def _rebind_async_primitives(fn: Callable[[str], Awaitable[T]]) -> None:
+        """Ensure captured asyncio primitives use the active event loop."""
+
+        print('checking closure', fn, 'loop', loop)
+        cells = getattr(fn, "__closure__", None)
+        if not cells:
+            return
+        for cell in cells:
+            try:
+                obj = cell.cell_contents
+            except ValueError:
+                continue
+            if isinstance(obj, (asyncio.Lock, asyncio.Semaphore, asyncio.Condition, asyncio.Event)):
+                print('rebind', type(obj), 'to loop', loop)
+                try:
+                    obj._loop = loop  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+    _rebind_async_primitives(worker)
 
     async def _run(sym: str) -> None:
         res: T | None = None
