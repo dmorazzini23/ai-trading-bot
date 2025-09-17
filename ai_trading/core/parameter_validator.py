@@ -145,7 +145,7 @@ class ParameterValidator:
             'risk_optimization': {
                 'max_portfolio_risk': 'Increased to 2.5% for higher profit potential',
                 'max_position_size': 'Reduced to 8% for better diversification',
-                'stop_loss_multiplier': 'Tightened to 1.8x for capital preservation',
+                'stop_loss_multiplier': 'Widened to 2.0x to minimize noise-driven exits',
                 'take_profit_multiplier': 'Reduced to 2.5x for frequent profit taking',
                 'max_correlation_exposure': 'Reduced to 15% for better diversification',
             },
@@ -200,7 +200,7 @@ def log_parameter_changes():
     logger.info('Risk management optimizations:')
     logger.info(f"  MAX_PORTFOLIO_RISK: 0.02 → {RISK_PARAMETERS['MAX_PORTFOLIO_RISK']} (higher profit potential)")
     logger.info(f"  MAX_POSITION_SIZE: 0.10 → {RISK_PARAMETERS['MAX_POSITION_SIZE']} (increased for larger positions)")
-    logger.info(f"  STOP_LOSS_MULTIPLIER: 2.0 → {RISK_PARAMETERS['STOP_LOSS_MULTIPLIER']} (capital preservation)")
+    logger.info(f"  STOP_LOSS_MULTIPLIER: 1.8 → {RISK_PARAMETERS['STOP_LOSS_MULTIPLIER']} (capital preservation)")
     logger.info(f"  TAKE_PROFIT_MULTIPLIER: 3.0 → {RISK_PARAMETERS['TAKE_PROFIT_MULTIPLIER']} (frequent profit taking)")
     logger.info(f"  MAX_CORRELATION_EXPOSURE: 0.20 → {RISK_PARAMETERS['MAX_CORRELATION_EXPOSURE']} (better diversification)")
     logger.info('Execution optimizations:')
