@@ -59,6 +59,17 @@ from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderStatus, OrderType
 from .idempotency import OrderIdempotencyCache
 
+def _normalize_side(side: OrderSide | str | None) -> str | None:
+    """Return normalized side string ("buy"/"sell") when possible."""
+    if isinstance(side, OrderSide):
+        return side.value.lower()
+    if isinstance(side, str):
+        cleaned = side.strip().lower()
+        if cleaned in {"buy", "sell"}:
+            return cleaned
+    return None
+
+
 def _ensure_positive_qty(qty: float) -> float:
     if qty is None:
         raise ValueError('qty_none')
@@ -928,7 +939,14 @@ class ExecutionEngine:
         except Exception:
             diff_bps = 0.0
         order.slippage_bps = diff_bps
-        if abs(diff_bps) > threshold_bps:
+        normalized_side = _normalize_side(getattr(order, "side", None))
+        if normalized_side == "buy":
+            directional_slippage_bps = diff_bps
+        elif normalized_side == "sell":
+            directional_slippage_bps = -diff_bps
+        else:
+            directional_slippage_bps = abs(diff_bps)
+        if directional_slippage_bps > threshold_bps:
             logger.warning(
                 "SLIPPAGE_PRECHECK_THRESHOLD_EXCEEDED",
                 extra={
@@ -937,6 +955,7 @@ class ExecutionEngine:
                     "delayed_price": round(delayed_price, 6),
                     "reference_price": round(reference_price, 6),
                     "slippage_bps": round(diff_bps, 2),
+                    "directional_slippage_bps": round(directional_slippage_bps, 2),
                     "threshold_bps": round(threshold_bps, 2),
                 },
             )
@@ -998,7 +1017,15 @@ class ExecutionEngine:
                 predicted_slippage_bps = (
                     (predicted_fill - base_ref) / base_ref
                 ) * 10000
-            if abs(predicted_slippage_bps) > threshold:
+            normalized_side = _normalize_side(getattr(order, "side", None))
+            if normalized_side == "buy":
+                directional_slippage_bps = predicted_slippage_bps
+            elif normalized_side == "sell":
+                directional_slippage_bps = -predicted_slippage_bps
+            else:
+                directional_slippage_bps = abs(predicted_slippage_bps)
+
+            if directional_slippage_bps > threshold:
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
                 limit_conversion_ok = True
                 if order.order_type == OrderType.MARKET:
@@ -1022,6 +1049,7 @@ class ExecutionEngine:
                         extra={
                             "order_id": order.id,
                             "limit_price": round(limit_price, 4),
+                            "directional_slippage_bps": round(directional_slippage_bps, 2),
                         },
                     )
                 reduced = max(
@@ -1033,12 +1061,20 @@ class ExecutionEngine:
                     qty_reduced = True
                     logger.warning(
                         "SLIPPAGE_QTY_REDUCED",
-                        extra={"order_id": order.id, "new_qty": reduced},
+                        extra={
+                            "order_id": order.id,
+                            "new_qty": reduced,
+                            "directional_slippage_bps": round(directional_slippage_bps, 2),
+                        },
                     )
                 else:
                     order.status = OrderStatus.REJECTED
                     logger.warning(
-                        "SLIPPAGE_ORDER_REJECTED", extra={"order_id": order.id}
+                        "SLIPPAGE_ORDER_REJECTED",
+                        extra={
+                            "order_id": order.id,
+                            "directional_slippage_bps": round(directional_slippage_bps, 2),
+                        },
                     )
                     if had_manual_price:
                         raise AssertionError(
@@ -1124,6 +1160,13 @@ class ExecutionEngine:
                     ref = float(base_price) if base_price else 1.0
                     slippage_bps = ((actual - ref) / ref) * 10000
                 order.slippage_bps = slippage_bps
+                normalized_side = _normalize_side(getattr(order, "side", None))
+                if normalized_side == "buy":
+                    directional_slippage_bps = slippage_bps
+                elif normalized_side == "sell":
+                    directional_slippage_bps = -slippage_bps
+                else:
+                    directional_slippage_bps = abs(slippage_bps)
                 logger.info(
                     'SLIPPAGE_DIAGNOSTIC',
                     extra={
@@ -1134,10 +1177,15 @@ class ExecutionEngine:
                     },
                 )
                 threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
-                if abs(slippage_bps) > threshold:
+                if directional_slippage_bps > threshold:
                     logger.warning(
                         'SLIPPAGE_THRESHOLD_EXCEEDED',
-                        extra={'order_id': order.id, 'slippage_bps': round(slippage_bps, 2), 'threshold_bps': threshold},
+                        extra={
+                            'order_id': order.id,
+                            'slippage_bps': round(slippage_bps, 2),
+                            'directional_slippage_bps': round(directional_slippage_bps, 2),
+                            'threshold_bps': threshold,
+                        },
                     )
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
             logger.error('SIMULATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
