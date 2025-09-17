@@ -269,7 +269,7 @@ The trading engine honors `AI_TRADING_CONF_THRESHOLD` (default **0.75**) to requ
 GET http://127.0.0.1:$HEALTHCHECK_PORT/healthz
 ```
 
-Available when `RUN_HEALTHCHECK=1` on `$HEALTHCHECK_PORT` (default **9001**); always returns JSON and must never 500.
+Available when `RUN_HEALTHCHECK=1` on `$HEALTHCHECK_PORT` (default **9101** and distinct from the API port); always returns JSON and must never 500.
 
 Example:
 

@@ -24,8 +24,8 @@ python -m ai_trading --dry-run
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 RUN_HEALTHCHECK=1 python -m ai_trading.app &
-curl -s http://127.0.0.1:9001/healthz
-curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics
+curl -s http://127.0.0.1:9101/healthz
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9101/metrics
 ```
 
 The import test confirms the Alpaca SDK is ready; if it fails, install it with `pip install alpaca-py`.
@@ -36,6 +36,8 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 
 * `GET /healthz` &mdash; minimal JSON liveness probe
 * `GET /metrics` &mdash; Prometheus metrics (returns **501** if metrics are disabled)
+
+The health server binds to `HEALTHCHECK_PORT` (default **9101**) and must not reuse the API port (**9001**).
 
 Use **one** Alpaca SDK in production (recommended: `alpaca-py`).
 Remove legacy `alpaca-trade-api` if present (`pip uninstall -y alpaca-trade-api`).

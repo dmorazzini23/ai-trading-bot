@@ -107,3 +107,31 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
     record = records[0]
     assert getattr(record, "env_value", None) == "0.02"
     assert getattr(record, "trading_config_value", None) == 0.02
+
+
+def test_fail_fast_env_health_port_conflict(monkeypatch):
+    base_env = {
+        "ALPACA_API_KEY": "key",
+        "ALPACA_SECRET_KEY": "secret",
+        "ALPACA_DATA_FEED": "iex",
+        "WEBHOOK_SECRET": "hook",
+        "CAPITAL_CAP": "0.25",
+        "ALPACA_API_URL": "https://paper-api.alpaca.markets",
+    }
+    for key, value in base_env.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setenv("RUN_HEALTHCHECK", "1")
+
+    class DummySettings:
+        api_port = 9001
+        healthcheck_port = 9001
+
+    monkeypatch.setattr("ai_trading.settings.get_settings", lambda: DummySettings())
+
+    with pytest.raises(SystemExit) as excinfo:
+        _fail_fast_env()
+
+    message = str(excinfo.value)
+    assert "HEALTHCHECK_PORT" in message
+    assert "differ" in message

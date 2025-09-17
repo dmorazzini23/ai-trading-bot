@@ -280,6 +280,23 @@ def _fail_fast_env() -> None:
         extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
     )
 
+    if os.getenv("RUN_HEALTHCHECK", "").strip() == "1":
+        from ai_trading.settings import get_settings
+
+        settings = get_settings()
+        health_port = int(getattr(settings, "healthcheck_port", 0) or 0)
+        api_port = int(getattr(settings, "api_port", 0) or 0)
+        if health_port == api_port:
+            message = (
+                "RUN_HEALTHCHECK=1 requires HEALTHCHECK_PORT to differ from API_PORT; "
+                f"both are set to {api_port}."
+            )
+            logger.critical(
+                "HEALTHCHECK_PORT_CONFLICT",
+                extra={"api_port": api_port, "healthcheck_port": health_port},
+            )
+            raise SystemExit(message)
+
     raw_risk_limit = get_env("DOLLAR_RISK_LIMIT")
     cfg_risk_limit = getattr(trading_cfg, "dollar_risk_limit", None)
     alias_raw = get_env("DAILY_LOSS_LIMIT")

@@ -97,7 +97,7 @@ Mount these locations or set the variables above so data persists across restart
 
 ### Health endpoints & env
 
-Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on the port defined by the `HEALTHCHECK_PORT` environment variable (default **9001**).
+Set `RUN_HEALTHCHECK=1` to expose `/healthz` and `/metrics` on the port defined by the `HEALTHCHECK_PORT` environment variable (default **9101** and distinct from the API port).
 
 | Key | Purpose |
 | --- | --- |
