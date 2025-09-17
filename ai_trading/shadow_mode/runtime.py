@@ -17,7 +17,8 @@ class _LazyModule(ModuleType):
             # Remove the proxy so ``import_module`` loads the real module
             sys.modules.pop(self.__name__, None)
             self._real = importlib.import_module(self.__name__)
-            sys.modules[self.__name__] = self._real
+        # Ensure ``sys.modules`` contains the loaded module for future imports
+        sys.modules[self.__name__] = self._real
         return self._real
 
     def __getattr__(self, item: str):  # pragma: no cover - exercised via tests
@@ -36,10 +37,12 @@ def ensure_alpaca_api() -> ModuleType:
     mod = sys.modules.get(name)
     if isinstance(mod, _LazyModule):
         return mod
-    if mod is None:
-        mod = _LazyModule(name)
-        sys.modules[name] = mod
-    return mod
+
+    lazy = _LazyModule(name)
+    if mod is not None:
+        lazy._real = mod
+    sys.modules[name] = lazy
+    return lazy
 
 
 # Ensure placeholder is registered when this module is imported
