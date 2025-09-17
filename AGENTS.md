@@ -68,7 +68,7 @@ config.reload_env()
 * Routes: `GET /healthz`, `GET /metrics`
 * `/healthz` JSON: `{"ok": true, "ts": "...", "service": "ai-trading"}`
 * `/metrics` exposes Prometheus format
-* Set `RUN_HEALTHCHECK=1` to serve these on `$HEALTHCHECK_PORT` (default **9001**)
+* Set `RUN_HEALTHCHECK=1` to serve these on `$HEALTHCHECK_PORT` (default **9101**, must differ from the API port **9001**)
 * Local check:
   ```bash
   RUN_HEALTHCHECK=1 python -m ai_trading.app &
