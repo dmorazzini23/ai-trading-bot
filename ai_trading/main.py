@@ -706,13 +706,28 @@ def main(argv: list[str] | None = None) -> None:
                 except Exception:
                     logger.error("NEXT_MARKET_OPEN_FAILED", exc_info=True)
                     raise SystemExit(1)
-                wait = max((nxt - now).total_seconds(), 0)
+                wait = max((nxt - now).total_seconds(), 0.0)
+                cap_raw = getattr(S, "interval_when_closed", 300)
+                try:
+                    cap = float(cap_raw)
+                except (TypeError, ValueError):
+                    cap = 300.0
+                if cap != cap:  # NaN guard without importing math
+                    cap = 300.0
+                cap = max(cap, 0.0)
+                sleep_for = min(wait, cap) if cap > 0 else 0.0
                 logger.warning(
                     "MARKET_CLOSED_SLEEP",
-                    extra={"now": now.isoformat(), "next_open": nxt.isoformat(), "sleep_s": int(wait)},
+                    extra={
+                        "now": now.isoformat(),
+                        "next_open": nxt.isoformat(),
+                        "sleep_s": int(sleep_for),
+                        "sleep_original_s": int(wait),
+                        "sleep_cap_s": int(cap),
+                    },
                 )
-                if wait > 0:
-                    time.sleep(wait)
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
     except Exception:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
