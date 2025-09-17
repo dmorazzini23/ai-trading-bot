@@ -223,13 +223,41 @@ class ProductionExecutionCoordinator:
                 self.halt_manager.record_trade()
                 notional_value = order.quantity * execution_result['fill_price']
                 if notional_value > 50000:
-                    await self.alert_manager.send_trading_alert('Order Executed', order.symbol, {'side': order.side.value, 'quantity': order.quantity, 'fill_price': execution_result['fill_price'], 'notional_value': notional_value, 'slippage_bps': execution_result.get('actual_slippage_bps', 0)}, AlertSeverity.INFO)
+                    await asyncio.to_thread(
+                        self.alert_manager.send_trading_alert,
+                        'Order Executed',
+                        order.symbol,
+                        {
+                            'side': order.side.value,
+                            'quantity': order.quantity,
+                            'fill_price': execution_result['fill_price'],
+                            'notional_value': notional_value,
+                            'slippage_bps': execution_result.get('actual_slippage_bps', 0),
+                        },
+                        AlertSeverity.INFO,
+                    )
                 slippage = execution_result.get('actual_slippage_bps', 0)
                 if slippage > EXECUTION_PARAMETERS['MAX_SLIPPAGE_BPS']:
-                    await self.alert_manager.send_performance_alert('Excessive Slippage', slippage, EXECUTION_PARAMETERS['MAX_SLIPPAGE_BPS'], AlertSeverity.WARNING)
+                    await asyncio.to_thread(
+                        self.alert_manager.send_performance_alert,
+                        'Excessive Slippage',
+                        slippage,
+                        EXECUTION_PARAMETERS['MAX_SLIPPAGE_BPS'],
+                        AlertSeverity.WARNING,
+                    )
                 logger.info(f"Order {order.id} executed successfully: {order.symbol} {order.side.value} {order.quantity} @ ${execution_result['fill_price']:.2f}")
             else:
-                await self.alert_manager.send_trading_alert('Order Execution Failed', order.symbol, {'order_id': order.id, 'reason': execution_result.get('message', 'Unknown'), 'quantity': order.quantity}, AlertSeverity.WARNING)
+                await asyncio.to_thread(
+                    self.alert_manager.send_trading_alert,
+                    'Order Execution Failed',
+                    order.symbol,
+                    {
+                        'order_id': order.id,
+                        'reason': execution_result.get('message', 'Unknown'),
+                        'quantity': order.quantity,
+                    },
+                    AlertSeverity.WARNING,
+                )
                 logger.warning(f"Order {order.id} execution failed: {execution_result.get('message')}")
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('POST_EXECUTION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
@@ -239,7 +267,17 @@ class ProductionExecutionCoordinator:
         try:
             order.status = OrderStatus.REJECTED
             self.rejected_orders[order.id] = order
-            await self.alert_manager.send_trading_alert('Order Rejected', order.symbol, {'order_id': order.id, 'reason': reason, 'quantity': order.quantity}, AlertSeverity.WARNING)
+            await asyncio.to_thread(
+                self.alert_manager.send_trading_alert,
+                'Order Rejected',
+                order.symbol,
+                {
+                    'order_id': order.id,
+                    'reason': reason,
+                    'quantity': order.quantity,
+                },
+                AlertSeverity.WARNING,
+            )
             logger.warning(f'Order {order.id} rejected: {reason}')
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ORDER_REJECTION_HANDLER_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
