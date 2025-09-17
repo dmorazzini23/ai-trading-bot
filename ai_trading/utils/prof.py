@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import math
 import time
 from contextlib import contextmanager
 
@@ -33,7 +35,7 @@ class SoftBudget:
         return max(0.0, self._deadline - time.monotonic())
 
     def elapsed_ms(self) -> int:
-        return int((time.perf_counter() - self._start) * 1000)
+        return math.ceil((time.perf_counter() - self._start) * 1000)
 
     def over(self) -> bool:
         return time.monotonic() >= self._deadline
