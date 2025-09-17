@@ -111,10 +111,24 @@ def _pmc_session_info(d: date) -> Session:
         raise RuntimeError("pandas_market_calendars not available")
     pd = load_pandas()
     sched = cal.schedule(start_date=d, end_date=d)
+    prev: date | None = None
     if sched.empty:
+        fallback = _FALLBACK_SESSIONS.get(d)
+        if fallback is not None:
+            return fallback
         prev = previous_trading_session(d)
+        prev_fallback = _FALLBACK_SESSIONS.get(prev)
+        if prev_fallback is not None:
+            return prev_fallback
         sched = cal.schedule(start_date=prev, end_date=prev)
     if sched.empty:
+        fallback = _FALLBACK_SESSIONS.get(d)
+        if fallback is not None:
+            return fallback
+        if prev is not None:
+            prev_fallback = _FALLBACK_SESSIONS.get(prev)
+            if prev_fallback is not None:
+                return prev_fallback
         raise RuntimeError(f"No trading session for {d}")
     open_et = sched.iloc[0]["market_open"].tz_convert(_ET).to_pydatetime()
     close_et = sched.iloc[0]["market_close"].tz_convert(_ET).to_pydatetime()
