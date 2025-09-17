@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from ai_trading.utils.exec import get_worker_env_override
+
 
 class TestPredictionExecutor:
     """Test prediction executor worker count logic."""
@@ -19,7 +21,7 @@ class TestPredictionExecutor:
             os.environ.pop("PREDICTION_WORKERS", None)
 
             # Simulate the logic from bot_engine.py
-            _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+            _workers_env = get_worker_env_override("PREDICTION_WORKERS")
             _cpu = (os.cpu_count() or 2)
             _default_workers = max(2, min(4, _cpu))
             workers = _workers_env or _default_workers
@@ -34,7 +36,7 @@ class TestPredictionExecutor:
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PREDICTION_WORKERS", None)
 
-            _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+            _workers_env = get_worker_env_override("PREDICTION_WORKERS")
             _cpu = (os.cpu_count() or 2)
             _default_workers = max(2, min(4, _cpu))
             workers = _workers_env or _default_workers
@@ -49,7 +51,7 @@ class TestPredictionExecutor:
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PREDICTION_WORKERS", None)
 
-            _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+            _workers_env = get_worker_env_override("PREDICTION_WORKERS")
             _cpu = (os.cpu_count() or 2)
             _default_workers = max(2, min(4, _cpu))
             workers = _workers_env or _default_workers
@@ -59,7 +61,7 @@ class TestPredictionExecutor:
     def test_prediction_executor_env_override(self):
         """Test that PREDICTION_WORKERS environment variable overrides default."""
         with patch.dict(os.environ, {"PREDICTION_WORKERS": "3"}):
-            _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+            _workers_env = get_worker_env_override("PREDICTION_WORKERS")
             _cpu = (os.cpu_count() or 2)
             _default_workers = max(2, min(4, _cpu))
             workers = _workers_env or _default_workers
@@ -70,7 +72,7 @@ class TestPredictionExecutor:
         """Test that PREDICTION_WORKERS=0 uses default logic."""
         with patch('os.cpu_count', return_value=6):
             with patch.dict(os.environ, {"PREDICTION_WORKERS": "0"}):
-                _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+                _workers_env = get_worker_env_override("PREDICTION_WORKERS")
                 _cpu = (os.cpu_count() or 2)
                 _default_workers = max(2, min(4, _cpu))
                 workers = _workers_env or _default_workers
@@ -81,7 +83,7 @@ class TestPredictionExecutor:
         """Test that empty PREDICTION_WORKERS uses default logic."""
         with patch('os.cpu_count', return_value=6):
             with patch.dict(os.environ, {"PREDICTION_WORKERS": ""}):
-                _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+                _workers_env = get_worker_env_override("PREDICTION_WORKERS")
                 _cpu = (os.cpu_count() or 2)
                 _default_workers = max(2, min(4, _cpu))
                 workers = _workers_env or _default_workers
@@ -92,14 +94,18 @@ class TestPredictionExecutor:
         """Test behavior with invalid PREDICTION_WORKERS value."""
         with patch('os.cpu_count', return_value=4):
             with patch.dict(os.environ, {"PREDICTION_WORKERS": "invalid"}):
-                # This should raise ValueError when trying to convert to int
-                with pytest.raises(ValueError):
-                    int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+                override = get_worker_env_override("PREDICTION_WORKERS")
+                assert override == 0, "Invalid input should be ignored"
+                _cpu = (os.cpu_count() or 2)
+                _default_workers = max(2, min(4, _cpu))
+                workers = override or _default_workers
+
+                assert workers == 4, "Fallback should use default sizing when invalid"
 
     def test_prediction_executor_large_value(self):
         """Test that large PREDICTION_WORKERS values are accepted."""
         with patch.dict(os.environ, {"PREDICTION_WORKERS": "16"}):
-            _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+            _workers_env = get_worker_env_override("PREDICTION_WORKERS")
             _cpu = (os.cpu_count() or 2)
             _default_workers = max(2, min(4, _cpu))
             workers = _workers_env or _default_workers
@@ -123,7 +129,7 @@ class TestPredictionExecutor:
             with patch.dict(os.environ, {}, clear=True):
                 os.environ.pop("PREDICTION_WORKERS", None)
 
-                _workers_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+                _workers_env = get_worker_env_override("PREDICTION_WORKERS")
                 _cpu = (os.cpu_count() or 2)
                 _default_workers = max(2, min(4, _cpu))
                 workers = _workers_env or _default_workers

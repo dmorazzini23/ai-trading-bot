@@ -8,6 +8,8 @@ import tempfile
 import traceback
 from pathlib import Path
 
+from ai_trading.utils.exec import get_worker_env_override
+
 try:
     import pandas as pd  # type: ignore
 except Exception:  # pragma: no cover
@@ -60,16 +62,16 @@ def test_executor_sizing():
             if var in os.environ:
                 del os.environ[var]
         _cpu = os.cpu_count() or 2
-        _exec_env = int(os.getenv('EXECUTOR_WORKERS', '0') or '0')
-        _pred_env = int(os.getenv('PREDICTION_WORKERS', '0') or '0')
+        _exec_env = get_worker_env_override('EXECUTOR_WORKERS')
+        _pred_env = get_worker_env_override('PREDICTION_WORKERS')
         _exec_workers = _exec_env or max(2, min(4, _cpu))
         _pred_workers = _pred_env or max(2, min(4, _cpu))
         assert 2 <= _exec_workers <= 4
         assert 2 <= _pred_workers <= 4
         os.environ['EXECUTOR_WORKERS'] = '6'
         os.environ['PREDICTION_WORKERS'] = '3'
-        _exec_env = int(os.getenv('EXECUTOR_WORKERS', '0') or '0')
-        _pred_env = int(os.getenv('PREDICTION_WORKERS', '0') or '0')
+        _exec_env = get_worker_env_override('EXECUTOR_WORKERS')
+        _pred_env = get_worker_env_override('PREDICTION_WORKERS')
         _exec_workers = _exec_env or max(2, min(4, _cpu))
         _pred_workers = _pred_env or max(2, min(4, _cpu))
         assert _exec_workers == 6

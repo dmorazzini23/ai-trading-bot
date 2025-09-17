@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from ai_trading.logging import get_logger
+from ai_trading.utils.exec import get_worker_env_override
 
 logger = get_logger(__name__)
 
@@ -33,14 +34,12 @@ def _ensure_executors() -> None:
     # Base default for 1 vCPU target machines is 1–2 workers to avoid oversubscription
     default_workers = max(1, min(2, cpu))
     # Allow env override for emergency tuning
-    try:
-        env_exec = int(os.getenv("AI_TRADING_EXEC_WORKERS", "0"))
-    except ValueError:
-        env_exec = 0
-    try:
-        env_pred = int(os.getenv("AI_TRADING_PRED_WORKERS", "0"))
-    except ValueError:
-        env_pred = 0
+    env_exec = get_worker_env_override(
+        "AI_TRADING_EXEC_WORKERS", fallback_keys=("EXECUTOR_WORKERS",)
+    )
+    env_pred = get_worker_env_override(
+        "AI_TRADING_PRED_WORKERS", fallback_keys=("PREDICTION_WORKERS",)
+    )
     exec_workers = exec_fn(cpu) if callable(exec_fn) else (env_exec or default_workers)
     pred_fn = getattr(s, "effective_prediction_workers", None)
     pred_workers = pred_fn(cpu) if callable(pred_fn) else (env_pred or default_workers)

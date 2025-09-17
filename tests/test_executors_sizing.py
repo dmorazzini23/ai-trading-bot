@@ -3,6 +3,7 @@
 import os
 from unittest.mock import patch
 
+from ai_trading.utils.exec import get_worker_env_override
 
 def test_executor_auto_sizing():
     """Test that executors auto-size correctly based on CPU count."""
@@ -24,8 +25,8 @@ def test_executor_auto_sizing():
         # Check the computed values (note: we can't directly test executor workers
         # because they're created at import time, but we can check the logic)
         _cpu = (os.cpu_count() or 2)
-        _exec_env = int(os.getenv("EXECUTOR_WORKERS", "0") or "0")
-        _pred_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+        _exec_env = get_worker_env_override("EXECUTOR_WORKERS")
+        _pred_env = get_worker_env_override("PREDICTION_WORKERS")
         _exec_workers = _exec_env or max(2, min(4, _cpu))
         _pred_workers = _pred_env or max(2, min(4, _cpu))
 
@@ -41,8 +42,8 @@ def test_executor_env_overrides():
 
     # Test the logic that would be used
     _cpu = (os.cpu_count() or 2)
-    _exec_env = int(os.getenv("EXECUTOR_WORKERS", "0") or "0")
-    _pred_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+    _exec_env = get_worker_env_override("EXECUTOR_WORKERS")
+    _pred_env = get_worker_env_override("PREDICTION_WORKERS")
     _exec_workers = _exec_env or max(2, min(4, _cpu))
     _pred_workers = _pred_env or max(2, min(4, _cpu))
 
@@ -74,8 +75,8 @@ def test_executor_bounds():
             mock_cpu_count.return_value = cpu_count
 
             _cpu = (os.cpu_count() or 2)
-            _exec_env = int(os.getenv("EXECUTOR_WORKERS", "0") or "0")
-            _pred_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+            _exec_env = get_worker_env_override("EXECUTOR_WORKERS")
+            _pred_env = get_worker_env_override("PREDICTION_WORKERS")
             _exec_workers = _exec_env or max(2, min(4, _cpu))
             _pred_workers = _pred_env or max(2, min(4, _cpu))
 
@@ -94,8 +95,8 @@ def test_executor_fallback_behavior():
         mock_cpu_count.return_value = None
 
         _cpu = (os.cpu_count() or 2)
-        _exec_env = int(os.getenv("EXECUTOR_WORKERS", "0") or "0")
-        _pred_env = int(os.getenv("PREDICTION_WORKERS", "0") or "0")
+        _exec_env = get_worker_env_override("EXECUTOR_WORKERS")
+        _pred_env = get_worker_env_override("PREDICTION_WORKERS")
         _exec_workers = _exec_env or max(2, min(4, _cpu))
         _pred_workers = _pred_env or max(2, min(4, _cpu))
 
@@ -116,7 +117,7 @@ def test_executor_env_validation():
     for env_val, expected in test_cases:
         os.environ["EXECUTOR_WORKERS"] = env_val
 
-        _exec_env = int(os.getenv("EXECUTOR_WORKERS", "0") or "0")
+        _exec_env = get_worker_env_override("EXECUTOR_WORKERS")
         assert _exec_env == expected, f"For env value '{env_val}', expected {expected}, got {_exec_env}"
 
         del os.environ["EXECUTOR_WORKERS"]
