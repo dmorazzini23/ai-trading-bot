@@ -1,4 +1,5 @@
 import warnings
+
 import pytest
 
 pd = pytest.importorskip("pandas")
@@ -18,13 +19,21 @@ def _make_gap_df():
         }
     )
 
-def test_warn_on_gaps():
+def test_log_on_gaps(caplog):
     df = _make_gap_df()
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        out = _verify_minute_continuity(df, "TEST")
-    assert len(w) == 1
+        with caplog.at_level("WARNING", logger="ai_trading.data.fetch"):
+            out = _verify_minute_continuity(df, "TEST")
+    assert not w
     assert out.equals(df)
+    record = next(
+        (rec for rec in caplog.records if rec.message == "MINUTE_GAPS_DETECTED"),
+        None,
+    )
+    assert record is not None
+    assert getattr(record, "symbol", None) == "TEST"
+    assert getattr(record, "gap_count", None) == 1
 
 def test_backfill_ffill():
     df = _make_gap_df()
