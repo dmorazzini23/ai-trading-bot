@@ -5061,8 +5061,44 @@ class DataFetcher:
             secret_key=api_secret,
         )
 
+        def _normalize_bars(
+            raw: pd.DataFrame | None, label: str
+        ) -> pd.DataFrame | None:
+            if raw is None:
+                return None
+            frame = raw
+            if isinstance(frame.columns, pd.MultiIndex):
+                frame = frame.xs(symbol, level=0, axis=1)
+            else:
+                frame = frame.drop(columns=["symbol"], errors="ignore")
+            if frame.empty:
+                logger.warning(
+                    f"No minute bars returned for {symbol}. Possible market holiday or API outage"
+                )
+                return None
+            if len(frame.index) and isinstance(frame.index[0], tuple):
+                idx_vals = [t[1] for t in frame.index]
+            else:
+                idx_vals = frame.index
+            try:
+                idx = safe_to_datetime(idx_vals, context=f"{label} {symbol}")
+            except ValueError as e:
+                reason = "empty data" if frame.empty else "unparseable timestamps"
+                logger.warning(
+                    f"Invalid {label.lower()} index for {symbol}; skipping. {reason} | {e}"
+                )
+                return None
+            frame.index = idx
+            return frame.rename(columns=lambda c: c.lower()).drop(
+                columns=["symbol"], errors="ignore"
+            )[["open", "high", "low", "close", "volume"]]
+
+        fallback_attempted = False
+        fallback_feed_used: str | None = None
+        df: pd.DataFrame | None = None
+
         try:
-            feed = getattr(self.settings, "alpaca_data_feed", None) or "iex"
+            feed = (getattr(self.settings, "alpaca_data_feed", None) or "iex").lower()
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Minute,
@@ -5071,33 +5107,77 @@ class DataFetcher:
                 feed=feed,
             )
             bars_df = bars.safe_get_stock_bars(client, req, symbol, "MINUTE")
-            if bars_df is None:
+            df = _normalize_bars(bars_df, "minute")
+            if df is None:
                 return None
-            if isinstance(bars_df.columns, pd.MultiIndex):
-                bars_df = bars_df.xs(symbol, level=0, axis=1)
-            else:
-                bars_df = bars_df.drop(columns=["symbol"], errors="ignore")
-            if bars_df.empty:
-                logger.warning(
-                    f"No minute bars returned for {symbol}. Possible market holiday or API outage"
-                )
-                return None
-            if len(bars_df.index) and isinstance(bars_df.index[0], tuple):
-                idx_vals = [t[1] for t in bars_df.index]
-            else:
-                idx_vals = bars_df.index
+
+            current_minute = now_utc.replace(second=0, microsecond=0)
             try:
-                idx = safe_to_datetime(idx_vals, context=f"minute {symbol}")
-            except ValueError as e:
-                reason = "empty data" if bars_df.empty else "unparseable timestamps"
+                last_bar_ts = pd.to_datetime(df.index[-1], utc=True)
+            except (IndexError, ValueError, TypeError) as exc:
                 logger.warning(
-                    f"Invalid minute index for {symbol}; skipping. {reason} | {e}"
+                    "UNEXPECTED_MINUTE_INDEX", extra={"symbol": symbol, "cause": str(exc)}
                 )
-                return None
-            bars_df.index = idx
-            df = bars_df.rename(columns=lambda c: c.lower()).drop(
-                columns=["symbol"], errors="ignore"
-            )[["open", "high", "low", "close", "volume"]]
+                return df
+
+            age_seconds = int((current_minute - last_bar_ts).total_seconds())
+            if age_seconds > 600 and feed == "iex":
+                fallback_candidates = getattr(
+                    self.settings, "alpaca_feed_failover", ("sip",)
+                )
+                fallback_feed = None
+                for candidate in fallback_candidates:
+                    if not candidate:
+                        continue
+                    candidate_lc = str(candidate).lower()
+                    if candidate_lc != feed:
+                        fallback_feed = candidate_lc
+                        break
+                if fallback_feed is None:
+                    fallback_feed = "sip"
+                fallback_attempted = True
+                fallback_feed_used = fallback_feed
+                logger.warning(
+                    "IEX_MINUTE_DATA_STALE",
+                    extra={
+                        "symbol": symbol,
+                        "age_seconds": age_seconds,
+                        "retry_feed": fallback_feed,
+                    },
+                )
+                try:
+                    req.feed = fallback_feed
+                    bars_df = bars.safe_get_stock_bars(
+                        client, req, symbol, "MINUTE_REALTIME_FALLBACK"
+                    )
+                    fallback_df = _normalize_bars(bars_df, fallback_feed.upper())
+                    if fallback_df is not None:
+                        df = fallback_df
+                        try:
+                            last_bar_ts = pd.to_datetime(df.index[-1], utc=True)
+                            age_seconds = int((current_minute - last_bar_ts).total_seconds())
+                        except (IndexError, ValueError, TypeError):
+                            pass
+                except APIError as api_exc:
+                    message = str(api_exc)
+                    if "subscription does not permit" in message.lower():
+                        logger.warning(
+                            "REALTIME_FEED_ENTITLEMENT_MISSING",
+                            extra={
+                                "symbol": symbol,
+                                "requested_feed": fallback_feed,
+                                "cause": message,
+                            },
+                        )
+                    else:
+                        logger.warning(
+                            "REALTIME_FEED_FALLBACK_ERROR",
+                            extra={
+                                "symbol": symbol,
+                                "requested_feed": fallback_feed,
+                                "cause": message,
+                            },
+                        )
         except APIError as e:
             err_msg = str(e)
             if (
@@ -5111,29 +5191,9 @@ class DataFetcher:
                     df_iex = bars.safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
                     if df_iex is None:
                         return None
-                    if isinstance(df_iex.columns, pd.MultiIndex):
-                        df_iex = df_iex.xs(symbol, level=0, axis=1)
-                    else:
-                        df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
-                    if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        idx_vals = [t[1] for t in df_iex.index]
-                    else:
-                        idx_vals = df_iex.index
-                    try:
-                        idx = safe_to_datetime(idx_vals, context=f"IEX minute {symbol}")
-                    except ValueError as _e:
-                        reason = (
-                            "empty data" if df_iex.empty else "unparseable timestamps"
-                        )
-                        logger.warning(
-                            f"Invalid IEX minute index for {symbol}; skipping. {reason} | {_e}"
-                        )
-                        df = pd.DataFrame()
-                    else:
-                        df_iex.index = idx
-                        df = df_iex.rename(columns=lambda c: c.lower())[
-                            "open", "high", "low", "close", "volume"
-                        ]
+                    fallback_attempted = True
+                    fallback_feed_used = "iex"
+                    df = _normalize_bars(df_iex, "IEX minute") or pd.DataFrame()
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -5172,9 +5232,36 @@ class DataFetcher:
             logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
             df = pd.DataFrame()
 
+        data_fresh = False
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            try:
+                staleness._ensure_data_fresh(
+                    df,
+                    600,
+                    symbol=symbol,
+                    now=now_utc,
+                )
+                data_fresh = True
+            except RuntimeError as stale_exc:
+                if fallback_attempted:
+                    logger.warning(
+                        "REALTIME_FALLBACK_STALE",
+                        extra={
+                            "symbol": symbol,
+                            "feed": fallback_feed_used or feed,
+                            "detail": str(stale_exc),
+                        },
+                    )
+        elif df is None:
+            data_fresh = False
+
         with cache_lock:
-            self._minute_cache[symbol] = df
-            self._minute_timestamps[symbol] = now_utc
+            if data_fresh:
+                self._minute_cache[symbol] = df
+                self._minute_timestamps[symbol] = now_utc
+            else:
+                self._minute_cache.pop(symbol, None)
+                self._minute_timestamps.pop(symbol, None)
         return df
 
     def get_historical_minute(

@@ -218,6 +218,86 @@ def test_fetch_minute_df_safe_sparse_minute_data_triggers_sip_fallback(
     assert any(rec.message == "MINUTE_DATA_COVERAGE_WARNING" for rec in caplog.records)
 
 
+def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 4, 15, 30, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    stale_idx = pd.date_range(end=base_now - timedelta(minutes=15), periods=5, freq="min", tz="UTC")
+    fresh_idx = pd.date_range(end=base_now - timedelta(minutes=1), periods=5, freq="min", tz="UTC")
+
+    settings = types.SimpleNamespace(
+        alpaca_api_key="key",
+        alpaca_secret_key_plain="secret",
+        alpaca_data_feed="iex",
+        alpaca_feed_failover=("sip",),
+    )
+
+    class DummyClient:  # noqa: D401 - minimal stub
+        def __init__(self, *args, **kwargs):
+            pass
+
+    feeds: list[str] = []
+
+    def fake_safe_get_stock_bars(client, req, symbol, tag):
+        feeds.append(req.feed)
+        if req.feed == "iex":
+            idx = stale_idx
+        else:
+            idx = fresh_idx
+        frame = pd.DataFrame(
+            {
+                "open": [1.0 + i * 0.01 for i in range(len(idx))],
+                "high": [1.1 + i * 0.01 for i in range(len(idx))],
+                "low": [0.9 + i * 0.01 for i in range(len(idx))],
+                "close": [1.0 + i * 0.01 for i in range(len(idx))],
+                "volume": [100] * len(idx),
+                "symbol": [symbol] * len(idx),
+            },
+            index=idx,
+        )
+        return frame
+
+    captured: dict[str, object] = {}
+
+    def capture_ensure(df, max_age_seconds, *, symbol=None, now=None, tz=None):
+        captured["df"] = df.copy()
+        captured["max_age"] = max_age_seconds
+        captured["symbol"] = symbol
+        return None
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_settings", lambda: settings)
+    monkeypatch.setattr(bot_engine, "StockHistoricalDataClient", DummyClient)
+    monkeypatch.setattr(
+        bot_engine.bars,
+        "safe_get_stock_bars",
+        fake_safe_get_stock_bars,
+    )
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", capture_ensure)
+
+    fetcher = bot_engine.DataFetcher()
+    ctx = types.SimpleNamespace()
+
+    result = fetcher.get_minute_df(ctx, "AAPL", lookback_minutes=5)
+
+    assert feeds == ["iex", "sip"]
+    assert "df" in captured
+    assert captured["symbol"] == "AAPL"
+    assert captured["max_age"] == 600
+    assert isinstance(result, pd.DataFrame)
+    pd.testing.assert_index_equal(result.index, fresh_idx)
+    assert fetcher._minute_cache["AAPL"].index[-1] == fresh_idx[-1]
+    assert fetcher._minute_timestamps["AAPL"] == base_now
+
+
 def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
     pd = load_pandas()
     sample = _sample_df()
