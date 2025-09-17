@@ -328,7 +328,7 @@ def _validate_input_df(data) -> None:
     if hasattr(data, "columns"):
         missing = [col for col in required if col not in data.columns]
         if missing:
-            raise KeyError(f"Input data missing required column(s): {missing}")
+            raise ValueError(f"Input data missing required column(s): {missing}")
 
 
 def _apply_macd(data) -> Any | None:
