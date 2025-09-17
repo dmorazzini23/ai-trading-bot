@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, date
+
+import types
 
 import pytest
 
@@ -134,8 +136,12 @@ def test_http_fallback_receives_iso_timestamps(monkeypatch):
         def get_stock_bars(self, request):
             return self.Resp()
 
+    def fail_fetch(*_args, **_kwargs):  # pragma: no cover - exercised indirectly
+        raise RuntimeError("fail")
+
     monkeypatch.setattr(bars_mod, "http_get_bars", fake_http_get_bars)
     monkeypatch.setattr(bars_mod.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(bars_mod, "_client_fetch_stock_bars", fail_fetch)
 
     safe_get_stock_bars(DummyClient(), req, symbol="SPY", context="TEST")
 
@@ -165,3 +171,33 @@ def test_window_has_trading_session_handles_missing_holiday_session(monkeypatch)
         monkeypatch.setattr(fetch_mod, "rth_session_utc", fake_rth_session_utc)
 
         assert fetch_mod._window_has_trading_session(start, end) is False
+
+
+def test_session_info_uses_fallback_when_calendar_available(monkeypatch):
+    mc = pytest.importorskip("ai_trading.utils.market_calendar")
+
+    holiday = date(2024, 1, 1)
+    previous = date(2023, 12, 29)
+
+    class DummyCalendar:
+        def schedule(self, start_date, end_date):
+            if start_date == previous and end_date == previous:
+                return pd.DataFrame(
+                    {
+                        "market_open": [pd.Timestamp("2023-12-29 14:30", tz="UTC")],
+                        "market_close": [pd.Timestamp("2023-12-29 21:00", tz="UTC")],
+                    }
+                )
+            return pd.DataFrame(columns=["market_open", "market_close"])
+
+    pmc = types.SimpleNamespace(get_calendar=lambda _: DummyCalendar())
+
+    monkeypatch.setattr(mc, "_CAL", None)
+    monkeypatch.setattr(mc, "load_pandas_market_calendars", lambda: pmc)
+    monkeypatch.setattr(mc, "load_pandas", lambda: pd)
+
+    session = mc.session_info(holiday)
+
+    assert session.start_utc == datetime(2024, 1, 1, 14, 30, tzinfo=UTC)
+    assert session.end_utc == datetime(2024, 1, 1, 21, 0, tzinfo=UTC)
+    assert session.is_early_close is False
