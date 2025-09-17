@@ -985,7 +985,11 @@ def _verify_minute_continuity(
     if missing.empty:
         return df
 
-    warnings.warn(f"{symbol} minute data has {len(missing)} gaps", RuntimeWarning)
+    gap_count = int(len(missing))
+    logger.warning(
+        "MINUTE_GAPS_DETECTED",
+        extra=_norm_extra({"symbol": symbol, "gap_count": gap_count}),
+    )
     if not backfill:
         return df
 
