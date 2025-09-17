@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+import ai_trading.alpaca_api as alpaca_api
+from ai_trading.alpaca_api import AlpacaAuthenticationError, is_alpaca_service_available
 from ai_trading.core import bot_engine
 import ai_trading.data.fetch as data_fetcher
 
@@ -52,4 +54,25 @@ def test_get_latest_price_uses_latest_close_when_providers_fail(monkeypatch):
     price = bot_engine.get_latest_price("AAPL")
 
     assert price == 55.0
+
+
+def test_get_latest_price_handles_auth_failure(monkeypatch):
+    monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", True)
+
+    def raise_auth(*_a, **_k):
+        monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", False)
+        raise AlpacaAuthenticationError("Unauthorized")
+
+    def fail_backup(*_a, **_k):  # pragma: no cover - defensive guard
+        raise AssertionError("Backup provider should not be queried on auth failure")
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (raise_auth, None))
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", fail_backup)
+    monkeypatch.setattr(bot_engine, "get_bars_df", fail_backup)
+
+    price = bot_engine.get_latest_price("AAPL")
+
+    assert price is None
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_auth_failed"
+    assert not is_alpaca_service_available()
 

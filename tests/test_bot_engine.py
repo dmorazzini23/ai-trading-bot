@@ -8,6 +8,9 @@ import numpy as np
 import pytest
 pd = pytest.importorskip("pandas")
 
+from ai_trading.alpaca_api import AlpacaAuthenticationError
+from ai_trading.core import bot_engine
+
 
 def _install_alpaca_stub() -> types.ModuleType:
     alpaca_stub = types.ModuleType("alpaca")
@@ -156,6 +159,28 @@ def test_prepare_indicators_ignores_non_indicator_nans():
     assert required.issubset(result.columns)
     assert 'unused_feature' in result.columns
     assert not result['stochrsi'].isna().all()
+
+
+def test_safe_trade_handles_auth_failure(monkeypatch):
+    state = bot_engine.BotState()
+    ctx = types.SimpleNamespace(api=types.SimpleNamespace(list_positions=lambda: []))
+
+    def raise_auth(*_a, **_k):
+        raise AlpacaAuthenticationError("Unauthorized")
+
+    monkeypatch.setattr(bot_engine, "trade_logic", raise_auth)
+
+    result = bot_engine._safe_trade(
+        ctx,
+        state,
+        "AAPL",
+        1_000.0,
+        object(),
+        True,
+    )
+
+    assert result is False
+    assert "AAPL" in state.auth_skipped_symbols
 
 
 def test_prepare_indicators_insufficient_data():

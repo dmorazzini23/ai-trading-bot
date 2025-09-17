@@ -50,6 +50,7 @@ EASTERN_TZ = eastern_tz()
 
 ALPACA_AVAILABLE = not missing("alpaca", "alpaca")
 HAS_PANDAS: bool = not missing("pandas", "pandas")
+_ALPACA_SERVICE_AVAILABLE: bool = True
 
 
 def initialize() -> None:
@@ -70,6 +71,17 @@ def initialize() -> None:
                 importlib.import_module("alpaca.data")
     except Exception as exc:  # pragma: no cover - exercised in tests
         raise RuntimeError("alpaca-py SDK is required") from exc
+
+
+def is_alpaca_service_available() -> bool:
+    """Return ``True`` when Alpaca API requests are currently authenticated."""
+
+    return _ALPACA_SERVICE_AVAILABLE
+
+
+def _set_alpaca_service_available(value: bool) -> None:
+    global _ALPACA_SERVICE_AVAILABLE
+    _ALPACA_SERVICE_AVAILABLE = bool(value)
 
 
 if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
@@ -521,6 +533,13 @@ class AlpacaOrderNetworkError(AlpacaOrderError):
     pass
 
 
+class AlpacaAuthenticationError(AlpacaOrderHTTPError):
+    """Raised when Alpaca rejects a request due to invalid credentials."""
+
+    def __init__(self, message: str, payload: Optional[dict[str, Any]] | None = None):
+        super().__init__(401, message, payload=payload)
+
+
 @dataclass(frozen=True)
 class _AlpacaConfig:
     base_url: str
@@ -868,6 +887,27 @@ def alpaca_get(
     status_code = getattr(resp, "status_code", 0)
     text = getattr(resp, "text", "") if resp is not None else ""
 
+    if 200 <= status_code < 400:
+        _set_alpaca_service_available(True)
+
+    if status_code == 401:
+        payload = content if isinstance(content, dict) else {}
+        message = ""
+        if isinstance(payload, dict):
+            message = str(payload.get("message") or text)
+        else:
+            message = text
+        _set_alpaca_service_available(False)
+        _log.critical(
+            "ALPACA_AUTH_FAILURE",
+            extra={
+                "endpoint": url,
+                "status": status_code,
+                "shadow_mode": cfg.shadow,
+            },
+        )
+        raise AlpacaAuthenticationError(message or "Alpaca authentication failed", payload=payload)
+
     if status_code >= 400:
         payload = content if isinstance(content, dict) else {}
         message = ""
@@ -897,11 +937,13 @@ def start_trade_updates_stream(*_a, **_k):
 __all__ = [
     "ALPACA_AVAILABLE",
     "is_shadow_mode",
+    "is_alpaca_service_available",
     "RETRY_HTTP_CODES",
     "RETRYABLE_HTTP_STATUSES",
     "submit_order",
     "AlpacaOrderError",
     "AlpacaOrderHTTPError",
+    "AlpacaAuthenticationError",
     "AlpacaOrderNetworkError",
     "generate_client_order_id",
     "list_orders_wrapper",

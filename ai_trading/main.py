@@ -108,6 +108,39 @@ def run_cycle() -> None:
         except Exception:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
 
+    from ai_trading.alpaca_api import (
+        AlpacaAuthenticationError,
+        alpaca_get,
+        is_alpaca_service_available,
+    )
+
+    if not is_alpaca_service_available():
+        logger.critical(
+            "ALPACA_AUTH_PREFLIGHT_FAILED",
+            extra={
+                "detail": "Alpaca authentication previously marked unavailable",
+                "action": "Verify ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY",
+            },
+        )
+        return
+
+    try:
+        alpaca_get("/v2/account/configurations", timeout=5)
+    except AlpacaAuthenticationError as exc:
+        logger.critical(
+            "ALPACA_AUTH_PREFLIGHT_FAILED",
+            extra={
+                "detail": str(exc),
+                "action": "Verify ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY",
+            },
+        )
+        return
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "ALPACA_PREFLIGHT_UNEXPECTED",
+            extra={"detail": str(exc), "exc_type": exc.__class__.__name__},
+        )
+
     from ai_trading.core.bot_engine import (
         BotState,
         run_all_trades_worker,
