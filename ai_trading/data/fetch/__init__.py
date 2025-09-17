@@ -849,21 +849,23 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
 
 
 def _post_process(
-    df: pd.DataFrame,
+    df: pd.DataFrame | None,
     *,
     symbol: str | None = None,
     timeframe: str | None = None,
-) -> pd.DataFrame:
-    """Normalize OHLCV DataFrame or return empty."""
+) -> pd.DataFrame | None:
+    """Normalize OHLCV DataFrame while preserving explicit empties."""
     pd = _ensure_pandas()
     if pd is None:
-        return []  # type: ignore[return-value]
+        return df
     if df is None or getattr(df, "empty", True):
-        return pd.DataFrame()
+        return None
     return _flatten_and_normalize_ohlcv(df, symbol, timeframe)
 
 
-def _verify_minute_continuity(df: pd.DataFrame, symbol: str, backfill: str | None = None) -> pd.DataFrame:
+def _verify_minute_continuity(
+    df: pd.DataFrame | None, symbol: str, backfill: str | None = None
+) -> pd.DataFrame | None:
     """Verify 1-minute bar continuity and optionally backfill gaps."""
 
     pd_local = _ensure_pandas()
@@ -1164,7 +1166,7 @@ def retry_empty_fetch_once(
 
 def _fetch_bars(
     symbol: str, start: Any, end: Any, timeframe: str, *, feed: str = _DEFAULT_FEED, adjustment: str = "raw"
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     """Fetch bars from Alpaca v2 with alt-feed fallback."""
     pd = _ensure_pandas()
     _ensure_requests()
@@ -2212,6 +2214,8 @@ def _fetch_bars(
                 )
                 _mark_fallback(symbol, _interval, _start, _end)
                 return alt_df
+    if df is None or getattr(df, "empty", True):
+        return None
     return df
 
 
@@ -2222,7 +2226,7 @@ def get_minute_df(
     feed: str | None = None,
     *,
     backfill: str | None = None,
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     """Minute bars fetch with provider fallback and gap handling.
 
     Also updates in-memory minute cache for freshness checks."""
@@ -2479,6 +2483,8 @@ def get_minute_df(
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
     df = _post_process(df, symbol=symbol, timeframe="1Min")
+    if df is None:
+        return None
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
     return df
 
@@ -2616,7 +2622,7 @@ def get_bars(
 
 def get_bars_batch(
     symbols: list[str], timeframe: str, start: Any, end: Any, *, feed: str | None = None, adjustment: str | None = None
-) -> dict[str, pd.DataFrame]:
+) -> dict[str, pd.DataFrame | None]:
     """Fetch bars for multiple symbols via get_bars."""
     return {sym: get_bars(sym, timeframe, start, end, feed=feed, adjustment=adjustment) for sym in symbols}
 

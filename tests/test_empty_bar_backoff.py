@@ -71,6 +71,7 @@ def test_backoff_uses_alternate_provider(monkeypatch, caplog):
             "high": [1],
             "low": [1],
             "close": [1],
+            "volume": [0],
         }
     )
 
@@ -111,7 +112,7 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         out = fetch.get_minute_df(symbol, start, end)
 
-    assert out.empty
+    assert out is None or out.empty
     assert key in fetch._SKIPPED_SYMBOLS
     assert any(r.message == "ALPACA_EMPTY_BAR_BACKOFF" for r in caplog.records)
 
@@ -155,7 +156,7 @@ def test_skip_retry_when_market_closed(monkeypatch, caplog):
     with caplog.at_level(logging.INFO):
         out = fetch.get_minute_df(symbol, start, end)
 
-    assert out.empty
+    assert out is None or out.empty
     assert any(
         r.message == "ALPACA_EMPTY_BAR_MARKET_CLOSED" for r in caplog.records
     )

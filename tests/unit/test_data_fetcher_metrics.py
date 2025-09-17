@@ -144,7 +144,7 @@ def test_unauthorized_sip_returns_empty(
     monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
     monkeypatch.setattr(df, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="sip")
-    assert out.empty
+    assert out is None or out.empty
     names = [r.name for r in capmetrics]
     assert names == ["data.fetch.unauthorized"]
     assert capmetrics[0].tags["feed"] == "sip"
