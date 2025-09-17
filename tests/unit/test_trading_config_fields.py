@@ -13,7 +13,7 @@ def test_defaults_present():
     assert cfg.signal_confirmation_bars == 2
     assert cfg.delta_threshold == 0.02
     assert cfg.min_confidence == 0.6
-    assert cfg.position_size_min_usd == 0.0
+    assert cfg.position_size_min_usd == 25.0
 
 
 def test_env_overrides_and_defaults(monkeypatch):

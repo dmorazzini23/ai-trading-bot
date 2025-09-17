@@ -22,7 +22,7 @@ def get_settings():  # type: ignore[override]
 from ai_trading.utils.capital_scaling import (
     derive_cap_from_settings as _derive_cap_from_settings,
 )
-from ai_trading.settings import Settings
+from ai_trading.settings import Settings, POSITION_SIZE_MIN_USD_DEFAULT
 
 # re-export helpers expected by tests and callers
 derive_cap_from_settings = _derive_cap_from_settings
@@ -330,7 +330,7 @@ class TradingConfig:
     daily_loss_limit: Optional[float] = 0.03
     max_position_size: Optional[float] = None
     max_position_equity_fallback: float = 200000.0
-    position_size_min_usd: float | None = 0.0
+    position_size_min_usd: float | None = POSITION_SIZE_MIN_USD_DEFAULT
     sector_exposure_cap: Optional[float] = None
     max_drawdown_threshold: Optional[float] = None
     trailing_factor: Optional[float] = None
@@ -581,7 +581,7 @@ class TradingConfig:
             position_size_min_usd=_get(
                 "POSITION_SIZE_MIN_USD",
                 float,
-                default=0.0,
+                default=POSITION_SIZE_MIN_USD_DEFAULT,
                 aliases=("AI_TRADING_POSITION_SIZE_MIN_USD",),
             ),
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),

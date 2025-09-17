@@ -1,5 +1,6 @@
 from __future__ import annotations
 from ai_trading.logging import get_logger
+import math
 import random
 import threading
 from collections.abc import Sequence
@@ -27,13 +28,94 @@ from ai_trading.config.management import (
     validate_required_env,
 )
 from ai_trading.config.settings import get_settings
-from ai_trading.settings import get_alpaca_secret_key_plain
+from ai_trading.settings import (
+    POSITION_SIZE_MIN_USD_DEFAULT,
+    get_alpaca_secret_key_plain,
+    get_position_size_min_usd,
+)
 
 if not hasattr(np, 'NaN'):
     np.NaN = np.nan
 
 # Lazy pandas proxy
 pd = load_pandas()
+
+
+def _is_finite_number(value: Any) -> bool:
+    try:
+        if hasattr(np, "isfinite"):
+            return bool(np.isfinite(value))
+    except (TypeError, ValueError):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _derive_minimum_quantity(engine: "RiskEngine", price: float) -> int:
+    min_usd_raw = getattr(
+        engine.config,
+        "position_size_min_usd",
+        POSITION_SIZE_MIN_USD_DEFAULT,
+    )
+    try:
+        min_usd_value = float(min_usd_raw)
+    except (TypeError, ValueError):
+        min_usd_value = None
+
+    fallback_usd = get_position_size_min_usd()
+    if fallback_usd <= 0:
+        fallback_usd = POSITION_SIZE_MIN_USD_DEFAULT
+    fallback_qty = max(int(fallback_usd / price), 1)
+
+    if (
+        min_usd_value is not None
+        and _is_finite_number(min_usd_value)
+        and min_usd_value > 0
+    ):
+        return max(int(min_usd_value / price), 1)
+
+    if not getattr(engine, "_invalid_min_size_logged", False):
+        logger.warning(
+            "Invalid position_size_min_usd=%s; using fallback of $%.2f",
+            min_usd_raw,
+            fallback_usd,
+        )
+        engine._invalid_min_size_logged = True
+    return fallback_qty
+
+
+def _calculate_position_size(
+    engine: "RiskEngine",
+    raw_qty: float,
+    price: float,
+    signal: Any,
+) -> int:
+    symbol = getattr(signal, "symbol", "UNKNOWN")
+    min_qty = _derive_minimum_quantity(engine, price)
+
+    if not _is_finite_number(raw_qty):
+        logger.warning(
+            "Non-finite raw_qty %s for %s; falling back to minimum position size",
+            raw_qty,
+            symbol,
+        )
+        return max(min_qty, 0)
+
+    if raw_qty < 0:
+        logger.warning("Negative raw_qty %s for %s, returning 0", raw_qty, symbol)
+        return 0
+
+    if raw_qty == 0:
+        logger.warning(
+            "Zero raw_qty for %s; falling back to minimum position size",
+            symbol,
+        )
+        return max(min_qty, 0)
+
+    qty = max(int(raw_qty), min_qty)
+    return max(qty, 0)
 try:
     from alpaca.data.historical.stock import StockHistoricalDataClient
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
@@ -119,6 +201,7 @@ class RiskEngine:
         from threading import Event
         self._update_event = Event()
         self._last_update = 0.0
+        self._invalid_min_size_logged = False
         try:
             max_drawdown = get_env('MAX_DRAWDOWN_THRESHOLD', '0.15', cast=float)
             if not 0 < max_drawdown <= 1.0:
@@ -668,41 +751,7 @@ class RiskEngine:
                 logger.warning('Failed to calculate position size, returning 0')
                 return 0
         try:
-            min_qty = self.config.position_size_min_usd / price
-            try:
-                if hasattr(np, 'isfinite'):
-                    is_raw_qty_finite = np.isfinite(raw_qty)
-                    is_min_qty_finite = np.isfinite(min_qty)
-                else:
-                    is_raw_qty_finite = str(raw_qty).lower() not in ['nan', 'inf', '-inf']
-                    is_min_qty_finite = str(min_qty).lower() not in ['nan', 'inf', '-inf']
-            except (AttributeError, TypeError):
-                is_raw_qty_finite = isinstance(raw_qty, int | float) and raw_qty == raw_qty and (abs(raw_qty) != float('inf'))
-                is_min_qty_finite = isinstance(min_qty, int | float) and min_qty == min_qty and (abs(min_qty) != float('inf'))
-            if not is_raw_qty_finite or raw_qty == 0:
-                if is_min_qty_finite and min_qty > 0:
-                    logger.warning(
-                        'Non-finite or zero raw_qty %s for %s; falling back to minimum position size',
-                        raw_qty,
-                        getattr(signal, 'symbol', 'UNKNOWN'),
-                    )
-                    qty = int(min_qty)
-                else:
-                    logger.warning(
-                        'Invalid raw_qty %s and min_qty %s for %s, returning 0',
-                        raw_qty,
-                        min_qty,
-                        getattr(signal, 'symbol', 'UNKNOWN'),
-                    )
-                    return 0
-            elif raw_qty < 0:
-                logger.warning('Negative raw_qty %s for %s, returning 0', raw_qty, getattr(signal, 'symbol', 'UNKNOWN'))
-                return 0
-            elif not is_min_qty_finite or min_qty <= 0:
-                logger.warning('Invalid min_qty %s, using raw_qty only', min_qty)
-                qty = int(raw_qty)
-            else:
-                qty = max(int(raw_qty), int(min_qty))
+            qty = _calculate_position_size(self, raw_qty, price, signal)
             if getattr(signal, 'strategy', '') == 'default':
                 qty = max(qty, 10)
             return max(qty, 0)

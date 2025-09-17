@@ -26,7 +26,7 @@ def test_trading_config_has_required_parameters():
     assert cfg.capital_cap == 0.25
     assert cfg.dollar_risk_limit == 0.05
     assert cfg.max_position_size == 8000.0
-    assert cfg.position_size_min_usd == 0.0
+    assert cfg.position_size_min_usd == 25.0
 
 
 def test_trading_config_from_env_loads_parameters():

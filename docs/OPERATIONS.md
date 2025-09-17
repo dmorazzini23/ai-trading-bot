@@ -43,6 +43,7 @@ Set the following to control position sizing:
 - `MAX_POSITION_SIZE`: absolute USD cap per position. Must be >0 (typically 1-10000). Ignored when `max_position_mode=AUTO`, where the bot derives a value from `CAPITAL_CAP` and equity.
 - `AI_TRADING_MAX_POSITION_SIZE`: explicit override for deployments; must be positive and always takes precedence over dynamic sizing.
 - `MAX_POSITION_EQUITY_FALLBACK`: equity assumed when deriving `MAX_POSITION_SIZE` but the real account equity cannot be fetched. Defaults to `200000`.
+- `AI_TRADING_POSITION_SIZE_MIN_USD`: minimum per-trade notional in USD. Defaults to **$25** when unset. Values ≤0 are considered invalid and the risk engine automatically falls back to the default (guaranteeing at least one share when prices are high).
 
 ### Execution exposure tracking
 
