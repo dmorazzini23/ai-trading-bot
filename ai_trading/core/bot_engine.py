@@ -12211,8 +12211,32 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         loss = -delta.clip(upper=0)
         avg_gain = gain.rolling(14).mean()
         avg_loss = loss.rolling(14).mean()
-        rs = avg_gain / avg_loss
+
+        # Use numpy division to avoid propagating inf/NaN when the rolling
+        # averages are zero. Treat the "no movement" windows (both gain and
+        # loss equal to zero) as neutral RSI values of 50 instead of NaN.
+        neutral_mask = (avg_gain == 0) & (avg_loss == 0)
+
+        avg_gain_arr = avg_gain.to_numpy(dtype=float, copy=True)
+        avg_loss_arr = avg_loss.to_numpy(dtype=float, copy=True)
+        rs_values = np.full_like(avg_gain_arr, np.nan)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rs_values = np.divide(
+                avg_gain_arr,
+                avg_loss_arr,
+                out=rs_values,
+                where=avg_loss_arr != 0,
+            )
+
+        # Infinite RS corresponds to RSI of 100 when there were gains but no
+        # losses. Preserve that behaviour, while forcing neutral windows to 1
+        # (RS=1 -> RSI=50).
+        rs_values[(avg_loss_arr == 0) & (avg_gain_arr > 0)] = np.inf
+        rs_values[neutral_mask.to_numpy()] = 1.0
+
+        rs = pd.Series(rs_values, index=avg_gain.index)
         rsi = 100 - (100 / (1 + rs))
+        rsi = rsi.where(~neutral_mask, 50.0)
 
     frame["rsi"] = rsi
     frame["rsi_14"] = rsi
