@@ -8,7 +8,77 @@ import hashlib
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from cachetools import TTLCache
+
+try:
+    from cachetools import TTLCache  # type: ignore
+except ImportError:  # pragma: no cover - exercised via explicit fallback tests
+    import logging
+    from collections import OrderedDict
+    from time import monotonic
+
+    logger = logging.getLogger(__name__)
+    logger.warning(
+        "cachetools not available; using fallback TTL cache implementation (degraded idempotency cache performance)"
+    )
+
+    class TTLCache:  # type: ignore[override]
+        """Lightweight TTL cache fallback with basic eviction semantics."""
+
+        def __init__(self, maxsize: int, ttl: float) -> None:
+            self.maxsize = maxsize
+            self.ttl = ttl
+            self._store: OrderedDict[str, tuple[object, float]] = OrderedDict()
+
+        def _expire(self) -> None:
+            """Remove expired entries in-place."""
+            now = monotonic()
+            expired_keys = [key for key, (_, exp) in self._store.items() if exp <= now]
+            for key in expired_keys:
+                self._store.pop(key, None)
+
+        def __contains__(self, key: str) -> bool:
+            self._expire()
+            if key not in self._store:
+                return False
+            value, exp = self._store[key]
+            if exp <= monotonic():
+                self._store.pop(key, None)
+                return False
+            # touch to maintain recency semantics similar to OrderedDict move-to-end
+            self._store.move_to_end(key)
+            return True
+
+        def __setitem__(self, key: str, value: object) -> None:
+            self._expire()
+            if key in self._store:
+                self._store.pop(key, None)
+            elif self.maxsize and len(self._store) >= self.maxsize:
+                self._store.popitem(last=False)
+            self._store[key] = (value, monotonic() + self.ttl)
+
+        def get(self, key: str, default: object | None=None) -> object | None:
+            self._expire()
+            item = self._store.get(key)
+            if item is None:
+                return default
+            value, exp = item
+            if exp <= monotonic():
+                self._store.pop(key, None)
+                return default
+            self._store.move_to_end(key)
+            return value
+
+        def keys(self):  # noqa: D401 - mimic cachetools API
+            """Return current cache keys after expiring stale entries."""
+            self._expire()
+            return list(self._store.keys())
+
+        def __len__(self) -> int:
+            return len(self._store)
+
+        def __repr__(self) -> str:  # pragma: no cover - diagnostic helper
+            return f"TTLCache(maxsize={self.maxsize}, ttl={self.ttl}, size={len(self)})"
+
 from ai_trading.core.interfaces import OrderSide
 
 @dataclass
