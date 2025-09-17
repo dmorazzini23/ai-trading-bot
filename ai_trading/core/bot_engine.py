@@ -5273,7 +5273,10 @@ class TradeLogger:
         if not os.path.exists(resolved):
             try:
                 with open(resolved, "w") as f:
-                    portalocker.lock(f, portalocker.LOCK_EX)
+                    _has_lock = hasattr(portalocker, "lock")
+                    _has_unlock = hasattr(portalocker, "unlock")
+                    if _has_lock:
+                        portalocker.lock(f, portalocker.LOCK_EX)
                     try:
                         csv.writer(f).writerow(
                             [
@@ -5292,7 +5295,8 @@ class TradeLogger:
                             ]
                         )
                     finally:
-                        portalocker.unlock(f)
+                        if _has_unlock:
+                            portalocker.unlock(f)
             except PermissionError:
                 logger.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
@@ -5334,7 +5338,10 @@ class TradeLogger:
         now_iso = utc_now_iso()
         try:
             with open(self.path, "a") as f:
-                portalocker.lock(f, portalocker.LOCK_EX)
+                _has_lock = hasattr(portalocker, "lock")
+                _has_unlock = hasattr(portalocker, "unlock")
+                if _has_lock:
+                    portalocker.lock(f, portalocker.LOCK_EX)
                 try:
                     csv.writer(f).writerow(
                         [
@@ -5353,14 +5360,18 @@ class TradeLogger:
                         ]
                     )
                 finally:
-                    portalocker.unlock(f)
+                    if _has_unlock:
+                        portalocker.unlock(f)
         except PermissionError:
             logger.debug("TradeLogger entry log skipped; path not writable")
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
         try:
             with open(self.path, "r+") as f:
-                portalocker.lock(f, portalocker.LOCK_EX)
+                _has_lock = hasattr(portalocker, "lock")
+                _has_unlock = hasattr(portalocker, "unlock")
+                if _has_lock:
+                    portalocker.lock(f, portalocker.LOCK_EX)
                 try:
                     rows = list(csv.reader(f))
                     header, data = rows[0], rows[1:]
@@ -5411,7 +5422,8 @@ class TradeLogger:
                     w.writerow(header)
                     w.writerows(data)
                 finally:
-                    portalocker.unlock(f)
+                    if _has_unlock:
+                        portalocker.unlock(f)
         except PermissionError:
             logger.debug("TradeLogger exit log skipped; path not writable")
             return

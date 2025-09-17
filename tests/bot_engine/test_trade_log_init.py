@@ -48,6 +48,28 @@ def test_trade_logger_records_entry(tmp_path, monkeypatch):
     assert "AAPL" in lines[1]
 
 
+def test_trade_logger_header_without_portalocker_lock(tmp_path, monkeypatch):
+    """Trade logger should still write when portalocker lacks lock/unlock."""
+
+    class _PortalockerStub:
+        LOCK_EX = object()
+
+    stub = _PortalockerStub()
+
+    monkeypatch.setattr(bot_engine, "portalocker", stub)
+    log_path = tmp_path / "trades.jsonl"
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+    bot_engine._TRADE_LOG_FALLBACK_PATH = None
+
+    logger = bot_engine.get_trade_logger()
+    logger.log_entry("STUB", 1.23, 1, "buy", "test")
+
+    lines = log_path.read_text().splitlines()
+    assert lines[0].startswith("symbol,entry_time")
+    assert any("STUB" in line for line in lines[1:])
+
+
 def test_get_trade_logger_creates_header_when_missing(tmp_path, monkeypatch):
     """get_trade_logger should create the file with a header if absent."""
 
