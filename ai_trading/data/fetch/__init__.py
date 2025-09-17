@@ -460,7 +460,11 @@ def _window_has_trading_session(start: _dt.datetime, end: _dt.datetime) -> bool:
     end_day = end.date()
     while day <= end_day:
         if is_trading_day(day):
-            open_dt, close_dt = rth_session_utc(day)
+            try:
+                open_dt, close_dt = rth_session_utc(day)
+            except (RuntimeError, ValueError):
+                day += _dt.timedelta(days=1)
+                continue
             if end > open_dt and start < close_dt:
                 return True
         day += _dt.timedelta(days=1)

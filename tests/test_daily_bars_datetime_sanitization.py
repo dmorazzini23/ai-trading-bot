@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 pd = pytest.importorskip("pandas")
 
 from ai_trading.data import bars as bars_mod
+from ai_trading.data import fetch as fetch_mod
 from ai_trading.data.bars import StockBarsRequest, TimeFrame, safe_get_stock_bars
 
 
@@ -142,3 +143,25 @@ def test_http_fallback_receives_iso_timestamps(monkeypatch):
     assert isinstance(req.end, datetime)
     assert captured_http["start"] == req.start.isoformat()
     assert captured_http["end"] == req.end.isoformat()
+
+
+def test_window_has_trading_session_handles_missing_holiday_session(monkeypatch):
+    freeze_time = pytest.importorskip("freezegun").freeze_time
+
+    holiday = datetime(2024, 7, 4, 12, tzinfo=UTC)
+    start = holiday - timedelta(hours=1)
+    end = holiday + timedelta(hours=1)
+
+    with freeze_time("2024-07-04 12:00:00", tz_offset=0):
+        holiday_date = holiday.date()
+
+        def fake_is_trading_day(day):
+            return day == holiday_date
+
+        def fake_rth_session_utc(day):
+            raise RuntimeError("calendar missing session")
+
+        monkeypatch.setattr(fetch_mod, "is_trading_day", fake_is_trading_day)
+        monkeypatch.setattr(fetch_mod, "rth_session_utc", fake_rth_session_utc)
+
+        assert fetch_mod._window_has_trading_session(start, end) is False
