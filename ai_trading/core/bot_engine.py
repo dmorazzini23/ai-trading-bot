@@ -1005,7 +1005,8 @@ def fetch_sentiment(
                 )
                 # fmt: on
                 if resp.status_code in {429, 500, 502, 503, 504}:
-                    raise RequestException(f"status {resp.status_code}")
+                    _SENTIMENT_CACHE[symbol] = (time.time(), 0.0)
+                    return 0.0
                 resp.raise_for_status()
                 data = resp.json()
                 score = float(data.get("sentiment", 0.0))
