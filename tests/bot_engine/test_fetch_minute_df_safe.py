@@ -1,6 +1,6 @@
 import sys
 import types
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from ai_trading.utils.lazy_imports import load_pandas
@@ -67,6 +67,65 @@ def test_fetch_minute_df_safe_raises_on_stale(monkeypatch):
 
     assert getattr(excinfo.value, "fetch_reason", None) == "stale_minute_data"
     assert getattr(excinfo.value, "symbol", None) == "AAPL"
+
+
+def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
+    pd = load_pandas()
+
+    session_end = datetime(2024, 1, 2, 21, 0, tzinfo=UTC)
+    session_start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+    base_now = session_end + timedelta(hours=2)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    idx = pd.date_range(end=session_end, periods=3, freq="min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.1, 1.2, 1.3],
+            "low": [0.9, 1.0, 1.1],
+            "close": [1.0, 1.1, 1.2],
+            "volume": [100, 110, 120],
+        },
+        index=idx,
+    )
+
+    captured: dict[str, object] = {}
+
+    def capture_freshness(df_arg, max_age_seconds, *, symbol=None, now=None, tz=None):
+        captured["max_age"] = max_age_seconds
+        captured["now"] = now
+        return None
+
+    from ai_trading.data import market_calendar
+
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: df.copy())
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", capture_freshness)
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, session_end),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: session_end.date(),
+    )
+
+    result = bot_engine.fetch_minute_df_safe("AMGN")
+
+    assert captured["max_age"] == 600
+    assert captured["now"] == session_end
+    pd.testing.assert_frame_equal(result, df)
 
 
 def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
