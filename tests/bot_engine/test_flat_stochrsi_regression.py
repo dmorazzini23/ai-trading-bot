@@ -41,7 +41,29 @@ def test_prepare_indicators_constant_series(monkeypatch: pytest.MonkeyPatch) -> 
     required = {"rsi", "rsi_14", "ichimoku_conv", "ichimoku_base", "stochrsi"}
     assert not engineered.empty
     assert required.issubset(engineered.columns)
-    assert not engineered["stochrsi"].isna().all()
+    assert np.isfinite(engineered["rsi"]).all()
+    assert np.isfinite(engineered["stochrsi"]).all()
+    assert np.isclose(engineered["rsi"], 50.0).all()
+    assert np.logical_and(engineered["stochrsi"] >= 0.0, engineered["stochrsi"] <= 1.0).all()
+
+
+def test_prepare_indicators_constant_series_manual_rsi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual RSI fallback should stabilise flat price windows at 50."""
+
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    df = _constant_minute_frame()
+
+    # Force the manual RSI implementation path by returning ``None`` from the
+    # pandas-ta helper.
+    monkeypatch.setattr(bot_engine.ta, "rsi", lambda *_args, **_kwargs: None)
+
+    engineered = bot_engine.prepare_indicators(df)
+
+    assert not engineered.empty
+    assert np.isclose(engineered["rsi"], 50.0).all()
+    assert np.isfinite(engineered["stochrsi"]).all()
 
 
 def test_fetch_feature_data_constant_series(monkeypatch: pytest.MonkeyPatch) -> None:
