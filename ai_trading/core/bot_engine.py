@@ -11048,9 +11048,21 @@ def trade_logic(
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
-    for col in ["macd", "atr", "vwap", "macds", "sma_50", "sma_200"]:
+    default_feature_values = {
+        "macd": 0.0,
+        "atr": 0.0,
+        "vwap": 0.0,
+        "macds": 0.0,
+        "sma_50": 0.0,
+        "sma_200": 0.0,
+        "rsi": 50.0,
+        "ichimoku_conv": 0.0,
+        "ichimoku_base": 0.0,
+        "stochrsi": 0.5,
+    }
+    for col, neutral_value in default_feature_values.items():
         if col not in feat_df.columns:
-            feat_df[col] = 0.0
+            feat_df[col] = neutral_value
 
     feature_names = _model_feature_names(model)
     missing = [f for f in feature_names if f not in feat_df.columns]
