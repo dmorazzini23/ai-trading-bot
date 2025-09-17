@@ -162,8 +162,16 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
     end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)
     start_dt = ensure_utc_datetime(getattr(request, 'start', None) or prev_open, default=prev_open, clamp_to='bod', allow_callables=False)
-    request.start = start_dt.isoformat()
-    request.end = end_dt.isoformat()
+    iso_start = start_dt.isoformat()
+    iso_end = end_dt.isoformat()
+    try:
+        request.start = start_dt
+    except Exception:
+        pass
+    try:
+        request.end = end_dt
+    except Exception:
+        pass
     feed_req = _canon_feed(getattr(request, 'feed', None))
     if feed_req:
         request.feed = _ensure_entitled_feed(client, feed_req)
@@ -220,7 +228,7 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                 tf_str = _canon_tf(getattr(request, 'timeframe', ''))
                 feed_str = _canon_feed(getattr(request, 'feed', None))
                 if tf_str.lower() in {'1day', 'day'}:
-                    mdf = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
+                    mdf = get_minute_df(symbol, iso_start, iso_end, feed=feed_str)
                     if mdf is not None and (not mdf.empty):
                         rdf = _resample_minutes_to_daily(mdf)
                         if rdf is not None and (not rdf.empty):
@@ -254,9 +262,9 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                                 raise
                             _log.warning('ALPACA_LIMIT_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
                 elif _is_minute_timeframe(tf_str):
-                    df = get_minute_df(symbol, start_dt, end_dt, feed=feed_str)
+                    df = get_minute_df(symbol, iso_start, iso_end, feed=feed_str)
                 else:
-                    df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
+                    df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
                 if df is None or df.empty:
                     return _create_empty_bars_dataframe()
         if isinstance(df.index, pd.MultiIndex):
@@ -276,10 +284,12 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     except COMMON_EXC as e:
         _log.error('ALPACA_BARS_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
         if _is_minute_timeframe(getattr(request, 'timeframe', '')):
-            return _ensure_df(get_minute_df(symbol, start_dt, end_dt, feed=_canon_feed(getattr(request, 'feed', None))))
+            return _ensure_df(
+                get_minute_df(symbol, iso_start, iso_end, feed=_canon_feed(getattr(request, 'feed', None)))
+            )
         tf_str = _canon_tf(getattr(request, 'timeframe', ''))
         feed_str = _canon_feed(getattr(request, 'feed', None))
-        df = http_get_bars(symbol, tf_str, start_dt, end_dt, feed=feed_str)
+        df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
         return _ensure_df(df)
 
 def _fetch_daily_bars(client, symbol, start, end, **kwargs):
