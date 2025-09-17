@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ai_trading.logging import get_logger
 
-_log = get_logger(__name__)
+_log = get_logger("ai_trading.startup.config")
 
 
 def ensure_max_position_size(cfg, tcfg) -> float:
