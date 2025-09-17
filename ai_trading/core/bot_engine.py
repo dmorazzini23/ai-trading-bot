@@ -2835,9 +2835,18 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
         staleness._ensure_data_fresh(df, 600, symbol=symbol)
-    except RuntimeError as e:
-        logger.warning(f"Data staleness check failed for {symbol}: {e}")
-        # Still return the data but log the staleness issue
+    except RuntimeError as exc:
+        detail = str(exc)
+        logger.warning(
+            "FETCH_MINUTE_STALE_DATA",
+            extra={"symbol": symbol, "detail": detail},
+        )
+        err = DataFetchError("stale_minute_data")
+        setattr(err, "fetch_reason", "stale_minute_data")
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", "1Min")
+        setattr(err, "detail", detail)
+        raise err from exc
 
     return df
 
@@ -9837,7 +9846,8 @@ def _fetch_feature_data(
 
     Returns ``(raw_df, feat_df, skip_flag)``. When data is missing returns
     ``(None, None, False)``; when indicators are insufficient returns
-    ``(raw_df, None, True)``.
+    ``(raw_df, None, True)``. Stale minute data triggers
+    ``(None, None, True)`` so callers can skip trading without halting.
 
     When ``price_df`` is provided, it is treated as the raw minute-bar data and
     no additional fetch is attempted.
@@ -9857,6 +9867,15 @@ def _fetch_feature_data(
             raw_df = fetch_minute_df_safe(symbol)
         except DataFetchError as exc:
             reason = getattr(exc, "fetch_reason", "")
+            if reason == "stale_minute_data":
+                logger.info(
+                    "SKIP_STALE_MINUTE_DATA",
+                    extra={
+                        "symbol": symbol,
+                        "detail": getattr(exc, "detail", str(exc)),
+                    },
+                )
+                return None, None, True
             if reason in {
                 "close_column_all_nan",
                 "close_column_missing",
