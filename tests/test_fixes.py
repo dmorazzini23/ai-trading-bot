@@ -4,10 +4,18 @@ Test script to validate the trading bot fixes.
 This script tests the expanded ticker portfolio and TA-Lib fallback handling.
 """
 
+from __future__ import annotations
+
 import csv
+import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+
+import pytest
+
+from ai_trading.core import bot_engine
 
 
 def test_tickers_csv():
@@ -80,29 +88,75 @@ def test_talib_imports():
     except ImportError:
         return False
 
-def test_screen_universe_logging():
-    """Test that screen_universe function has enhanced logging."""
+def _make_sample_df(pd, *, rows: int = 60, volume: int = 150_000) -> "pd.DataFrame":
+    base = pd.Series(range(rows), dtype="float64") + 100.0
+    data = {
+        "open": base - 0.5,
+        "high": base + 0.5,
+        "low": base - 1.0,
+        "close": base,
+        "volume": [volume] * rows,
+    }
+    index = pd.date_range(datetime(2024, 1, 1), periods=rows, freq="D")
+    return pd.DataFrame(data, index=index)
 
-    with Path('ai_trading/core/bot_engine.py').open() as f:
-        content = f.read()
 
-    # Check for enhanced logging statements
-    if 'logger.info(f"[SCREEN_UNIVERSE] Starting screening of' in content:
-        pass
-    else:
-        return False
+def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Test that screen_universe reports accurate counters for mixed outcomes."""
 
-    if 'filtered_out[sym] = "no_data"' in content:
-        pass
-    else:
-        return False
+    pd = pytest.importorskip("pandas")
 
-    if 'f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates' in content:
-        pass
-    else:
-        return False
+    class DummyTA:
+        _failed = False
 
-    return True
+        @staticmethod
+        def atr(high, low, close, length):  # noqa: D401
+            return pd.Series([1.0] * len(close))
+
+    class DummyFetcher:
+        def __init__(self, frames: dict[str, "pd.DataFrame"]):
+            self.frames = frames
+
+        def get_daily_df(self, runtime, symbol: str):  # noqa: D401, ANN001
+            return self.frames.get(symbol)
+
+    class DummyRuntime:
+        def __init__(self, frames: dict[str, "pd.DataFrame"]):
+            self.data_fetcher = DummyFetcher(frames)
+
+    frames = {
+        "SPY": _make_sample_df(pd),
+        "VALID": _make_sample_df(pd),
+        "EMPTY": _make_sample_df(pd, rows=10),
+        "LOW": _make_sample_df(pd, volume=90_000),
+    }
+
+    runtime = DummyRuntime(frames)
+
+    monkeypatch.setattr(bot_engine, "ta", DummyTA(), raising=False)
+    monkeypatch.setattr(bot_engine.time, "sleep", lambda *_, **__: None)
+    bot_engine._SCREEN_CACHE.clear()
+    bot_engine._screening_in_progress = False
+
+    caplog.set_level(logging.INFO)
+
+    selected = bot_engine.screen_universe(["VALID", "EMPTY", "LOW"], runtime)
+
+    assert selected == ["VALID"]
+
+    summary_records = [
+        record for record in caplog.records if record.getMessage() == "SCREEN_SUMMARY"
+    ]
+    assert summary_records, "Expected SCREEN_SUMMARY log entry"
+    summary = summary_records[-1]
+
+    assert summary.tried == 3
+    assert summary.valid == 1
+    assert summary.empty == 1
+    assert summary.failed == 1
+
+    assert "[SCREEN_UNIVERSE] Starting screening" in caplog.text
+    assert "Selected 1 of" in caplog.text
 
 def main():
     """Run all tests."""

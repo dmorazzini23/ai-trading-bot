@@ -12404,7 +12404,8 @@ def screen_universe(
         _screening_in_progress = True
         try:
             top_n = 20  # AI-AGENT-REF: maintain top N selection
-            cand_set = set(candidates)
+            ordered_candidates = list(dict.fromkeys(candidates))
+            cand_set = set(ordered_candidates)
             logger.info(
                 f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
             )
@@ -12434,12 +12435,13 @@ def screen_universe(
                 if sym not in cand_set:
                     _SCREEN_CACHE.pop(sym, None)
 
-            new_syms = cand_set - _SCREEN_CACHE.keys()
+            new_syms = [sym for sym in ordered_candidates if sym not in _SCREEN_CACHE]
             filtered_out = {}  # Track reasons for filtering
-            tried = valid = empty = failed = 0
+            tried = len(ordered_candidates)
+            valid = sum(1 for sym in ordered_candidates if sym in _SCREEN_CACHE)
+            empty = failed = 0
 
             for sym in new_syms:
-                tried += 1
                 df = runtime.data_fetcher.get_daily_df(runtime, sym)
                 if not is_valid_ohlcv(df):
                     empty += 1
@@ -12460,6 +12462,7 @@ def screen_universe(
                 original_len = len(df)
                 df = df[df["volume"] > 100_000]
                 if df.empty:
+                    failed += 1
                     filtered_out[sym] = "low_volume"
                     logger.debug(
                         f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
@@ -12500,6 +12503,7 @@ def screen_universe(
                         df2 = df2[df2["volume"] > 100_000]
                         series = _calc_atr(df2)
                         if series.empty or series.dropna().empty:
+                            failed += 1
                             filtered_out[sym] = "atr_insufficient_data"
                             logger.warning(
                                 f"[SCREEN_UNIVERSE] {sym}: ATR unavailable after extended fetch"
@@ -12508,6 +12512,7 @@ def screen_universe(
                             continue
                         df = df2
                     except (ValueError, TypeError, OSError):
+                        failed += 1
                         filtered_out[sym] = "atr_fetch_failed"
                         logger.warning(
                             f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
@@ -12521,6 +12526,7 @@ def screen_universe(
                     logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
                     valid += 1
                 else:
+                    failed += 1
                     filtered_out[sym] = "atr_nan"
                     logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
                 time.sleep(0.25)
