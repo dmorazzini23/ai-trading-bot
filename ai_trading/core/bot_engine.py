@@ -6635,6 +6635,8 @@ class SignalManager:
         ]
         df = df.dropna(subset=indicator_cols)
         if df.empty:
+            # Ensure callers never consume stale component state when there is no data
+            self.last_components = []
             return 0.0, 0.0, "no_data"
 
         raw = [
@@ -6657,6 +6659,8 @@ class SignalManager:
                 continue
             signals.append(s)
         if not signals:
+            # Clearing prevents downstream consumers from reusing a previous evaluation
+            self.last_components = []
             return 0.0, 0.0, "no_signals"
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
@@ -10911,9 +10915,31 @@ def _evaluate_trade_signal(
 ) -> tuple[float, float, str]:
     """Return ``(final_score, confidence, strategy)`` for ``symbol``."""
 
-    ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
+    _, eval_confidence, _ = ctx.signal_manager.evaluate(
+        ctx, state, feat_df, symbol, model
+    )
+    components = ctx.signal_manager.last_components
+    if not components:
+        confidence = 0.0
+        try:
+            confidence = float(eval_confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if not np.isfinite(confidence):
+            confidence = 0.0
+        logger.info(
+            "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
+            symbol,
+            0.0,
+            confidence,
+        )
+        logger.info(
+            "SIGNAL_HOLD",
+            extra={"symbol": symbol, "confidence": confidence},
+        )
+        return 0.0, confidence, "HOLD"
     unique: dict[str, tuple[int, float, str]] = {}
-    for s, w, lab in ctx.signal_manager.last_components:
+    for s, w, lab in components:
         unique[lab] = (s, w, lab)
     ctx.signal_manager.last_components = list(unique.values())
     comp_list = [
