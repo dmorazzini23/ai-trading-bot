@@ -1,10 +1,11 @@
 import csv
+import inspect
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from ai_trading.logging import get_logger
-import inspect
 
 logger = get_logger(__name__)
 
@@ -264,25 +265,26 @@ def log_trade(
         }
 
     for path in targets:
-        try:
-            _ensure_file_header(path, headers)
-        except PermissionError as exc:
-            logger.error("audit.log permission denied %s: %s", path, exc)
-            fix_file_permissions(path)
+        def _run_with_fix(action: Callable[[], None]) -> bool:
             try:
-                _ensure_file_header(path, headers)
-            except PermissionError:
-                return
-        try:
+                action()
+                return True
+            except PermissionError as exc:
+                logger.error("audit.log permission denied %s: %s", path, exc)
+                fix_file_permissions(path)
+                try:
+                    action()
+                    return True
+                except PermissionError:
+                    return False
+
+        if not _run_with_fix(lambda: _ensure_file_header(path, headers)):
+            return
+
+        def _write_row() -> None:
             with open(path, "a", newline="") as f:  # built-in open for patch compatibility
                 writer = csv.DictWriter(f, fieldnames=headers)
                 writer.writerow(row)
-        except PermissionError as exc:
-            logger.error("audit.log permission denied %s: %s", path, exc)
-            fix_file_permissions(path)
-            try:
-                with open(path, "a", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=headers)
-                    writer.writerow(row)
-            except PermissionError:
-                return
+
+        if not _run_with_fix(_write_row):
+            return
