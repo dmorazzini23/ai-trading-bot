@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     redis_url: str | None = Field(default=None, alias='REDIS_URL')
     enable_finnhub: bool = Field(True, alias='ENABLE_FINNHUB')
     finnhub_api_key: str | None = Field(default=None, alias='FINNHUB_API_KEY')
-    backup_data_provider: Literal['yahoo', 'none'] = Field(
+    backup_data_provider: Literal['yahoo', 'none', 'finnhub', 'finnhub_low_latency'] = Field(
         'yahoo', alias='BACKUP_DATA_PROVIDER'
     )
     alpaca_base_url: str = Field(

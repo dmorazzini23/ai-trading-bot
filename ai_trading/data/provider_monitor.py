@@ -55,10 +55,11 @@ class ProviderMonitor:
         # Track provider switchovers for diagnostics
         self.switch_counts: dict[tuple[str, str], int] = defaultdict(int)
         self.consecutive_switches = 0
-        self._last_switch_time: datetime | None = None
-        self._alert_cooldown_until: datetime | None = None
-        self._switchover_disable_count = 0
-        self._current_switch_cooldown = cooldown
+        self.consecutive_switches_by_provider: dict[str, int] = defaultdict(int)
+        self._last_switch_time: dict[str, datetime] = {}
+        self._alert_cooldown_until: dict[str, datetime | None] = {}
+        self._switchover_disable_counts: dict[str, int] = defaultdict(int)
+        self._current_switch_cooldowns: dict[str, float] = defaultdict(lambda: float(cooldown))
         self.switchover_threshold = switchover_threshold
         self.backoff_factor = (
             backoff_factor
@@ -123,6 +124,22 @@ class ProviderMonitor:
         self.fail_counts.pop(provider, None)
         self.disable_counts.pop(provider, None)
         self.outage_start.pop(provider, None)
+        self.consecutive_switches_by_provider.pop(provider, None)
+        self._switchover_disable_counts.pop(provider, None)
+        self._current_switch_cooldowns.pop(provider, None)
+        self._alert_cooldown_until.pop(provider, None)
+        self._last_switch_time.pop(provider, None)
+        if "_" not in provider:
+            # Reset feed-specific keys when a base provider recovers
+            to_clear = [key for key in self.consecutive_switches_by_provider if key.startswith(f"{provider}_")]
+            for key in to_clear:
+                self.consecutive_switches_by_provider.pop(key, None)
+                self._switchover_disable_counts.pop(key, None)
+                self._current_switch_cooldowns.pop(key, None)
+                self._alert_cooldown_until.pop(key, None)
+                self._last_switch_time.pop(key, None)
+        if not self.consecutive_switches_by_provider:
+            self.consecutive_switches = 0
 
     def record_switchover(self, from_provider: str, to_provider: str) -> None:
         """Record a switchover from one provider to another.
@@ -134,22 +151,30 @@ class ProviderMonitor:
         """
 
         now = datetime.now(UTC)
-        if self._last_switch_time:
-            elapsed = (now - self._last_switch_time).total_seconds()
-            if elapsed >= self._current_switch_cooldown:
-                self.consecutive_switches = 0
-                self._switchover_disable_count = 0
-                self._current_switch_cooldown = self.cooldown
-                self._alert_cooldown_until = None
-        self._last_switch_time = now
-        self._switchover_disable_count += 1
-        self._current_switch_cooldown = min(
-            self.cooldown * (self.backoff_factor ** (self._switchover_disable_count - 1)),
+        last = self._last_switch_time.get(from_provider)
+        cooldown_window = self._current_switch_cooldowns.get(from_provider, float(self.cooldown))
+        if last:
+            elapsed = (now - last).total_seconds()
+            if elapsed >= cooldown_window:
+                self.consecutive_switches_by_provider.pop(from_provider, None)
+                self._switchover_disable_counts.pop(from_provider, None)
+                self._current_switch_cooldowns[from_provider] = float(self.cooldown)
+                self._alert_cooldown_until.pop(from_provider, None)
+                if not self.consecutive_switches_by_provider:
+                    self.consecutive_switches = 0
+        self._last_switch_time[from_provider] = now
+        count = self._switchover_disable_counts[from_provider] + 1
+        self._switchover_disable_counts[from_provider] = count
+        cooldown_window = min(
+            self.cooldown * (self.backoff_factor ** (count - 1)),
             self.max_cooldown,
         )
+        self._current_switch_cooldowns[from_provider] = cooldown_window
         key = (from_provider, to_provider)
         self.switch_counts[key] += 1
-        self.consecutive_switches += 1
+        streak = self.consecutive_switches_by_provider[from_provider] + 1
+        self.consecutive_switches_by_provider[from_provider] = streak
+        self.consecutive_switches = streak
         logger.info(
             "DATA_PROVIDER_SWITCHOVER",
             extra={
@@ -166,16 +191,14 @@ class ProviderMonitor:
                 "DATA_PROVIDER_FAILURE_DURATION",
                 extra={"provider": from_provider, "duration": duration},
             )
-        if (
-            self.consecutive_switches >= self.switchover_threshold
-            and (not self._alert_cooldown_until or now >= self._alert_cooldown_until)
-        ):
+        cooldown_until = self._alert_cooldown_until.get(from_provider)
+        if streak >= self.switchover_threshold and (cooldown_until is None or now >= cooldown_until):
             logger.warning(
                 "PRIMARY_DATA_FEED_UNAVAILABLE",
                 extra={
                     "from_provider": from_provider,
                     "to_provider": to_provider,
-                    "consecutive": self.consecutive_switches,
+                    "consecutive": streak,
                 },
             )
             try:
@@ -183,13 +206,11 @@ class ProviderMonitor:
                     AlertType.SYSTEM,
                     AlertSeverity.WARNING,
                     "Consecutive provider switchovers",
-                    metadata={"count": self.consecutive_switches},
+                    metadata={"count": streak},
                 )
             except Exception:  # pragma: no cover - alerting best effort
                 logger.exception("ALERT_FAILURE", extra={"provider": to_provider})
-            self._alert_cooldown_until = now + timedelta(
-                seconds=self._current_switch_cooldown
-            )
+            self._alert_cooldown_until[from_provider] = now + timedelta(seconds=cooldown_window)
             # Back off the failing provider more aggressively to avoid thrashing
             try:
                 self.disable(from_provider, duration=self.max_cooldown)

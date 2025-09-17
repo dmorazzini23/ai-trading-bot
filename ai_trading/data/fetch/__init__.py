@@ -512,21 +512,26 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
 
 
 _DEFAULT_FEED = "iex"
-_SIP_UNAUTHORIZED = os.getenv("ALPACA_SIP_UNAUTHORIZED", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
-_ALLOW_SIP = os.getenv("ALPACA_ALLOW_SIP", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
-_HAS_SIP = os.getenv("ALPACA_HAS_SIP", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
+def _env_flag(key: str, default: bool = False) -> bool:
+    """Return truthy flag for ``key`` honouring ``default`` when unset."""
+
+    raw = os.getenv(key)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _prefers_sip() -> bool:
+    feed = os.getenv("ALPACA_DATA_FEED", "iex").strip().lower()
+    if "sip" in feed:
+        return True
+    failover = os.getenv("ALPACA_FEED_FAILOVER", "")
+    return any(part.strip().lower() == "sip" for part in failover.split(","))
+
+
+_SIP_UNAUTHORIZED = _env_flag("ALPACA_SIP_UNAUTHORIZED")
+_HAS_SIP = _env_flag("ALPACA_HAS_SIP")
+_ALLOW_SIP = _env_flag("ALPACA_ALLOW_SIP", default=_HAS_SIP or _prefers_sip())
 _SIP_DISALLOWED_WARNED = False
 _SIP_PRECHECK_DONE = False
 _SIP_UNAVAILABLE_LOGGED: set[str] = set()
@@ -846,10 +851,69 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     return df
 
 
+def _finnhub_resolution(interval: str) -> str | None:
+    mapping = {
+        "1m": "1",
+        "5m": "5",
+        "15m": "15",
+        "30m": "30",
+        "60m": "60",
+        "1h": "60",
+        "1d": "D",
+        "day": "D",
+    }
+    return mapping.get(interval.lower())
+
+
+def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
+    pd_local = _ensure_pandas()
+    if getattr(fh_fetcher, "fetch", None) is None or getattr(fh_fetcher, "is_stub", False):
+        if pd_local is None:
+            return []  # type: ignore[return-value]
+        log_finnhub_disabled(symbol)
+        idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
+        cols = ["open", "high", "low", "close", "volume"]
+        return pd_local.DataFrame(columns=cols, index=idx).reset_index()
+    resolution = _finnhub_resolution(interval)
+    if resolution is None:
+        if pd_local is None:
+            return []  # type: ignore[return-value]
+        return pd_local.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    try:
+        df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution=resolution)
+    except FinnhubAPIException:
+        df = None
+    except Exception:
+        df = None
+    if df is None:
+        if pd_local is None:
+            return []  # type: ignore[return-value]
+        return pd_local.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    try:
+        return _flatten_and_normalize_ohlcv(df, symbol, interval)
+    except Exception:
+        if pd_local is None:
+            return []  # type: ignore[return-value]
+        return pd_local.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+
 def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Route to configured backup provider or return empty DataFrame."""
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-    if provider == "yahoo":
+    normalized = str(provider).strip().lower()
+    if normalized in {"finnhub", "finnhub_low_latency"}:
+        df = _finnhub_get_bars(symbol, start, end, interval)
+        if isinstance(df, list):  # pragma: no cover - defensive for stub returns
+            return df
+        if getattr(df, "empty", True):
+            logger.warning(
+                "BACKUP_PROVIDER_EMPTY",
+                extra={"provider": provider, "symbol": symbol, "interval": interval},
+            )
+        return df
+    if normalized == "yahoo":
         try:
             _start = ensure_datetime(start)
             _end = ensure_datetime(end)
@@ -861,7 +925,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             _BACKUP_USAGE_LOGGED.add(key)
         return _yahoo_get_bars(symbol, start, end, interval)
     pd_local = _ensure_pandas()
-    if provider in ("", "none"):
+    if normalized in ("", "none"):
         logger.info("BACKUP_PROVIDER_DISABLED", extra={"symbol": symbol})
     else:
         logger.warning("UNKNOWN_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
