@@ -1,13 +1,12 @@
 """Reinforcement learning trading utilities with optional dependencies."""
 from __future__ import annotations
 
-from functools import lru_cache
 import importlib
-from ai_trading.logging import get_logger
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from typing import TYPE_CHECKING
+from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -17,6 +16,9 @@ DummyVecEnv: Any | None = None
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from ai_trading.strategies.base import StrategySignal  # noqa: F401
+    from . import train as _train_module
+
+    train = _train_module
 
 
 @lru_cache(maxsize=1)
@@ -105,4 +107,35 @@ class RLTrader(RLAgent):
     pass
 
 
-__all__ = ["RLAgent", "RLTrader", "is_rl_available", "PPO", "DummyVecEnv"]
+__all__ = [
+    "DummyVecEnv",
+    "PPO",
+    "RLAgent",
+    "RLTrader",
+    "is_rl_available",
+    "train",
+]
+
+
+def _load_train_module() -> Any:
+    """Dynamically import :mod:`ai_trading.rl_trading.train` when requested."""
+
+    module_name = f"{__name__}.train"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
+        raise AttributeError(
+            f"module {__name__!r} has no attribute 'train'"
+        ) from exc
+    globals()["train"] = module
+    return module
+
+
+def __getattr__(name: str) -> Any:  # pragma: no cover - thin lazy loader
+    if name == "train":
+        return _load_train_module()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:  # pragma: no cover - keep introspection predictable
+    return sorted({*globals(), "train"})
