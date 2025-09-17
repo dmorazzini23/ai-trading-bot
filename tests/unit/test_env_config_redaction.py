@@ -48,6 +48,13 @@ def test_redact_config_env_alias_mapped():
     assert "ALPACA_BASE_URL" not in redacted
 
 
+def test_redact_config_env_does_not_alias_apca():
+    payload = {"APCA_API_BASE_URL": "https://legacy-api.alpaca.markets"}
+    redacted = redact_config_env(payload)
+    assert "ALPACA_API_URL" not in redacted
+    assert redacted["APCA_API_BASE_URL"] == "https://legacy-api.alpaca.markets"
+
+
 def test_base_url_alias_logged(caplog, monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "AK123456789")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "SK987654321")

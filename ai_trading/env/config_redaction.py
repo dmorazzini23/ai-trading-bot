@@ -8,7 +8,6 @@ from ai_trading.logging.redact import redact_env
 # Mapping of environment variable aliases to their canonical names.
 _ALIAS_MAP: Dict[str, str] = {
     "ALPACA_BASE_URL": "ALPACA_API_URL",
-    "APCA_API_BASE_URL": "ALPACA_API_URL",
 }
 
 

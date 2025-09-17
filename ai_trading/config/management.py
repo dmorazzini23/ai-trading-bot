@@ -69,7 +69,7 @@ def _select_alpaca_base_url(
     env_map = env or os.environ
     invalid_entries: list[tuple[str, str, str]] = []
 
-    for env_key in ("ALPACA_BASE_URL", "ALPACA_API_URL", "APCA_API_BASE_URL"):
+    for env_key in ("ALPACA_BASE_URL", "ALPACA_API_URL"):
         raw = env_map.get(env_key)
         normalized, message = _normalize_alpaca_base_url(raw, source_key=env_key)
         if normalized:
@@ -80,7 +80,6 @@ def _select_alpaca_base_url(
     fallback_raw = (
         env_map.get("ALPACA_BASE_URL")
         or env_map.get("ALPACA_API_URL")
-        or env_map.get("APCA_API_BASE_URL")
     )
     return None, fallback_raw, invalid_entries
 
