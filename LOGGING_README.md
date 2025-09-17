@@ -52,6 +52,12 @@ Daily price requests now log their parameters and outcome:
 - `DAILY_FETCH_CACHE_HIT` emits once on first cache use; subsequent hits appear only when debug logging is enabled
 - `DAILY_FETCH_RESULT` reports the number of rows returned and whether the
   response came from cache
+- `MINUTE_DATA_COVERAGE_WARNING` fires when intraday data covers less than half
+  of the expected regular-session window or drops below the configured
+  indicator lookback. The bot immediately re-requests the same window from an
+  alternate feed (SIP when entitled, otherwise the next provider in
+  `provider_priority`) so on-call operators can correlate coverage gaps with
+  upstream providers.
 - Unauthorized feed responses trigger a quick entitlement check and switch to a
   permitted feed when available. If no alternative exists, operators are
   notified once.

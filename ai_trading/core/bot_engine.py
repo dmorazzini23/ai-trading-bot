@@ -2745,6 +2745,89 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     else:
         df = get_minute_df(symbol, start_dt, end_dt)
 
+    expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
+    intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
+
+    def _normalize_feed_name(value: object) -> str:
+        try:
+            feed_val = str(value).strip().lower()
+        except Exception:
+            return data_fetcher_module._DEFAULT_FEED
+        if "sip" in feed_val:
+            return "sip"
+        if "iex" in feed_val:
+            return "iex"
+        return data_fetcher_module._DEFAULT_FEED
+
+    actual_bars = 0
+    if df is not None:
+        try:
+            actual_bars = int(len(df))
+        except Exception:
+            actual_bars = 0
+
+    low_coverage = (
+        expected_bars >= intraday_lookback
+        and (
+            actual_bars < max(1, int(expected_bars * 0.5))
+            or actual_bars < intraday_lookback
+        )
+    )
+
+    if low_coverage:
+        current_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
+        fallback_feed: str | None = None
+        fallback_provider: str | None = None
+        if data_fetcher_module._sip_configured():
+            fallback_feed = "sip"
+        else:
+            try:
+                from ai_trading.config.settings import provider_priority as _provider_priority
+
+                providers = list(_provider_priority())
+            except Exception as exc:  # pragma: no cover - defensive logging
+                providers = []
+                logger.debug("PROVIDER_PRIORITY_LOOKUP_FAILED", extra={"error": str(exc)})
+            current_key = f"alpaca_{current_feed}"
+            if providers:
+                try:
+                    current_index = providers.index(current_key)
+                except ValueError:
+                    current_index = -1
+                for provider_name in providers[current_index + 1 :]:
+                    fallback_provider = provider_name
+                    if provider_name.startswith("alpaca_"):
+                        fallback_feed = provider_name.split("_", 1)[1]
+                    break
+        log_extra = {
+            "symbol": symbol,
+            "expected_bars": expected_bars,
+            "actual_bars": actual_bars,
+            "from_feed": current_feed,
+            "fallback_feed": fallback_feed or "",
+            "fallback_provider": fallback_provider or "",
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        }
+        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=log_extra)
+        fetch_kwargs: dict[str, object] = {}
+        if fallback_feed and fallback_feed != current_feed:
+            fetch_kwargs["feed"] = fallback_feed
+        try:
+            df_alt = get_minute_df(symbol, start_dt, end_dt, **fetch_kwargs)
+        except Exception as exc:  # pragma: no cover - fallback errors are logged
+            logger.warning(
+                "MINUTE_DATA_FALLBACK_FAILED",
+                extra={**log_extra, "error": str(exc)},
+            )
+        else:
+            if df_alt is not None and not getattr(df_alt, "empty", True):
+                df = df_alt
+                try:
+                    actual_bars = int(len(df))
+                except Exception:
+                    actual_bars = 0
+
     # Drop bars with zero volume or from the current (incomplete) minute
     try:
         current_minute = now_utc.replace(second=0, microsecond=0)
