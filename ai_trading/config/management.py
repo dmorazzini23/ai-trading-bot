@@ -507,16 +507,36 @@ class TradingConfig:
 
         mode = resolve_trading_mode(mode or "balanced").lower()
 
+        explicit_env_keys: set[str] = set()
+
+        def _register_explicit(key: str, resolved_key: str) -> None:
+            canonical = key.upper()
+            explicit_env_keys.add(canonical)
+            explicit_env_keys.add(resolved_key.upper())
+
         def _get(
             key: str,
             cast: Callable[[str], Any] | type = str,
             default: Any = None,
             aliases: Iterable[str] = (),
         ):
-            for k in (key, *aliases):
-                if k in env_map and env_map[k] != "":
-                    val = env_map[k]
-                    return cast(val) if cast is not str else val
+            for candidate in (key, *aliases):
+                if candidate not in env_map:
+                    continue
+                raw_val = env_map[candidate]
+                if raw_val in (None, ""):
+                    continue
+                _register_explicit(key, candidate)
+                if cast is bool:
+                    return _to_bool(str(raw_val))
+                if cast is str:
+                    return raw_val
+                try:
+                    return cast(raw_val)
+                except (ValueError, TypeError) as exc:
+                    raise RuntimeError(
+                        f"Failed to cast env var {candidate!r}={raw_val!r} via {cast}: {exc}"
+                    ) from exc
             return default
 
         base_url = _get(
@@ -688,16 +708,9 @@ class TradingConfig:
                     max_position_size=12000.0,
                 ),
             }
-            preset_aliases = {
-                "MAX_POSITION_SIZE": ("AI_TRADING_MAX_POSITION_SIZE",),
-            }
             for k, v in presets[mode].items():
                 env_key = k.upper()
-                override_keys = (env_key, *preset_aliases.get(env_key, ()))
-                if any(
-                    key in env_map and env_map[key] not in (None, "")
-                    for key in override_keys
-                ):
+                if env_key in explicit_env_keys:
                     continue
                 try:
                     object.__setattr__(cfg, k, v)
