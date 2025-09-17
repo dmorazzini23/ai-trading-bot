@@ -5,26 +5,6 @@ Expose a **minimal, explicit allowlist** of submodules and symbols that are
 safe to import from the package root for tests and CLI users.
 """
 from importlib import import_module as _import_module
-import os as _os
-
-# AI-AGENT-REF: sanitize specific executor env vars once at import time (no wrapper)
-try:
-    for _k in ("EXECUTOR_WORKERS", "PREDICTION_WORKERS"):
-        _v = _os.environ.get(_k)
-        if _v is not None and not str(_v).isdigit():
-            _os.environ[_k] = ""
-    _orig_getenv = _os.getenv
-    def _sanitized_getenv(key, default=None):  # type: ignore[override]
-        if str(key).upper() in {"EXECUTOR_WORKERS", "PREDICTION_WORKERS"}:
-            val = _orig_getenv(key, default)
-            try:
-                return val if (val is None or str(val).isdigit()) else ""
-            except Exception:
-                return ""
-        return _orig_getenv(key, default)
-    _os.getenv = _sanitized_getenv  # type: ignore[assignment]
-except Exception:
-    pass
 
 # AI-AGENT-REF: public surface allowlist
 _EXPORTS = {

@@ -133,25 +133,6 @@ def dummy_data_fetcher():
     return _F()
 
 
-# Sanitize specific executor env vars for tests that perform naive int(os.getenv(...))
-@pytest.fixture(autouse=True)
-def _sanitize_executor_env(monkeypatch):
-    import os as _os
-
-    _orig_getenv = _os.getenv
-
-    def _sanitized_getenv(key, default=None):  # type: ignore[override]
-        if str(key).upper() in {"EXECUTOR_WORKERS", "PREDICTION_WORKERS"}:
-            val = _orig_getenv(key, default)
-            try:
-                return val if (val is None or str(val).isdigit()) else ""
-            except Exception:
-                return ""
-        return _orig_getenv(key, default)
-
-    monkeypatch.setattr(_os, "getenv", _sanitized_getenv, raising=True)
-
-
 @pytest.fixture(autouse=True)
 def _reset_fallback_cache(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
