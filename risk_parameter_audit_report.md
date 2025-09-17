@@ -34,10 +34,10 @@
   Line: print(f"  • MAX_POSITION_SIZE: 10.0% → {RISK_PARAMETERS['MAX_POSITION_SIZE']*100:.1f}% (+150% increase)")
 - demo_drawdown_protection.py:20 - MAX_DRAWDOWN_THRESHOLD
   Found: 0.1 | Expected: 0.15
-  Line: print(f"Configuration: Max Drawdown = {config.MAX_DRAWDOWN_THRESHOLD:.1%}")
+  Line: print(f"Configuration: Max Drawdown = {config.get_max_drawdown_threshold():.1%}")
 - demo_drawdown_protection.py:63 - MAX_DRAWDOWN_THRESHOLD
   Found: 0.1 | Expected: 0.15
-  Line: print(f"      💥 CIRCUIT BREAKER TRIGGERED: {status['current_drawdown']:.1%} > {config.MAX_DRAWDOWN_THRESHOLD:.1%}")
+  Line: print(f"      💥 CIRCUIT BREAKER TRIGGERED: {status['current_drawdown']:.1%} > {config.get_max_drawdown_threshold():.1%}")
 - demonstrate_optimization_simple.py:43 - MAX_POSITION_SIZE
   Found: 10.0 | Expected: 8000
   Line: print(f"  • MAX_POSITION_SIZE: 10.0% → 25.0% (+150% increase)")

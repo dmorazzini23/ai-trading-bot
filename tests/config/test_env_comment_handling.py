@@ -9,6 +9,7 @@ def _reload_config(monkeypatch, **env):
     sys.modules.pop(module_name, None)
     for key in [
         "MAX_DRAWDOWN_THRESHOLD",
+        "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",
         "TRADING_MODE",
         "KELLY_FRACTION",
         "CONF_THRESHOLD",
@@ -28,5 +29,5 @@ def _cleanup():
 
 def test_comment_stripped_from_float_env(monkeypatch):
     cfg = _reload_config(monkeypatch, MAX_DRAWDOWN_THRESHOLD="0.08  # comment")
-    assert cfg.MAX_DRAWDOWN_THRESHOLD == pytest.approx(0.08)
+    assert cfg.get_max_drawdown_threshold() == pytest.approx(0.08)
 

@@ -35,7 +35,7 @@ EXPECTED = {
     'ai_trading.config': sorted([
         '_require_env_vars',
         'AlpacaConfig',
-        'MAX_DRAWDOWN_THRESHOLD',
+        'get_max_drawdown_threshold',
         'META_LEARNING_BOOTSTRAP_ENABLED',
         'META_LEARNING_BOOTSTRAP_WIN_RATE',
         'META_LEARNING_MIN_TRADES_REDUCED',

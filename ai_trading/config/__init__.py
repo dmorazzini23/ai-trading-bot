@@ -30,17 +30,6 @@ def _parse_float_env(val: str) -> float:
     return float(token)
 
 
-def _require_float_env(name: str) -> float:
-    """Fetch a required environment variable and convert to float."""
-    val = os.getenv(name)
-    if val is None or val == "":
-        raise RuntimeError(f"Missing required env var: {name}")
-    try:
-        return _parse_float_env(val)
-    except ValueError as e:
-        raise RuntimeError(f"Invalid value for {name}: {val}") from e
-
-
 def _optional_float_env(name: str, default: float) -> float:
     """Fetch an optional float environment variable."""
     val = os.getenv(name)
@@ -52,7 +41,24 @@ def _optional_float_env(name: str, default: float) -> float:
         raise RuntimeError(f"Invalid value for {name}: {val}") from e
 
 
-MAX_DRAWDOWN_THRESHOLD = _require_float_env("MAX_DRAWDOWN_THRESHOLD")
+
+
+def get_max_drawdown_threshold() -> float:
+    """Return the configured max drawdown threshold from the environment."""
+    overrides: dict[str, str] = {}
+    for key in ("AI_TRADING_MAX_DRAWDOWN_THRESHOLD", "MAX_DRAWDOWN_THRESHOLD"):
+        raw = os.getenv(key)
+        if raw in (None, ""):
+            continue
+        try:
+            overrides[key] = str(_parse_float_env(raw))
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid value for {key}: {raw}") from exc
+
+    cfg = TradingConfig.from_env(overrides or None)
+    if cfg.max_drawdown_threshold is None:
+        raise RuntimeError("MAX_DRAWDOWN_THRESHOLD is not configured")
+    return float(cfg.max_drawdown_threshold)
 
 _MODE_PRESETS = {
     "conservative": {
@@ -194,7 +200,7 @@ def log_config(masked_keys: list[str] | None=None, secrets_to_redact: list[str] 
 __all__ = [
     '_require_env_vars',
     'AlpacaConfig',
-    'MAX_DRAWDOWN_THRESHOLD',
+    'get_max_drawdown_threshold',
     'META_LEARNING_BOOTSTRAP_ENABLED',
     'META_LEARNING_BOOTSTRAP_WIN_RATE',
     'META_LEARNING_MIN_TRADES_REDUCED',

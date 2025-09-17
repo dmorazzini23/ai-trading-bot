@@ -21,7 +21,7 @@ def test_integration():
     # Test 1: Configuration loading
 
     # Test 2: Circuit breaker creation
-    breaker = DrawdownCircuitBreaker(max_drawdown=config.MAX_DRAWDOWN_THRESHOLD)
+    breaker = DrawdownCircuitBreaker(max_drawdown=config.get_max_drawdown_threshold())
 
     # Test 3: Normal operation
     initial_equity = 10000.0

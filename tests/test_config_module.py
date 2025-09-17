@@ -8,7 +8,14 @@ def _reload_config(monkeypatch, **env):
     module_name = "ai_trading.config"
     if module_name in list(importlib.sys.modules):
         del importlib.sys.modules[module_name]
-    for k in ["MAX_DRAWDOWN_THRESHOLD", "TRADING_MODE", "KELLY_FRACTION", "CONF_THRESHOLD", "MAX_POSITION_SIZE"]:
+    for k in [
+        "MAX_DRAWDOWN_THRESHOLD",
+        "AI_TRADING_MAX_DRAWDOWN_THRESHOLD",
+        "TRADING_MODE",
+        "KELLY_FRACTION",
+        "CONF_THRESHOLD",
+        "MAX_POSITION_SIZE",
+    ]:
         monkeypatch.delenv(k, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, str(v))
@@ -23,8 +30,9 @@ def _cleanup():
 
 
 def test_missing_drawdown_threshold(monkeypatch):
+    module = _reload_config(monkeypatch)
     with pytest.raises(RuntimeError):
-        _reload_config(monkeypatch)
+        module.get_max_drawdown_threshold()
 
 
 def test_mode_presets(monkeypatch):
