@@ -38,3 +38,4 @@ def test_run_with_concurrency_respects_limit():
     asyncio.run(concurrency.run_with_concurrency(symbols, worker, max_concurrency=2))
 
     assert max_seen <= 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS <= 2
