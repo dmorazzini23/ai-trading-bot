@@ -3104,15 +3104,27 @@ def _fetch_universe_bars(
     feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Fetch bars using batch API with safe fallback."""  # AI-AGENT-REF
+    out: Dict[str, pd.DataFrame] = {}
+    missing: list[str] = list(symbols)
     try:
         batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
         if isinstance(batch, dict):
-            return batch
+            missing = []
+            for sym in symbols:
+                df = batch.get(sym)
+                if df is not None and not getattr(df, "empty", False):
+                    out[sym] = df
+                else:
+                    missing.append(sym)
+            if not missing:
+                return out
     except COMMON_EXC:
         pass
-    out: Dict[str, pd.DataFrame] = {}
 
     # Fallback to per-symbol requests with bounded concurrency.
+    if not missing:
+        return out
+
     settings = get_settings()
     max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
 
@@ -3126,7 +3138,7 @@ def _fetch_universe_bars(
     with ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="fallback-bars"
     ) as ex:
-        futures = [ex.submit(_pull, s) for s in symbols]
+        futures = [ex.submit(_pull, s) for s in missing]
         for fut in as_completed(futures):
             results.append(fut.result())
 
