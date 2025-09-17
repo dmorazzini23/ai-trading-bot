@@ -631,9 +631,9 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
                     df[canonical] = df[canonical].combine_first(df[alias])
                 except AttributeError:  # pragma: no cover - non-Series columns
                     pass
-                df = df.drop(columns=[alias])
+                df.drop(columns=[alias], inplace=True)
             else:
-                df = df.rename(columns={alias: canonical})
+                df.rename(columns={alias: canonical}, inplace=True)
     return df
 
 
@@ -661,7 +661,7 @@ def _flatten_and_normalize_ohlcv(
                 df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
         except (AttributeError, IndexError, TypeError):
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
-    df = normalize_ohlcv_columns(df)
+    normalize_ohlcv_columns(df)
 
     if "close" not in df.columns and "adj_close" in df.columns:
         df["close"] = df["adj_close"]
@@ -722,31 +722,61 @@ def _flatten_and_normalize_ohlcv(
             setattr(err, "timeframe", timeframe)
             raise err
 
-    if isinstance(df.index, pd.DatetimeIndex):
+    df_out = df
+
+    if isinstance(df_out.index, pd.DatetimeIndex):
         try:
-            tz = df.index.tz
+            tz = df_out.index.tz
             if tz is not None:
-                df.index = df.index.tz_convert("UTC").tz_localize(None)
+                df_out.index = df_out.index.tz_convert("UTC").tz_localize(None)
         except (AttributeError, TypeError, ValueError):
             pass
-        df = df[~df.index.duplicated(keep="last")].sort_index()
-    if "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
-        df = df.reset_index().rename(columns={df.index.name or "index": "timestamp"})
+        try:
+            duplicated = df_out.index.duplicated(keep="last")
+        except Exception:  # pragma: no cover - defensive
+            duplicated = None
+        has_duplicates = False
+        if duplicated is not None:
+            try:
+                has_duplicates = bool(duplicated.any())
+            except Exception:  # pragma: no cover - defensive
+                has_duplicates = False
+        if has_duplicates:
+            mask = ~duplicated
+            try:
+                needs_filter = not bool(mask.all())
+            except Exception:  # pragma: no cover - defensive
+                needs_filter = True
+            if needs_filter:
+                df_out = df_out.loc[mask]
+        is_monotonic_attr = getattr(df_out.index, "is_monotonic_increasing", True)
+        try:
+            is_monotonic = bool(is_monotonic_attr()) if callable(is_monotonic_attr) else bool(is_monotonic_attr)
+        except Exception:  # pragma: no cover - defensive
+            is_monotonic = True
+        if not is_monotonic:
+            df_out.sort_index(inplace=True)
+    if "timestamp" not in getattr(df_out, "columns", []) and isinstance(df_out.index, pd.DatetimeIndex):
+        index_name = df_out.index.name or "index"
+        df_reset = df_out.reset_index()
+        if index_name != "timestamp":
+            df_reset.rename(columns={index_name: "timestamp"}, inplace=True)
+        df_out = df_reset
 
     # Avoid timestamp being simultaneously a column and an index label.
     try:
-        index_names = list(getattr(df.index, "names", []) or [])
+        index_names = list(getattr(df_out.index, "names", []) or [])
     except TypeError:  # pragma: no cover - non-list names container
         index_names = []
-    if "timestamp" in df.columns and index_names and any(name == "timestamp" for name in index_names):
+    if "timestamp" in df_out.columns and index_names and any(name == "timestamp" for name in index_names):
         new_names = [None if name == "timestamp" else name for name in index_names]
         try:
-            df.index = df.index.set_names(new_names)
+            df_out.index = df_out.index.set_names(new_names)
         except AttributeError:  # e.g. DatetimeIndex with single name attribute
-            if getattr(df.index, "name", None) == "timestamp":
-                df.index = df.index.rename(None)
+            if getattr(df_out.index, "name", None) == "timestamp":
+                df_out.index = df_out.index.rename(None)
 
-    return df
+    return df_out
 
 
 def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
@@ -836,7 +866,19 @@ def _verify_minute_continuity(df: pd.DataFrame, symbol: str, backfill: str | Non
     if pd_local is None or df is None or getattr(df, "empty", True) or "timestamp" not in df.columns:
         return df
 
-    df = df.sort_values("timestamp")
+    timestamp_series = df["timestamp"]
+    monotonic_attr = getattr(timestamp_series, "is_monotonic_increasing", None)
+    try:
+        needs_sort = bool(monotonic_attr is False)
+    except Exception:  # pragma: no cover - defensive
+        needs_sort = False
+    if monotonic_attr is None:
+        try:
+            needs_sort = bool(timestamp_series.is_monotonic_increasing is False)
+        except Exception:  # pragma: no cover - fallback
+            needs_sort = True
+    if needs_sort:
+        df.sort_values("timestamp", inplace=True)
     ts = pd_local.DatetimeIndex(df["timestamp"])
     diffs = ts.to_series().diff().dt.total_seconds().iloc[1:]
     missing = diffs[diffs > 60]
