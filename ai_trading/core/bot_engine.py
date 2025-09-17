@@ -2888,6 +2888,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
 
+    if df is not None:
+        df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
+
     def _normalize_feed_name(value: object) -> str:
         try:
             feed_val = str(value).strip().lower()
@@ -3043,7 +3046,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
         else:
             if df_alt is not None and not getattr(df_alt, "empty", True):
-                df = df_alt
+                df = _sanitize_minute_df(
+                    df_alt,
+                    symbol=symbol,
+                    current_now=now_utc,
+                )
                 try:
                     actual_bars = int(len(df))
                 except Exception:
@@ -3053,8 +3060,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
-
-    df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
 
     # Check data freshness before proceeding with trading logic
     staleness_reference = now_utc if market_open_now else end_dt
