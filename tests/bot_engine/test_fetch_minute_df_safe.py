@@ -1,8 +1,11 @@
 import sys
 import types
+from datetime import UTC, datetime
 
 import pytest
 from ai_trading.utils.lazy_imports import load_pandas
+
+pytest.importorskip("pandas")
 
 sys.modules.setdefault(
     "portalocker",
@@ -133,4 +136,72 @@ def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
     assert len(observed) == 1
     assert observed[0] is not None
     pd.testing.assert_frame_equal(observed[0], sample)
+
+
+def test_fetch_minute_df_safe_market_cache_hit(monkeypatch, tmp_path):
+    pd = load_pandas()
+    sample = _sample_df()
+
+    calls: list[tuple[str, object, object]] = []
+
+    def fake_get_minute_df(symbol: str, start, end):
+        calls.append((symbol, start, end))
+        return sample
+
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+
+    base_now = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+    session_start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+
+    from ai_trading.data import market_calendar
+
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    cache_cfg = types.SimpleNamespace(
+        market_cache_enabled=True,
+        market_cache_ttl=900,
+        market_cache_disk=False,
+        market_cache_disk_enabled=False,
+        market_cache_dir=str(tmp_path / "market"),
+    )
+    monkeypatch.setattr(bot_engine, "CFG", cache_cfg, raising=False)
+    monkeypatch.setattr(bot_engine, "S", cache_cfg, raising=False)
+
+    from ai_trading.market import cache as market_cache
+
+    with market_cache._lock:
+        market_cache._mem.clear()
+
+    first = bot_engine.fetch_minute_df_safe("AAPL")
+    second = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert len(calls) == 1
+    assert isinstance(first, pd.DataFrame)
+    assert isinstance(second, pd.DataFrame)
+    pd.testing.assert_frame_equal(first, sample)
+    pd.testing.assert_frame_equal(second, sample)
 

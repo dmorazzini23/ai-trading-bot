@@ -99,3 +99,76 @@ def test_settings_integration():
     # Test that defaults are reasonable
     assert settings.data_cache_ttl_seconds > 0
     assert len(settings.data_cache_dir) > 0
+
+
+def test_get_or_load_caches_memory_and_disk(tmp_path):
+    with mcache._lock:
+        mcache._mem.clear()
+
+    cache_dir = tmp_path / "cache"
+    df = pd.DataFrame({"close": [1.0], "volume": [10]})
+
+    calls: list[int] = []
+
+    def loader():
+        calls.append(1)
+        return df
+
+    result1 = mcache.get_or_load(
+        key=("AAPL", "1Min", "2024-01-01T00:00:00", "2024-01-01T01:00:00"),
+        loader=loader,
+        ttl=60,
+        cache_dir=str(cache_dir),
+        disk_enabled=True,
+    )
+    result2 = mcache.get_or_load(
+        key=("AAPL", "1Min", "2024-01-01T00:00:00", "2024-01-01T01:00:00"),
+        loader=loader,
+        ttl=60,
+        cache_dir=str(cache_dir),
+        disk_enabled=True,
+    )
+
+    assert calls == [1]
+    pd.testing.assert_frame_equal(result1, df)
+    pd.testing.assert_frame_equal(result2, df)
+
+    disk_path = mcache.disk_path(
+        str(cache_dir), "AAPL", "1Min", "2024-01-01T00:00:00", "2024-01-01T01:00:00"
+    )
+    assert disk_path.exists() or disk_path.with_suffix(".csv").exists()
+
+
+def test_get_or_load_disk_hit_without_loader(tmp_path):
+    with mcache._lock:
+        mcache._mem.clear()
+
+    cache_dir = tmp_path / "cache"
+    df = pd.DataFrame({"close": [2.0], "volume": [20]})
+
+    def loader():
+        return df
+
+    mcache.get_or_load(
+        key=("TSLA", "1Min", "2024-01-02T00:00:00", "2024-01-02T01:00:00"),
+        loader=loader,
+        ttl=60,
+        cache_dir=str(cache_dir),
+        disk_enabled=True,
+    )
+
+    with mcache._lock:
+        mcache._mem.clear()
+
+    def fail_loader():
+        raise AssertionError("loader should not run when disk cache hits")
+
+    restored = mcache.get_or_load(
+        key=("TSLA", "1Min", "2024-01-02T00:00:00", "2024-01-02T01:00:00"),
+        loader=fail_loader,
+        ttl=60,
+        cache_dir=str(cache_dir),
+        disk_enabled=True,
+    )
+
+    pd.testing.assert_frame_equal(restored, df)
