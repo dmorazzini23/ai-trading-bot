@@ -10,6 +10,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from ai_trading.logging import logger
+from ai_trading.utils.time import safe_utcnow
 from ai_trading.utils.timing import sleep as psleep
 from ..core.constants import PERFORMANCE_THRESHOLDS, RISK_PARAMETERS
 
@@ -42,7 +43,7 @@ class Alert:
         self.alert_type = alert_type
         self.severity = severity
         self.message = message
-        self.timestamp = datetime.now(UTC)
+        self.timestamp = safe_utcnow()
         self.symbol = kwargs.get('symbol')
         self.strategy_id = kwargs.get('strategy_id')
         self.value = kwargs.get('value')
@@ -58,12 +59,12 @@ class Alert:
         """Acknowledge the alert."""
         self.acknowledged = True
         self.acknowledged_by = user
-        self.acknowledged_at = datetime.now(UTC)
+        self.acknowledged_at = safe_utcnow()
 
     def resolve(self):
         """Mark alert as resolved."""
         self.resolved = True
-        self.resolved_at = datetime.now(UTC)
+        self.resolved_at = safe_utcnow()
 
     def to_dict(self) -> dict:
         """Convert alert to dictionary."""
@@ -197,7 +198,7 @@ class AlertManager:
         """Background cleanup of old alerts."""
         while self._cleanup_running:
             try:
-                cutoff_time = datetime.now(UTC) - timedelta(hours=self.alert_retention_hours)
+                cutoff_time = safe_utcnow() - timedelta(hours=self.alert_retention_hours)
                 with self._lock:
                     self.alerts = [a for a in self.alerts if a.timestamp >= cutoff_time]
                 psleep(3600)
@@ -230,7 +231,7 @@ class RiskAlertEngine:
             portfolio_metrics: Dictionary of portfolio risk metrics
         """
         try:
-            datetime.now(UTC)
+            safe_utcnow()
             max_drawdown = portfolio_metrics.get('max_drawdown', 0)
             if max_drawdown > self.thresholds['MAX_DRAWDOWN']:
                 self._create_risk_alert('max_drawdown', AlertSeverity.CRITICAL, f"Maximum drawdown {max_drawdown:.2%} exceeds threshold {self.thresholds['MAX_DRAWDOWN']:.2%}", value=max_drawdown, threshold=self.thresholds['MAX_DRAWDOWN'])
@@ -282,7 +283,7 @@ class RiskAlertEngine:
     def _create_risk_alert(self, alert_key: str, severity: AlertSeverity, message: str, **kwargs):
         """Create risk alert with cooldown protection."""
         try:
-            current_time = datetime.now(UTC)
+            current_time = safe_utcnow()
             last_alert_time = self.last_alert_times.get(alert_key)
             if last_alert_time and (current_time - last_alert_time).total_seconds() < self.alert_cooldown:
                 return
