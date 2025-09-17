@@ -143,6 +143,13 @@ class Settings(BaseSettings):
         ('alpaca_iex', 'alpaca_sip', 'yahoo'), env='DATA_PROVIDER_PRIORITY'
     )
     max_data_fallbacks: int = Field(2, env='MAX_DATA_FALLBACKS')
+    minute_data_freshness_tolerance_seconds: int = Field(
+        900,
+        validation_alias=AliasChoices(
+            'MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS',
+            'AI_TRADING_MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS',
+        ),
+    )
     daily_loss_limit: float = Field(default=0.05, env='AI_TRADING_DAILY_LOSS_LIMIT')
     max_drawdown_threshold: float = Field(default=0.08, env='AI_TRADING_MAX_DRAWDOWN_THRESHOLD')
     portfolio_drift_threshold: float = Field(default=0.15, env='AI_TRADING_PORTFOLIO_DRIFT_THRESHOLD')

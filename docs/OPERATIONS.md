@@ -44,6 +44,10 @@ Set the following to control position sizing:
 - `AI_TRADING_MAX_POSITION_SIZE`: explicit override for deployments; must be positive and always takes precedence over dynamic sizing.
 - `MAX_POSITION_EQUITY_FALLBACK`: equity assumed when deriving `MAX_POSITION_SIZE` but the real account equity cannot be fetched. Defaults to `200000`.
 
+### Market data freshness tolerance
+
+- `AI_TRADING_MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS` (alias `MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS`) bounds how old minute-bar data may be before trading halts. The default is **900 seconds (15 minutes)**, matching the data-validation guard in `ai_trading.data_validation.core`. Lowering the value tightens the freshness requirement; raising it allows the bot to keep trading when providers lag slightly. Updates take effect without code changes because `fetch_minute_df_safe` and Alpaca fallbacks read the setting at runtime.
+
 ### Execution exposure tracking
 
 - `ExecutionEngine.execute_order(...)` now returns an `ExecutionResult` object (a string subclass) containing the created order, its current status, the filled quantity, and the proportional signal weight that filled. Code that only needs the order ID can continue to treat the result as a string.
