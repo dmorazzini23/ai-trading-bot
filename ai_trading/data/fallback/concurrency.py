@@ -17,6 +17,7 @@ T = TypeVar("T")
 # Result sets populated after ``run_with_concurrency`` completes.
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
+PEAK_SIMULTANEOUS_WORKERS: int = 0
 
 
 async def run_with_concurrency(
@@ -84,16 +85,34 @@ async def run_with_concurrency(
             except ValueError:
                 continue
 
-    sem = asyncio.Semaphore(max(1, max_concurrency))
+    concurrency_limit = max(1, max_concurrency)
+    counter_lock = asyncio.Lock()
+    running = 0
+    peak_running = 0
 
-    async def _run(sym: str) -> None:
+    async def _increment() -> None:
+        nonlocal running, peak_running
+        async with counter_lock:
+            running += 1
+            if running > peak_running:
+                peak_running = running
+            assert (
+                running <= concurrency_limit
+            ), f"Exceeded max_concurrency={concurrency_limit}: running={running}"
+
+    async def _decrement() -> None:
+        nonlocal running
+        async with counter_lock:
+            running -= 1
+
+    async def _execute(sym: str) -> None:
         res: T | None = None
+        await _increment()
         try:
-            async with sem:
-                coro = worker(sym)
-                if timeout is not None:
-                    coro = asyncio.wait_for(coro, timeout)
-                res = await coro
+            coro = worker(sym)
+            if timeout is not None:
+                coro = asyncio.wait_for(coro, timeout)
+            res = await coro
         except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
             res = None
         except Exception:  # pragma: no cover - worker errors become None
@@ -104,10 +123,35 @@ async def run_with_concurrency(
                 FAILED_SYMBOLS.add(sym)
             else:
                 SUCCESSFUL_SYMBOLS.add(sym)
+            await _decrement()
 
-    tasks = [asyncio.create_task(_run(sym)) for sym in symbols]
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    for sym in symbols:
+        await queue.put(sym)
+
+    for _ in range(concurrency_limit):
+        await queue.put(None)
+
+    async def _worker() -> None:
+        while True:
+            sym = await queue.get()
+            if sym is None:
+                break
+            await _execute(sym)
+
+    tasks = [asyncio.create_task(_worker()) for _ in range(concurrency_limit)]
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    global PEAK_SIMULTANEOUS_WORKERS
+    PEAK_SIMULTANEOUS_WORKERS = peak_running
+
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 
 
-__all__ = ["run_with_concurrency", "SUCCESSFUL_SYMBOLS", "FAILED_SYMBOLS"]
+__all__ = [
+    "run_with_concurrency",
+    "SUCCESSFUL_SYMBOLS",
+    "FAILED_SYMBOLS",
+    "PEAK_SIMULTANEOUS_WORKERS",
+]
