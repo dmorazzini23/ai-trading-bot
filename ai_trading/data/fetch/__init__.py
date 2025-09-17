@@ -1635,6 +1635,16 @@ def _fetch_bars(
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
             attempt = _state["retries"] + 1
+            if _feed == "iex" and _SIP_UNAUTHORIZED:
+                fallback_viable = False
+                if fallback:
+                    _, fb_feed, _, _ = fallback
+                    if fb_feed != "sip":
+                        fallback_viable = True
+                    elif _sip_configured() and not _SIP_UNAUTHORIZED:
+                        fallback_viable = True
+                if not fallback_viable:
+                    raise ValueError("rate_limited")
             if attempt >= max_retries:
                 if fallback:
                     result = _attempt_fallback(fallback)
