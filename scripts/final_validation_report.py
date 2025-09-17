@@ -60,8 +60,8 @@ def validate_issue_3_quantity_tracking():
 def validate_issue_4_position_limits():
     """Validate Issue 4: Position Limit Reached Too Early"""
     logging.info('\n🔍 Issue 4: Position Limit Reached Too Early')
-    logging.info("   Problem: Bot stops at 10 positions with 'SKIP_TOO_MANY_POSITIONS'")
-    logging.info('   Root Cause: MAX_PORTFOLIO_POSITIONS too low for modern portfolio sizes')
+    logging.info("   Problem (pre-fix): Bot stopped at 10 positions with 'SKIP_TOO_MANY_POSITIONS'")
+    logging.info('   Root Cause: Previous MAX_PORTFOLIO_POSITIONS default was too low for modern portfolios')
     fixes_found = 0
     bot_engine_path = Path('ai_trading/core/bot_engine.py')
     if bot_engine_path.exists():

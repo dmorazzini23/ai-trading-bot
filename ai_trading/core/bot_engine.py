@@ -4045,7 +4045,7 @@ MIN_SIGNAL_STRENGTH = params.get(
         getattr(state.mode_obj.config, "min_signal_strength", 0.1),
     ),
 )
-# AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
+# AI-AGENT-REF: Increase default position limit from "10" to "20" for better portfolio utilization
 # REMOVED: module-scope MAX_PORTFOLIO_POSITIONS = CFG.max_portfolio_positions
 CORRELATION_THRESHOLD = 0.60
 # REMOVED: SECTOR_EXPOSURE_CAP = CFG.sector_exposure_cap

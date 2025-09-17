@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     score_size_gamma: float = Field(1.0, alias='SCORE_SIZE_GAMMA', description='Shape parameter: 1.0 linear, <1 concave, >1 convex')
     buy_threshold: float = Field(default=0.4, env='AI_TRADING_BUY_THRESHOLD')
     sector_exposure_cap: float = Field(default=0.33, env='AI_TRADING_SECTOR_EXPOSURE_CAP')
-    max_portfolio_positions: int = Field(default=10, env='AI_TRADING_MAX_PORTFOLIO_POSITIONS')
+    max_portfolio_positions: int = Field(default=20, env='AI_TRADING_MAX_PORTFOLIO_POSITIONS')
     disaster_dd_limit: float = Field(default=0.25, env='AI_TRADING_DISASTER_DD_LIMIT')
     data_cache_enable: bool = Field(default=True, env='AI_TRADING_DATA_CACHE_ENABLE')
     data_cache_ttl_seconds: int = Field(default=300, env='AI_TRADING_DATA_CACHE_TTL_SECONDS')
@@ -416,7 +416,7 @@ def get_disaster_dd_limit() -> float:
     return _to_float(getattr(get_settings(), 'disaster_dd_limit', 0.25), 0.25)
 
 def get_max_portfolio_positions() -> int:
-    return _to_int(getattr(get_settings(), 'max_portfolio_positions', 10), 10)
+    return _to_int(getattr(get_settings(), 'max_portfolio_positions', 20), 20)
 
 def get_sector_exposure_cap() -> float:
     return _to_float(getattr(get_settings(), 'sector_exposure_cap', 0.33), 0.33)
