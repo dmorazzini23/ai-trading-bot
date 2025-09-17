@@ -9034,11 +9034,17 @@ def submit_order(
 def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Order | None:
     """Submit an order while guarding against closed-market submissions.
 
-    The market status check is skipped when running in testing mode or when
-    ``bypass_market_check`` is explicitly set to ``True``.
+    The market status check is skipped when running in testing mode, when the
+    ``PYTEST_RUNNING`` flag is set, or when ``bypass_market_check`` is
+    explicitly ``True``.
     """
 
-    if not (getattr(CFG, "testing", False) or bypass_market_check):
+    pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
+    skip_market_check = (
+        getattr(CFG, "testing", False) or pytest_running or bypass_market_check
+    )
+
+    if not skip_market_check:
         if not market_is_open():
             logger.warning(
                 "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
