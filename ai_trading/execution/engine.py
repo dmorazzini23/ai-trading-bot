@@ -1000,6 +1000,7 @@ class ExecutionEngine:
                 ) * 10000
             if abs(predicted_slippage_bps) > threshold:
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
+                limit_conversion_ok = True
                 if order.order_type == OrderType.MARKET:
                     adj = float(expected) * (tol_bps / 10000.0)
                     limit_price = (
@@ -1007,10 +1008,15 @@ class ExecutionEngine:
                         if order.side == OrderSide.BUY
                         else float(expected) - adj
                     )
-                    order.order_type = OrderType.LIMIT
                     tick = TICK_BY_SYMBOL.get(order.symbol)
-                    order.price = Money(limit_price, tick)
-                    base_price = limit_price
+                    try:
+                        price_money = Money(limit_price, tick)
+                    except Exception:
+                        limit_conversion_ok = False
+                    else:
+                        order.order_type = OrderType.LIMIT
+                        order.price = price_money
+                        base_price = limit_price
                     logger.warning(
                         "SLIPPAGE_LIMIT_CONVERSION",
                         extra={
@@ -1021,16 +1027,14 @@ class ExecutionEngine:
                 reduced = max(
                     1, int(order.quantity * threshold / abs(predicted_slippage_bps))
                 )
+                qty_reduced = False
                 if reduced < order.quantity:
                     order.quantity = reduced
+                    qty_reduced = True
                     logger.warning(
                         "SLIPPAGE_QTY_REDUCED",
                         extra={"order_id": order.id, "new_qty": reduced},
                     )
-                    if had_manual_price:
-                        raise AssertionError(
-                            f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
-                        )
                 else:
                     order.status = OrderStatus.REJECTED
                     logger.warning(
@@ -1041,6 +1045,12 @@ class ExecutionEngine:
                             f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
                         )
                     return
+                if had_manual_price:
+                    if not limit_conversion_ok or not qty_reduced:
+                        raise AssertionError(
+                            f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
+                        )
+                    return order
                 try:
                     from ai_trading.core.bot_engine import get_trade_logger
 
