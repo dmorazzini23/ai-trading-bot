@@ -9,7 +9,6 @@ processing large symbol lists.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TypeVar
 
@@ -85,42 +84,7 @@ async def run_with_concurrency(
             except ValueError:
                 continue
 
-    for sym in symbols:
-        try:
-            res = await worker(sym)
-        except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
-            res = None
-        except Exception:  # pragma: no cover - worker errors become None
-            res = None
-        results[sym] = res
-        if res is None:
-            FAILED_SYMBOLS.add(sym)
-        else:
-            SUCCESSFUL_SYMBOLS.add(sym)
-    return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
-
-    loop = asyncio.get_running_loop()
-
-    def _rebind_async_primitives(fn: Callable[[str], Awaitable[T]]) -> None:
-        """Ensure captured asyncio primitives use the active event loop."""
-
-        print('checking closure', fn, 'loop', loop)
-        cells = getattr(fn, "__closure__", None)
-        if not cells:
-            return
-        for cell in cells:
-            try:
-                obj = cell.cell_contents
-            except ValueError:
-                continue
-            if isinstance(obj, (asyncio.Lock, asyncio.Semaphore, asyncio.Condition, asyncio.Event)):
-                print('rebind', type(obj), 'to loop', loop)
-                try:
-                    obj._loop = loop  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
-    _rebind_async_primitives(worker)
+    sem = asyncio.Semaphore(max(1, max_concurrency))
 
     async def _run(sym: str) -> None:
         res: T | None = None
@@ -141,7 +105,7 @@ async def run_with_concurrency(
             else:
                 SUCCESSFUL_SYMBOLS.add(sym)
 
-    tasks = [asyncio.create_task(_run(s)) for s in symbols]
+    tasks = [asyncio.create_task(_run(sym)) for sym in symbols]
     await asyncio.gather(*tasks, return_exceptions=True)
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 
