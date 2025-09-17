@@ -49,3 +49,36 @@ def test_switches_to_backup_provider(monkeypatch, caplog):
     assert not df.empty
     assert after == before + 1
     assert any(r.message == "BACKUP_PROVIDER_USED" for r in caplog.records)
+
+
+def test_finnhub_backup_provider(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("FINNHUB_API_KEY", "abc123")
+    monkeypatch.setenv("ENABLE_FINNHUB", "1")
+    monkeypatch.setenv("BACKUP_DATA_PROVIDER", "finnhub")
+    config_settings.get_settings.cache_clear()
+
+    start = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
+    end = start + dt.timedelta(minutes=1)
+
+    class DummyFetcher:
+        is_stub = False
+
+        def fetch(self, symbol, start_dt, end_dt, resolution="1"):
+            return pd.DataFrame(
+                {
+                    "timestamp": [pd.Timestamp(start_dt)],
+                    "open": [2.0],
+                    "high": [2.5],
+                    "low": [1.9],
+                    "close": [2.4],
+                    "volume": [100],
+                }
+            )
+
+    monkeypatch.setattr(data_fetcher, "fh_fetcher", DummyFetcher(), raising=False)
+
+    df = data_fetcher._backup_get_bars("AAPL", start, end, "1m")
+    assert not df.empty
+    assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]

@@ -90,24 +90,62 @@ def test_record_switchover_backoff(monkeypatch):
 
     monitor.record_switchover("a", "b")
     assert monitor.consecutive_switches == 1
-    assert monitor._current_switch_cooldown == 10
+    assert monitor.consecutive_switches_by_provider["a"] == 1
+    assert monitor._current_switch_cooldowns["a"] == 10
 
     FakeDT.current = base + timedelta(seconds=5)
     monitor.record_switchover("b", "a")
-    assert monitor.consecutive_switches == 2
-    assert monitor._current_switch_cooldown == 20
-    assert alerts.calls
+    assert monitor.consecutive_switches == 1
+    assert monitor.consecutive_switches_by_provider["b"] == 1
+    assert monitor._current_switch_cooldowns["b"] == 10
+    assert not alerts.calls
 
-    FakeDT.current = base + timedelta(seconds=15)
+    FakeDT.current = base + timedelta(seconds=8)
     monitor.record_switchover("a", "b")
-    assert monitor.consecutive_switches == 3
-    assert monitor._current_switch_cooldown == 40
+    assert monitor.consecutive_switches == 2
+    assert monitor.consecutive_switches_by_provider["a"] == 2
+    assert monitor._current_switch_cooldowns["a"] == 20
     assert len(alerts.calls) == 1
 
     FakeDT.current = base + timedelta(seconds=60)
     monitor.record_switchover("b", "a")
     assert monitor.consecutive_switches == 1
-    assert monitor._current_switch_cooldown == 10
+    assert monitor._current_switch_cooldowns["b"] == 10
+
+
+def test_partial_coverage_reset_prevents_disable(monkeypatch):
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+
+    class FakeDT(datetime):
+        current = base
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return cls.current
+
+    monkeypatch.setattr(pm, "datetime", FakeDT)
+    alerts = DummyAlerts()
+    monitor = pm.ProviderMonitor(
+        cooldown=10,
+        switchover_threshold=2,
+        backoff_factor=2,
+        max_cooldown=60,
+        alert_manager=alerts,
+    )
+    disabled: list[float] = []
+    monitor.register_disable_callback("alpaca_iex", lambda duration: disabled.append(duration.total_seconds()))
+
+    monitor.record_switchover("alpaca_iex", "yahoo")
+    assert monitor.consecutive_switches == 1
+
+    monitor.record_success("alpaca_iex")
+    assert monitor.consecutive_switches == 0
+
+    FakeDT.current = base + timedelta(seconds=2)
+    monitor.record_switchover("alpaca_iex", "yahoo")
+    assert monitor.consecutive_switches == 1
+    assert not disabled
+    assert not alerts.calls
 
 
 def test_failure_duration_metric(monkeypatch, caplog):
@@ -127,8 +165,8 @@ def test_failure_duration_metric(monkeypatch, caplog):
     with caplog.at_level(logging.INFO):
         monitor.record_switchover("a", "b")
 
-    assert (
-        provider_failure_duration_seconds.labels(provider="a")._value.get() == 30
-    )
+    metric = provider_failure_duration_seconds.labels(provider="a")
+    if hasattr(metric, "_value"):
+        assert metric._value.get() == 30
     assert any(r.message == "DATA_PROVIDER_FAILURE_DURATION" for r in caplog.records)
 

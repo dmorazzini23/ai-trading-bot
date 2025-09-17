@@ -759,7 +759,7 @@ exits early with a clear error message when these values are invalid.
    # Set the following only if your Alpaca account has SIP permissions
   # ALPACA_DATA_FEED=sip
   # ALPACA_HAS_SIP=1      # set to 1 if your Alpaca account has SIP access
-  # ALPACA_ALLOW_SIP=1    # enable SIP feed and SIP fallback
+  # ALPACA_ALLOW_SIP=1    # enable SIP feed and SIP fallback (auto-enabled when HAS_SIP=1)
   # ALPACA_FEED_FAILOVER=sip,iex  # retry SIP first when Alpaca returns an empty payload
   # ALPACA_EMPTY_TO_BACKUP=1      # hop straight to the backup provider after empty Alpaca responses
   # Without ALPACA_HAS_SIP, the fetcher uses the backup provider instead of SIP
@@ -837,7 +837,7 @@ connectivity.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `PRIMARY_DATA_PROVIDER` | `alpaca` | Primary data source |
-| `BACKUP_DATA_PROVIDER` | `yahoo` | Fallback data source |
+| `BACKUP_DATA_PROVIDER` | `yahoo` | Fallback data source (`yahoo`, `finnhub`, or `none`) |
 | `MARKET_DATA_TIMEOUT` | `30` | API timeout in seconds |
 | `CACHE_MARKET_DATA` | `true` | Enable data caching |
 | `TRADING_HOURS_ONLY` | `true` | Trade only during market hours |
@@ -847,7 +847,7 @@ and queries the backup source. Configure additional fallbacks with:
 
 - Set `ENABLE_FINNHUB=1` and supply `FINNHUB_API_KEY` to enable a Finnhub
   retry before using the backup provider.
-- `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback (`yahoo` or `none`).
+- `BACKUP_DATA_PROVIDER` to override the default Yahoo Finance fallback (`yahoo`, `finnhub`, or `none`).
 
 When the configured fallback is used, a `USING_BACKUP_PROVIDER` log entry is emitted with the provider name.
 See [docs/provider_configuration.md](docs/provider_configuration.md) for environment-specific examples.
