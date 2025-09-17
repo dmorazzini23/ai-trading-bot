@@ -28,6 +28,8 @@ def test_daily_uses_date_only(mock_rest_cls):
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert isinstance(req.start, dt.datetime) and req.start.tzinfo is None
     assert isinstance(req.end, dt.datetime) and req.end.tzinfo is None
+    assert req.start.time() == dt.time(0)
+    assert req.end.time() == dt.time(0)
     assert getattr(req.timeframe, "amount", None) == 1
     assert getattr(req.timeframe.unit, "name", "") == "Day"
 
@@ -48,6 +50,8 @@ def test_intraday_uses_rfc3339z(mock_rest_cls):
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert isinstance(req.start, dt.datetime) and req.start.tzinfo == dt.UTC
     assert isinstance(req.end, dt.datetime) and req.end.tzinfo == dt.UTC
+    assert req.start == start.astimezone(dt.UTC)
+    assert req.end == end.astimezone(dt.UTC)
     assert getattr(req.timeframe, "amount", None) == 5
     assert getattr(req.timeframe.unit, "name", "") in {"Minute", "Min"}
 

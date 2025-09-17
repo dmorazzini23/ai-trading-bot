@@ -269,14 +269,30 @@ def _fmt_rfc3339_z(dtobj: dt.datetime) -> str:
 
 
 def _format_start_end_for_tradeapi(timeframe: str, start, end):
-    """Daily => YYYY-MM-DD; intraday => RFC3339Z in UTC."""
-    from ai_trading.utils.datetime import compose_daily_params, compose_intraday_params, ensure_datetime
+    """Return request datetimes plus canonical string forms for logging."""
+    from ai_trading.utils.datetime import (
+        compose_daily_params,
+        compose_intraday_params,
+        ensure_datetime,
+    )
 
-    sd = ensure_datetime(start) if start is not None else None
-    ed = ensure_datetime(end) if end is not None else None
+    if start is None or end is None:
+        raise ValueError("start and end must be provided")
+
+    sd = ensure_datetime(start)
+    ed = ensure_datetime(end)
+
     is_daily = str(timeframe).lower() in {"1day", "day", "daily"}
-    params = compose_daily_params(sd, ed) if is_daily else compose_intraday_params(sd, ed)
-    return (params["start"], params["end"])
+    if is_daily:
+        req_start = dt.datetime.combine(sd.date(), dt.time())
+        req_end = dt.datetime.combine(ed.date(), dt.time())
+        params = compose_daily_params(sd, ed)
+    else:
+        req_start = sd.astimezone(_UTC)
+        req_end = ed.astimezone(_UTC)
+        params = compose_intraday_params(sd, ed)
+
+    return req_start, req_end, params["start"], params["end"]
 
 
 def _get_rest(*, bars: bool = False) -> Any:
@@ -325,7 +341,7 @@ def _get_rest(*, bars: bool = False) -> Any:
     )
 
 
-def _bars_time_window(timeframe: Any) -> tuple[str, str]:
+def _bars_time_window(timeframe: Any) -> tuple[dt.datetime, dt.datetime]:
     now = dt.datetime.now(tz=_UTC)
     end = now - dt.timedelta(minutes=1)
 
@@ -347,7 +363,13 @@ def _bars_time_window(timeframe: Any) -> tuple[str, str]:
     else:
         days = int(os.getenv("DATA_LOOKBACK_DAYS_MINUTE", 5))
     start = end - dt.timedelta(days=days)
-    return (_fmt_rfc3339_z(start), _fmt_rfc3339_z(end))
+    if is_daily:
+        start = dt.datetime.combine(start.date(), dt.time())
+        end = dt.datetime.combine(end.date(), dt.time())
+    else:
+        start = start.astimezone(_UTC)
+        end = end.astimezone(_UTC)
+    return (start, end)
 
 
 # AI-AGENT-REF: ensure clear error when pandas missing
@@ -422,13 +444,13 @@ def get_bars_df(
             pass
     if start is None or end is None:
         start, end = _bars_time_window(tf_obj)
-    start_s, end_s = _format_start_end_for_tradeapi(tf_norm, start, end)
+    req_start, req_end, start_s, end_s = _format_start_end_for_tradeapi(tf_norm, start, end)
     try:
         req = StockBarsRequest(
             symbol_or_symbols=[symbol],
             timeframe=tf_obj,
-            start=start_s,
-            end=end_s,
+            start=req_start,
+            end=req_end,
             adjustment=adjustment,
             feed=feed,
         )
