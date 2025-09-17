@@ -3013,13 +3013,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         except Exception:
             actual_bars = 0
 
-    low_coverage = (
-        expected_bars >= intraday_lookback
-        and (
-            actual_bars < max(1, int(expected_bars * 0.5))
-            or actual_bars < intraday_lookback
-        )
+    coverage_threshold = (
+        max(1, int(expected_bars * 0.5)) if expected_bars > 0 else 0
     )
+    materially_short = (
+        expected_bars > 0 and actual_bars < coverage_threshold
+    )
+    insufficient_intraday = (
+        expected_bars >= intraday_lookback and actual_bars < intraday_lookback
+    )
+    low_coverage = materially_short or insufficient_intraday
 
     if low_coverage:
         fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
