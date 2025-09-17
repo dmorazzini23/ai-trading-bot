@@ -55,6 +55,11 @@ Daily price requests now log their parameters and outcome:
 - Unauthorized feed responses trigger a quick entitlement check and switch to a
   permitted feed when available. If no alternative exists, operators are
   notified once.
+- `MINUTE_DATA_COVERAGE_WARNING` fires when a minute window returns fewer than
+  half of the expected bars or not enough history to satisfy indicator
+  lookbacks. The bot immediately re-requests the same window using the SIP feed
+  (when entitled) or the next provider in `DATA_PROVIDER_PRIORITY`, so a single
+  warning is typically followed by a healthy bar count on the next line.
 - Empty bar responses are retried with an exponential backoff. The retry
   policy can be tuned via `FETCH_BARS_MAX_RETRIES`, `FETCH_BARS_BACKOFF_BASE`,
   and `FETCH_BARS_BACKOFF_CAP`. Logs include the remaining retry count,

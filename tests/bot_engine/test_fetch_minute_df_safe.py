@@ -69,6 +69,84 @@ def test_fetch_minute_df_safe_raises_on_stale(monkeypatch):
     assert getattr(excinfo.value, "symbol", None) == "AAPL"
 
 
+def test_fetch_minute_df_safe_fallbacks_to_sip_on_sparse_data(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+    session_start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+
+    def _make_df(rows: int) -> pd.DataFrame:
+        index = pd.date_range(session_start, periods=rows, freq="1min", tz="UTC")
+        frame = pd.DataFrame(
+            {
+                "open": [1.0] * rows,
+                "high": [1.0] * rows,
+                "low": [1.0] * rows,
+                "close": [1.0] * rows,
+                "volume": [100] * rows,
+                "timestamp": index,
+            },
+            index=index,
+        )
+        return frame
+
+    calls: list[tuple[str, datetime, datetime, str | None]] = []
+
+    def fake_get_minute_df(symbol: str, start, end, *, feed: str | None = None, backfill=None):
+        calls.append((symbol, start, end, feed))
+        if feed == "sip":
+            return _make_df(60)
+        return _make_df(10)
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        intraday_lookback_minutes=120,
+        alpaca_data_feed="iex",
+    )
+
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: True, raising=False)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+
+    from ai_trading.data import market_calendar
+
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert len(calls) == 2
+    assert calls[0][:3] == calls[1][:3]
+    assert calls[1][3] == "sip"
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 60
+    pd.testing.assert_series_equal(result.index.to_series(), result["timestamp"], check_names=False)
+
+
 def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
     pd = load_pandas()
     sample = _sample_df()

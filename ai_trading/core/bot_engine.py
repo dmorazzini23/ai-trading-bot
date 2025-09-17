@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import math
 import os
 import stat
 import tempfile
@@ -2716,6 +2717,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         start_dt = now_utc - timedelta(days=1)
         end_dt = now_utc
 
+    expected_bars = max(
+        0,
+        math.ceil((end_dt - start_dt).total_seconds() / 60.0),
+    )
+    indicator_lookback = max(1, int(getattr(S, "intraday_lookback_minutes", 120)))
+
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
         try:
@@ -2741,6 +2748,87 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df = get_minute_df(symbol, start_dt, end_dt)
     else:
         df = get_minute_df(symbol, start_dt, end_dt)
+
+    actual_rows = int(getattr(df, "__len__", lambda: 0)())
+    coverage_threshold = max(1, expected_bars // 2) if expected_bars else 0
+    needs_indicator_history = expected_bars >= indicator_lookback
+    indicator_shortfall = needs_indicator_history and actual_rows < indicator_lookback
+    coverage_shortfall = expected_bars > 0 and actual_rows < coverage_threshold
+
+    if coverage_shortfall or indicator_shortfall:
+        current_feed = str(getattr(S, "alpaca_data_feed", "iex") or "iex").lower()
+        fallback_feed: str | None = None
+        fallback_provider: str | None = None
+        if data_fetcher_module._sip_configured() and current_feed != "sip":
+            fallback_feed = "sip"
+        else:
+            providers = list(data_fetcher_module.provider_priority())
+            current_provider = f"alpaca_{current_feed}"
+            scan: list[str] = []
+            if providers:
+                try:
+                    idx = providers.index(current_provider)
+                except ValueError:
+                    idx = -1
+                if idx >= 0:
+                    scan = providers[idx + 1 :]
+                if not scan:
+                    scan = [prov for prov in providers if prov != current_provider]
+            for prov in scan:
+                if prov == current_provider:
+                    continue
+                fallback_provider = prov
+                if prov.startswith("alpaca_"):
+                    candidate = prov.split("_", 1)[1]
+                    if candidate != current_feed:
+                        fallback_feed = candidate
+                break
+
+        ratio = (actual_rows / expected_bars) if expected_bars else None
+        logger.warning(
+            "MINUTE_DATA_COVERAGE_WARNING",
+            extra={
+                "symbol": symbol,
+                "expected_bars": expected_bars,
+                "actual_bars": actual_rows,
+                "coverage_ratio": round(ratio, 3) if ratio is not None else None,
+                "indicator_lookback": indicator_lookback,
+                "fallback_feed": fallback_feed,
+                "fallback_provider": fallback_provider,
+            },
+        )
+
+        fallback_df: pd.DataFrame | None = None
+        if fallback_feed and fallback_feed != current_feed:
+            try:
+                fallback_df = get_minute_df(
+                    symbol,
+                    start_dt,
+                    end_dt,
+                    feed=fallback_feed,
+                )
+            except Exception as exc:  # pragma: no cover - defensive log path
+                logger.warning(
+                    "MINUTE_DATA_COVERAGE_FALLBACK_FAILED",
+                    extra={
+                        "symbol": symbol,
+                        "feed": fallback_feed,
+                        "error": str(exc),
+                    },
+                )
+                fallback_df = None
+        elif fallback_provider and not fallback_feed:
+            logger.info(
+                "MINUTE_DATA_COVERAGE_NO_DIRECT_FEED",
+                extra={
+                    "symbol": symbol,
+                    "provider": fallback_provider,
+                },
+            )
+
+        if fallback_df is not None and not getattr(fallback_df, "empty", True):
+            df = fallback_df
+            actual_rows = int(len(df))
 
     # Drop bars with zero volume or from the current (incomplete) minute
     try:
