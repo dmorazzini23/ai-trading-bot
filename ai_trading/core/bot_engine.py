@@ -2701,8 +2701,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     now_utc = datetime.now(UTC)
     today_et = now_utc.astimezone(EASTERN_TZ).date()
+    market_open_now = True
     try:
-        if is_market_open():
+        market_open_now = is_market_open()
+        if market_open_now:
             session_start, _ = rth_session_utc(today_et)
             start_dt = session_start
             end_dt = now_utc
@@ -2715,6 +2717,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         # Fallback: retain previous 1-day window behavior
         start_dt = now_utc - timedelta(days=1)
         end_dt = now_utc
+        market_open_now = True
 
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
@@ -2832,9 +2835,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         raise err
 
     # Check data freshness before proceeding with trading logic
+    staleness_reference = now_utc if market_open_now else end_dt
+
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
-        staleness._ensure_data_fresh(df, 600, symbol=symbol)
+        staleness._ensure_data_fresh(
+            df,
+            600,
+            symbol=symbol,
+            now=staleness_reference,
+        )
     except RuntimeError as exc:
         detail = str(exc)
         logger.warning(
