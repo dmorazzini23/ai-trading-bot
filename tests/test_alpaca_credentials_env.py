@@ -35,6 +35,16 @@ class TestAlpacaCredentials:
             assert secret_key == "alias_secret"
             assert base_url == "https://alias-api.alpaca.markets"
 
+    def test_legacy_apca_base_url_ignored(self) -> None:
+        env_vars = {
+            "ALPACA_API_KEY": "legacy_key",
+            "ALPACA_SECRET_KEY": "legacy_secret",
+            "APCA_API_BASE_URL": "https://legacy-api.alpaca.markets",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            _, _, base_url = _resolve_alpaca_env()
+            assert base_url == "https://paper-api.alpaca.markets"
+
     def test_default_base_url_when_missing(self) -> None:
         env_vars = {
             "ALPACA_API_KEY": "key",
