@@ -474,20 +474,30 @@ class TradingConfig:
         alias_map = {
             "AI_TRADING_BUY_THRESHOLD": "BUY_THRESHOLD",
             "AI_TRADING_CONF_THRESHOLD": "CONF_THRESHOLD",
+            "AI_TRADING_CONFIDENCE_LEVEL": "CONFIDENCE_LEVEL",
+            "AI_TRADING_KELLY_FRACTION_MAX": "KELLY_FRACTION_MAX",
             "AI_TRADING_MAX_DRAWDOWN_THRESHOLD": "MAX_DRAWDOWN_THRESHOLD",
+            "AI_TRADING_MAX_POSITION_SIZE": "MAX_POSITION_SIZE",
+            "AI_TRADING_MIN_SAMPLE_SIZE": "MIN_SAMPLE_SIZE",
+            "AI_TRADING_POSITION_SIZE_MIN_USD": "POSITION_SIZE_MIN_USD",
             # Legacy daily loss limit alias: backfills ``DOLLAR_RISK_LIMIT`` when absent.
             "DAILY_LOSS_LIMIT": "DOLLAR_RISK_LIMIT",
         }
-        # Aliases are a legacy backfill mechanism: only populate canonicals when
-        # the operator did not provide an explicit canonical value.
+        # AI_TRADING_* aliases are the canonical spellings going forward and always
+        # override their legacy counterparts. Other aliases continue to act as
+        # backfills when the canonical key is missing.
         for alias, canon in alias_map.items():
             alias_value = env_map.get(alias)
             if alias_value in (None, ""):
                 continue
-            canonical_value = env_map.get(canon)
-            if canonical_value is not None and str(canonical_value).strip() != "":
+
+            if alias.startswith("AI_TRADING_"):
+                env_map[canon] = alias_value
                 continue
-            env_map[canon] = alias_value
+
+            canonical_value = env_map.get(canon)
+            if canonical_value is None or str(canonical_value).strip() == "":
+                env_map[canon] = alias_value
 
         from .aliases import resolve_trading_mode
 
