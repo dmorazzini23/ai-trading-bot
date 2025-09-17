@@ -51,13 +51,13 @@ def alpaca_empty_to_backup(s: Settings | None = None) -> bool:
 
 
 def sentiment_retry_max(s: Settings | None = None) -> int:
-    """Return maximum sentiment fetch retry count."""
+    """Return maximum sentiment fetch retry count (defaults to 5 attempts)."""
     s = s or get_settings()
     return int(getattr(s, 'sentiment_max_retries', 5))
 
 
 def sentiment_backoff_base(s: Settings | None = None) -> float:
-    """Return base delay for sentiment fetch backoff."""
+    """Return base delay for sentiment fetch backoff (defaults to 5 seconds)."""
     s = s or get_settings()
     return float(getattr(s, 'sentiment_backoff_base', 5.0))
 
