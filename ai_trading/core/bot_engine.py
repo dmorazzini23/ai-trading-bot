@@ -11784,7 +11784,12 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     # Stochastic RSI using single rolling aggregation
     rsi_bounds = rsi.rolling(14).agg(["min", "max"])
     stoch_denominator = (rsi_bounds["max"] - rsi_bounds["min"]).astype(float)
-    stoch_denominator = stoch_denominator.mask(stoch_denominator == 0.0, np.nan)
+    # Guard against zero-width RSI bounds for flat price series. Without this the
+    # stochastic RSI column becomes entirely NaN and the subsequent ``dropna``
+    # removes all rows, causing downstream feature extraction to fall back to raw
+    # data.
+    eps = np.finfo(float).eps
+    stoch_denominator = stoch_denominator.where(stoch_denominator != 0.0, eps)
     frame["stochrsi"] = (rsi - rsi_bounds["min"]) / stoch_denominator
 
     indicator_cols = [
