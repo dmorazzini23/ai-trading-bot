@@ -3916,6 +3916,9 @@ class BotState:
     last_trade_direction: dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
 
+    # Operational telemetry
+    degraded_providers: set[str] = field(default_factory=set)
+
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
         default_factory=list
@@ -10457,12 +10460,22 @@ def _enter_long(
     conf: float,
     strat: str,
 ) -> bool:
-    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
-        logger.warning(
-            "SKIP_PRIMARY_PROVIDER_DISABLED",
-            extra={"symbol": symbol, "reason": "alpaca_disabled"},
-        )
-        return True
+    primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    if callable(primary_provider_fn):
+        try:
+            provider_enabled = bool(primary_provider_fn())
+        except Exception:  # pragma: no cover - defensive guard
+            provider_enabled = True
+        if not provider_enabled:
+            logger.info(
+                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
+                extra={"symbol": symbol, "provider": "alpaca"},
+            )
+            degraded = getattr(state, "degraded_providers", None)
+            if degraded is None:
+                degraded = set()
+                setattr(state, "degraded_providers", degraded)
+            degraded.add("alpaca")
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -10486,15 +10499,21 @@ def _enter_long(
         price_source = _PRICE_SOURCE.get(symbol, "unknown")
     if quote_price is None:
         logger.warning(
-            "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}
+            "SKIP_ORDER_NO_PRICE",
+            extra={"symbol": symbol, "source": price_source},
         )
         return True
-    if price_source != "alpaca":
+    if price_source == "unknown":
         logger.warning(
             "SKIP_ORDER_PRICE_SOURCE",
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
+    if price_source != "alpaca":
+        logger.info(
+            "ORDER_USING_FALLBACK_PRICE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
     current_price = float(quote_price)
 
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
@@ -10649,12 +10668,22 @@ def _enter_short(
     conf: float,
     strat: str,
 ) -> bool:
-    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
-        logger.warning(
-            "SKIP_PRIMARY_PROVIDER_DISABLED",
-            extra={"symbol": symbol, "reason": "alpaca_disabled"},
-        )
-        return True
+    primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    if callable(primary_provider_fn):
+        try:
+            provider_enabled = bool(primary_provider_fn())
+        except Exception:  # pragma: no cover - defensive guard
+            provider_enabled = True
+        if not provider_enabled:
+            logger.info(
+                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
+                extra={"symbol": symbol, "provider": "alpaca"},
+            )
+            degraded = getattr(state, "degraded_providers", None)
+            if degraded is None:
+                degraded = set()
+                setattr(state, "degraded_providers", degraded)
+            degraded.add("alpaca")
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -10678,15 +10707,21 @@ def _enter_short(
         price_source = _PRICE_SOURCE.get(symbol, "unknown")
     if quote_price is None:
         logger.warning(
-            "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}
+            "SKIP_ORDER_NO_PRICE",
+            extra={"symbol": symbol, "source": price_source},
         )
         return True
-    if price_source != "alpaca":
+    if price_source == "unknown":
         logger.warning(
             "SKIP_ORDER_PRICE_SOURCE",
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
+    if price_source != "alpaca":
+        logger.info(
+            "ORDER_USING_FALLBACK_PRICE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
     current_price = float(quote_price)
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
@@ -10920,12 +10955,27 @@ def trade_logic(
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
 
-    if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
+    provider_enabled = True
+    primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
+    if callable(primary_provider_fn):
+        try:
+            provider_enabled = bool(primary_provider_fn())
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "PRIMARY_PROVIDER_STATUS_ERROR",
+                extra={"symbol": symbol, "detail": str(exc)},
+            )
+            provider_enabled = True
+    if not provider_enabled:
         logger.warning(
-            "SKIP_PRIMARY_PROVIDER_DISABLED",
-            extra={"symbol": symbol},
+            "PRIMARY_PROVIDER_DEGRADED",
+            extra={"symbol": symbol, "provider": "alpaca"},
         )
-        return False
+        degraded = getattr(state, "degraded_providers", None)
+        if degraded is None:
+            degraded = set()
+            setattr(state, "degraded_providers", degraded)
+        degraded.add("alpaca")
 
     with StageTimer(logger, "FETCH_FEATURE_DATA", symbol=symbol):
         raw_df, feat_df, skip_flag = _fetch_feature_data(
