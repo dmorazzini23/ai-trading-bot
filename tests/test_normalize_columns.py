@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pandas as pd
 import pytest
 
@@ -38,6 +40,9 @@ def test_normalize_removes_timestamp_index_conflict():
     out = _flatten_and_normalize_ohlcv(df)
     assert "timestamp" in out.columns
     assert all(name != "timestamp" for name in (out.index.names or []))
+    if isinstance(out.index, pd.DatetimeIndex):
+        assert out.index.tz == UTC
+    assert str(out["timestamp"].dtype) == "datetime64[ns, UTC]"
     # Should not raise after normalize when sorting by timestamp column.
     out.sort_values("timestamp")
 
@@ -59,6 +64,28 @@ def test_normalize_maps_provider_aliases():
     assert not {"t", "o", "h", "l", "c", "v"} & set(out.columns)
     pd.testing.assert_series_equal(out["open"], pd.Series([10.0, 10.5, 10.75]), check_names=False)
     pd.testing.assert_series_equal(out["close"], pd.Series([10.1, 10.6, 10.8]), check_names=False)
+    if isinstance(out.index, pd.DatetimeIndex):
+        assert out.index.tz == UTC
+    assert str(out["timestamp"].dtype) == "datetime64[ns, UTC]"
+
+
+def test_normalize_localizes_naive_index_to_utc():
+    ts = pd.date_range("2024-01-01 09:30", periods=2, freq="1min")
+    df = pd.DataFrame(
+        {
+            "open": [1.0, 1.1],
+            "high": [1.1, 1.2],
+            "low": [0.9, 1.0],
+            "close": [1.05, 1.15],
+            "volume": [100, 120],
+        },
+        index=ts,
+    )
+
+    out = _flatten_and_normalize_ohlcv(df)
+    if isinstance(out.index, pd.DatetimeIndex):
+        assert out.index.tz == UTC
+    assert str(out["timestamp"].dtype) == "datetime64[ns, UTC]"
 
 
 def test_normalize_rejects_string_nan_close_values():

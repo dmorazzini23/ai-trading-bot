@@ -647,7 +647,7 @@ def _flatten_and_normalize_ohlcv(
     - flatten MultiIndex columns
     - lower/snake columns
     - ensure 'close' exists (fallback to 'adj_close')
-    - de-duplicate & sort index, convert index to UTC and tz-naive
+    - de-duplicate & sort index, normalize index to timezone-aware UTC
     """
     pd = _ensure_pandas()
     if pd is None:
@@ -724,14 +724,21 @@ def _flatten_and_normalize_ohlcv(
 
     if isinstance(df.index, pd.DatetimeIndex):
         try:
-            tz = df.index.tz
-            if tz is not None:
-                df.index = df.index.tz_convert("UTC").tz_localize(None)
+            tz = getattr(df.index, "tz", None)
+            if tz is None:
+                df.index = df.index.tz_localize(UTC)
+            else:
+                df.index = df.index.tz_convert(UTC)
         except (AttributeError, TypeError, ValueError):
             pass
         df = df[~df.index.duplicated(keep="last")].sort_index()
     if "timestamp" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
         df = df.reset_index().rename(columns={df.index.name or "index": "timestamp"})
+    elif "timestamp" in df.columns:
+        try:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        except Exception:
+            pass
 
     # Avoid timestamp being simultaneously a column and an index label.
     try:
