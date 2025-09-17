@@ -8,6 +8,9 @@ import os
 from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from ai_trading.logging import logger
+
+
+POSITION_SIZE_MIN_USD_DEFAULT = 25.0
 try:
     from pydantic.fields import FieldInfo
 except Exception:  # pragma: no cover - pydantic may be missing in tests
@@ -133,7 +136,10 @@ class Settings(BaseSettings):
     pretrade_lookback_days: int = Field(120, alias='PRETRADE_LOOKBACK_DAYS')
     verbose_logging: bool = Field(default=False, env='AI_TRADING_VERBOSE_LOGGING')
     enable_plotting: bool = Field(default=False, env='AI_TRADING_ENABLE_PLOTTING')
-    position_size_min_usd: float = Field(default=0.0, env='AI_TRADING_POSITION_SIZE_MIN_USD')
+    position_size_min_usd: float = Field(
+        default=POSITION_SIZE_MIN_USD_DEFAULT,
+        env='AI_TRADING_POSITION_SIZE_MIN_USD',
+    )
     volume_threshold: float = Field(default=0.0, env='AI_TRADING_VOLUME_THRESHOLD')
     alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
     alpaca_feed_failover: tuple[str, ...] = Field(('sip',), env='ALPACA_FEED_FAILOVER')
@@ -471,7 +477,14 @@ def get_enable_plotting() -> bool:
     return _to_bool(getattr(get_settings(), 'enable_plotting', False), False)
 
 def get_position_size_min_usd() -> float:
-    return _to_float(getattr(get_settings(), 'position_size_min_usd', 0.0), 0.0)
+    return _to_float(
+        getattr(
+            get_settings(),
+            'position_size_min_usd',
+            POSITION_SIZE_MIN_USD_DEFAULT,
+        ),
+        POSITION_SIZE_MIN_USD_DEFAULT,
+    )
 
 def get_volume_threshold() -> float:
     return _to_float(getattr(get_settings(), 'volume_threshold', 0.0), 0.0)

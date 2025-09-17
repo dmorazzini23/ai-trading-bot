@@ -1,13 +1,11 @@
-from tests.optdeps import require
-require("numpy")
+import logging
+import os
 import sys
 import types
 
-import numpy as np
-import os
-import types
-import logging
 import pytest
+
+np = pytest.importorskip("numpy")
 os.environ.setdefault("PYTEST_RUNNING", "1")
 os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
@@ -110,6 +108,22 @@ def test_position_size_zero_raw_qty_defaults_to_min(caplog):
         qty = eng.position_size(sig, cash=1000, price=10)
     assert qty == 10
     assert any("falling back to minimum position size" in rec.message for rec in caplog.records)
+
+
+def test_position_size_invalid_min_usd_falls_back_once(caplog):
+    eng = RiskEngine()
+    sig = make_signal()
+    sig.weight = 0.1
+    eng.asset_limits["equity"] = 1.0
+    eng.strategy_limits["s"] = 1.0
+    eng.config = types.SimpleNamespace(position_size_min_usd=0.0, atr_multiplier=1.0)
+    with caplog.at_level(logging.WARNING):
+        qty1 = eng.position_size(sig, cash=100, price=30)
+        qty2 = eng.position_size(sig, cash=100, price=30)
+    assert qty1 >= 1
+    assert qty2 >= 1
+    invalid_logs = [rec for rec in caplog.records if "Invalid position_size_min_usd" in rec.message]
+    assert len(invalid_logs) == 1
 
 
 def test_check_max_drawdown():
