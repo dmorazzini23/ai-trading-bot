@@ -16,6 +16,15 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/metrics  # 200 if e
 
 Set `RUN_HEALTHCHECK=1` in the environment to enable the Flask endpoints.
 
+### Singleton guard
+
+The service refuses to start when another healthy `ai-trading` API is already
+bound to the configured port (`9001` by default). On startup it probes
+`http://127.0.0.1:<port>/healthz`; if it responds with `service=ai-trading`,
+the new process logs `API_PORT_HEALTHY_ELSEWHERE` and exits with
+`EADDRINUSE`. Operators should stop the existing `ai-trading.service` (or
+release the port) before relaunching to avoid running duplicate trading loops.
+
 ### Paths & default files
 - Trade log location is controlled by `TRADE_LOG_PATH` (or the legacy `AI_TRADING_TRADE_LOG_PATH`). The packaged systemd unit pins it to `/home/aiuser/ai-trading-bot/logs/trades.jsonl` and creates that directory with `0700` permissions for `aiuser`.
 - Without an override the bot prefers `/var/log/ai-trading-bot/trades.jsonl`; if that directory—or an explicit override—cannot be created or written it automatically falls back to `./logs/trades.jsonl` relative to the working directory. The chosen directory is auto-created.
