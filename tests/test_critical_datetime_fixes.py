@@ -99,55 +99,65 @@ class TestSentimentCaching(unittest.TestCase):
 
     def test_sentiment_cache_rate_limit_handling(self):
         """Test that sentiment caching properly handles rate limits."""
+        be = None
+        original_failures = None
         try:
             import time
 
-            from ai_trading.core.bot_engine import _SENTIMENT_CACHE, fetch_sentiment
-            from requests.exceptions import HTTPError
+            from ai_trading.core import bot_engine as be
 
             # Clear cache
-            _SENTIMENT_CACHE.clear()
+            be._SENTIMENT_CACHE.clear()
+            original_failures = be._SENTIMENT_FAILURES
 
             # Mock the API key variables in bot_engine module
             with patch("ai_trading.core.bot_engine.SENTIMENT_API_KEY", "test_key"):
                 with patch("ai_trading.core.bot_engine.NEWS_API_KEY", "test_key"):
                     # Mock the requests to simulate rate limiting
                     with patch("ai_trading.core.bot_engine._HTTP_SESSION.get") as mock_get:
-                        # First call - simulate rate limit (429)
-                        mock_response = MagicMock()
-                        mock_response.status_code = 429
-                        mock_response.raise_for_status.side_effect = HTTPError("429 Too Many Requests")
-                        mock_get.return_value = mock_response
+                        with patch("ai_trading.core.bot_engine.time.sleep") as mock_sleep:
+                            # First call - simulate rate limit (429)
+                            mock_response = MagicMock()
+                            mock_response.status_code = 429
+                            mock_get.return_value = mock_response
 
-                        # Mock context for fetch_sentiment
-                        mock_ctx = MagicMock()
+                            # Mock context for fetch_sentiment
+                            mock_ctx = MagicMock()
 
-                        # This should handle the rate limit gracefully and cache neutral score
-                        score = fetch_sentiment(mock_ctx, "AAPL")
+                            be._SENTIMENT_FAILURES = 0
 
-                        # Should return neutral score (0.0) when rate limited
-                        self.assertEqual(score, 0.0, "Should return neutral score when rate limited")
+                            # This should handle the rate limit gracefully and cache neutral score
+                            score = be.fetch_sentiment(mock_ctx, "AAPL")
 
-                        # Should cache the neutral score
-                        self.assertIn("AAPL", _SENTIMENT_CACHE, "Should cache the rate-limited result")
+                            # Should return neutral score (0.0) when rate limited
+                            self.assertEqual(score, 0.0, "Should return neutral score when rate limited")
 
-                        # Verify the cached value is correct
-                        cached_entry = _SENTIMENT_CACHE["AAPL"]
-                        self.assertEqual(cached_entry[1], 0.0, "Cached sentiment should be 0.0")
+                            # Should cache the neutral score immediately
+                            self.assertIn("AAPL", be._SENTIMENT_CACHE, "Should cache the rate-limited result")
 
-                        # Second call should use cache (no API call)
-                        _SENTIMENT_CACHE.clear()  # Clear cache to test fresh call
-                        _SENTIMENT_CACHE["AAPL"] = (
-                            time.time(),
-                            0.0,
-                        )  # Pre-populate with rate-limited result
+                            # Verify the cached value is correct and no retries/backoff occurred
+                            cached_entry = be._SENTIMENT_CACHE["AAPL"]
+                            self.assertEqual(cached_entry[1], 0.0, "Cached sentiment should be 0.0")
+                            mock_response.raise_for_status.assert_not_called()
+                            mock_sleep.assert_not_called()
+                            self.assertEqual(be._SENTIMENT_FAILURES, 0, "Rate limit should not increment failures")
 
-                        score2 = fetch_sentiment(mock_ctx, "AAPL")
-                        self.assertEqual(score2, 0.0, "Should return cached neutral score")
+                            # Second call should use cache (no API call)
+                            be._SENTIMENT_CACHE.clear()  # Clear cache to test fresh call
+                            be._SENTIMENT_CACHE["AAPL"] = (
+                                time.time(),
+                                0.0,
+                            )  # Pre-populate with rate-limited result
+
+                            score2 = be.fetch_sentiment(mock_ctx, "AAPL")
+                            self.assertEqual(score2, 0.0, "Should return cached neutral score")
 
         except ImportError as e:
             # Skip test if modules are not available
             self.skipTest(f"Required modules not available: {e}")
+        finally:
+            if be is not None and original_failures is not None:
+                be._SENTIMENT_FAILURES = original_failures
 
 
 if __name__ == "__main__":
