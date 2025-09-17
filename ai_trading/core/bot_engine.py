@@ -8315,6 +8315,14 @@ def check_pdt_rule(runtime) -> bool:
     Returns False when Alpaca is unavailable, allowing the bot to continue
     operating in simulation mode.
     """
+    if getattr(runtime, "api", None) is None:
+        initialized = _initialize_alpaca_clients()
+        if not initialized and getattr(runtime, "api", None) is None:
+            logger_once.info(
+                "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
+                key="pdt_check_skipped",
+            )
+            return False
     ensure_alpaca_attached(runtime)
     acct = safe_alpaca_get_account(runtime)
 
