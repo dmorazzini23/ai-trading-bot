@@ -79,6 +79,18 @@ def _ensure_valid_price(price: float | None) -> float | None:
         raise ValueError(f'invalid_price:{price}')
     return p
 
+def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
+    """Best-effort normalization of ``side`` to :class:`OrderSide`."""
+
+    if isinstance(side, OrderSide):
+        return side
+    if side is None:
+        return None
+    try:
+        return OrderSide(str(side).lower())
+    except Exception:
+        return None
+
 class ExecutionAlgorithm(Enum):
     """Execution algorithm types."""
     MARKET = 'market'
@@ -1131,7 +1143,13 @@ class ExecutionEngine:
         except Exception:
             diff_bps = 0.0
         order.slippage_bps = diff_bps
-        if abs(diff_bps) > threshold_bps:
+        side = _normalize_order_side(getattr(order, "side", None))
+        if side is None:
+            adverse_bps = abs(diff_bps)
+        else:
+            directional = diff_bps if side == OrderSide.BUY else -diff_bps
+            adverse_bps = max(directional, 0.0)
+        if adverse_bps > threshold_bps:
             logger.warning(
                 "SLIPPAGE_PRECHECK_THRESHOLD_EXCEEDED",
                 extra={
@@ -1140,6 +1158,7 @@ class ExecutionEngine:
                     "delayed_price": round(delayed_price, 6),
                     "reference_price": round(reference_price, 6),
                     "slippage_bps": round(diff_bps, 2),
+                    "adverse_slippage_bps": round(adverse_bps, 2),
                     "threshold_bps": round(threshold_bps, 2),
                 },
             )
@@ -1201,14 +1220,24 @@ class ExecutionEngine:
                 predicted_slippage_bps = (
                     (predicted_fill - base_ref) / base_ref
                 ) * 10000
-            if abs(predicted_slippage_bps) > threshold:
+            side = _normalize_order_side(getattr(order, "side", None))
+            if side is None:
+                adverse_predicted_bps = abs(predicted_slippage_bps)
+            else:
+                directional_predicted = (
+                    predicted_slippage_bps
+                    if side == OrderSide.BUY
+                    else -predicted_slippage_bps
+                )
+                adverse_predicted_bps = max(directional_predicted, 0.0)
+            if adverse_predicted_bps > threshold:
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
                 limit_conversion_ok = True
                 if order.order_type == OrderType.MARKET:
                     adj = float(expected) * (tol_bps / 10000.0)
                     limit_price = (
                         float(expected) + adj
-                        if order.side == OrderSide.BUY
+                        if side == OrderSide.BUY
                         else float(expected) - adj
                     )
                     tick = TICK_BY_SYMBOL.get(order.symbol)
@@ -1225,10 +1254,11 @@ class ExecutionEngine:
                         extra={
                             "order_id": order.id,
                             "limit_price": round(limit_price, 4),
+                            "adverse_slippage_bps": round(adverse_predicted_bps, 2),
                         },
                     )
                 reduced = max(
-                    1, int(order.quantity * threshold / abs(predicted_slippage_bps))
+                    1, int(order.quantity * threshold / adverse_predicted_bps)
                 )
                 qty_reduced = False
                 if reduced < order.quantity:
@@ -1236,12 +1266,24 @@ class ExecutionEngine:
                     qty_reduced = True
                     logger.warning(
                         "SLIPPAGE_QTY_REDUCED",
-                        extra={"order_id": order.id, "new_qty": reduced},
+                        extra={
+                            "order_id": order.id,
+                            "new_qty": reduced,
+                            "adverse_slippage_bps": round(
+                                adverse_predicted_bps, 2
+                            ),
+                        },
                     )
                 else:
                     order.status = OrderStatus.REJECTED
                     logger.warning(
-                        "SLIPPAGE_ORDER_REJECTED", extra={"order_id": order.id}
+                        "SLIPPAGE_ORDER_REJECTED",
+                        extra={
+                            "order_id": order.id,
+                            "adverse_slippage_bps": round(
+                                adverse_predicted_bps, 2
+                            ),
+                        },
                     )
                     if had_manual_price:
                         raise AssertionError(
@@ -1337,10 +1379,22 @@ class ExecutionEngine:
                     },
                 )
                 threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
-                if abs(slippage_bps) > threshold:
+                if side is None:
+                    adverse_actual_bps = abs(slippage_bps)
+                else:
+                    directional_actual = (
+                        slippage_bps if side == OrderSide.BUY else -slippage_bps
+                    )
+                    adverse_actual_bps = max(directional_actual, 0.0)
+                if adverse_actual_bps > threshold:
                     logger.warning(
                         'SLIPPAGE_THRESHOLD_EXCEEDED',
-                        extra={'order_id': order.id, 'slippage_bps': round(slippage_bps, 2), 'threshold_bps': threshold},
+                        extra={
+                            'order_id': order.id,
+                            'slippage_bps': round(slippage_bps, 2),
+                            'adverse_slippage_bps': round(adverse_actual_bps, 2),
+                            'threshold_bps': threshold,
+                        },
                     )
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
             logger.error('SIMULATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
