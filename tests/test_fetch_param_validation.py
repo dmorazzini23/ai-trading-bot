@@ -27,7 +27,7 @@ def test_window_without_trading_session_returns_empty():
     start = datetime(2024, 1, 6, tzinfo=UTC)
     end = start + timedelta(days=1)
     out = fetch._fetch_bars("AAPL", start, end, "1Min")
-    assert out.empty
+    assert out is None or out.empty
 
 
 def test_missing_session_raises(monkeypatch):

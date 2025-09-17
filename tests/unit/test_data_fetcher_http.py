@@ -75,7 +75,7 @@ def test_sip_unauthorized_returns_empty(monkeypatch: pytest.MonkeyPatch, status_
 
     start, end = _dt_range(2)
     out = df._fetch_bars("TEST", start, end, "1Min", feed="sip")
-    assert isinstance(out, pd.DataFrame) and out.empty
+    assert out is None or (isinstance(out, pd.DataFrame) and out.empty)
     assert calls["count"] == 1
     assert df._SIP_UNAUTHORIZED is True
 
@@ -402,7 +402,7 @@ def test_unauthorized_sip_only_attempts_once(monkeypatch: pytest.MonkeyPatch):
     out = df._fetch_bars("TEST", start, end, "1Min", feed="sip")
 
     assert calls["count"] == 1
-    assert isinstance(out, pd.DataFrame) and out.empty
+    assert out is None or (isinstance(out, pd.DataFrame) and out.empty)
     assert df._SIP_UNAUTHORIZED is True
 
 

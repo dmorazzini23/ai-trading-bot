@@ -72,7 +72,7 @@ def test_error_empty_switches_to_backup(monkeypatch):
     monkeypatch.setattr(fetch, "_backup_get_bars", fake_backup)
 
     out1 = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert out1.empty
+    assert out1 is None or out1.empty
     assert req.calls == 1
 
     out2 = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")

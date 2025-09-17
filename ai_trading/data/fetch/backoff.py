@@ -101,6 +101,8 @@ def _fetch_feed(
                 )
                 return _empty_df()
             else:
+                if df is None or getattr(df, "empty", True):
+                    return df
                 _EMPTY_BAR_COUNTS.pop(tf_key, None)
                 mark_success(symbol, timeframe)
                 return df
@@ -110,6 +112,8 @@ def _fetch_feed(
         )
         return _empty_df()
     else:
+        if df is None or getattr(df, "empty", True):
+            return df
         _EMPTY_BAR_COUNTS.pop(tf_key, None)
         mark_success(symbol, timeframe)
         return df
