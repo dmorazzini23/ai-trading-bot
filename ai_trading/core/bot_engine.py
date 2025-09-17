@@ -925,10 +925,32 @@ def maybe_init_brokers() -> None:
 
 
 def fetch_sentiment(
-    symbol_or_ctx, symbol: str | None = None, *, ttl_s: int = 300
+    symbol_or_ctx,
+    symbol: str | None = None,
+    *,
+    ttl_s: int = 300,
+    session: Any | None = None,
 ) -> float:
     global _SENTIMENT_FAILURES
-    """Fetch sentiment score with basic caching and failure tracking."""
+    """Fetch sentiment score with basic caching and failure tracking.
+
+    Parameters
+    ----------
+    symbol_or_ctx : Any
+        Historical signature kept for backwards compatibility. When ``symbol``
+        is ``None`` the value is treated as the ticker symbol.
+    symbol : str | None, optional
+        Explicit ticker symbol. Defaults to ``None`` to support the legacy
+        signature.
+    ttl_s : int, optional
+        Cache TTL for failed lookups. Defaults to ``300`` seconds.
+    session : Any, optional
+        Object providing a ``.get`` method. Tests may pass a stub (for example
+        ``session=be.requests`` after monkeypatching ``be.requests``) so network
+        guards never reach the real socket layer. When ``None`` the function
+        first tries the module-level ``_HTTP_SESSION`` and falls back to the
+        (possibly monkeypatched) ``requests`` module.
+    """
     if symbol is None:
         symbol = symbol_or_ctx  # backward compat: first arg was context
     now = time.time()
@@ -949,28 +971,57 @@ def fetch_sentiment(
             return cached[1] if cached else 0.0
 
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
+    session_candidates: list[Any] = []
+    if session is not None:
+        session_candidates.append(session)
+    else:
+        session_candidates.append(_HTTP_SESSION)
+        if requests is not _HTTP_SESSION:
+            session_candidates.append(requests)
+
+    exception_types = COMMON_EXC
+    if RequestException not in COMMON_EXC:
+        exception_types = (*COMMON_EXC, RequestException)
+    exception_types = (*exception_types, RuntimeError)
+
     for attempt in range(1, SENTIMENT_MAX_RETRIES + 1):
-        try:
-            _SENTIMENT_CALL_TIMES.append(time.time())
-            # fmt: off
-            resp = _HTTP_SESSION.get(
-                SENTIMENT_API_URL, params=params, timeout=clamp_request_timeout(HTTP_TIMEOUT)
-            )
-            # fmt: on
-            if resp.status_code in {429, 500, 502, 503, 504}:
-                raise RequestException(f"status {resp.status_code}")
-            resp.raise_for_status()
-            data = resp.json()
-            score = float(data.get("sentiment", 0.0))
-            _SENTIMENT_CACHE[symbol] = (time.time(), score)
-            return score
-        except COMMON_EXC:
-            _SENTIMENT_FAILURES += 1
-            if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD or attempt == SENTIMENT_MAX_RETRIES:
-                _SENTIMENT_CACHE[symbol] = (time.time(), 0.0)
-                return 0.0
-            sleep_s = SENTIMENT_BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, SENTIMENT_BACKOFF_BASE)
-            time.sleep(sleep_s)
+        call_recorded = False
+        for candidate in session_candidates:
+            get = getattr(candidate, "get", None)
+            if not callable(get):
+                continue
+            if not call_recorded:
+                _SENTIMENT_CALL_TIMES.append(time.time())
+                call_recorded = True
+            try:
+                # fmt: off
+                resp = get(
+                    SENTIMENT_API_URL,
+                    params=params,
+                    timeout=clamp_request_timeout(HTTP_TIMEOUT),
+                )
+                # fmt: on
+                if resp.status_code in {429, 500, 502, 503, 504}:
+                    raise RequestException(f"status {resp.status_code}")
+                resp.raise_for_status()
+                data = resp.json()
+                score = float(data.get("sentiment", 0.0))
+                _SENTIMENT_CACHE[symbol] = (time.time(), score)
+                return score
+            except Exception as exc:  # noqa: BLE001 - controlled filtering below
+                if not isinstance(exc, exception_types):
+                    raise
+                continue
+
+        _SENTIMENT_FAILURES += 1
+        if (
+            _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD
+            or attempt == SENTIMENT_MAX_RETRIES
+        ):
+            _SENTIMENT_CACHE[symbol] = (time.time(), 0.0)
+            return 0.0
+        sleep_s = SENTIMENT_BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, SENTIMENT_BACKOFF_BASE)
+        time.sleep(sleep_s)
 
 
 def _sha256_file(path: str) -> str:
