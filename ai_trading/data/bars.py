@@ -166,11 +166,11 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     iso_end = end_dt.isoformat()
     try:
         request.start = start_dt
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
     try:
         request.end = end_dt
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
     feed_req = _canon_feed(getattr(request, 'feed', None))
     if feed_req:
