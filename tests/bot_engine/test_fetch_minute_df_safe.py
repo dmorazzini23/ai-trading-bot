@@ -58,22 +58,147 @@ def test_fetch_minute_df_safe_raises_on_empty(monkeypatch):
         bot_engine.fetch_minute_df_safe("AAPL")
 
 
-def test_fetch_minute_df_safe_raises_on_stale(monkeypatch):
+def test_fetch_minute_df_safe_recovers_from_single_stale(monkeypatch, caplog):
     pd = load_pandas()
-    monkeypatch.setattr(
-        bot_engine, "get_minute_df", lambda s, start, end, **_: _sample_df()
+
+    base_now = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    idx_stale = pd.date_range(
+        end=base_now - timedelta(minutes=15), periods=5, freq="min", tz="UTC"
+    )
+    idx_fresh = pd.date_range(
+        end=base_now - timedelta(minutes=1), periods=5, freq="min", tz="UTC"
     )
 
-    def _raise_stale(df, max_age_seconds, *, symbol=None, now=None, tz=None):
-        raise RuntimeError("age=900s")
+    stale_df = pd.DataFrame(
+        {
+            "open": [1.0] * len(idx_stale),
+            "high": [1.1] * len(idx_stale),
+            "low": [0.9] * len(idx_stale),
+            "close": [1.0] * len(idx_stale),
+            "volume": [100] * len(idx_stale),
+        },
+        index=idx_stale,
+    )
+    fresh_df = pd.DataFrame(
+        {
+            "open": [1.0] * len(idx_fresh),
+            "high": [1.1] * len(idx_fresh),
+            "low": [0.9] * len(idx_fresh),
+            "close": [1.0] * len(idx_fresh),
+            "volume": [100] * len(idx_fresh),
+        },
+        index=idx_fresh,
+    )
 
-    monkeypatch.setattr(staleness, "_ensure_data_fresh", _raise_stale)
+    calls: list[tuple[datetime, datetime, dict[str, object]]] = []
+
+    def fake_get_minute_df(symbol, start, end, **kwargs):
+        calls.append((start, end, kwargs))
+        if len(calls) == 1:
+            return stale_df.copy()
+        return fresh_df.copy()
+
+    ensure_calls: list[pd.Index] = []
+
+    def fake_ensure(df, max_age_seconds, *, symbol=None, now=None, tz=None):
+        ensure_calls.append(df.index)
+        if len(ensure_calls) == 1:
+            raise RuntimeError("age=900s")
+        return None
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        intraday_lookback_minutes=30,
+        data_feed="iex",
+        alpaca_feed_failover=("sip",),
+    )
+
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", fake_ensure)
+
+    with caplog.at_level(logging.INFO):
+        result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert len(calls) == 2
+    assert ensure_calls[0].equals(idx_stale)
+    assert ensure_calls[1].equals(idx_fresh)
+    assert isinstance(result, pd.DataFrame)
+    pd.testing.assert_index_equal(result.index, idx_fresh)
+    assert any(rec.message == "FETCH_MINUTE_STALE_RECOVERED" for rec in caplog.records)
+
+
+def test_fetch_minute_df_safe_raises_when_all_retries_stale(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    idx_stale = pd.date_range(
+        end=base_now - timedelta(minutes=20), periods=5, freq="min", tz="UTC"
+    )
+
+    stale_df = pd.DataFrame(
+        {
+            "open": [1.0] * len(idx_stale),
+            "high": [1.1] * len(idx_stale),
+            "low": [0.9] * len(idx_stale),
+            "close": [1.0] * len(idx_stale),
+            "volume": [100] * len(idx_stale),
+        },
+        index=idx_stale,
+    )
+
+    calls: list[tuple[datetime, datetime, dict[str, object]]] = []
+
+    def fake_get_minute_df(symbol, start, end, **kwargs):
+        calls.append((start, end, kwargs))
+        return stale_df.copy()
+
+    ensure_calls: list[int] = []
+
+    def fake_ensure(df, max_age_seconds, *, symbol=None, now=None, tz=None):
+        ensure_calls.append(len(ensure_calls))
+        raise RuntimeError(f"age=900s-call{len(ensure_calls)}")
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        intraday_lookback_minutes=30,
+        data_feed="iex",
+        alpaca_feed_failover=(),
+    )
+
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", fake_ensure)
 
     with pytest.raises(bot_engine.DataFetchError) as excinfo:
         bot_engine.fetch_minute_df_safe("AAPL")
 
+    assert len(calls) >= 2  # initial + retry
     assert getattr(excinfo.value, "fetch_reason", None) == "stale_minute_data"
     assert getattr(excinfo.value, "symbol", None) == "AAPL"
+    detail = getattr(excinfo.value, "detail", "")
+    assert "age=900s-call1" in detail
+    assert "age=900s-call2" in detail
 
 
 def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
