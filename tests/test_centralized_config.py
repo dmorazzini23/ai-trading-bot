@@ -56,6 +56,13 @@ class TestCentralizedConfig:
             TradingConfig.from_env({})
         monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
 
+    def test_missing_drawdown_threshold_allowed_when_opted_in(self, monkeypatch):
+        """Legacy relaxed path still defaults the drawdown threshold."""
+        monkeypatch.delenv("MAX_DRAWDOWN_THRESHOLD", raising=False)
+        cfg = TradingConfig.from_env({}, allow_missing_drawdown=True)
+        assert cfg.max_drawdown_threshold == pytest.approx(0.08)
+        monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+
     def test_mode_specific_configurations(self):
         """Test that each mode has appropriate parameter values."""
         conservative = TradingConfig.from_env("conservative")

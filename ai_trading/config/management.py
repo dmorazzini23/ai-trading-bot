@@ -456,9 +456,8 @@ class TradingConfig:
         ``env_or_mode`` may be a mode string or a mapping of env vars that
         supplements ``os.environ``. Mapping keys override any existing process
         environment values and ``TRADING_MODE`` may be present to influence
-        overrides. ``MAX_DRAWDOWN_THRESHOLD`` defaults to ``0.08`` when unset.
-        ``allow_missing_drawdown`` is retained for backward compatibility but
-        has no effect.
+        overrides. ``MAX_DRAWDOWN_THRESHOLD`` defaults to ``0.08`` only when
+        ``allow_missing_drawdown`` is explicitly enabled.
         """
         mode: str | None = None
         env_map = {k.upper(): v for k, v in os.environ.items()}
@@ -542,6 +541,26 @@ class TradingConfig:
                     "TRADING_CONFIG_EXTRAS must be valid JSON"
                 ) from exc
 
+        _sentinel = object()
+        raw_drawdown_threshold = _get(
+            "MAX_DRAWDOWN_THRESHOLD",
+            float,
+            default=_sentinel,
+            aliases=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
+        )
+        drawdown_missing = raw_drawdown_threshold is _sentinel
+        if drawdown_missing:
+            if not allow_missing_drawdown:
+                raise RuntimeError(
+                    "MAX_DRAWDOWN_THRESHOLD is required; set allow_missing_drawdown=True to use the 0.08 fallback."
+                )
+            logger.debug(
+                "allow_missing_drawdown is deprecated; max_drawdown_threshold defaults to 0.08"
+            )
+            max_drawdown_threshold = 0.08
+        else:
+            max_drawdown_threshold = raw_drawdown_threshold
+
         cfg = cls(
             capital_cap=_get("CAPITAL_CAP", float, default=0.25),
             dollar_risk_limit=_get(
@@ -566,12 +585,7 @@ class TradingConfig:
                 aliases=("AI_TRADING_POSITION_SIZE_MIN_USD",),
             ),
             sector_exposure_cap=_get("SECTOR_EXPOSURE_CAP", float),
-            max_drawdown_threshold=_get(
-                "MAX_DRAWDOWN_THRESHOLD",
-                float,
-                default=0.08,
-                aliases=("AI_TRADING_MAX_DRAWDOWN_THRESHOLD",),
-            ),
+            max_drawdown_threshold=max_drawdown_threshold,
             trailing_factor=_get("TRAILING_FACTOR", float),
             take_profit_factor=_get("TAKE_PROFIT_FACTOR", float),
             max_position_size_pct=_get("MAX_POSITION_SIZE_PCT", float),
@@ -677,11 +691,6 @@ class TradingConfig:
                     object.__setattr__(cfg, k, v)
                 except Exception:
                     pass
-
-        if allow_missing_drawdown:
-            logger.debug(
-                "allow_missing_drawdown is deprecated; max_drawdown_threshold defaults to 0.08"
-            )
 
         return cfg
 
