@@ -122,6 +122,7 @@ from ai_trading.config.management import (
     is_shadow_mode,
     TradingConfig,
 )
+from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 from ai_trading.broker.alpaca_credentials import check_alpaca_available
 from ai_trading import portfolio  # expose portfolio module for tests/monkeypatching
@@ -2699,6 +2700,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     from ai_trading.utils.base import is_market_open, EASTERN_TZ
     from ai_trading.data.market_calendar import rth_session_utc, previous_trading_session
 
+    max_age_seconds = _minute_data_freshness_limit()
+
     now_utc = datetime.now(UTC)
     today_et = now_utc.astimezone(EASTERN_TZ).date()
     market_open_now = True
@@ -2963,7 +2966,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             try:
                 staleness._ensure_data_fresh(
                     refreshed_df,
-                    600,
+                    max_age_seconds,
                     symbol=symbol,
                     now=staleness_reference_retry,
                 )
@@ -3055,10 +3058,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     staleness_reference = now_utc if market_open_now else end_dt
 
     try:
-        # Allow data up to 10 minutes old during market hours (600 seconds)
+        # Allow data up to the configured staleness window during market hours
         staleness._ensure_data_fresh(
             df,
-            600,
+            max_age_seconds,
             symbol=symbol,
             now=staleness_reference,
         )
@@ -4083,6 +4086,16 @@ def _env_float(default: float, *keys: str) -> float:
         except COMMON_EXC:
             logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": k, "value": v})
     return default
+
+
+def _minute_data_freshness_limit() -> int:
+    """Return tolerated staleness for minute data in seconds."""
+
+    try:
+        value = int(minute_data_freshness_tolerance())
+    except Exception:
+        return 900
+    return value if value > 0 else 900
 
 
 CAPITAL_CAP = _env_float(0.25, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
@@ -5380,7 +5393,7 @@ class DataFetcher:
             try:
                 staleness._ensure_data_fresh(
                     df,
-                    600,
+                    _minute_data_freshness_limit(),
                     symbol=symbol,
                     now=now_utc,
                 )

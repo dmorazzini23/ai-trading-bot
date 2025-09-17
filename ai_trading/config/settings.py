@@ -35,6 +35,18 @@ def max_data_fallbacks(s: Settings | None = None) -> int:
     return int(getattr(s, 'max_data_fallbacks', 2))
 
 
+def minute_data_freshness_tolerance(s: Settings | None = None) -> int:
+    """Return maximum tolerated staleness for minute data in seconds."""
+
+    s = s or get_settings()
+    raw_value = getattr(s, 'minute_data_freshness_tolerance_seconds', 900)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 900
+    return value if value > 0 else 900
+
+
 def alpaca_feed_failover(s: Settings | None = None) -> tuple[str, ...]:
     """Return preferred Alpaca feed fallback order."""
     s = s or get_settings()
@@ -73,6 +85,7 @@ __all__ = [
     'broker_keys',
     'provider_priority',
     'max_data_fallbacks',
+    'minute_data_freshness_tolerance',
     'alpaca_feed_failover',
     'alpaca_empty_to_backup',
     'sentiment_retry_max',

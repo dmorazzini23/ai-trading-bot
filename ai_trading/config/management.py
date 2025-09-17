@@ -357,6 +357,7 @@ class TradingConfig:
     paper: bool = True
     data_feed: Optional[str] = None
     data_provider: Optional[str] = None
+    minute_data_freshness_tolerance_seconds: int = 900
     # Additional attributes validated by tests; optional for runtime
     max_portfolio_risk: Optional[float] = None
     buy_threshold: Optional[float] = 0.4
@@ -395,6 +396,11 @@ class TradingConfig:
             raise ValueError("delta_threshold must be non-negative")
         if not (0.0 <= self.min_confidence <= 1.0):
             raise ValueError("min_confidence must be between 0 and 1")
+        tolerance = getattr(self, "minute_data_freshness_tolerance_seconds", 900)
+        if tolerance <= 0:
+            raise ValueError(
+                "minute_data_freshness_tolerance_seconds must be positive"
+            )
 
     # --- Ergonomics: safe update & dict view ---
     def update(self, **kwargs) -> None:
@@ -632,6 +638,12 @@ class TradingConfig:
             ),
             data_feed=_get("DATA_FEED", str),
             data_provider=_get("DATA_PROVIDER", str),
+            minute_data_freshness_tolerance_seconds=_get(
+                "MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS",
+                int,
+                default=900,
+                aliases=("AI_TRADING_MINUTE_DATA_FRESHNESS_TOLERANCE_SECONDS",),
+            ),
             buy_threshold=_get(
                 "BUY_THRESHOLD", float, aliases=("AI_TRADING_BUY_THRESHOLD",)
             ),
