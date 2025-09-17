@@ -262,6 +262,17 @@ class BaseStrategy(ABC):
         """Convert strategy to dictionary representation."""
         return {'strategy_id': self.strategy_id, 'name': self.name, 'risk_level': self.risk_level.value, 'is_active': self.is_active, 'parameters': self.parameters, 'symbols': self.symbols, 'timeframes': self.timeframes, 'performance': self.get_performance_summary(), 'created_at': self.created_at.isoformat()}
 
+class Strategy(BaseStrategy):
+    """Minimal concrete strategy used for tests and fallbacks."""
+
+    def __init__(self) -> None:
+        super().__init__(strategy_id="base", name="Base Strategy")
+
+    def generate_signals(self, market_data: dict) -> list[StrategySignal]:
+        """Return an empty signal list for any market data."""
+        return []
+
+
 class StrategyRegistry:
     """
     Registry for managing multiple trading strategies.
@@ -410,4 +421,3 @@ class StrategyRegistry:
     def get_registry_summary(self) -> dict:
         """Get summary of strategy registry."""
         return {'total_strategies': len(self.strategies), 'active_strategies': len(self.active_strategies), 'strategy_list': [{'id': strategy.strategy_id, 'name': strategy.name, 'is_active': strategy.is_active, 'signals_generated': strategy.signals_generated, 'trades_executed': strategy.trades_executed} for strategy in self.strategies.values()]}
-Strategy = BaseStrategy

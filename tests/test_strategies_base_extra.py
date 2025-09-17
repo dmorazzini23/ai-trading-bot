@@ -8,5 +8,6 @@ def test_asset_class_for_crypto():
 
 
 def test_strategy_generate_base():
-    """Base Strategy.generate returns empty list."""
-    assert Strategy().generate(None) == []
+    """Default Strategy implementation returns no signals and does not raise."""
+    strategy = Strategy()
+    assert strategy.generate(None) == []
