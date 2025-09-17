@@ -9,6 +9,8 @@ import pytest
 import ai_trading.data.fetch as df
 from ai_trading.utils.timefmt import isoformat_z
 
+pd = pytest.importorskip("pandas")
+
 
 @dataclass
 class Rec:
@@ -65,7 +67,8 @@ def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics
     def fake_get(*args, **kwargs):
         return responses.pop(0)
 
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=True)
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
     assert not out.empty
     names = [r.name for r in capmetrics]
@@ -79,6 +82,29 @@ def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics
     assert capmetrics[2].tags["feed"] == "sip"
 
 
+def test_rate_limit_no_retry_when_sip_unauthorized(
+    monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]
+):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", True, raising=False)
+    start, end = _ts_window()
+    calls = {"count": 0}
+
+    def fake_get(*args, **kwargs):
+        calls["count"] += 1
+        return Resp(429, {})
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+
+    with pytest.raises(ValueError, match="rate_limited"):
+        df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert calls["count"] == 1
+    names = [r.name for r in capmetrics]
+    assert names == ["data.fetch.rate_limited"]
+    assert capmetrics[0].tags["feed"] == "iex"
+
+
 def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     start, end = _ts_window()
@@ -90,7 +116,8 @@ def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: l
             raise ev
         return ev
 
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=True)
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
     assert not out.empty
     names = [r.name for r in capmetrics]
@@ -113,7 +140,9 @@ def test_unauthorized_sip_returns_empty(
     def fake_get(*args, **kwargs):
         return responses.pop(0)
 
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=True)
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+    monkeypatch.setattr(df, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="sip")
     assert out.empty
     names = [r.name for r in capmetrics]
@@ -132,7 +161,8 @@ def test_empty_payload_fallback_success(
     def fake_get(*args, **kwargs):
         return responses.pop(0)
 
-    monkeypatch.setattr(df.requests, "get", fake_get, raising=True)
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
     out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
     assert not out.empty
     names = [r.name for r in capmetrics]

@@ -97,6 +97,39 @@ def test_sip_fallback_skipped_when_marked_unauthorized(monkeypatch: pytest.Monke
     assert calls["count"] == 1
 
 
+def test_rate_limit_after_sip_unauthorized_only_hits_iex_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+
+    calls = {"sip": 0, "iex": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        feed = (params or {}).get("feed")
+        if feed == "sip":
+            calls["sip"] += 1
+            return _Resp(401, payload={"message": "auth required"})
+        calls["iex"] += 1
+        return _Resp(429, payload={"message": "rate limit"})
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+    monkeypatch.setattr(df, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
+
+    start, end = _dt_range(2)
+    df._fetch_bars("TEST", start, end, "1Min", feed="sip")
+    assert calls["sip"] == 1
+    assert df._SIP_UNAUTHORIZED is True
+
+    with pytest.raises(ValueError, match="rate_limited"):
+        df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+    assert calls["iex"] == 1
+
+
 def test_no_additional_sip_requests_after_unauthorized(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
