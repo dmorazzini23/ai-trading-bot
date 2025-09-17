@@ -58,6 +58,12 @@ Daily price requests now log their parameters and outcome:
   alternate feed (SIP when entitled, otherwise the next provider in
   `provider_priority`) so on-call operators can correlate coverage gaps with
   upstream providers.
+- `FETCH_MINUTE_STALE_DATA` warns when the most recent minute bar is outside the
+  freshness SLA. The bot now re-fetches the window using the current clock,
+  tries configured feed promotions, and logs `FETCH_MINUTE_STALE_RECOVERED`
+  once fresher data arrives. Operators only see a `DataFetchError` after all
+  retry attempts still return stale payloads, with the aggregated staleness
+  reasons recorded in the exception detail for post-mortem analysis.
 - Unauthorized feed responses trigger a quick entitlement check and switch to a
   permitted feed when available. If no alternative exists, operators are
   notified once.

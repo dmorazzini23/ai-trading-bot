@@ -2719,6 +2719,141 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         end_dt = now_utc
         market_open_now = True
 
+    def _determine_fallback_feed(
+        current_feed: str,
+    ) -> tuple[str | None, str | None]:
+        fallback_feed: str | None = None
+        fallback_provider: str | None = None
+        if data_fetcher_module._sip_configured():
+            fallback_feed = "sip"
+        else:
+            try:
+                from ai_trading.config.settings import (
+                    provider_priority as _provider_priority,
+                )
+
+                providers = list(_provider_priority())
+            except Exception as exc:  # pragma: no cover - defensive logging
+                providers = []
+                logger.debug(
+                    "PROVIDER_PRIORITY_LOOKUP_FAILED",
+                    extra={"error": str(exc)},
+                )
+            current_key = f"alpaca_{current_feed}"
+            if providers:
+                try:
+                    current_index = providers.index(current_key)
+                except ValueError:
+                    current_index = -1
+                for provider_name in providers[current_index + 1 :]:
+                    fallback_provider = provider_name
+                    if provider_name.startswith("alpaca_"):
+                        fallback_feed = provider_name.split("_", 1)[1]
+                    break
+        return fallback_feed, fallback_provider
+
+    def _sanitize_minute_df(
+        raw_df: pd.DataFrame,
+        *,
+        symbol: str,
+        current_now: datetime,
+    ) -> pd.DataFrame:
+        df = raw_df.copy()
+        # Drop bars with zero volume or from the current (incomplete) minute
+        try:
+            current_minute = current_now.replace(second=0, microsecond=0)
+            ts_col = "timestamp" if "timestamp" in df.columns else None
+            if ts_col is not None:
+                df = df[df[ts_col] < current_minute]
+            else:
+                df = df[df.index < current_minute]
+            if "volume" in df.columns:
+                df = df[df["volume"] > 0]
+        except (*COMMON_EXC, AttributeError) as exc:  # pragma: no cover - defensive
+            logger.debug("minute bar filtering failed: %s", exc)
+
+        if df.empty:
+            msg = (
+                "Minute bars DataFrame is empty after fallbacks; market likely closed"
+            )  # AI-AGENT-REF
+            logger.warning(
+                "FETCH_MINUTE_EMPTY",
+                extra={"reason": "empty", "context": "market_closed"},
+            )
+            raise DataFetchError(msg)
+
+        if "close" not in df.columns:
+            logger.error(
+                "FETCH_MINUTE_CLOSE_MISSING",
+                extra={"symbol": symbol, "timeframe": "1Min", "rows": len(df)},
+            )
+            err = DataFetchError("close_column_missing")
+            setattr(err, "fetch_reason", "close_column_missing")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            raise err
+
+        # Normalize OHLCV numeric types so placeholder strings become NaN prior to filtering
+        for col in ("open", "high", "low", "close", "volume"):
+            if col in df.columns:
+                try:
+                    df.loc[:, col] = pd.to_numeric(df[col], errors="coerce")
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.debug("minute bar %s coercion failed: %s", col, exc)
+
+        close_series = df["close"]
+        dropped_rows = 0
+        initial_rows = len(df)
+        try:
+            mask = close_series.notna()
+            df = df[mask]
+            dropped_rows = initial_rows - len(df)
+            if df.empty:
+                logger.warning(
+                    "FETCH_MINUTE_CLOSE_ALL_NAN_AFTER_FILTER",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "initial_rows": initial_rows,
+                        "dropped_rows": initial_rows,
+                    },
+                )
+                err = DataFetchError("close_column_all_nan")
+                setattr(err, "fetch_reason", "close_column_all_nan")
+                setattr(err, "symbol", symbol)
+                setattr(err, "timeframe", "1Min")
+                raise err
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.debug("close filter failed: %s", exc)
+        close_series = df["close"]
+        try:
+            non_null_count = int(close_series.count())
+        except Exception:  # pragma: no cover - defensive fallback
+            try:
+                non_null_count = int(
+                    close_series.dropna().shape[0]
+                )  # type: ignore[attr-defined]
+            except Exception:
+                non_null_count = 0
+        if non_null_count == 0:
+            logger.error(
+                "FETCH_MINUTE_CLOSE_ALL_NAN",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "rows": len(df),
+                    "initial_rows": initial_rows,
+                    "dropped_rows": dropped_rows,
+                },
+            )
+            err = DataFetchError("close_column_all_nan")
+            setattr(err, "fetch_reason", "close_column_all_nan")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            raise err
+
+        return df
+
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
         try:
@@ -2759,6 +2894,110 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             return "iex"
         return data_fetcher_module._DEFAULT_FEED
 
+    current_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
+    active_feed = current_feed
+
+    def _attempt_stale_recovery(
+        *,
+        stale_details: list[str],
+        current_feed: str,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> tuple[pd.DataFrame, datetime, datetime, datetime, str] | None:
+        seen_feeds: set[str] = set()
+        attempts: list[tuple[str, str | None]] = []
+
+        def _append_attempt(feed: str | None, provider: str | None) -> None:
+            if not feed:
+                return
+            if feed in seen_feeds:
+                return
+            seen_feeds.add(feed)
+            attempts.append((feed, provider))
+
+        _append_attempt(current_feed, f"alpaca_{current_feed}")
+
+        failover = getattr(CFG, "alpaca_feed_failover", ())
+        for candidate in failover:
+            if not candidate:
+                continue
+            normalized = _normalize_feed_name(candidate)
+            _append_attempt(normalized, f"alpaca_{normalized}")
+
+        fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
+        if fallback_feed and fallback_feed != current_feed:
+            provider_name = fallback_provider or f"alpaca_{fallback_feed}"
+            _append_attempt(fallback_feed, provider_name)
+
+        for feed_name, provider_name in attempts:
+            attempt_now = datetime.now(UTC)
+            attempt_end = attempt_now if market_open_now else end_dt
+            fetch_kwargs: dict[str, object] = {}
+            if feed_name != current_feed:
+                fetch_kwargs["feed"] = feed_name
+            try:
+                refreshed = get_minute_df(symbol, start_dt, attempt_end, **fetch_kwargs)
+            except DataFetchError:
+                raise
+            except Exception as fetch_exc:
+                logger.warning(
+                    "FETCH_MINUTE_STALE_RETRY_FAILED",
+                    extra={
+                        "symbol": symbol,
+                        "feed": feed_name,
+                        "provider": provider_name or "",
+                        "error": str(fetch_exc),
+                    },
+                )
+                continue
+            if refreshed is None or getattr(refreshed, "empty", True):
+                continue
+            refreshed_df = _sanitize_minute_df(
+                refreshed,
+                symbol=symbol,
+                current_now=attempt_now,
+            )
+            staleness_reference_retry = (
+                attempt_now if market_open_now else attempt_end
+            )
+            try:
+                staleness._ensure_data_fresh(
+                    refreshed_df,
+                    600,
+                    symbol=symbol,
+                    now=staleness_reference_retry,
+                )
+            except RuntimeError as retry_exc:
+                detail_retry = str(retry_exc)
+                stale_details.append(detail_retry)
+                logger.warning(
+                    "FETCH_MINUTE_STALE_RETRY_STILL_STALE",
+                    extra={
+                        "symbol": symbol,
+                        "detail": detail_retry,
+                        "feed": feed_name,
+                        "provider": provider_name or "",
+                    },
+                )
+                continue
+            logger.info(
+                "FETCH_MINUTE_STALE_RECOVERED",
+                extra={
+                    "symbol": symbol,
+                    "feed": feed_name,
+                    "provider": provider_name or "",
+                    "attempt": len(stale_details),
+                },
+            )
+            return (
+                refreshed_df,
+                attempt_end,
+                staleness_reference_retry,
+                attempt_now,
+                feed_name,
+            )
+        return None
+
     actual_bars = 0
     if df is not None:
         try:
@@ -2775,30 +3014,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     )
 
     if low_coverage:
-        current_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
-        fallback_feed: str | None = None
-        fallback_provider: str | None = None
-        if data_fetcher_module._sip_configured():
-            fallback_feed = "sip"
-        else:
-            try:
-                from ai_trading.config.settings import provider_priority as _provider_priority
-
-                providers = list(_provider_priority())
-            except Exception as exc:  # pragma: no cover - defensive logging
-                providers = []
-                logger.debug("PROVIDER_PRIORITY_LOOKUP_FAILED", extra={"error": str(exc)})
-            current_key = f"alpaca_{current_feed}"
-            if providers:
-                try:
-                    current_index = providers.index(current_key)
-                except ValueError:
-                    current_index = -1
-                for provider_name in providers[current_index + 1 :]:
-                    fallback_provider = provider_name
-                    if provider_name.startswith("alpaca_"):
-                        fallback_feed = provider_name.split("_", 1)[1]
-                    break
+        fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
         log_extra = {
             "symbol": symbol,
             "expected_bars": expected_bars,
@@ -2827,95 +3043,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     actual_bars = int(len(df))
                 except Exception:
                     actual_bars = 0
+                if fallback_feed:
+                    active_feed = fallback_feed
 
-    # Drop bars with zero volume or from the current (incomplete) minute
-    try:
-        current_minute = now_utc.replace(second=0, microsecond=0)
-        ts_col = "timestamp" if "timestamp" in df.columns else None
-        if ts_col is not None:
-            df = df[df[ts_col] < current_minute]
-        else:
-            df = df[df.index < current_minute]
-        if "volume" in df.columns:
-            df = df[df["volume"] > 0]
-    except (*COMMON_EXC, AttributeError) as exc:  # pragma: no cover - defensive
-        logger.debug("minute bar filtering failed: %s", exc)
+    if df is None:
+        raise DataFetchError("minute_data_unavailable")
 
-    if df.empty:
-        msg = "Minute bars DataFrame is empty after fallbacks; market likely closed"  # AI-AGENT-REF
-        logger.warning(
-            "FETCH_MINUTE_EMPTY",
-            extra={"reason": "empty", "context": "market_closed"},
-        )
-        raise DataFetchError(msg)
-
-    if "close" not in df.columns:
-        logger.error(
-            "FETCH_MINUTE_CLOSE_MISSING",
-            extra={"symbol": symbol, "timeframe": "1Min", "rows": len(df)},
-        )
-        err = DataFetchError("close_column_missing")
-        setattr(err, "fetch_reason", "close_column_missing")
-        setattr(err, "symbol", symbol)
-        setattr(err, "timeframe", "1Min")
-        raise err
-
-    # Normalize OHLCV numeric types so placeholder strings become NaN prior to filtering
-    for col in ("open", "high", "low", "close", "volume"):
-        if col in df.columns:
-            try:
-                df.loc[:, col] = pd.to_numeric(df[col], errors="coerce")
-            except Exception as exc:  # pragma: no cover - defensive fallback
-                logger.debug("minute bar %s coercion failed: %s", col, exc)
-
-    close_series = df["close"]
-    dropped_rows = 0
-    initial_rows = len(df)
-    try:
-        mask = close_series.notna()
-        df = df[mask]
-        dropped_rows = initial_rows - len(df)
-        if df.empty:
-            logger.warning(
-                "FETCH_MINUTE_CLOSE_ALL_NAN_AFTER_FILTER",
-                extra={
-                    "symbol": symbol,
-                    "timeframe": "1Min",
-                    "initial_rows": initial_rows,
-                    "dropped_rows": initial_rows,
-                },
-            )
-            err = DataFetchError("close_column_all_nan")
-            setattr(err, "fetch_reason", "close_column_all_nan")
-            setattr(err, "symbol", symbol)
-            setattr(err, "timeframe", "1Min")
-            raise err
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        logger.debug("close filter failed: %s", exc)
-    close_series = df["close"]
-    try:
-        non_null_count = int(close_series.count())
-    except Exception:  # pragma: no cover - defensive fallback
-        try:
-            non_null_count = int(close_series.dropna().shape[0])  # type: ignore[attr-defined]
-        except Exception:
-            non_null_count = 0
-    if non_null_count == 0:
-        logger.error(
-            "FETCH_MINUTE_CLOSE_ALL_NAN",
-            extra={
-                "symbol": symbol,
-                "timeframe": "1Min",
-                "rows": len(df),
-                "initial_rows": initial_rows,
-                "dropped_rows": dropped_rows,
-            },
-        )
-        err = DataFetchError("close_column_all_nan")
-        setattr(err, "fetch_reason", "close_column_all_nan")
-        setattr(err, "symbol", symbol)
-        setattr(err, "timeframe", "1Min")
-        raise err
+    df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
 
     # Check data freshness before proceeding with trading logic
     staleness_reference = now_utc if market_open_now else end_dt
@@ -2934,12 +3068,21 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "FETCH_MINUTE_STALE_DATA",
             extra={"symbol": symbol, "detail": detail},
         )
-        err = DataFetchError("stale_minute_data")
-        setattr(err, "fetch_reason", "stale_minute_data")
-        setattr(err, "symbol", symbol)
-        setattr(err, "timeframe", "1Min")
-        setattr(err, "detail", detail)
-        raise err from exc
+        stale_details = [detail]
+        recovery = _attempt_stale_recovery(
+            stale_details=stale_details,
+            current_feed=active_feed,
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+        if recovery is None:
+            err = DataFetchError("stale_minute_data")
+            setattr(err, "fetch_reason", "stale_minute_data")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            setattr(err, "detail", "; ".join(stale_details))
+            raise err from exc
+        df, end_dt, staleness_reference, now_utc, active_feed = recovery
 
     return df
 
