@@ -11764,11 +11764,19 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
     # Stochastic RSI using single rolling aggregation
     rsi_bounds = rsi.rolling(14).agg(["min", "max"])
-    frame["stochrsi"] = (rsi - rsi_bounds["min"]) / (
-        rsi_bounds["max"] - rsi_bounds["min"]
-    )
+    stoch_denominator = (rsi_bounds["max"] - rsi_bounds["min"]).astype(float)
+    stoch_denominator = stoch_denominator.mask(stoch_denominator == 0.0, np.nan)
+    frame["stochrsi"] = (rsi - rsi_bounds["min"]) / stoch_denominator
 
-    frame.dropna(inplace=True)
+    indicator_cols = [
+        "rsi",
+        "rsi_14",
+        "ichimoku_conv",
+        "ichimoku_base",
+        "stochrsi",
+    ]
+    subset = [col for col in indicator_cols if col in frame.columns]
+    frame.dropna(subset=subset, inplace=True)
     if frame.empty:
         logger.warning(
             "prepare_indicators produced empty dataframe after dropping NaNs.",
