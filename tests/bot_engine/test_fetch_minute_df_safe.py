@@ -1,3 +1,4 @@
+import logging
 import sys
 import types
 from datetime import UTC, datetime, timedelta
@@ -38,7 +39,9 @@ def _sample_df():
 
 def test_fetch_minute_df_safe_returns_dataframe(monkeypatch):
     pd = load_pandas()
-    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: _sample_df())
+    monkeypatch.setattr(
+        bot_engine, "get_minute_df", lambda s, start, end, **_: _sample_df()
+    )
     monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None)
     result = bot_engine.fetch_minute_df_safe("AAPL")
     assert isinstance(result, pd.DataFrame)
@@ -47,7 +50,9 @@ def test_fetch_minute_df_safe_returns_dataframe(monkeypatch):
 
 def test_fetch_minute_df_safe_raises_on_empty(monkeypatch):
     pd = load_pandas()
-    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: pd.DataFrame())
+    monkeypatch.setattr(
+        bot_engine, "get_minute_df", lambda s, start, end, **_: pd.DataFrame()
+    )
     monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None)
     with pytest.raises(bot_engine.DataFetchError):
         bot_engine.fetch_minute_df_safe("AAPL")
@@ -55,7 +60,9 @@ def test_fetch_minute_df_safe_raises_on_empty(monkeypatch):
 
 def test_fetch_minute_df_safe_raises_on_stale(monkeypatch):
     pd = load_pandas()
-    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: _sample_df())
+    monkeypatch.setattr(
+        bot_engine, "get_minute_df", lambda s, start, end, **_: _sample_df()
+    )
 
     def _raise_stale(df, max_age_seconds, *, symbol=None, now=None, tz=None):
         raise RuntimeError("age=900s")
@@ -108,7 +115,9 @@ def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
     monkeypatch.setattr(base_utils, "is_market_open", lambda: False)
-    monkeypatch.setattr(bot_engine, "get_minute_df", lambda s, start, end: df.copy())
+    monkeypatch.setattr(
+        bot_engine, "get_minute_df", lambda s, start, end, **_: df.copy()
+    )
     monkeypatch.setattr(staleness, "_ensure_data_fresh", capture_freshness)
     monkeypatch.setattr(
         market_calendar,
@@ -126,6 +135,87 @@ def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
     assert captured["max_age"] == 600
     assert captured["now"] == session_end
     pd.testing.assert_frame_equal(result, df)
+
+
+def test_fetch_minute_df_safe_sparse_minute_data_triggers_sip_fallback(
+    monkeypatch, caplog
+):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 17, 30, tzinfo=UTC)
+    session_start = datetime(2024, 1, 3, 14, 30, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    expected = int((base_now - session_start).total_seconds() // 60)
+
+    calls: list[tuple[str, object, object, object]] = []
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        calls.append((symbol, start, end, feed))
+        if feed == "sip":
+            idx = pd.date_range(
+                end=end - timedelta(minutes=1),
+                periods=expected,
+                freq="min",
+                tz="UTC",
+            )
+            return pd.DataFrame(
+                {
+                    "close": list(range(len(idx))),
+                    "volume": [100] * len(idx),
+                },
+                index=idx,
+            )
+        idx = pd.date_range(start=start, periods=10, freq="min", tz="UTC")
+        return pd.DataFrame(
+            {
+                "close": [1.0] * len(idx),
+                "volume": [100] * len(idx),
+            },
+            index=idx,
+        )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine.CFG, "data_feed", "iex", raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert len(calls) == 2
+    assert calls[1][3] == "sip"
+    assert len(result) == expected
+    assert any(rec.message == "MINUTE_DATA_COVERAGE_WARNING" for rec in caplog.records)
 
 
 def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
@@ -219,7 +309,7 @@ def test_fetch_minute_df_safe_market_cache_hit(monkeypatch, tmp_path):
 
     calls: list[tuple[str, object, object]] = []
 
-    def fake_get_minute_df(symbol: str, start, end):
+    def fake_get_minute_df(symbol: str, start, end, **_):
         calls.append((symbol, start, end))
         return sample
 
