@@ -202,6 +202,13 @@ class PortInUseError(RuntimeError):
             message = f"Port {port} is already in use"
         super().__init__(message)
 
+
+class ExistingApiDetected(PortInUseError):
+    """Raised when another healthy ai-trading API instance owns the port."""
+
+    def __init__(self, port: int):
+        super().__init__(port, pid=None)
+
 config: Any | None = None
 _SHUTDOWN = threading.Event()
 
@@ -509,6 +516,39 @@ def run_flask_app(
         raise
 
 
+def _probe_local_api_health(port: int) -> bool:
+    """Return ``True`` when the ai-trading API responds on ``port``."""
+
+    try:
+        import http.client as _http
+        import json as _json
+    except Exception:  # pragma: no cover - stdlib import failures are unexpected
+        return False
+
+    conn = None
+    resp = None
+    try:
+        conn = _http.HTTPConnection("127.0.0.1", port, timeout=1.5)
+        conn.request("GET", "/healthz")
+        resp = conn.getresponse()
+        payload = resp.read()  # must consume response before closing
+    except Exception:
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    if resp is None or resp.status != 200:
+        return False
+    try:
+        data = _json.loads(payload.decode("utf-8"))
+    except Exception:
+        return False
+    return bool(data) and data.get("service") == "ai-trading"
+
+
 def start_api(ready_signal: threading.Event | None = None) -> None:
     """Spin up the Flask API server or raise if the port is unavailable."""
 
@@ -518,36 +558,6 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     wait_seconds = max(0.0, float(getattr(settings, "api_port_wait_seconds", 0.0)))
     deadline = time.monotonic() + wait_seconds
     attempt = 0
-
-    def _existing_api_healthy() -> bool:
-        """Return True if another process is already serving the API health endpoint."""
-        try:
-            import http.client as _http
-            import json as _json
-        except Exception:  # pragma: no cover - fallback if stdlib import fails
-            return False
-
-        resp = None
-        try:
-            conn = _http.HTTPConnection("127.0.0.1", port, timeout=1.5)
-            conn.request("GET", "/healthz")
-            resp = conn.getresponse()
-            payload = resp.read()  # must consume response before closing
-        except Exception:
-            return False
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-        if resp is None or resp.status != 200:
-            return False
-        try:
-            data = _json.loads(payload.decode("utf-8"))
-        except Exception:
-            return False
-        return bool(data) and data.get("service") == "ai-trading"
 
     while True:
         attempt += 1
@@ -565,14 +575,12 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                         )
                         raise PortInUseError(port, pid) from exc
 
-                    if _existing_api_healthy():
-                        logger.info(
+                    if _probe_local_api_health(port):
+                        logger.critical(
                             "API_PORT_ALIVE_ELSEWHERE",
                             extra={"port": port},
                         )
-                        if ready_signal is not None:
-                            ready_signal.set()
-                        return
+                        raise ExistingApiDetected(port) from exc
 
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -603,6 +611,25 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
             break
 
     run_flask_app(port, ready_signal)
+
+
+def _assert_singleton_api(settings) -> None:
+    """Ensure we are the only ai-trading API instance before trading warm-up."""
+
+    port = int(getattr(settings, "api_port", 9001) or 9001)
+    pid = get_pid_on_port(port)
+    if pid:
+        logger.critical(
+            "API_PORT_OCCUPIED_BEFORE_START",
+            extra={"port": port, "pid": pid},
+        )
+        raise PortInUseError(port, pid)
+    if _probe_local_api_health(port):
+        logger.critical(
+            "API_PORT_HEALTHY_ELSEWHERE",
+            extra={"port": port},
+        )
+        raise ExistingApiDetected(port)
 
 
 def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event) -> None:
@@ -691,6 +718,14 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    try:
+        _assert_singleton_api(S)
+    except PortInUseError as exc:
+        logger.critical(
+            "API_PORT_CONFLICT_FATAL",
+            extra={"port": exc.port, "pid": exc.pid},
+        )
+        raise SystemExit(errno.EADDRINUSE) from exc
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     try:
         if not _is_market_open_base():

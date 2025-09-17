@@ -93,3 +93,29 @@ def test_start_api_waits_for_transient_port_conflicts(monkeypatch):
 
     assert called["port"] == test_port
     assert RetrySocket.failures_remaining == 0
+
+
+def test_start_api_aborts_when_existing_api_healthy(monkeypatch):
+    """Healthy existing API instances should halt the new startup."""
+
+    probe = socket.socket()
+    probe.bind(("0.0.0.0", 0))
+    test_port = probe.getsockname()[1]
+    probe.close()
+
+    blocker = socket.socket()
+    blocker.bind(("0.0.0.0", test_port))
+    blocker.listen(1)
+
+    monkeypatch.setattr(main, "get_settings", lambda: DummySettings(test_port))
+    monkeypatch.setattr(main, "ensure_dotenv_loaded", lambda: None)
+    monkeypatch.setattr(main, "get_pid_on_port", lambda _port: None)
+    monkeypatch.setattr(main, "_probe_local_api_health", lambda _port: True)
+
+    try:
+        with pytest.raises(main.ExistingApiDetected) as excinfo:
+            main.start_api()
+    finally:
+        blocker.close()
+
+    assert excinfo.value.port == test_port
