@@ -26,6 +26,14 @@ def test_rl_train_and_infer(monkeypatch, tmp_path):
     sig = inf.predict_signal(agent, data[0])
     assert sig and sig.side == "buy"
 
+
+def test_rl_train_module_reload_preserves_train_attr():
+    import importlib
+
+    reloaded = importlib.reload(train_mod)
+    assert hasattr(reloaded, "train")
+    assert callable(reloaded.train)
+
 def test_rl_wrapper_without_c(monkeypatch, tmp_path):
     data = np.random.rand(20, 4)
     class DummyPPO:
