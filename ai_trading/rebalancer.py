@@ -14,6 +14,7 @@ except Exception:  # ImportError
 from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 from ai_trading.settings import get_rebalance_interval_min
+from ai_trading.utils.time import safe_utcnow
 
 logger = get_logger(__name__)
 
@@ -39,7 +40,7 @@ from ai_trading.strategies.regime_detector import create_regime_detector
 def rebalance_interval_min() -> int:
     return get_rebalance_interval_min()
 
-_last_rebalance = datetime.now(UTC)
+_last_rebalance = safe_utcnow()
 _rebalancer: "TaxAwareRebalancer | None" = None
 
 
@@ -351,7 +352,7 @@ def rebalance_portfolio(ctx) -> None:
 def enhanced_maybe_rebalance(ctx) -> None:
     """Enhanced rebalance check with tax optimization and market conditions."""
     global _last_rebalance
-    now = datetime.now(UTC)
+    now = safe_utcnow()
     if now - _last_rebalance >= timedelta(minutes=rebalance_interval_min()):
         try:
             portfolio = getattr(ctx, 'portfolio_weights', {})
@@ -554,7 +555,7 @@ def _prepare_rebalancing_market_data(ctx) -> dict:
 def maybe_rebalance(ctx) -> None:
     """Rebalance when interval has elapsed."""
     global _last_rebalance
-    now = datetime.now(UTC)
+    now = safe_utcnow()
     if now - _last_rebalance >= timedelta(minutes=rebalance_interval_min()):
         settings = get_settings()
         portfolio = getattr(ctx, 'portfolio_weights', {})

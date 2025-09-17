@@ -10,6 +10,7 @@ from ai_trading.logging import logger
 from ai_trading.logging.emit_once import emit_once
 from json import JSONDecodeError
 from ai_trading.exc import RequestException
+from ai_trading.utils.time import safe_utcnow
 
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 from ..core.constants import PERFORMANCE_THRESHOLDS
@@ -121,7 +122,7 @@ class DrawdownCircuitBreaker:
         """Trigger circuit breaker halt."""
         try:
             self.state = CircuitBreakerState.OPEN
-            self.halt_timestamp = datetime.now(UTC)
+            self.halt_timestamp = safe_utcnow()
             logger.critical(f'TRADING HALTED - Drawdown Circuit Breaker: {reason}. Current drawdown: {self._safe_format_percentage(self.current_drawdown)}')
             for callback in self.reset_callbacks:
                 try:
@@ -139,7 +140,7 @@ class DrawdownCircuitBreaker:
             logger.info(f'TRADING RESUMED - Drawdown Circuit Breaker: {reason}')
             for callback in self.reset_callbacks:
                 try:
-                    callback('reset', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': datetime.now(UTC)})
+                    callback('reset', {'reason': reason, 'drawdown': self.current_drawdown, 'timestamp': safe_utcnow()})
                 except COMMON_EXC as e:
                     logger.error(f'Error in circuit breaker callback: {e}')
         except COMMON_EXC as e:
@@ -168,7 +169,7 @@ class VolatilityCircuitBreaker:
         self.state = CircuitBreakerState.CLOSED
         self.current_volatility = 0.0
         self.position_size_multiplier = 1.0
-        self.last_volatility_update = datetime.now(UTC)
+        self.last_volatility_update = safe_utcnow()
         logger.info(f'VolatilityCircuitBreaker initialized with thresholds: high={self._safe_format_percentage(high_vol_threshold)}, extreme={self._safe_format_percentage(extreme_vol_threshold)}')
 
     def _safe_format_percentage(self, value) -> str:
@@ -196,7 +197,7 @@ class VolatilityCircuitBreaker:
         """
         try:
             self.current_volatility = volatility
-            self.last_volatility_update = datetime.now(UTC)
+            self.last_volatility_update = safe_utcnow()
             if volatility >= self.extreme_vol_threshold:
                 self.state = CircuitBreakerState.OPEN
                 self.position_size_multiplier = 0.0
@@ -321,7 +322,7 @@ class TradingHaltManager:
             with self._lock:
                 self.manual_halt = True
                 self.manual_halt_reason = reason
-                self.manual_halt_timestamp = datetime.now(UTC)
+                self.manual_halt_timestamp = safe_utcnow()
                 logger.critical(f'MANUAL TRADING HALT: {reason}')
         except COMMON_EXC as e:
             logger.error(f'Error setting manual halt: {e}')
@@ -390,7 +391,7 @@ class TradingHaltManager:
         try:
             with self._lock:
                 trading_status = self.is_trading_allowed()
-                return {'timestamp': datetime.now(UTC), 'trading_status': trading_status, 'manual_controls': {'manual_halt': self.manual_halt, 'manual_halt_reason': self.manual_halt_reason, 'manual_halt_timestamp': self.manual_halt_timestamp, 'emergency_stop': self.emergency_stop}, 'daily_limits': {'trade_count': self.daily_trade_count, 'max_daily_trades': self.max_daily_trades, 'daily_loss_amount': self.daily_loss_amount, 'max_daily_loss': self.max_daily_loss}, 'circuit_breakers': trading_status['circuit_breakers']}
+                return {'timestamp': safe_utcnow(), 'trading_status': trading_status, 'manual_controls': {'manual_halt': self.manual_halt, 'manual_halt_reason': self.manual_halt_reason, 'manual_halt_timestamp': self.manual_halt_timestamp, 'emergency_stop': self.emergency_stop}, 'daily_limits': {'trade_count': self.daily_trade_count, 'max_daily_trades': self.max_daily_trades, 'daily_loss_amount': self.daily_loss_amount, 'max_daily_loss': self.max_daily_loss}, 'circuit_breakers': trading_status['circuit_breakers']}
         except COMMON_EXC as e:
             logger.error(f'Error getting comprehensive status: {e}')
             return {'error': str(e)}
@@ -406,7 +407,7 @@ class DeadMansSwitch:
     def __init__(self, timeout_seconds: int=300):
         """Initialize dead man's switch."""
         self.timeout_seconds = timeout_seconds
-        self.last_heartbeat = datetime.now(UTC)
+        self.last_heartbeat = safe_utcnow()
         self.is_active = False
         self.emergency_callbacks = []
         self.monitoring_thread = None
@@ -420,7 +421,7 @@ class DeadMansSwitch:
                 logger.warning("Dead man's switch already active")
                 return
             self.is_active = True
-            self.last_heartbeat = datetime.now(UTC)
+            self.last_heartbeat = safe_utcnow()
             self._stop_event.clear()
             self.monitoring_thread = threading.Thread(target=self._monitoring_loop, daemon=True, name='DeadMansSwitch')
             self.monitoring_thread.start()
@@ -445,7 +446,7 @@ class DeadMansSwitch:
         """Send heartbeat signal to reset the timer."""
         try:
             if self.is_active:
-                self.last_heartbeat = datetime.now(UTC)
+                self.last_heartbeat = safe_utcnow()
                 logger.debug("Dead man's switch heartbeat received")
         except COMMON_EXC as e:
             logger.error(f'Error processing heartbeat: {e}')
@@ -454,7 +455,7 @@ class DeadMansSwitch:
         """Main monitoring loop running in separate thread."""
         try:
             while self.is_active and (not self._stop_event.is_set()):
-                current_time = datetime.now(UTC)
+                current_time = safe_utcnow()
                 time_since_heartbeat = (current_time - self.last_heartbeat).total_seconds()
                 if time_since_heartbeat > self.timeout_seconds:
                     logger.critical(f"DEAD MAN'S SWITCH TRIGGERED - No heartbeat for {time_since_heartbeat:.0f}s")
@@ -483,7 +484,7 @@ class DeadMansSwitch:
     def get_status(self) -> dict[str, Any]:
         """Get current dead man's switch status."""
         try:
-            current_time = datetime.now(UTC)
+            current_time = safe_utcnow()
             time_since_heartbeat = (current_time - self.last_heartbeat).total_seconds()
             return {'is_active': self.is_active, 'last_heartbeat': self.last_heartbeat, 'time_since_heartbeat': time_since_heartbeat, 'timeout_seconds': self.timeout_seconds, 'status': 'OK' if time_since_heartbeat < self.timeout_seconds else 'TIMEOUT', 'monitoring_thread_alive': self.monitoring_thread.is_alive() if self.monitoring_thread else False}
         except COMMON_EXC as e:

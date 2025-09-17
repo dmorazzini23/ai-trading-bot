@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from ai_trading.logging import logger
+from ai_trading.utils.time import safe_utcnow
 
 class AlertSeverity(Enum):
     """Alert severity levels."""
@@ -46,7 +47,7 @@ class SafetyMonitor:
         self.is_monitoring = False
         self.emergency_stop_triggered = False
         self.thresholds = {'max_daily_loss': 0.05, 'max_position_risk': 0.02, 'max_drawdown': 0.1, 'min_available_cash': 1000, 'max_orders_per_minute': 50, 'max_failed_orders': 10, 'circuit_breaker_threshold': 5}
-        self.metrics = {'daily_pnl': 0.0, 'current_drawdown': 0.0, 'orders_this_minute': 0, 'failed_orders_count': 0, 'last_order_time': None, 'available_cash': 0.0, 'total_portfolio_value': 0.0, 'active_positions': 0, 'system_start_time': datetime.now(UTC)}
+        self.metrics = {'daily_pnl': 0.0, 'current_drawdown': 0.0, 'orders_this_minute': 0, 'failed_orders_count': 0, 'last_order_time': None, 'available_cash': 0.0, 'total_portfolio_value': 0.0, 'active_positions': 0, 'system_start_time': safe_utcnow()}
         self.alert_callbacks: list[Callable] = []
         self._monitor_thread = None
         self.emergency_actions: list[Callable] = []
@@ -125,7 +126,7 @@ class SafetyMonitor:
             if key in self.metrics:
                 self.metrics[key] = value
         if 'new_order' in kwargs:
-            self.metrics['last_order_time'] = datetime.now(UTC)
+            self.metrics['last_order_time'] = safe_utcnow()
             self.metrics['orders_this_minute'] += 1
 
     def check_safety_thresholds(self) -> list[dict]:
@@ -145,8 +146,8 @@ class SafetyMonitor:
 
     def get_system_health(self) -> dict[str, Any]:
         """Get comprehensive system health report."""
-        uptime = datetime.now(UTC) - self.metrics['system_start_time']
-        health = {'status': self.state.value, 'emergency_stop_active': self.emergency_stop_triggered, 'monitoring_active': self.is_monitoring, 'uptime_seconds': uptime.total_seconds(), 'metrics': self.metrics.copy(), 'thresholds': self.thresholds.copy(), 'violations': self.check_safety_thresholds(), 'timestamp': datetime.now(UTC).isoformat()}
+        uptime = safe_utcnow() - self.metrics['system_start_time']
+        health = {'status': self.state.value, 'emergency_stop_active': self.emergency_stop_triggered, 'monitoring_active': self.is_monitoring, 'uptime_seconds': uptime.total_seconds(), 'metrics': self.metrics.copy(), 'thresholds': self.thresholds.copy(), 'violations': self.check_safety_thresholds(), 'timestamp': safe_utcnow().isoformat()}
         return health
 
     def add_alert_callback(self, callback: Callable):
@@ -159,10 +160,10 @@ class SafetyMonitor:
 
     def _monitoring_loop(self):
         """Main monitoring loop."""
-        minute_reset_time = datetime.now(UTC)
+        minute_reset_time = safe_utcnow()
         while self.is_monitoring:
             try:
-                current_time = datetime.now(UTC)
+                current_time = safe_utcnow()
                 if (current_time - minute_reset_time).total_seconds() >= 60:
                     self.metrics['orders_this_minute'] = 0
                     minute_reset_time = current_time
@@ -182,7 +183,7 @@ class SafetyMonitor:
 
     def _send_alert(self, severity: AlertSeverity, message: str):
         """Send alert to all registered callbacks."""
-        alert = {'severity': severity.value, 'message': message, 'timestamp': datetime.now(UTC).isoformat(), 'system_state': self.state.value}
+        alert = {'severity': severity.value, 'message': message, 'timestamp': safe_utcnow().isoformat(), 'system_state': self.state.value}
         if severity == AlertSeverity.EMERGENCY:
             logger.critical(f'EMERGENCY ALERT: {message}')
         elif severity == AlertSeverity.CRITICAL:
@@ -246,7 +247,7 @@ class KillSwitch:
                 if self._check_kill_file():
                     self.trigger_kill_switch('Kill file detected')
                     break
-                if self.auto_kill_time and datetime.now(UTC) >= self.auto_kill_time:
+                if self.auto_kill_time and safe_utcnow() >= self.auto_kill_time:
                     self.trigger_kill_switch('Auto-kill time reached')
                     self.auto_kill_time = None
                 time.sleep(1)
@@ -277,18 +278,18 @@ class PerformanceMonitor:
     def __init__(self):
         """Initialize performance monitor."""
         self.metrics = {'order_latency': [], 'execution_times': [], 'memory_usage': [], 'cpu_usage': [], 'api_response_times': [], 'error_rates': {}, 'throughput': 0}
-        self.start_time = datetime.now(UTC)
+        self.start_time = safe_utcnow()
         logger.info('Performance monitor initialized')
 
     def record_order_latency(self, latency_ms: float):
         """Record order execution latency."""
-        self.metrics['order_latency'].append({'timestamp': datetime.now(UTC), 'latency_ms': latency_ms})
+        self.metrics['order_latency'].append({'timestamp': safe_utcnow(), 'latency_ms': latency_ms})
         if len(self.metrics['order_latency']) > 1000:
             self.metrics['order_latency'] = self.metrics['order_latency'][-500:]
 
     def record_api_response_time(self, endpoint: str, response_time_ms: float):
         """Record API response time."""
-        self.metrics['api_response_times'].append({'timestamp': datetime.now(UTC), 'endpoint': endpoint, 'response_time_ms': response_time_ms})
+        self.metrics['api_response_times'].append({'timestamp': safe_utcnow(), 'endpoint': endpoint, 'response_time_ms': response_time_ms})
 
     def record_error(self, error_type: str):
         """Record error occurrence."""
@@ -298,7 +299,7 @@ class PerformanceMonitor:
 
     def get_performance_report(self) -> dict[str, Any]:
         """Generate comprehensive performance report."""
-        uptime = datetime.now(UTC) - self.start_time
+        uptime = safe_utcnow() - self.start_time
         latencies = [l['latency_ms'] for l in self.metrics['order_latency']]
         avg_latency = sum(latencies) / len(latencies) if latencies else 0
         max_latency = max(latencies) if latencies else 0

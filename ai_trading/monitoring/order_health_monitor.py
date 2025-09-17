@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
+from ai_trading.utils.time import safe_utcnow
 from ai_trading.utils.timing import sleep as psleep
 CONFIG = TradingConfig()
 
@@ -48,7 +49,7 @@ class OrderHealthMetrics:
     avg_fill_time: float = 0.0
     avg_fill_rate: float = 0.0
     success_rate: float = 0.0
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = field(default_factory=safe_utcnow)
 
 @dataclass
 class PartialFillInfo:
@@ -144,7 +145,7 @@ class OrderHealthMonitor:
 
     def _update_partial_fill_tracking(self) -> None:
         """Update tracking of partial fills and retry logic."""
-        current_time = datetime.now(UTC)
+        current_time = safe_utcnow()
         retry_candidates = []
         with self._lock:
             for order_id, partial_info in list(self._partial_fills.items()):
@@ -167,7 +168,7 @@ class OrderHealthMonitor:
             with self._lock:
                 if partial_info.order_id in self._partial_fills:
                     self._partial_fills[partial_info.order_id].retry_count += 1
-                    self._partial_fills[partial_info.order_id].last_update = datetime.now(UTC)
+                    self._partial_fills[partial_info.order_id].last_update = safe_utcnow()
         except (ValueError, TypeError) as e:
             self.logger.error('Partial fill retry failed for %s: %s', partial_info.order_id, e)
 
@@ -219,7 +220,7 @@ class OrderHealthMonitor:
 
     def _record_partial_fill(self, order_id: str, filled_qty: int, total_qty: int) -> None:
         """Record a partial fill for tracking."""
-        current_time = datetime.now(UTC)
+        current_time = safe_utcnow()
         fill_rate = filled_qty / total_qty if total_qty > 0 else 0.0
         with self._lock:
             if order_id in self._partial_fills:
@@ -241,7 +242,7 @@ class OrderHealthMonitor:
             latest = recent_metrics[-1]
             previous = recent_metrics[-2]
             trend_data = {'success_rate_trend': latest.success_rate - previous.success_rate, 'fill_time_trend': latest.avg_fill_time - previous.avg_fill_time, 'stuck_orders_trend': latest.stuck_orders - previous.stuck_orders}
-        return {'current_metrics': {'total_orders': metrics.total_orders, 'success_rate': round(metrics.success_rate, 3), 'avg_fill_time': round(metrics.avg_fill_time, 1), 'stuck_orders': metrics.stuck_orders, 'partial_fills': metrics.partial_fills, 'avg_fill_rate': round(metrics.avg_fill_rate, 3)}, 'trends': trend_data, 'alerts_enabled': True, 'monitoring_active': self._monitoring_active, 'timestamp': datetime.now(UTC).isoformat()}
+        return {'current_metrics': {'total_orders': metrics.total_orders, 'success_rate': round(metrics.success_rate, 3), 'avg_fill_time': round(metrics.avg_fill_time, 1), 'stuck_orders': metrics.stuck_orders, 'partial_fills': metrics.partial_fills, 'avg_fill_rate': round(metrics.avg_fill_rate, 3)}, 'trends': trend_data, 'alerts_enabled': True, 'monitoring_active': self._monitoring_active, 'timestamp': safe_utcnow().isoformat()}
 
     def export_metrics(self, filepath: str) -> None:
         """Export health metrics to a file."""

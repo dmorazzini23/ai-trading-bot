@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import UTC, datetime, timedelta, tzinfo, date as _date
+from time import time as _time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -11,17 +12,26 @@ _LAST_SESSION_CACHE: dict[str, "SessionWindow | None"] = {}
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     import pandas as pd
 
-def utcnow(tz: tzinfo | None = UTC) -> datetime:
-    """Repository-standard aware now with optional timezone.
+def safe_utcnow(tz: tzinfo | None = UTC) -> datetime:
+    """Return an aware UTC ``datetime`` resilient to Freezegun edge cases.
 
-    Args:
-        tz: Desired timezone. Defaults to UTC.
-
-    Returns:
-        timezone-aware ``datetime`` in the requested zone.
+    Freezegun can raise ``IndexError`` when multiple threads call
+    :func:`datetime.now` while the clock is frozen.  This helper catches that
+    specific failure mode and falls back to building a timestamp from
+    ``time.time()`` so worker threads keep running.
     """
-    now = datetime.now(UTC)
+
+    try:
+        now = datetime.now(UTC)
+    except IndexError:  # pragma: no cover - depends on freezegun behaviour
+        now = datetime.fromtimestamp(_time(), UTC)
     return now if tz in (UTC, None) else now.astimezone(tz)
+
+
+def utcnow(tz: tzinfo | None = UTC) -> datetime:
+    """Repository-standard aware now with optional timezone."""
+
+    return safe_utcnow(tz)
 
 now_utc = utcnow
 
@@ -58,4 +68,4 @@ def last_market_session(now: pd.Timestamp) -> SessionWindow | None:
     _LAST_SESSION_CACHE[key] = None
     return None
 
-__all__ = ['utcnow', 'now_utc', 'SessionWindow', 'last_market_session']
+__all__ = ['safe_utcnow', 'utcnow', 'now_utc', 'SessionWindow', 'last_market_session']

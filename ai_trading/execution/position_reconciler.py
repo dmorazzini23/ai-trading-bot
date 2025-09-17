@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from threading import Lock, Thread
 from typing import Any
 from ai_trading.logging import get_logger
+from ai_trading.utils.time import safe_utcnow
 
 def get_phase_logger(name: str, phase: str) -> logging.Logger:
     """Get a logger for a specific phase - fallback implementation."""
@@ -28,7 +29,7 @@ class PositionDiscrepancy:
         self.difference = broker_qty - bot_qty
         self.discrepancy_type = discrepancy_type
         self.severity = severity
-        self.timestamp = datetime.now(UTC)
+        self.timestamp = safe_utcnow()
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
@@ -57,7 +58,7 @@ class PositionReconciler:
         with self._lock:
             old_qty = self._bot_positions.get(symbol, 0)
             self._bot_positions[symbol] = quantity
-            self.logger.info('BOT_POSITION_UPDATE', extra={'symbol': symbol, 'old_qty': old_qty, 'new_qty': quantity, 'change': quantity - old_qty, 'reason': reason, 'timestamp': datetime.now(UTC).isoformat()})
+            self.logger.info('BOT_POSITION_UPDATE', extra={'symbol': symbol, 'old_qty': old_qty, 'new_qty': quantity, 'change': quantity - old_qty, 'reason': reason, 'timestamp': safe_utcnow().isoformat()})
 
     def adjust_bot_position(self, symbol: str, quantity_change: float, reason: str='execution_engine') -> None:
         """Adjust the bot's position by a relative amount."""
@@ -65,7 +66,7 @@ class PositionReconciler:
             current_qty = self._bot_positions.get(symbol, 0)
             new_qty = current_qty + quantity_change
             self._bot_positions[symbol] = new_qty
-            self.logger.info('BOT_POSITION_ADJUST', extra={'symbol': symbol, 'old_qty': current_qty, 'new_qty': new_qty, 'change': quantity_change, 'reason': reason, 'timestamp': datetime.now(UTC).isoformat()})
+            self.logger.info('BOT_POSITION_ADJUST', extra={'symbol': symbol, 'old_qty': current_qty, 'new_qty': new_qty, 'change': quantity_change, 'reason': reason, 'timestamp': safe_utcnow().isoformat()})
 
     def get_bot_positions(self) -> dict[str, float]:
         """Get current bot positions."""
@@ -81,15 +82,15 @@ class PositionReconciler:
             broker_positions = {}
             with self._lock:
                 self._broker_positions = broker_positions.copy()
-            self.logger.debug('BROKER_POSITIONS_FETCHED', extra={'positions_count': len(broker_positions), 'timestamp': datetime.now(UTC).isoformat()})
+            self.logger.debug('BROKER_POSITIONS_FETCHED', extra={'positions_count': len(broker_positions), 'timestamp': safe_utcnow().isoformat()})
             return broker_positions
         except (ValueError, TypeError) as e:
-            self.logger.error('BROKER_POSITION_FETCH_ERROR', extra={'error': str(e), 'timestamp': datetime.now(UTC).isoformat()})
+            self.logger.error('BROKER_POSITION_FETCH_ERROR', extra={'error': str(e), 'timestamp': safe_utcnow().isoformat()})
             return {}
 
     def reconcile_positions(self) -> list[PositionDiscrepancy]:
         """Perform position reconciliation and return any discrepancies."""
-        self.logger.info('RECONCILIATION_START', extra={'timestamp': datetime.now(UTC).isoformat()})
+        self.logger.info('RECONCILIATION_START', extra={'timestamp': safe_utcnow().isoformat()})
         bot_positions = self.get_bot_positions()
         broker_positions = self.get_broker_positions()
         discrepancies = []
@@ -108,7 +109,7 @@ class PositionReconciler:
             self._discrepancy_history.extend(discrepancies)
             if len(self._discrepancy_history) > 1000:
                 self._discrepancy_history = self._discrepancy_history[-500:]
-            reconciliation_record = {'timestamp': datetime.now(UTC).isoformat(), 'bot_positions': bot_positions, 'broker_positions': broker_positions, 'discrepancies_count': len(discrepancies), 'discrepancies': [d.to_dict() for d in discrepancies]}
+            reconciliation_record = {'timestamp': safe_utcnow().isoformat(), 'bot_positions': bot_positions, 'broker_positions': broker_positions, 'discrepancies_count': len(discrepancies), 'discrepancies': [d.to_dict() for d in discrepancies]}
             self._reconciliation_history.append(reconciliation_record)
             if len(self._reconciliation_history) > 100:
                 self._reconciliation_history = self._reconciliation_history[-50:]
@@ -181,7 +182,7 @@ class PositionReconciler:
                         self.logger.info('AUTO_RESOLVED_DISCREPANCIES', extra={'resolved_count': resolved, 'total_discrepancies': len(discrepancies)})
                 time.sleep(self.reconciliation_interval)
             except (ValueError, TypeError) as e:
-                self.logger.error('RECONCILIATION_LOOP_ERROR', extra={'error': str(e), 'timestamp': datetime.now(UTC).isoformat()})
+                self.logger.error('RECONCILIATION_LOOP_ERROR', extra={'error': str(e), 'timestamp': safe_utcnow().isoformat()})
                 time.sleep(min(self.reconciliation_interval, 60))
 
     def get_current_discrepancies(self) -> list[PositionDiscrepancy]:

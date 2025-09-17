@@ -24,6 +24,7 @@ except Exception:  # ImportError
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.metrics import get_counter
 from ai_trading.config.management import get_env
+from ai_trading.utils.time import safe_utcnow
 
 logger = get_logger(__name__)
 ORDER_STALE_AFTER_S = 8 * 60
@@ -443,7 +444,7 @@ class OrderManager:
         """Monitor active orders for timeouts and updates."""
         while self._monitor_running:
             try:
-                current_time = datetime.now(UTC)
+                current_time = safe_utcnow()
                 expired_orders = []
                 for order_id, order in list(self.active_orders.items()):
                     age_seconds = (current_time - order.created_at).total_seconds()

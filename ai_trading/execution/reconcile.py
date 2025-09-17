@@ -13,6 +13,7 @@ from typing import Any
 
 from ai_trading.core.interfaces import Order, OrderStatus, Position, OrderType
 from ai_trading.order.types import OrderSide
+from ai_trading.utils.time import safe_utcnow
 logger = get_logger(__name__)
 
 @dataclass
@@ -216,7 +217,7 @@ class PositionReconciler:
                 actions.extend(self.apply_position_fixes(position_drifts, position_manager))
             if order_manager and order_drifts:
                 actions.extend(self.apply_order_fixes(order_drifts, order_manager))
-        result = ReconciliationResult(position_drifts=position_drifts, order_drifts=order_drifts, actions_taken=actions, reconciled_at=datetime.now(UTC))
+        result = ReconciliationResult(position_drifts=position_drifts, order_drifts=order_drifts, actions_taken=actions, reconciled_at=safe_utcnow())
         self.logger.info(f'Reconciliation complete: {len(position_drifts)} position drifts, {len(order_drifts)} order drifts, {len(actions)} actions taken')
         return result
 _global_reconciler: PositionReconciler | None = None
@@ -246,7 +247,7 @@ def reconcile_with_broker(
     client = broker_client or reconciler.broker_client
     if client is None:
         logger.warning("reconcile_with_broker called without broker client")
-        return ReconciliationResult([], [], [], datetime.now(UTC))
+        return ReconciliationResult([], [], [], safe_utcnow())
 
     broker_positions: dict[str, Position] = {}
     broker_orders: dict[str, Order] = {}
@@ -262,7 +263,7 @@ def reconcile_with_broker(
                 market_value=float(getattr(pos, "market_value", 0.0)),
                 cost_basis=float(getattr(pos, "cost_basis", 0.0)),
                 unrealized_pnl=float(getattr(pos, "unrealized_pl", 0.0)),
-                timestamp=datetime.now(UTC),
+                timestamp=safe_utcnow(),
             )
     except Exception as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker positions: {e}")
@@ -289,7 +290,7 @@ def reconcile_with_broker(
                 filled_quantity=filled_qty,
                 price=getattr(ord_obj, "limit_price", getattr(ord_obj, "price", None)),
                 filled_price=getattr(ord_obj, "filled_avg_price", None),
-                timestamp=datetime.now(UTC),
+                timestamp=safe_utcnow(),
             )
     except Exception as e:  # pragma: no cover - network issues
         logger.error(f"Failed to fetch broker orders: {e}")
@@ -321,7 +322,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
         ``reconciled_at`` timestamp reflects when the reconciliation occurred.
     """
     if not getattr(ctx, "api", None):
-        return ReconciliationResult([], [], [], datetime.now(UTC))
+        return ReconciliationResult([], [], [], safe_utcnow())
 
     broker_client = ctx.api
 
@@ -345,7 +346,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
             if order.status != broker_status or order.filled_quantity != filled_qty:
                 order.status = broker_status
                 order.filled_quantity = filled_qty
-                order.timestamp = datetime.now(UTC)
+                order.timestamp = safe_utcnow()
                 if broker_status == OrderStatus.FILLED:
                     side_mult = 1 if getattr(order.side, "value", order.side) == OrderSide.BUY.value else -1
                     local_positions[order.symbol] = local_positions.get(order.symbol, 0) + side_mult * filled_qty
@@ -362,7 +363,7 @@ def reconcile_positions_and_orders(ctx=None) -> ReconciliationResult:
                 market_value=0.0,
                 cost_basis=0.0,
                 unrealized_pnl=0.0,
-                timestamp=datetime.now(UTC),
+                timestamp=safe_utcnow(),
             )
             for sym, qty in local_positions.items()
         },
