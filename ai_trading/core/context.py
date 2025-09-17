@@ -41,12 +41,18 @@ from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 class MockTradingClient:
     """Fallback Alpaca trading client used when the SDK is unavailable."""
 
+    def __init__(self, *_, paper: bool | None = None, **__):
+        self.paper = paper
+
     def __getattr__(self, name: str) -> None:  # pragma: no cover - simple proxy
         raise RuntimeError("Alpaca trading client unavailable")
 
 
 class MockDataClient:
     """Fallback Alpaca data client used when the SDK is unavailable."""
+
+    def __init__(self, *_, paper: bool | None = None, **__):
+        self.paper = paper
 
     def __getattr__(self, name: str) -> None:  # pragma: no cover - simple proxy
         raise RuntimeError("Alpaca data client unavailable")
@@ -72,26 +78,47 @@ def get_context() -> SimpleNamespace:
     feed = getattr(settings, "alpaca_data_feed", "iex")
     log_fetch = getattr(settings, "log_market_fetch", True)
     testing = getattr(settings, "testing", False)
+    api_key = getattr(settings, "alpaca_api_key", None)
+    secret_key = get_alpaca_secret_key_plain()
+    base_url = str(getattr(settings, "alpaca_base_url", "") or "")
+    is_paper = "paper" in base_url.lower()
 
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.trading.client import TradingClient  # type: ignore
-
-        trading_client = TradingClient(
-            settings.alpaca_api_key,
-            get_alpaca_secret_key_plain(),
-        )
     except Exception:  # pragma: no cover - client unavailable
-        trading_client = MockTradingClient()
+        trading_client = MockTradingClient(paper=is_paper)
+    else:
+        try:
+            trading_client = TradingClient(
+                api_key=api_key,
+                secret_key=secret_key,
+                paper=is_paper,
+            )
+        except Exception:
+            trading_client = MockTradingClient(paper=is_paper)
 
     try:  # pragma: no cover - exercised in integration tests
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
-
-        data_client = StockHistoricalDataClient(
-            settings.alpaca_api_key,
-            get_alpaca_secret_key_plain(),
-        )
     except Exception:  # pragma: no cover - client unavailable
-        data_client = MockDataClient()
+        data_client = MockDataClient(paper=is_paper)
+    else:
+        try:
+            data_client = StockHistoricalDataClient(
+                api_key=api_key,
+                secret_key=secret_key,
+                paper=is_paper,
+            )
+        except TypeError:
+            try:
+                data_client = StockHistoricalDataClient.__call__(
+                    StockHistoricalDataClient,
+                    api_key=api_key,
+                    secret_key=secret_key,
+                )
+            except Exception:
+                data_client = MockDataClient(paper=is_paper)
+        except Exception:
+            data_client = MockDataClient(paper=is_paper)
 
     _CTX = SimpleNamespace(
         alpaca_trading_client=trading_client,
