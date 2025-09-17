@@ -180,6 +180,20 @@ def _parse_timeframe(tf: Any) -> bars.TimeFrame:
     if key in tf_map:
         return tf_map[key]
     raise ValueError(f"Unsupported timeframe: {tf}")
+
+
+def _normalize_feed_name(value: object) -> str:
+    """Return canonical feed name ("iex" or "sip") with safe fallback."""
+
+    try:
+        feed_val = str(value).strip().lower()
+    except Exception:
+        return data_fetcher_module._DEFAULT_FEED
+    if "sip" in feed_val:
+        return "sip"
+    if "iex" in feed_val:
+        return "iex"
+    return data_fetcher_module._DEFAULT_FEED
 # One place to define the common exception family (module-scoped)
 COMMON_EXC = (
     TypeError,
@@ -1386,6 +1400,7 @@ from ai_trading import (
 )
 from ai_trading.config import management as config
 from ai_trading.config import get_settings
+from ai_trading.config.settings import minute_data_staleness_seconds
 from ai_trading.settings import (
     _secret_to_str,
     get_news_api_key,
@@ -2748,17 +2763,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
 
-    def _normalize_feed_name(value: object) -> str:
-        try:
-            feed_val = str(value).strip().lower()
-        except Exception:
-            return data_fetcher_module._DEFAULT_FEED
-        if "sip" in feed_val:
-            return "sip"
-        if "iex" in feed_val:
-            return "iex"
-        return data_fetcher_module._DEFAULT_FEED
-
     actual_bars = 0
     if df is not None:
         try:
@@ -2774,8 +2778,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         )
     )
 
+    feed_for_freshness = _normalize_feed_name(getattr(CFG, "data_feed", None))
+
     if low_coverage:
-        current_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
+        current_feed = feed_for_freshness
+        active_feed = current_feed
         fallback_feed: str | None = None
         fallback_provider: str | None = None
         if data_fetcher_module._sip_configured():
@@ -2823,10 +2830,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         else:
             if df_alt is not None and not getattr(df_alt, "empty", True):
                 df = df_alt
+                active_feed = _normalize_feed_name(fallback_feed or current_feed)
                 try:
                     actual_bars = int(len(df))
                 except Exception:
                     actual_bars = 0
+        feed_for_freshness = active_feed
 
     # Drop bars with zero volume or from the current (incomplete) minute
     try:
@@ -2919,12 +2928,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     # Check data freshness before proceeding with trading logic
     staleness_reference = now_utc if market_open_now else end_dt
+    max_age_seconds = minute_data_staleness_seconds(feed_for_freshness)
 
     try:
-        # Allow data up to 10 minutes old during market hours (600 seconds)
+        # Allow configurable tolerance before marking the data as stale
         staleness._ensure_data_fresh(
             df,
-            600,
+            max_age_seconds,
             symbol=symbol,
             now=staleness_reference,
         )
@@ -5235,9 +5245,11 @@ class DataFetcher:
         data_fresh = False
         if isinstance(df, pd.DataFrame) and not df.empty:
             try:
+                feed_label = _normalize_feed_name(fallback_feed_used or feed)
+                max_age_seconds = minute_data_staleness_seconds(feed_label)
                 staleness._ensure_data_fresh(
                     df,
-                    600,
+                    max_age_seconds,
                     symbol=symbol,
                     now=now_utc,
                 )

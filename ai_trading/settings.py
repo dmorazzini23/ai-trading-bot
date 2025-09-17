@@ -138,6 +138,22 @@ class Settings(BaseSettings):
     alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
     alpaca_feed_failover: tuple[str, ...] = Field(('sip',), env='ALPACA_FEED_FAILOVER')
     alpaca_empty_to_backup: bool = Field(True, env='ALPACA_EMPTY_TO_BACKUP')
+    minute_data_max_staleness_seconds: int = Field(
+        900,
+        validation_alias=AliasChoices(
+            'AI_TRADING_MINUTE_DATA_MAX_STALENESS_SECONDS',
+            'MINUTE_DATA_MAX_STALENESS_SECONDS',
+        ),
+        description='Maximum age (seconds) minute bars may be before considered stale.',
+    )
+    minute_data_staleness_overrides: dict[str, int] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            'AI_TRADING_MINUTE_DATA_STALENESS_OVERRIDES',
+            'MINUTE_DATA_STALENESS_OVERRIDES',
+        ),
+        description='Optional JSON mapping of feed name to per-feed stale thresholds in seconds.',
+    )
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
     data_provider_priority: tuple[str, ...] = Field(
         ('alpaca_iex', 'alpaca_sip', 'yahoo'), env='DATA_PROVIDER_PRIORITY'

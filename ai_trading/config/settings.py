@@ -78,4 +78,34 @@ __all__ = [
     'sentiment_retry_max',
     'sentiment_backoff_base',
     'sentiment_backoff_strategy',
+    'minute_data_staleness_seconds',
 ]
+
+
+def minute_data_staleness_seconds(
+    feed: str | None = None, s: Settings | None = None
+) -> int:
+    """Return maximum allowed age (seconds) for minute data, honoring overrides."""
+
+    s = s or get_settings()
+    try:
+        default = int(getattr(s, 'minute_data_max_staleness_seconds', 900))
+    except (TypeError, ValueError):
+        default = 900
+    overrides = getattr(s, 'minute_data_staleness_overrides', None)
+    if overrides and feed:
+        try:
+            normalized = str(feed).strip().lower()
+        except Exception:
+            normalized = ''
+        if normalized:
+            try:
+                candidate = overrides.get(normalized)
+            except AttributeError:
+                candidate = None
+            if candidate is not None:
+                try:
+                    return int(candidate)
+                except (TypeError, ValueError):
+                    return default
+    return default

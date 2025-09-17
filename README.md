@@ -103,6 +103,15 @@ Rebalance frequency defaults to 60 minutes; override with `AI_TRADING_REBALANCE_
 is used when multiple sources are set.
 Production code paths must avoid shim helpers like `optional_import(...)`; use direct `try`/`except ImportError` blocks or `importlib.util.find_spec` to guard optional dependencies and gate heavy imports inside function scope when possible.
 
+### Minute data freshness
+
+Real-time trading tolerates minute bars that are up to **15 minutes** old by default (900 seconds).
+Operators can tighten or relax this guard by exporting
+`AI_TRADING_MINUTE_DATA_MAX_STALENESS_SECONDS=<seconds>` in the environment. For feed-specific
+controls, set `AI_TRADING_MINUTE_DATA_STALENESS_OVERRIDES` to a JSON object such as
+`{"sip": 300, "iex": 900}`. The bot applies the override for the active feed and falls back to the
+global limit when no feed match is provided. Overrides outside JSON (for example YAML) are ignored.
+
 ### HTTP client tuning (performance)
 
 The global HTTP session used for data/broker calls can be tuned via env to balance latency, throughput, and resiliency:

@@ -58,16 +58,140 @@ def test_fetch_minute_df_safe_raises_on_empty(monkeypatch):
         bot_engine.fetch_minute_df_safe("AAPL")
 
 
-def test_fetch_minute_df_safe_raises_on_stale(monkeypatch):
+def test_fetch_minute_df_safe_respects_configured_tolerance(monkeypatch):
     pd = load_pandas()
-    monkeypatch.setattr(
-        bot_engine, "get_minute_df", lambda s, start, end, **_: _sample_df()
+
+    base_now = datetime(2024, 1, 3, 16, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=45)
+    session_end = base_now + timedelta(hours=3)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    idx = pd.date_range(end=base_now - timedelta(minutes=14), periods=15, freq="min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [1.0 + i * 0.01 for i in range(len(idx))],
+            "high": [1.1 + i * 0.01 for i in range(len(idx))],
+            "low": [0.9 + i * 0.01 for i in range(len(idx))],
+            "close": [1.0 + i * 0.01 for i in range(len(idx))],
+            "volume": [100] * len(idx),
+        },
+        index=idx,
     )
 
-    def _raise_stale(df, max_age_seconds, *, symbol=None, now=None, tz=None):
-        raise RuntimeError("age=900s")
+    observed: dict[str, object] = {}
 
-    monkeypatch.setattr(staleness, "_ensure_data_fresh", _raise_stale)
+    def check_fresh(df_arg, max_age_seconds, *, symbol=None, now=None, tz=None):
+        observed["max_age"] = max_age_seconds
+        observed["symbol"] = symbol
+        last_ts = pd.to_datetime(df_arg.index[-1], utc=True)
+        if now is None:
+            raise AssertionError("now should be provided")
+        age = (now - last_ts).total_seconds()
+        observed["age"] = age
+        if age > max_age_seconds:
+            raise RuntimeError(f"age={age}")
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", lambda *a, **k: df.copy())
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 999, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, session_end),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    feeds_seen: list[str | None] = []
+
+    def resolve_staleness(feed=None):
+        feeds_seen.append(feed)
+        return 900
+
+    monkeypatch.setattr(bot_engine, "minute_data_staleness_seconds", resolve_staleness)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", check_fresh)
+
+    result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+    assert observed["max_age"] == 900
+    assert observed["age"] <= observed["max_age"]
+    assert feeds_seen[-1] in {None, "iex"}
+
+
+def test_fetch_minute_df_safe_raises_on_stale(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 16, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=45)
+    session_end = base_now + timedelta(hours=3)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    idx = pd.date_range(end=base_now - timedelta(minutes=18), periods=20, freq="min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [1.0 + i * 0.01 for i in range(len(idx))],
+            "high": [1.1 + i * 0.01 for i in range(len(idx))],
+            "low": [0.9 + i * 0.01 for i in range(len(idx))],
+            "close": [1.0 + i * 0.01 for i in range(len(idx))],
+            "volume": [100] * len(idx),
+        },
+        index=idx,
+    )
+
+    def build_df(*_a, **_k):
+        return df.copy()
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", build_df)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 999, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, session_end),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+
+    monkeypatch.setattr(bot_engine, "minute_data_staleness_seconds", lambda feed=None: 900)
+
+    def assert_stale(df_arg, max_age_seconds, *, symbol=None, now=None, tz=None):
+        last_ts = pd.to_datetime(df_arg.index[-1], utc=True)
+        if now is None:
+            raise AssertionError("now must be set")
+        age = (now - last_ts).total_seconds()
+        if age <= max_age_seconds:
+            return None
+        raise RuntimeError(f"age={age}")
+
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", assert_stale)
 
     with pytest.raises(bot_engine.DataFetchError) as excinfo:
         bot_engine.fetch_minute_df_safe("AAPL")
@@ -132,7 +256,7 @@ def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
 
     result = bot_engine.fetch_minute_df_safe("AMGN")
 
-    assert captured["max_age"] == 600
+    assert captured["max_age"] == 900
     assert captured["now"] == session_end
     pd.testing.assert_frame_equal(result, df)
 
@@ -291,7 +415,7 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     assert feeds == ["iex", "sip"]
     assert "df" in captured
     assert captured["symbol"] == "AAPL"
-    assert captured["max_age"] == 600
+    assert captured["max_age"] == 900
     assert isinstance(result, pd.DataFrame)
     pd.testing.assert_index_equal(result.index, fresh_idx)
     assert fetcher._minute_cache["AAPL"].index[-1] == fresh_idx[-1]
