@@ -14477,13 +14477,16 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
                 # AI-AGENT-REF: exit immediately on repeated data failure
                 return
-            else:
-                logger.info(
-                    "DATA_SOURCE_RETRY_FINAL",
-                    extra={"success": True, "attempts": attempt + 1},
-                )
-
+            zero_row_symbols = [s for s in symbols if row_counts.get(s, 0) == 0]
             skipped = [s for s in symbols if s not in processed]
+            logger.info(
+                "DATA_SOURCE_RETRY_FINAL",
+                extra={
+                    "success": not skipped and not zero_row_symbols,
+                    "attempts": attempt + 1,
+                },
+            )
+
             if skipped:
                 logger.info(
                     "CYCLE_SKIPPED_SUMMARY",
