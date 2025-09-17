@@ -19,6 +19,7 @@ from ai_trading.logging import get_logger
 import os
 import pickle
 import random
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +55,24 @@ if TYPE_CHECKING:  # pragma: no cover - typing helpers
 open = open
 getattr = getattr
 logger = get_logger(__name__)
+
+_STRICT_DECIMAL_PATTERN = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def _is_strict_decimal(value: Any) -> bool:
+    """Return ``True`` when ``value`` represents a plain decimal string."""
+
+    if value is None:
+        return False
+    if isinstance(value, bool):  # ``bool`` is a subclass of ``int``
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered in {"nan", "inf", "-inf", "+inf"}:
+        return False
+    return bool(_STRICT_DECIMAL_PATTERN.fullmatch(text))
 
 try:
     from ai_trading.portfolio_rl import PortfolioReinforcementLearner
@@ -267,7 +286,11 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         audit_format_present = True
                         if len(row) >= 6:
                             try:
-                                price = float(row[5])
+                                price_raw = row[5]
+                                if not _is_strict_decimal(price_raw):
+                                    logger.debug('Invalid price format in audit row: %s', price_raw)
+                                    continue
+                                price = float(price_raw)
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in audit format row: %s', e)
                                 continue
@@ -279,8 +302,13 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         meta_format_present = True
                         if len(row) >= 5:
                             try:
-                                entry_price = float(row[2])
-                                exit_price = float(row[4])
+                                entry_raw = row[2]
+                                exit_raw = row[4]
+                                if not (_is_strict_decimal(entry_raw) and _is_strict_decimal(exit_raw)):
+                                    logger.debug('Invalid price format in meta row: %s', row)
+                                    continue
+                                entry_price = float(entry_raw)
+                                exit_price = float(exit_raw)
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in meta format row: %s', e)
                                 continue
@@ -294,6 +322,8 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                     else:
                         numeric_vals = []
                         for _col_idx, col_val in enumerate(row[:5]):
+                            if not _is_strict_decimal(col_val):
+                                continue
                             try:
                                 numeric_vals.append(float(col_val))
                             except (ValueError, TypeError):
@@ -339,6 +369,8 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         row = next(csv_reader)
                         numeric_vals = []
                         for col in row:
+                            if not _is_strict_decimal(col):
+                                continue
                             try:
                                 numeric_vals.append(float(col))
                             except (ValueError, TypeError):
@@ -627,17 +659,27 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         return False
     required_cols = {'entry_price', 'exit_price', 'side'}
     total_rows = len(df)
-    valid = df[['entry_price', 'exit_price']].apply(pd.to_numeric, errors='coerce').notna().all(axis=1)
-    try:
-        valid_rows = int(valid.sum())
-    except (ValueError, TypeError):
-        valid_rows = total_rows
     cols_obj = getattr(df, "columns", None)
     try:
         cols_list = list(cols_obj) if cols_obj is not None else []
     except TypeError:
         cols_list = []
     cols = set(cols_list)
+    # ``cols_list`` is reused for header checks below; avoid recomputing.
+    entry_decimal_mask = pd.Series(False, index=df.index)
+    exit_decimal_mask = pd.Series(False, index=df.index)
+    numeric_mask = pd.Series(False, index=df.index)
+    if 'entry_price' in cols:
+        entry_decimal_mask = df['entry_price'].apply(_is_strict_decimal)
+    if 'exit_price' in cols:
+        exit_decimal_mask = df['exit_price'].apply(_is_strict_decimal)
+    if {'entry_price', 'exit_price'}.issubset(cols):
+        numeric_mask = df[['entry_price', 'exit_price']].apply(pd.to_numeric, errors='coerce').notna().all(axis=1)
+    valid = entry_decimal_mask & exit_decimal_mask & numeric_mask
+    try:
+        valid_rows = int(valid.sum())
+    except (ValueError, TypeError):
+        valid_rows = 0
     quality_report.update({
         'file_exists': bool(total_rows),
         'has_valid_format': required_cols.issubset(cols),
@@ -663,6 +705,10 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
         return False
     original_rows = len(df)
     logger.debug(f'META_LEARNING_RAW_DATA: {original_rows} total rows loaded from {trade_log_path}')
+    filtered_out = original_rows - int(valid_rows)
+    if filtered_out > 0:
+        logger.debug('META_LEARNING_STRICT_PRICE_FILTER: Removed %s rows failing decimal validation', filtered_out)
+    df = df[valid].copy()
     if len(df) > 0 and len(cols) >= 3:
         has_meta_headers = any(col in ['symbol', 'entry_price', 'exit_price', 'signal_tags'] for col in cols_list)
         if has_meta_headers:
