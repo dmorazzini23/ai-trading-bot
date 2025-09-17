@@ -186,8 +186,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices('SENTIMENT_API_KEY', 'NEWS_API_KEY'),
     )
     sentiment_api_url: str | None = Field(default=None, alias='SENTIMENT_API_URL')
-    sentiment_max_retries: int = Field(3, alias='SENTIMENT_MAX_RETRIES')
-    sentiment_backoff_base: float = Field(1.0, alias='SENTIMENT_BACKOFF_BASE')
+    sentiment_max_retries: int = Field(5, alias='SENTIMENT_MAX_RETRIES')
+    sentiment_backoff_base: float = Field(5.0, alias='SENTIMENT_BACKOFF_BASE')
     sentiment_backoff_strategy: str = Field('exponential', alias='SENTIMENT_BACKOFF_STRATEGY')
     rebalance_interval_min: int = Field(60, ge=1, description='Minutes between portfolio rebalances', alias='REBALANCE_INTERVAL_MIN')
     # HTTP client/session tuning (used by main._init_http_session)
