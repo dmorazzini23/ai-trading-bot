@@ -238,8 +238,9 @@ after the symbol is confirmed missing or all feeds return empty data.
 Per-request retries (default **5**) can be tuned via the
 `FETCH_BARS_MAX_RETRIES` environment variable. When the limit is reached the
 fetcher returns `None` so callers can fall back to cached data or alternate
-providers. Enable an optional Yahoo fallback by setting
-`ENABLE_HTTP_FALLBACK=1`.
+providers. Yahoo HTTP fallback is enabled by default; set
+`ENABLE_HTTP_FALLBACK=0` (or `false`) to opt out when running in an offline
+environment.
 
 **Data Provider Diagnostics:**
 

@@ -56,3 +56,35 @@ def test_fetch_feed_adds_skip_list_after_max_retries(monkeypatch):
 
     assert key in fb._SKIPPED_SYMBOLS
     assert key in fetch._SKIPPED_SYMBOLS
+
+
+def test_fetch_feed_uses_http_fallback_when_enabled(monkeypatch):
+    pd = pytest.importorskip("pandas")
+    start, end = _dt_range(1)
+
+    def always_empty(symbol, s, e, timeframe, *, feed):
+        raise fb.EmptyBarsError(f"empty:{feed}")
+
+    fb._SKIPPED_SYMBOLS.clear()
+    fb._EMPTY_BAR_COUNTS.clear()
+    fetch._SKIPPED_SYMBOLS.clear()
+
+    monkeypatch.setattr(fb, "_fetch_bars", always_empty)
+    monkeypatch.setattr(fb, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
+    monkeypatch.setattr(fb, "max_data_fallbacks", lambda: 2)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True, raising=False)
+
+    fallback_calls: list[tuple[str, str]] = []
+
+    def fake_backup(symbol, s, e, interval):
+        fallback_calls.append((symbol, interval))
+        return pd.DataFrame({"timestamp": [s]})
+
+    monkeypatch.setattr(fb, "_backup_get_bars", fake_backup)
+    monkeypatch.setattr(fetch, "_backup_get_bars", fake_backup)
+    monkeypatch.setattr(fb.provider_monitor, "record_switchover", lambda *a, **k: None)
+
+    out = fb._fetch_feed("TEST", start, end, "1Min", feed="iex")
+    assert isinstance(out, pd.DataFrame)
+    assert not out.empty
+    assert fallback_calls == [("TEST", "1m")]

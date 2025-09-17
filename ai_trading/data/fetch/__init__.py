@@ -210,10 +210,16 @@ _FETCH_BARS_MAX_RETRIES = int(os.getenv("FETCH_BARS_MAX_RETRIES", "5"))
 # Configurable backoff parameters for retry logic
 _FETCH_BARS_BACKOFF_BASE = float(os.getenv("FETCH_BARS_BACKOFF_BASE", "2"))
 _FETCH_BARS_BACKOFF_CAP = float(os.getenv("FETCH_BARS_BACKOFF_CAP", "5"))
-_ENABLE_HTTP_FALLBACK = os.getenv("ENABLE_HTTP_FALLBACK", "0").strip().lower() not in {
-    "0",
-    "false",
-}
+_http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+if _http_fallback_env is None:
+    _ENABLE_HTTP_FALLBACK = True
+else:
+    _ENABLE_HTTP_FALLBACK = _http_fallback_env.strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 # Track fallback usage to avoid repeated Alpaca requests for the same window
 _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()

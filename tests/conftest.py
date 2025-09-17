@@ -136,6 +136,7 @@ def dummy_data_fetcher():
 @pytest.fixture(autouse=True)
 def _reset_fallback_cache(monkeypatch):
     monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
+    monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {})
 
 
 @pytest.fixture

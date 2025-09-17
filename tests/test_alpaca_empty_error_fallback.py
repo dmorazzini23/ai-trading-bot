@@ -21,6 +21,7 @@ def test_error_empty_switches_to_backup(monkeypatch):
     monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
     monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 0)
     monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex"])
+    monkeypatch.setattr(fetch, "_preferred_feed_failover", lambda: [])
     monkeypatch.setattr(fetch, "_ALPACA_EMPTY_ERROR_THRESHOLD", 2, raising=False)
     monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 1, raising=False)
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
@@ -51,6 +52,7 @@ def test_error_empty_switches_to_backup(monkeypatch):
 
     req = _Requests()
     monkeypatch.setattr(fetch, "requests", req)
+    monkeypatch.setattr(fetch._HTTP_SESSION, "get", req.get)
 
     backup_calls = {"count": 0}
 
@@ -72,12 +74,13 @@ def test_error_empty_switches_to_backup(monkeypatch):
     monkeypatch.setattr(fetch, "_backup_get_bars", fake_backup)
 
     out1 = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert out1 is None or out1.empty
+    assert out1 is not None and not out1.empty
     assert req.calls == 1
+    assert backup_calls["count"] == 1
 
     out2 = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
-    assert not out2.empty
-    assert req.calls == 2
-    assert backup_calls["count"] == 1
+    assert out2 is not None and not out2.empty
+    assert req.calls == 1
+    assert backup_calls["count"] == 2
 
     assert ("AAPL", "1Min") not in fetch._ALPACA_EMPTY_ERROR_COUNTS
