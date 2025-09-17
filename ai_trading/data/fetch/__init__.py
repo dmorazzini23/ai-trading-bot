@@ -651,7 +651,7 @@ def _flatten_and_normalize_ohlcv(
     - flatten MultiIndex columns
     - lower/snake columns
     - ensure 'close' exists (fallback to 'adj_close')
-    - de-duplicate & sort index, convert index to UTC and tz-naive
+    - de-duplicate & sort index, convert timestamp fields to UTC while keeping them tz-aware
     """
     pd = _ensure_pandas()
     if pd is None:
@@ -731,8 +731,13 @@ def _flatten_and_normalize_ohlcv(
     if isinstance(df_out.index, pd.DatetimeIndex):
         try:
             tz = df_out.index.tz
+        except Exception:  # pragma: no cover - defensive
+            tz = None
+        try:
             if tz is not None:
-                df_out.index = df_out.index.tz_convert("UTC").tz_localize(None)
+                df_out.index = df_out.index.tz_convert("UTC")
+            else:
+                df_out.index = df_out.index.tz_localize("UTC")
         except (AttributeError, TypeError, ValueError):
             pass
         try:
@@ -760,6 +765,25 @@ def _flatten_and_normalize_ohlcv(
             is_monotonic = True
         if not is_monotonic:
             df_out.sort_index(inplace=True)
+    if "timestamp" in getattr(df_out, "columns", []):
+        try:
+            ts_series = df_out["timestamp"]
+        except Exception:  # pragma: no cover - defensive
+            ts_series = None
+        if ts_series is not None:
+            tz = None
+            try:
+                tz = getattr(ts_series.dt, "tz", None)  # type: ignore[attr-defined]
+            except Exception:
+                tz = None
+            try:
+                if tz is not None:
+                    df_out["timestamp"] = ts_series.dt.tz_convert("UTC")  # type: ignore[attr-defined]
+                else:
+                    converted = pd.to_datetime(ts_series, utc=True, errors="ignore")
+                    df_out["timestamp"] = converted
+            except (AttributeError, TypeError, ValueError):
+                pass
     if "timestamp" not in getattr(df_out, "columns", []) and isinstance(df_out.index, pd.DatetimeIndex):
         index_name = df_out.index.name or "index"
         df_reset = df_out.reset_index()

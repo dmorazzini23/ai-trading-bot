@@ -84,3 +84,25 @@ def test_normalize_alias_helper_exposed():
     df = pd.DataFrame({"O": [1], "H": [2], "L": [0], "C": [1.5], "V": [100], "T": ["2024-01-01"]})
     out = normalize_ohlcv_columns(df.copy())
     assert {"open", "high", "low", "close", "volume", "timestamp"}.issubset(out.columns)
+
+
+def test_normalize_keeps_timestamp_timezone_awareness():
+    ts = pd.date_range("2024-01-01 09:30", periods=3, freq="1min", tz="America/New_York")
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.2, 10.3, 10.4],
+            "low": [9.8, 9.9, 10.0],
+            "close": [10.1, 10.15, 10.25],
+            "volume": [1_000, 1_200, 1_100],
+        },
+        index=ts,
+    )
+
+    out = _flatten_and_normalize_ohlcv(df.copy())
+
+    assert "timestamp" in out.columns
+    timestamp_series = out["timestamp"]
+    assert hasattr(timestamp_series, "dt")
+    assert getattr(timestamp_series.dt, "tz", None) is not None
+    assert str(timestamp_series.dt.tz) == "UTC"
