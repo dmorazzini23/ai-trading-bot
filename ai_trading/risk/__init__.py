@@ -1,7 +1,7 @@
 """Risk Management Module - Institutional Grade Risk Controls."""
 from __future__ import annotations
 
-from ai_trading.config.management import TradingConfig
+from ai_trading.config.management import TradingConfig, from_env_relaxed
 from . import kelly as _kelly
 from .circuit_breakers import (
     CircuitBreakerState,
@@ -28,8 +28,20 @@ from .position_sizing import (
     VolatilityPositionSizer,
 )
 
-# AI-AGENT-REF: initialize Kelly defaults without importing settings
-_kelly._DEFAULT_CONFIG = TradingConfig.from_env()
+
+def _load_default_kelly_config() -> TradingConfig:
+    """Build the Kelly default config lazily with relaxed fallback."""
+
+    try:
+        return TradingConfig.from_env()
+    except RuntimeError as exc:
+        message = str(exc)
+        if "MAX_DRAWDOWN_THRESHOLD" not in message:
+            raise
+        return from_env_relaxed()
+
+
+_kelly.configure_default_config(_load_default_kelly_config)
 
 __all__ = [
     "RiskEngine",

@@ -5,7 +5,7 @@ import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Optional
+from typing import Callable, Optional
 
 from ai_trading.config.management import TradingConfig, from_env_relaxed
 from ai_trading.logging import logger
@@ -17,6 +17,57 @@ class KellyParams:
     cap: float
 
 _DEFAULT_CONFIG: Optional[TradingConfig] = None
+_CONFIG_LOADER: Callable[[], TradingConfig] | None = None
+_STRICT_ENV_ERROR_HINT = "MAX_DRAWDOWN_THRESHOLD"
+
+
+def _strict_env_loader() -> TradingConfig:
+    """Attempt to build the TradingConfig with full validation."""
+
+    try:
+        return TradingConfig.from_env()
+    except RuntimeError as exc:
+        message = str(exc)
+        if _STRICT_ENV_ERROR_HINT in message:
+            logger.debug(
+                "Kelly default config falling back to relaxed env: %s",
+                message,
+            )
+            return from_env_relaxed()
+        raise
+
+
+def _build_safe_default() -> TradingConfig:
+    """Return a deterministic TradingConfig used when env loading fails."""
+
+    return TradingConfig(
+        seed=42,
+        kelly_fraction_max=0.25,
+        max_drawdown_threshold=None,
+        buy_threshold=0.4,
+        conf_threshold=0.8,
+        daily_loss_limit=0.05,
+        capital_cap=0.25,
+        dollar_risk_limit=0.05,
+        paper=True,
+    )
+
+
+def configure_default_config(
+    loader: Callable[[], TradingConfig] | None = None,
+) -> None:
+    """Set the loader used to initialize the module default config lazily."""
+
+    global _CONFIG_LOADER, _DEFAULT_CONFIG
+    _CONFIG_LOADER = loader or _strict_env_loader
+    _DEFAULT_CONFIG = None
+
+
+def reset_default_config() -> None:
+    """Clear the cached default config forcing a reload on next access."""
+
+    global _DEFAULT_CONFIG
+    _DEFAULT_CONFIG = None
 
 @lru_cache(maxsize=1)
 def get_default_config() -> TradingConfig:
@@ -29,20 +80,15 @@ def get_default_config() -> TradingConfig:
     global _DEFAULT_CONFIG
     if _DEFAULT_CONFIG is not None:
         return _DEFAULT_CONFIG
+    loader = _CONFIG_LOADER or _strict_env_loader
     try:
-        _DEFAULT_CONFIG = from_env_relaxed()
-    except Exception:
-        _DEFAULT_CONFIG = TradingConfig(
-            seed=42,
-            kelly_fraction_max=0.25,
-            max_drawdown_threshold=None,
-            buy_threshold=0.4,
-            conf_threshold=0.8,
-            daily_loss_limit=0.05,
-            capital_cap=0.25,
-            dollar_risk_limit=0.05,
-            paper=True,
-        )
+        candidate = loader()
+    except Exception as exc:
+        logger.error("Kelly default config loader failed: %s", exc)
+        candidate = _build_safe_default()
+    if not isinstance(candidate, TradingConfig):  # pragma: no cover - defensive
+        raise TypeError("Kelly default config loader must return TradingConfig")
+    _DEFAULT_CONFIG = candidate
     return _DEFAULT_CONFIG
 
 def institutional_kelly(p: KellyParams) -> float:
