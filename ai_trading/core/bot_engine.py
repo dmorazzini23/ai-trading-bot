@@ -339,7 +339,7 @@ from ai_trading.config.settings import (
 from ai_trading.data.provider_monitor import provider_monitor
 
 # Sentiment knobs used by tests
-SENTIMENT_FAILURE_THRESHOLD: int = 8  # Audit: trip circuit after 8 consecutive failures
+SENTIMENT_FAILURE_THRESHOLD = 8  # Audit: trip circuit after 8 consecutive failures
 _SENTIMENT_FAILURES: int = 0
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 SENTIMENT_SUCCESS_TTL_SEC: int = int(os.getenv("SENTIMENT_SUCCESS_TTL_SEC", "900"))
@@ -6242,9 +6242,7 @@ _SENTIMENT_CIRCUIT_BREAKER = {
     "opened_at": 0,
 }  # closed, open, half-open
 # AI-AGENT-REF: Enhanced sentiment circuit breaker thresholds for better resilience
-SENTIMENT_RECOVERY_TIMEOUT = (
-    900  # Audit: 15-minute (900s) recovery window for sentiment circuit breaker
-)
+SENTIMENT_RECOVERY_TIMEOUT = 900  # Audit: 15-minute (900s) recovery window for sentiment circuit breaker
 if SENTIMENT_BACKOFF_STRATEGY.lower() == "fixed":
     _SENTIMENT_WAIT = wait_random(SENTIMENT_BACKOFF_BASE, SENTIMENT_BACKOFF_BASE * 2)
 else:
