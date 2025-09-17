@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import ai_trading.alpaca_api as alpaca_api
-from ai_trading.alpaca_api import AlpacaOrderHTTPError
+from ai_trading.alpaca_api import AlpacaAuthenticationError, AlpacaOrderHTTPError, is_alpaca_service_available
 from ai_trading.exc import RequestException
 
 
@@ -124,6 +124,30 @@ def test_alpaca_get_network_error(_http_stub: SimpleNamespace, _metrics_stub: tu
     assert calls.count == 1
     # errors counter increments on network failures too
     assert errors.count == 1
+
+
+def test_alpaca_get_auth_error_marks_unavailable(
+    _http_stub: SimpleNamespace,
+    _metrics_stub: tuple[_Counter, _Counter, _Histogram],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls, errors, _ = _metrics_stub
+    monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", True)
+    _http_stub.response = _Response(
+        status_code=401,
+        payload={"message": "Unauthorized"},
+        text="Unauthorized",
+    )
+
+    assert is_alpaca_service_available()
+
+    with pytest.raises(AlpacaAuthenticationError) as excinfo:
+        alpaca_api.alpaca_get("/v2/account")
+
+    assert "Unauthorized" in str(excinfo.value)
+    assert calls.count == 1
+    assert errors.count == 1
+    assert not is_alpaca_service_available()
 
 
 def test_get_latest_price_uses_live_quote(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

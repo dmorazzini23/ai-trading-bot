@@ -82,10 +82,12 @@ from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.logging import logger_once
 from ai_trading.alpaca_api import (
+    AlpacaAuthenticationError,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
     get_trading_client_cls,
     get_data_client_cls,
     get_api_error_cls,
+    is_alpaca_service_available,
 )
 from ai_trading.utils.pickle_safe import safe_pickle_load
 from ai_trading.utils.base import is_market_open as _is_market_open_base
@@ -3915,6 +3917,7 @@ class BotState:
     trade_cooldowns: dict[str, datetime] = field(default_factory=dict)
     last_trade_direction: dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
+    auth_skipped_symbols: set[str] = field(default_factory=set)
 
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
@@ -10140,6 +10143,15 @@ def _safe_trade(
             regime_ok,
             price_df=price_df,
         )
+    except AlpacaAuthenticationError as exc:
+        logger.error(
+            "SKIP_TRADE_ALPACA_AUTH",
+            extra={"symbol": symbol, "detail": str(exc)},
+        )
+        auth_skipped = getattr(state, "auth_skipped_symbols", None)
+        if isinstance(auth_skipped, set):
+            auth_skipped.add(symbol)
+        return False
     except RetryError as e:
         logger.warning(
             f"[trade_logic] retries exhausted for {symbol}: {e}",
@@ -10484,6 +10496,15 @@ def _enter_long(
     else:
         quote_price = get_latest_price(symbol)
         price_source = _PRICE_SOURCE.get(symbol, "unknown")
+        if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
+            logger.warning(
+                "SKIP_ORDER_ALPACA_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source},
+            )
+            auth_skipped = getattr(state, "auth_skipped_symbols", None)
+            if isinstance(auth_skipped, set):
+                auth_skipped.add(symbol)
+            return True
     if quote_price is None:
         logger.warning(
             "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}
@@ -10676,6 +10697,15 @@ def _enter_short(
     else:
         quote_price = get_latest_price(symbol)
         price_source = _PRICE_SOURCE.get(symbol, "unknown")
+        if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
+            logger.warning(
+                "SKIP_ORDER_ALPACA_UNAVAILABLE",
+                extra={"symbol": symbol, "price_source": price_source},
+            )
+            auth_skipped = getattr(state, "auth_skipped_symbols", None)
+            if isinstance(auth_skipped, set):
+                auth_skipped.add(symbol)
+            return True
     if quote_price is None:
         logger.warning(
             "SKIP_ORDER_NO_PRICE", extra={"symbol": symbol, "source": price_source}
@@ -15908,6 +15938,9 @@ def get_latest_price(symbol: str):
 
     price: float | None = None
     price_source = "unknown"
+    if not is_alpaca_service_available():
+        _PRICE_SOURCE[symbol] = "alpaca_unavailable"
+        return None
     try:
         alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
         data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
@@ -15917,6 +15950,13 @@ def get_latest_price(symbol: str):
             logger.warning("ALPACA_PRICE_NONE", extra={"symbol": symbol})
         else:
             price_source = "alpaca"
+    except AlpacaAuthenticationError as exc:
+        logger.error(
+            "ALPACA_PRICE_AUTH_FAILED",
+            extra={"symbol": symbol, "detail": str(exc)},
+        )
+        _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+        return None
     except (
         FileNotFoundError,
         PermissionError,
