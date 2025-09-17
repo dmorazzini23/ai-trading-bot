@@ -70,13 +70,27 @@ def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
         ["entry_price", "exit_price", "signal_tags", "side", "confidence"],
     )
 
+    output_path = tmp_path / "out.csv"
+
     with caplog.at_level(logging.WARNING):
         bot_engine.run_meta_learning_weight_optimizer(
             trade_log_path=str(trade_log),
-            output_path=str(tmp_path / "out.csv"),
+            output_path=str(output_path),
         )
 
-    assert any(r.levelno == logging.WARNING and str(trade_log) in r.getMessage() for r in caplog.records)
+    warning_records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and r.getMessage() == "METALEARN_NO_TRADES"
+    ]
+
+    assert warning_records, "Expected METALEARN_NO_TRADES warning to be emitted"
+    assert any(
+        str(trade_log) in record.getMessage()
+        or getattr(record, "trade_log_path", None) == str(trade_log)
+        for record in warning_records
+    ), "Trade log path should be referenced in warning message or extras"
+    assert not output_path.exists(), "Optimizer should return early without creating weights file"
 
 
 def test_weight_optimizer_logs_warning_on_empty_df(caplog):
