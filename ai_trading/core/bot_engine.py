@@ -13610,12 +13610,14 @@ def run_multi_strategy(ctx) -> None:
         )
 
         try:
-            ctx.execution_engine.execute_order(
+            result = ctx.execution_engine.execute_order(
                 sig.symbol,
                 sig.side,
                 qty,
                 price=price,
                 asset_class=sig.asset_class,
+                signal=sig,
+                signal_weight=getattr(sig, "weight", None),
             )
         except AssertionError as exc:
             logger.warning(
@@ -13628,7 +13630,43 @@ def run_multi_strategy(ctx) -> None:
                 },
             )
             continue
-        ctx.risk_engine.register_fill(sig)
+        if result is None:
+            continue
+        filled_qty = getattr(result, "filled_quantity", 0) or 0
+        if filled_qty <= 0:
+            continue
+        requested_qty = getattr(result, "requested_quantity", qty) or qty
+        try:
+            requested_qty = float(requested_qty)
+            filled_qty = float(filled_qty)
+        except (TypeError, ValueError):
+            continue
+        if requested_qty <= 0:
+            continue
+        try:
+            signal_weight = float(getattr(sig, "weight", 0.0))
+        except (TypeError, ValueError):
+            signal_weight = 0.0
+        fill_ratio = filled_qty / requested_qty
+        if fill_ratio <= 0:
+            continue
+        filled_weight = signal_weight * min(1.0, fill_ratio)
+        if filled_weight == 0:
+            continue
+        try:
+            from dataclasses import replace
+
+            filled_signal = replace(sig, weight=filled_weight)
+        except Exception:
+            try:
+                filled_signal = sig.__class__(**{**getattr(sig, "__dict__", {}), "weight": filled_weight})
+            except Exception:
+                continue
+        ctx.risk_engine.register_fill(filled_signal)
+        try:
+            ctx.execution_engine.mark_fill_reported(str(result), int(filled_qty))
+        except Exception:
+            logger.debug("MARK_FILL_REPORTED_FAILED", exc_info=True)
 
     # At the end of the strategy cycle, trigger trailing-stop checks if an ExecutionEngine is present.
     try:

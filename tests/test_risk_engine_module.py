@@ -7,6 +7,7 @@ import numpy as np
 import os
 import types
 import logging
+import pytest
 os.environ.setdefault("PYTEST_RUNNING", "1")
 os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
@@ -62,6 +63,40 @@ def test_register_and_position_size(monkeypatch):
     sell = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s", weight=sig.weight, asset_class="equity")
     eng.register_fill(sell)
     assert round(eng.exposure["equity"], 6) == 0
+
+
+def test_register_fill_zero_weight_no_exposure_change():
+    eng = RiskEngine()
+    sig = make_signal()
+    assert eng.exposure.get("equity", 0.0) == 0.0
+    eng.register_fill(sig)
+    assert eng.exposure.get("equity", 0.0) == 0.0
+
+
+def test_register_fill_partial_updates_exposure():
+    eng = RiskEngine()
+    base = make_signal()
+    base.weight = 0.5
+    partial = TradeSignal(
+        symbol=base.symbol,
+        side=base.side,
+        confidence=base.confidence,
+        strategy=base.strategy,
+        weight=0.2,
+        asset_class=base.asset_class,
+    )
+    eng.register_fill(partial)
+    assert pytest.approx(eng.exposure[base.asset_class], rel=1e-6) == 0.2
+    remainder = TradeSignal(
+        symbol=base.symbol,
+        side=base.side,
+        confidence=base.confidence,
+        strategy=base.strategy,
+        weight=base.weight - partial.weight,
+        asset_class=base.asset_class,
+    )
+    eng.register_fill(remainder)
+    assert pytest.approx(eng.exposure[base.asset_class], rel=1e-6) == pytest.approx(base.weight)
 
 
 def test_position_size_zero_raw_qty_defaults_to_min(caplog):

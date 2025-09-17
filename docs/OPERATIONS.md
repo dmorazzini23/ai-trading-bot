@@ -43,3 +43,9 @@ Set the following to control position sizing:
 - `MAX_POSITION_SIZE`: absolute USD cap per position. Must be >0 (typically 1-10000). Ignored when `max_position_mode=AUTO`, where the bot derives a value from `CAPITAL_CAP` and equity.
 - `AI_TRADING_MAX_POSITION_SIZE`: explicit override for deployments; must be positive and always takes precedence over dynamic sizing.
 - `MAX_POSITION_EQUITY_FALLBACK`: equity assumed when deriving `MAX_POSITION_SIZE` but the real account equity cannot be fetched. Defaults to `200000`.
+
+### Execution exposure tracking
+
+- `ExecutionEngine.execute_order(...)` now returns an `ExecutionResult` object (a string subclass) containing the created order, its current status, the filled quantity, and the proportional signal weight that filled. Code that only needs the order ID can continue to treat the result as a string.
+- The trading loop inspects the returned `ExecutionResult` and only calls `RiskEngine.register_fill(...)` when a non-zero fill quantity is reported. Partial fills are forwarded with a scaled signal weight so exposure reflects the filled portion of the order.
+- The execution engine registers asynchronous callbacks with the order manager. Late fills (for example, fills confirmed after the trading cycle completes) automatically trigger `RiskEngine.register_fill(...)` with the outstanding fill delta, keeping the exposure ledger in sync even when confirmations arrive after the synchronous trading loop.

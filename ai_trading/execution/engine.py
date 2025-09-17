@@ -12,9 +12,10 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, is_dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from types import SimpleNamespace
 try:  # pragma: no cover - Alpaca SDK optional in tests
     from alpaca.common.exceptions import APIError
@@ -58,6 +59,9 @@ from ai_trading.math.money import Money, round_to_lot, round_to_tick
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderStatus, OrderType
 from .idempotency import OrderIdempotencyCache
+
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    from ai_trading.risk.engine import TradeSignal
 
 def _ensure_positive_qty(qty: float) -> float:
     if qty is None:
@@ -125,6 +129,7 @@ class Order:
         self.parent_order_id = kwargs.get('parent_order_id')
         self.slippage_bps = 0.0
         logger.debug(f'Order created: {self.id} {self.side} {self.quantity} {self.symbol}')
+
 
     @property
     def remaining_quantity(self) -> int:
@@ -206,6 +211,79 @@ class Order:
             'notional_value': self.notional_value,
             'fill_percentage': self.fill_percentage,
         }
+
+
+@dataclass
+class _SignalMeta:
+    """Track signal context needed for post-fill exposure updates."""
+
+    signal: Any | None
+    requested_qty: int
+    signal_weight: float | None
+    reported_fill_qty: int = 0
+
+
+class ExecutionResult(str):
+    """Rich execution response preserving backwards-compatible ``str`` semantics."""
+
+    __slots__ = ("order", "status", "filled_quantity", "requested_quantity", "signal_weight")
+
+    def __new__(
+        cls,
+        order: Order | None,
+        status: OrderStatus | str | None,
+        filled_quantity: int,
+        requested_quantity: int,
+        signal_weight: float | None,
+    ) -> "ExecutionResult":
+        order_id = getattr(order, "id", "") or ""
+        obj = str.__new__(cls, order_id)
+        obj.order = order
+        obj.status = cls._normalize_status(status)
+        obj.filled_quantity = int(filled_quantity or 0)
+        obj.requested_quantity = int(requested_quantity or 0)
+        obj.signal_weight = signal_weight
+        return obj
+
+    @staticmethod
+    def _normalize_status(status: OrderStatus | str | None) -> OrderStatus | None:
+        if isinstance(status, OrderStatus):
+            return status
+        if status is None:
+            return None
+        try:
+            return OrderStatus(str(status))
+        except Exception:
+            return None
+
+    @property
+    def has_fill(self) -> bool:
+        """Return ``True`` when any quantity filled."""
+
+        return self.filled_quantity > 0
+
+    @property
+    def fill_ratio(self) -> float:
+        """Return ratio of filled quantity to requested quantity (0–1)."""
+
+        if self.requested_quantity <= 0:
+            return 0.0
+        try:
+            ratio = self.filled_quantity / self.requested_quantity
+        except ZeroDivisionError:
+            return 0.0
+        return max(0.0, min(1.0, float(ratio)))
+
+    @property
+    def filled_weight(self) -> float | None:
+        """Return proportional signal weight filled, when available."""
+
+        if self.signal_weight is None:
+            return None
+        try:
+            return float(self.signal_weight) * self.fill_ratio
+        except (TypeError, ValueError):
+            return None
 
 class OrderManager:
     """
@@ -498,6 +576,7 @@ class ExecutionEngine:
         self.logger = logger
         self._open_orders: dict[str, OrderInfo] = {}
         self._available_qty: float = 0
+        self._order_signal_meta: dict[str, _SignalMeta] = {}
         # In-memory fallback for position tracking when broker data is unavailable
         self._position_ledger: dict[str, int] = {}
         self.execution_stats = {
@@ -509,6 +588,10 @@ class ExecutionEngine:
             'average_fill_time': 0.0,
         }
         emit_once(logger, 'EXECUTION_ENGINE_INIT', 'info', 'ExecutionEngine initialized')
+        try:
+            self.order_manager.add_execution_callback(self._handle_execution_event)
+        except Exception:  # pragma: no cover - defensive, callbacks optional in some tests
+            logger.debug('EXECUTION_CALLBACK_REGISTRATION_FAILED', exc_info=True)
 
     def _select_api(self):
         """Return the active broker API interface."""
@@ -784,6 +867,8 @@ class ExecutionEngine:
             Order ID if successful, ``None`` if rejected.
         """
         try:
+            signal = kwargs.pop("signal", None)
+            explicit_signal_weight = kwargs.pop("signal_weight", None)
             api = self._select_api()
             if api is None:
                 logger.debug('NO_API_SELECTED')
@@ -856,9 +941,25 @@ class ExecutionEngine:
             order = Order(symbol, side, quantity, order_type, **kwargs)
             if self.order_manager.submit_order(order):
                 self.execution_stats["total_orders"] += 1
+                meta_weight = self._coerce_signal_weight(explicit_signal_weight, signal)
+                if signal is not None or meta_weight is not None:
+                    self._order_signal_meta[order.id] = _SignalMeta(signal, quantity, meta_weight)
+                else:
+                    self._order_signal_meta.pop(order.id, None)
                 if order_type == OrderType.MARKET:
                     self._simulate_market_execution(order)
-                return order.id
+                weight_for_result = meta_weight
+                meta = self._order_signal_meta.get(order.id)
+                if meta is not None:
+                    weight_for_result = meta.signal_weight
+                result = ExecutionResult(
+                    order,
+                    getattr(order, "status", None),
+                    getattr(order, "filled_quantity", 0),
+                    quantity,
+                    weight_for_result,
+                )
+                return result
             self.execution_stats["rejected_orders"] += 1
             return None
         except (ValueError, TypeError, KeyError) as e:
@@ -872,6 +973,108 @@ class ExecutionEngine:
     def execute_sliced(self, symbol: str, quantity: int, side: OrderSide, **kwargs):
         """Execute order slices by delegating to execute_order."""
         return self.execute_order(symbol, side, quantity, **kwargs)
+
+    def _coerce_signal_weight(self, explicit_weight: Any, signal: Any) -> float | None:
+        """Best-effort conversion of signal weight to ``float``."""
+
+        for candidate in (explicit_weight, getattr(signal, "weight", None)):
+            if candidate is None:
+                continue
+            try:
+                weight = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            else:
+                if math.isfinite(weight):
+                    return weight
+        return None
+
+    def mark_fill_reported(self, order_id: str, quantity: int) -> None:
+        """Record quantity already forwarded to risk engine to avoid double-counting."""
+
+        meta = self._order_signal_meta.get(order_id)
+        if meta is None:
+            return
+        try:
+            qty = int(quantity)
+        except (TypeError, ValueError):
+            return
+        if qty < 0:
+            return
+        meta.reported_fill_qty = max(meta.reported_fill_qty, qty)
+        if meta.reported_fill_qty >= meta.requested_qty:
+            self._order_signal_meta.pop(order_id, None)
+
+    def _handle_execution_event(self, order: Order, event_type: str) -> None:
+        """Propagate late fills back to the trading context."""
+
+        order_id = getattr(order, "id", None)
+        if not order_id:
+            return
+        meta = self._order_signal_meta.get(order_id)
+        if meta is None:
+            return
+        filled_qty = self._safe_int(getattr(order, "filled_quantity", 0))
+        if filled_qty is None:
+            filled_qty = 0
+        delta = filled_qty - meta.reported_fill_qty
+        if delta > 0:
+            if self._forward_risk_fill(order, delta, meta):
+                meta.reported_fill_qty = filled_qty
+        status = ExecutionResult._normalize_status(getattr(order, "status", None))
+        if (status is not None and status.is_terminal) or event_type in {"completed", "cancelled", "canceled", "expired"}:
+            if delta <= 0 and filled_qty > meta.reported_fill_qty:
+                meta.reported_fill_qty = filled_qty
+            if status is None or status.is_terminal or event_type in {"cancelled", "canceled", "expired"}:
+                self._order_signal_meta.pop(order_id, None)
+
+    @staticmethod
+    def _safe_int(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _forward_risk_fill(self, order: Order, delta_qty: int, meta: _SignalMeta) -> bool:
+        """Forward ``delta_qty`` fills to the risk engine when possible."""
+
+        if delta_qty <= 0:
+            return False
+        ctx = getattr(self, "ctx", None)
+        risk_engine = getattr(ctx, "risk_engine", None) if ctx is not None else None
+        if risk_engine is None:
+            return False
+        signal = meta.signal
+        if signal is None:
+            return False
+        weight_delta = self._weight_for_delta(delta_qty, meta)
+        if weight_delta is None:
+            return False
+        try:
+            if is_dataclass(signal):
+                fill_signal = replace(signal, weight=weight_delta)
+            else:
+                fill_signal = signal.__class__(**{**getattr(signal, "__dict__", {}), "weight": weight_delta})
+        except Exception:
+            return False
+        risk_engine.register_fill(fill_signal)
+        return True
+
+    def _weight_for_delta(self, delta_qty: int, meta: _SignalMeta) -> float | None:
+        """Return proportional weight for ``delta_qty`` fills."""
+
+        if meta.requested_qty <= 0:
+            return None
+        weight = meta.signal_weight
+        if weight is None:
+            return None
+        try:
+            proportion = float(delta_qty) / float(meta.requested_qty)
+        except ZeroDivisionError:
+            return None
+        if not math.isfinite(proportion) or proportion <= 0:
+            return None
+        return weight * proportion
 
     def _guess_price(self, symbol: str) -> float | None:
         """Best-effort to obtain a reasonable price for simulation.
