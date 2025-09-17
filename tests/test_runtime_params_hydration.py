@@ -104,6 +104,52 @@ def test_build_runtime_uses_config_values():
     assert runtime.params['KELLY_FRACTION'] == 0.7
 
 
+def test_build_runtime_respects_mode_presets(monkeypatch):
+    """Runtime params should mirror mode presets when env vars are unset."""
+    from ai_trading.config.management import TradingConfig
+    from ai_trading.core.runtime import build_runtime
+
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+    for key in (
+        "MAX_POSITION_SIZE",
+        "AI_TRADING_MAX_POSITION_SIZE",
+        "KELLY_FRACTION",
+        "CONF_THRESHOLD",
+        "AI_TRADING_CONF_THRESHOLD",
+        "DAILY_LOSS_LIMIT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    expectations = {
+        "balanced": {
+            "kelly_fraction": 0.6,
+            "conf_threshold": 0.75,
+            "daily_loss_limit": 0.05,
+            "max_position_size": 8000.0,
+        },
+        "conservative": {
+            "kelly_fraction": 0.25,
+            "conf_threshold": 0.85,
+            "daily_loss_limit": 0.03,
+            "max_position_size": 5000.0,
+        },
+        "aggressive": {
+            "kelly_fraction": 0.75,
+            "conf_threshold": 0.65,
+            "daily_loss_limit": 0.08,
+            "max_position_size": 12000.0,
+        },
+    }
+
+    for mode, expected in expectations.items():
+        cfg = TradingConfig.from_env(mode)
+        runtime = build_runtime(cfg)
+        assert cfg.daily_loss_limit == pytest.approx(expected["daily_loss_limit"])
+        assert runtime.params["KELLY_FRACTION"] == pytest.approx(expected["kelly_fraction"])
+        assert runtime.params["CONF_THRESHOLD"] == pytest.approx(expected["conf_threshold"])
+        assert runtime.params["MAX_POSITION_SIZE"] == pytest.approx(expected["max_position_size"])
+
+
 def test_param_helper_fallback_logic():
     """Test that _param helper function provides proper fallback logic."""
     from ai_trading.config.management import TradingConfig
