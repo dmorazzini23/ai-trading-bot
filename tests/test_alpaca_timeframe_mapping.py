@@ -1,3 +1,4 @@
+import datetime as dt
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -47,6 +48,8 @@ def test_day_timeframe_normalized(mock_rest_cls):
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert getattr(req.timeframe, "amount", None) == 1
     assert getattr(req.timeframe.unit, "name", "") == "Day"
+    assert isinstance(req.start, dt.datetime) and req.start.tzinfo is None
+    assert isinstance(req.end, dt.datetime) and req.end.tzinfo is None
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
@@ -63,6 +66,8 @@ def test_tf_zero_arg_normalized(mock_rest_cls):
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert getattr(req.timeframe, "amount", None) == 1
     assert getattr(req.timeframe.unit, "name", "") == "Day"
+    assert isinstance(req.start, dt.datetime) and req.start.tzinfo is None
+    assert isinstance(req.end, dt.datetime) and req.end.tzinfo is None
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
@@ -79,6 +84,8 @@ def test_minute_normalized(mock_rest_cls):
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert getattr(req.timeframe, "amount", None) == 1
     assert getattr(req.timeframe.unit, "name", "") in {"Minute", "Min"}
+    assert isinstance(req.start, dt.datetime) and req.start.tzinfo == dt.UTC
+    assert isinstance(req.end, dt.datetime) and req.end.tzinfo == dt.UTC
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
 
 
@@ -95,4 +102,6 @@ def test_week_normalized(mock_rest_cls):
     (req,), kwargs = mock_rest.get_stock_bars.call_args
     assert getattr(req.timeframe, "amount", None) == 1
     assert getattr(req.timeframe.unit, "name", "").lower() == "week"
+    assert isinstance(req.start, dt.datetime)
+    assert isinstance(req.end, dt.datetime)
     assert_df_like(df)  # AI-AGENT-REF: allow empty in offline mode
