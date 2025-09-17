@@ -2,6 +2,7 @@ import logging
 '\nDemonstration of DrawdownCircuitBreaker with centralized configuration.\n\nThis script simulates how the circuit breaker would protect a portfolio\nduring a volatile trading session using parameters from the centralized\nTradingConfig system.\n'
 import os
 os.environ['TESTING'] = '1'
+from ai_trading.config import get_max_drawdown_threshold
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
@@ -39,8 +40,9 @@ def simulate_trading_session():
         trading_status = '🟢 TRADING' if trading_allowed else '🔴 HALTED'
         drawdown_pct = status['current_drawdown'] * 100
         logging.info(f'{time}: ${equity:>8,.0f} {change:<15} | {trading_status:<12} | Drawdown: {drawdown_pct:>4.1f}% | {description}')
-        if not trading_allowed and status['current_drawdown'] > config.MAX_DRAWDOWN_THRESHOLD:
-            logging.info(str(f"      💥 CIRCUIT BREAKER TRIGGERED: {status['current_drawdown']:.1%} > {config.MAX_DRAWDOWN_THRESHOLD:.1%}"))
+        threshold = get_max_drawdown_threshold()
+        if not trading_allowed and status['current_drawdown'] > threshold:
+            logging.info(str(f"      💥 CIRCUIT BREAKER TRIGGERED: {status['current_drawdown']:.1%} > {threshold:.1%}"))
         elif trading_allowed and status['current_drawdown'] > 0:
             recovery_ratio = equity / status['peak_equity'] if status['peak_equity'] > 0 else 0
             if recovery_ratio >= breaker.recovery_threshold:
