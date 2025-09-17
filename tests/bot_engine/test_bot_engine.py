@@ -1,5 +1,6 @@
 import sys
 import types
+from datetime import time
 
 import pytest
 
@@ -106,3 +107,128 @@ class TestProcessSymbol:
         assert processed == []
         assert row_counts == {}
         assert dummy_halt.calls == ["AAPL:empty_frame"]
+
+
+def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders = []
+
+    class _DummyAPI:
+        def list_positions(self):  # noqa: D401, ANN001 - minimal stub
+            return []
+
+        def get_account(self):  # noqa: D401 - minimal stub
+            return types.SimpleNamespace(equity=100000.0, portfolio_value=100000.0)
+
+    class _Logger:
+        def __init__(self) -> None:
+            self.entries: list[tuple] = []
+
+        def log_entry(self, *args, **kwargs):  # noqa: D401 - capture call
+            self.entries.append((args, kwargs))
+
+        def log_exit(self, *args, **kwargs):  # noqa: D401 - unused in test
+            return None
+
+    feat_df = pd.DataFrame(
+        {
+            "close": [100.0, 101.0],
+            "open": [99.5, 100.5],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "volume": [1_000, 1_200],
+            "macd": [0.1, 0.2],
+            "atr": [1.0, 1.0],
+            "vwap": [100.2, 100.6],
+            "macds": [0.05, 0.05],
+            "sma_50": [99.0, 99.5],
+            "sma_200": [95.0, 95.5],
+        }
+    )
+
+    ctx = types.SimpleNamespace(
+        signal_manager=types.SimpleNamespace(last_components=[]),
+        data_fetcher=types.SimpleNamespace(
+            get_daily_df=lambda *_a, **_k: feat_df.copy()
+        ),
+        portfolio_weights={},
+        api=_DummyAPI(),
+        trade_logger=_Logger(),
+        take_profit_targets={},
+        stop_targets={},
+        market_open=time(6, 30),
+        market_close=time(13, 0),
+        rebalance_buys={},
+        config=types.SimpleNamespace(exposure_cap_aggressive=0.9),
+    )
+
+    state = bot_engine.BotState()
+    state.position_cache = {}
+
+    monkeypatch.setenv("PYTEST_RUNNING", "")
+    monkeypatch.setenv("TESTING", "")
+    monkeypatch.setenv("DRY_RUN", "")
+
+    monkeypatch.setattr(bot_engine, "pre_trade_checks", lambda *a, **k: True)
+
+    def _fake_fetch(*_a, **_k):
+        return feat_df.copy(), feat_df.copy(), None
+
+    def _fake_eval(ctx_obj, state_obj, _df, _symbol, _model):
+        ctx_obj.signal_manager.last_components = [(1, 0.8, "fallback_test")]
+        return 1.0, 0.8, "fallback_test"
+
+    monkeypatch.setattr(bot_engine, "_fetch_feature_data", _fake_fetch)
+    monkeypatch.setattr(bot_engine, "_evaluate_trade_signal", _fake_eval)
+    monkeypatch.setattr(bot_engine, "_exit_positions_if_needed", lambda *a, **k: False)
+    monkeypatch.setattr(bot_engine, "_check_trade_frequency_limits", lambda *a, **k: False)
+    monkeypatch.setattr(bot_engine, "get_trade_cooldown_min", lambda: 0)
+    monkeypatch.setattr(bot_engine, "get_buy_threshold", lambda: 0.5)
+    monkeypatch.setattr(bot_engine, "_current_qty", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        bot_engine, "_apply_sector_cap_qty", lambda _ctx, _symbol, qty, _price: qty
+    )
+
+    def _fake_scaled_atr_stop(*a, **_k):
+        entry_price = a[0] if a else _k.get("entry_price", 0.0)
+        return entry_price * 0.95, entry_price * 1.05
+
+    monkeypatch.setattr(bot_engine, "scaled_atr_stop", _fake_scaled_atr_stop)
+    monkeypatch.setattr(bot_engine, "is_high_vol_regime", lambda: False)
+    monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
+    monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+
+    def _fake_latest_price(sym):
+        bot_engine._PRICE_SOURCE[sym] = "yahoo"
+        return 101.0
+
+    monkeypatch.setattr(bot_engine, "get_latest_price", _fake_latest_price)
+
+    def _fake_submit(ctx_obj, sym, qty, side, price=None):  # noqa: D401 - capture order
+        orders.append((sym, qty, side, price))
+        return types.SimpleNamespace(id="order-1")
+
+    monkeypatch.setattr(bot_engine, "submit_order", _fake_submit)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
+    )
+
+    result = bot_engine.trade_logic(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        model=None,
+        regime_ok=True,
+    )
+
+    assert result is True
+    assert orders and orders[0][0] == symbol
+    assert "alpaca" in state.degraded_providers
+    assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
