@@ -192,7 +192,14 @@ class RiskEngine:
                                 df = bars_df.copy()
                         elif bars_df is not None and pd is not None:
                             df = pd.DataFrame(bars_df)
-                    except Exception as exc:  # pragma: no cover - provider variance
+                    except (
+                        APIError,
+                        TimeoutError,
+                        ConnectionError,
+                        ValueError,
+                        TypeError,
+                        OSError,
+                    ) as exc:  # pragma: no cover - provider variance
                         logger.warning('ATR client fetch failed for %s: %s', symbol, exc)
                         simple_get = getattr(client, 'get_bars', None)
                         if callable(simple_get):
@@ -200,7 +207,13 @@ class RiskEngine:
                                 candidate = simple_get(symbol, limit)
                             except TypeError:
                                 candidate = None
-                            except Exception as fallback_exc:  # pragma: no cover - provider variance
+                            except (
+                                APIError,
+                                TimeoutError,
+                                ConnectionError,
+                                ValueError,
+                                OSError,
+                            ) as fallback_exc:  # pragma: no cover - provider variance
                                 logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
                                 candidate = None
                             if candidate:
@@ -237,7 +250,7 @@ class RiskEngine:
                         df_local = pd.DataFrame(df_in)
                     else:
                         df_local = df_in.copy() if isinstance(df_in, pd.DataFrame) else df_in
-                except Exception:
+                except (ValueError, TypeError, AttributeError):
                     return (None, None, None)
                 if getattr(df_local, 'empty', True):
                     return (None, None, None)
@@ -280,7 +293,15 @@ class RiskEngine:
                                     records.append(record)
                         if records:
                             df_from_seq = pd.DataFrame(records)
-                    except Exception as exc:  # pragma: no cover - defensive
+                    except (
+                        APIError,
+                        TimeoutError,
+                        ConnectionError,
+                        ValueError,
+                        TypeError,
+                        OSError,
+                        AttributeError,
+                    ) as exc:  # pragma: no cover - defensive
                         logger.debug('ATR bars sequence conversion failed for %s: %s', symbol, exc)
                 if df_from_seq is not None and getattr(df_from_seq, 'empty', True) is False:
                     high, low, close = _extract_arrays(df_from_seq)
@@ -315,7 +336,15 @@ class RiskEngine:
                     if fetcher is not None and hasattr(fetcher, 'get_daily_df'):
                         try:
                             df_fallback = fetcher.get_daily_df(ctx, symbol)
-                        except Exception as exc:  # pragma: no cover - defensive
+                        except (
+                            APIError,
+                            TimeoutError,
+                            ConnectionError,
+                            ValueError,
+                            TypeError,
+                            OSError,
+                            AttributeError,
+                        ) as exc:  # pragma: no cover - defensive
                             logger.debug('ATR fetcher fallback failed for %s: %s', symbol, exc)
                             df_fallback = None
                 if df_fallback is not None and getattr(df_fallback, 'empty', False) is False:
