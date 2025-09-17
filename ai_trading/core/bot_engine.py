@@ -11764,9 +11764,11 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
     # Stochastic RSI using single rolling aggregation
     rsi_bounds = rsi.rolling(14).agg(["min", "max"])
-    frame["stochrsi"] = (rsi - rsi_bounds["min"]) / (
-        rsi_bounds["max"] - rsi_bounds["min"]
-    )
+    denominator = rsi_bounds["max"] - rsi_bounds["min"]
+    # Guard against flat RSI windows that collapse the denominator to zero.
+    safe_denominator = denominator.mask(denominator.abs() < 1e-9, np.nan)
+    stoch_rsi = (rsi - rsi_bounds["min"]) / safe_denominator
+    frame["stochrsi"] = stoch_rsi.fillna(0.5)
 
     frame.dropna(inplace=True)
     if frame.empty:
