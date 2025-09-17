@@ -76,6 +76,48 @@ def test_retrain_meta_learner(monkeypatch, tmp_path):
     assert ok
 
 
+def test_retrain_meta_learner_filters_non_decimal_prices(monkeypatch, tmp_path):
+    """Rows with non-decimal price strings are excluded before training."""
+
+    data = Path(tmp_path / "strict.csv")
+    df = pd.DataFrame(
+        {
+            "entry_price": ["100.50", "1e2", "invalid", "50.25"],
+            "exit_price": ["105.75", "99.00", "110.00", "55.00"],
+            "signal_tags": ["momentum", "mean_revert", "momentum", "trend"],
+            "side": ["buy", "sell", "buy", "sell"],
+        }
+    )
+    df.to_csv(data, index=False)
+
+    captured: dict[str, object] = {}
+
+    def _capturing_ridge(*args, **kwargs):
+        def fit(X, y, sample_weight=None):
+            captured["x_shape"] = getattr(X, "shape", None)
+            captured["sample_count"] = len(y)
+            captured["weight_len"] = len(sample_weight) if sample_weight is not None else None
+            return None
+
+        def predict(X):
+            return np.zeros(len(X))
+
+        return types.SimpleNamespace(fit=fit, predict=predict)
+
+    monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
+    monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda *a, **k: [])
+    monkeypatch.setattr(sklearn.linear_model, "Ridge", _capturing_ridge)
+
+    ok = meta_learning.retrain_meta_learner(
+        str(data), str(tmp_path / "m.pkl"), str(tmp_path / "hist.pkl"), min_samples=2
+    )
+
+    assert ok
+    assert captured["sample_count"] == 2
+    assert captured["weight_len"] == 2
+    assert captured["x_shape"] and captured["x_shape"][0] == 2
+
+
 def test_retrain_meta_learner_handles_non_iterable_columns(monkeypatch, tmp_path):
     """Handles DataFrames where ``columns`` is not iterable."""
     path = tmp_path / "trades.csv"
