@@ -27,6 +27,7 @@ class _Resp:
 
 
 def test_alpaca_empty_responses_trigger_backup(monkeypatch):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
     calls = {"count": 0}
 
     def fake_get(*args, **kwargs):
