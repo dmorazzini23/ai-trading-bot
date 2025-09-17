@@ -2,6 +2,7 @@ from __future__ import annotations
 from ai_trading.logging import get_logger
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -116,3 +117,61 @@ def put_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str, df: Any
         PermissionError,
     ) as e:
         logger.debug('Failed to write CSV cache file %s: %s', p_csv, e)
+
+
+def _normalize_key(
+    key: str | tuple[str, str, str, str],
+) -> tuple[str, tuple[str, str, str, str], tuple[str, str, str, str] | None]:
+    """Return a string cache key alongside normalized cache tuple components."""
+
+    if isinstance(key, tuple):
+        symbol, tf, start, end = key
+        cache_key = _key(symbol, tf, start, end)
+        return cache_key, (symbol, tf, start, end), (symbol, tf, start, end)
+
+    mem_symbol = f"__key__:{key}"
+    placeholder = (mem_symbol, "__", "__", "__")
+    return key, placeholder, None
+
+
+def get_or_load(
+    *,
+    key: str | tuple[str, str, str, str],
+    loader: Callable[[], Any],
+    ttl: int,
+    cache_dir: str | Path | None = None,
+    disk_enabled: bool | None = None,
+    disk_key: tuple[str, str, str, str] | None = None,
+    mem_enabled: bool = True,
+) -> Any:
+    """Retrieve cached data or load it, updating both memory and disk stores."""
+
+    _cache_key, mem_parts, default_disk_parts = _normalize_key(key)
+
+    disk_parts = disk_key if disk_key is not None else default_disk_parts
+
+    should_use_disk = bool(cache_dir) if disk_enabled is None else bool(disk_enabled and cache_dir)
+
+    cached: Any | None = None
+    if mem_enabled:
+        cached = get_mem(*mem_parts, ttl=ttl)
+        if cached is not None:
+            return cached
+
+    if should_use_disk and disk_parts is not None:
+        cached = get_disk(str(cache_dir), *disk_parts)
+        if cached is not None:
+            if mem_enabled:
+                put_mem(*mem_parts, cached)
+            return cached
+
+    result = loader()
+
+    if mem_enabled:
+        put_mem(*mem_parts, result)
+
+    if should_use_disk and disk_parts is not None and result is not None:
+        if hasattr(result, "to_parquet") or hasattr(result, "to_csv"):
+            put_disk(str(cache_dir), *disk_parts, result)
+
+    return result
