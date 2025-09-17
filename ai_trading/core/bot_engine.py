@@ -12225,13 +12225,8 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     close = frame["close"].astype(float)
     hl = frame[["high", "low"]].astype(float)
 
-    # RSI calculation (vectorized fallback when pandas_ta is missing)
-    try:
-        rsi = ta.rsi(close, length=14)
-        if rsi is None or rsi.empty:
-            raise ValueError
-    except (AttributeError, TypeError, ValueError):
-        delta = close.diff()
+    def _manual_rsi(series: pd.Series) -> pd.Series:
+        delta = series.diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
         avg_gain = gain.rolling(14).mean()
@@ -12260,8 +12255,32 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
         rs_values[neutral_mask.to_numpy()] = 1.0
 
         rs = pd.Series(rs_values, index=avg_gain.index)
-        rsi = 100 - (100 / (1 + rs))
-        rsi = rsi.where(~neutral_mask, 50.0)
+        manual_rsi = 100 - (100 / (1 + rs))
+        return manual_rsi.where(~neutral_mask, 50.0)
+
+    # RSI calculation (vectorized fallback when pandas_ta is missing)
+    try:
+        rsi = ta.rsi(close, length=14)
+        if rsi is None:
+            raise ValueError
+
+        rsi = pd.Series(rsi, index=close.index) if not isinstance(rsi, pd.Series) else rsi
+        if rsi.empty:
+            raise ValueError
+
+        valid_rsi = rsi.dropna()
+        if valid_rsi.empty:
+            raise ValueError
+
+        # Detect degenerate RSI outputs (all NaN or zero variance) which occur
+        # on flat price histories. These windows should fall back to the manual
+        # computation that seeds neutral values of 50.
+        if np.isclose(valid_rsi.var(ddof=0), 0.0):
+            close_delta = close.diff().abs()
+            if np.isclose(close_delta.max(skipna=True), 0.0):
+                raise ValueError
+    except (AttributeError, TypeError, ValueError):
+        rsi = _manual_rsi(close)
 
     frame["rsi"] = rsi
     frame["rsi_14"] = rsi
