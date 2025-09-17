@@ -906,6 +906,25 @@ class ExecutionEngine:
             pass
         return base_bps
 
+    @staticmethod
+    def _normalize_order_side(side: OrderSide | str | None) -> OrderSide | None:
+        """Normalize order side values to :class:`OrderSide`."""
+        if isinstance(side, OrderSide):
+            return side
+        try:
+            return OrderSide(side) if side is not None else None
+        except Exception:
+            return None
+
+    def _adverse_slippage_value(self, side: OrderSide | str | None, slippage_bps: float) -> float:
+        """Return the directional slippage that is adverse to ``side``."""
+        normalized = self._normalize_order_side(side)
+        if normalized == OrderSide.BUY:
+            return slippage_bps if slippage_bps > 0 else 0.0
+        if normalized in (OrderSide.SELL, OrderSide.SELL_SHORT):
+            return slippage_bps if slippage_bps < 0 else 0.0
+        return slippage_bps
+
     def _apply_slippage(
         self,
         order: Order,
@@ -928,7 +947,8 @@ class ExecutionEngine:
         except Exception:
             diff_bps = 0.0
         order.slippage_bps = diff_bps
-        if abs(diff_bps) > threshold_bps:
+        adverse_slippage = self._adverse_slippage_value(order.side, diff_bps)
+        if abs(adverse_slippage) > threshold_bps:
             logger.warning(
                 "SLIPPAGE_PRECHECK_THRESHOLD_EXCEEDED",
                 extra={
@@ -937,6 +957,7 @@ class ExecutionEngine:
                     "delayed_price": round(delayed_price, 6),
                     "reference_price": round(reference_price, 6),
                     "slippage_bps": round(diff_bps, 2),
+                    "adverse_slippage_bps": round(adverse_slippage, 2),
                     "threshold_bps": round(threshold_bps, 2),
                 },
             )
@@ -998,7 +1019,8 @@ class ExecutionEngine:
                 predicted_slippage_bps = (
                     (predicted_fill - base_ref) / base_ref
                 ) * 10000
-            if abs(predicted_slippage_bps) > threshold:
+            adverse_predicted = self._adverse_slippage_value(order.side, predicted_slippage_bps)
+            if abs(adverse_predicted) > threshold:
                 tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
                 if order.order_type == OrderType.MARKET:
                     adj = float(expected) * (tol_bps / 10000.0)
@@ -1015,17 +1037,21 @@ class ExecutionEngine:
                         "SLIPPAGE_LIMIT_CONVERSION",
                         extra={
                             "order_id": order.id,
+                            "adverse_slippage_bps": round(adverse_predicted, 2),
                             "limit_price": round(limit_price, 4),
                         },
                     )
-                reduced = max(
-                    1, int(order.quantity * threshold / abs(predicted_slippage_bps))
-                )
+                adverse_magnitude = abs(adverse_predicted)
+                reduced = max(1, int(order.quantity * threshold / adverse_magnitude))
                 if reduced < order.quantity:
                     order.quantity = reduced
                     logger.warning(
                         "SLIPPAGE_QTY_REDUCED",
-                        extra={"order_id": order.id, "new_qty": reduced},
+                        extra={
+                            "order_id": order.id,
+                            "new_qty": reduced,
+                            "adverse_slippage_bps": round(adverse_predicted, 2),
+                        },
                     )
                     if had_manual_price:
                         raise AssertionError(
@@ -1034,7 +1060,11 @@ class ExecutionEngine:
                 else:
                     order.status = OrderStatus.REJECTED
                     logger.warning(
-                        "SLIPPAGE_ORDER_REJECTED", extra={"order_id": order.id}
+                        "SLIPPAGE_ORDER_REJECTED",
+                        extra={
+                            "order_id": order.id,
+                            "adverse_slippage_bps": round(adverse_predicted, 2),
+                        },
                     )
                     if had_manual_price:
                         raise AssertionError(
@@ -1124,10 +1154,18 @@ class ExecutionEngine:
                     },
                 )
                 threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
-                if abs(slippage_bps) > threshold:
+                adverse_fill_slippage = self._adverse_slippage_value(
+                    order.side, slippage_bps
+                )
+                if abs(adverse_fill_slippage) > threshold:
                     logger.warning(
                         'SLIPPAGE_THRESHOLD_EXCEEDED',
-                        extra={'order_id': order.id, 'slippage_bps': round(slippage_bps, 2), 'threshold_bps': threshold},
+                        extra={
+                            'order_id': order.id,
+                            'slippage_bps': round(slippage_bps, 2),
+                            'adverse_slippage_bps': round(adverse_fill_slippage, 2),
+                            'threshold_bps': threshold,
+                        },
                     )
         except (KeyError, ValueError, TypeError, RuntimeError) as e:
             logger.error('SIMULATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order.id})
