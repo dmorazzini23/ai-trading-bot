@@ -10970,7 +10970,10 @@ def run_meta_learning_weight_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
         )
         if df is None:
-            logger.warning("METALEARN_NO_TRADES")
+            logger.warning(
+                "METALEARN_NO_TRADES",
+                extra={"trade_log_path": trade_log_path},
+            )
             return
         df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
