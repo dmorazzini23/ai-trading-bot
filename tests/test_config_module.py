@@ -39,3 +39,16 @@ def test_mode_presets(monkeypatch):
     cfg = _reload_config(monkeypatch, MAX_DRAWDOWN_THRESHOLD=0.2, TRADING_MODE="aggressive")
     assert cfg.CONF_THRESHOLD == pytest.approx(0.65)
     assert cfg.MAX_POSITION_SIZE == pytest.approx(12000.0)
+
+
+def test_balanced_mode_max_position_alias(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "balanced")
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+    monkeypatch.delenv("MAX_POSITION_SIZE", raising=False)
+    alias_value = "4321.5"
+    monkeypatch.setenv("AI_TRADING_MAX_POSITION_SIZE", alias_value)
+
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env()
+    assert cfg.max_position_size == pytest.approx(float(alias_value))

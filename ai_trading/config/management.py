@@ -653,9 +653,16 @@ class TradingConfig:
                     max_position_size=12000.0,
                 ),
             }
+            preset_aliases = {
+                "MAX_POSITION_SIZE": ("AI_TRADING_MAX_POSITION_SIZE",),
+            }
             for k, v in presets[mode].items():
                 env_key = k.upper()
-                if env_key in env_map and env_map[env_key] != "":
+                override_keys = (env_key, *preset_aliases.get(env_key, ()))
+                if any(
+                    key in env_map and env_map[key] not in (None, "")
+                    for key in override_keys
+                ):
                     continue
                 try:
                     object.__setattr__(cfg, k, v)
