@@ -88,6 +88,7 @@ def test_backoff_uses_alternate_provider(monkeypatch, caplog):
     assert called.get("alt")
     assert called.get("sleep")
     assert key not in fetch._SKIPPED_SYMBOLS
+    assert fetch._EMPTY_BAR_COUNTS.get(key, 0) == 0
     assert any(r.message == "ALPACA_EMPTY_BAR_BACKOFF" for r in caplog.records)
 
 
@@ -110,10 +111,11 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_yahoo_get_bars", lambda *a, **k: pd.DataFrame())
 
     with caplog.at_level(logging.WARNING):
-        out = fetch.get_minute_df(symbol, start, end)
+        with pytest.raises(fetch.EmptyBarsError):
+            fetch.get_minute_df(symbol, start, end)
 
-    assert out is None or out.empty
     assert key in fetch._SKIPPED_SYMBOLS
+    assert fetch._EMPTY_BAR_COUNTS[key] == fetch._EMPTY_BAR_THRESHOLD
     assert any(r.message == "ALPACA_EMPTY_BAR_BACKOFF" for r in caplog.records)
 
 
@@ -136,6 +138,7 @@ def test_retry_limit_raises(monkeypatch, caplog):
         with pytest.raises(fetch.EmptyBarsError):
             fetch.get_minute_df(symbol, start, end)
 
+    assert key in fetch._SKIPPED_SYMBOLS
     assert any(r.message == "ALPACA_EMPTY_BAR_MAX_RETRIES" for r in caplog.records)
 
 
@@ -180,6 +183,7 @@ def test_feed_switch_and_window_shrink(monkeypatch):
     monkeypatch.setenv("ENABLE_FINNHUB", "0")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setattr(fetch, "time", types.SimpleNamespace(sleep=lambda _s: None))
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
 
@@ -189,6 +193,7 @@ def test_feed_switch_and_window_shrink(monkeypatch):
         "high": [1],
         "low": [1],
         "close": [1],
+        "volume": [0],
     })
     monkeypatch.setattr(fetch, "_yahoo_get_bars", lambda *a, **k: df)
 
