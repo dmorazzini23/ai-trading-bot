@@ -33,6 +33,40 @@ from ai_trading.core import bot_engine
 from ai_trading.guards import staleness
 
 
+@pytest.fixture(autouse=True)
+def _short_intraday_defaults(monkeypatch):
+    """Keep intraday lookback small for unit test fixtures."""
+
+    monkeypatch.setattr(bot_engine, "_LONGEST_INTRADAY_INDICATOR_MINUTES", 1, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 1, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_indicator_window_minutes", 0, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "minute_gap_backfill", None, raising=False)
+    try:
+        monkeypatch.setattr(bot_engine, "S", bot_engine.CFG, raising=False)
+    except Exception:
+        pass
+    try:
+        monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    except Exception:
+        pass
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    def _tiny_session(current_date):
+        end = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+        return end - timedelta(minutes=1), end
+
+    monkeypatch.setattr(market_calendar, "rth_session_utc", _tiny_session, raising=False)
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+        raising=False,
+    )
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: False, raising=False)
+
+
 def _sample_df():
     pd = load_pandas()
     return pd.DataFrame({"close": [1.0]}, index=[pd.Timestamp("2024-01-01", tz="UTC")])
@@ -328,14 +362,15 @@ def test_fetch_minute_df_safe_after_hours_uses_session_close(monkeypatch):
                 return base_now.replace(tzinfo=None)
             return base_now.astimezone(tz)
 
-    idx = pd.date_range(end=session_end, periods=3, freq="min", tz="UTC")
+    expected_bars = int((session_end - session_start).total_seconds() // 60)
+    idx = pd.date_range(start=session_start, periods=expected_bars, freq="min", tz="UTC")
     df = pd.DataFrame(
         {
-            "open": [1.0, 1.1, 1.2],
-            "high": [1.1, 1.2, 1.3],
-            "low": [0.9, 1.0, 1.1],
-            "close": [1.0, 1.1, 1.2],
-            "volume": [100, 110, 120],
+            "open": [1.0 + i * 0.01 for i in range(expected_bars)],
+            "high": [1.1 + i * 0.01 for i in range(expected_bars)],
+            "low": [0.9 + i * 0.01 for i in range(expected_bars)],
+            "close": [1.0 + i * 0.01 for i in range(expected_bars)],
+            "volume": [100 + i for i in range(expected_bars)],
         },
         index=idx,
     )
@@ -736,13 +771,14 @@ def test_fetch_minute_df_safe_extends_window_for_long_indicators(monkeypatch):
 
     def fake_get_minute_df(symbol: str, start, end, **_):
         calls.append((start, end))
+        periods = max(1, int((end - start).total_seconds() // 60))
         idx = pd.date_range(
-            end=end - timedelta(minutes=1), periods=5, freq="min", tz="UTC"
+            end=end - timedelta(minutes=1), periods=periods, freq="min", tz="UTC"
         )
         return pd.DataFrame(
             {
-                "close": [1.0] * len(idx),
-                "volume": [100] * len(idx),
+                "close": [1.0 + i * 0.01 for i in range(len(idx))],
+                "volume": [100 + i for i in range(len(idx))],
             },
             index=idx,
         )
