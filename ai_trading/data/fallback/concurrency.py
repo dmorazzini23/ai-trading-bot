@@ -119,6 +119,13 @@ async def run_with_concurrency(
                 except AttributeError:
                     continue
                 _scan(value, seen)
+            try:
+                extra_attrs = vars(obj)
+            except TypeError:
+                extra_attrs = None
+            if extra_attrs:
+                for value in extra_attrs.values():
+                    _scan(value, seen)
             return
         if isinstance(obj, SimpleNamespace):
             for value in vars(obj).values():
