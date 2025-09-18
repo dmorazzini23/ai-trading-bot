@@ -7,12 +7,14 @@ _log = get_logger(__name__)
 _ALIASES = ['TRADING_MODE', 'bot_mode']
 _CANON = 'TRADING_MODE'
 
-def resolve_trading_mode(default: str) -> str:
+def resolve_trading_mode(default: str, *, skip_env: bool = False) -> str:
     """Resolve trading mode across aliases with precedence and deprecation logs.
 
     Precedence: TRADING_MODE > bot_mode > default.
     If conflicting values are present, prefer TRADING_MODE and emit a once log.
     """
+    if skip_env:
+        return default
     values = {k: os.getenv(k) for k in _ALIASES}
     chosen: tuple[str, str] | None = None
     for key in (_CANON, 'bot_mode'):

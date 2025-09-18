@@ -109,6 +109,53 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
     assert getattr(record, "trading_config_value", None) == 0.02
 
 
+def test_max_position_size_canonical_value_wins_over_alias():
+    env = {
+        "CAPITAL_CAP": "0.05",
+        "MAX_POSITION_MODE": "STATIC",
+        "DATA_FEED": "iex",
+        "DATA_PROVIDER": "alpaca",
+        "PAPER": "true",
+        "MAX_DRAWDOWN_THRESHOLD": "0.15",
+        "KELLY_FRACTION_MAX": "0.2",
+        "MIN_SAMPLE_SIZE": "50",
+        "CONFIDENCE_LEVEL": "0.9",
+        "MAX_POSITION_SIZE": "7000",
+        "AI_TRADING_MAX_POSITION_SIZE": "9000",
+    }
+
+    cfg = TradingConfig.from_env(env)
+
+    assert cfg.max_position_size == pytest.approx(7000)
+
+
+def test_explicit_mode_argument_overrides_trading_mode_env(monkeypatch):
+    for key in (
+        "TRADING_MODE",
+        "bot_mode",
+        "CAPITAL_CAP",
+        "DAILY_LOSS_LIMIT",
+        "DOLLAR_RISK_LIMIT",
+        "KELLY_FRACTION",
+        "CONF_THRESHOLD",
+        "SIGNAL_CONFIRMATION_BARS",
+        "TAKE_PROFIT_FACTOR",
+        "MAX_POSITION_SIZE",
+        "AI_TRADING_MAX_POSITION_SIZE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.12")
+    monkeypatch.setenv("TRADING_MODE", "aggressive")
+
+    cfg = TradingConfig.from_env("conservative")
+
+    assert cfg.capital_cap == pytest.approx(0.20)
+    assert cfg.take_profit_factor == pytest.approx(1.5)
+    assert cfg.max_position_size == pytest.approx(5000.0)
+    assert cfg.conf_threshold == pytest.approx(0.85)
+
+
 def test_fail_fast_env_health_port_conflict(monkeypatch):
     base_env = {
         "ALPACA_API_KEY": "key",
