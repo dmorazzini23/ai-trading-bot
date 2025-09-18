@@ -21,6 +21,7 @@ import pickle
 import random
 import re
 import sys
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -74,6 +75,46 @@ def _is_strict_decimal(value: Any) -> bool:
     if lowered in {"nan", "inf", "-inf", "+inf"}:
         return False
     return bool(_STRICT_DECIMAL_PATTERN.fullmatch(text))
+
+
+def _coerce_positive_numeric(values: dict[str, Any], require_decimal: bool = False) -> dict[str, float] | None:
+    """Return mapping of positive floats when all ``values`` are valid.
+
+    Values are first coerced with :func:`pandas.to_numeric` when pandas is
+    available to mirror the regression logic exercised in the critical fixes
+    tests.  When pandas is not installed we fall back to manual string parsing
+    while preserving the strict decimal requirements used historically.
+    """
+
+    pd_mod = _import_pandas(optional=True)
+    if pd_mod is not None:
+        try:
+            series = pd_mod.Series(values, dtype="object")
+            numeric = pd_mod.to_numeric(series, errors="coerce")
+        except Exception:  # pragma: no cover - defensive guard
+            return None
+        if numeric.isna().any():
+            return None
+        if not bool((numeric > 0).all()):
+            return None
+        return {key: float(numeric[key]) for key in values}
+
+    coerced: dict[str, float] = {}
+    pattern = _STRICT_DECIMAL_PATTERN if require_decimal else _SIGNED_DECIMAL_PATTERN
+    for key, raw_value in values.items():
+        text_value = str(raw_value).strip()
+        if not text_value:
+            return None
+        if not pattern.fullmatch(text_value):
+            return None
+        try:
+            numeric_value = float(text_value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(numeric_value) or numeric_value <= 0:
+            return None
+        coerced[key] = numeric_value
+    return coerced
 
 try:
     from ai_trading.portfolio_rl import PortfolioReinforcementLearner
@@ -291,11 +332,13 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                 if not _is_strict_decimal(price_raw):
                                     logger.debug('Invalid price format in audit row: %s', price_raw)
                                     continue
-                                price = float(price_raw)
+                                coerced = _coerce_positive_numeric({'price': price_raw}, require_decimal=True)
+                                if coerced is None:
+                                    logger.debug('Audit row rejected after numeric coercion: %s', row)
+                                    continue
+                                price = coerced['price']
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in audit format row: %s', e)
-                                continue
-                            if price <= 0:
                                 continue
                             audit_format_rows += 1
                             filtered_rows.append(row)
@@ -308,12 +351,16 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                 if not (_is_strict_decimal(entry_raw) and _is_strict_decimal(exit_raw)):
                                     logger.debug('Invalid price format in meta row: %s', row)
                                     continue
-                                entry_price = float(entry_raw)
-                                exit_price = float(exit_raw)
+                                coerced_prices = _coerce_positive_numeric(
+                                    {'entry_price': entry_raw, 'exit_price': exit_raw}, require_decimal=True
+                                )
+                                if coerced_prices is None:
+                                    logger.debug('Meta row rejected after numeric coercion: %s', row)
+                                    continue
+                                entry_price = coerced_prices['entry_price']
+                                exit_price = coerced_prices['exit_price']
                             except (ValueError, IndexError) as e:
                                 logger.debug('Invalid price in meta format row: %s', e)
-                                continue
-                            if entry_price <= 0 or exit_price <= 0:
                                 continue
                             meta_format_rows += 1
                             filtered_rows.append(row)
