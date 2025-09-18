@@ -27,3 +27,30 @@ def test_modern_env_keys_satisfy_tradingconfig(monkeypatch):
     assert cfg.confidence_level == 0.85
     assert cfg.kelly_fraction_max == 0.20
     assert cfg.min_sample_size == 12
+
+
+def test_ai_trading_alias_overrides_existing_canonical(monkeypatch):
+    monkeypatch.setenv("CONF_THRESHOLD", "0.6")
+    monkeypatch.setenv("AI_TRADING_CONF_THRESHOLD", "0.9")
+
+    cfg = TradingConfig.from_env({})
+
+    assert cfg.conf_threshold == 0.9
+
+
+def test_legacy_alias_backfills_only_when_missing(monkeypatch):
+    monkeypatch.delenv("DOLLAR_RISK_LIMIT", raising=False)
+    monkeypatch.setenv("DAILY_LOSS_LIMIT", "0.25")
+
+    cfg = TradingConfig.from_env({})
+
+    assert cfg.dollar_risk_limit == 0.25
+
+
+def test_legacy_alias_does_not_override_existing_canonical(monkeypatch):
+    monkeypatch.setenv("DOLLAR_RISK_LIMIT", "0.42")
+    monkeypatch.setenv("DAILY_LOSS_LIMIT", "0.25")
+
+    cfg = TradingConfig.from_env({})
+
+    assert cfg.dollar_risk_limit == 0.42
