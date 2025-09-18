@@ -14,7 +14,7 @@ from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
 from ai_trading.logging import get_logger
-from ai_trading.config.management import is_shadow_mode
+from ai_trading.config.management import is_shadow_mode, _resolve_alpaca_env
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.metrics import get_counter, get_histogram
 from ai_trading.utils.optional_dep import missing
@@ -549,9 +549,8 @@ class _AlpacaConfig:
 
     @staticmethod
     def from_env() -> "_AlpacaConfig":
-        base = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").rstrip("/")
-        key = os.getenv("ALPACA_API_KEY_ID")
-        sec = os.getenv("ALPACA_API_SECRET_KEY")
+        key, sec, base = _resolve_alpaca_env()
+        base = (base or "https://paper-api.alpaca.markets").rstrip("/")
         shadow_env = os.getenv("ALPACA_SHADOW", "")
         shadow = is_shadow_mode() or str(shadow_env).strip().lower() in {"1", "true", "yes", "on"}
         return _AlpacaConfig(base, key, sec, shadow)
