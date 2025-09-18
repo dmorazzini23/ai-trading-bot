@@ -1047,53 +1047,74 @@ def main(argv: list[str] | None = None) -> None:
                 fraction = 0.9
             # Dynamic interval: slow down when closed
             effective_interval = int(closed_interval if closed else interval)
-            budget = SoftBudget(interval_sec=float(effective_interval), fraction=fraction)
+            budget = None
             try:
-                if count % memory_check_interval == 0:
-                    gc_result = optimize_memory()
-                    if gc_result.get("objects_collected", 0) > 100:
-                        logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
-                _t0 = _mono()
-                with StageTimer(logger, "CYCLE_FETCH"):
-                    pass
+                budget = SoftBudget(interval_sec=float(effective_interval), fraction=fraction)
                 try:
-                    _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
-                except Exception:
-                    pass
-                if budget.over():
-                    logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
+                    if count % memory_check_interval == 0:
+                        gc_result = optimize_memory()
+                        if gc_result.get("objects_collected", 0) > 100:
+                            logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
+                    _t0 = _mono()
+                    with StageTimer(logger, "CYCLE_FETCH"):
+                        pass
                     try:
-                        _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
                     except Exception:
                         pass
-                _t1 = _mono()
-                with StageTimer(logger, "CYCLE_COMPUTE"):
-                    run_cycle()
-                try:
-                    _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, _mono() - _t1))  # type: ignore[call-arg]
-                except Exception:
-                    pass
-                if budget.over():
-                    logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
+                    if budget.over():
+                        logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
+                        try:
+                            _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
+                        except Exception:
+                            pass
+                    _t1 = _mono()
+                    with StageTimer(logger, "CYCLE_COMPUTE"):
+                        run_cycle()
                     try:
-                        _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, _mono() - _t1))  # type: ignore[call-arg]
                     except Exception:
                         pass
-                _t2 = _mono()
-                with StageTimer(logger, "CYCLE_EXECUTE"):
-                    pass
-                try:
-                    _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, _mono() - _t2))  # type: ignore[call-arg]
-                except Exception:
-                    pass
-                if budget.over():
-                    logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
+                    if budget.over():
+                        logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
+                        try:
+                            _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
+                        except Exception:
+                            pass
+                    _t2 = _mono()
+                    with StageTimer(logger, "CYCLE_EXECUTE"):
+                        pass
                     try:
-                        _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, _mono() - _t2))  # type: ignore[call-arg]
                     except Exception:
                         pass
-            except (ValueError, TypeError):
-                logger.exception("run_cycle failed")
+                    if budget.over():
+                        logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
+                        try:
+                            _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
+                        except Exception:
+                            pass
+                except (ValueError, TypeError):
+                    logger.exception("run_cycle failed")
+            except Exception:
+                logger.error(
+                    "SCHEDULER_RUN_CYCLE_EXCEPTION",
+                    extra={"iteration": count},
+                    exc_info=True,
+                )
+                count += 1
+                try:
+                    backoff_seconds = int(effective_interval)
+                except Exception:
+                    backoff_seconds = interval
+                backoff_seconds = max(1, min(30, backoff_seconds))
+                _interruptible_sleep(backoff_seconds)
+                if _SHUTDOWN.is_set():
+                    logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})
+                    break
+                continue
+            if budget is None:
+                continue
             count += 1
             logger.info("CYCLE_TIMING", extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over()})
             now_mono = time.monotonic()
