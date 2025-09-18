@@ -5926,6 +5926,7 @@ class TradeLogger:
             logger.debug("TradeLogger entry log skipped; path not writable")
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
+        updated_row: list[str] | None = None
         try:
             with open(self.path, "r+") as f:
                 _has_lock = hasattr(portalocker, "lock")
@@ -5975,6 +5976,7 @@ class TradeLogger:
                             else:
                                 row.append(conf)
                                 row.append(pnl * conf)
+                            updated_row = list(row)
                             break
                     f.seek(0)
                     f.truncate()
@@ -5987,6 +5989,10 @@ class TradeLogger:
         except PermissionError:
             logger.debug("TradeLogger exit log skipped; path not writable")
             return
+
+        trade_record: dict[str, Any] = (
+            dict(zip(header, updated_row)) if updated_row else {"symbol": symbol}
+        )
 
         # log reward
         try:
@@ -6037,6 +6043,7 @@ class TradeLogger:
         settings = get_settings()
         if settings.enable_sklearn:  # Meta-learning requires sklearn
             from ai_trading.meta_learning import (
+                trigger_meta_learning_conversion,
                 validate_trade_data_quality,
             )
             # from meta_learning import validate_trade_data_quality  # Legacy trigger reference
@@ -6048,7 +6055,14 @@ class TradeLogger:
                 logger.info(
                     "METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format"
                 )
-                # The conversion will be handled by the meta-learning system when it reads the log
+                try:
+                    trigger_meta_learning_conversion(trade_record)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "METALEARN_CONVERSION_FAILED",
+                        exc_info=exc,
+                        extra={"symbol": trade_record.get("symbol", symbol)},
+                    )
         else:
             logger.debug("Meta-learning disabled, skipping conversion")
 
