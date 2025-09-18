@@ -10635,12 +10635,45 @@ def _enter_long(
             if isinstance(auth_skipped, set):
                 auth_skipped.add(symbol)
             return True
-    if quote_price is None:
-        logger.warning(
-            "SKIP_ORDER_NO_PRICE",
-            extra={"symbol": symbol, "source": price_source},
-        )
-        return True
+
+    original_quote = quote_price
+    try:
+        corrected_quote = float(quote_price)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        corrected_quote = float("nan")
+
+    quote_invalid = (
+        quote_price is None
+        or not np.isfinite(corrected_quote)
+        or corrected_quote <= 0
+    )
+
+    if quote_invalid:
+        fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
+        if fallback_price is not None:
+            logger.warning(
+                "FALLBACK_TO_FEATURE_CLOSE",
+                extra={
+                    "symbol": symbol,
+                    "price_source": price_source,
+                    "quote": original_quote,
+                },
+            )
+            corrected_quote = float(fallback_price)
+            price_source = "feature_close"
+            _PRICE_SOURCE[symbol] = price_source
+        else:
+            logger.warning(
+                "SKIP_ORDER_INVALID_QUOTE",
+                extra={
+                    "symbol": symbol,
+                    "price_source": price_source,
+                    "quote": original_quote,
+                },
+            )
+            return True
+
+    quote_price = corrected_quote
     if price_source == "unknown":
         logger.warning(
             "SKIP_ORDER_PRICE_SOURCE",
