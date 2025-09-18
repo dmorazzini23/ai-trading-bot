@@ -48,6 +48,15 @@ class Session:
 # Known session overrides when :mod:`pandas_market_calendars` is missing.
 # Times are defined in ET then converted to UTC for accuracy.
 _FALLBACK_SESSIONS: dict[date, Session] = {
+    # Final trading days for 2023 used by previous-session fallbacks
+    date(2023, 12, 28): Session(
+        datetime(2023, 12, 28, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2023, 12, 28, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
+    date(2023, 12, 29): Session(
+        datetime(2023, 12, 29, 9, 30, tzinfo=_ET).astimezone(UTC),
+        datetime(2023, 12, 29, 16, 0, tzinfo=_ET).astimezone(UTC),
+    ),
     # Dummy sessions for early January 2024 to keep tests deterministic
     date(2024, 1, 1): Session(
         datetime(2024, 1, 1, 9, 30, tzinfo=_ET).astimezone(UTC),
