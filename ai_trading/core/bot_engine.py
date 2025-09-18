@@ -6554,11 +6554,28 @@ class SignalManager:
         self.mean_rev_lookback = 20
         self.mean_rev_zscore_threshold = 2.0
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
-        self.last_components: list[tuple[int, float, str]] = []
+        self._last_components: list[tuple[int, float, str]] = []
 
-    def signal_momentum(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
+    @property
+    def last_components(self) -> list[tuple[int, float, str]]:
+        """Return the most recent component signals."""
+
+        return list(self._last_components)
+
+    @last_components.setter
+    def last_components(self, components: Iterable[tuple[int, float, str]] | None) -> None:
+        """Store the most recent component signals."""
+
+        if not components:
+            self._last_components = []
+            return
+        self._last_components = list(components)
+
+    def signal_momentum(
+        self, df: pd.DataFrame, model=None
+    ) -> tuple[int, float, str] | None:
         if df is None or len(df) <= self.momentum_lookback:
-            return -1, 0.0, "momentum"
+            return None
         try:
             df["momentum"] = df["close"].pct_change(
                 self.momentum_lookback, fill_method=None
@@ -6566,32 +6583,32 @@ class SignalManager:
             val = df["momentum"].iloc[-1]
             if math.isnan(val):
                 logger.warning("Momentum indicator NaN, skipping")
-                return -1, 0.0, "momentum"
+                return None
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
             if math.isnan(w):
-                return -1, 0.0, "momentum"
+                return None
             return s, w, "momentum"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_momentum")
-            return -1, 0.0, "momentum"
+            return None
 
     def signal_mean_reversion(
         self, df: pd.DataFrame, model=None
-    ) -> tuple[int, float, str]:
+    ) -> tuple[int, float, str] | None:
         if df is None or len(df) < self.mean_rev_lookback:
-            return -1, 0.0, "mean_reversion"
+            return None
         try:
             ma = df["close"].rolling(self.mean_rev_lookback).mean()
             sd = df["close"].rolling(self.mean_rev_lookback).std()
             if sd.iloc[-1] == 0 or math.isnan(sd.iloc[-1]):
                 logger.warning("Mean reversion invalid rolling stats, skipping")
-                return -1, 0.0, "mean_reversion"
+                return None
             df["zscore"] = (df["close"] - ma) / sd
             val = df["zscore"].iloc[-1]
             if math.isnan(val):
                 logger.warning("Mean reversion zscore NaN, skipping")
-                return -1, 0.0, "mean_reversion"
+                return None
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
@@ -6599,41 +6616,47 @@ class SignalManager:
             )
             w = min(abs(val) / 3, 1.0)
             if math.isnan(w):
-                return -1, 0.0, "mean_reversion"
+                return None
             return s, w, "mean_reversion"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_mean_reversion")
-            return -1, 0.0, "mean_reversion"
+            return None
 
-    def signal_stochrsi(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
+    def signal_stochrsi(
+        self, df: pd.DataFrame, model=None
+    ) -> tuple[int, float, str] | None:
         if df is None or "stochrsi" not in df or df["stochrsi"].dropna().empty:
-            return -1, 0.0, "stochrsi"
+            return None
         try:
             val = df["stochrsi"].iloc[-1]
             s = 1 if val < 0.2 else -1 if val > 0.8 else -1
             return s, 0.3, "stochrsi"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_stochrsi")
-            return -1, 0.0, "stochrsi"
+            return None
 
-    def signal_obv(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
+    def signal_obv(
+        self, df: pd.DataFrame, model=None
+    ) -> tuple[int, float, str] | None:
         if df is None or len(df) < 6:
-            return -1, 0.0, "obv"
+            return None
         try:
             obv = pd.Series(ta.obv(df["close"], df["volume"]).values)
             if len(obv) < 5:
-                return -1, 0.0, "obv"
+                return None
             slope = np.polyfit(range(5), obv.tail(5), 1)[0]
             s = 1 if slope > 0 else -1 if slope < 0 else -1
             w = min(abs(slope) / 1e6, 1.0)
             return s, w, "obv"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_obv")
-            return -1, 0.0, "obv"
+            return None
 
-    def signal_vsa(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
+    def signal_vsa(
+        self, df: pd.DataFrame, model=None
+    ) -> tuple[int, float, str] | None:
         if df is None or len(df) < 20:
-            return -1, 0.0, "vsa"
+            return None
         try:
             body = abs(df["close"] - df["open"])
             vsa = df["volume"] * body
@@ -6662,7 +6685,7 @@ class SignalManager:
             OSError,
         ):  # AI-AGENT-REF: narrow exception
             logger.exception("Error in signal_vsa")
-            return -1, 0.0, "vsa"
+            return None
 
     def signal_ml(
         self, df: pd.DataFrame, model: Any | None = None, symbol: str | None = None
@@ -6726,12 +6749,12 @@ class SignalManager:
 
     def signal_sentiment(
         self, ctx: BotContext, ticker: str, df: pd.DataFrame = None, model: Any = None
-    ) -> tuple[int, float, str]:
+    ) -> tuple[int, float, str] | None:
         """
         Only fetch sentiment if price has moved > PRICE_TTL_PCT; otherwise, return cached/neutral.
         """
         if df is None or df.empty:
-            return -1, 0.0, "sentiment"
+            return None
 
         latest_close = float(get_latest_close(df))
         with sentiment_lock:
@@ -6878,6 +6901,7 @@ class SignalManager:
         """
         signals: list[tuple[int, float, str]] = []
         performance_data = load_global_signal_performance()
+        original_len = len(df)
 
         # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
         if not performance_data:
@@ -6945,6 +6969,10 @@ class SignalManager:
             self.last_components = []
             return 0.0, 0.0, "no_data"
 
+        if original_len < self.mean_rev_lookback:
+            self.last_components = []
+            return 0.0, 0.0, "no_data"
+
         raw = [
             self.signal_momentum(df, model),
             self.signal_mean_reversion(df, model),
@@ -6967,7 +6995,7 @@ class SignalManager:
         if not signals:
             # Clearing prevents downstream consumers from reusing a previous evaluation
             self.last_components = []
-            return 0.0, 0.0, "no_signals"
+            return 0.0, 0.0, "no_data"
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
         conf_map = {label: w for _, w, label in signals}
