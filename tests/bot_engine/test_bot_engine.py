@@ -1,6 +1,6 @@
 import sys
 import types
-from datetime import time
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 
@@ -107,6 +107,57 @@ class TestProcessSymbol:
         assert processed == []
         assert row_counts == {}
         assert dummy_halt.calls == ["AAPL:empty_frame"]
+
+    def test_process_symbols_early_exit_when_trade_quota_exhausted(
+        self, monkeypatch, caplog
+    ):
+        state = bot_engine.BotState()
+        state.position_cache = {}
+        now = datetime.now(UTC)
+        state.trade_history = [
+            ("SYM", now - timedelta(minutes=5))
+            for _ in range(bot_engine.MAX_TRADES_PER_HOUR)
+        ]
+        bot_engine.state = state
+
+        dummy_halt = DummyHaltManager()
+        dummy_ctx = DummyContext(dummy_halt)
+        monkeypatch.setattr(bot_engine, "get_ctx", lambda: dummy_ctx)
+        monkeypatch.setattr(bot_engine, "is_market_open", lambda: True)
+        monkeypatch.setattr(bot_engine, "ensure_final_bar", lambda *_, **__: True)
+        monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda *_, **__: None)
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_duplicates",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            bot_engine,
+            "skipped_cooldown",
+            types.SimpleNamespace(inc=lambda: None),
+            raising=False,
+        )
+        monkeypatch.setattr(bot_engine.executors, "_ensure_executors", lambda: None)
+        monkeypatch.setattr(bot_engine, "prediction_executor", DummyExecutor(), raising=False)
+        monkeypatch.setattr(bot_engine, "_safe_trade", lambda *_, **__: None)
+
+        def _fail_fetch(symbol: str):  # pragma: no cover - should not be called
+            raise AssertionError(f"fetch_minute_df_safe called for {symbol}")
+
+        monkeypatch.setattr(bot_engine, "fetch_minute_df_safe", _fail_fetch)
+
+        caplog.set_level("INFO")
+
+        processed, row_counts = bot_engine._process_symbols(
+            ["AAPL", "MSFT"], 1000.0, None, True
+        )
+
+        assert processed == []
+        assert row_counts == {}
+        assert any(
+            record.message == "TRADE_QUOTA_EXHAUSTED_SKIP" for record in caplog.records
+        )
 
 
 def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
