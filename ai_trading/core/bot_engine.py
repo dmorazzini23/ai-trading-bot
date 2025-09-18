@@ -7185,8 +7185,8 @@ async def on_trade_update(event):
 
 
 # AI-AGENT-REF: Global context and engine will be initialized lazily
-_ctx = None
-ctx = None  # alias for external access
+_ctx: BotContext | None = None
+ctx: BotContext | LazyBotContext | None = None  # alias for external access
 _exec_engine = None
 
 
@@ -7467,16 +7467,26 @@ class LazyBotContext:
         return getattr(self._context, name)
 
 
+# Provide a module-level lazy context instance for callers that import
+# ``ctx`` directly.  The wrapper defers heavy initialization until used so the
+# lightweight construction here preserves lazy semantics.
+ctx = LazyBotContext()
+
+
 # AI-AGENT-REF: No module-level context creation to prevent import-time side effects
 # Context will be created when first accessed via get_ctx() or _get_bot_context()
-_global_ctx = None
+_global_ctx = ctx
 
 
 def get_ctx():
     """Get the global bot context (backwards compatibility)."""
-    global _global_ctx
+    global _global_ctx, ctx
     if _global_ctx is None:
         _global_ctx = LazyBotContext()
+        # Ensure the legacy ``ctx`` alias continues to point at the shared lazy
+        # context wrapper when a new instance is created.
+        if isinstance(ctx, LazyBotContext):
+            ctx = _global_ctx
     return _global_ctx
 
 
