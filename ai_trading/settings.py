@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 import os
+import sys
 from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from ai_trading.logging import logger
@@ -61,6 +62,24 @@ def _to_bool(val: Any, default: bool | None=None) -> bool:
     if isinstance(val, str):
         return val.strip().lower() not in ('0', 'false', 'no', '')
     return bool(val)
+
+
+def _propagate_default_feed(feed: str) -> None:
+    """Update module-level default feed constants when settings mutate."""
+
+    targets = (
+        'ai_trading.data.fetch',
+        'ai_trading.core.bot_engine',
+    )
+    for mod_name in targets:
+        mod = sys.modules.get(mod_name)
+        if mod is None:
+            continue
+        try:
+            setattr(mod, '_DEFAULT_FEED', feed)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug('DEFAULT_FEED_PROPAGATE_FAILED', extra={'module': mod_name})
+
 
 class Settings(BaseSettings):
     env: str = Field(default='test', alias='APP_ENV')
@@ -141,7 +160,11 @@ class Settings(BaseSettings):
         env='AI_TRADING_POSITION_SIZE_MIN_USD',
     )
     volume_threshold: float = Field(default=0.0, env='AI_TRADING_VOLUME_THRESHOLD')
-    alpaca_data_feed: Literal['iex', 'sip'] = Field('iex', env='ALPACA_DATA_FEED')
+    alpaca_data_feed: Literal['iex', 'sip'] = Field(
+        'iex',
+        env='ALPACA_DATA_FEED',
+        validation_alias=AliasChoices('ALPACA_DATA_FEED', 'DATA_FEED', 'data_feed'),
+    )
     alpaca_feed_failover: tuple[str, ...] = Field(('sip',), env='ALPACA_FEED_FAILOVER')
     alpaca_empty_to_backup: bool = Field(True, env='ALPACA_EMPTY_TO_BACKUP')
     alpaca_adjustment: Literal['all', 'raw'] = Field('all', env='ALPACA_ADJUSTMENT')
@@ -364,7 +387,27 @@ class Settings(BaseSettings):
     @property
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=_to_int(getattr(self, 'trade_cooldown_min', 15), 15))
-    model_config = SettingsConfigDict(env_prefix='AI_TRADING_', extra='ignore', case_sensitive=False)
+
+    @property
+    def data_feed(self) -> Literal['iex', 'sip']:
+        """Alias for ``alpaca_data_feed`` supporting runtime mutation hooks."""
+
+        return self.alpaca_data_feed
+
+    @data_feed.setter
+    def data_feed(self, value: str) -> None:
+        normalized = type(self)._norm_feed(value)
+        normalized = type(self)._enforce_allowed_feed(normalized)
+        super().__setattr__('alpaca_data_feed', normalized)
+        if not normalized:
+            return
+        _propagate_default_feed(str(normalized))
+    model_config = SettingsConfigDict(
+        env_prefix='AI_TRADING_',
+        extra='ignore',
+        case_sensitive=False,
+        validate_assignment=True,
+    )
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

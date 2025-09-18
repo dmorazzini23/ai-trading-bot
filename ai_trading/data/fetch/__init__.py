@@ -517,7 +517,15 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
     return max(0, now_s - int(ts))
 
 
-_DEFAULT_FEED = "iex"
+try:
+    _cfg_default = get_settings()
+    _DEFAULT_FEED = (
+        getattr(_cfg_default, "data_feed", None)
+        or getattr(_cfg_default, "alpaca_data_feed", "iex")
+        or "iex"
+    )
+except Exception:  # pragma: no cover - defensive default
+    _DEFAULT_FEED = "iex"
 def _env_flag(key: str, default: bool = False) -> bool:
     """Return truthy flag for ``key`` honouring ``default`` when unset."""
 
@@ -2672,7 +2680,7 @@ def get_bars(
             if prov.startswith("alpaca_"):
                 feed = prov.split("_", 1)[1]
                 break
-        feed = feed or S.alpaca_data_feed
+        feed = feed or getattr(S, 'data_feed', getattr(S, 'alpaca_data_feed', 'iex'))
     adjustment = adjustment or S.alpaca_adjustment
     # If Alpaca credentials are missing, skip direct Alpaca HTTP calls and
     # fall back to the Yahoo helper to avoid noisy empty/unauthorized logs.
