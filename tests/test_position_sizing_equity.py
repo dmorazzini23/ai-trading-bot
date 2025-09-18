@@ -1,13 +1,15 @@
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 import ai_trading.position_sizing as ps
 import ai_trading.core.runtime as rt
 from ai_trading.logging import logger_once
 
 
 def test_fetch_equity_sets_paper(monkeypatch):
-    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
 
     calls: dict[str, bool] = {}
 
@@ -18,7 +20,8 @@ def test_fetch_equity_sets_paper(monkeypatch):
         def get_account(self):  # pragma: no cover - simple stub
             return SimpleNamespace(equity=0.0)
 
-    monkeypatch.setattr("alpaca.trading.client.TradingClient", Dummy)
+    monkeypatch.setattr(ps, "ALPACA_AVAILABLE", True)
+    monkeypatch.setattr(ps, "get_trading_client_cls", lambda: Dummy)
 
     cfg = SimpleNamespace(
         alpaca_api_key="k",
@@ -32,7 +35,7 @@ def test_fetch_equity_sets_paper(monkeypatch):
 
 def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
     # Ensure cache is clear
-    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     logger_once._emitted_keys.clear()
 
     # Stub equity fetcher to return a positive value
@@ -62,7 +65,7 @@ def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
 
 
 def test_get_max_position_size_auto_multiplies_equity(monkeypatch):
-    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
 
     cfg = SimpleNamespace(capital_cap=0.05)
@@ -71,7 +74,7 @@ def test_get_max_position_size_auto_multiplies_equity(monkeypatch):
 
 
 def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, caplog):
-    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     logger_once._emitted_keys.clear()
     calls = {"n": 0}
 
@@ -94,7 +97,7 @@ def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, capl
 
 
 def test_failed_equity_fetch_warns_once_and_caches(monkeypatch, caplog):
-    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     logger_once._emitted_keys.clear()
     calls = {"n": 0}
 
@@ -117,7 +120,7 @@ def test_failed_equity_fetch_warns_once_and_caches(monkeypatch, caplog):
 
 
 def test_equity_recovered_emits_warning_once(monkeypatch, caplog):
-    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity = (None, None, None)
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     logger_once._emitted_keys.clear()
 
     monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 0.0)
@@ -135,3 +138,45 @@ def test_equity_recovered_emits_warning_once(monkeypatch, caplog):
     sizing_msgs = [r.msg for r in caplog.records if r.name == "ai_trading.position_sizing"]
     assert equity_warns.count("EQUITY_MISSING") == 1
     assert sizing_msgs.count("CONFIG_AUTOFIX") == 1
+
+
+def test_auto_mode_reuses_cached_equity_on_failure(monkeypatch, caplog):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, 50000.0, None)
+
+    def failing_fetch(cfg, force_refresh=False):
+        ps._CACHE.equity_error = "http_error:503"
+        return None
+
+    monkeypatch.setattr(ps, "_get_equity_from_alpaca", failing_fetch)
+
+    cfg = SimpleNamespace(capital_cap=0.04, max_position_mode="AUTO")
+    tcfg = SimpleNamespace(capital_cap=0.04, max_position_mode="AUTO", dynamic_size_refresh_secs=0.0)
+
+    with caplog.at_level(logging.INFO):
+        size, meta = ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
+
+    assert size == 2000.0
+    assert meta["source"] == "cached_equity"
+    assert meta["equity"] == 50000.0
+    reuse_logs = [r for r in caplog.records if r.msg == "AUTO_SIZING_REUSED_EQUITY"]
+    assert reuse_logs and getattr(reuse_logs[0], "reason", None) == "http_error:503"
+
+
+def test_auto_mode_aborts_when_equity_unavailable(monkeypatch, caplog):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
+
+    def failing_fetch(cfg, force_refresh=False):
+        ps._CACHE.equity_error = "request_error:Timeout"
+        return None
+
+    monkeypatch.setattr(ps, "_get_equity_from_alpaca", failing_fetch)
+
+    cfg = SimpleNamespace(capital_cap=0.05, max_position_mode="AUTO")
+    tcfg = SimpleNamespace(capital_cap=0.05, max_position_mode="AUTO", dynamic_size_refresh_secs=0.0)
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="request_error:Timeout"):
+            ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
+
+    abort_logs = [r for r in caplog.records if r.msg == "AUTO_SIZING_ABORTED"]
+    assert abort_logs and getattr(abort_logs[0], "reason", None) == "request_error:Timeout"

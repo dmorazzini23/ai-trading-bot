@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 import ai_trading.position_sizing as ps
 
 
@@ -26,6 +28,7 @@ def _stub_session(monkeypatch, status: int, payload: dict, *, calls: dict | None
 
 
 def test_auto_mode_resolves_from_equity_and_capital_cap(monkeypatch, caplog):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     cfg = SimpleNamespace(
         alpaca_base_url="https://paper-api.alpaca.markets",
         alpaca_api_key="k",
@@ -47,7 +50,8 @@ def test_auto_mode_resolves_from_equity_and_capital_cap(monkeypatch, caplog):
     assert meta["source"] in {"alpaca", "cache"}
 
 
-def test_auto_mode_fallback_on_error(monkeypatch, caplog):
+def test_auto_mode_raises_on_error_without_cached_equity(monkeypatch, caplog):
+    ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
     cfg = SimpleNamespace(
         alpaca_base_url="https://paper-api.alpaca.markets",
         alpaca_api_key="k",
@@ -64,12 +68,11 @@ def test_auto_mode_fallback_on_error(monkeypatch, caplog):
     calls: dict[str, int] = {}
     _stub_session(monkeypatch, 500, {}, calls=calls)
 
-    with caplog.at_level(logging.WARNING):
-        size1, meta1 = ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
-        size2, meta2 = ps.resolve_max_position_size(cfg, tcfg)
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="http_error:500"):
+            ps.resolve_max_position_size(cfg, tcfg, force_refresh=True)
 
-    assert size1 == size2 == 4000.0
-    assert meta1["source"] == "fallback_equity"
-    assert meta2["source"] == "cache"
+    abort_logs = [r for r in caplog.records if r.msg == "AUTO_SIZING_ABORTED"]
+    assert abort_logs and getattr(abort_logs[0], "reason", None) == "http_error:500"
     assert calls["n"] == 1
 

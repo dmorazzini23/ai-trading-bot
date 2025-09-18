@@ -18,6 +18,7 @@ class _Cache:
     value: float | None = None
     ts: datetime | None = None
     equity: float | None = None
+    equity_error: str | None = None
 _CACHE = _Cache()
 
 def _now_utc() -> datetime:
@@ -111,7 +112,7 @@ def _fallback_max_size(cfg, tcfg) -> float:
     return 8000.0
 
 
-def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
+def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
     """Fetch account equity using Alpaca SDK or HTTP fallback.
 
     Parameters
@@ -124,21 +125,29 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
 
     Returns
     -------
-    float
-        The current account equity. ``0.0`` is returned on any error and the
-        value is cached for subsequent calls.
+    float | None
+        The current account equity. ``None`` is returned on error and the
+        failure reason is recorded in the log payload.
     """
-    if force_refresh:
-        _CACHE.equity = None
-    elif _CACHE.equity is not None:
+    if not force_refresh and _CACHE.equity is not None:
         return _CACHE.equity
 
     base = str(getattr(cfg, "alpaca_base_url", "")).rstrip("/")
     key = getattr(cfg, "alpaca_api_key", None)
     secret = getattr(cfg, "alpaca_secret_key_plain", None) or get_alpaca_secret_key_plain()
     if not key or not secret or not base:
-        _CACHE.equity = 0.0
-        return 0.0
+        reason = "missing_credentials"
+        _CACHE.equity_error = reason
+        _log.warning(
+            "ALPACA_EQUITY_UNAVAILABLE",
+            extra={
+                "reason": reason,
+                "has_key": bool(key),
+                "has_secret": bool(secret),
+                "base_url": base,
+            },
+        )
+        return None
 
     if ALPACA_AVAILABLE:
         try:
@@ -154,10 +163,20 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
                 acct = client.get_account()
                 eq = _coerce_float(getattr(acct, "equity", None), 0.0)
                 _CACHE.equity = eq
+                _CACHE.equity_error = None
                 return eq
-            _log.warning("ALPACA_CLIENT_NO_GET_ACCOUNT", extra={"client": type(client).__name__})
+            reason = "missing_get_account"
+            _log.warning(
+                "ALPACA_CLIENT_NO_GET_ACCOUNT",
+                extra={"client": type(client).__name__, "reason": reason},
+            )
         except Exception as e:  # noqa: BLE001 - log and fallback to HTTP
-            _log.warning("ALPACA_SDK_ACCOUNT_FAILED", extra={"error": str(e)})
+            reason = f"sdk_error:{type(e).__name__}"
+            _CACHE.equity_error = reason
+            _log.warning(
+                "ALPACA_SDK_ACCOUNT_FAILED",
+                extra={"error": str(e), "reason": reason},
+            )
 
     url = f"{base}/v2/account"
     try:
@@ -174,23 +193,39 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float:
         data = resp.json()
         eq = _coerce_float(data.get("equity"), 0.0)
         _CACHE.equity = eq
+        _CACHE.equity_error = None
         return eq
     except HTTPError as e:
         status = getattr(e.response, "status_code", None)
+        reason = f"http_error:{status}" if status is not None else "http_error"
+        _CACHE.equity_error = reason
         if status in {401, 403}:
-            _log.warning("ALPACA_AUTH_FAILED", extra={"url": url, "status": status})
+            _log.warning(
+                "ALPACA_AUTH_FAILED",
+                extra={"url": url, "status": status, "reason": reason},
+            )
         else:
-            _log.warning("ALPACA_HTTP_ERROR", extra={"url": url, "status": status})
-        _CACHE.equity = 0.0
-        return 0.0
+            _log.warning(
+                "ALPACA_HTTP_ERROR",
+                extra={"url": url, "status": status, "reason": reason},
+            )
+        return None
     except RequestException as e:
-        _log.warning("ALPACA_REQUEST_FAILED", extra={"url": url, "error": str(e)})
-        _CACHE.equity = 0.0
-        return 0.0
+        reason = f"request_error:{type(e).__name__}"
+        _CACHE.equity_error = reason
+        _log.warning(
+            "ALPACA_REQUEST_FAILED",
+            extra={"url": url, "error": str(e), "reason": reason},
+        )
+        return None
     except JSONDecodeError as e:
-        _log.warning("ALPACA_INVALID_RESPONSE", extra={"url": url, "error": str(e)})
-        _CACHE.equity = 0.0
-        return 0.0
+        reason = "invalid_json"
+        _CACHE.equity_error = reason
+        _log.warning(
+            "ALPACA_INVALID_RESPONSE",
+            extra={"url": url, "error": str(e), "reason": reason},
+        )
+        return None
     except Exception:  # log and propagate unexpected errors
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
@@ -235,7 +270,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             if eq in (None, 0.0):
                 # Allow tests to patch the public alias used by runtime.
                 fetched = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
-                if fetched > 0:
+                if fetched is not None and fetched > 0:
                     eq = fetched
                     for obj in (cfg, tcfg):
                         try:
@@ -263,30 +298,48 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         return (_CACHE.value, {'mode': mode, 'source': 'cache', 'capital_cap': cap, 'refreshed_at': (_CACHE.ts or _now_utc()).isoformat()})
     # Use public alias so callers/tests can patch equity retrieval.
     eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
-    if eq <= 0.0:
-        eq = _coerce_float(
-            getattr(
-                tcfg,
-                'max_position_equity_fallback',
-                getattr(cfg, 'max_position_equity_fallback', 200000.0),
-            ),
-            200000.0,
+    failure_reason = getattr(_CACHE, 'equity_error', None)
+    source = 'alpaca'
+    numeric_eq: float | None = None
+    if eq is not None:
+        try:
+            numeric_eq = float(eq)
+        except (TypeError, ValueError):
+            numeric_eq = None
+    if numeric_eq is None or numeric_eq <= 0.0:
+        if failure_reason is None and numeric_eq is not None:
+            failure_reason = 'non_positive_equity'
+        candidates = (
+            getattr(cfg, 'equity', None),
+            getattr(tcfg, 'equity', None),
+            _CACHE.equity,
         )
-        source = 'fallback_equity'
-        _CACHE.equity = eq
+        for candidate in candidates:
+            try:
+                candidate_val = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if candidate_val > 0.0:
+                numeric_eq = candidate_val
+                source = 'cached_equity'
+                break
+        if numeric_eq is None or numeric_eq <= 0.0:
+            reason = failure_reason or 'equity_unavailable'
+            _log.error(
+                'AUTO_SIZING_ABORTED',
+                extra={'reason': reason, 'capital_cap': cap},
+            )
+            raise RuntimeError(f"AUTO sizing aborted: {reason}")
         _log.info(
-            "CONFIG_AUTOFIX",
-            extra={
-                'field': 'equity',
-                'given': 0.0,
-                'fallback': eq,
-                'reason': 'equity_fetch_failed',
-                'capital_cap': cap,
-            },
+            'AUTO_SIZING_REUSED_EQUITY',
+            extra={'reason': failure_reason, 'capital_cap': cap, 'equity': numeric_eq},
         )
+        _CACHE.equity = numeric_eq
+        _CACHE.equity_error = failure_reason
     else:
-        source = 'alpaca'
-        _CACHE.equity = eq
+        numeric_eq = float(numeric_eq)
+        _CACHE.equity = numeric_eq
+        _CACHE.equity_error = None
     if cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
         _log.info(
@@ -296,7 +349,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 'given': 0.0,
                 'fallback': fb,
                 'reason': 'missing_capital_cap',
-                'equity': eq,
+                'equity': numeric_eq,
                 'capital_cap': cap,
             },
         )
@@ -307,14 +360,14 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             {
                 'mode': mode,
                 'source': 'fallback',
-                'equity': eq,
+                'equity': numeric_eq,
                 'capital_cap': cap,
                 'clamp_min': vmin,
                 'clamp_max': vmax,
                 'refreshed_at': _CACHE.ts.isoformat(),
             },
         )
-    computed = float(floor(eq * cap))
+    computed = float(floor(numeric_eq * cap))
     val = _clamp(
         computed,
         _coerce_float(vmin, None) if vmin is not None else None,
@@ -329,7 +382,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 'given': computed,
                 'fallback': fb,
                 'reason': 'non_positive_computed',
-                'equity': eq,
+                'equity': numeric_eq,
                 'capital_cap': cap,
             },
         )
@@ -341,7 +394,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         {
             'mode': mode,
             'source': source,
-            'equity': eq,
+            'equity': numeric_eq,
             'capital_cap': cap,
             'computed': computed,
             'clamp_min': vmin,
