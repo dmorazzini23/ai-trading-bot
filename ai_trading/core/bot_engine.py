@@ -16314,6 +16314,31 @@ def get_latest_price(symbol: str):
 
     price: float | None = None
     price_source = "unknown"
+
+    def _normalize_price(raw_value: Any, provider: str) -> float | None:
+        """Coerce *raw_value* to a positive float or log why it is rejected."""
+
+        if raw_value is None:
+            logger.warning(
+                "PRICE_PROVIDER_NONE",
+                extra={"symbol": symbol, "provider": provider},
+            )
+            return None
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "PRICE_PROVIDER_INVALID",
+                extra={"symbol": symbol, "provider": provider, "raw": raw_value},
+            )
+            return None
+        if value <= 0:
+            logger.warning(
+                "PRICE_PROVIDER_NONPOSITIVE",
+                extra={"symbol": symbol, "provider": provider, "price": value},
+            )
+            return None
+        return value
     if not is_alpaca_service_available():
         _PRICE_SOURCE[symbol] = "alpaca_unavailable"
         return None
@@ -16326,11 +16351,11 @@ def get_latest_price(symbol: str):
             params=params,
         )
         raw = data.get("ap") if data else None
-        price = float(raw) if raw is not None else None
-        if price is None:
-            logger.warning("ALPACA_PRICE_NONE", extra={"symbol": symbol})
-        else:
+        price = _normalize_price(raw, "alpaca")
+        if price is not None:
             price_source = "alpaca"
+        else:
+            price_source = "alpaca_invalid"
     except AlpacaAuthenticationError as exc:
         logger.error(
             "ALPACA_PRICE_AUTH_FAILED",
@@ -16369,24 +16394,26 @@ def get_latest_price(symbol: str):
             start = datetime.now(UTC) - timedelta(days=5)
             end = datetime.now(UTC)
             df = _yahoo_get_bars(symbol, start, end, interval="1d")
-            price = get_latest_close(df)
+            price = _normalize_price(get_latest_close(df), "yahoo")
             if price is not None:
                 price_source = "yahoo"
+            else:
+                price_source = "yahoo_invalid"
         except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.warning("YAHOO_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
 
     if price is None:
         try:
             df = get_bars_df(symbol)
-            price = get_latest_close(df)
+            price = _normalize_price(get_latest_close(df), "bars")
             if price is not None:
                 price_source = "bars"
+            else:
+                price_source = "bars_invalid"
         except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.error("LATEST_PRICE_FALLBACK_FAILED", extra={"symbol": symbol, "error": str(e)})
             price = None
 
-    if price is None:
-        price_source = "unknown"
     _PRICE_SOURCE[symbol] = price_source
     return price
 

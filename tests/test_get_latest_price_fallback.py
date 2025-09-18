@@ -56,6 +56,34 @@ def test_get_latest_price_uses_latest_close_when_providers_fail(monkeypatch):
     assert price == 55.0
 
 
+def test_get_latest_price_skips_non_positive_from_yahoo(monkeypatch):
+    """Zeroes from Yahoo should be treated as invalid and fall back further."""
+
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_alpaca_symbols",
+        lambda: (lambda *_a, **_k: {"ap": None}, None),
+    )
+
+    def yahoo_zero(symbol, start, end, interval):  # noqa: ARG001
+        return _df(0.0)
+
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", yahoo_zero)
+    monkeypatch.setattr(bot_engine, "get_latest_close", lambda df: float(df["close"].iloc[-1]))
+
+    def fail_bars(symbol):  # noqa: ARG001
+        raise RuntimeError("bars unavailable")
+
+    monkeypatch.setattr(bot_engine, "get_bars_df", fail_bars)
+
+    price = bot_engine.get_latest_price("AAPL")
+
+    assert price is None
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "yahoo_invalid"
+
+
 def test_get_latest_price_handles_auth_failure(monkeypatch):
     monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", True)
 
