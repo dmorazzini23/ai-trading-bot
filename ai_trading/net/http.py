@@ -21,9 +21,14 @@ from urllib.parse import urlparse
 
 try:  # handle TLS validation clock skew warnings gracefully
     import urllib3
-    urllib3.disable_warnings(
-        getattr(urllib3.exceptions, "SystemTimeWarning", urllib3.exceptions.HTTPWarning)
-    )
+
+    _warning_category = Warning
+    _exceptions = getattr(urllib3, "exceptions", None)
+    if _exceptions is not None:
+        _warning_category = getattr(_exceptions, "SystemTimeWarning", Warning)
+        if _warning_category is Warning:
+            _warning_category = getattr(_exceptions, "HTTPWarning", Warning)
+    urllib3.disable_warnings(_warning_category)
 except Exception:  # pragma: no cover - urllib3 missing or misbehaving
     pass
 
