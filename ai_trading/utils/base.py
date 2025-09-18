@@ -17,6 +17,7 @@ from typing import Any, TYPE_CHECKING
 from uuid import UUID
 from zoneinfo import ZoneInfo
 from ai_trading.config import get_settings
+from ai_trading.config.management import get_env
 from ai_trading.exc import COMMON_EXC
 from ai_trading.settings import get_verbose_logging
 from .locks import portfolio_lock
@@ -24,6 +25,32 @@ from .safe_subprocess import (
     SUBPROCESS_TIMEOUT_DEFAULT,
     safe_subprocess_run,
 )
+
+try:  # pragma: no cover - import guard mirrors runtime behaviour
+    from ai_trading.alpaca_api import (  # type: ignore
+        alpaca_get as _alpaca_get,
+        AlpacaOrderHTTPError,
+    )
+except ImportError:  # pragma: no cover - fallback when Alpaca API unavailable
+
+    class AlpacaOrderHTTPError(Exception):  # type: ignore[no-redef]
+        """Fallback Alpaca HTTP error when alpaca-py is unavailable."""
+
+        def __init__(
+            self,
+            status_code: int | None = None,
+            message: str = "",
+            *,
+            payload: dict[str, Any] | None = None,
+        ) -> None:
+            super().__init__(message or "Alpaca request failed")
+            self.status_code = status_code
+            self.payload = payload or {}
+
+    def _alpaca_get(*args: Any, **kwargs: Any):  # type: ignore[no-redef]
+        raise ImportError("alpaca API unavailable")
+
+alpaca_get = _alpaca_get
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd  # pylint: disable=unused-import
@@ -235,10 +262,19 @@ def get_current_price(symbol: str) -> float:
     """Return latest quote price with fallbacks."""
     price = 0.0
     try:
-        from ai_trading.alpaca_api import alpaca_get
-
-        data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
+        feed = get_env("ALPACA_DATA_FEED", "iex")
+        params = {"feed": feed} if feed else None
+        data = alpaca_get(
+            f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
+            params=params,
+        )
         price = float(data.get("ap", 0) or 0)
+    except AlpacaOrderHTTPError as exc:
+        logger.warning(
+            "get_current_price http error for %s: %s",
+            symbol,
+            exc,
+        )
     except COMMON_EXC as exc:
         logger.warning("get_current_price primary fetch failed for %s: %s", symbol, exc)
     if price <= 0:

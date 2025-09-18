@@ -83,6 +83,7 @@ from ai_trading.utils import health_check as _health_check
 from ai_trading.logging import logger_once
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
+    AlpacaOrderHTTPError,
     get_bars_df,  # AI-AGENT-REF: canonical bar fetcher (auto start/end)
     get_trading_client_cls,
     get_data_client_cls,
@@ -16199,7 +16200,12 @@ def get_latest_price(symbol: str):
         return None
     try:
         alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
-        data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
+        feed = get_env("ALPACA_DATA_FEED", "iex")
+        params = {"feed": feed} if feed else None
+        data = alpaca_get(
+            f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
+            params=params,
+        )
         raw = data.get("ap") if data else None
         price = float(raw) if raw is not None else None
         if price is None:
@@ -16213,6 +16219,17 @@ def get_latest_price(symbol: str):
         )
         _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
         return None
+    except AlpacaOrderHTTPError as exc:
+        logger.warning(
+            "ALPACA_PRICE_HTTP_ERROR",
+            extra={
+                "symbol": symbol,
+                "status": getattr(exc, "status_code", None),
+                "error": str(exc),
+            },
+        )
+        price_source = "alpaca_http_error"
+        _PRICE_SOURCE[symbol] = price_source
     except (
         FileNotFoundError,
         PermissionError,
