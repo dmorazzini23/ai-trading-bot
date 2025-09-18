@@ -533,8 +533,14 @@ class TradingConfig:
                     return _to_bool(str(raw_val))
                 if cast is str:
                     return raw_val
+                value_to_cast = raw_val
+                if isinstance(raw_val, str) and cast is not _to_bool:
+                    normalized = raw_val.split("#", 1)[0].strip()
+                    if not normalized:
+                        continue
+                    value_to_cast = normalized
                 try:
-                    return cast(raw_val)
+                    return cast(value_to_cast)
                 except (ValueError, TypeError) as exc:
                     raise RuntimeError(
                         f"Failed to cast env var {candidate!r}={raw_val!r} via {cast}: {exc}"
