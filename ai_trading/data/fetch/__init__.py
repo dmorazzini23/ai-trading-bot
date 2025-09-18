@@ -2145,8 +2145,13 @@ def _fetch_bars(
                     except Exception:  # pragma: no cover - alerting best effort
                         logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                 remaining_retries = max_retries - _state["retries"]
+                log_event = (
+                    "ALPACA_FETCH_ABORTED"
+                    if remaining_retries > 0
+                    else "ALPACA_FETCH_RETRY_LIMIT"
+                )
                 logger.warning(
-                    "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT",
+                    log_event,
                     extra=_norm_extra(
                         {
                             "provider": "alpaca",
@@ -2163,6 +2168,12 @@ def _fetch_bars(
                         }
                     ),
                 )
+                if log_event == "ALPACA_FETCH_RETRY_LIMIT":
+                    raise EmptyBarsError(
+                        "alpaca_empty: symbol="
+                        f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
+                        f" retries={_state['retries']}"
+                    )
                 return None
             if can_retry_timeframe:
                 if _state["retries"] < max_retries:
@@ -2182,7 +2193,10 @@ def _fetch_bars(
                                 }
                             ),
                         )
-                        return None
+                        raise EmptyBarsError(
+                            "alpaca_empty: symbol="
+                            f"{symbol}, timeframe={_interval}, feed={_feed}, reason=market_closed"
+                        )
                     if planned_backoff is not None:
                         _state["retries"] = attempt
                         _state["delay"] = planned_backoff
@@ -2229,7 +2243,11 @@ def _fetch_bars(
                         }
                     ),
                 )
-                return None
+                raise EmptyBarsError(
+                    "alpaca_empty: symbol="
+                    f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
+                    f" retries={_state['retries']}"
+                )
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
                 from ai_trading.utils.lazy_imports import load_pandas as _lp
 
@@ -2239,8 +2257,13 @@ def _fetch_bars(
                 except Exception:
                     return pd.DataFrame()
             remaining_retries = max_retries - _state["retries"]
+            log_event = (
+                "ALPACA_FETCH_ABORTED"
+                if remaining_retries > 0
+                else "ALPACA_FETCH_RETRY_LIMIT"
+            )
             logger.warning(
-                "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT",
+                log_event,
                 extra=_norm_extra(
                     {
                         "provider": "alpaca",
@@ -2257,6 +2280,12 @@ def _fetch_bars(
                     }
                 ),
             )
+            if log_event == "ALPACA_FETCH_RETRY_LIMIT":
+                raise EmptyBarsError(
+                    "alpaca_empty: symbol="
+                    f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
+                    f" retries={_state['retries']}"
+                )
             return None
         _alpaca_empty_streak = 0
         ts_col = None

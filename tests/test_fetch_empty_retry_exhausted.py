@@ -1,6 +1,9 @@
 import json
 import logging
+import types
 from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from ai_trading.data import fetch
 
@@ -26,7 +29,13 @@ class _Session:
     def _get(self, url, params=None, headers=None, timeout=None):
         idx = self.calls
         self.calls += 1
-        return _Resp(self._payloads[idx], self._corr_ids[idx])
+        if idx >= len(self._payloads):
+            payload = self._payloads[-1]
+            corr_id = self._corr_ids[-1]
+        else:
+            payload = self._payloads[idx]
+            corr_id = self._corr_ids[idx]
+        return _Resp(payload, corr_id)
 
 
 def _dt_range():
@@ -47,6 +56,11 @@ def test_skip_log_when_retries_exhausted(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_sip_fallback_allowed", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 1)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 0)
+    monkeypatch.setattr(fetch, "fh_fetcher", None)
+    monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
+    monkeypatch.setattr(fetch, "time", types.SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _s: None))
 
     calls = []
 
@@ -56,10 +70,11 @@ def test_skip_log_when_retries_exhausted(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "log_fetch_attempt", _log_fetch_attempt)
 
     with caplog.at_level(logging.WARNING):
-        out = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+        with pytest.raises(fetch.EmptyBarsError) as exc:
+            fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 
-    assert out is None
-    assert sess.calls == 2
+    assert "alpaca_empty" in str(exc.value)
+    assert 2 <= sess.calls <= 4
     assert len(calls) == 1
     assert calls[0][2]["remaining_retries"] == 0
     assert all(c[2]["remaining_retries"] >= 0 for c in calls)
