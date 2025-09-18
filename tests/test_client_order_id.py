@@ -21,6 +21,10 @@ def api():
     api = DummyAPI()
     yield api
     api.ids.clear()
+    if hasattr(api, "client_order_ids"):
+        api.client_order_ids.clear()
+    if hasattr(api, "client_order_ids") and not api.client_order_ids:
+        delattr(api, "client_order_ids")
 
 
 def test_unique_client_order_id(api):
@@ -41,3 +45,22 @@ def test_unique_client_order_id(api):
         client=api,
     )
     assert len(set(api.ids)) == 2
+    assert hasattr(api, "client_order_ids")
+    assert api.client_order_ids == api.ids
+
+
+def test_shadow_mode_populates_id_lists(api, monkeypatch):
+    monkeypatch.setenv("ALPACA_SHADOW", "1")
+    req = make_req("MSFT")
+    resp = alpaca_api.submit_order(
+        req.symbol,
+        req.side,
+        qty=req.qty,
+        time_in_force=req.time_in_force,
+        client=api,
+    )
+
+    assert resp["status"] == "accepted"
+    assert hasattr(api, "client_order_ids")
+    assert api.ids == api.client_order_ids
+    assert resp["client_order_id"] == api.ids[-1]

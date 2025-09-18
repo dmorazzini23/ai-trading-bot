@@ -584,6 +584,38 @@ def _to_public_dict(resp_json: dict[str, Any]) -> dict[str, Any]:
     return {k: resp_json.get(k) for k in fields if k in resp_json}
 
 
+def _record_client_order_id(client: Any | None, idempotency_key: str | None) -> None:
+    """Record generated client order IDs on the provided client object.
+
+    The Alpaca client historically exposed ``client_order_ids`` while newer
+    tests and helpers expect ``ids``. To keep both code paths working, we
+    append the generated idempotency key to each attribute, initialising a
+    list where necessary. Failures are intentionally swallowed to avoid
+    leaking broker errors back to callers.
+    """
+
+    if client is None or not idempotency_key:
+        return
+
+    for attr in ("ids", "client_order_ids"):
+        try:
+            collection = getattr(client, attr)
+        except AttributeError:
+            try:
+                setattr(client, attr, [])
+                collection = getattr(client, attr)
+            except Exception:
+                continue
+
+        if not hasattr(collection, "append"):
+            continue
+
+        try:
+            collection.append(idempotency_key)
+        except Exception:
+            continue
+
+
 def _sdk_submit(
     client: Any,
     *,
@@ -630,11 +662,6 @@ def _sdk_submit(
             _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
             if _err is not None:
                 _alpaca_errors_total.inc()
-        except Exception:
-            pass
-    if idempotency_key and hasattr(client, "ids"):
-        try:
-            client.ids.append(idempotency_key)
         except Exception:
             pass
     if hasattr(order, "_raw"):
@@ -760,6 +787,7 @@ def submit_order(
     idempotency_key = idempotency_key or generate_client_order_id()
 
     if do_shadow:
+        _record_client_order_id(client, idempotency_key)
         oid = f"shadow-{uuid.uuid4().hex[:16]}"
         return {
             "id": oid,
@@ -775,7 +803,7 @@ def submit_order(
         }
 
     if client is not None:
-        return _sdk_submit(
+        order = _sdk_submit(
             client,
             symbol=symbol,
             qty=q_int,
@@ -787,6 +815,8 @@ def submit_order(
             idempotency_key=idempotency_key,
             timeout=timeout,
         )
+        _record_client_order_id(client, idempotency_key)
+        return order
 
     try:
         from alpaca.trading.client import TradingClient as _REST
