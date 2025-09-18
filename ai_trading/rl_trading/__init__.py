@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -152,6 +153,7 @@ def _load_train_module() -> Any:
         raise AttributeError(
             f"module {__name__!r} has no attribute 'train'"
         ) from exc
+    sys.modules.setdefault("ai_trading.rl_trading.train", module)
     globals()["train"] = module
     return module
 
@@ -164,3 +166,9 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin lazy loader
 
 def __dir__() -> list[str]:  # pragma: no cover - keep introspection predictable
     return sorted({*globals(), "train"})
+
+
+try:  # Eagerly import to keep a stable module reference for reloads.
+    _load_train_module()
+except AttributeError:  # pragma: no cover - optional dependency missing in tests
+    train = None
