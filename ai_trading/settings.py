@@ -152,6 +152,13 @@ class Settings(BaseSettings):
     data_cache_ttl_seconds: int = Field(default=300, env='AI_TRADING_DATA_CACHE_TTL_SECONDS')
     data_cache_dir: str = Field(default=str(Path.home() / '.cache' / 'ai_trading'), env='AI_TRADING_DATA_CACHE_DIR')
     data_cache_disk_enable: bool = Field(True, env='AI_TRADING_DATA_CACHE_DISK_ENABLE')
+    market_cache_enabled: bool = Field(False, alias='MARKET_CACHE_ENABLED')
+    market_cache_ttl: int = Field(900, alias='MARKET_CACHE_TTL')
+    intraday_lookback_minutes: int = Field(120, alias='INTRADAY_LOOKBACK_MINUTES')
+    intraday_indicator_window_minutes: int = Field(
+        0, alias='INTRADAY_INDICATOR_WINDOW_MINUTES'
+    )
+    minute_gap_backfill: str | None = Field('auto', alias='MINUTE_GAP_BACKFILL')
     pretrade_lookback_days: int = Field(120, alias='PRETRADE_LOOKBACK_DAYS')
     verbose_logging: bool = Field(default=False, env='AI_TRADING_VERBOSE_LOGGING')
     enable_plotting: bool = Field(default=False, env='AI_TRADING_ENABLE_PLOTTING')
