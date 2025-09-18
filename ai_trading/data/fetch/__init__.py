@@ -4,7 +4,7 @@ import os
 import warnings
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas
@@ -63,6 +63,29 @@ def get_settings():  # pragma: no cover - simple alias for tests
 
 # Module-level session reused across requests
 _HTTP_SESSION: HTTPSession = get_http_session()
+
+
+_JSON_PRIMITIVE_TYPES = (str, int, float, bool, type(None))
+
+
+def _coerce_json_primitives(data: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return a JSON-serialisable copy of *data* for structured logging."""
+
+    if not data:
+        return {}
+    safe: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, bool):
+            safe[key] = value
+        elif isinstance(value, (int,)):
+            safe[key] = int(value)
+        elif isinstance(value, float):
+            safe[key] = float(value)
+        elif isinstance(value, _JSON_PRIMITIVE_TYPES):
+            safe[key] = value
+        else:
+            safe[key] = str(value)
+    return safe
 
 
 # Optional dependency placeholders
@@ -1825,7 +1848,35 @@ def _fetch_bars(
         if df.empty:
             attempt = _state["retries"] + 1
             remaining_retries = max(0, max_retries - attempt)
-            log_extra_with_remaining = {"remaining_retries": remaining_retries, **log_extra}
+            can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
+            planned_retry_meta: dict[str, Any] = {}
+            planned_backoff: float | None = None
+            outside_market_hours = False
+            if (
+                attempt <= max_retries
+                and can_retry_timeframe
+                and _state["retries"] < max_retries
+            ):
+                outside_market_hours = _outside_market_hours(_start, _end)
+                if not outside_market_hours:
+                    planned_backoff = min(
+                        _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
+                        _FETCH_BARS_BACKOFF_CAP,
+                    )
+                    planned_retry_meta = _coerce_json_primitives(
+                        retry_empty_fetch_once(
+                            delay=planned_backoff,
+                            attempt=attempt,
+                            max_retries=max_retries,
+                            previous_correlation_id=prev_corr,
+                            total_elapsed=time.monotonic() - start_time,
+                        )
+                    )
+            log_extra_with_remaining = {
+                **planned_retry_meta,
+                "remaining_retries": remaining_retries,
+                **log_extra,
+            }
             if attempt <= max_retries:
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
             metrics.empty_payload += 1
@@ -2113,9 +2164,9 @@ def _fetch_bars(
                     ),
                 )
                 return None
-            if str(_interval).lower() not in {"1day", "day", "1d"}:
+            if can_retry_timeframe:
                 if _state["retries"] < max_retries:
-                    if _outside_market_hours(_start, _end):
+                    if outside_market_hours:
                         logger.info(
                             "ALPACA_FETCH_MARKET_CLOSED",
                             extra=_norm_extra(
@@ -2132,37 +2183,35 @@ def _fetch_bars(
                             ),
                         )
                         return None
-                    _state["retries"] += 1
-                    backoff = min(
-                        _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1),
-                        _FETCH_BARS_BACKOFF_CAP,
-                    )
-                    elapsed = time.monotonic() - start_time
-                    _state["delay"] = backoff
-                    meta = retry_empty_fetch_once(
-                        delay=backoff,
-                        attempt=_state["retries"],
-                        max_retries=max_retries,
-                        previous_correlation_id=prev_corr,
-                        total_elapsed=elapsed,
-                    )
-                    logger.debug(
-                        "RETRY_EMPTY_BARS",
-                        extra=_norm_extra(
-                            {
-                                "provider": "alpaca",
-                                "feed": _feed,
-                                "timeframe": _interval,
-                                "symbol": symbol,
-                                "start": _start.isoformat(),
-                                "end": _end.isoformat(),
-                                "correlation_id": _state["corr_id"],
-                                **meta,
-                            }
-                        ),
-                    )
-                    time.sleep(backoff)
-                    return _req(session, None, headers=headers, timeout=timeout)
+                    if planned_backoff is not None:
+                        _state["retries"] = attempt
+                        _state["delay"] = planned_backoff
+                        retry_meta = planned_retry_meta or _coerce_json_primitives(
+                            retry_empty_fetch_once(
+                                delay=planned_backoff,
+                                attempt=attempt,
+                                max_retries=max_retries,
+                                previous_correlation_id=prev_corr,
+                                total_elapsed=time.monotonic() - start_time,
+                            )
+                        )
+                        logger.debug(
+                            "RETRY_EMPTY_BARS",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "symbol": symbol,
+                                    "start": _start.isoformat(),
+                                    "end": _end.isoformat(),
+                                    "correlation_id": _state["corr_id"],
+                                    **retry_meta,
+                                }
+                            ),
+                        )
+                        time.sleep(planned_backoff)
+                        return _req(session, None, headers=headers, timeout=timeout)
                 logger.warning(
                     "ALPACA_FETCH_RETRY_LIMIT",
                     extra=_norm_extra(
