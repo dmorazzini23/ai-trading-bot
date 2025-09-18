@@ -11,6 +11,7 @@ import unittest
 from datetime import UTC, date, datetime
 
 from tests.mocks.app_mocks import MockConfig
+from ai_trading.meta_learning import validate_trade_data_quality
 
 
 class TestCriticalFixes(unittest.TestCase):
@@ -84,7 +85,7 @@ class TestCriticalFixes(unittest.TestCase):
             # Test data with mixed price types
             test_data = {
                 "entry_price": ["100.50", "200", "invalid", "50.25"],
-                "exit_price": ["105.75", "195", "0", "55.00"],
+                "exit_price": ["105.75", "-5", "0", "55.00"],
                 "side": ["buy", "sell", "buy", "sell"],
                 "signal_tags": ["momentum", "mean_revert", "momentum", "trend"],
             }
@@ -108,6 +109,33 @@ class TestCriticalFixes(unittest.TestCase):
             self.assertTrue(
                 all(df["exit_price"] > 0), "All exit prices should be positive"
             )
+
+            from ai_trading.meta_learning import validate_trade_data_quality
+
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv") as tmp:
+                tmp.write(
+                    "symbol,entry_time,entry_price,exit_time,exit_price,qty,side,signal_tags\n"
+                )
+                tmp.write(
+                    "AAA,2024-01-01T00:00:00Z,100.50,2024-01-01T01:00:00Z,105.75,1,buy,momentum\n"
+                )
+                tmp.write(
+                    "BBB,2024-01-02T00:00:00Z,200,2024-01-02T01:00:00Z,-5,1,sell,mean_revert\n"
+                )
+                tmp.write(
+                    "CCC,2024-01-03T00:00:00Z,invalid,2024-01-03T01:00:00Z,0,1,buy,momentum\n"
+                )
+                tmp.write(
+                    "DDD,2024-01-04T00:00:00Z,50.25,2024-01-04T01:00:00Z,55.00,1,sell,trend\n"
+                )
+                csv_path = tmp.name
+
+            try:
+                report = validate_trade_data_quality(csv_path)
+                self.assertEqual(report["row_count"], 4)
+                self.assertEqual(report["valid_price_rows"], 2)
+            finally:
+                os.unlink(csv_path)
 
         except ImportError:
             # Skip if pandas not available
