@@ -799,6 +799,62 @@ def test_fetch_minute_df_safe_market_cache_hit(monkeypatch, tmp_path):
     pd.testing.assert_frame_equal(second, sample)
 
 
+def test_signal_manager_evaluate_with_shorter_history(monkeypatch):
+    pd = load_pandas()
+
+    idx = pd.date_range(
+        start=pd.Timestamp("2024-01-02 09:30", tz="UTC"), periods=120, freq="min"
+    )
+    closes = [100 + i * 0.1 for i in range(len(idx))]
+    df = pd.DataFrame(
+        {
+            "open": [price - 0.05 for price in closes],
+            "high": [price + 0.1 for price in closes],
+            "low": [price - 0.1 for price in closes],
+            "close": closes,
+            "volume": [1000 + i for i in range(len(idx))],
+            "stochrsi": [0.5] * len(idx),
+            "rsi": [55.0] * len(idx),
+            "rsi_14": [55.0] * len(idx),
+            "ichimoku_conv": [1.0] * len(idx),
+            "ichimoku_base": [1.0] * len(idx),
+            "macd": [0.0] * len(idx),
+            "macds": [0.0] * len(idx),
+            "vwap": closes,
+            "atr": [1.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    def _stub_sentiment(self, ctx, ticker, df=None, model=None):  # noqa: D401
+        return 1, 0.05, "sentiment"
+
+    def _stub_regime(self, ctx, state, df, model=None):  # noqa: D401
+        return 1, 0.05, "regime"
+
+    monkeypatch.setattr(bot_engine.SignalManager, "signal_sentiment", _stub_sentiment)
+    monkeypatch.setattr(bot_engine.SignalManager, "signal_regime", _stub_regime)
+    monkeypatch.setattr(
+        bot_engine.SignalManager,
+        "signal_ml",
+        lambda self, df, model=None, symbol=None: (1, 0.05, "ml"),
+    )
+    monkeypatch.setattr(bot_engine, "load_global_signal_performance", lambda: {})
+    monkeypatch.setattr(bot_engine, "signals_evaluated", None, raising=False)
+
+    manager = bot_engine.SignalManager()
+    state = bot_engine.BotState()
+
+    signal, confidence, label = manager.evaluate(
+        object(), state, df.copy(), "AAPL", model=None
+    )
+
+    assert label != "no_data"
+    assert manager.last_components
+    assert confidence >= 0
+    assert signal in (-1, 1)
+
+
 def test_fetch_feature_data_skips_when_minute_stale(monkeypatch):
     err = bot_engine.DataFetchError("stale_minute_data")
     setattr(err, "fetch_reason", "stale_minute_data")
