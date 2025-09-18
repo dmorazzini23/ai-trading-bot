@@ -695,6 +695,145 @@ def test_fetch_minute_df_safe_extends_window_for_long_indicators(monkeypatch):
     assert (end - start) >= timedelta(minutes=200)
 
 
+def test_fetch_minute_df_safe_reuses_fallback_feed_within_soft_budget(
+    monkeypatch, caplog
+):
+    pd = load_pandas()
+
+    class FakeBudget:
+        def __init__(self, limit: float) -> None:
+            self.limit = limit
+            self.elapsed = 0.0
+
+        def consume(self, cost: float) -> None:
+            self.elapsed += cost
+
+        def over(self) -> bool:
+            return self.elapsed > self.limit
+
+    budget = FakeBudget(limit=2.0)
+
+    base_now = datetime(2024, 1, 3, 17, 30, tzinfo=UTC)
+    session_start = datetime(2024, 1, 3, 14, 30, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    expected = max(1, int((base_now - session_start).total_seconds() // 60))
+
+    lazy_state = bot_engine.state
+    try:
+        original_state = object.__getattribute__(lazy_state, "_inst")
+    except AttributeError:
+        original_state = None
+    object.__setattr__(lazy_state, "_inst", bot_engine.BotState())
+    monkeypatch.addfinalizer(
+        lambda: object.__setattr__(lazy_state, "_inst", original_state)
+    )
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        intraday_lookback_minutes=60,
+        data_feed="iex",
+        alpaca_feed_failover=(),
+    )
+
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+
+    from ai_trading.data import market_calendar
+
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+
+    cost_map = {"iex": 1.0, "sip": 0.4}
+    calls: list[tuple[str, str]] = []
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        feed_name = str(feed or "iex").lower()
+        feed_key = "sip" if "sip" in feed_name else "iex"
+        calls.append((symbol, feed_key))
+        budget.consume(cost_map[feed_key])
+        if feed_key == "iex":
+            idx = pd.date_range(
+                end=end - timedelta(minutes=2),
+                periods=5,
+                freq="min",
+                tz="UTC",
+            )
+            return pd.DataFrame(
+                {
+                    "open": [1.0] * len(idx),
+                    "high": [1.1] * len(idx),
+                    "low": [0.9] * len(idx),
+                    "close": [1.0] * len(idx),
+                    "volume": [50] * len(idx),
+                },
+                index=idx,
+            )
+        idx = pd.date_range(
+            end=end - timedelta(minutes=1),
+            periods=expected,
+            freq="min",
+            tz="UTC",
+        )
+        return pd.DataFrame(
+            {
+                "open": [1.0] * len(idx),
+                "high": [1.1] * len(idx),
+                "low": [0.9] * len(idx),
+                "close": [1.0] * len(idx),
+                "volume": [100] * len(idx),
+            },
+            index=idx,
+        )
+
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+
+    with caplog.at_level(logging.WARNING):
+        first = bot_engine.fetch_minute_df_safe("AAPL")
+        second = bot_engine.fetch_minute_df_safe("MSFT")
+
+    assert isinstance(first, pd.DataFrame)
+    assert isinstance(second, pd.DataFrame)
+    warnings = [rec for rec in caplog.records if rec.message == "MINUTE_DATA_COVERAGE_WARNING"]
+    assert len(warnings) == 1
+    assert calls == [("AAPL", "iex"), ("AAPL", "sip"), ("MSFT", "sip")]
+    assert not budget.over()
+    assert budget.elapsed <= budget.limit
+    assert getattr(bot_engine.state, "minute_data_preferred_feed") == "sip"
+    degraded = getattr(bot_engine.state, "minute_data_degraded_feeds")
+    assert isinstance(degraded, set)
+    assert "iex" in degraded
+
+
 def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     pd = load_pandas()
 

@@ -2905,15 +2905,52 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         return df
 
+    def _normalize_feed_name(value: object) -> str:
+        try:
+            feed_val = str(value).strip().lower()
+        except Exception:
+            return data_fetcher_module._DEFAULT_FEED
+        if "sip" in feed_val:
+            return "sip"
+        if "iex" in feed_val:
+            return "iex"
+        return data_fetcher_module._DEFAULT_FEED
+
+    configured_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
+    preferred_feed_state = getattr(state, "minute_data_preferred_feed", None)
+    preferred_feed = (
+        _normalize_feed_name(preferred_feed_state)
+        if preferred_feed_state is not None
+        else None
+    )
+    current_feed = preferred_feed or configured_feed
+    initial_fetch_kwargs: dict[str, object] = {}
+    if preferred_feed:
+        initial_fetch_kwargs["feed"] = preferred_feed
+
+    degraded_feed_cache = getattr(state, "minute_data_degraded_feeds", None)
+    if not isinstance(degraded_feed_cache, set):
+        degraded_feed_cache = set()
+        try:
+            setattr(state, "minute_data_degraded_feeds", degraded_feed_cache)
+        except Exception:
+            degraded_feed_cache = set()
+
+    cache_suffix = f":{preferred_feed}" if preferred_feed else ""
+
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
         try:
             from ai_trading.market.cache import get_or_load as _get_or_load
 
-            cache_key = f"minute:{symbol}:{start_dt.isoformat()}"
+            cache_key = f"minute:{symbol}:{start_dt.isoformat()}{cache_suffix}"
+
+            def _load_minute_df() -> pd.DataFrame | None:
+                return get_minute_df(symbol, start_dt, end_dt, **initial_fetch_kwargs)
+
             df = _get_or_load(
                 key=cache_key,
-                loader=lambda: get_minute_df(symbol, start_dt, end_dt),
+                loader=_load_minute_df,
                 ttl=getattr(S, "market_cache_ttl", 900),
             )
         except (
@@ -2927,9 +2964,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.debug("Cache layer unavailable/failed: %s", e)
-            df = get_minute_df(symbol, start_dt, end_dt)
+            df = get_minute_df(symbol, start_dt, end_dt, **initial_fetch_kwargs)
     else:
-        df = get_minute_df(symbol, start_dt, end_dt)
+        df = get_minute_df(symbol, start_dt, end_dt, **initial_fetch_kwargs)
 
     expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
@@ -2937,18 +2974,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     if df is not None:
         df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
 
-    def _normalize_feed_name(value: object) -> str:
-        try:
-            feed_val = str(value).strip().lower()
-        except Exception:
-            return data_fetcher_module._DEFAULT_FEED
-        if "sip" in feed_val:
-            return "sip"
-        if "iex" in feed_val:
-            return "iex"
-        return data_fetcher_module._DEFAULT_FEED
-
-    current_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
     active_feed = current_feed
 
     def _attempt_stale_recovery(
@@ -3105,7 +3130,15 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 except Exception:
                     actual_bars = 0
                 if fallback_feed:
-                    active_feed = fallback_feed
+                    normalized_fallback = _normalize_feed_name(fallback_feed)
+                    active_feed = normalized_fallback
+                    if degraded_feed_cache is not None and current_feed:
+                        if normalized_fallback != current_feed:
+                            degraded_feed_cache.add(current_feed)
+                    try:
+                        setattr(state, "minute_data_preferred_feed", normalized_fallback)
+                    except Exception:
+                        pass
 
         if df is not None:
             try:
@@ -4017,6 +4050,10 @@ class BotState:
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
+
+    # Minute data feed cache (per-cycle)
+    minute_data_preferred_feed: str | None = None
+    minute_data_degraded_feeds: set[str] = field(default_factory=set)
 
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
