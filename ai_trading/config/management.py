@@ -487,26 +487,25 @@ class TradingConfig:
             # Legacy daily loss limit alias: backfills ``DOLLAR_RISK_LIMIT`` when absent.
             "DAILY_LOSS_LIMIT": "DOLLAR_RISK_LIMIT",
         }
-        # AI_TRADING_* aliases are the canonical spellings going forward and always
-        # override their legacy counterparts. Other aliases continue to act as
-        # backfills when the canonical key is missing.
+        # AI_TRADING_* aliases are the canonical spellings going forward but they
+        # now serve strictly as backfills so explicit canonical values win.
+        # Other aliases continue to act as backfills when the canonical key is
+        # missing.
         for alias, canon in alias_map.items():
             alias_value = env_map.get(alias)
             if alias_value in (None, ""):
                 continue
 
             canonical_value = env_map.get(canon)
-
-            if alias.startswith("AI_TRADING_"):
-                env_map[canon] = alias_value
-                continue
-
             if canonical_value is None or str(canonical_value).strip() == "":
                 env_map[canon] = alias_value
 
         from .aliases import resolve_trading_mode
 
-        mode = resolve_trading_mode(mode or "balanced").lower()
+        explicit_mode_requested = isinstance(env_or_mode, str) and bool(mode)
+        mode = resolve_trading_mode(
+            mode or "balanced", skip_env=explicit_mode_requested
+        ).lower()
 
         explicit_env_keys: set[str] = set()
 
