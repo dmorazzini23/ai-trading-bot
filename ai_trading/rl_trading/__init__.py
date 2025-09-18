@@ -28,8 +28,8 @@ def _load_rl_stack() -> dict[str, Any] | None:
         sb3 = importlib.import_module("stable_baselines3")
         gym = importlib.import_module("gymnasium")
         importlib.import_module("torch")
-    except ImportError as exc:
-        logger.debug("RL stack unavailable: %s", exc)
+    except Exception as exc:
+        logger.exception("RL stack unavailable: %s", exc)
         return None
     global PPO, DummyVecEnv
     try:
