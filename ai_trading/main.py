@@ -380,19 +380,32 @@ def _validate_runtime_config(cfg, tcfg) -> None:
     if not 0.0 < risk <= 1.0:
         errors.append(f"DOLLAR_RISK_LIMIT out of range: {risk}")
     prev_eq = _CACHE.equity
-    eq = _get_equity_from_alpaca(cfg)
+    raw_eq = _get_equity_from_alpaca(cfg)
+    eq: float | None
+    if raw_eq is None:
+        eq = None
+    else:
+        try:
+            eq = float(raw_eq)
+        except (TypeError, ValueError):
+            logger.warning("ACCOUNT_EQUITY_INVALID", extra={"equity": raw_eq})
+            eq = None
     targets = (cfg,) if cfg is tcfg else (cfg, tcfg)
-    if eq > 0:
+    resolved_eq = eq if eq is not None and eq > 0 else None
+    if resolved_eq is not None:
         for obj in targets:
             try:
-                setattr(obj, "equity", eq)
+                setattr(obj, "equity", resolved_eq)
             except Exception:
                 try:
-                    object.__setattr__(obj, "equity", eq)
+                    object.__setattr__(obj, "equity", resolved_eq)
                 except Exception:  # pragma: no cover - defensive
                     pass
     else:
-        logger.warning("ACCOUNT_EQUITY_MISSING", extra={"equity": eq})
+        logger.warning(
+            "ACCOUNT_EQUITY_MISSING",
+            extra={"equity": eq if eq is not None else raw_eq},
+        )
         for obj in targets:
             try:
                 setattr(obj, "equity", None)
