@@ -50,6 +50,18 @@ def test_trading_config_from_env_loads_parameters():
         assert cfg.position_size_min_usd == 25.0
 
 
+def test_alias_does_not_override_direct_max_position_size(monkeypatch):
+    """MAX_POSITION_SIZE should win over AI_TRADING_MAX_POSITION_SIZE."""
+    from ai_trading.config.management import TradingConfig
+
+    monkeypatch.setenv("MAX_POSITION_SIZE", "1234")
+    monkeypatch.setenv("AI_TRADING_MAX_POSITION_SIZE", "5678")
+
+    cfg = TradingConfig.from_env()
+
+    assert cfg.max_position_size == 1234.0
+
+
 def test_trading_config_from_env_market_calendar(monkeypatch):
     """TradingConfig.from_env picks up MARKET_CALENDAR."""  # AI-AGENT-REF
     from ai_trading.config.management import TradingConfig

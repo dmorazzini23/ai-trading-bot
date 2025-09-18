@@ -495,11 +495,13 @@ class TradingConfig:
             if alias_value in (None, ""):
                 continue
 
+            canonical_value = env_map.get(canon)
+
             if alias.startswith("AI_TRADING_"):
-                env_map[canon] = alias_value
+                if canonical_value is None or str(canonical_value).strip() == "":
+                    env_map[canon] = alias_value
                 continue
 
-            canonical_value = env_map.get(canon)
             if canonical_value is None or str(canonical_value).strip() == "":
                 env_map[canon] = alias_value
 
