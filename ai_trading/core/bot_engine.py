@@ -16383,11 +16383,66 @@ def get_latest_price(symbol: str):
             f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
             params=params,
         )
-        raw = data.get("ap") if data else None
-        price = _normalize_price(raw, "alpaca")
-        if price is not None:
-            price_source = "alpaca"
-        else:
+        def _iter_price_sources(payload: Any) -> Iterable[tuple[str, Any]]:
+            """Yield potential Alpaca price fields with source labels."""
+
+            if not isinstance(payload, dict):
+                return
+
+            def _lookup(keys: Iterable[str]) -> Any:
+                for key in keys:
+                    if key in payload:
+                        return payload[key]
+                return None
+
+            # Ask price first (primary source)
+            ask_value = _lookup(("ask_price", "ap"))
+            yield "alpaca_ask", ask_value
+
+            # Bid price when ask is missing or invalid
+            bid_value = _lookup(("bid_price", "bp"))
+            yield "alpaca_bid", bid_value
+
+            # Last trade can appear in multiple shapes
+            last_obj = _lookup(("last", "last_trade", "lastTrade"))
+            last_value: Any = None
+            if isinstance(last_obj, dict):
+                for key in ("price", "p", "trade_price", "last_price"):
+                    if key in last_obj:
+                        last_value = last_obj[key]
+                        break
+            elif last_obj is not None:
+                last_value = last_obj
+            if last_value is None:
+                last_value = _lookup(("last_price", "lp"))
+            yield "alpaca_last", last_value
+
+            # Midpoint if provided by the API (eg. SIP feed)
+            midpoint_value = _lookup(("midpoint", "mid_price", "mp"))
+            yield "alpaca_midpoint", midpoint_value
+
+        payloads: list[dict[str, Any]] = []
+        if isinstance(data, dict):
+            payloads.append(data)
+            nested = data.get("quote")
+            if isinstance(nested, dict):
+                payloads.append(nested)
+                nested_symbol = nested.get(symbol)
+                if isinstance(nested_symbol, dict):
+                    payloads.append(nested_symbol)
+            symbol_payload = data.get(symbol)
+            if isinstance(symbol_payload, dict):
+                payloads.append(symbol_payload)
+
+        for payload in payloads:
+            for source_label, raw_value in _iter_price_sources(payload):
+                price = _normalize_price(raw_value, source_label)
+                if price is not None:
+                    price_source = source_label
+                    break
+            if price is not None:
+                break
+        if price is None:
             price_source = "alpaca_invalid"
     except AlpacaAuthenticationError as exc:
         logger.error(
