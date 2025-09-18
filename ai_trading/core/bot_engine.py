@@ -198,6 +198,11 @@ COMMON_EXC = (
 # Allow NEWS_API_KEY to serve as the default sentiment key if SENTIMENT_API_KEY is unset.  # AI-AGENT-REF: env alias
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY") or os.getenv("NEWS_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
+
+# Longest intraday indicator window (200-minute SMA) expressed in minutes. The
+# fetch path must cover at least this lookback so early-session runs have
+# enough history to maintain indicator continuity.
+_LONGEST_INTRADAY_INDICATOR_MINUTES = 200
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
 _TEST_ENV_VARS = ("PYTEST_RUNNING", "PYTEST_CURRENT_TEST", "TESTING")
@@ -2711,6 +2716,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     now_utc = datetime.now(UTC)
     today_et = now_utc.astimezone(EASTERN_TZ).date()
+    session_date: date = today_et
     market_open_now = True
     try:
         market_open_now = is_market_open()
@@ -2719,8 +2725,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             start_dt = session_start
             end_dt = now_utc
         else:
-            prev = previous_trading_session(today_et)
-            session_start, session_end = rth_session_utc(prev)
+            session_date = previous_trading_session(today_et)
+            session_start, session_end = rth_session_utc(session_date)
             start_dt = session_start
             end_dt = session_end
     except COMMON_EXC:
@@ -2728,6 +2734,40 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         start_dt = now_utc - timedelta(days=1)
         end_dt = now_utc
         market_open_now = True
+        session_date = today_et
+
+    def _coerce_int(value: object, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    longest_indicator_minutes = max(
+        _LONGEST_INTRADAY_INDICATOR_MINUTES,
+        _coerce_int(getattr(CFG, "longest_intraday_indicator_minutes", None)),
+        _coerce_int(getattr(CFG, "intraday_indicator_window_minutes", None)),
+        _coerce_int(getattr(CFG, "intraday_lookback_minutes", None)),
+        1,
+    )
+    required_span = timedelta(minutes=longest_indicator_minutes)
+
+    if (end_dt - start_dt) < required_span:
+        backfill_date = session_date
+        attempts = 0
+        while (end_dt - start_dt) < required_span and attempts < 10:
+            try:
+                backfill_date = previous_trading_session(backfill_date)
+                session_start, _ = rth_session_utc(backfill_date)
+            except COMMON_EXC as exc:
+                logger.debug(
+                    "FETCH_MINUTE_SESSION_BACKFILL_FAILED",
+                    extra={"symbol": symbol, "error": str(exc)},
+                )
+                start_dt = end_dt - required_span
+                break
+            else:
+                start_dt = session_start
+            attempts += 1
 
     def _determine_fallback_feed(
         current_feed: str,

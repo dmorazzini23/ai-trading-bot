@@ -542,6 +542,86 @@ def test_fetch_minute_df_safe_early_session_sparse_data_triggers_sip_fallback(
     assert any(rec.message == "MINUTE_DATA_COVERAGE_WARNING" for rec in caplog.records)
 
 
+def test_fetch_minute_df_safe_extends_window_for_long_indicators(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 16, 0, tzinfo=UTC)
+    session_start = datetime(2024, 1, 3, 14, 30, tzinfo=UTC)
+    prev_session_start = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
+    session_duration = timedelta(hours=6, minutes=30)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    calls: list[tuple[datetime, datetime]] = []
+
+    def fake_get_minute_df(symbol: str, start, end, **_):
+        calls.append((start, end))
+        idx = pd.date_range(
+            end=end - timedelta(minutes=1), periods=5, freq="min", tz="UTC"
+        )
+        return pd.DataFrame(
+            {
+                "close": [1.0] * len(idx),
+                "volume": [100] * len(idx),
+            },
+            index=idx,
+        )
+
+    def fake_ensure(df, max_age_seconds, *, symbol=None, now=None, tz=None):
+        return None
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        intraday_lookback_minutes=120,
+        intraday_indicator_window_minutes=0,
+        data_feed="iex",
+        alpaca_feed_failover=(),
+    )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    current_session_date = session_start.date()
+    previous_session_date = prev_session_start.date()
+
+    def fake_rth_session_utc(day):
+        if day == current_session_date:
+            return session_start, session_start + session_duration
+        if day == previous_session_date:
+            return prev_session_start, prev_session_start + session_duration
+        raise AssertionError(f"unexpected date {day}")
+
+    def fake_previous_trading_session(day):
+        if day == current_session_date:
+            return previous_session_date
+        return previous_session_date - timedelta(days=1)
+
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", fake_ensure)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
+    monkeypatch.setattr(market_calendar, "rth_session_utc", fake_rth_session_utc)
+    monkeypatch.setattr(
+        market_calendar, "previous_trading_session", fake_previous_trading_session
+    )
+
+    result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert isinstance(result, pd.DataFrame)
+    assert calls, "get_minute_df should be invoked"
+    start, end = calls[0]
+    assert start == prev_session_start
+    assert end == base_now
+    assert (end - start) >= timedelta(minutes=200)
+
+
 def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     pd = load_pandas()
 

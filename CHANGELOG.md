@@ -28,6 +28,9 @@ All notable changes to this project will be documented in this file.
 - Meta-learning: WeightOptimizer now warns when provided an empty DataFrame.
 - Core: gate `ML_MODEL_MISSING` warning behind `AI_TRADING_WARN_IF_MODEL_MISSING` flag.
 - Data fetch: enforce rate limiter in `fetch.core` to comply with Alpaca quotas.
+- Minute data: `fetch_minute_df_safe` now stitches the prior RTH session into
+  morning windows so long-horizon intraday indicators (e.g., SMA-200) remain
+  populated during early trading.
 - Utils: `safe_subprocess_run` now returns a result object exposing `stdout`, `returncode`, and `timeout` flag.
 - Execution: convert market orders exceeding slippage threshold to limits with adjusted price and proportionally reduce quantity; record adjustments in trade log.
 
