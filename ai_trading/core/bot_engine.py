@@ -2942,6 +2942,34 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         return df
 
+    def _normalize_feed_name(value: object) -> str:
+        try:
+            feed_val = str(value).strip().lower()
+        except Exception:
+            return data_fetcher_module._DEFAULT_FEED
+        if "sip" in feed_val:
+            return "sip"
+        if "iex" in feed_val:
+            return "iex"
+        return data_fetcher_module._DEFAULT_FEED
+
+    configured_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
+    current_feed = configured_feed
+    try:
+        cached_feeds = getattr(state, "minute_feed_cache", None)
+    except Exception:
+        cached_feeds = None
+    if isinstance(cached_feeds, dict):
+        preferred_feed = cached_feeds.get(configured_feed)
+        if preferred_feed:
+            current_feed = preferred_feed
+
+    def _initial_fetch_kwargs() -> dict[str, object]:
+        kwargs = _minute_fetch_kwargs()
+        if current_feed and current_feed != configured_feed:
+            kwargs["feed"] = current_feed
+        return kwargs
+
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
         try:
@@ -2951,7 +2979,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df = _get_or_load(
                 key=cache_key,
                 loader=lambda: get_minute_df(
-                    symbol, start_dt, end_dt, **_minute_fetch_kwargs()
+                    symbol, start_dt, end_dt, **_initial_fetch_kwargs()
                 ),
                 ttl=getattr(S, "market_cache_ttl", 900),
             )
@@ -2966,28 +2994,15 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.debug("Cache layer unavailable/failed: %s", e)
-            df = get_minute_df(symbol, start_dt, end_dt, **_minute_fetch_kwargs())
+            df = get_minute_df(symbol, start_dt, end_dt, **_initial_fetch_kwargs())
     else:
-        df = get_minute_df(symbol, start_dt, end_dt, **_minute_fetch_kwargs())
+        df = get_minute_df(symbol, start_dt, end_dt, **_initial_fetch_kwargs())
 
     expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
 
     if df is not None:
         df = _sanitize_minute_df(df, symbol=symbol, current_now=now_utc)
-
-    def _normalize_feed_name(value: object) -> str:
-        try:
-            feed_val = str(value).strip().lower()
-        except Exception:
-            return data_fetcher_module._DEFAULT_FEED
-        if "sip" in feed_val:
-            return "sip"
-        if "iex" in feed_val:
-            return "iex"
-        return data_fetcher_module._DEFAULT_FEED
-
-    current_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
     active_feed = current_feed
 
     def _attempt_stale_recovery(
@@ -3098,6 +3113,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         except Exception:
             actual_bars = 0
 
+    fallback_used = False
+    fallback_feed_used = None
+
     coverage_threshold = (
         max(1, int(expected_bars * 0.5)) if expected_bars > 0 else 0
     )
@@ -3147,6 +3165,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     actual_bars = 0
                 if fallback_feed:
                     active_feed = fallback_feed
+                if fallback_feed and fallback_feed != current_feed:
+                    fallback_used = True
+                    fallback_feed_used = fallback_feed
 
         if df is not None:
             try:
@@ -3159,6 +3180,17 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         insufficient_intraday = (
             expected_bars >= intraday_lookback and actual_bars < intraday_lookback
         )
+        if (
+            fallback_used
+            and fallback_feed_used
+            and configured_feed
+            and not (materially_short or insufficient_intraday)
+        ):
+            cache = getattr(state, "minute_feed_cache", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                setattr(state, "minute_feed_cache", cache)
+            cache[configured_feed] = fallback_feed_used
         if materially_short or insufficient_intraday:
             active_provider = ""
             if active_feed:
@@ -4008,6 +4040,7 @@ class BotState:
         trade_cooldowns (Dict[str, datetime]): Per-symbol cooldown periods to prevent overtrading
         last_trade_direction (Dict[str, str]): Last trade direction per symbol ('buy'/'sell')
         skipped_cycles (int): Count of trading cycles skipped due to market/risk conditions
+        minute_feed_cache (Dict[str, str]): Preferred minute feed per cycle after failovers
 
     Examples:
         >>> state = BotState()
@@ -4058,6 +4091,9 @@ class BotState:
 
     # Operational telemetry
     degraded_providers: set[str] = field(default_factory=set)
+
+    # Minute data feed cache scoped to the active trading cycle
+    minute_feed_cache: dict[str, str] = field(default_factory=dict)
 
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
@@ -15034,6 +15070,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
             return
+        feed_cache = getattr(state, "minute_feed_cache", None)
+        if isinstance(feed_cache, dict):
+            feed_cache.clear()
+        else:
+            state.minute_feed_cache = {}
         state.running = True
         state.last_run_at = now
         if not getattr(state, "_strategies_loaded", False):
