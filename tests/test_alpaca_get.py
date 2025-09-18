@@ -38,8 +38,10 @@ class _Response:
 @pytest.fixture(autouse=True)
 def _alpaca_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPACA_BASE_URL", "https://example.com")
-    monkeypatch.setenv("ALPACA_API_KEY_ID", "key-id")
-    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_API_KEY", "key-id")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SHADOW", raising=False)
 
 
@@ -148,6 +150,32 @@ def test_alpaca_get_auth_error_marks_unavailable(
     assert calls.count == 1
     assert errors.count == 1
     assert not is_alpaca_service_available()
+
+
+def test_alpaca_get_accepts_apca_aliases(
+    _http_stub: SimpleNamespace,
+    _metrics_stub: tuple[_Counter, _Counter, _Histogram],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls, errors, _ = _metrics_stub
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.setenv("APCA_API_KEY_ID", "legacy-id")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "legacy-secret")
+
+    _http_stub.response = _Response(
+        status_code=200,
+        payload={"data": "ok"},
+    )
+
+    result = alpaca_api.alpaca_get("/v2/legacy")
+
+    assert result == {"data": "ok"}
+    headers = _http_stub.called["headers"]
+    assert headers["APCA-API-KEY-ID"] == "legacy-id"
+    assert headers["APCA-API-SECRET-KEY"] == "legacy-secret"
+    assert calls.count == 1
+    assert errors.count == 0
 
 
 def test_get_latest_price_uses_live_quote(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
