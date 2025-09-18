@@ -3107,6 +3107,48 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 if fallback_feed:
                     active_feed = fallback_feed
 
+        if df is not None:
+            try:
+                actual_bars = int(len(df))
+            except Exception:
+                actual_bars = 0
+        materially_short = (
+            expected_bars > 0 and actual_bars < coverage_threshold
+        )
+        insufficient_intraday = (
+            expected_bars >= intraday_lookback and actual_bars < intraday_lookback
+        )
+        if materially_short or insufficient_intraday:
+            active_provider = ""
+            if active_feed:
+                if fallback_feed and active_feed == fallback_feed:
+                    active_provider = fallback_provider or f"alpaca_{active_feed}"
+                else:
+                    active_provider = f"alpaca_{active_feed}"
+            abort_extra = {
+                "symbol": symbol,
+                "expected_bars": expected_bars,
+                "actual_bars": actual_bars,
+                "coverage_threshold": coverage_threshold,
+                "intraday_lookback": intraday_lookback,
+                "from_feed": current_feed,
+                "from_provider": f"alpaca_{current_feed}" if current_feed else "",
+                "active_feed": active_feed,
+                "active_provider": active_provider,
+                "fallback_feed": fallback_feed or "",
+                "fallback_provider": fallback_provider or "",
+                "start": start_dt.isoformat(),
+                "end": end_dt.isoformat(),
+            }
+            logger.warning("MINUTE_DATA_COVERAGE_ABORT", extra=abort_extra)
+            err = DataFetchError("minute_data_low_coverage")
+            setattr(err, "fetch_reason", "minute_data_low_coverage")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            setattr(err, "expected_bars", expected_bars)
+            setattr(err, "actual_bars", actual_bars)
+            raise err
+
     if df is None:
         raise DataFetchError("minute_data_unavailable")
 
