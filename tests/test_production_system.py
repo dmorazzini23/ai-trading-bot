@@ -198,7 +198,13 @@ async def test_production_execution_coordinator():
             strategy="test_strategy"
         )
 
-        assert result["status"] in ["success", "rejected"], f"Unexpected status: {result['status']}"
+        # Ensure ExecutionResult maintains attribute access for existing callers
+        assert result.status in ["success", "rejected"], f"Unexpected status: {result.status}"
+
+        # Mapping compatibility keeps dictionary-style access working for integrations
+        assert result["status"] == result.status
+        assert result["symbol"] == "AAPL"
+        assert result["is_successful"] == result.is_successful
 
         # Test execution summary
         summary = coordinator.get_execution_summary()
