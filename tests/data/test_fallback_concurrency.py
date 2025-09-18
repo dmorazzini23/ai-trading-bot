@@ -39,3 +39,31 @@ def test_run_with_concurrency_respects_limit():
 
     assert max_seen <= 2
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS <= 2
+
+
+def test_run_with_concurrency_rebinds_foreign_loop_lock():
+    def build_lock_in_fresh_loop() -> asyncio.Lock:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _factory() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            return loop.run_until_complete(_factory())
+        finally:
+            loop.close()
+
+    external_lock = build_lock_in_fresh_loop()
+
+    async def worker(sym: str) -> str:
+        async with external_lock:
+            await asyncio.sleep(0)
+            return sym
+
+    symbols = ["AAPL", "MSFT"]
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed

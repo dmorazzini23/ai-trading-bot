@@ -14,6 +14,39 @@ from typing import TypeVar
 
 T = TypeVar("T")
 
+
+_ASYNCIO_PRIMITIVE_NAMES = {"Lock", "Semaphore", "Event", "Condition"}
+
+
+def _collect_asyncio_primitive_types() -> tuple[type, ...]:
+    """Return concrete asyncio synchronization primitive types."""
+
+    primitive_types: set[type] = set()
+
+    for attr in _ASYNCIO_PRIMITIVE_NAMES:
+        candidate = getattr(asyncio, attr, None)
+        if isinstance(candidate, type):
+            primitive_types.add(candidate)
+
+    locks_module = getattr(asyncio, "locks", None)
+    if locks_module is not None:
+        for attr in _ASYNCIO_PRIMITIVE_NAMES:
+            candidate = getattr(locks_module, attr, None)
+            if isinstance(candidate, type):
+                primitive_types.add(candidate)
+
+    return tuple(primitive_types)
+
+
+_ASYNCIO_PRIMITIVE_TYPES = _collect_asyncio_primitive_types()
+
+
+def _is_asyncio_primitive(obj: object) -> bool:
+    obj_type = type(obj)
+    if obj_type in _ASYNCIO_PRIMITIVE_TYPES:
+        return True
+    return obj_type.__module__ == "_asyncio" and obj_type.__name__ in _ASYNCIO_PRIMITIVE_NAMES
+
 # Result sets populated after ``run_with_concurrency`` completes.
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
@@ -61,7 +94,7 @@ async def run_with_concurrency(
         if obj_id in seen:
             return
         seen.add(obj_id)
-        if isinstance(obj, (asyncio.Lock, asyncio.Semaphore, asyncio.Event, asyncio.Condition)):
+        if _is_asyncio_primitive(obj):
             try:
                 obj._loop = loop  # type: ignore[attr-defined]
             except Exception:
