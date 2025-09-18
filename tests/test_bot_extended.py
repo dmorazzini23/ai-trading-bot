@@ -72,13 +72,26 @@ sys.modules.setdefault("urllib3", types.ModuleType("urllib3"))
 sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules.setdefault("bs4", types.ModuleType("bs4"))
 sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
-sys.modules.setdefault("flask", types.ModuleType("flask"))
+flask_mod = sys.modules.setdefault("flask", types.ModuleType("flask"))
+flask_app_mod = sys.modules.setdefault("flask.app", types.ModuleType("flask.app"))
+
+
+def _jsonify(payload=None, *args, **kwargs):
+    if payload is not None:
+        return payload
+    if args:
+        return args[0] if len(args) == 1 else list(args)
+    return kwargs
+
+
 class _Flask:
     def __init__(self, *a, **k):
-        pass
+        self._routes = {}
+        self.config = {}
 
-    def route(self, *a, **k):
+    def route(self, path, *a, **k):
         def decorator(func):
+            self._routes[path] = func
             return func
 
         return decorator
@@ -86,7 +99,38 @@ class _Flask:
     def run(self, *a, **k):
         pass
 
-sys.modules["flask"].Flask = _Flask
+    def test_client(self):
+        app = self
+
+        class _Response:
+            def __init__(self, data, status=200):
+                self._data = data
+                self.status_code = status
+
+            def get_json(self):
+                return self._data
+
+        class _Client:
+            def get(self, path):
+                handler = app._routes[path]
+                result = handler()
+                status = 200
+                data = result
+                if isinstance(result, tuple):
+                    data = result[0]
+                    if len(result) > 1:
+                        status = result[1]
+                return _Response(data, status)
+
+        return _Client()
+
+
+if not hasattr(flask_mod, "Flask"):
+    flask_mod.Flask = _Flask
+if not hasattr(flask_app_mod, "Flask"):
+    flask_app_mod.Flask = _Flask
+if not hasattr(flask_mod, "jsonify"):
+    flask_mod.jsonify = _jsonify
 exc_mod = types.ModuleType("requests.exceptions")
 exc_mod.HTTPError = Exception
 exc_mod.RequestException = Exception
