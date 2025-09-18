@@ -351,20 +351,25 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         _configured = True
         _ensure_single_handler(logger)
         logger.handlers.clear()
+        S = None
+        level_name_env_default = os.getenv('LOG_LEVEL', 'INFO')
         try:
             from ai_trading.config import get_settings, management as config
             S = get_settings()
-            level_name = getattr(S, 'log_level', 'INFO')
+            level_name = getattr(S, 'log_level', level_name_env_default)
             yf_level_name = getattr(
-                S, 'log_level_yfinance', config.get_env('LOG_LEVEL_YFINANCE', 'WARNING')
+                S,
+                'log_level_yfinance',
+                config.get_env('LOG_LEVEL_YFINANCE', 'WARNING'),
             )
-            if S.log_compact_json:
-                formatter = CompactJsonFormatter('%Y-%m-%dT%H:%M:%SZ')
-            else:
-                formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
+            formatter = (
+                CompactJsonFormatter('%Y-%m-%dT%H:%M:%SZ')
+                if bool(getattr(S, 'log_compact_json', False))
+                else JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
+            )
         except COMMON_EXC:
             from ai_trading.config import management as config
-            level_name = os.getenv('LOG_LEVEL', 'INFO')
+            level_name = level_name_env_default
             yf_level_name = config.get_env('LOG_LEVEL_YFINANCE', 'WARNING')
             formatter = JSONFormatter('%Y-%m-%dT%H:%M:%SZ')
         level = getattr(logging, str(level_name).upper(), logging.INFO)
@@ -373,9 +378,10 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
         logging.getLogger('yfinance').setLevel(yf_level)
         # Reduce noisy HTTP libraries unless explicitly requested
         try:
-            http_level_name = getattr(S, 'log_level_http', config.get_env('LOG_LEVEL_HTTP', 'WARNING'))
+            http_env_default = config.get_env('LOG_LEVEL_HTTP', 'WARNING')
         except Exception:
-            http_level_name = os.getenv('LOG_LEVEL_HTTP', 'WARNING')
+            http_env_default = os.getenv('LOG_LEVEL_HTTP', 'WARNING')
+        http_level_name = getattr(S, 'log_level_http', http_env_default)
         http_level = getattr(logging, str(http_level_name).upper(), logging.WARNING)
         for _name in ('urllib3', 'requests'):
             logging.getLogger(_name).setLevel(http_level)
