@@ -113,9 +113,29 @@ def get_test_client():
     gracefully when the testing utilities are missing.
     """
 
-    if missing("flask.testing", "flask.testing"):
+    module_name = "flask.testing"
+    feature_name = "flask.testing"
+
+    if missing(module_name, feature_name):
         return None
-    flask_testing = import_module("flask.testing")
+
+    try:
+        flask_testing = import_module(module_name)
+    except ImportError:
+        # The dependency may have been removed after the cache was populated.
+        # Clear and repopulate the cache so future calls see the updated state.
+        try:
+            missing.cache_clear()
+        except AttributeError:
+            pass
+
+        if missing(module_name, feature_name):
+            return None
+
+        try:
+            flask_testing = import_module(module_name)
+        except ImportError:
+            return None
 
     app = create_app()
     return flask_testing.FlaskClient(app)
