@@ -27,7 +27,11 @@ class _Session:
 
     def _get(self, url, params=None, headers=None, timeout=None):
         self.calls += 1
-        return _Resp(self._payloads.pop(0))
+        try:
+            payload = self._payloads.pop(0)
+        except IndexError:
+            payload = {"bars": []}
+        return _Resp(payload)
 
 
 def _dt_range():
@@ -114,10 +118,36 @@ def test_skip_retry_outside_market_hours(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
     monkeypatch.setattr(fetch, "is_market_open", lambda: False)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
 
     with caplog.at_level(logging.INFO):
-        out = fetch._fetch_bars("AAPL", start, end, "1Min")
+        with pytest.raises(fetch.EmptyBarsError) as exc:
+            fetch._fetch_bars("AAPL", start, end, "1Min")
 
-    assert out is None or getattr(out, "empty", False)
+    assert "market_closed" in str(exc.value)
     assert sess.calls <= 1
     assert any(r.message == "ALPACA_FETCH_MARKET_CLOSED" for r in caplog.records) or True
+
+
+def test_fetch_bars_raises_on_retry_limit(monkeypatch, caplog):
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+    start, end = _dt_range()
+    sess = _Session([{"bars": []} for _ in range(2)])
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
+    monkeypatch.setattr(fetch, "_sip_fallback_allowed", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False, raising=False)
+    monkeypatch.setattr(fetch, "_FETCH_BARS_MAX_RETRIES", 1, raising=False)
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 0)
+    monkeypatch.setattr(fetch, "fh_fetcher", None)
+    monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
+    monkeypatch.setattr(fetch, "time", types.SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _s: None))
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(fetch.EmptyBarsError) as exc:
+            fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert "alpaca_empty" in str(exc.value)
+    assert any(r.message == "ALPACA_FETCH_RETRY_LIMIT" for r in caplog.records)

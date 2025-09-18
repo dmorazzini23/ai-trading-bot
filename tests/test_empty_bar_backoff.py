@@ -111,8 +111,10 @@ def test_backoff_skips_when_alternate_empty(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_yahoo_get_bars", lambda *a, **k: pd.DataFrame())
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(fetch.EmptyBarsError):
+        with pytest.raises(fetch.EmptyBarsError) as exc:
             fetch.get_minute_df(symbol, start, end)
+
+    assert str(exc.value).startswith("empty_bars")
 
     assert key in fetch._SKIPPED_SYMBOLS
     assert fetch._EMPTY_BAR_COUNTS[key] == fetch._EMPTY_BAR_THRESHOLD
