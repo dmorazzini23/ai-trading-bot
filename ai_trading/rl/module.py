@@ -46,7 +46,9 @@ def train(data: Any, model_path: str | Path, cfg: RLConfig | None = None):
         Optional :class:`RLConfig` overriding the legacy ``_C`` defaults.
     """
 
-    cfg = cfg or _C
+    # ``_C`` may be removed by callers to avoid the legacy alias.  Fall back to
+    # a fresh configuration if the global alias is absent.
+    cfg = cfg or globals().get("_C") or RLConfig()
     logger.debug("RL train invoked", extra={"timesteps": cfg.timesteps})
     return _train_mod.train(data, model_path, timesteps=cfg.timesteps)
 
