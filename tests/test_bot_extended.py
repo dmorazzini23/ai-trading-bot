@@ -69,7 +69,21 @@ if "pandas_ta" in sys.modules:
 sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
 sys.modules.setdefault("requests", types.ModuleType("requests"))
 sys.modules.setdefault("urllib3", types.ModuleType("urllib3"))
-sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
+
+
+class _HTTPWarning(Warning):
+    pass
+
+
+class _SystemTimeWarning(Warning):
+    pass
+
+
+sys.modules["urllib3"].exceptions = types.SimpleNamespace(
+    HTTPError=Exception,
+    HTTPWarning=_HTTPWarning,
+    SystemTimeWarning=_SystemTimeWarning,
+)
 sys.modules.setdefault("bs4", types.ModuleType("bs4"))
 sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
 flask_mod = sys.modules.setdefault("flask", types.ModuleType("flask"))
