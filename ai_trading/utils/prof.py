@@ -36,9 +36,9 @@ class SoftBudget:
 
     def elapsed_ms(self) -> int:
         elapsed = time.monotonic() - self._start
-        if elapsed <= 0:
+        if elapsed < 1e-9:
             return 0
-        return max(1, round(elapsed * 1000))
+        return max(1, math.ceil(elapsed * 1000))
 
     def over(self) -> bool:
         return time.monotonic() >= self._deadline
