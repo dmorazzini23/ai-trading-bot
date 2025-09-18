@@ -9947,9 +9947,27 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             cid = _gen_id("ai")
             order_args["client_order_id"] = cid
             ids = getattr(api, "client_order_ids", None)
-            if ids is None:
-                setattr(api, "client_order_ids", [])
-                ids = api.client_order_ids
+            if isinstance(ids, list):
+                ids_list = ids
+            else:
+                if ids is None:
+                    ids_list: list[Any] = []
+                elif isinstance(ids, (tuple, set)):
+                    ids_list = list(ids)
+                else:
+                    ids_list = []
+                assigned = False
+                try:
+                    setattr(api, "client_order_ids", ids_list)
+                except (AttributeError, TypeError):
+                    assigned = False
+                else:
+                    assigned = True
+                if assigned:
+                    refreshed = getattr(api, "client_order_ids", ids_list)
+                    if isinstance(refreshed, list):
+                        ids_list = refreshed
+                ids = ids_list
             ids.append(cid)
         except (ImportError, AttributeError):
             pass
