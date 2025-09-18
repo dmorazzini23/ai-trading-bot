@@ -10087,6 +10087,13 @@ def calculate_entry_size(
         logger.warning("Failed to get cash for entry size calculation: %s", exc)
         return 1
 
+    if price <= 0:
+        logger.info(
+            "SKIP_INVALID_PRICE",
+            extra={"symbol": symbol, "price": price},
+        )
+        return 0
+
     cap_pct = ctx.params.get("get_capital_cap()", get_capital_cap())
     cap_sz = int(round((cash * cap_pct) / price)) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
@@ -10096,8 +10103,26 @@ def calculate_entry_size(
         else np.array([0.0])
     )
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
+    if kelly_sz <= 0:
+        logger.info(
+            "SKIP_INVALID_KELLY_SIZE",
+            extra={"symbol": symbol, "kelly_sz": kelly_sz},
+        )
+        return 0
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
     dollar_cap = ctx.max_position_dollars / price if price > 0 else kelly_sz
+    if cap_sz <= 0:
+        logger.info(
+            "SKIP_CAP_SIZE_ZERO",
+            extra={"symbol": symbol, "cap_sz": cap_sz, "cash": cash, "cap_pct": cap_pct},
+        )
+        return 0
+    if dollar_cap <= 0:
+        logger.info(
+            "SKIP_DOLLAR_CAP_ZERO",
+            extra={"symbol": symbol, "dollar_cap": dollar_cap, "price": price},
+        )
+        return 0
     base = int(round(min(kelly_sz, vol_sz, cap_sz, dollar_cap, MAX_POSITION_SIZE)))
     factor = max(0.5, min(1.5, 1 + (win_prob - 0.5)))
     liq = liquidity_factor(ctx, symbol)
