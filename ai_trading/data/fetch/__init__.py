@@ -33,6 +33,7 @@ from ai_trading.config.settings import (
     alpaca_empty_to_backup,
 )
 from ai_trading.data.empty_bar_backoff import (
+    _EMPTY_BAR_COUNTS,
     _SKIPPED_SYMBOLS,
     mark_success,
     record_attempt,
@@ -192,9 +193,6 @@ def bars_time_window_day(days: int = 10, *, end: _dt.datetime | None = None) -> 
 
 _MINUTE_CACHE: dict[str, tuple[int, int]] = {}
 
-# Track consecutive empty-bar responses per (symbol, timeframe) pair to avoid
-# repeated fetch noise and allow skipping per interval
-_EMPTY_BAR_COUNTS: dict[tuple[str, str], int] = {}
 # Track consecutive error="empty" responses specifically from the IEX feed to
 # allow proactive SIP fallback on subsequent requests.
 _IEX_EMPTY_COUNTS: dict[tuple[str, str], int] = {}
@@ -2342,8 +2340,23 @@ def get_minute_df(
     tf_key = (symbol, "1Min")
     if tf_key in _SKIPPED_SYMBOLS:
         logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
-        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-    record_attempt(symbol, "1Min")
+        raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")
+    try:
+        attempt = record_attempt(symbol, "1Min")
+    except EmptyBarsError:
+        cnt = _EMPTY_BAR_COUNTS.get(tf_key, MAX_EMPTY_RETRIES + 1)
+        logger.error(
+            "ALPACA_EMPTY_BAR_MAX_RETRIES",
+            extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
+        )
+        log_empty_retries_exhausted(
+            "alpaca",
+            symbol=symbol,
+            timeframe="1Min",
+            feed=feed or _DEFAULT_FEED,
+            retries=cnt,
+        )
+        raise
     used_backup = False
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
@@ -2386,7 +2399,7 @@ def get_minute_df(
                     )
                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                    mark_success(symbol, "1Min")
+                    _SKIPPED_SYMBOLS.discard(tf_key)
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 try:
                     market_open = is_market_open()
@@ -2399,10 +2412,9 @@ def get_minute_df(
                     )
                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                    mark_success(symbol, "1Min")
+                    _SKIPPED_SYMBOLS.discard(tf_key)
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
-                cnt = _EMPTY_BAR_COUNTS.get(tf_key, 0) + 1
-                _EMPTY_BAR_COUNTS[tf_key] = cnt
+                cnt = _EMPTY_BAR_COUNTS.get(tf_key, attempt)
                 if cnt > _EMPTY_BAR_MAX_RETRIES:
                     logger.error(
                         "ALPACA_EMPTY_BAR_MAX_RETRIES",
@@ -2470,7 +2482,6 @@ def get_minute_df(
                                     },
                                 )
                                 _record_feed_switch(symbol, "1Min", cur, alt_feed)
-                                _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
                                 df_alt = _post_process(df_alt, symbol=symbol, timeframe="1Min")
@@ -2504,7 +2515,6 @@ def get_minute_df(
                                         "end": end_dt.isoformat(),
                                     },
                                 )
-                                _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 mark_success(symbol, "1Min")
                                 df_short = _post_process(df_short, symbol=symbol, timeframe="1Min")
@@ -2581,7 +2591,6 @@ def get_minute_df(
                 last_ts = None
             if last_ts is not None:
                 set_cached_minute_timestamp(symbol, last_ts)
-            _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             mark_success(symbol, "1Min")
             if used_backup:
@@ -2589,9 +2598,11 @@ def get_minute_df(
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
     df = _post_process(df, symbol=symbol, timeframe="1Min")
-    if df is None:
-        return None
+    if df is None or getattr(df, "empty", False):
+        raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
+    if getattr(df, "empty", False):
+        raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     return df
 
 
