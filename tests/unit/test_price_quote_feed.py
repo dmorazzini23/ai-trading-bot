@@ -86,7 +86,7 @@ def test_get_latest_price_uses_configured_feed(monkeypatch):
         == f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest"
     )
     assert captured["params"] == {"feed": "sip"}
-    assert bot_engine._PRICE_SOURCE[symbol] == "alpaca"
+    assert bot_engine._PRICE_SOURCE[symbol] == "alpaca_ask"
 
 
 def test_get_latest_price_http_error_falls_back(monkeypatch):
