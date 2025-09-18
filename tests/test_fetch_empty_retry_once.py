@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+pytest.importorskip("pandas")
+
 from ai_trading.data import fetch
 
 
@@ -92,6 +94,7 @@ def test_single_retry_and_warning(monkeypatch, caplog):
     assert calls[0][1] == "empty"
     assert calls[0][2]["correlation_id"] == "id1"
     assert "previous_correlation_id" not in calls[0][2]
+    assert calls[0][2]["delay"] == sleep_called["delay"]
     assert calls[1][1] is None
     assert calls[1][2]["correlation_id"] == "id2"
     assert calls[1][2]["previous_correlation_id"] == "id1"
