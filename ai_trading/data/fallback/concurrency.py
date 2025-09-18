@@ -17,7 +17,8 @@ from typing import TypeVar
 T = TypeVar("T")
 
 
-_ASYNCIO_PRIMITIVE_NAMES = {"Lock", "Semaphore", "Event", "Condition"}
+_ASYNCIO_PRIMITIVE_NAMES = {"Lock", "Semaphore", "Event", "Condition", "BoundedSemaphore"}
+_ASYNCIO_LOCK_NAMES = {"Lock", "Semaphore", "BoundedSemaphore"}
 
 
 def _collect_asyncio_primitive_types() -> tuple[type, ...]:
@@ -48,6 +49,60 @@ def _is_asyncio_primitive(obj: object) -> bool:
     if obj_type in _ASYNCIO_PRIMITIVE_TYPES:
         return True
     return obj_type.__module__ == "_asyncio" and obj_type.__name__ in _ASYNCIO_PRIMITIVE_NAMES
+
+
+def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object:
+    """Return a replacement lock/semaphore bound to ``loop`` when necessary."""
+
+    obj_type = type(obj)
+    type_name = obj_type.__name__
+
+    if type_name not in _ASYNCIO_LOCK_NAMES:
+        return obj
+
+    bound_loop = None
+    for attr_name in ("_loop", "_bound_loop"):
+        if hasattr(obj, attr_name):
+            bound_loop = getattr(obj, attr_name)
+            if bound_loop is not None:
+                break
+
+    if bound_loop is None or bound_loop is loop:
+        return obj
+
+    if isinstance(obj, asyncio.Lock):
+        return asyncio.Lock()
+
+    bounded_semaphore_type = getattr(asyncio, "BoundedSemaphore", None)
+    if bounded_semaphore_type is not None and isinstance(obj, bounded_semaphore_type):
+        candidate_value = None
+        for attr_name in ("_value", "_initial_value", "_bound_value"):
+            value = getattr(obj, attr_name, None)
+            if isinstance(value, int) and value >= 0:
+                candidate_value = value
+                break
+        if candidate_value is None:
+            candidate_value = 1
+        return bounded_semaphore_type(candidate_value)
+
+    if isinstance(obj, asyncio.Semaphore):
+        candidate_value = getattr(obj, "_value", None)
+        if not isinstance(candidate_value, int) or candidate_value < 0:
+            candidate_value = getattr(obj, "_initial_value", None)
+        if not isinstance(candidate_value, int) or candidate_value < 0:
+            candidate_value = 1
+        return asyncio.Semaphore(candidate_value)
+
+    constructor = getattr(asyncio, type_name, None)
+    if callable(constructor):
+        try:
+            return constructor()
+        except TypeError:
+            pass
+    try:
+        return obj_type()
+    except TypeError:
+        return obj
 
 # Result sets populated after ``run_with_concurrency`` completes.
 SUCCESSFUL_SYMBOLS: set[str] = set()
@@ -91,69 +146,143 @@ async def run_with_concurrency(
 
     loop = asyncio.get_running_loop()
 
-    def _scan(obj, seen: set[int]) -> None:
+    def _scan(obj, seen: set[int]) -> object:
         obj_id = id(obj)
         if obj_id in seen:
-            return
+            return obj
         seen.add(obj_id)
         if _is_asyncio_primitive(obj):
-            for attr_name in ("_loop", "_bound_loop"):
-                if hasattr(obj, attr_name):
-                    try:
-                        setattr(obj, attr_name, loop)
-                    except Exception:
-                        pass
-            return
+            replacement = _maybe_recreate_lock(obj, loop)
+            return replacement
         if isinstance(obj, Mapping):
-            for value in obj.values():
-                _scan(value, seen)
-            return
+            supports_setitem = hasattr(obj, "__setitem__")
+            items = list(obj.items())
+            mutated = False
+            replacements: list[tuple[object, object]] = []
+            for key, value in items:
+                new_value = _scan(value, seen)
+                replacements.append((key, new_value))
+                if new_value is not value:
+                    mutated = True
+                    if supports_setitem:
+                        try:
+                            obj[key] = new_value
+                        except Exception:
+                            pass
+            if mutated and not supports_setitem:
+                mapping_type = type(obj)
+                try:
+                    return mapping_type(replacements)
+                except Exception:
+                    return dict(replacements)
+            return obj
         if isinstance(obj, (list, tuple, set, frozenset)):
+            if isinstance(obj, list):
+                for idx, value in enumerate(list(obj)):
+                    new_value = _scan(value, seen)
+                    if new_value is not value:
+                        obj[idx] = new_value
+                return obj
+            if isinstance(obj, tuple):
+                mutated = False
+                new_items = []
+                for value in obj:
+                    new_value = _scan(value, seen)
+                    mutated = mutated or new_value is not value
+                    new_items.append(new_value)
+                if mutated:
+                    return tuple(new_items)
+                return obj
+            if isinstance(obj, set):
+                mutated = False
+                new_values = []
+                for value in list(obj):
+                    new_value = _scan(value, seen)
+                    mutated = mutated or new_value is not value
+                    new_values.append(new_value)
+                if mutated:
+                    obj.clear()
+                    obj.update(new_values)
+                return obj
+            mutated = False
+            new_values = []
             for value in obj:
-                _scan(value, seen)
-            return
+                new_value = _scan(value, seen)
+                mutated = mutated or new_value is not value
+                new_values.append(new_value)
+            if mutated:
+                return type(obj)(new_values)
+            return obj
         if is_dataclass(obj) and not isinstance(obj, type):
             for field in fields(obj):
                 try:
                     value = getattr(obj, field.name)
                 except AttributeError:
                     continue
-                _scan(value, seen)
+                new_value = _scan(value, seen)
+                if new_value is not value:
+                    try:
+                        setattr(obj, field.name, new_value)
+                    except Exception:
+                        pass
             try:
                 extra_attrs = vars(obj)
             except TypeError:
                 extra_attrs = None
             if extra_attrs:
-                for value in extra_attrs.values():
-                    _scan(value, seen)
-            return
+                for name, value in list(extra_attrs.items()):
+                    new_value = _scan(value, seen)
+                    if new_value is not value:
+                        try:
+                            setattr(obj, name, new_value)
+                        except Exception:
+                            pass
+            return obj
         if isinstance(obj, SimpleNamespace):
-            for value in vars(obj).values():
-                _scan(value, seen)
-            return
+            for name, value in list(vars(obj).items()):
+                new_value = _scan(value, seen)
+                if new_value is not value:
+                    setattr(obj, name, new_value)
+            return obj
         slots = getattr(type(obj), "__slots__", ())
         if slots:
             slot_names = (slots,) if isinstance(slots, str) else slots
             for name in slot_names:
                 if hasattr(obj, name):
-                    _scan(getattr(obj, name), seen)
-            return
+                    value = getattr(obj, name)
+                    new_value = _scan(value, seen)
+                    if new_value is not value:
+                        try:
+                            setattr(obj, name, new_value)
+                        except Exception:
+                            pass
+            return obj
         module_name = getattr(obj.__class__, "__module__", "")
         if (
             hasattr(obj, "__dict__")
             and not isinstance(obj, ModuleType)
             and module_name.startswith(("ai_trading", "tests", "__main__"))
         ):
-            for value in vars(obj).values():
-                _scan(value, seen)
-            return
+            for name, value in list(vars(obj).items()):
+                new_value = _scan(value, seen)
+                if new_value is not value:
+                    try:
+                        setattr(obj, name, new_value)
+                    except Exception:
+                        pass
+            return obj
+
+        return obj
 
     cells = getattr(worker, "__closure__", None)
     if cells:
         seen: set[int] = set()
         for cell in cells:
             try:
-                _scan(cell.cell_contents, seen)
+                original = cell.cell_contents
+                new_value = _scan(original, seen)
+                if new_value is not original:
+                    cell.cell_contents = new_value
             except ValueError:
                 continue
 
