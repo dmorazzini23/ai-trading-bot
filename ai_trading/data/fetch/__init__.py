@@ -2112,7 +2112,12 @@ def _fetch_bars(
                         }
                     ),
                 )
-                return None
+                msg = (
+                    "alpaca empty response for "
+                    f"symbol={symbol}, timeframe={_interval}, feed={_feed}, "
+                    f"retries={_state['retries']}, remaining={remaining_retries}, reason={reason}"
+                )
+                raise EmptyBarsError(msg)
             if str(_interval).lower() not in {"1day", "day", "1d"}:
                 if _state["retries"] < max_retries:
                     if _outside_market_hours(_start, _end):
@@ -2131,7 +2136,12 @@ def _fetch_bars(
                                 }
                             ),
                         )
-                        return None
+                        msg = (
+                            "alpaca market closed for "
+                            f"symbol={symbol}, timeframe={_interval}, feed={_feed}, "
+                            f"window={_start.isoformat()}->{_end.isoformat()}"
+                        )
+                        raise EmptyBarsError(msg)
                     _state["retries"] += 1
                     backoff = min(
                         _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1),
@@ -2180,7 +2190,12 @@ def _fetch_bars(
                         }
                     ),
                 )
-                return None
+                msg = (
+                    "alpaca empty response for "
+                    f"symbol={symbol}, timeframe={_interval}, feed={_feed}, "
+                    f"retries={_state['retries']}, remaining=0, reason={reason}"
+                )
+                raise EmptyBarsError(msg)
             if (not _open) and str(_interval).lower() in {"1day", "day", "1d"}:
                 from ai_trading.utils.lazy_imports import load_pandas as _lp
 
@@ -2208,7 +2223,12 @@ def _fetch_bars(
                     }
                 ),
             )
-            return None
+            msg = (
+                "alpaca empty response for "
+                f"symbol={symbol}, timeframe={_interval}, feed={_feed}, "
+                f"retries={_state['retries']}, remaining={remaining_retries}, reason={reason}"
+            )
+            raise EmptyBarsError(msg)
         _alpaca_empty_streak = 0
         ts_col = None
         for c in df.columns:
@@ -2319,7 +2339,13 @@ def _fetch_bars(
                 _mark_fallback(symbol, _interval, _start, _end)
                 return alt_df
     if df is None or getattr(df, "empty", True):
-        return None
+        remaining = max(0, max_retries - _state.get("retries", 0))
+        msg = (
+            "alpaca empty response for "
+            f"symbol={symbol}, timeframe={_interval}, feed={_feed}, "
+            f"retries={_state.get('retries', 0)}, remaining={remaining}"
+        )
+        raise EmptyBarsError(msg)
     return df
 
 

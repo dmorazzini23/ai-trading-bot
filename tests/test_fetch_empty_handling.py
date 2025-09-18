@@ -43,6 +43,7 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
     monkeypatch.setattr(fetch, "is_market_open", lambda: True)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False)
     monkeypatch.setattr(fetch, "_empty_should_emit", lambda *a, **k: True)
     monkeypatch.setattr(fetch, "_empty_record", lambda *a, **k: 1)
     monkeypatch.setattr(fetch, "_empty_classify", lambda **k: logging.WARNING)
@@ -62,9 +63,10 @@ def test_warn_on_empty_when_market_open(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "time", types.SimpleNamespace(monotonic=_monotonic, sleep=_sleep))
 
     with caplog.at_level(logging.DEBUG):
-        out = fetch._fetch_bars("AAPL", start, end, "1Min")
+        with pytest.raises(fetch.EmptyBarsError) as exc:
+            fetch._fetch_bars("AAPL", start, end, "1Min")
 
-    assert out is None
+    assert "alpaca empty response" in str(exc.value)
     assert sess.calls <= 2
     retry_logs = [r for r in caplog.records if r.message == "RETRY_EMPTY_BARS"]
     if retry_logs:
@@ -109,15 +111,21 @@ def test_silent_fallback_when_market_closed(monkeypatch, caplog):
 def test_skip_retry_outside_market_hours(monkeypatch, caplog):
     monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
     start, end = _dt_range()
-    sess = _Session([{"bars": []}])
+    sess = _Session([{"bars": []}, {"bars": []}])
     monkeypatch.setattr(fetch, "_HTTP_SESSION", sess)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", True)
     monkeypatch.setattr(fetch, "is_market_open", lambda: False)
     monkeypatch.setattr(fetch, "_outside_market_hours", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", False)
 
     with caplog.at_level(logging.INFO):
-        out = fetch._fetch_bars("AAPL", start, end, "1Min")
+        with pytest.raises(fetch.EmptyBarsError) as exc:
+            fetch._fetch_bars("AAPL", start, end, "1Min")
 
-    assert out is None or getattr(out, "empty", False)
-    assert sess.calls <= 1
+    assert "alpaca empty response" in str(exc.value)
+    assert sess.calls <= 2
+    assert any(
+        r.message in {"ALPACA_FETCH_MARKET_CLOSED", "ALPACA_EMPTY_RESPONSE_THRESHOLD"}
+        for r in caplog.records
+    )
     assert any(r.message == "ALPACA_FETCH_MARKET_CLOSED" for r in caplog.records) or True
