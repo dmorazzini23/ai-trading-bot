@@ -2743,6 +2743,43 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         except (TypeError, ValueError):
             return default
 
+    def _resolve_gap_backfill(value: object) -> tuple[str | None, bool]:
+        """Normalize configured gap backfill mode.
+
+        Returns the explicit backfill mode along with an ``auto`` flag indicating
+        whether the system should fall back to forward-fill when the primary
+        feed exhibits low coverage.
+        """
+
+        if value is None:
+            return None, True
+        try:
+            normalized = str(value).strip().lower()
+        except Exception:
+            return None, True
+        if not normalized or normalized in {"none", "off", "false"}:
+            return None, False
+        if normalized == "auto":
+            return None, True
+        if normalized in {"ffill", "forward_fill", "forward-fill"}:
+            return "ffill", False
+        if normalized in {"interpolate", "interp"}:
+            return "interpolate", False
+        return None, True
+
+    configured_backfill, auto_gap_fill = _resolve_gap_backfill(
+        getattr(CFG, "minute_gap_backfill", None)
+    )
+    active_backfill: str | None = configured_backfill
+
+    def _minute_fetch_kwargs(*, extra: dict[str, object] | None = None) -> dict[str, object]:
+        kwargs: dict[str, object] = {}
+        if active_backfill:
+            kwargs["backfill"] = active_backfill
+        if extra:
+            kwargs.update(extra)
+        return kwargs
+
     longest_indicator_minutes = max(
         _LONGEST_INTRADAY_INDICATOR_MINUTES,
         _coerce_int(getattr(CFG, "longest_intraday_indicator_minutes", None)),
@@ -2913,7 +2950,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             cache_key = f"minute:{symbol}:{start_dt.isoformat()}"
             df = _get_or_load(
                 key=cache_key,
-                loader=lambda: get_minute_df(symbol, start_dt, end_dt),
+                loader=lambda: get_minute_df(
+                    symbol, start_dt, end_dt, **_minute_fetch_kwargs()
+                ),
                 ttl=getattr(S, "market_cache_ttl", 900),
             )
         except (
@@ -2927,9 +2966,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.debug("Cache layer unavailable/failed: %s", e)
-            df = get_minute_df(symbol, start_dt, end_dt)
+            df = get_minute_df(symbol, start_dt, end_dt, **_minute_fetch_kwargs())
     else:
-        df = get_minute_df(symbol, start_dt, end_dt)
+        df = get_minute_df(symbol, start_dt, end_dt, **_minute_fetch_kwargs())
 
     expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
     intraday_lookback = max(1, int(getattr(CFG, "intraday_lookback_minutes", 120)))
@@ -2986,7 +3025,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         for feed_name, provider_name in attempts:
             attempt_now = datetime.now(UTC)
             attempt_end = attempt_now if market_open_now else end_dt
-            fetch_kwargs: dict[str, object] = {}
+            fetch_kwargs = _minute_fetch_kwargs()
             if feed_name != current_feed:
                 fetch_kwargs["feed"] = feed_name
             try:
@@ -3072,6 +3111,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     if low_coverage:
         fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
+        if active_backfill is None and auto_gap_fill:
+            active_backfill = "ffill"
         log_extra = {
             "symbol": symbol,
             "expected_bars": expected_bars,
@@ -3083,7 +3124,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "end": end_dt.isoformat(),
         }
         logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=log_extra)
-        fetch_kwargs: dict[str, object] = {}
+        fetch_kwargs = _minute_fetch_kwargs()
         if fallback_feed and fallback_feed != current_feed:
             fetch_kwargs["feed"] = fallback_feed
         try:
