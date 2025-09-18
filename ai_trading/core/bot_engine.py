@@ -14889,12 +14889,21 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         extra={"cause": e.__class__.__name__, "detail": str(e)},
                     )
 
+            api = getattr(runtime, "api", None)
+            get_account = getattr(api, "get_account", None)
+            can_fetch_account = callable(get_account)
+            account_snapshot = (
+                safe_alpaca_get_account(runtime) if can_fetch_account else None
+            )
+
             # AI-AGENT-REF: Update drawdown circuit breaker with current equity
             dbc = getattr(runtime, "drawdown_circuit_breaker", None)
-            if dbc:
+            if dbc and can_fetch_account:
                 try:
-                    acct = runtime.api.get_account()
-                    current_equity = float(acct.equity) if acct else 0.0
+                    acct = account_snapshot
+                    current_equity = (
+                        float(getattr(acct, "equity", 0.0)) if acct else 0.0
+                    )
                     trading_allowed = dbc.update_equity(current_equity)
                     # AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block
                     status = dbc.get_status()
@@ -14964,53 +14973,57 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 logger.info("HALT_SKIP_NEW_TRADES")
                 _send_heartbeat()
                 # log summary even when halted
-                try:
-                    acct = runtime.api.get_account()
-                    cash = float(acct.cash)
-                    equity = float(acct.equity)
-                    positions = runtime.api.list_positions()
-                    logger.debug("Raw Alpaca positions: %s", positions)
-                    exposure = (
-                        sum(abs(float(p.market_value)) for p in positions)
-                        / equity
-                        * 100
-                        if equity > 0
-                        else 0.0
-                    )
-                    logger.info(
-                        f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
-                    )
-                    logger.info(
-                        "POSITIONS_DETAIL",
-                        extra={
-                            "positions": [
-                                {
-                                    "symbol": p.symbol,
-                                    "qty": int(p.qty),
-                                    "avg_price": float(p.avg_entry_price),
-                                    "market_value": float(p.market_value),
-                                }
-                                for p in positions
-                            ],
-                        },
-                    )
-                    logger.info(
-                        "WEIGHTS_VS_POSITIONS",
-                        extra={
-                            "weights": runtime.portfolio_weights,
-                            "positions": {p.symbol: int(p.qty) for p in positions},
-                            "cash": cash,
-                        },
-                    )
-                except (
-                    APIError,
-                    TimeoutError,
-                    ConnectionError,
-                ) as e:  # AI-AGENT-REF: tighten summary fetch errors
-                    logger.warning(
-                        "SUMMARY_FAIL",
-                        extra={"cause": e.__class__.__name__, "detail": str(e)},
-                    )
+                if can_fetch_account:
+                    try:
+                        acct = account_snapshot or safe_alpaca_get_account(runtime)
+                        cash = float(getattr(acct, "cash", 0.0)) if acct else 0.0
+                        equity = float(getattr(acct, "equity", cash)) if acct else 0.0
+                        list_positions_fn = getattr(runtime.api, "list_positions", None)
+                        positions = (
+                            list_positions_fn() if callable(list_positions_fn) else []
+                        )
+                        logger.debug("Raw Alpaca positions: %s", positions)
+                        exposure = (
+                            sum(abs(float(p.market_value)) for p in positions)
+                            / equity
+                            * 100
+                            if equity > 0
+                            else 0.0
+                        )
+                        logger.info(
+                            f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
+                        )
+                        logger.info(
+                            "POSITIONS_DETAIL",
+                            extra={
+                                "positions": [
+                                    {
+                                        "symbol": p.symbol,
+                                        "qty": int(p.qty),
+                                        "avg_price": float(p.avg_entry_price),
+                                        "market_value": float(p.market_value),
+                                    }
+                                    for p in positions
+                                ],
+                            },
+                        )
+                        logger.info(
+                            "WEIGHTS_VS_POSITIONS",
+                            extra={
+                                "weights": runtime.portfolio_weights,
+                                "positions": {p.symbol: int(p.qty) for p in positions},
+                                "cash": cash,
+                            },
+                        )
+                    except (
+                        APIError,
+                        TimeoutError,
+                        ConnectionError,
+                    ) as e:  # AI-AGENT-REF: tighten summary fetch errors
+                        logger.warning(
+                            "SUMMARY_FAIL",
+                            extra={"cause": e.__class__.__name__, "detail": str(e)},
+                        )
                 return
 
             alpha_model = getattr(runtime, "model", None)
