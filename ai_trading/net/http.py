@@ -28,7 +28,9 @@ try:  # handle TLS validation clock skew warnings gracefully
         _warning_category = getattr(_exceptions, "SystemTimeWarning", Warning)
         if _warning_category is Warning:
             _warning_category = getattr(_exceptions, "HTTPWarning", Warning)
-    urllib3.disable_warnings(_warning_category)
+    _disable_warnings = getattr(urllib3, "disable_warnings", None)
+    if callable(_disable_warnings):
+        _disable_warnings(_warning_category)
 except Exception:  # pragma: no cover - urllib3 missing or misbehaving
     pass
 
