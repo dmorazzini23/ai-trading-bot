@@ -29,6 +29,15 @@ try:  # handle TLS validation clock skew warnings gracefully
         if _warning_category is Warning:
             _warning_category = getattr(_exceptions, "HTTPWarning", Warning)
     _disable_warnings = getattr(urllib3, "disable_warnings", None)
+    if _disable_warnings is None:
+        def _noop_disable_warnings(*args, **kwargs):
+            return None
+
+        _disable_warnings = _noop_disable_warnings
+        try:
+            setattr(urllib3, "disable_warnings", _disable_warnings)
+        except Exception:  # pragma: no cover - attribute assignment failed
+            pass
     if callable(_disable_warnings):
         _disable_warnings(_warning_category)
 except Exception:  # pragma: no cover - urllib3 missing or misbehaving

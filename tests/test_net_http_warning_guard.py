@@ -35,7 +35,7 @@ def test_disable_warnings_handles_missing_httpwarning():
         importlib.reload(http)
 
 
-def test_disable_warnings_missing_attribute_is_ignored():
+def test_disable_warnings_missing_attribute_can_be_monkeypatched():
     import ai_trading.net.http as http
 
     original_urllib3 = sys.modules.get("urllib3")
@@ -46,8 +46,21 @@ def test_disable_warnings_missing_attribute_is_ignored():
 
     sys.modules["urllib3"] = stub
     try:
-        # Should not raise even though disable_warnings is absent.
+        # Initial reload should populate the shim without raising.
         importlib.reload(http)
+        assert hasattr(stub, "disable_warnings")
+        assert callable(stub.disable_warnings)
+
+        recorded_categories: list[type[Warning] | None] = []
+
+        def _patched_disable_warnings(category=None, *args, **kwargs):
+            recorded_categories.append(category)
+
+        stub.disable_warnings = _patched_disable_warnings
+
+        importlib.reload(http)
+        assert recorded_categories, "patched disable_warnings should be invoked"
+        assert recorded_categories[-1] is not None
     finally:
         if original_urllib3 is not None:
             sys.modules["urllib3"] = original_urllib3
