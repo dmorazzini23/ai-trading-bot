@@ -6,6 +6,7 @@ Tests the 5 major issues identified in the problem statement.
 
 import os
 import sys
+import tempfile
 import unittest
 from datetime import UTC, date, datetime
 
@@ -111,6 +112,24 @@ class TestCriticalFixes(unittest.TestCase):
         except ImportError:
             # Skip if pandas not available
             self.skipTest("pandas not available for meta learning test")
+
+    def test_meta_learning_signed_negative_prices_are_rejected(self):
+        """Trade data quality check should drop rows with signed non-positive prices."""
+        from ai_trading.meta_learning import validate_trade_data_quality
+
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv") as tmp:
+            tmp.write("c1,c2,c3,c4,c5\n")
+            tmp.write("2024-01-01,AAA,100,105,1\n")
+            tmp.write("2024-01-02,BBB,-50,110,1\n")
+            tmp.write("2024-01-03,CCC,120,-3,1\n")
+            tmp_path = tmp.name
+
+        try:
+            report = validate_trade_data_quality(tmp_path)
+            self.assertEqual(report["row_count"], 3)
+            self.assertEqual(report["valid_price_rows"], 1)
+        finally:
+            os.unlink(tmp_path)
 
     def test_systemd_service_configuration(self):
         """Test 3: Service Configuration - systemd service file."""
