@@ -1308,6 +1308,9 @@ def _fetch_bars(
     # Normalize timestamps to the minute to avoid querying empty slices
     _start = _start.replace(second=0, microsecond=0)
     _end = _end.replace(second=0, microsecond=0)
+    session = _HTTP_SESSION
+    if session is None or not hasattr(session, "get"):
+        raise ValueError("session_required")
     _interval = _canon_tf(timeframe)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
@@ -1446,9 +1449,6 @@ def _fetch_bars(
         "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
     }
     timeout_v = clamp_request_timeout(10)
-    session = _HTTP_SESSION
-    if session is None or not hasattr(session, "get"):
-        raise ValueError("session_required")
 
     # Mutable state for retry tracking
     start_time = time.monotonic()
@@ -1465,6 +1465,9 @@ def _fetch_bars(
         nonlocal _interval, _feed, _start, _end
         global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count, _ALPACA_DISABLED_ALERTED
         _state["providers"].append(_feed)
+
+        if session is None or not hasattr(session, "get"):
+            raise ValueError("session_required")
 
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False
