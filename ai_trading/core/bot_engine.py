@@ -3106,51 +3106,77 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
         return None
 
-    actual_bars = 0
-    if df is not None:
-        try:
-            actual_bars = int(len(df))
-        except Exception:
-            actual_bars = 0
+    def _coverage_metrics(
+        frame: pd.DataFrame | None,
+        *,
+        expected: int,
+        intraday_requirement: int,
+    ) -> dict[str, object]:
+        actual = 0
+        if frame is not None:
+            try:
+                actual = int(len(frame))
+            except Exception:
+                actual = 0
+        threshold = max(1, int(expected * 0.5)) if expected > 0 else 0
+        materially_short_local = expected > 0 and actual < threshold
+        insufficient_local = (
+            expected >= intraday_requirement and actual < intraday_requirement
+        )
+        return {
+            "actual": actual,
+            "threshold": threshold,
+            "materially_short": materially_short_local,
+            "insufficient_intraday": insufficient_local,
+            "low_coverage": materially_short_local or insufficient_local,
+        }
+
+    coverage = _coverage_metrics(
+        df,
+        expected=expected_bars,
+        intraday_requirement=intraday_lookback,
+    )
+    actual_bars = int(coverage["actual"])
+    coverage_threshold = int(coverage["threshold"])
+    materially_short = bool(coverage["materially_short"])
+    insufficient_intraday = bool(coverage["insufficient_intraday"])
+    low_coverage = bool(coverage["low_coverage"])
+
+    primary_actual_bars = actual_bars
 
     fallback_used = False
     fallback_feed_used = None
-
-    coverage_threshold = (
-        max(1, int(expected_bars * 0.5)) if expected_bars > 0 else 0
-    )
-    materially_short = (
-        expected_bars > 0 and actual_bars < coverage_threshold
-    )
-    insufficient_intraday = (
-        expected_bars >= intraday_lookback and actual_bars < intraday_lookback
-    )
-    low_coverage = materially_short or insufficient_intraday
+    fallback_attempted = False
+    fallback_feed = None
+    fallback_provider: str | None = None
+    coverage_warning_logged = False
 
     if low_coverage:
         fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
         if active_backfill is None and auto_gap_fill:
             active_backfill = "ffill"
-        log_extra = {
-            "symbol": symbol,
-            "expected_bars": expected_bars,
-            "actual_bars": actual_bars,
-            "from_feed": current_feed,
-            "fallback_feed": fallback_feed or "",
-            "fallback_provider": fallback_provider or "",
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-        }
-        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=log_extra)
+
         fetch_kwargs = _minute_fetch_kwargs()
         if fallback_feed and fallback_feed != current_feed:
             fetch_kwargs["feed"] = fallback_feed
+
+        fallback_attempted = True
         try:
             df_alt = get_minute_df(symbol, start_dt, end_dt, **fetch_kwargs)
         except Exception as exc:  # pragma: no cover - fallback errors are logged
             logger.warning(
                 "MINUTE_DATA_FALLBACK_FAILED",
-                extra={**log_extra, "error": str(exc)},
+                extra={
+                    "symbol": symbol,
+                    "expected_bars": expected_bars,
+                    "actual_bars": actual_bars,
+                    "from_feed": current_feed,
+                    "fallback_feed": (fallback_feed or ""),
+                    "fallback_provider": (fallback_provider or ""),
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "error": str(exc),
+                },
             )
         else:
             if df_alt is not None and not getattr(df_alt, "empty", True):
@@ -3159,68 +3185,64 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     symbol=symbol,
                     current_now=now_utc,
                 )
-                try:
-                    actual_bars = int(len(df))
-                except Exception:
-                    actual_bars = 0
+                coverage = _coverage_metrics(
+                    df,
+                    expected=expected_bars,
+                    intraday_requirement=intraday_lookback,
+                )
+                actual_bars = int(coverage["actual"])
+                coverage_threshold = int(coverage["threshold"])
+                materially_short = bool(coverage["materially_short"])
+                insufficient_intraday = bool(coverage["insufficient_intraday"])
+                low_coverage = bool(coverage["low_coverage"])
                 if fallback_feed:
                     active_feed = fallback_feed
                 if fallback_feed and fallback_feed != current_feed:
                     fallback_used = True
                     fallback_feed_used = fallback_feed
 
-        if df is not None:
-            try:
-                actual_bars = int(len(df))
-            except Exception:
-                actual_bars = 0
-        materially_short = (
-            expected_bars > 0 and actual_bars < coverage_threshold
+        coverage = _coverage_metrics(
+            df,
+            expected=expected_bars,
+            intraday_requirement=intraday_lookback,
         )
-        insufficient_intraday = (
-            expected_bars >= intraday_lookback and actual_bars < intraday_lookback
-        )
+        actual_bars = int(coverage["actual"])
+        coverage_threshold = int(coverage["threshold"])
+        materially_short = bool(coverage["materially_short"])
+        insufficient_intraday = bool(coverage["insufficient_intraday"])
+        low_coverage = bool(coverage["low_coverage"])
+
+        warning_extra = {
+            "symbol": symbol,
+            "expected_bars": expected_bars,
+            "primary_actual_bars": primary_actual_bars,
+            "actual_bars": actual_bars,
+            "materially_short": materially_short,
+            "insufficient_intraday": insufficient_intraday,
+            "from_feed": current_feed,
+            "active_feed": active_feed,
+            "fallback_feed": (fallback_feed or ""),
+            "fallback_provider": (fallback_provider or ""),
+            "fallback_attempted": fallback_attempted,
+            "fallback_used": fallback_used,
+            "fallback_exhausted": low_coverage,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        }
+        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
+        coverage_warning_logged = True
+
         if (
             fallback_used
             and fallback_feed_used
             and configured_feed
-            and not (materially_short or insufficient_intraday)
+            and not low_coverage
         ):
             cache = getattr(state, "minute_feed_cache", None)
             if not isinstance(cache, dict):
                 cache = {}
                 setattr(state, "minute_feed_cache", cache)
             cache[configured_feed] = fallback_feed_used
-        if materially_short or insufficient_intraday:
-            active_provider = ""
-            if active_feed:
-                if fallback_feed and active_feed == fallback_feed:
-                    active_provider = fallback_provider or f"alpaca_{active_feed}"
-                else:
-                    active_provider = f"alpaca_{active_feed}"
-            abort_extra = {
-                "symbol": symbol,
-                "expected_bars": expected_bars,
-                "actual_bars": actual_bars,
-                "coverage_threshold": coverage_threshold,
-                "intraday_lookback": intraday_lookback,
-                "from_feed": current_feed,
-                "from_provider": f"alpaca_{current_feed}" if current_feed else "",
-                "active_feed": active_feed,
-                "active_provider": active_provider,
-                "fallback_feed": fallback_feed or "",
-                "fallback_provider": fallback_provider or "",
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
-            }
-            logger.warning("MINUTE_DATA_COVERAGE_ABORT", extra=abort_extra)
-            err = DataFetchError("minute_data_low_coverage")
-            setattr(err, "fetch_reason", "minute_data_low_coverage")
-            setattr(err, "symbol", symbol)
-            setattr(err, "timeframe", "1Min")
-            setattr(err, "expected_bars", expected_bars)
-            setattr(err, "actual_bars", actual_bars)
-            raise err
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
@@ -3257,6 +3279,76 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             setattr(err, "detail", "; ".join(stale_details))
             raise err from exc
         df, end_dt, staleness_reference, now_utc, active_feed = recovery
+
+    expected_bars = max(int((end_dt - start_dt).total_seconds() // 60), 0)
+    coverage = _coverage_metrics(
+        df,
+        expected=expected_bars,
+        intraday_requirement=intraday_lookback,
+    )
+    actual_bars = int(coverage["actual"])
+    coverage_threshold = int(coverage["threshold"])
+    materially_short = bool(coverage["materially_short"])
+    insufficient_intraday = bool(coverage["insufficient_intraday"])
+    low_coverage = bool(coverage["low_coverage"])
+
+    if low_coverage and not coverage_warning_logged:
+        warning_extra = {
+            "symbol": symbol,
+            "expected_bars": expected_bars,
+            "primary_actual_bars": primary_actual_bars,
+            "actual_bars": actual_bars,
+            "materially_short": materially_short,
+            "insufficient_intraday": insufficient_intraday,
+            "from_feed": current_feed,
+            "active_feed": active_feed,
+            "fallback_feed": (fallback_feed or ""),
+            "fallback_provider": (fallback_provider or ""),
+            "fallback_attempted": fallback_attempted,
+            "fallback_used": fallback_used,
+            "fallback_exhausted": low_coverage,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        }
+        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
+        coverage_warning_logged = True
+
+    if low_coverage:
+        active_provider = ""
+        if active_feed:
+            if fallback_feed and active_feed == fallback_feed:
+                active_provider = fallback_provider or f"alpaca_{active_feed}"
+            else:
+                active_provider = f"alpaca_{active_feed}"
+        abort_extra = {
+            "symbol": symbol,
+            "expected_bars": expected_bars,
+            "actual_bars": actual_bars,
+            "coverage_threshold": coverage_threshold,
+            "intraday_lookback": intraday_lookback,
+            "materially_short": materially_short,
+            "insufficient_intraday": insufficient_intraday,
+            "from_feed": current_feed,
+            "from_provider": f"alpaca_{current_feed}" if current_feed else "",
+            "active_feed": active_feed,
+            "active_provider": active_provider,
+            "fallback_feed": (fallback_feed or ""),
+            "fallback_provider": (fallback_provider or ""),
+            "fallback_attempted": fallback_attempted,
+            "fallback_used": fallback_used,
+            "fallback_exhausted": True,
+            "primary_actual_bars": primary_actual_bars,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        }
+        logger.warning("MINUTE_DATA_COVERAGE_ABORT", extra=abort_extra)
+        err = DataFetchError("minute_data_low_coverage")
+        setattr(err, "fetch_reason", "minute_data_low_coverage")
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", "1Min")
+        setattr(err, "expected_bars", expected_bars)
+        setattr(err, "actual_bars", actual_bars)
+        raise err
 
     return df
 
