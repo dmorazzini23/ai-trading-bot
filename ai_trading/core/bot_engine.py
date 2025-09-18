@@ -6692,24 +6692,28 @@ class SignalManager:
         df["sma_50"] = df["close"].rolling(window=50).mean()
         df["sma_200"] = df["close"].rolling(window=200).mean()
 
+        indicator_candidates = (
+            "rsi",
+            "rsi_14",
+            "ichimoku_conv",
+            "ichimoku_base",
+            "stochrsi",
+            "macd",
+            "vwap",
+            "macds",
+            "atr",
+            "sma_50",
+            "sma_200",
+        )
         indicator_cols = [
-            c
-            for c in (
-                "rsi",
-                "rsi_14",
-                "ichimoku_conv",
-                "ichimoku_base",
-                "stochrsi",
-                "macd",
-                "vwap",
-                "macds",
-                "atr",
-                "sma_50",
-                "sma_200",
-            )
-            if c in df.columns
+            col
+            for col in indicator_candidates
+            if col in df.columns and df[col].notna().any()
         ]
-        df = df.dropna(subset=indicator_cols)
+        # Only require indicators that have at least one populated value; long-window
+        # averages like sma_200 remain optional until they have data.
+        if indicator_cols:
+            df = df.dropna(subset=indicator_cols)
         if df.empty:
             # Ensure callers never consume stale component state when there is no data
             self.last_components = []
