@@ -14,6 +14,65 @@ import types
 import pytest
 import ai_trading.data.fetch as data_fetcher
 
+
+if "flask" not in _sys.modules:
+    flask_mod = types.ModuleType("flask")
+    flask_app_mod = types.ModuleType("flask.app")
+
+    class _StubFlask:
+        def __init__(self, *a, **k):
+            self._routes = {}
+            self.config = {}
+
+        def route(self, path, *a, **k):
+            def decorator(func):
+                self._routes[path] = func
+                return func
+
+            return decorator
+
+        def run(self, *a, **k):
+            pass
+
+        def test_client(self):
+            app = self
+
+            class _Response:
+                def __init__(self, data, status=200):
+                    self._data = data
+                    self.status_code = status
+
+                def get_json(self):
+                    return self._data
+
+            class _Client:
+                def get(self, path):
+                    handler = app._routes[path]
+                    result = handler()
+                    status = 200
+                    data = result
+                    if isinstance(result, tuple):
+                        data = result[0]
+                        if len(result) > 1:
+                            status = result[1]
+                    return _Response(data, status)
+
+            return _Client()
+
+    def _jsonify(payload=None, *args, **kwargs):
+        if payload is not None:
+            return payload
+        if args:
+            return args[0] if len(args) == 1 else list(args)
+        return kwargs
+
+    flask_mod.Flask = _StubFlask
+    flask_mod.jsonify = getattr(flask_mod, "jsonify", _jsonify)
+    flask_app_mod.Flask = _StubFlask
+    flask_app_mod.jsonify = flask_mod.jsonify
+    _sys.modules["flask"] = flask_mod
+    _sys.modules["flask.app"] = flask_app_mod
+
 try:
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     from alpaca.data import TimeFrame  # type: ignore  # noqa: F401
