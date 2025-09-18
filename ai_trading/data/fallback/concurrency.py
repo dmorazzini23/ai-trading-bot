@@ -9,7 +9,9 @@ processing large symbol lists.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import fields, is_dataclass
+from types import ModuleType, SimpleNamespace
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -95,17 +97,47 @@ async def run_with_concurrency(
             return
         seen.add(obj_id)
         if _is_asyncio_primitive(obj):
-            try:
-                obj._loop = loop  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            for attr_name in ("_loop", "_bound_loop"):
+                if hasattr(obj, attr_name):
+                    try:
+                        setattr(obj, attr_name, loop)
+                    except Exception:
+                        pass
             return
-        if isinstance(obj, dict):
+        if isinstance(obj, Mapping):
             for value in obj.values():
                 _scan(value, seen)
             return
-        if isinstance(obj, (list, tuple, set)):
+        if isinstance(obj, (list, tuple, set, frozenset)):
             for value in obj:
+                _scan(value, seen)
+            return
+        if is_dataclass(obj) and not isinstance(obj, type):
+            for field in fields(obj):
+                try:
+                    value = getattr(obj, field.name)
+                except AttributeError:
+                    continue
+                _scan(value, seen)
+            return
+        if isinstance(obj, SimpleNamespace):
+            for value in vars(obj).values():
+                _scan(value, seen)
+            return
+        slots = getattr(type(obj), "__slots__", ())
+        if slots:
+            slot_names = (slots,) if isinstance(slots, str) else slots
+            for name in slot_names:
+                if hasattr(obj, name):
+                    _scan(getattr(obj, name), seen)
+            return
+        module_name = getattr(obj.__class__, "__module__", "")
+        if (
+            hasattr(obj, "__dict__")
+            and not isinstance(obj, ModuleType)
+            and module_name.startswith(("ai_trading", "tests", "__main__"))
+        ):
+            for value in vars(obj).values():
                 _scan(value, seen)
             return
 
