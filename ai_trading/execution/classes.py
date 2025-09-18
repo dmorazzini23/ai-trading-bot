@@ -13,16 +13,17 @@ returns that complicate caller logic.
 
 from __future__ import annotations
 
+from collections.abc import ItemsView, KeysView, Mapping, ValuesView
 from dataclasses import dataclass, field, replace, fields
 from datetime import UTC, datetime
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from ..core.enums import OrderSide, OrderType
 
 
 @dataclass
-class ExecutionResult:
+class ExecutionResult(Mapping[str, Any]):
     """Represents the outcome of an order execution."""
 
     status: str
@@ -86,6 +87,35 @@ class ExecutionResult:
             "is_failed": self.is_failed,
             "is_partial": self.is_partial,
         }
+
+    # Mapping protocol -------------------------------------------------
+    def __getitem__(self, key: str) -> Any:
+        """Allow dictionary-style access, delegating to :meth:`to_dict`."""
+
+        data = self.to_dict()
+        try:
+            return data[key]
+        except KeyError as exc:  # pragma: no cover - defensive re-raise
+            raise KeyError(key) from exc
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over keys from :meth:`to_dict`."""
+
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        """Return the number of items in :meth:`to_dict`."""
+
+        return len(self.to_dict())
+
+    def keys(self) -> KeysView[str]:
+        return self.to_dict().keys()
+
+    def items(self) -> ItemsView[str, Any]:
+        return self.to_dict().items()
+
+    def values(self) -> ValuesView[Any]:
+        return self.to_dict().values()
 
     def with_updates(self, **updates: Any) -> "ExecutionResult":
         """Return a copy of the result with ``updates`` applied."""
