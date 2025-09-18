@@ -19,6 +19,10 @@ import numpy as np
 
 
 class HeuristicModel:
+    """Lightweight heuristic classifier acting as a placeholder model."""
+
+    is_placeholder_model = True
+    classes_ = np.array([0, 1], dtype=int)
     feature_names_in_ = np.array(["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"])  # type: ignore[attr-defined]
 
     def _score_row(self, x: np.ndarray) -> float:

@@ -122,3 +122,25 @@ def test_missing_model_warns_when_flag_set(monkeypatch, tmp_path, caplog):
     reload_bot_engine()
     assert "ML_MODEL_MISSING" in caplog.text
 
+
+def test_heuristic_fallback_marked_placeholder(monkeypatch, tmp_path):
+    external = tmp_path / "ext"
+    internal = tmp_path / "int"
+    external.mkdir()
+    internal.mkdir()
+
+    monkeypatch.setenv("AI_TRADING_MODELS_DIR", str(external))
+
+    import ai_trading.paths as paths
+    import ai_trading.model_loader as model_loader
+
+    importlib.reload(paths)
+    ml = importlib.reload(model_loader)
+    monkeypatch.setattr(ml, "INTERNAL_MODELS_DIR", internal)
+    ml.ML_MODELS.clear()
+
+    model = ml.load_model("MISSING_PLACEHOLDER")
+
+    assert getattr(model, "is_placeholder_model", False) is True
+    assert tuple(getattr(model, "classes_", ())) == (0, 1)
+
