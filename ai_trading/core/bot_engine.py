@@ -14413,7 +14413,25 @@ def _process_symbols(
         _budget_sec = 300.0
     proc_budget = SoftBudget(interval_sec=float(_budget_sec), fraction=1.0)
 
+    quota_notice_logged = False
+    quota_notice_lock = Lock()
+
+    def _log_trade_quota_once() -> None:
+        nonlocal quota_notice_logged
+        with quota_notice_lock:
+            if quota_notice_logged:
+                return
+            quota_notice_logged = True
+            logger.info(
+                "TRADE_QUOTA_EXHAUSTED_SKIP",
+                extra={"max_per_hour": MAX_TRADES_PER_HOUR},
+            )
+
     for symbol in symbols:
+        now = datetime.now(UTC)
+        if _trade_limit_reached(state, now):
+            _log_trade_quota_once()
+            break
         # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
         if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
             logger.info("SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"})
@@ -14503,6 +14521,9 @@ def _process_symbols(
             logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
             if not is_market_open():
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
+                return
+            if _trade_limit_reached(state, datetime.now(UTC)):
+                _log_trade_quota_once()
                 return
             def _halt(reason: str) -> None:
                 logger.error("DATA_FETCH_EMPTY", extra={"symbol": symbol, "reason": reason})
@@ -16199,6 +16220,18 @@ def ichimoku_indicator(
         if state:
             state.indicator_failures += 1
         return pd.DataFrame(), None
+
+
+def _trade_limit_reached(state: BotState, current_time: datetime) -> bool:
+    """Return True when the rolling hourly trade quota has been exhausted."""
+
+    if not hasattr(state, "trade_history"):
+        state.trade_history = []
+        return False
+
+    hour_ago = current_time - timedelta(hours=TRADE_FREQUENCY_WINDOW_HOURS)
+    total_trades_hour = sum(1 for _, ts in state.trade_history if ts > hour_ago)
+    return total_trades_hour >= MAX_TRADES_PER_HOUR
 
 
 def _check_trade_frequency_limits(
