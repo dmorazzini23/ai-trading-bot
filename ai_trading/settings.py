@@ -158,6 +158,9 @@ class Settings(BaseSettings):
     intraday_indicator_window_minutes: int = Field(
         0, alias='INTRADAY_INDICATOR_WINDOW_MINUTES'
     )
+    longest_intraday_indicator_minutes: int = Field(
+        200, alias='LONGEST_INTRADAY_INDICATOR_MINUTES'
+    )
     minute_gap_backfill: str | None = Field('auto', alias='MINUTE_GAP_BACKFILL')
     pretrade_lookback_days: int = Field(120, alias='PRETRADE_LOOKBACK_DAYS')
     verbose_logging: bool = Field(default=False, env='AI_TRADING_VERBOSE_LOGGING')
@@ -548,3 +551,18 @@ def get_seed_int(default: int=42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: stable default accessor
     s = get_settings()
     return _to_int(getattr(s, 'ai_trading_seed', default), default)
+
+
+def get_intraday_windows() -> dict[str, int]:
+    """Return configured intraday window lengths in minutes."""
+
+    s = get_settings()
+    return {
+        'lookback_minutes': _to_int(getattr(s, 'intraday_lookback_minutes', 120), 120),
+        'indicator_window_minutes': _to_int(
+            getattr(s, 'intraday_indicator_window_minutes', 0), 0
+        ),
+        'longest_indicator_minutes': _to_int(
+            getattr(s, 'longest_intraday_indicator_minutes', 200), 200
+        ),
+    }
