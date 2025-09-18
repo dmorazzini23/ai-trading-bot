@@ -67,3 +67,26 @@ def test_disable_warnings_missing_attribute_can_be_monkeypatched():
         else:
             sys.modules.pop("urllib3", None)
         importlib.reload(http)
+
+
+def test_helper_restores_deleted_disable_warnings():
+    import ai_trading.net.http as http
+
+    urllib3 = importlib.import_module("urllib3")
+    original = getattr(urllib3, "disable_warnings", None)
+
+    if hasattr(urllib3, "disable_warnings"):
+        delattr(urllib3, "disable_warnings")
+
+    try:
+        http.ensure_urllib3_disable_warnings()
+        refreshed = importlib.import_module("urllib3")
+        assert hasattr(refreshed, "disable_warnings")
+        assert callable(refreshed.disable_warnings)
+    finally:
+        if original is not None:
+            setattr(urllib3, "disable_warnings", original)
+        else:
+            if hasattr(urllib3, "disable_warnings"):
+                delattr(urllib3, "disable_warnings")
+        importlib.reload(http)

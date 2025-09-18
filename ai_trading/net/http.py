@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 from typing import cast
 
@@ -19,29 +20,45 @@ from urllib3.util.retry import Retry
 from ai_trading.utils import clamp_request_timeout
 from urllib.parse import urlparse
 
-try:  # handle TLS validation clock skew warnings gracefully
-    import urllib3
 
-    _warning_category = Warning
-    _exceptions = getattr(urllib3, "exceptions", None)
-    if _exceptions is not None:
-        _warning_category = getattr(_exceptions, "SystemTimeWarning", Warning)
-        if _warning_category is Warning:
-            _warning_category = getattr(_exceptions, "HTTPWarning", Warning)
-    _disable_warnings = getattr(urllib3, "disable_warnings", None)
-    if _disable_warnings is None:
+def ensure_urllib3_disable_warnings() -> None:
+    """Re-import ``urllib3`` and guarantee a callable ``disable_warnings`` attribute."""
+
+    try:
+        urllib3 = importlib.import_module("urllib3")
+    except Exception:  # pragma: no cover - urllib3 not installed
+        return
+
+    globals()["urllib3"] = urllib3
+
+    disable_warnings = getattr(urllib3, "disable_warnings", None)
+    if not callable(disable_warnings):
+
         def _noop_disable_warnings(*args, **kwargs):
             return None
 
-        _disable_warnings = _noop_disable_warnings
         try:
-            setattr(urllib3, "disable_warnings", _disable_warnings)
+            setattr(urllib3, "disable_warnings", _noop_disable_warnings)
         except Exception:  # pragma: no cover - attribute assignment failed
-            pass
-    if callable(_disable_warnings):
-        _disable_warnings(_warning_category)
-except Exception:  # pragma: no cover - urllib3 missing or misbehaving
-    pass
+            return
+        disable_warnings = getattr(urllib3, "disable_warnings", None)
+        if not callable(disable_warnings):  # pragma: no cover - custom module rejected shim
+            return
+
+    warning_category = Warning
+    exceptions = getattr(urllib3, "exceptions", None)
+    if exceptions is not None:
+        warning_category = getattr(exceptions, "SystemTimeWarning", warning_category)
+        if warning_category is Warning:
+            warning_category = getattr(exceptions, "HTTPWarning", warning_category)
+
+    try:
+        disable_warnings(warning_category)
+    except Exception:  # pragma: no cover - downstream failure should not break imports
+        pass
+
+
+ensure_urllib3_disable_warnings()
 
 
 _SessionBase = cast(
@@ -53,6 +70,7 @@ class TimeoutSession(_SessionBase):
     """Requests ``Session`` that injects a default timeout."""
 
     def __init__(self, default_timeout: tuple[float, float] = (5.0, 10.0)) -> None:
+        ensure_urllib3_disable_warnings()
         super().__init__()
         self._default_timeout = cast(tuple[float, float], clamp_request_timeout(default_timeout))
 
@@ -99,6 +117,8 @@ def build_retrying_session(
 ) -> TimeoutSession:
     """Create a session with urllib3 ``Retry`` and default timeout."""
 
+    ensure_urllib3_disable_warnings()
+
     connect_timeout_f = cast(float, clamp_request_timeout(connect_timeout))
     read_timeout_f = cast(float, clamp_request_timeout(read_timeout))
     s = TimeoutSession(default_timeout=(connect_timeout_f, read_timeout_f))
@@ -126,6 +146,7 @@ def build_retrying_session(
 def set_global_session(s: TimeoutSession) -> None:
     """Register global session singleton."""
 
+    ensure_urllib3_disable_warnings()
     global _GLOBAL_SESSION
     _GLOBAL_SESSION = s
 
@@ -143,6 +164,7 @@ def mount_host_retry_profile(
 
     host_or_url may be a bare host (e.g. "paper-api.alpaca.markets") or a URL.
     """
+    ensure_urllib3_disable_warnings()
     parsed = urlparse(host_or_url if "://" in host_or_url else f"https://{host_or_url}")
     host = parsed.netloc or parsed.path
     if not host:
@@ -168,6 +190,7 @@ def mount_host_retry_profile(
 def get_global_session() -> TimeoutSession:
     """Return the global session, building a default if missing."""
 
+    ensure_urllib3_disable_warnings()
     if _GLOBAL_SESSION is None:
         set_global_session(build_retrying_session())
     return _GLOBAL_SESSION
@@ -176,6 +199,7 @@ def get_global_session() -> TimeoutSession:
 def get_http_session() -> HTTPSession:
     """Return process-wide HTTP session singleton."""
 
+    ensure_urllib3_disable_warnings()
     return get_global_session()
 
 
@@ -187,4 +211,5 @@ __all__ = [
     "get_global_session",
     "get_http_session",
     "mount_host_retry_profile",
+    "ensure_urllib3_disable_warnings",
 ]
