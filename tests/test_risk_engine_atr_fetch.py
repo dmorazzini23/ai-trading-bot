@@ -101,3 +101,32 @@ def test_get_atr_data_with_yfinance(monkeypatch: pytest.MonkeyPatch):
     eng.ctx = types.SimpleNamespace(data_client=provider)
     atr = eng._get_atr_data("AAPL", lookback=14)
     assert atr == 1.0
+
+
+def test_get_atr_data_falls_back_to_simple_get_bars(monkeypatch: pytest.MonkeyPatch):
+    eng = RiskEngine()
+    fallback_rows = [
+        {"open": 1.0, "high": 2.0, "low": 1.0, "close": 1.5}
+        for _ in range(30)
+    ]
+
+    class FallbackClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def get_bars(self, symbol: str, limit: int):
+            self.calls.append((symbol, limit))
+            return fallback_rows
+
+    client = FallbackClient()
+    eng.ctx = types.SimpleNamespace(data_client=client)
+
+    def _raise(*_args, **_kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr("ai_trading.risk.engine.safe_get_stock_bars", _raise)
+
+    atr = eng._get_atr_data("AAPL", lookback=14)
+    assert atr == 1.0
+    assert client.calls and client.calls[-1][0] == "AAPL"
+    assert client.calls[-1][1] >= 15

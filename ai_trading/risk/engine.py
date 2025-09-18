@@ -253,66 +253,6 @@ class RiskEngine:
                     return val
             ctx = getattr(self, 'ctx', None)
             client = getattr(ctx, 'data_client', None) or self.data_client or getattr(ctx, 'api', None)
-            high = low = close = None
-            df = None
-            bars_sequence: Sequence[Any] | None = None
-            if client:
-                has_stock_bars = callable(getattr(client, 'get_stock_bars', None)) or callable(getattr(client, 'get_bars', None))
-                if has_stock_bars:
-                    feed = getattr(get_settings(), 'alpaca_data_feed', None)
-                    limit = max(lookback + 10, lookback + 1, 2)
-                    timeframe = getattr(TimeFrame, 'Day', '1Day')
-                    try:
-                        request = StockBarsRequest(
-                            symbol_or_symbols=symbol,
-                            timeframe=timeframe,
-                            limit=limit,
-                            feed=feed,
-                        )
-                        bars_df = safe_get_stock_bars(client, request, symbol, context='risk_engine_atr')
-                        if hasattr(bars_df, 'empty'):
-                            if not bars_df.empty:
-                                df = bars_df.copy()
-                        elif bars_df is not None and pd is not None:
-                            df = pd.DataFrame(bars_df)
-                    except (
-                        APIError,
-                        TimeoutError,
-                        ConnectionError,
-                        ValueError,
-                        TypeError,
-                        OSError,
-                    ) as exc:  # pragma: no cover - provider variance
-                        logger.warning('ATR client fetch failed for %s: %s', symbol, exc)
-                        simple_get = getattr(client, 'get_bars', None)
-                        if callable(simple_get):
-                            try:
-                                candidate = simple_get(symbol, limit)
-                            except TypeError:
-                                candidate = None
-                            except (
-                                APIError,
-                                TimeoutError,
-                                ConnectionError,
-                                ValueError,
-                                OSError,
-                            ) as fallback_exc:  # pragma: no cover - provider variance
-                                logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
-                                candidate = None
-                            if candidate:
-                                if isinstance(candidate, (str, bytes, bytearray)):
-                                    candidate = None
-                                elif not isinstance(candidate, Sequence):
-                                    try:
-                                        candidate = list(candidate)
-                                    except TypeError:
-                                        candidate = None
-                                if isinstance(candidate, Sequence) and candidate:
-                                    bars_sequence = candidate
-                else:
-                    logger.warning('missing stock bars fetch for %s', symbol)
-            else:
-                logger.warning('No data client available; attempting to use context data for %s', symbol)
             def _safe_bar_value(bar: Any, names: Sequence[str]) -> Any:
                 if isinstance(bar, dict):
                     for name in names:
@@ -355,14 +295,14 @@ class RiskEngine:
                     _series(df_local, 'close'),
                 )
 
-            if df is not None:
-                high, low, close = _extract_arrays(df)
-            if any(x is None for x in (high, low, close)) and bars_sequence:
+            def _sequence_to_arrays(seq: Sequence[Any]) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+                if not seq:
+                    return (None, None, None)
                 df_from_seq = None
                 if pd is not None:
                     try:
                         records = []
-                        for bar in bars_sequence:
+                        for bar in seq:
                             if isinstance(bar, dict):
                                 records.append(bar)
                             elif hasattr(bar, '__dict__'):
@@ -386,25 +326,182 @@ class RiskEngine:
                         AttributeError,
                     ) as exc:  # pragma: no cover - defensive
                         logger.debug('ATR bars sequence conversion failed for %s: %s', symbol, exc)
+                        df_from_seq = None
                 if df_from_seq is not None and getattr(df_from_seq, 'empty', True) is False:
-                    high, low, close = _extract_arrays(df_from_seq)
-                elif bars_sequence:
-                    highs: list[float] = []
-                    lows: list[float] = []
-                    closes: list[float] = []
-                    for bar in bars_sequence:
-                        high_val = _safe_bar_value(bar, ('high', 'h'))
-                        low_val = _safe_bar_value(bar, ('low', 'l'))
-                        close_val = _safe_bar_value(bar, ('close', 'c'))
-                        if None in (high_val, low_val, close_val):
-                            continue
-                        highs.append(float(high_val))
-                        lows.append(float(low_val))
-                        closes.append(float(close_val))
-                    if highs and lows and closes:
-                        high = np.asarray(highs)
-                        low = np.asarray(lows)
-                        close = np.asarray(closes)
+                    try:
+                        return _extract_arrays(df_from_seq)
+                    except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover - defensive
+                        logger.debug('ATR sequence dataframe extraction failed for %s: %s', symbol, exc)
+                highs: list[float] = []
+                lows: list[float] = []
+                closes: list[float] = []
+                for bar in seq:
+                    high_val = _safe_bar_value(bar, ('high', 'h'))
+                    low_val = _safe_bar_value(bar, ('low', 'l'))
+                    close_val = _safe_bar_value(bar, ('close', 'c'))
+                    if None in (high_val, low_val, close_val):
+                        continue
+                    highs.append(float(high_val))
+                    lows.append(float(low_val))
+                    closes.append(float(close_val))
+                if highs and lows and closes:
+                    return (np.asarray(highs), np.asarray(lows), np.asarray(closes))
+                return (None, None, None)
+
+            def _candidate_to_arrays(candidate: Any) -> tuple[
+                np.ndarray | None,
+                np.ndarray | None,
+                np.ndarray | None,
+                Sequence[Any] | None,
+            ]:
+                if candidate is None:
+                    return (None, None, None, None)
+                seq_candidate: Sequence[Any] | None = None
+                cand_high = cand_low = cand_close = None
+                if pd is not None and hasattr(candidate, 'empty'):
+                    try:
+                        df_candidate = candidate.copy() if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
+                    except (ValueError, TypeError, AttributeError):
+                        df_candidate = None
+                    if df_candidate is not None and getattr(df_candidate, 'empty', True) is False:
+                        cand_high, cand_low, cand_close = _extract_arrays(df_candidate)
+                if cand_high is None or cand_low is None or cand_close is None:
+                    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+                        seq_candidate = candidate
+                        cand_high, cand_low, cand_close = _sequence_to_arrays(candidate)
+                if (
+                    (cand_high is None or cand_low is None or cand_close is None)
+                    and seq_candidate is None
+                    and not isinstance(candidate, (str, bytes, bytearray))
+                    and not hasattr(candidate, 'empty')
+                ):
+                    try:
+                        seq_list = list(candidate)
+                    except TypeError:
+                        seq_list = None
+                    if seq_list:
+                        seq_candidate = seq_list
+                        cand_high, cand_low, cand_close = _sequence_to_arrays(seq_list)
+                if cand_high is None or cand_low is None or cand_close is None:
+                    if pd is not None and not hasattr(candidate, 'empty'):
+                        try:
+                            df_candidate = pd.DataFrame(candidate)
+                        except (ValueError, TypeError, AttributeError):
+                            df_candidate = None
+                        if df_candidate is not None and getattr(df_candidate, 'empty', True) is False:
+                            cand_high, cand_low, cand_close = _extract_arrays(df_candidate)
+                return cand_high, cand_low, cand_close, seq_candidate
+
+            high = low = close = None
+            df = None
+            bars_sequence: Sequence[Any] | None = None
+            simple_get = None
+            attempted_simple_get = False
+            limit: int | None = None
+            if client:
+                has_stock_bars = callable(getattr(client, 'get_stock_bars', None)) or callable(getattr(client, 'get_bars', None))
+                if has_stock_bars:
+                    feed = getattr(get_settings(), 'alpaca_data_feed', None)
+                    limit = max(lookback + 10, lookback + 1, 2)
+                    timeframe = getattr(TimeFrame, 'Day', '1Day')
+                    simple_get = getattr(client, 'get_bars', None)
+                    try:
+                        request = StockBarsRequest(
+                            symbol_or_symbols=symbol,
+                            timeframe=timeframe,
+                            limit=limit,
+                            feed=feed,
+                        )
+                        bars_df = safe_get_stock_bars(client, request, symbol, context='risk_engine_atr')
+                        if hasattr(bars_df, 'empty'):
+                            if not bars_df.empty:
+                                df = bars_df.copy()
+                        elif bars_df is not None and pd is not None:
+                            df = pd.DataFrame(bars_df)
+                    except (
+                        APIError,
+                        TimeoutError,
+                        ConnectionError,
+                        ValueError,
+                        TypeError,
+                        OSError,
+                        AttributeError,
+                    ) as exc:  # pragma: no cover - provider variance
+                        logger.warning('ATR client fetch failed for %s: %s', symbol, exc)
+                        if callable(simple_get):
+                            attempted_simple_get = True
+                            try:
+                                candidate = simple_get(symbol, limit)
+                            except TypeError:
+                                candidate = None
+                            except (
+                                APIError,
+                                TimeoutError,
+                                ConnectionError,
+                                ValueError,
+                                OSError,
+                            ) as fallback_exc:  # pragma: no cover - provider variance
+                                logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
+                                candidate = None
+                            if candidate is not None:
+                                cand_high, cand_low, cand_close, seq_candidate = _candidate_to_arrays(candidate)
+                                if (
+                                    cand_high is not None
+                                    and cand_low is not None
+                                    and cand_close is not None
+                                ):
+                                    high, low, close = cand_high, cand_low, cand_close
+                                elif seq_candidate:
+                                    bars_sequence = seq_candidate
+                else:
+                    logger.warning('missing stock bars fetch for %s', symbol)
+            else:
+                logger.warning('No data client available; attempting to use context data for %s', symbol)
+            if df is not None:
+                try:
+                    high, low, close = _extract_arrays(df)
+                except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover - defensive
+                    logger.debug('ATR dataframe extraction failed for %s: %s', symbol, exc)
+                    high = low = close = None
+            if (
+                any(x is None for x in (high, low, close))
+                and simple_get is not None
+                and callable(simple_get)
+                and not attempted_simple_get
+                and limit is not None
+            ):
+                try:
+                    candidate = simple_get(symbol, limit)
+                except TypeError:
+                    candidate = None
+                except (
+                    APIError,
+                    TimeoutError,
+                    ConnectionError,
+                    ValueError,
+                    OSError,
+                ) as fallback_exc:  # pragma: no cover - provider variance
+                    logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
+                    candidate = None
+                if candidate is not None:
+                    cand_high, cand_low, cand_close, seq_candidate = _candidate_to_arrays(candidate)
+                    if (
+                        cand_high is not None
+                        and cand_low is not None
+                        and cand_close is not None
+                    ):
+                        high, low, close = cand_high, cand_low, cand_close
+                    elif seq_candidate:
+                        bars_sequence = seq_candidate
+                attempted_simple_get = True
+            if any(x is None for x in (high, low, close)) and bars_sequence:
+                seq_high, seq_low, seq_close = _sequence_to_arrays(bars_sequence)
+                if (
+                    seq_high is not None
+                    and seq_low is not None
+                    and seq_close is not None
+                ):
+                    high, low, close = seq_high, seq_low, seq_close
             if any(x is None for x in (high, low, close)):
                 data = None
                 if ctx is not None:
