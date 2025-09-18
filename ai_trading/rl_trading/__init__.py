@@ -52,10 +52,35 @@ class RLAgent:
         self.model_path = str(model_path)
         self.model: Any | None = None
 
+    def _load_stub_model(self, model_path: Path) -> None:
+        """Load the lightweight stub model used when RL dependencies are missing."""
+
+        from . import train  # imported lazily to avoid optional deps at import time
+
+        logger.warning(
+            "RL stack unavailable – falling back to stub model for %s",
+            model_path,
+        )
+        if model_path.exists():
+            try:
+                self.model = train.Model.load(model_path)
+                return
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logger.warning(
+                    "Failed to load stub RL model from %s: %s; creating fresh stub",
+                    model_path,
+                    exc,
+                )
+        self.model = train.Model(train.TrainingConfig(model_path=str(model_path)))
+
     def load(self) -> None:
-        if not is_rl_available() or PPO is None:
-            raise ImportError("stable-baselines3 required")
-        if Path(self.model_path).exists():
+        model_path = Path(self.model_path)
+        rl_ready = is_rl_available()
+        is_stub = getattr(PPO, "__name__", "") == "_SB3Stub"
+        if not rl_ready or PPO is None or is_stub:
+            self._load_stub_model(model_path)
+            return
+        if model_path.exists():
             self.model = PPO.load(self.model_path)
         else:
             logger.error("RL model not found at %s", self.model_path)
