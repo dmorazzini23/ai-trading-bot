@@ -100,7 +100,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     eq = getattr(cfg, "equity", None)
     if eq in (None, 0.0):
         fetched = _get_equity_from_alpaca(cfg, force_refresh=True)
-        eq = fetched if fetched > 0 else None
+        eq = fetched if (fetched is not None and fetched > 0) else None
         try:
             object.__setattr__(cfg, "equity", eq)
         except Exception:

@@ -11,7 +11,13 @@ except ImportError:
 
     class RequestException(Exception):
         pass
-    HTTPError = Exception
+
+    class HTTPError(Exception):
+        """Fallback HTTPError with optional response attribute."""
+
+        def __init__(self, *args, response=None, **kwargs):  # noqa: D401 - simple passthrough
+            super().__init__(*args)
+            self.response = response
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 TRANSIENT_HTTP_EXC = (RequestException, HTTPError, TimeoutError, OSError, ConnectionError)
 

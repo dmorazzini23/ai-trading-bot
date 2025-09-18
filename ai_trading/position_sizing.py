@@ -126,7 +126,8 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
     Returns
     -------
     float | None
-        The current account equity. ``None`` is returned on error and the
+        The current account equity. ``0.0`` is returned for recoverable
+        errors, ``None`` is returned when credentials are missing, and the
         failure reason is recorded in the log payload.
     """
     if not force_refresh and _CACHE.equity is not None:
@@ -196,8 +197,10 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
         _CACHE.equity_error = None
         return eq
     except HTTPError as e:
-        status = getattr(e.response, "status_code", None)
+        resp_obj = getattr(e, "response", None)
+        status = getattr(resp_obj, "status_code", None)
         reason = f"http_error:{status}" if status is not None else "http_error"
+        _CACHE.equity = 0.0
         _CACHE.equity_error = reason
         if status in {401, 403}:
             _log.warning(
@@ -209,24 +212,28 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
                 "ALPACA_HTTP_ERROR",
                 extra={"url": url, "status": status, "reason": reason},
             )
-        return None
+        return 0.0
     except RequestException as e:
         reason = f"request_error:{type(e).__name__}"
+        _CACHE.equity = 0.0
         _CACHE.equity_error = reason
         _log.warning(
             "ALPACA_REQUEST_FAILED",
             extra={"url": url, "error": str(e), "reason": reason},
         )
-        return None
+        return 0.0
     except JSONDecodeError as e:
         reason = "invalid_json"
+        _CACHE.equity = 0.0
         _CACHE.equity_error = reason
         _log.warning(
             "ALPACA_INVALID_RESPONSE",
             extra={"url": url, "error": str(e), "reason": reason},
         )
-        return None
-    except Exception:  # log and propagate unexpected errors
+        return 0.0
+    except Exception as exc:  # log and propagate unexpected errors
+        _CACHE.equity = None
+        _CACHE.equity_error = f"unexpected_error:{type(exc).__name__}"
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
 
