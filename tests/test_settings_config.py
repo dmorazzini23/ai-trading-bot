@@ -25,10 +25,11 @@ def test_settings_defaults(monkeypatch):
 
 def test_sip_feed_falls_back(monkeypatch):
     """SIP feed requests fall back to IEX when not explicitly allowed."""  # AI-AGENT-REF
-    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
     monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
     s = Settings()
+    s.data_feed = "sip"
     assert s.alpaca_data_feed == "iex"
+    assert s.data_feed == "iex"
 
 
 def test_settings_invalid_risk(monkeypatch):
@@ -64,3 +65,25 @@ def test_current_qty_no_position():
         position_map = {}
 
     assert _current_qty(Ctx(), "XYZ") == 0
+
+
+def test_cfg_data_feed_updates_default_feed(monkeypatch):
+    """Mutating ``CFG.data_feed`` propagates to module-level fallbacks."""
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    pytest.importorskip("numpy")
+    from ai_trading.config import settings as config_settings
+    from ai_trading.data import fetch as data_fetch
+    from ai_trading.core import bot_engine
+
+    cfg = config_settings.get_settings()
+    original_feed = cfg.data_feed
+    try:
+        cfg.data_feed = "sip"
+        assert cfg.data_feed == "sip"
+        assert data_fetch._DEFAULT_FEED == "sip"
+        assert bot_engine._DEFAULT_FEED == "sip"
+    finally:
+        cfg.data_feed = original_feed
+        assert data_fetch._DEFAULT_FEED == cfg.data_feed
+        assert bot_engine._DEFAULT_FEED == cfg.data_feed

@@ -1685,7 +1685,11 @@ if getattr(S, "use_rl_agent", False) and RL_MODEL_PATH:
             extra={"hint": "ai_trading.rl_trading import failed"},
         )
 
-_DEFAULT_FEED = getattr(CFG, "alpaca_data_feed", "iex") or "iex"
+_DEFAULT_FEED = (
+    getattr(CFG, "data_feed", None)
+    or getattr(CFG, "alpaca_data_feed", "iex")
+    or "iex"
+)
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
@@ -4707,7 +4711,11 @@ class DataFetcher:
         logger.debug(
             "ALPACA_DATA_CONFIG",
             extra={
-                "feed": getattr(self.settings, "alpaca_data_feed", None),
+                "feed": getattr(
+                    self.settings,
+                    "data_feed",
+                    getattr(self.settings, "alpaca_data_feed", None),
+                ),
                 "adjustment": getattr(self.settings, "alpaca_adjustment", None),
             },
         )
@@ -4943,7 +4951,14 @@ class DataFetcher:
                 return None
 
         try:
-            feed = getattr(self.settings, "alpaca_data_feed", None) or "iex"
+            feed = (
+                getattr(
+                    self.settings,
+                    "data_feed",
+                    getattr(self.settings, "alpaca_data_feed", None),
+                )
+                or "iex"
+            )
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Day,
@@ -5269,7 +5284,14 @@ class DataFetcher:
         df: pd.DataFrame | None = None
 
         try:
-            feed = (getattr(self.settings, "alpaca_data_feed", None) or "iex").lower()
+            feed = (
+                getattr(
+                    self.settings,
+                    "data_feed",
+                    getattr(self.settings, "alpaca_data_feed", None),
+                )
+                or "iex"
+            ).lower()
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Minute,
@@ -5449,7 +5471,14 @@ class DataFetcher:
         """
         all_days: list[pd.DataFrame] = []
         current_day = start_date
-        feed = getattr(self.settings, "alpaca_data_feed", None) or "iex"
+        feed = (
+            getattr(
+                self.settings,
+                "data_feed",
+                getattr(self.settings, "alpaca_data_feed", None),
+            )
+            or "iex"
+        )
 
         while current_day <= end_date:
             day_start = datetime.combine(current_day, dt_time.min, UTC)
