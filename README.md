@@ -1187,10 +1187,10 @@ export ENABLE_DAILY_RETRAIN=true   # Enable (default)
 export DISABLE_DAILY_RETRAIN=1     # Disable
 
 # Manual retraining
-python scripts/retrain_model.py --symbols SPY,QQQ --days 90
+python -m retrain --trade-log data/trades.csv --model-path artifacts/meta_model.pkl
 
 # Schedule retraining
-echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python scripts/retrain_model.py" | crontab -
+echo "0 2 * * * /opt/ai-trading-bot/venv/bin/python -m retrain --trade-log /var/lib/ai-trading/trades.csv" | crontab -
 ```
 
 ### Maintenance Tasks
