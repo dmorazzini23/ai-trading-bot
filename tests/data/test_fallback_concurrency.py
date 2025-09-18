@@ -67,3 +67,47 @@ def test_run_with_concurrency_rebinds_foreign_loop_lock():
     assert results == {symbol: symbol for symbol in symbols}
     assert succeeded == set(symbols)
     assert not failed
+
+
+def test_run_with_concurrency_handles_blocking_and_failures():
+    max_seen = 0
+    current = 0
+    lock = asyncio.Lock()
+    release_blocker = asyncio.Event()
+
+    async def worker(sym: str) -> str:
+        nonlocal max_seen, current
+        async with lock:
+            current += 1
+            if current > max_seen:
+                max_seen = current
+        try:
+            if sym == "BLOCK":
+                await release_blocker.wait()
+            elif sym == "FAIL":
+                await asyncio.sleep(0)
+                raise RuntimeError("boom")
+            else:
+                await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with lock:
+                current -= 1
+
+    symbols = ["BLOCK", "OK1", "FAIL", "OK2"]
+
+    async def run_and_release():
+        task = asyncio.create_task(
+            concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+        )
+        await asyncio.sleep(0.05)
+        release_blocker.set()
+        return await asyncio.wait_for(task, 1)
+
+    results, succeeded, failed = asyncio.run(run_and_release())
+
+    assert max_seen <= 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS <= 2
+    assert results["FAIL"] is None
+    assert "FAIL" in failed
+    assert "BLOCK" in succeeded

@@ -138,43 +138,32 @@ async def run_with_concurrency(
         async with counter_lock:
             running -= 1
 
-    async def _execute(sym: str) -> None:
-        res: T | None = None
-        await _increment()
-        try:
-            coro = worker(sym)
-            if timeout is not None:
-                coro = asyncio.wait_for(coro, timeout)
-            res = await coro
-        except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
-            res = None
-        except Exception:  # pragma: no cover - worker errors become None
-            res = None
-        finally:
-            results[sym] = res
-            if res is None:
-                FAILED_SYMBOLS.add(sym)
-            else:
-                SUCCESSFUL_SYMBOLS.add(sym)
-            await _decrement()
+    semaphore = asyncio.Semaphore(concurrency_limit)
 
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    async def _bounded_execute(sym: str) -> None:
+        async with semaphore:
+            res: T | None = None
+            await _increment()
+            try:
+                coro = worker(sym)
+                if timeout is not None:
+                    coro = asyncio.wait_for(coro, timeout)
+                res = await coro
+            except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
+                res = None
+            except Exception:  # pragma: no cover - worker errors become None
+                res = None
+            finally:
+                results[sym] = res
+                if res is None:
+                    FAILED_SYMBOLS.add(sym)
+                else:
+                    SUCCESSFUL_SYMBOLS.add(sym)
+                await _decrement()
 
-    for sym in symbols:
-        await queue.put(sym)
-
-    for _ in range(concurrency_limit):
-        await queue.put(None)
-
-    async def _worker() -> None:
-        while True:
-            sym = await queue.get()
-            if sym is None:
-                break
-            await _execute(sym)
-
-    tasks = [asyncio.create_task(_worker()) for _ in range(concurrency_limit)]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [asyncio.create_task(_bounded_execute(sym)) for sym in symbols]
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     global PEAK_SIMULTANEOUS_WORKERS
     PEAK_SIMULTANEOUS_WORKERS = peak_running
