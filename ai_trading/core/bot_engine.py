@@ -7922,19 +7922,38 @@ def _record_sentiment_failure(
         SENTIMENT_RECOVERY_TIMEOUT,
     )
     cb["next_retry"] = cb["last_failure"] + delay
+
+    escalate_provider_failure = True
     if cb["failures"] >= SENTIMENT_FAILURE_THRESHOLD:
         cb["state"] = "open"
         cb["opened_at"] = cb["last_failure"]
-        logger.warning(
-            f"Sentiment circuit breaker opened after {cb['failures']} failures"
-        )
+        if reason == "rate_limit":
+            logger.warning(
+                "Sentiment circuit breaker opened after %s rate limit responses",
+                cb["failures"],
+            )
+        else:
+            logger.warning(
+                "Sentiment circuit breaker opened after %s failures",
+                cb["failures"],
+            )
     else:
-        logger.debug(
-            "Sentiment failure %s; next retry in %.1fs", cb["failures"], delay
-        )
+        if reason == "rate_limit":
+            escalate_provider_failure = False
+            logger.info(
+                "Sentiment rate limit %s/%s - deferring provider disable; next retry in %.1fs",
+                cb["failures"],
+                SENTIMENT_FAILURE_THRESHOLD,
+                delay,
+            )
+        else:
+            logger.debug(
+                "Sentiment failure %s; next retry in %.1fs", cb["failures"], delay
+            )
     state_val = {"closed": 0, "half-open": 1, "open": 2}[cb["state"]]
     sentiment_cb_state.set(state_val)
-    provider_monitor.record_failure("sentiment", reason, error)
+    if escalate_provider_failure:
+        provider_monitor.record_failure("sentiment", reason, error)
 
 
 @retry(
