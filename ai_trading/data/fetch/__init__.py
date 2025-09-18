@@ -1748,9 +1748,12 @@ def _fetch_bars(
         }
         if prev_corr:
             log_extra["previous_correlation_id"] = prev_corr
-        delay = _state.pop("delay", None)
+        delay = _state.get("delay")
         if delay is not None:
             log_extra["delay"] = delay
+        retry_delay = _state.get("retry_delay")
+        if retry_delay is not None and "retry_delay" not in log_extra:
+            log_extra["retry_delay"] = retry_delay
         if status == 400:
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra_with_remaining)
@@ -2200,6 +2203,7 @@ def _fetch_bars(
                     if planned_backoff is not None:
                         _state["retries"] = attempt
                         _state["delay"] = planned_backoff
+                        _state["retry_delay"] = planned_backoff
                         retry_meta = planned_retry_meta or _coerce_json_primitives(
                             retry_empty_fetch_once(
                                 delay=planned_backoff,
@@ -2306,6 +2310,12 @@ def _fetch_bars(
         df.set_index("timestamp", inplace=True, drop=False)
         _IEX_EMPTY_COUNTS.pop((symbol, _interval), None)
         log_extra_success = {"remaining_retries": max_retries - _state["retries"], **log_extra}
+        state_delay = _state.get("delay")
+        if state_delay is not None:
+            log_extra_success["delay"] = state_delay
+        state_retry_delay = _state.get("retry_delay")
+        if state_retry_delay is not None and "retry_delay" not in log_extra_success:
+            log_extra_success["retry_delay"] = state_retry_delay
         log_fetch_attempt("alpaca", status=status, **log_extra_success)
         provider_monitor.record_success("alpaca")
         _ALPACA_DISABLED_ALERTED = False
