@@ -57,6 +57,7 @@ getattr = getattr
 logger = get_logger(__name__)
 
 _STRICT_DECIMAL_PATTERN = re.compile(r"^\d+(?:\.\d+)?$")
+_SIGNED_DECIMAL_PATTERN = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 
 
 def _is_strict_decimal(value: Any) -> bool:
@@ -321,13 +322,29 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         continue
                     else:
                         numeric_vals = []
+                        row_invalid = False
                         for _col_idx, col_val in enumerate(row[:5]):
-                            if not _is_strict_decimal(col_val):
+                            text_val = str(col_val).strip()
+                            if not text_val:
                                 continue
-                            try:
-                                numeric_vals.append(float(col_val))
-                            except (ValueError, TypeError):
+                            if _is_strict_decimal(col_val):
+                                try:
+                                    numeric_value = float(text_val)
+                                except (ValueError, TypeError):
+                                    continue
+                            elif _SIGNED_DECIMAL_PATTERN.fullmatch(text_val):
+                                try:
+                                    numeric_value = float(text_val)
+                                except (ValueError, TypeError):
+                                    continue
+                            else:
                                 continue
+                            if numeric_value <= 0:
+                                row_invalid = True
+                                break
+                            numeric_vals.append(numeric_value)
+                        if row_invalid:
+                            continue
                         if numeric_vals and all(v > 0 for v in numeric_vals):
                             filtered_rows.append(row)
                 except COMMON_EXC as e:

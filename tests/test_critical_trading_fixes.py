@@ -456,14 +456,19 @@ def test_meta_learning_price_validation():
 
     # Create test CSV with mixed valid/invalid data
     test_data = {
-        'timestamp': ['2024-01-01 10:00:00', '2024-01-01 11:00:00', '2024-01-01 12:00:00'],
-        'symbol': ['AAPL', 'MSFT', 'GOOGL'],
-        'side': ['buy', 'sell', 'buy'],
-        'entry_price': [150.50, -10.0, 2800.0],  # One negative price
-        'exit_price': [155.0, 200.0, 2850.0],
-        'quantity': [100, 50, 10],
-        'pnl': [450.0, -500.0, 500.0],
-        'signal_tags': ['momentum', 'mean_reversion', 'momentum']
+        'timestamp': [
+            '2024-01-01 10:00:00',
+            '2024-01-01 11:00:00',
+            '2024-01-01 12:00:00',
+            '2024-01-01 13:00:00',
+        ],
+        'symbol': ['AAPL', 'MSFT', 'GOOGL', 'TSLA'],
+        'side': ['buy', 'sell', 'buy', 'sell'],
+        'entry_price': [150.50, -10.0, 2800.0, 320.0],  # Include negative entry and exit scenarios
+        'exit_price': [155.0, 200.0, 2850.0, -15.0],
+        'quantity': [100, 50, 10, 5],
+        'pnl': [450.0, -500.0, 500.0, -250.0],
+        'signal_tags': ['momentum', 'mean_reversion', 'momentum', 'breakout']
     }
 
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as tmp:
@@ -475,8 +480,8 @@ def test_meta_learning_price_validation():
         quality_report = validate_trade_data_quality(tmp_path)
         assert quality_report['file_exists'] is True
         assert quality_report['has_valid_format'] is True
-        assert quality_report['row_count'] == 3
-        assert quality_report['valid_price_rows'] == 2  # Should filter out negative price
+        assert quality_report['row_count'] == 4
+        assert quality_report['valid_price_rows'] == 2  # Should filter out negative entry/exit prices
     finally:
         os.unlink(tmp_path)
 
