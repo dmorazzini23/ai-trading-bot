@@ -654,7 +654,14 @@ _PRIMARY_PRICE_SOURCES = frozenset(
 def _is_primary_price_source(source: str) -> bool:
     """Return ``True`` when *source* represents Alpaca-provided pricing."""
 
-    return source in _PRIMARY_PRICE_SOURCES
+    if not source:
+        return False
+    normalized = source.strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith("alpaca"):
+        return True
+    return normalized in _PRIMARY_PRICE_SOURCES
 logger = get_logger(__name__)
 
 def _alpaca_diag_info() -> dict[str, object]:
