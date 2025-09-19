@@ -826,7 +826,13 @@ def _flatten_and_normalize_ohlcv(
                 if tz is not None:
                     df_out["timestamp"] = ts_series.dt.tz_convert("UTC")  # type: ignore[attr-defined]
                 else:
-                    converted = pd.to_datetime(ts_series, utc=True, errors="ignore")
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            message="errors='ignore' is deprecated and will raise in a future version.",
+                            category=FutureWarning,
+                        )
+                        converted = pd.to_datetime(ts_series, utc=True, errors="ignore")
                     df_out["timestamp"] = converted
             except (AttributeError, TypeError, ValueError):
                 pass
@@ -2492,7 +2498,7 @@ def get_minute_df(
                 and not getattr(df, "empty", True)
             ):
                 _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
-        except (EmptyBarsError, ValueError, RuntimeError) as e:
+        except (EmptyBarsError, ValueError, RuntimeError, AttributeError) as e:
             if isinstance(e, EmptyBarsError):
                 now = datetime.now(UTC)
                 if end_dt > now or start_dt > now:
@@ -2643,14 +2649,21 @@ def get_minute_df(
         df = None
     if df is None or getattr(df, "empty", True):
         if use_finnhub:
+            finnhub_df = None
             try:
-                df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution="1")
+                finnhub_df = _finnhub_get_bars(symbol, start_dt, end_dt, "1m")
             except (FinnhubAPIException, ValueError, NotImplementedError) as e:
                 logger.debug("FINNHUB_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
-                df = None
             else:
-                if df is not None and not getattr(df, "empty", True):
-                    used_backup = True
+                logger.debug(
+                    "FINNHUB_FETCH_SUCCESS",
+                    extra={
+                        "symbol": symbol,
+                        "rows": getattr(finnhub_df, "shape", (0,))[0] if finnhub_df is not None else 0,
+                    },
+                )
+            df = finnhub_df
+            used_backup = True
         elif not enable_finnhub:
             warn_finnhub_disabled_no_data(symbol)
         else:
