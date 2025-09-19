@@ -67,31 +67,52 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
             if bound_loop is not None:
                 break
 
-    if bound_loop is None or bound_loop is loop:
+    if bound_loop is loop:
         return obj
+
+    def _capture_sem_state() -> dict[str, int]:
+        state: dict[str, int] = {}
+        for attr_name in ("_value", "_initial_value", "_bound_value"):
+            value = getattr(obj, attr_name, None)
+            if isinstance(value, int):
+                state[attr_name] = value
+        return state
 
     if isinstance(obj, asyncio.Lock):
         return asyncio.Lock()
 
     bounded_semaphore_type = getattr(asyncio, "BoundedSemaphore", None)
     if bounded_semaphore_type is not None and isinstance(obj, bounded_semaphore_type):
+        sem_state = _capture_sem_state()
         candidate_value = None
-        for attr_name in ("_value", "_initial_value", "_bound_value"):
-            value = getattr(obj, attr_name, None)
+        for attr_name in ("_initial_value", "_bound_value", "_value"):
+            value = sem_state.get(attr_name)
             if isinstance(value, int) and value >= 0:
                 candidate_value = value
                 break
         if candidate_value is None:
             candidate_value = 1
-        return bounded_semaphore_type(candidate_value)
+        replacement = bounded_semaphore_type(candidate_value)
+        for attr_name, value in sem_state.items():
+            if hasattr(replacement, attr_name) and isinstance(value, int) and value >= 0:
+                setattr(replacement, attr_name, value)
+        return replacement
 
     if isinstance(obj, asyncio.Semaphore):
-        candidate_value = getattr(obj, "_value", None)
-        if not isinstance(candidate_value, int) or candidate_value < 0:
-            candidate_value = getattr(obj, "_initial_value", None)
-        if not isinstance(candidate_value, int) or candidate_value < 0:
+        sem_state = _capture_sem_state()
+        candidate_value = None
+        for attr_name in ("_initial_value", "_value"):
+            value = sem_state.get(attr_name)
+            if isinstance(value, int) and value >= 0:
+                candidate_value = value
+                break
+        if candidate_value is None:
             candidate_value = 1
-        return asyncio.Semaphore(candidate_value)
+        replacement = asyncio.Semaphore(candidate_value)
+        for attr_name, value in sem_state.items():
+            if hasattr(replacement, attr_name) and isinstance(value, int) and value >= 0:
+                setattr(replacement, attr_name, value)
+        return replacement
 
     constructor = getattr(asyncio, type_name, None)
     if callable(constructor):
