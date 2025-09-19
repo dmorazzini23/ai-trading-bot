@@ -672,7 +672,13 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
                 continue
             if canonical in df.columns:
                 try:
-                    df[canonical] = df[canonical].combine_first(df[alias])
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            category=FutureWarning,
+                            message="The behavior of array concatenation with empty entries is deprecated.",
+                        )
+                        df[canonical] = df[canonical].combine_first(df[alias])
                 except AttributeError:  # pragma: no cover - non-Series columns
                     pass
                 df.drop(columns=[alias], inplace=True)
@@ -2428,10 +2434,14 @@ def get_minute_df(
     pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
-    if tf_key in _SKIPPED_SYMBOLS:
+    if tf_key in _SKIPPED_SYMBOLS and window_has_session:
         logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")
+    elif tf_key in _SKIPPED_SYMBOLS:
+        _SKIPPED_SYMBOLS.discard(tf_key)
+        _EMPTY_BAR_COUNTS.pop(tf_key, None)
     try:
         attempt = record_attempt(symbol, "1Min")
     except EmptyBarsError:
@@ -2449,6 +2459,8 @@ def get_minute_df(
         )
         raise
     used_backup = False
+    success_marked = False
+    fallback_logged = False
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
@@ -2672,6 +2684,9 @@ def get_minute_df(
         else:
             df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
+    allow_empty_return = (not window_has_session) or (
+        used_backup and _EMPTY_BAR_COUNTS.get(tf_key, 0) < _EMPTY_BAR_THRESHOLD
+    )
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
@@ -2684,16 +2699,59 @@ def get_minute_df(
                 set_cached_minute_timestamp(symbol, last_ts)
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             mark_success(symbol, "1Min")
-            if used_backup:
+            success_marked = True
+            if used_backup and not fallback_logged:
                 _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                fallback_logged = True
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
-    df = _post_process(df, symbol=symbol, timeframe="1Min")
-    if df is None or getattr(df, "empty", False):
+    original_df = df
+    if original_df is None:
+        raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
+    if getattr(original_df, "empty", False):
+        if allow_empty_return:
+            if not success_marked:
+                mark_success(symbol, "1Min")
+                success_marked = True
+            if used_backup and not fallback_logged:
+                _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                fallback_logged = True
+            _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            return original_df
+        raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
+    df = _post_process(original_df, symbol=symbol, timeframe="1Min")
+    if df is None:
+        if allow_empty_return:
+            if not success_marked:
+                mark_success(symbol, "1Min")
+                success_marked = True
+            if used_backup and not fallback_logged:
+                _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                fallback_logged = True
+            _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            return original_df if original_df is not None else df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
-    if getattr(df, "empty", False):
+    if df is None or getattr(df, "empty", False):
+        if allow_empty_return:
+            if not success_marked:
+                mark_success(symbol, "1Min")
+                success_marked = True
+            if used_backup and not fallback_logged:
+                _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                fallback_logged = True
+            _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            if df is None:
+                return original_df if original_df is not None else df
+            return df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
+    if not success_marked:
+        mark_success(symbol, "1Min")
+        success_marked = True
+        if used_backup and not fallback_logged:
+            _mark_fallback(symbol, "1Min", start_dt, end_dt)
+            fallback_logged = True
+        _IEX_EMPTY_COUNTS.pop(tf_key, None)
     return df
 
 
