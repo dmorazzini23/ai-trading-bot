@@ -3190,6 +3190,103 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     fallback_provider: str | None = None
     coverage_warning_logged = False
 
+    sip_recovery_attempted = False
+    if (
+        current_feed == "iex"
+        and expected_bars > 0
+        and actual_bars < coverage_threshold
+    ):
+        try:
+            sip_allowed = bool(
+                data_fetcher_module._sip_configured()
+                and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            sip_allowed = False
+            logger.debug(
+                "SIP_RECOVERY_STATUS_UNKNOWN",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+        if sip_allowed:
+            sip_recovery_attempted = True
+            sip_kwargs = _minute_fetch_kwargs(extra={"feed": "sip"})
+            try:
+                sip_df_raw = get_minute_df(symbol, start_dt, end_dt, **sip_kwargs)
+            except Exception as sip_exc:  # pragma: no cover - best effort logging
+                logger.debug(
+                    "SIP_RECOVERY_FAILED",
+                    extra={
+                        "symbol": symbol,
+                        "prev_feed": current_feed,
+                        "error": str(sip_exc),
+                    },
+                )
+            else:
+                if sip_df_raw is not None and not getattr(sip_df_raw, "empty", True):
+                    sip_df = _sanitize_minute_df(
+                        sip_df_raw,
+                        symbol=symbol,
+                        current_now=now_utc,
+                    )
+                    try:
+                        sip_bars = int(len(sip_df))
+                    except Exception:
+                        sip_bars = 0
+                    if sip_bars > actual_bars:
+                        prev_cov = actual_bars / max(expected_bars, 1)
+                        new_cov = sip_bars / max(expected_bars, 1)
+                        logger.warning(
+                            "COVERAGE_RECOVERY_SIP",
+                            extra={
+                                "symbol": symbol,
+                                "prev_feed": current_feed,
+                                "prev_cov": round(prev_cov, 4),
+                                "new_feed": "sip",
+                                "new_cov": round(new_cov, 4),
+                                "expected_bars": expected_bars,
+                                "prev_bars": actual_bars,
+                                "new_bars": sip_bars,
+                            },
+                        )
+                        df = sip_df
+                        active_feed = "sip"
+                        fallback_feed = "sip"
+                        fallback_provider = "alpaca_sip"
+                        fallback_used = True
+                        fallback_feed_used = "sip"
+                        coverage = _coverage_metrics(
+                            df,
+                            expected=expected_bars,
+                            intraday_requirement=intraday_lookback,
+                        )
+                        actual_bars = int(coverage["actual"])
+                        coverage_threshold = int(coverage["threshold"])
+                        materially_short = bool(coverage["materially_short"])
+                        insufficient_intraday = bool(coverage["insufficient_intraday"])
+                        low_coverage = bool(coverage["low_coverage"])
+                    else:
+                        logger.debug(
+                            "SIP_RECOVERY_NO_IMPROVEMENT",
+                            extra={
+                                "symbol": symbol,
+                                "prev_feed": current_feed,
+                                "prev_bars": actual_bars,
+                                "sip_bars": sip_bars,
+                                "expected_bars": expected_bars,
+                            },
+                        )
+                else:
+                    logger.debug(
+                        "SIP_RECOVERY_EMPTY",
+                        extra={
+                            "symbol": symbol,
+                            "prev_feed": current_feed,
+                            "expected_bars": expected_bars,
+                        },
+                    )
+    if sip_recovery_attempted:
+        fallback_attempted = True
+
     if low_coverage:
         fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
         if active_backfill is None and auto_gap_fill:
