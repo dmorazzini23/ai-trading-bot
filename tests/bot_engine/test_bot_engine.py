@@ -365,3 +365,126 @@ def test_enter_long_uses_feature_close_when_quote_invalid(monkeypatch, caplog):
     assert any("FALLBACK_TO_FEATURE_CLOSE" in rec.message for rec in caplog.records)
     assert not any("computed qty <= 0" in rec.message for rec in caplog.records)
     assert bot_engine._PRICE_SOURCE[symbol] == "feature_close"
+
+
+def test_get_latest_price_skips_alpaca_when_provider_disabled(monkeypatch):
+    symbol = "AAPL"
+
+    monkeypatch.setattr(bot_engine, "is_alpaca_service_available", lambda: True)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+
+    def _fail():  # pragma: no cover - should not be called
+        raise AssertionError("alpaca_get should not be invoked when disabled")
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (_fail, None))
+
+    result = bot_engine.get_latest_price(symbol)
+
+    assert result is None
+    assert bot_engine._PRICE_SOURCE[symbol] == "alpaca_disabled"
+
+
+def test_enter_long_uses_feature_close_when_alpaca_disabled(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+
+    class _DummyAPI:
+        def list_positions(self):  # noqa: D401, ANN001 - minimal stub
+            return []
+
+        def get_account(self):  # noqa: D401 - minimal stub
+            return types.SimpleNamespace(equity=100000.0, portfolio_value=100000.0)
+
+    class _Logger:
+        def log_entry(self, *args, **kwargs):  # noqa: D401 - capture call
+            return (args, kwargs)
+
+        def log_exit(self, *args, **kwargs):  # noqa: D401 - unused in test
+            return None
+
+    feat_df = pd.DataFrame(
+        {
+            "close": [100.0, 101.0],
+            "open": [99.5, 100.5],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "volume": [1_000, 1_200],
+            "macd": [0.1, 0.2],
+            "atr": [1.0, 1.0],
+            "vwap": [100.2, 100.6],
+            "macds": [0.05, 0.05],
+            "sma_50": [99.0, 99.5],
+            "sma_200": [95.0, 95.5],
+        }
+    )
+
+    ctx = types.SimpleNamespace(
+        portfolio_weights={symbol: 0.02},
+        api=_DummyAPI(),
+        trade_logger=_Logger(),
+        take_profit_targets={},
+        stop_targets={},
+        market_open=time(6, 30),
+        market_close=time(13, 0),
+        config=types.SimpleNamespace(exposure_cap_aggressive=0.9),
+    )
+
+    state = bot_engine.BotState()
+    state.auth_skipped_symbols = set()
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(bot_engine, "_apply_sector_cap_qty", lambda _ctx, _sym, qty, _price: qty)
+    monkeypatch.setattr(bot_engine, "scaled_atr_stop", lambda **_k: (95.95, 106.05))
+    monkeypatch.setattr(bot_engine, "is_high_vol_regime", lambda: False)
+    monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
+    monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
+        or types.SimpleNamespace(id="order-1"),
+    )
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+
+    def _disabled_price(sym):
+        bot_engine._PRICE_SOURCE[sym] = "alpaca_disabled"
+        return None
+
+    monkeypatch.setattr(bot_engine, "get_latest_price", _disabled_price)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
+    )
+
+    caplog.set_level("WARNING")
+
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.8,
+        strat="alpaca_disabled_test",
+    )
+
+    assert result is True
+    assert orders and orders[0][0] == symbol
+    assert orders[0][3] == pytest.approx(feat_df["close"].iloc[-1])
+    assert "FALLBACK_TO_FEATURE_CLOSE" in {rec.message for rec in caplog.records}
+    assert bot_engine._PRICE_SOURCE[symbol] == "feature_close"
+    assert "alpaca" in getattr(state, "degraded_providers", set())

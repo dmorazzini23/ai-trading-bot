@@ -10920,6 +10920,7 @@ def _enter_long(
         or os.getenv("TESTING")
         or os.getenv("DRY_RUN")
     )
+    outage_detected = False
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca"
@@ -10927,15 +10928,17 @@ def _enter_long(
     else:
         quote_price = get_latest_price(symbol)
         price_source = _PRICE_SOURCE.get(symbol, "unknown")
-        if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
+        outage_sources = {
+            "alpaca_auth_failed",
+            "alpaca_unavailable",
+            "alpaca_disabled",
+        }
+        outage_detected = price_source in outage_sources
+        if outage_detected:
             logger.warning(
-                "SKIP_ORDER_ALPACA_UNAVAILABLE",
+                "ALPACA_PRIMARY_UNAVAILABLE",
                 extra={"symbol": symbol, "price_source": price_source},
             )
-            auth_skipped = getattr(state, "auth_skipped_symbols", None)
-            if isinstance(auth_skipped, set):
-                auth_skipped.add(symbol)
-            return True
 
     original_quote = quote_price
     try:
@@ -10972,6 +10975,10 @@ def _enter_long(
                     "quote": original_quote,
                 },
             )
+            if outage_detected:
+                auth_skipped = getattr(state, "auth_skipped_symbols", None)
+                if isinstance(auth_skipped, set):
+                    auth_skipped.add(symbol)
             return True
 
     quote_price = corrected_quote
@@ -11170,6 +11177,7 @@ def _enter_short(
         or os.getenv("TESTING")
         or os.getenv("DRY_RUN")
     )
+    outage_detected = False
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca"
@@ -11177,7 +11185,13 @@ def _enter_short(
     else:
         quote_price = get_latest_price(symbol)
         price_source = _PRICE_SOURCE.get(symbol, "unknown")
-        if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
+        outage_sources = {
+            "alpaca_auth_failed",
+            "alpaca_unavailable",
+            "alpaca_disabled",
+        }
+        outage_detected = price_source in outage_sources
+        if outage_detected:
             logger.warning(
                 "SKIP_ORDER_ALPACA_UNAVAILABLE",
                 extra={"symbol": symbol, "price_source": price_source},
@@ -16567,6 +16581,18 @@ def get_latest_price(symbol: str):
 
     price: float | None = None
     price_source = "unknown"
+
+    primary_provider_fn = getattr(
+        data_fetcher_module, "is_primary_provider_enabled", None
+    )
+    if callable(primary_provider_fn):
+        try:
+            provider_enabled = bool(primary_provider_fn())
+        except Exception:  # pragma: no cover - defensive guard
+            provider_enabled = True
+        if not provider_enabled:
+            _PRICE_SOURCE[symbol] = "alpaca_disabled"
+            return None
 
     def _normalize_price(raw_value: Any, provider: str) -> float | None:
         """Coerce *raw_value* to a positive float or log why it is rejected."""
