@@ -16639,6 +16639,10 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             )
             return None
         return value
+    pending_bid: tuple[str, Any] | None = None
+    ask_unusable = False
+    last_unusable = False
+
     skip_primary = prefer_backup
     if not skip_primary and not is_alpaca_service_available():
         skip_primary = True
@@ -16670,10 +16674,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 ask_value = _lookup(("ask_price", "ap"))
                 yield "alpaca_ask", ask_value
 
-                # Bid price when ask is missing or invalid
-                bid_value = _lookup(("bid_price", "bp"))
-                yield "alpaca_bid", bid_value
-
                 # Last trade can appear in multiple shapes
                 last_obj = _lookup(("last", "last_trade", "lastTrade"))
                 last_value: Any = None
@@ -16692,6 +16692,10 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 midpoint_value = _lookup(("midpoint", "mid_price", "mp"))
                 yield "alpaca_midpoint", midpoint_value
 
+                # Bid price retained for degraded fallback paths
+                bid_value = _lookup(("bid_price", "bp"))
+                yield "alpaca_bid", bid_value
+
             payloads: list[dict[str, Any]] = []
             if isinstance(data, dict):
                 payloads.append(data)
@@ -16707,10 +16711,21 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
             for payload in payloads:
                 for source_label, raw_value in _iter_price_sources(payload):
-                    price = _normalize_price(raw_value, source_label)
-                    if price is not None:
+                    if source_label == "alpaca_bid":
+                        if pending_bid is None:
+                            pending_bid = (source_label, raw_value)
+                        continue
+
+                    candidate = _normalize_price(raw_value, source_label)
+                    if candidate is not None:
+                        price = candidate
                         price_source = source_label
                         break
+
+                    if source_label == "alpaca_ask":
+                        ask_unusable = True
+                    elif source_label == "alpaca_last":
+                        last_unusable = True
                 if price is not None:
                     break
             if price is None:
@@ -16775,6 +16790,16 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
             logger.error("LATEST_PRICE_FALLBACK_FAILED", extra={"symbol": symbol, "error": str(e)})
             price = None
+
+    if price is None and pending_bid is not None:
+        bid_source_label, bid_raw_value = pending_bid
+        bid_price = _normalize_price(bid_raw_value, bid_source_label)
+        if bid_price is not None:
+            price = bid_price
+            if ask_unusable and last_unusable:
+                price_source = f"{bid_source_label}_degraded"
+            else:
+                price_source = bid_source_label
 
     _PRICE_SOURCE[symbol] = price_source
     return price

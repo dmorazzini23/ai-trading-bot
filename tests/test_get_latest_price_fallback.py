@@ -117,8 +117,8 @@ def test_get_latest_price_uses_yahoo_when_alpaca_none(monkeypatch):
     assert price == 101.0
 
 
-def test_get_latest_price_uses_alpaca_bid_when_ask_invalid(monkeypatch):
-    """Positive bid/last data should prevent Yahoo fallback when ask is invalid."""
+def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
+    """When ask is unusable, prefer last trade over bid before falling back."""
 
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
     monkeypatch.setattr(
@@ -143,8 +143,44 @@ def test_get_latest_price_uses_alpaca_bid_when_ask_invalid(monkeypatch):
 
     price = bot_engine.get_latest_price("AAPL")
 
+    assert price == 95.1
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
+
+
+def test_get_latest_price_degrades_to_bid_after_fallback(monkeypatch):
+    """Bid is accepted only after fallbacks fail when ask/last are unusable."""
+
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.is_alpaca_service_available",
+        lambda: True,
+    )
+
+    def fake_alpaca_get(*_a, **_k):
+        return {
+            "ap": 0.0,
+            "bp": 94.5,
+            "last": {"price": 0.0},
+            "midpoint": 0.0,
+        }
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (fake_alpaca_get, None))
+
+    calls = {"yahoo": 0}
+
+    def yahoo_zero(symbol, start, end, interval):  # noqa: ARG001
+        calls["yahoo"] += 1
+        return _df(0.0)
+
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", yahoo_zero)
+    monkeypatch.setattr(bot_engine, "get_latest_close", lambda df: float(df["close"].iloc[-1]))
+    monkeypatch.setattr(bot_engine, "get_bars_df", lambda symbol: (_ for _ in ()).throw(RuntimeError))
+
+    price = bot_engine.get_latest_price("AAPL")
+
+    assert calls["yahoo"] == 1
     assert price == 94.5
-    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid"
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid_degraded"
 
 
 def test_get_latest_price_uses_latest_close_when_providers_fail(monkeypatch):
