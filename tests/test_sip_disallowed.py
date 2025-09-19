@@ -1,32 +1,34 @@
-from datetime import datetime, UTC
-import json
-import types
-
-from ai_trading.data.fetch import sip_disallowed
+from ai_trading.data.fetch.sip_disallowed import sip_disallowed
 
 
-class _RespOK:
-    status_code = 200
-    headers = {"Content-Type": "application/json"}
-    text = json.dumps({"bars": [{"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]})
+def test_sip_disallowed_when_flag_disabled(monkeypatch):
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
+    assert sip_disallowed() is True
 
-    def json(self):
-        return json.loads(self.text)
+
+def test_sip_disallowed_without_credentials(monkeypatch):
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
+    assert sip_disallowed() is True
 
 
-def test_sip_disallowed_falls_back_to_iex(monkeypatch):
-    feeds: list[str] = []
-    calls: list[str] = []
+def test_sip_allowed_with_credentials(monkeypatch):
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
+    assert sip_disallowed() is False
 
-    def fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
-        calls.append(params.get("feed"))
-        return _RespOK()
 
-    session = types.SimpleNamespace(get=fake_get)
-    monkeypatch.setattr(sip_disallowed, "_ALLOW_SIP", False, raising=False)
-    start = datetime(2024, 1, 1, tzinfo=UTC)
-    end = datetime(2024, 1, 2, tzinfo=UTC)
-    df = sip_disallowed.fetch_bars("AAPL", start, end, "1Min", session=session, feeds_used=feeds)
-    assert calls == ["iex"]
-    assert "sip" in feeds
-    assert (getattr(df, "empty", False) is False) and df
+def test_sip_disallowed_when_entitlement_missing(monkeypatch):
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "0")
+    assert sip_disallowed() is True
+
