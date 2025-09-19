@@ -640,6 +640,7 @@ pd = load_pandas()
 _FEATURE_CACHE: "OrderedDict[tuple[str, pd.Timestamp], pd.DataFrame]" = OrderedDict()
 _FEATURE_CACHE_LIMIT = 128
 _PRICE_SOURCE: dict[str, str] = {}
+_ALPACA_DISABLED_SENTINEL = "alpaca_disabled"
 _PRIMARY_PRICE_SOURCES = frozenset(
     {
         "alpaca",
@@ -10957,7 +10958,11 @@ def _enter_long(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
+        if price_source in {
+            "alpaca_auth_failed",
+            "alpaca_unavailable",
+            _ALPACA_DISABLED_SENTINEL,
+        }:
             logger.warning(
                 "SKIP_ORDER_ALPACA_UNAVAILABLE",
                 extra={"symbol": symbol, "price_source": price_source},
@@ -11202,7 +11207,11 @@ def _enter_short(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
+        if price_source in {
+            "alpaca_auth_failed",
+            "alpaca_unavailable",
+            _ALPACA_DISABLED_SENTINEL,
+        }:
             logger.warning(
                 "SKIP_ORDER_ALPACA_UNAVAILABLE",
                 extra={"symbol": symbol, "price_source": price_source},
@@ -16592,6 +16601,19 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     price: float | None = None
     price_source = "unknown"
+
+    primary_provider_fn = getattr(
+        data_fetcher_module, "is_primary_provider_enabled", None
+    )
+    if callable(primary_provider_fn):
+        try:
+            provider_enabled = bool(primary_provider_fn())
+        except Exception:  # pragma: no cover - defensive guard
+            provider_enabled = True
+        if not provider_enabled:
+            price_source = _ALPACA_DISABLED_SENTINEL
+            _PRICE_SOURCE[symbol] = price_source
+            return None
 
     def _normalize_price(raw_value: Any, provider: str) -> float | None:
         """Coerce *raw_value* to a positive float or log why it is rejected."""

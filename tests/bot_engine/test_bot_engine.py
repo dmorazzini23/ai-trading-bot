@@ -256,8 +256,8 @@ def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
         if prefer_backup:
             bot_engine._PRICE_SOURCE[sym] = "yahoo"
             return 101.0
-        bot_engine._PRICE_SOURCE[sym] = "alpaca_ask"
-        return 0.0
+        bot_engine._PRICE_SOURCE[sym] = bot_engine._ALPACA_DISABLED_SENTINEL
+        return None
 
     monkeypatch.setattr(bot_engine, "get_latest_price", _fake_latest_price)
 
@@ -288,7 +288,28 @@ def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
     assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
 
 
-def test_enter_long_uses_feature_close_when_quote_invalid(monkeypatch, caplog):
+def test_get_latest_price_skips_primary_during_cooldown(monkeypatch):
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_engine, "is_alpaca_service_available", lambda: True)
+
+    def _fail_alpaca_symbols():  # pragma: no cover - should not be invoked
+        raise AssertionError("Alpaca should not be queried during cooldown")
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", _fail_alpaca_symbols)
+
+    price = bot_engine.get_latest_price("AAPL")
+
+    assert price is None
+    assert bot_engine._PRICE_SOURCE["AAPL"] == bot_engine._ALPACA_DISABLED_SENTINEL
+
+
+def test_enter_long_uses_feature_close_when_primary_disabled(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
 
     symbol = "AAPL"
@@ -347,12 +368,18 @@ def test_enter_long_uses_feature_close_when_quote_invalid(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
     monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "submit_order", lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price)) or types.SimpleNamespace(id="order-1"))
+    def _fake_latest_price(_symbol, *, prefer_backup=False):
+        bot_engine._PRICE_SOURCE[_symbol] = bot_engine._ALPACA_DISABLED_SENTINEL
+        return None
+
+    monkeypatch.setattr(bot_engine, "get_latest_price", _fake_latest_price)
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {symbol: bot_engine._ALPACA_DISABLED_SENTINEL}, raising=False)
     monkeypatch.setattr(
-        bot_engine,
-        "get_latest_price",
-        lambda _symbol, *, prefer_backup=False: 0.0,
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
     )
-    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {symbol: "alpaca_ask"}, raising=False)
 
     caplog.set_level("WARNING")
 
@@ -655,4 +682,52 @@ def test_enter_short_logs_fallback_for_non_alpaca_sources(monkeypatch, caplog):
     assert orders and orders[0][3] == pytest.approx(101.0)
     assert any(
         record.message == "ORDER_USING_FALLBACK_PRICE" for record in caplog.records
+    )
+
+
+def test_enter_short_skips_when_primary_disabled(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx, state, feat_df = _build_dummy_short_context(pd, symbol)
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(bot_engine, "calculate_entry_size", lambda *a, **k: 5)
+    monkeypatch.setattr(
+        bot_engine,
+        "_apply_sector_cap_qty",
+        lambda _ctx, _sym, qty, _price: qty,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
+        or types.SimpleNamespace(id="order-1"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: (None, bot_engine._ALPACA_DISABLED_SENTINEL),
+    )
+
+    caplog.set_level("WARNING")
+
+    result = bot_engine._enter_short(
+        ctx,
+        state,
+        symbol,
+        feat_df=feat_df,
+        final_score=-1.0,
+        conf=-0.8,
+        strat="cooldown_short_skip",
+    )
+
+    assert result is True
+    assert orders == []
+    assert any(
+        record.message == "SKIP_ORDER_ALPACA_UNAVAILABLE" for record in caplog.records
     )
