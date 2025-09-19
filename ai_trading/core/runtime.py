@@ -5,6 +5,7 @@ This module provides a standardized runtime context that ensures consistent
 access to trading parameters and configuration across the system.
 """
 from __future__ import annotations
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from .protocols import AllocatorProtocol
@@ -82,6 +83,23 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     Returns:
         BotRuntime with fully populated params dict
     """
+    impl_raw = os.getenv("AI_TRADING_EXECUTION_IMPL", os.getenv("EXECUTION_IMPL", ""))
+    impl = (impl_raw or "").lower()
+    if impl in {"live", "broker", "alpaca"}:
+        missing = [
+            key
+            for key in ("ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY", "ALPACA_BASE_URL")
+            if not os.getenv(key)
+        ]
+        if missing:
+            logger.critical(
+                "LIVE_REQUESTED_BUT_CREDS_MISSING",
+                extra={"missing": missing},
+            )
+            raise RuntimeError(
+                f"Live trading requested but missing credentials: {', '.join(missing)}"
+            )
+
     params: dict[str, float] = {}
     for k, dflt in REQUIRED_PARAM_DEFAULTS.items():
         # MAX_POSITION_SIZE is resolved after capital cap so the value can be

@@ -280,7 +280,7 @@ class Settings(BaseSettings):
     @classmethod
     def _enforce_allowed_feed(cls, v: str) -> str:
         """Force IEX feed unless SIP explicitly allowed."""
-        allow_sip = os.getenv('ALPACA_ALLOW_SIP', '').strip().lower() in {
+        allow_sip = str(os.getenv('ALPACA_ALLOW_SIP', '0')).strip().lower() in {
             '1',
             'true',
             'yes',
@@ -304,7 +304,7 @@ class Settings(BaseSettings):
     @field_validator('alpaca_feed_failover', mode='after')
     @classmethod
     def _normalize_feed_failover(cls, v: tuple[str, ...]) -> tuple[str, ...]:
-        allow_sip = os.getenv('ALPACA_ALLOW_SIP', '').strip().lower() in {
+        allow_sip = str(os.getenv('ALPACA_ALLOW_SIP', '0')).strip().lower() in {
             '1',
             'true',
             'yes',

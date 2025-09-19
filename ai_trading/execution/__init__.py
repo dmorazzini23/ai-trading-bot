@@ -2,9 +2,49 @@
 
 from __future__ import annotations
 
+import os
+
+from ai_trading.logging import get_logger
+
+_logger = get_logger(__name__)
+
+
 # Core exports that should always be available
 from .classes import ExecutionResult, OrderRequest
-from .engine import ExecutionAlgorithm, ExecutionEngine, Order
+from .engine import ExecutionAlgorithm, Order
+from .engine import ExecutionEngine as _SimExecutionEngine
+
+
+def _missing_creds() -> list[str]:
+    required = ("ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY", "ALPACA_BASE_URL")
+    return [key for key in required if not os.getenv(key)]
+
+
+def _creds_ok() -> bool:
+    return not _missing_creds()
+
+
+_impl_raw = os.getenv("AI_TRADING_EXECUTION_IMPL", os.getenv("EXECUTION_IMPL", "sim"))
+_impl = (_impl_raw or "sim").lower()
+
+ExecutionEngine = _SimExecutionEngine
+
+if _impl in {"live", "broker", "alpaca"} and _creds_ok():
+    try:
+        from .live_trading import AlpacaExecutionEngine as _LiveExecutionEngine
+    except Exception as exc:  # pragma: no cover - runtime guard
+        _logger.error(
+            "TRADING_ENGINE_IMPORT_FAILED",
+            extra={"impl": _impl, "error": str(exc)},
+        )
+    else:
+        ExecutionEngine = _LiveExecutionEngine
+elif _impl in {"live", "broker", "alpaca"}:
+    missing = _missing_creds()
+    _logger.error(
+        "TRADING_CREDS_MISSING_FALLBACK_SIM",
+        extra={"missing": missing},
+    )
 
 # Optional submodule: algorithms
 try:  # pragma: no cover - optional dependency
