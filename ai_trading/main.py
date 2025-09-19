@@ -781,6 +781,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_cli(argv)
     global config
     config = S = get_settings()
+    # Initialize TradingConfig-backed overrides (import-safe)
+    try:
+        from ai_trading.core import bot_engine as _be
+
+        _be.initialize_runtime_config()
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("RUNTIME_CONFIG_INIT_SKIPPED", exc_info=True)
     try:
         _assert_singleton_api(S)
     except PortInUseError as exc:
