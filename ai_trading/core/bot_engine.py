@@ -1312,7 +1312,7 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                         },
                     )
                     try:
-                        ctx.data_fetcher = data_fetcher_module.build_fetcher(ctx)  # type: ignore[attr-defined]
+                        ctx.data_fetcher = data_fetcher_module.build_fetcher()  # type: ignore[attr-defined]
                     except (AttributeError, TypeError):
                         pass
         else:
@@ -3450,7 +3450,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     low_coverage = bool(coverage["low_coverage"])
 
     if materially_short:
-        sip_recovery_df = _try_sip_recovery(symbol, start_dt, end_dt)
+        sip_recovery_df = _try_sip_recovery(
+            symbol=symbol,
+            expected_bars=expected_bars,
+            primary_actual_bars=primary_actual_bars,
+            start=start_dt,
+            end=end_dt,
+        )
         if sip_recovery_df is not None:
             df = sip_recovery_df
             active_feed = "sip"
@@ -5133,6 +5139,7 @@ _last_fh_prefetch_date: date | None = None
 class DataFetcher:
     prefer: str | None = None
     force_feed: str | None = None
+    cache_minutes: int = 15
 
     def __post_init__(self):
         self.prefer = self._normalize_feed_value(self.prefer)
@@ -6073,33 +6080,42 @@ class DataFetcher:
         return combined
 
 
-def _try_sip_recovery(symbol: str, start: datetime, end: datetime):
+def _try_sip_recovery(
+    symbol: str,
+    expected_bars: int,
+    primary_actual_bars: int,
+    start: datetime,
+    end: datetime,
+) -> "pd.DataFrame | None":
     """Attempt to refill minute coverage by forcing the Alpaca SIP feed."""
+
+    if provider_monitor.is_disabled("alpaca_sip"):
+        logger.info(
+            "SIP_RECOVERY_BYPASS",
+            extra={"symbol": symbol, "reason": "provider_disabled"},
+        )
+        return None
 
     if not _sip_configured():
         logger.info("COVERAGE_RECOVERY_SIP_DISABLED", extra={"symbol": symbol})
         return None
 
-    try:
-        fetcher = build_fetcher(prefer="alpaca", force_feed="sip")
-    except Exception as exc:  # pragma: no cover - defensive
+    has_sip_entitlement = str(os.getenv("ALPACA_ALLOW_SIP", "")).lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if not has_sip_entitlement:
         logger.warning(
-            "COVERAGE_RECOVERY_FAILED",
-            extra={
-                "symbol": symbol,
-                "provider": "alpaca",
-                "feed": "sip",
-                "rows": 0,
-                "error": str(exc),
-            },
+            "UNAUTHORIZED_SIP",
+            extra={"provider": "alpaca", "feed": "sip", "timeframe": "1Min"},
         )
+        provider_monitor.record_failure("alpaca", reason="unauthorized")
+        provider_monitor.disable("alpaca_sip", duration=1800)
         return None
 
-    logger.info(
-        "COVERAGE_RECOVERY_START",
-        extra={"symbol": symbol, "provider": "alpaca", "feed": "sip"},
-    )
     try:
+        fetcher = build_fetcher(prefer="alpaca", force_feed="sip")
         df = fetcher.get_bars(
             symbol=symbol,
             timeframe="1Min",
@@ -6117,32 +6133,41 @@ def _try_sip_recovery(symbol: str, start: datetime, end: datetime):
                 "error": str(exc),
             },
         )
+        err_str = str(exc)
+        if "403" in err_str or "unauthorized" in err_str.lower():
+            provider_monitor.record_failure("alpaca", reason="unauthorized", error=err_str)
+            provider_monitor.disable("alpaca_sip", duration=1800)
         return None
 
-    rows = 0 if df is None else len(df)
-    expected_minutes = max(int((end - start).total_seconds() // 60) + 1, 1)
-    if df is not None and rows >= 0.5 * expected_minutes:
-        logger.info(
-            "COVERAGE_RECOVERY_DONE",
+    new_bars = 0 if df is None else int(getattr(df, "__len__", lambda: 0)())
+    if new_bars <= primary_actual_bars:
+        logger.warning(
+            "COVERAGE_RECOVERY_INSUFFICIENT",
             extra={
                 "symbol": symbol,
-                "provider": "alpaca",
-                "feed": "sip",
-                "rows": rows,
+                "expected_bars": expected_bars,
+                "prev_bars": primary_actual_bars,
+                "new_bars": new_bars,
             },
         )
-        return df
+        return None
 
+    new_cov = round(new_bars / max(expected_bars, 1), 4)
+    prev_cov = round(primary_actual_bars / max(expected_bars, 1), 4)
     logger.warning(
-        "COVERAGE_RECOVERY_FAILED",
+        "COVERAGE_RECOVERY_SIP",
         extra={
             "symbol": symbol,
-            "provider": "alpaca",
-            "feed": "sip",
-            "rows": rows,
+            "prev_feed": "iex",
+            "prev_cov": prev_cov,
+            "new_feed": "sip",
+            "new_cov": new_cov,
+            "expected_bars": expected_bars,
+            "prev_bars": primary_actual_bars,
+            "new_bars": new_bars,
         },
     )
-    return None
+    return df
 
 
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
@@ -7837,7 +7862,7 @@ class LazyBotContext:
             ) as e:  # AI-AGENT-REF: narrow exception
                 logger.warning("Failed to subscribe to trade updates: %s", e)
 
-        fetcher = data_fetcher_module.build_fetcher(params)
+        fetcher = data_fetcher_module.build_fetcher()
         self._context = BotContext(
             api=trading_client,
             data_client=data_client,
@@ -14847,7 +14872,7 @@ def ensure_data_fetcher(runtime) -> DataFetcher:
     # Do not treat a late-construction as a warning to keep startup logs clean
     logger.info("DATA_FETCHER_MISSING", extra={"key": "data_fetcher_missing"})
     try:
-        fetcher = data_fetcher_module.build_fetcher(getattr(runtime, "params", {}))
+        fetcher = data_fetcher_module.build_fetcher()
     except COMMON_EXC as exc:  # pragma: no cover - best effort during startup
         logger_once.error(
             "DATA_FETCHER_INIT_FAILED", extra={"detail": str(exc)},
