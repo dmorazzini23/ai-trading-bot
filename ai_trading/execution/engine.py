@@ -43,6 +43,8 @@ from ai_trading.monitoring.order_health_monitor import (
 _active_orders = _mon_active
 _order_tracking_lock = _mon_lock
 
+_PRIMARY_FALLBACK_SOURCE = "unknown"
+
 def _cleanup_stale_orders(now: float | None=None, max_age_s: int | None=None) -> int:
     """Remove orders older than ``max_age_s`` and return count."""
     max_age = max_age_s if max_age_s is not None else ORDER_STALE_AFTER_S
@@ -133,6 +135,8 @@ class Order:
         self.min_quantity = kwargs.get('min_quantity', 0)
         self.stop_price = kwargs.get('stop_price')
         self.target_price = kwargs.get('target_price')
+        self.price_source = kwargs.get('price_source', 'unknown')
+        self.expected_price_source = kwargs.get('expected_price_source', self.price_source)
         self.max_participation_rate = kwargs.get('max_participation_rate', 0.1)
         self.max_slippage_bps = kwargs.get('max_slippage_bps', EXECUTION_PARAMETERS['MAX_SLIPPAGE_BPS'])
         self.urgency_level = kwargs.get('urgency_level', 'normal')
@@ -350,19 +354,32 @@ class OrderManager:
                 try:
                     import importlib
                     be = importlib.import_module("ai_trading.core.bot_engine")
-                    if hasattr(be, "get_latest_price"):
-                        quote = be.get_latest_price(order.symbol)
-                        if quote is not None:
-                            tick = TICK_BY_SYMBOL.get(order.symbol)
-                            order.expected_price = Money(quote, tick)
-                            logger.debug(
-                                "EXPECTED_PRICE_REFRESHED",
-                                extra={
-                                    "order_id": order.id,
-                                    "symbol": order.symbol,
-                                    "expected_price": float(order.expected_price),
-                                },
-                            )
+                    quote_info: SimpleNamespace | None = None
+                    if hasattr(be, "resolve_trade_quote"):
+                        quote_info = be.resolve_trade_quote(order.symbol)
+                    elif hasattr(be, "get_latest_price"):
+                        price = be.get_latest_price(order.symbol)
+                        source = (
+                            be.get_price_source(order.symbol)
+                            if hasattr(be, "get_price_source")
+                            else _PRIMARY_FALLBACK_SOURCE
+                        )
+                        quote_info = SimpleNamespace(price=price, source=source)
+                    if quote_info is not None and quote_info.price is not None:
+                        tick = TICK_BY_SYMBOL.get(order.symbol)
+                        order.expected_price = Money(quote_info.price, tick)
+                        order.expected_price_source = getattr(quote_info, "source", order.expected_price_source)
+                        if not getattr(order, "price_source", None):
+                            order.price_source = getattr(quote_info, "source", order.price_source)
+                        logger.debug(
+                            "EXPECTED_PRICE_REFRESHED",
+                            extra={
+                                "order_id": order.id,
+                                "symbol": order.symbol,
+                                "expected_price": float(order.expected_price),
+                                "price_source": getattr(quote_info, "source", "unknown"),
+                            },
+                        )
                 except Exception as e:  # pragma: no cover - diagnostics only
                     logger.debug(
                         "EXPECTED_PRICE_REFRESH_FAILED",
@@ -937,14 +954,29 @@ class ExecutionEngine:
                     try:
                         import importlib
                         be = importlib.import_module("ai_trading.core.bot_engine")
-                        if hasattr(be, "get_latest_price"):
-                            exp_price = be.get_latest_price(symbol)
-                            if exp_price is not None:
-                                kwargs["expected_price"] = exp_price
-                                logger.debug(
-                                    "EXPECTED_PRICE_FETCHED",
-                                    extra={"symbol": symbol, "expected_price": float(exp_price)},
-                                )
+                        quote_info: SimpleNamespace | None = None
+                        if hasattr(be, "resolve_trade_quote"):
+                            quote_info = be.resolve_trade_quote(symbol)
+                        elif hasattr(be, "get_latest_price"):
+                            price = be.get_latest_price(symbol)
+                            source = (
+                                be.get_price_source(symbol)
+                                if hasattr(be, "get_price_source")
+                                else _PRIMARY_FALLBACK_SOURCE
+                            )
+                            quote_info = SimpleNamespace(price=price, source=source)
+                        if quote_info is not None and quote_info.price is not None:
+                            kwargs["expected_price"] = quote_info.price
+                            kwargs.setdefault("price_source", getattr(quote_info, "source", "unknown"))
+                            kwargs["expected_price_source"] = getattr(quote_info, "source", "unknown")
+                            logger.debug(
+                                "EXPECTED_PRICE_FETCHED",
+                                extra={
+                                    "symbol": symbol,
+                                    "expected_price": float(quote_info.price),
+                                    "price_source": getattr(quote_info, "source", "unknown"),
+                                },
+                            )
                     except Exception as e:  # pragma: no cover - diagnostics only
                         logger.debug(
                             "EXPECTED_PRICE_FETCH_FAILED",
@@ -1190,11 +1222,21 @@ class ExecutionEngine:
             except Exception:
                 expected = float(base_price)
 
-            base_threshold = get_env(
-                "MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float
+            price_source = (
+                getattr(order, "expected_price_source", None)
+                or getattr(order, "price_source", None)
+                or "unknown"
             )
-            threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
-            base_price = self._apply_slippage(order, base_price, expected, threshold)
+            if isinstance(price_source, str) and price_source.startswith("alpaca"):
+                base_threshold = get_env(
+                    "MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float
+                )
+                threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
+                base_price = self._apply_slippage(order, base_price, expected, threshold)
+            else:
+                order.slippage_bps = 0.0
+                threshold = float("inf")
+                base_threshold = float("inf")
             if getattr(order, "expected_price", None) is None and base_price:
                 try:
                     tick = TICK_BY_SYMBOL.get(order.symbol)
