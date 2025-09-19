@@ -1270,54 +1270,35 @@ _FETCHER_SINGLETON: Any | None = None
 
 
 def build_fetcher(
-    config: Any | None = None,
-    *,
     prefer: str | None = None,
     force_feed: str | None = None,
-):
-    """Return a market data fetcher with safe fallbacks."""
+    *,
+    cache_minutes: int = 15,
+) -> "DataFetcher":
+    """
+    Returns a DataFetcher. If prefer/force_feed are provided, build a fresh, directed
+    fetcher (no singleton) to avoid cross-talk with the default.
+    """
+    # Import FIRST so it's bound before any use (avoids UnboundLocalError)
+    import importlib
+    bot_mod = importlib.import_module("ai_trading.core.bot_engine")
+    DF = getattr(bot_mod, "DataFetcher")
 
+    # Fast path: directed fetcher for coverage-recovery or special flows
     if prefer or force_feed:
-        fetcher = DataFetcher(prefer=prefer, force_feed=force_feed)
-        setattr(fetcher, "source", "alpaca")
+        fetcher = DF(prefer=prefer, force_feed=force_feed)
+        # (Optional) tag for logging/diagnostics:
+        setattr(fetcher, "source", "directed")
         return fetcher
 
+    # Singleton for the general case
     global _FETCHER_SINGLETON
     if _FETCHER_SINGLETON is not None:
         return _FETCHER_SINGLETON
-    try:
-        from ai_trading.alpaca_api import ALPACA_AVAILABLE
-    except Exception:  # pragma: no cover - optional dependency
-        ALPACA_AVAILABLE = False
 
-    bot_mod = importlib.import_module("ai_trading.core.bot_engine")
-    DataFetcher = bot_mod.DataFetcher
-    _ensure_http_client()
-    yf_mod = _ensure_yfinance()
-    req_mod = _ensure_requests()
-
-    alpaca_ok = bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
-    has_keys = alpaca_ok
-    if ALPACA_AVAILABLE and has_keys:
-        logger.info("DATA_FETCHER_BUILD", extra={"source": "alpaca"})
-        fetcher = DataFetcher()
-        setattr(fetcher, "source", "alpaca")
-        _FETCHER_SINGLETON = fetcher
-        return fetcher
-    if getattr(yf_mod, "download", None) is not None and getattr(req_mod, "get", None) is not None:
-        logger.info("DATA_FETCHER_BUILD", extra={"source": "yfinance"})
-        fetcher = DataFetcher()
-        setattr(fetcher, "source", "yfinance")
-        _FETCHER_SINGLETON = fetcher
-        return fetcher
-    if getattr(req_mod, "get", None) is not None:
-        logger.warning("DATA_FETCHER_BUILD_FALLBACK", extra={"source": "yahoo-requests"})
-        fetcher = DataFetcher()
-        setattr(fetcher, "source", "fallback")
-        _FETCHER_SINGLETON = fetcher
-        return fetcher
-    logger.error("DATA_FETCHER_UNAVAILABLE", extra={"reason": "no deps"})
-    raise DataFetchError("No market data source available")
+    _FETCHER_SINGLETON = DF(cache_minutes=cache_minutes)
+    setattr(_FETCHER_SINGLETON, "source", "singleton")
+    return _FETCHER_SINGLETON
 
 
 def retry_empty_fetch_once(
