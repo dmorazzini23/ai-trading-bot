@@ -2835,32 +2835,49 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     ) -> tuple[str | None, str | None]:
         fallback_feed: str | None = None
         fallback_provider: str | None = None
-        if data_fetcher_module._sip_configured():
+        sip_allowed = False
+        try:
+            sip_allowed = bool(
+                data_fetcher_module._sip_configured()
+                and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            )
+        except Exception:  # pragma: no cover - defensive
+            sip_allowed = False
+        if sip_allowed and current_feed != "sip":
             fallback_feed = "sip"
-        else:
-            try:
-                from ai_trading.config.settings import (
-                    provider_priority as _provider_priority,
-                )
+            fallback_provider = "alpaca_sip"
+            return fallback_feed, fallback_provider
+        try:
+            from ai_trading.config.settings import (
+                provider_priority as _provider_priority,
+            )
 
-                providers = list(_provider_priority())
-            except Exception as exc:  # pragma: no cover - defensive logging
-                providers = []
-                logger.debug(
-                    "PROVIDER_PRIORITY_LOOKUP_FAILED",
-                    extra={"error": str(exc)},
-                )
-            current_key = f"alpaca_{current_feed}"
-            if providers:
-                try:
-                    current_index = providers.index(current_key)
-                except ValueError:
-                    current_index = -1
-                for provider_name in providers[current_index + 1 :]:
-                    fallback_provider = provider_name
-                    if provider_name.startswith("alpaca_"):
-                        fallback_feed = provider_name.split("_", 1)[1]
-                    break
+            providers = list(_provider_priority())
+        except Exception as exc:  # pragma: no cover - defensive logging
+            providers = []
+            logger.debug(
+                "PROVIDER_PRIORITY_LOOKUP_FAILED",
+                extra={"error": str(exc)},
+            )
+        current_key = f"alpaca_{current_feed}"
+        if providers:
+            try:
+                current_index = providers.index(current_key)
+            except ValueError:
+                current_index = -1
+            for provider_name in providers[current_index + 1 :]:
+                if provider_name in {"alpaca_sip", "sip"} and not sip_allowed:
+                    continue
+                fallback_provider = provider_name
+                if provider_name.startswith("alpaca_"):
+                    candidate_feed = provider_name.split("_", 1)[1]
+                    if candidate_feed == "sip" and not sip_allowed:
+                        fallback_provider = None
+                        continue
+                    fallback_feed = candidate_feed
+                else:
+                    fallback_feed = fallback_provider
+                break
         return fallback_feed, fallback_provider
 
     def _sanitize_minute_df(
@@ -3208,6 +3225,25 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     symbol=symbol,
                     current_now=now_utc,
                 )
+                metadata = data_fetcher_module.get_fallback_metadata(
+                    symbol,
+                    "1Min",
+                    start_dt,
+                    end_dt,
+                )
+                if metadata:
+                    provider_meta = metadata.get("fallback_provider")
+                    if provider_meta:
+                        fallback_provider = provider_meta
+                    feed_meta = metadata.get("fallback_feed")
+                    if not feed_meta and provider_meta and provider_meta.startswith("alpaca_"):
+                        feed_meta = provider_meta.split("_", 1)[1]
+                    if feed_meta:
+                        fallback_feed = feed_meta
+                        if provider_meta and not provider_meta.startswith("alpaca_"):
+                            active_feed = feed_meta
+                        elif provider_meta and provider_meta.startswith("alpaca_"):
+                            active_feed = feed_meta
                 coverage = _coverage_metrics(
                     df,
                     expected=expected_bars,

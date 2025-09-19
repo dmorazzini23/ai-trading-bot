@@ -752,6 +752,129 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
     assert not budget.over()
 
 
+def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
+    monkeypatch, caplog
+):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 16, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=30)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    calls: list[str] = []
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        calls.append(str(feed or "iex"))
+        start_dt = bot_engine.data_fetcher_module.ensure_datetime(start)
+        end_dt = bot_engine.data_fetcher_module.ensure_datetime(end)
+        if len(calls) == 1:
+            idx = pd.date_range(
+                start=start_dt,
+                periods=2,
+                freq="min",
+                tz="UTC",
+            )
+            return pd.DataFrame(
+                {
+                    "timestamp": idx,
+                    "open": [1.0] * len(idx),
+                    "high": [1.0] * len(idx),
+                    "low": [1.0] * len(idx),
+                    "close": [1.0] * len(idx),
+                    "volume": [10] * len(idx),
+                }
+            )
+        bot_engine.data_fetcher_module._mark_fallback(
+            symbol,
+            "1Min",
+            start_dt,
+            end_dt,
+            from_provider="alpaca_iex",
+        )
+        idx = pd.date_range(
+            end=end_dt - timedelta(minutes=1),
+            periods=30,
+            freq="min",
+            tz="UTC",
+        )
+        return pd.DataFrame(
+            {
+                "timestamp": idx,
+                "open": [1.0] * len(idx),
+                "high": [1.1] * len(idx),
+                "low": [0.9] * len(idx),
+                "close": [1.0] * len(idx),
+                "volume": [100] * len(idx),
+            }
+        )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    bot_engine.data_fetcher_module._FALLBACK_WINDOWS.clear()
+    bot_engine.data_fetcher_module._FALLBACK_METADATA.clear()
+    bot_engine.data_fetcher_module._FALLBACK_UNTIL.clear()
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine.CFG, "data_feed", "iex", raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "alpaca_feed_failover", (), raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "market_cache_enabled", False, raising=False)
+    monkeypatch.setattr(bot_engine.CFG, "intraday_lookback_minutes", 30, raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_SIP_UNAUTHORIZED",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module.provider_monitor,
+        "record_switchover",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+        raising=False,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert len(calls) == 2
+    assert calls[1] == "yahoo"
+    assert not result.empty
+    warning_records = [rec for rec in caplog.records if rec.message == "MINUTE_DATA_COVERAGE_WARNING"]
+    assert warning_records, "coverage warning not emitted"
+    assert warning_records[-1].fallback_provider == "yahoo"
+
+
 def test_fetch_minute_df_safe_extends_window_for_long_indicators(monkeypatch):
     pd = load_pandas()
 

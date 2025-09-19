@@ -247,6 +247,7 @@ _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
 # primary-provider attempts for slightly shifted windows in the same cycle.
 _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
+_FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
 # symbol/timeframe/window. This keeps production logs concise while preserving
@@ -384,7 +385,15 @@ def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.dat
     return (symbol, timeframe, int(start.timestamp()), int(end.timestamp()))
 
 
-def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> None:
+def _mark_fallback(
+    symbol: str,
+    timeframe: str,
+    start: _dt.datetime,
+    end: _dt.datetime,
+    *,
+    from_provider: str | None = None,
+    fallback_feed: str | None = None,
+) -> None:
     """Record usage of the configured backup provider.
 
     Side effects
@@ -398,6 +407,14 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
     key = _fallback_key(symbol, timeframe, start, end)
     fallback_order.register_fallback(provider, symbol)
+    metadata: dict[str, str] = {"fallback_provider": provider}
+    if from_provider:
+        metadata["from_provider"] = from_provider
+    if fallback_feed:
+        metadata["fallback_feed"] = fallback_feed
+    elif provider and not provider.startswith("alpaca_"):
+        metadata["fallback_feed"] = provider
+    _FALLBACK_METADATA[key] = metadata
     # Emit once per unique (symbol, timeframe, window)
     if key not in _FALLBACK_WINDOWS:
         log_backup_provider_used(
@@ -407,7 +424,7 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
             start=start,
             end=end,
         )
-        provider_monitor.record_switchover("alpaca", provider)
+        provider_monitor.record_switchover(from_provider or "alpaca", provider)
     _FALLBACK_WINDOWS.add(key)
     # Also remember at a coarser granularity for a short TTL to avoid
     # repeated primary-provider retries for small window shifts in the same run.
@@ -420,6 +437,20 @@ def _mark_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
 
 def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
+
+
+def get_fallback_metadata(
+    symbol: str,
+    timeframe: str,
+    start: _dt.datetime,
+    end: _dt.datetime,
+) -> dict[str, str] | None:
+    """Return recorded fallback metadata for ``symbol`` and window if available."""
+
+    key = _fallback_key(symbol, timeframe, start, end)
+    if key in _FALLBACK_METADATA:
+        return dict(_FALLBACK_METADATA[key])
+    return None
 
 
 def _symbol_exists(symbol: str) -> bool:
@@ -1384,7 +1415,13 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                _mark_fallback(symbol, _interval, _start, _end)
+                _mark_fallback(
+                    symbol,
+                    _interval,
+                    _start,
+                    _end,
+                    from_provider=f"alpaca_{_feed}",
+                )
                 return _backup_get_bars(symbol, _start, _end, interval=fb_int)
         else:
             _alpaca_disabled_until = None
@@ -1437,7 +1474,13 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                _mark_fallback(symbol, _interval, _start, _end)
+                _mark_fallback(
+                    symbol,
+                    _interval,
+                    _start,
+                    _end,
+                    from_provider=f"alpaca_{_feed}",
+                )
                 return _backup_get_bars(symbol, _start, _end, interval=fb_int)
             return pd.DataFrame()
 
@@ -1452,7 +1495,13 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            _mark_fallback(symbol, _interval, _start, _end)
+            _mark_fallback(
+                symbol,
+                _interval,
+                _start,
+                _end,
+                from_provider=f"alpaca_{_feed}",
+            )
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
         return pd.DataFrame()
 
@@ -1791,7 +1840,13 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    _mark_fallback(symbol, _interval, _start, _end)
+                    _mark_fallback(
+                        symbol,
+                        _interval,
+                        _start,
+                        _end,
+                        from_provider=f"alpaca_{_feed}",
+                    )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
             if fallback:
@@ -1824,7 +1879,13 @@ def _fetch_bars(
                     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
                     provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
                     provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
-                    _mark_fallback(symbol, _interval, _start, _end)
+                    _mark_fallback(
+                        symbol,
+                        _interval,
+                        _start,
+                        _end,
+                        from_provider=f"alpaca_{_feed}",
+                    )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
             attempt = _state["retries"] + 1
@@ -1923,7 +1984,13 @@ def _fetch_bars(
                     provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
                     provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
                     metrics.empty_fallback += 1
-                    _mark_fallback(symbol, _interval, _start, _end)
+                    _mark_fallback(
+                        symbol,
+                        _interval,
+                        _start,
+                        _end,
+                        from_provider=f"alpaca_{_feed}",
+                    )
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
                     _state["stop"] = True
                     interval_map = {
@@ -1999,7 +2066,13 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    _mark_fallback(symbol, _interval, _start, _end)
+                    _mark_fallback(
+                        symbol,
+                        _interval,
+                        _start,
+                        _end,
+                        from_provider=f"alpaca_{_feed}",
+                    )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 logger.error(
                     "IEX_EMPTY_NO_SIP",
@@ -2019,7 +2092,13 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(base_interval)
                 if fb_int:
-                    _mark_fallback(symbol, base_interval, base_start, base_end)
+                    _mark_fallback(
+                        symbol,
+                        base_interval,
+                        base_start,
+                        base_end,
+                        from_provider=f"alpaca_{base_feed}",
+                    )
                     return _backup_get_bars(symbol, base_start, base_end, interval=fb_int)
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
@@ -2419,7 +2498,13 @@ def _fetch_bars(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
                 )
-                _mark_fallback(symbol, _interval, _start, _end)
+                _mark_fallback(
+                    symbol,
+                    _interval,
+                    _start,
+                    _end,
+                    from_provider=f"alpaca_{_feed}",
+                )
                 return alt_df
     if df is None or getattr(df, "empty", True):
         return None
@@ -2724,7 +2809,13 @@ def get_minute_df(
     if getattr(original_df, "empty", False):
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                _mark_fallback(
+                    symbol,
+                    "1Min",
+                    start_dt,
+                    end_dt,
+                    from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                )
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -2734,7 +2825,13 @@ def get_minute_df(
     if df is None:
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                _mark_fallback(
+                    symbol,
+                    "1Min",
+                    start_dt,
+                    end_dt,
+                    from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                )
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -2744,7 +2841,13 @@ def get_minute_df(
     if df is None or getattr(df, "empty", False):
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(symbol, "1Min", start_dt, end_dt)
+                _mark_fallback(
+                    symbol,
+                    "1Min",
+                    start_dt,
+                    end_dt,
+                    from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                )
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -2756,7 +2859,13 @@ def get_minute_df(
         mark_success(symbol, "1Min")
         success_marked = True
         if used_backup and not fallback_logged:
-            _mark_fallback(symbol, "1Min", start_dt, end_dt)
+            _mark_fallback(
+                symbol,
+                "1Min",
+                start_dt,
+                end_dt,
+                from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+            )
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
     return df
@@ -2958,6 +3067,7 @@ __all__ = [
     "get_cached_minute_timestamp",
     "set_cached_minute_timestamp",
     "clear_cached_minute_timestamp",
+    "get_fallback_metadata",
     "age_cached_minute_timestamps",
     "last_minute_bar_age_seconds",
     "_build_daily_url",
