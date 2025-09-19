@@ -1269,8 +1269,19 @@ def fetch_daily_data_async(
 _FETCHER_SINGLETON: Any | None = None
 
 
-def build_fetcher(config: Any):
+def build_fetcher(
+    config: Any | None = None,
+    *,
+    prefer: str | None = None,
+    force_feed: str | None = None,
+):
     """Return a market data fetcher with safe fallbacks."""
+
+    if prefer or force_feed:
+        fetcher = DataFetcher(prefer=prefer, force_feed=force_feed)
+        setattr(fetcher, "source", "alpaca")
+        return fetcher
+
     global _FETCHER_SINGLETON
     if _FETCHER_SINGLETON is not None:
         return _FETCHER_SINGLETON

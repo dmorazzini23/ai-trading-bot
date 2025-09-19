@@ -58,6 +58,8 @@ from ai_trading.data.fetch import (
     get_minute_df,
     get_cached_minute_timestamp,
     last_minute_bar_age_seconds,
+    _sip_configured,
+    build_fetcher,
 )
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
@@ -3447,6 +3449,28 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     insufficient_intraday = bool(coverage["insufficient_intraday"])
     low_coverage = bool(coverage["low_coverage"])
 
+    if materially_short:
+        sip_recovery_df = _try_sip_recovery(symbol, start_dt, end_dt)
+        if sip_recovery_df is not None:
+            df = sip_recovery_df
+            active_feed = "sip"
+            fallback_attempted = True
+            fallback_used = True
+            fallback_feed = "sip"
+            fallback_feed_used = "sip"
+            if not fallback_provider:
+                fallback_provider = "alpaca_sip"
+            coverage = _coverage_metrics(
+                df,
+                expected=expected_bars,
+                intraday_requirement=intraday_lookback,
+            )
+            actual_bars = int(coverage["actual"])
+            coverage_threshold = int(coverage["threshold"])
+            materially_short = bool(coverage["materially_short"])
+            insufficient_intraday = bool(coverage["insufficient_intraday"])
+            low_coverage = bool(coverage["low_coverage"])
+
     if low_coverage and not coverage_warning_logged:
         warning_extra = {
             "symbol": symbol,
@@ -5107,7 +5131,12 @@ def is_high_vol_regime() -> bool:
 _last_fh_prefetch_date: date | None = None
 @dataclass
 class DataFetcher:
+    prefer: str | None = None
+    force_feed: str | None = None
+
     def __post_init__(self):
+        self.prefer = self._normalize_feed_value(self.prefer)
+        self.force_feed = self._normalize_feed_value(self.force_feed)
         self.settings = get_settings()
         self._daily_cache: dict[str, tuple[date, pd.DataFrame | None]] = {}
         self._minute_cache: dict[str, pd.DataFrame | None] = {}
@@ -5134,6 +5163,48 @@ class DataFetcher:
                 ),
                 "adjustment": getattr(self.settings, "alpaca_adjustment", None),
             },
+        )
+
+    @staticmethod
+    def _normalize_feed_value(value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            normalized = str(value).strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        return normalized or None
+
+    def _resolve_feed(self, feed: str | None) -> str | None:
+        normalized = self._normalize_feed_value(feed)
+        if self.force_feed:
+            return self.force_feed
+        if normalized is None and self.prefer:
+            return self.prefer
+        return normalized
+
+    def get_bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: Any,
+        end: Any,
+        *,
+        feed: str | None = None,
+        adjustment: str | None = None,
+    ) -> pd.DataFrame | None:
+        """Delegate to :func:`ai_trading.data.fetch.get_bars` honoring overrides."""
+
+        effective_feed = self._resolve_feed(feed)
+        if effective_feed is None:
+            effective_feed = feed  # type: ignore[assignment]
+        return data_fetcher_module.get_bars(
+            symbol,
+            timeframe,
+            start,
+            end,
+            feed=effective_feed,
+            adjustment=adjustment,
         )
 
     def _warn_once(self, key: str, msg: str) -> None:
@@ -5367,7 +5438,7 @@ class DataFetcher:
                 return None
 
         try:
-            feed = (
+            feed = self._resolve_feed(
                 getattr(
                     self.settings,
                     "data_feed",
@@ -5375,6 +5446,8 @@ class DataFetcher:
                 )
                 or "iex"
             )
+            if not feed:
+                feed = "iex"
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Day,
@@ -5700,14 +5773,16 @@ class DataFetcher:
         df: pd.DataFrame | None = None
 
         try:
-            feed = (
+            feed = self._resolve_feed(
                 getattr(
                     self.settings,
                     "data_feed",
                     getattr(self.settings, "alpaca_data_feed", None),
                 )
                 or "iex"
-            ).lower()
+            )
+            if not feed:
+                feed = "iex"
             req = bars.StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=bars.TimeFrame.Minute,
@@ -5873,6 +5948,7 @@ class DataFetcher:
                 self._minute_timestamps.pop(symbol, None)
         return df
 
+
     def get_historical_minute(
         self,
         ctx: BotContext,  # ← still needs ctx here, per retrain.py
@@ -5887,7 +5963,7 @@ class DataFetcher:
         """
         all_days: list[pd.DataFrame] = []
         current_day = start_date
-        feed = (
+        feed = self._resolve_feed(
             getattr(
                 self.settings,
                 "data_feed",
@@ -5895,6 +5971,8 @@ class DataFetcher:
             )
             or "iex"
         )
+        if not feed:
+            feed = "iex"
 
         while current_day <= end_date:
             day_start = datetime.combine(current_day, dt_time.min, UTC)
@@ -5993,6 +6071,78 @@ class DataFetcher:
         combined = combined[~combined.index.duplicated(keep="first")]
         combined = combined.sort_index()
         return combined
+
+
+def _try_sip_recovery(symbol: str, start: datetime, end: datetime):
+    """Attempt to refill minute coverage by forcing the Alpaca SIP feed."""
+
+    if not _sip_configured():
+        logger.info("COVERAGE_RECOVERY_SIP_DISABLED", extra={"symbol": symbol})
+        return None
+
+    try:
+        fetcher = build_fetcher(prefer="alpaca", force_feed="sip")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "COVERAGE_RECOVERY_FAILED",
+            extra={
+                "symbol": symbol,
+                "provider": "alpaca",
+                "feed": "sip",
+                "rows": 0,
+                "error": str(exc),
+            },
+        )
+        return None
+
+    logger.info(
+        "COVERAGE_RECOVERY_START",
+        extra={"symbol": symbol, "provider": "alpaca", "feed": "sip"},
+    )
+    try:
+        df = fetcher.get_bars(
+            symbol=symbol,
+            timeframe="1Min",
+            start=start,
+            end=end,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "COVERAGE_RECOVERY_FAILED",
+            extra={
+                "symbol": symbol,
+                "provider": "alpaca",
+                "feed": "sip",
+                "rows": 0,
+                "error": str(exc),
+            },
+        )
+        return None
+
+    rows = 0 if df is None else len(df)
+    expected_minutes = max(int((end - start).total_seconds() // 60) + 1, 1)
+    if df is not None and rows >= 0.5 * expected_minutes:
+        logger.info(
+            "COVERAGE_RECOVERY_DONE",
+            extra={
+                "symbol": symbol,
+                "provider": "alpaca",
+                "feed": "sip",
+                "rows": rows,
+            },
+        )
+        return df
+
+    logger.warning(
+        "COVERAGE_RECOVERY_FAILED",
+        extra={
+            "symbol": symbol,
+            "provider": "alpaca",
+            "feed": "sip",
+            "rows": rows,
+        },
+    )
+    return None
 
 
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
@@ -14281,6 +14431,55 @@ def start_metrics_server(default_port: int = 9200) -> None:
         logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
 
+def _resolve_exec_price(
+    symbol: str,
+    minute_df: pd.DataFrame | None,
+    last_close: float | None,
+    stale_sec_limit: int = 180,
+):
+    """Return a valid execution price or ``None`` when data is unusable."""
+
+    try:  # pragma: no cover - pandas always available in prod
+        import pandas as pd_mod  # type: ignore
+    except ImportError:  # pragma: no cover - defensive
+        pd_mod = pd
+
+    price = 0.0
+    if minute_df is not None and len(minute_df):
+        try:
+            price = float(minute_df["close"].iloc[-1])
+        except Exception:
+            price = 0.0
+        if pd_mod is not None:
+            try:
+                last_idx = minute_df.index[-1]
+                last_ts = pd_mod.Timestamp(last_idx)
+                if last_ts.tzinfo is None:
+                    last_ts = last_ts.tz_localize("UTC")
+                age = (
+                    pd_mod.Timestamp.utcnow().tz_localize("UTC")
+                    - last_ts.tz_convert("UTC")
+                ).total_seconds()
+            except Exception:  # pragma: no cover - defensive
+                age = 0.0
+            if age > stale_sec_limit:
+                logger.warning(
+                    "FETCH_MINUTE_STALE_DATA",
+                    extra={"symbol": symbol, "age": f"{int(age)}s"},
+                )
+                price = 0.0
+    if price <= 0.0:
+        if last_close and last_close > 0:
+            logger.info(
+                "PRICE_FALLBACK_LAST_CLOSE",
+                extra={"symbol": symbol, "price": float(last_close)},
+            )
+            return float(last_close), "last_close"
+        logger.warning("PRICE_INVALID_SKIP_SYMBOL", extra={"symbol": symbol})
+        return None, "invalid"
+    return price, "minute_close"
+
+
 def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
@@ -14445,7 +14644,9 @@ def run_multi_strategy(ctx) -> None:
         sig = to_trade_signal(sig)
         retries = 0
         price = 0.0
-        data = None
+        minute_df: pd.DataFrame | None = None
+        last_close: float | None = None
+        skip_symbol = False
         while price <= 0 and retries < 3:
             try:
                 req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
@@ -14457,27 +14658,26 @@ def run_multi_strategy(ctx) -> None:
             if price <= 0:
                 time.sleep(2)
                 try:
-                    data = fetch_minute_df_safe(sig.symbol)
+                    minute_df = fetch_minute_df_safe(sig.symbol)
                 except DataFetchError:
-                    data = pd.DataFrame()
-                if data is not None and not data.empty:
-                    row = data.iloc[-1]
+                    minute_df = pd.DataFrame()
+                if minute_df is not None and not minute_df.empty:
+                    row = minute_df.iloc[-1]
                     logger.debug(
                         "Fetched minute data for %s: %s",
                         sig.symbol,
                         row.to_dict(),
                     )
-                    minute_close = float(row.get("close", 0))
-                    logger.info(
-                        "Using last_close=%.4f vs minute_close=%.4f",
-                        utils.get_latest_close(data),
-                        minute_close,
+                    last_close = utils.get_latest_close(minute_df)
+                    resolved_price, _ = _resolve_exec_price(
+                        sig.symbol, minute_df, last_close
                     )
-                    price = (
-                        minute_close
-                        if minute_close > 0
-                        else utils.get_latest_close(data)
-                    )
+                    if resolved_price is None:
+                        skip_symbol = True
+                        break
+                    price = resolved_price
+                if skip_symbol:
+                    break
                 if price <= 0:
                     logger.warning(
                         "Retry %s: price %.2f <= 0 for %s, refetching data",
@@ -14488,16 +14688,8 @@ def run_multi_strategy(ctx) -> None:
                     retries += 1
             else:
                 break
-        if price <= 0:
-            logger.critical(
-                "Failed after retries: non-positive price for %s. Data context: %r",
-                sig.symbol,
-                (
-                    data.tail(3).to_dict()
-                    if hasattr(data, "tail") and hasattr(data, "to_dict")
-                    else data
-                ),
-            )
+        if skip_symbol or price <= 0:
+            logger.info("SKIP_SYMBOL_NO_VALID_PRICE", extra={"symbol": sig.symbol})
             continue
         # Provide the account equity (cash) when sizing positions; this allows
         # CapitalScalingEngine.scale_position to use equity rather than raw size.
