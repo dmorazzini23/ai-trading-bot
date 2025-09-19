@@ -10,8 +10,18 @@ from typing import Any
 
 try:  # optional dependency
     import numpy as np
-except ImportError:
+except ImportError:  # pragma: no cover - exercised via guard paths
     np = None
+
+
+def _require_numpy(context: str) -> None:
+    """Ensure NumPy is available before using NumPy-dependent helpers."""
+
+    if np is None:
+        raise ImportError(
+            "NumPy is required for "
+            f"{context}. Install the 'numpy' package or the 'ai-trading-bot[rl]' extras."
+        )
 from ai_trading.logging import logger
 from . import _load_rl_stack, is_rl_available
 
@@ -145,6 +155,7 @@ class EarlyStoppingCallback(BaseCallback):
     """
 
     def __init__(self, patience: int=10, min_improvement: float=0.01, verbose: int=0):
+        _require_numpy("EarlyStoppingCallback")
         super().__init__(verbose)
         self.patience = patience
         self.min_improvement = min_improvement
@@ -156,6 +167,7 @@ class EarlyStoppingCallback(BaseCallback):
 
     def _on_rollout_end(self) -> None:
         """Called at the end of each rollout."""
+        _require_numpy("EarlyStoppingCallback rollout handling")
         if hasattr(self.training_env, 'get_attr'):
             try:
                 env_rewards = self.training_env.get_attr('episode_returns')
@@ -183,6 +195,7 @@ class DetailedEvalCallback(BaseCallback):
     """
 
     def __init__(self, eval_env, eval_freq: int=10000, n_eval_episodes: int=5, deterministic: bool=True, save_path: str | None=None, verbose: int=1):
+        _require_numpy("DetailedEvalCallback")
         super().__init__(verbose)
         self.eval_env = eval_env
         self.eval_freq = eval_freq
@@ -199,6 +212,7 @@ class DetailedEvalCallback(BaseCallback):
 
     def _evaluate_model(self) -> None:
         """Run detailed evaluation."""
+        _require_numpy("Detailed evaluation metrics")
         try:
             episode_rewards, episode_lengths = evaluate_policy(self.model, self.eval_env, n_eval_episodes=self.n_eval_episodes, deterministic=self.deterministic, return_episode_rewards=True)
             mean_reward = np.mean(episode_rewards)
@@ -249,6 +263,7 @@ class DetailedEvalCallback(BaseCallback):
 
     def _calculate_sharpe_ratio(self) -> float:
         """Calculate approximate Sharpe ratio from recent evaluations."""
+        _require_numpy("Sharpe ratio calculation")
         try:
             if len(self.eval_results) < 2:
                 return 0.0
@@ -311,8 +326,7 @@ class RLTrainer:
         Returns:
             Training results
         """
-        if np is None:
-            raise ImportError("numpy required for RL training")
+        _require_numpy("RLTrainer training")
         if not _ensure_rl():
             logger.warning('Stable-baselines3 not available - returning dummy results')
             return {'training_time': 0.0, 'final_evaluation': {'mean_reward': 0.0, 'std_reward': 0.0}, 'total_timesteps': 0, 'algorithm': self.algorithm}
@@ -395,6 +409,7 @@ class RLTrainer:
 
     def _final_evaluation(self) -> dict[str, float]:
         """Perform final comprehensive evaluation."""
+        _require_numpy("final evaluation metrics")
         try:
             if self.model is None or self.eval_env is None:
                 return {}
@@ -454,6 +469,7 @@ __all__ = [
 
 def train_rl_model_cli() -> None:
     """CLI interface for RL training."""
+    _require_numpy("train_rl_model_cli")
     if not _ensure_rl():
         logger.warning('Stable-baselines3 not available - RL training CLI disabled')
         return
