@@ -2458,6 +2458,7 @@ def get_minute_df(
             retries=cnt,
         )
         raise
+    attempt_count_snapshot = attempt
     used_backup = False
     success_marked = False
     fallback_logged = False
@@ -2586,10 +2587,12 @@ def get_minute_df(
                                 )
                                 _record_feed_switch(symbol, "1Min", cur, alt_feed)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                                mark_success(symbol, "1Min")
                                 df_alt = _post_process(df_alt, symbol=symbol, timeframe="1Min")
                                 df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
-                                return df_alt
+                                if df_alt is not None and not getattr(df_alt, "empty", True):
+                                    mark_success(symbol, "1Min")
+                                    return df_alt
+                                df = df_alt
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(
@@ -2619,10 +2622,12 @@ def get_minute_df(
                                     },
                                 )
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                                mark_success(symbol, "1Min")
                                 df_short = _post_process(df_short, symbol=symbol, timeframe="1Min")
                                 df_short = _verify_minute_continuity(df_short, symbol, backfill=backfill)
-                                return df_short
+                                if df_short is not None and not getattr(df_short, "empty", True):
+                                    mark_success(symbol, "1Min")
+                                    return df_short
+                                df = df_short
                     df = None
                 else:
                     logger.debug(
@@ -2684,8 +2689,9 @@ def get_minute_df(
         else:
             df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
+    attempt_count_snapshot = max(attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot))
     allow_empty_return = (not window_has_session) or (
-        used_backup and _EMPTY_BAR_COUNTS.get(tf_key, 0) < _EMPTY_BAR_THRESHOLD
+        used_backup and attempt_count_snapshot < _EMPTY_BAR_THRESHOLD
     )
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
@@ -2697,12 +2703,6 @@ def get_minute_df(
                 last_ts = None
             if last_ts is not None:
                 set_cached_minute_timestamp(symbol, last_ts)
-            _IEX_EMPTY_COUNTS.pop(tf_key, None)
-            mark_success(symbol, "1Min")
-            success_marked = True
-            if used_backup and not fallback_logged:
-                _mark_fallback(symbol, "1Min", start_dt, end_dt)
-                fallback_logged = True
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
     original_df = df
@@ -2710,37 +2710,31 @@ def get_minute_df(
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     if getattr(original_df, "empty", False):
         if allow_empty_return:
-            if not success_marked:
-                mark_success(symbol, "1Min")
-                success_marked = True
             if used_backup and not fallback_logged:
                 _mark_fallback(symbol, "1Min", start_dt, end_dt)
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _post_process(original_df, symbol=symbol, timeframe="1Min")
     if df is None:
         if allow_empty_return:
-            if not success_marked:
-                mark_success(symbol, "1Min")
-                success_marked = True
             if used_backup and not fallback_logged:
                 _mark_fallback(symbol, "1Min", start_dt, end_dt)
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df if original_df is not None else df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
     if df is None or getattr(df, "empty", False):
         if allow_empty_return:
-            if not success_marked:
-                mark_success(symbol, "1Min")
-                success_marked = True
             if used_backup and not fallback_logged:
                 _mark_fallback(symbol, "1Min", start_dt, end_dt)
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
+            _SKIPPED_SYMBOLS.discard(tf_key)
             if df is None:
                 return original_df if original_df is not None else df
             return df
