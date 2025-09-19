@@ -81,7 +81,15 @@ class ProviderMonitor:
 
         self._callbacks[provider] = cb
 
-    def record_failure(self, provider: str, reason: str, error: str | None = None) -> None:
+    def record_failure(
+        self,
+        provider: str,
+        reason: str,
+        error: str | None = None,
+        *,
+        exception: Exception | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         """Record a failure for ``provider`` and alert on threshold.
 
         Parameters
@@ -95,19 +103,58 @@ class ProviderMonitor:
             Optional detailed error message derived from the underlying
             exception. When provided it is included in logs and alert metadata
             to aid debugging of provider outages.
+        exception:
+            Optional exception instance for structured diagnostics. When
+            supplied the exception type and representation are captured in the
+            diagnostic log event and alert metadata.
+        retry_after:
+            Optional retry hint (in seconds) returned by the provider. The value
+            is emitted with the diagnostics to highlight throttling or
+            backoff-oriented failures.
         """
 
         count = self.fail_counts[provider] + 1
         self.fail_counts[provider] = count
+        diagnostics: dict[str, object] = {
+            "provider": provider,
+            "reason": reason,
+            "count": count,
+            "threshold": self.threshold,
+            "backoff_factor": self.backoff_factor,
+            "max_cooldown": self.max_cooldown,
+        }
+        if retry_after is not None:
+            diagnostics["retry_after"] = retry_after
+        if error:
+            diagnostics["error"] = error
+        if exception is not None:
+            diagnostics["exception_type"] = type(exception).__name__
+            diagnostics["exception_repr"] = repr(exception)
+        disable_count = self.disable_counts.get(provider, 0)
+        projected_cooldown = min(
+            self.cooldown * (self.backoff_factor ** disable_count),
+            self.max_cooldown,
+        )
+        diagnostics["projected_cooldown"] = projected_cooldown
+        logger.warning("DATA_PROVIDER_FAILURE_DIAGNOSTIC", extra=diagnostics)
         if count >= self.threshold:
             extra = {"provider": provider, "reason": reason, "count": count}
             if error:
                 extra["error"] = error
+            if exception is not None:
+                extra["exception_type"] = type(exception).__name__
+                extra["exception_repr"] = repr(exception)
+            if retry_after is not None:
+                extra["retry_after"] = retry_after
             logger.error("DATA_PROVIDER_FAILURE", extra=extra)
             try:
                 metadata = {"reason": reason, "failures": count}
                 if error:
                     metadata["error"] = error
+                if exception is not None:
+                    metadata["exception_type"] = type(exception).__name__
+                if retry_after is not None:
+                    metadata["retry_after"] = retry_after
                 self.alert_manager.create_alert(
                     AlertType.SYSTEM,
                     AlertSeverity.CRITICAL,
@@ -243,7 +290,13 @@ class ProviderMonitor:
         provider_disabled.labels(provider=provider).set(1)
         logger.warning(
             "DATA_PROVIDER_DISABLED",
-            extra={"provider": provider, "cooldown": cooldown_s, "disable_count": count},
+            extra={
+                "provider": provider,
+                "cooldown": cooldown_s,
+                "disable_count": count,
+                "backoff_factor": self.backoff_factor,
+                "max_cooldown": self.max_cooldown,
+            },
         )
         cb = self._callbacks.get(provider)
         if cb:
