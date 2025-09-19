@@ -17,7 +17,9 @@ from ai_trading.exc import RequestException
 if TYPE_CHECKING:
     import pandas as pd
 
-config = TradingConfig.from_env()
+# Defer configuration resolution to runtime to avoid import-time side effects
+def _get_config() -> TradingConfig:
+    return TradingConfig.from_env(allow_missing_drawdown=True)
 _sentiment_lock = Lock()
 _last_request_time: dict[str, float] = {}
 logger = logging.getLogger(__name__)
@@ -37,7 +39,8 @@ _cache_ttl = 300
 
 def fetch_sentiment(symbol: str) -> float:
     """Return a sentiment score for ``symbol`` using NewsAPI with rate limiting and TTL cache."""
-    api_key = getattr(config, 'SENTIMENT_API_KEY', None) or config.NEWS_API_KEY
+    cfg = _get_config()
+    api_key = getattr(cfg, 'SENTIMENT_API_KEY', None) or getattr(cfg, 'NEWS_API_KEY', None)
     if not api_key:
         logger.debug('No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)')
         return 0.0
@@ -66,7 +69,7 @@ def fetch_sentiment(symbol: str) -> float:
                 return 0.0
         _last_request_time[symbol] = current_time
     try:
-        base_url = getattr(config, 'SENTIMENT_API_URL', 'https://newsapi.org/v2/everything')
+        base_url = getattr(cfg, 'SENTIMENT_API_URL', 'https://newsapi.org/v2/everything')
         url = f'{base_url}?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={api_key}'
         resp = http.get(url, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()

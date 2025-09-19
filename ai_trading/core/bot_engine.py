@@ -1521,9 +1521,8 @@ else:  # pragma: no cover - executed only when SDK missing
 # This ensures imports don't fail due to missing environment variables
 
 try:
-    # Only import config module, don't validate at import time
+    # Only import config module; defer hydration to runtime initializer
     from ai_trading.config.settings import get_settings
-    _get_trading_config()
 except (
     FileNotFoundError,
     PermissionError,
@@ -4429,31 +4428,40 @@ def _minute_data_freshness_limit() -> int:
 
 
 CAPITAL_CAP = _env_float(0.25, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
-_cfg = TradingConfig.from_env()
-# Align default MAX_POSITION_SIZE with configuration at import time. Runtime
-# may update this later when dynamic sizing is resolved.
-if getattr(_cfg, "max_position_size", None):
-    try:
-        MAX_POSITION_SIZE = float(_cfg.max_position_size)
-    except (ValueError, TypeError):  # pragma: no cover - defensive
-        pass
 _settings_drl = get_dollar_risk_limit()
 DOLLAR_RISK_LIMIT = _settings_drl
-if _cfg.dollar_risk_limit is not None and _cfg.dollar_risk_limit != _settings_drl:
-    logger.debug(
-        "DOLLAR_RISK_LIMIT_OVERRIDE",
-        extra={
-            "settings": _settings_drl,
-            "trading_config": _cfg.dollar_risk_limit,
-        },
+
+
+def initialize_runtime_config() -> None:
+    """Resolve TradingConfig-backed overrides after environment is loaded.
+
+    Keeps import-time side effects out of this module.
+    """
+
+    try:
+        cfg = TradingConfig.from_env(allow_missing_drawdown=True)
+    except Exception as exc:  # pragma: no cover - import-time tolerance
+        logger.debug("TRADING_CONFIG_DEFERRED", extra={"error": repr(exc)})
+        return
+    # Align defaults at runtime
+    if getattr(cfg, "max_position_size", None):
+        try:
+            globals()["MAX_POSITION_SIZE"] = float(cfg.max_position_size)  # type: ignore[assignment]
+        except (ValueError, TypeError):  # pragma: no cover - defensive
+            pass
+    if getattr(cfg, "dollar_risk_limit", None) is not None and cfg.dollar_risk_limit != DOLLAR_RISK_LIMIT:  # type: ignore[operator]
+        logger.debug(
+            "DOLLAR_RISK_LIMIT_OVERRIDE",
+            extra={"settings": _settings_drl, "trading_config": cfg.dollar_risk_limit},
+        )
+        globals()["DOLLAR_RISK_LIMIT"] = cfg.dollar_risk_limit  # type: ignore[assignment]
+    resolved_drl = globals().get("DOLLAR_RISK_LIMIT", DOLLAR_RISK_LIMIT)
+    _emit_once(
+        logger,
+        "dollar_risk_limit_resolved",
+        logging.DEBUG,
+        f"DOLLAR_RISK_LIMIT resolved to {resolved_drl:.3f}",
     )
-    DOLLAR_RISK_LIMIT = _cfg.dollar_risk_limit
-_emit_once(
-    logger,
-    "dollar_risk_limit_resolved",
-    logging.DEBUG,
-    f"DOLLAR_RISK_LIMIT resolved to {DOLLAR_RISK_LIMIT:.3f}",
-)
 BUY_THRESHOLD = params.get(
     "get_buy_threshold()",
     getattr(state.mode_obj.config, "buy_threshold", get_buy_threshold()),
