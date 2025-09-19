@@ -153,7 +153,7 @@ def _load_train_module() -> Any:
         raise AttributeError(
             f"module {__name__!r} has no attribute 'train'"
         ) from exc
-    sys.modules.setdefault("ai_trading.rl_trading.train", module)
+    sys.modules["ai_trading.rl_trading.train"] = module
     globals()["train"] = module
     return module
 
