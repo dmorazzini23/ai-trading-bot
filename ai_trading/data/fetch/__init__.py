@@ -139,16 +139,30 @@ def _to_timeframe_str(tf: object) -> str:
 
 
 def _to_feed_str(feed: object) -> str:
-    """Return canonical feed string with strict validation."""
+    """Return canonical feed string with strict validation.
+
+    Unknown feeds (for example ``"yahoo"`` or ``"alpaca_yahoo"``) are
+    sanitized to the configured default to avoid provider flapping. A single
+    warning is emitted so operators can correct the upstream configuration.
+    """
+
     try:
         s = str(feed).strip().lower()
-    except Exception as e:  # pragma: no cover - defensive
-        raise ValueError("invalid_feed") from e
+    except Exception:  # pragma: no cover - defensive
+        logger.warning(
+            "FEED_SANITIZED",
+            extra=_norm_extra({"given": repr(feed), "using": _DEFAULT_FEED}),
+        )
+        return _DEFAULT_FEED
     if "iex" in s:
         return "iex"
     if "sip" in s:
         return "sip"
-    raise ValueError("invalid_feed")
+    logger.warning(
+        "FEED_SANITIZED",
+        extra=_norm_extra({"given": s or repr(feed), "using": _DEFAULT_FEED}),
+    )
+    return _DEFAULT_FEED
 
 
 class DataFetchError(Exception):
