@@ -252,9 +252,12 @@ def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
     monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
 
-    def _fake_latest_price(sym):
-        bot_engine._PRICE_SOURCE[sym] = "yahoo"
-        return 101.0
+    def _fake_latest_price(sym, *, prefer_backup=False):
+        if prefer_backup:
+            bot_engine._PRICE_SOURCE[sym] = "yahoo"
+            return 101.0
+        bot_engine._PRICE_SOURCE[sym] = "alpaca_ask"
+        return 0.0
 
     monkeypatch.setattr(bot_engine, "get_latest_price", _fake_latest_price)
 
@@ -344,8 +347,12 @@ def test_enter_long_uses_feature_close_when_quote_invalid(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "get_take_profit_factor", lambda: 1.0)
     monkeypatch.setattr(bot_engine, "_record_trade_in_frequency_tracker", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine, "submit_order", lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price)) or types.SimpleNamespace(id="order-1"))
-    monkeypatch.setattr(bot_engine, "get_latest_price", lambda _symbol: 0.0)
-    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {symbol: "alpaca"}, raising=False)
+    monkeypatch.setattr(
+        bot_engine,
+        "get_latest_price",
+        lambda _symbol, *, prefer_backup=False: 0.0,
+    )
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {symbol: "alpaca_ask"}, raising=False)
 
     caplog.set_level("WARNING")
 

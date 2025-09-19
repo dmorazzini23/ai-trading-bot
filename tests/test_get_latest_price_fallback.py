@@ -213,3 +213,55 @@ def test_get_latest_price_handles_auth_failure(monkeypatch):
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_auth_failed"
     assert not is_alpaca_service_available()
 
+
+def test_get_latest_price_prefer_backup_skips_alpaca(monkeypatch):
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+
+    called = {"alpaca": False}
+
+    def fake_alpaca(*_a, **_k):  # pragma: no cover - should not be invoked
+        called["alpaca"] = True
+        return {"ap": 123.0}
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (fake_alpaca, None))
+
+    def fake_yahoo(symbol, start, end, interval):  # noqa: ARG001
+        return _df(104.0)
+
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", fake_yahoo)
+    monkeypatch.setattr(
+        bot_engine,
+        "get_latest_close",
+        lambda df: float(df["close"].iloc[-1]),
+    )
+
+    price = bot_engine.get_latest_price("AAPL", prefer_backup=True)
+
+    assert price == 104.0
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "yahoo"
+    assert not called["alpaca"]
+
+
+def test_resolve_trade_quote_prefers_backup_when_primary_zero(monkeypatch):
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+
+    def fake_alpaca(*_a, **_k):
+        return {"ap": 0.0, "bp": 0.0}
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", lambda: (fake_alpaca, None))
+
+    def fake_yahoo(symbol, start, end, interval):  # noqa: ARG001
+        return _df(102.5)
+
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", fake_yahoo)
+    monkeypatch.setattr(
+        bot_engine,
+        "get_latest_close",
+        lambda df: float(df["close"].iloc[-1]),
+    )
+
+    quote = bot_engine.resolve_trade_quote("AAPL")
+
+    assert quote.price == 102.5
+    assert quote.source == "yahoo"
+

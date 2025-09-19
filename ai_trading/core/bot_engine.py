@@ -640,6 +640,21 @@ pd = load_pandas()
 _FEATURE_CACHE: "OrderedDict[tuple[str, pd.Timestamp], pd.DataFrame]" = OrderedDict()
 _FEATURE_CACHE_LIMIT = 128
 _PRICE_SOURCE: dict[str, str] = {}
+_PRIMARY_PRICE_SOURCES = frozenset(
+    {
+        "alpaca",
+        "alpaca_ask",
+        "alpaca_bid",
+        "alpaca_last",
+        "alpaca_midpoint",
+    }
+)
+
+
+def _is_primary_price_source(source: str) -> bool:
+    """Return ``True`` when *source* represents Alpaca-provided pricing."""
+
+    return source in _PRIMARY_PRICE_SOURCES
 logger = get_logger(__name__)
 
 def _alpaca_diag_info() -> dict[str, object]:
@@ -10890,6 +10905,7 @@ def _enter_long(
     conf: float,
     strat: str,
 ) -> bool:
+    prefer_backup_quote = False
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     if callable(primary_provider_fn):
         try:
@@ -10906,6 +10922,10 @@ def _enter_long(
                 degraded = set()
                 setattr(state, "degraded_providers", degraded)
             degraded.add("alpaca")
+            prefer_backup_quote = True
+    degraded = getattr(state, "degraded_providers", None)
+    if isinstance(degraded, set) and "alpaca" in degraded:
+        prefer_backup_quote = True
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -10920,13 +10940,16 @@ def _enter_long(
         or os.getenv("TESTING")
         or os.getenv("DRY_RUN")
     )
+    quote_price: float | None
+    price_source: str
     if testing_mode:
         quote_price = current_price
-        price_source = "alpaca"
+        price_source = "alpaca_ask"
         _PRICE_SOURCE[symbol] = price_source
     else:
-        quote_price = get_latest_price(symbol)
-        price_source = _PRICE_SOURCE.get(symbol, "unknown")
+        quote_price, price_source = _resolve_order_quote(
+            symbol, prefer_backup=prefer_backup_quote
+        )
         if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
             logger.warning(
                 "SKIP_ORDER_ALPACA_UNAVAILABLE",
@@ -10937,19 +10960,7 @@ def _enter_long(
                 auth_skipped.add(symbol)
             return True
 
-    original_quote = quote_price
-    try:
-        corrected_quote = float(quote_price)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        corrected_quote = float("nan")
-
-    quote_invalid = (
-        quote_price is None
-        or not np.isfinite(corrected_quote)
-        or corrected_quote <= 0
-    )
-
-    if quote_invalid:
+    if quote_price is None:
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
         if fallback_price is not None:
             logger.warning(
@@ -10957,10 +10968,10 @@ def _enter_long(
                 extra={
                     "symbol": symbol,
                     "price_source": price_source,
-                    "quote": original_quote,
+                    "quote": quote_price,
                 },
             )
-            corrected_quote = float(fallback_price)
+            quote_price = float(fallback_price)
             price_source = "feature_close"
             _PRICE_SOURCE[symbol] = price_source
         else:
@@ -10969,19 +10980,18 @@ def _enter_long(
                 extra={
                     "symbol": symbol,
                     "price_source": price_source,
-                    "quote": original_quote,
+                    "quote": quote_price,
                 },
             )
             return True
 
-    quote_price = corrected_quote
     if price_source == "unknown":
         logger.warning(
             "SKIP_ORDER_PRICE_SOURCE",
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if price_source != "alpaca":
+    if not _is_primary_price_source(price_source):
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -11140,6 +11150,7 @@ def _enter_short(
     conf: float,
     strat: str,
 ) -> bool:
+    prefer_backup_quote = False
     primary_provider_fn = getattr(data_fetcher_module, "is_primary_provider_enabled", None)
     if callable(primary_provider_fn):
         try:
@@ -11156,6 +11167,10 @@ def _enter_short(
                 degraded = set()
                 setattr(state, "degraded_providers", degraded)
             degraded.add("alpaca")
+            prefer_backup_quote = True
+    degraded = getattr(state, "degraded_providers", None)
+    if isinstance(degraded, set) and "alpaca" in degraded:
+        prefer_backup_quote = True
 
     current_price = get_latest_close(feat_df)
     if logger.isEnabledFor(logging.DEBUG):
@@ -11170,13 +11185,16 @@ def _enter_short(
         or os.getenv("TESTING")
         or os.getenv("DRY_RUN")
     )
+    quote_price: float | None
+    price_source: str
     if testing_mode:
         quote_price = current_price
-        price_source = "alpaca"
+        price_source = "alpaca_ask"
         _PRICE_SOURCE[symbol] = price_source
     else:
-        quote_price = get_latest_price(symbol)
-        price_source = _PRICE_SOURCE.get(symbol, "unknown")
+        quote_price, price_source = _resolve_order_quote(
+            symbol, prefer_backup=prefer_backup_quote
+        )
         if price_source in {"alpaca_auth_failed", "alpaca_unavailable"}:
             logger.warning(
                 "SKIP_ORDER_ALPACA_UNAVAILABLE",
@@ -11198,7 +11216,7 @@ def _enter_short(
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if price_source != "alpaca":
+    if not _is_primary_price_source(price_source):
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -16562,7 +16580,7 @@ def _record_trade_in_frequency_tracker(
     )
 
 
-def get_latest_price(symbol: str):
+def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     """Return the most recent quote price with provider fallbacks."""
 
     price: float | None = None
@@ -16592,107 +16610,114 @@ def get_latest_price(symbol: str):
             )
             return None
         return value
-    if not is_alpaca_service_available():
-        _PRICE_SOURCE[symbol] = "alpaca_unavailable"
-        return None
-    try:
-        alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
-        feed = get_env("ALPACA_DATA_FEED", "iex")
-        params = {"feed": feed} if feed else None
-        data = alpaca_get(
-            f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
-            params=params,
-        )
-        def _iter_price_sources(payload: Any) -> Iterable[tuple[str, Any]]:
-            """Yield potential Alpaca price fields with source labels."""
+    skip_primary = prefer_backup
+    if not skip_primary and not is_alpaca_service_available():
+        skip_primary = True
+        price_source = "alpaca_unavailable"
 
-            if not isinstance(payload, dict):
-                return
+    if not skip_primary:
+        try:
+            alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
+            feed = get_env("ALPACA_DATA_FEED", "iex")
+            params = {"feed": feed} if feed else None
+            data = alpaca_get(
+                f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
+                params=params,
+            )
 
-            def _lookup(keys: Iterable[str]) -> Any:
-                for key in keys:
-                    if key in payload:
-                        return payload[key]
-                return None
+            def _iter_price_sources(payload: Any) -> Iterable[tuple[str, Any]]:
+                """Yield potential Alpaca price fields with source labels."""
 
-            # Ask price first (primary source)
-            ask_value = _lookup(("ask_price", "ap"))
-            yield "alpaca_ask", ask_value
+                if not isinstance(payload, dict):
+                    return
 
-            # Bid price when ask is missing or invalid
-            bid_value = _lookup(("bid_price", "bp"))
-            yield "alpaca_bid", bid_value
+                def _lookup(keys: Iterable[str]) -> Any:
+                    for key in keys:
+                        if key in payload:
+                            return payload[key]
+                    return None
 
-            # Last trade can appear in multiple shapes
-            last_obj = _lookup(("last", "last_trade", "lastTrade"))
-            last_value: Any = None
-            if isinstance(last_obj, dict):
-                for key in ("price", "p", "trade_price", "last_price"):
-                    if key in last_obj:
-                        last_value = last_obj[key]
+                # Ask price first (primary source)
+                ask_value = _lookup(("ask_price", "ap"))
+                yield "alpaca_ask", ask_value
+
+                # Bid price when ask is missing or invalid
+                bid_value = _lookup(("bid_price", "bp"))
+                yield "alpaca_bid", bid_value
+
+                # Last trade can appear in multiple shapes
+                last_obj = _lookup(("last", "last_trade", "lastTrade"))
+                last_value: Any = None
+                if isinstance(last_obj, dict):
+                    for key in ("price", "p", "trade_price", "last_price"):
+                        if key in last_obj:
+                            last_value = last_obj[key]
+                            break
+                elif last_obj is not None:
+                    last_value = last_obj
+                if last_value is None:
+                    last_value = _lookup(("last_price", "lp"))
+                yield "alpaca_last", last_value
+
+                # Midpoint if provided by the API (eg. SIP feed)
+                midpoint_value = _lookup(("midpoint", "mid_price", "mp"))
+                yield "alpaca_midpoint", midpoint_value
+
+            payloads: list[dict[str, Any]] = []
+            if isinstance(data, dict):
+                payloads.append(data)
+                nested = data.get("quote")
+                if isinstance(nested, dict):
+                    payloads.append(nested)
+                    nested_symbol = nested.get(symbol)
+                    if isinstance(nested_symbol, dict):
+                        payloads.append(nested_symbol)
+                symbol_payload = data.get(symbol)
+                if isinstance(symbol_payload, dict):
+                    payloads.append(symbol_payload)
+
+            for payload in payloads:
+                for source_label, raw_value in _iter_price_sources(payload):
+                    price = _normalize_price(raw_value, source_label)
+                    if price is not None:
+                        price_source = source_label
                         break
-            elif last_obj is not None:
-                last_value = last_obj
-            if last_value is None:
-                last_value = _lookup(("last_price", "lp"))
-            yield "alpaca_last", last_value
-
-            # Midpoint if provided by the API (eg. SIP feed)
-            midpoint_value = _lookup(("midpoint", "mid_price", "mp"))
-            yield "alpaca_midpoint", midpoint_value
-
-        payloads: list[dict[str, Any]] = []
-        if isinstance(data, dict):
-            payloads.append(data)
-            nested = data.get("quote")
-            if isinstance(nested, dict):
-                payloads.append(nested)
-                nested_symbol = nested.get(symbol)
-                if isinstance(nested_symbol, dict):
-                    payloads.append(nested_symbol)
-            symbol_payload = data.get(symbol)
-            if isinstance(symbol_payload, dict):
-                payloads.append(symbol_payload)
-
-        for payload in payloads:
-            for source_label, raw_value in _iter_price_sources(payload):
-                price = _normalize_price(raw_value, source_label)
                 if price is not None:
-                    price_source = source_label
                     break
-            if price is not None:
-                break
-        if price is None:
-            price_source = "alpaca_invalid"
-    except AlpacaAuthenticationError as exc:
-        logger.error(
-            "ALPACA_PRICE_AUTH_FAILED",
-            extra={"symbol": symbol, "detail": str(exc)},
-        )
-        _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
-        return None
-    except AlpacaOrderHTTPError as exc:
-        logger.warning(
-            "ALPACA_PRICE_HTTP_ERROR",
-            extra={
-                "symbol": symbol,
-                "status": getattr(exc, "status_code", None),
-                "error": str(exc),
-            },
-        )
-        price_source = "alpaca_http_error"
-        _PRICE_SOURCE[symbol] = price_source
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as e:  # AI-AGENT-REF: narrow exception
-        logger.warning("ALPACA_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
+            if price is None:
+                price_source = "alpaca_invalid"
+        except AlpacaAuthenticationError as exc:
+            logger.error(
+                "ALPACA_PRICE_AUTH_FAILED",
+                extra={"symbol": symbol, "detail": str(exc)},
+            )
+            _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
+            return None
+        except AlpacaOrderHTTPError as exc:
+            logger.warning(
+                "ALPACA_PRICE_HTTP_ERROR",
+                extra={
+                    "symbol": symbol,
+                    "status": getattr(exc, "status_code", None),
+                    "error": str(exc),
+                },
+            )
+            price_source = "alpaca_http_error"
+            _PRICE_SOURCE[symbol] = price_source
+        except (
+            FileNotFoundError,
+            PermissionError,
+            IsADirectoryError,
+            JSONDecodeError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
+            logger.warning("ALPACA_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
+    else:
+        if price_source == "unknown" and prefer_backup:
+            price_source = "alpaca_skipped"
 
     if price is None:
         try:
@@ -16724,6 +16749,51 @@ def get_latest_price(symbol: str):
 
     _PRICE_SOURCE[symbol] = price_source
     return price
+
+
+def _resolve_order_quote(
+    symbol: str,
+    *,
+    prefer_backup: bool = False,
+) -> tuple[float | None, str]:
+    """Return ``(price, source)`` preferring active providers for trading."""
+
+    attempts: list[bool] = []
+    if not prefer_backup:
+        attempts.append(False)
+    attempts.append(True)
+    last_source = _PRICE_SOURCE.get(symbol, "unknown")
+    for use_backup in attempts:
+        price = get_latest_price(symbol, prefer_backup=use_backup)
+        source = _PRICE_SOURCE.get(symbol, "unknown")
+        last_source = source
+        if price is None:
+            continue
+        try:
+            price_value = float(price)
+        except (TypeError, ValueError):
+            continue
+        if price_value <= 0:
+            continue
+        return price_value, source
+    return None, last_source
+
+
+def resolve_trade_quote(
+    symbol: str,
+    *,
+    prefer_backup: bool = False,
+) -> types.SimpleNamespace:
+    """Return quote metadata used when routing orders."""
+
+    price, source = _resolve_order_quote(symbol, prefer_backup=prefer_backup)
+    return types.SimpleNamespace(price=price, source=source)
+
+
+def get_price_source(symbol: str) -> str:
+    """Return the last recorded price source for *symbol*."""
+
+    return _PRICE_SOURCE.get(symbol, "unknown")
 
 
 def initialize_bot(api=None, data_loader=None):
