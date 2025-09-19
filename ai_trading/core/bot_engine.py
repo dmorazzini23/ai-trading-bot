@@ -10981,7 +10981,8 @@ def _enter_long(
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if price_source != "alpaca":
+    is_alpaca_source = isinstance(price_source, str) and price_source.lower().startswith("alpaca")
+    if not is_alpaca_source:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -11198,7 +11199,8 @@ def _enter_short(
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if price_source != "alpaca":
+    is_alpaca_source = isinstance(price_source, str) and price_source.lower().startswith("alpaca")
+    if not is_alpaca_source:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
