@@ -8,9 +8,28 @@ import pytest
 np = pytest.importorskip("numpy")
 os.environ.setdefault("PYTEST_RUNNING", "1")
 os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
+os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
     sys.modules.pop(m, None)
 sys.modules.pop("risk_engine", None)
+import ai_trading.config.management as config_management
+import ai_trading.config.settings as config_settings
+
+config_pkg = sys.modules.get("ai_trading.config")
+if config_pkg is None:
+    config_pkg = types.ModuleType("ai_trading.config")
+    sys.modules["ai_trading.config"] = config_pkg
+
+config_pkg.get_settings = config_settings.get_settings
+config_pkg.Settings = config_settings.Settings
+config_pkg.management = config_management
+config_pkg.TradingConfig = config_management.TradingConfig
+
+if not hasattr(config_management, "from_env_relaxed"):
+    def _from_env_relaxed() -> config_management.TradingConfig:  # pragma: no cover - legacy shim
+        return config_management.TradingConfig.from_env()
+
+    config_management.from_env_relaxed = _from_env_relaxed  # type: ignore[attr-defined]
 from ai_trading.risk.engine import RiskEngine, TradeSignal  # AI-AGENT-REF: normalized import
 
 
@@ -25,6 +44,32 @@ class DummyAPI:
 
 def make_signal():
     return TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s", weight=0.0, asset_class="equity")
+
+
+def test_risk_engine_instantiates_with_default_config(monkeypatch):
+    stub_config = types.SimpleNamespace(
+        exposure_cap_aggressive=0.8,
+        position_size_min_usd=100.0,
+        atr_multiplier=1.0,
+        pytest_running=True,
+        max_drawdown_threshold=0.15,
+        hard_stop_cooldown_min=10.0,
+        alpaca_oauth_token=None,
+    )
+    calls: list[None] = []
+
+    def fake_get_trading_config():
+        calls.append(None)
+        return stub_config
+
+    risk_engine_module = sys.modules[RiskEngine.__module__]
+    monkeypatch.setattr(risk_engine_module, "get_trading_config", fake_get_trading_config)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-secret")
+
+    engine = RiskEngine()
+
+    assert engine.config is stub_config
+    assert calls, "RiskEngine() should fetch a trading config when none is provided"
 
 
 def test_can_trade_limits():
