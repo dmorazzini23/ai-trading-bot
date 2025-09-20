@@ -35,7 +35,11 @@ class _FinnhubFetcherStub:
 
 
 def _build_fetcher() -> Any:
-    enable = config.get_env("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
+    raw_enable = config.get_env("ENABLE_FINNHUB", "1")
+    if isinstance(raw_enable, str):
+        enable = raw_enable.strip().lower() not in {"0", "false", "off", "no"}
+    else:
+        enable = bool(raw_enable)
     if not enable:
         if "finnhub" not in _SENT_DEPS_LOGGED:
             log_finnhub_disabled("GLOBAL")
