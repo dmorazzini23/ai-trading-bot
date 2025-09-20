@@ -698,6 +698,7 @@ logger = get_logger(__name__)
 # Cycle-scoped fallback cache shared across helpers/tests
 _GLOBAL_CYCLE_ID: int | None = None
 _GLOBAL_INTRADAY_FALLBACK_FEED: str | None = None
+_SIP_UNAUTHORIZED_LOGGED = False
 
 
 def _reset_cycle_cache() -> None:
@@ -721,6 +722,13 @@ def _cache_cycle_fallback_feed(feed: str | None) -> None:
     global _GLOBAL_INTRADAY_FALLBACK_FEED
     if feed:
         _GLOBAL_INTRADAY_FALLBACK_FEED = feed
+
+
+def _sip_authorized() -> bool:
+    """Return True when SIP entitlement environment flag allows access."""
+
+    value = str(os.getenv("ALPACA_ALLOW_SIP", "")).strip().lower()
+    return value in {"1", "true", "yes"}
 
 def _alpaca_diag_info() -> dict[str, object]:
     """Collect Alpaca env & mode diagnostics for operator visibility."""
@@ -3047,6 +3055,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             return "sip"
         if "iex" in feed_val:
             return "iex"
+        if "yahoo" in feed_val:
+            return "yahoo"
         return data_fetcher_module._DEFAULT_FEED
 
     configured_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
@@ -3241,163 +3251,113 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     primary_actual_bars = actual_bars
 
+    primary_start_dt = start_dt
+
     fallback_used = False
-    fallback_feed_used = None
+    fallback_feed_used: str | None = None
     fallback_attempted = False
-    fallback_feed = None
+    fallback_feed: str | None = None
     fallback_provider: str | None = None
     coverage_warning_logged = False
 
-    sip_recovery_attempted = False
-    if (
-        current_feed == "iex"
-        and expected_bars > 0
-        and actual_bars < coverage_threshold
-    ):
-        try:
-            sip_allowed = bool(
-                data_fetcher_module._sip_configured()
-                and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-            )
-        except Exception as exc:  # pragma: no cover - defensive logging
-            sip_allowed = False
-            logger.debug(
-                "SIP_RECOVERY_STATUS_UNKNOWN",
-                extra={"symbol": symbol, "error": str(exc)},
-            )
+    planned_fallback_feed = _prefer_feed_this_cycle() or "yahoo"
+    planned_fallback_provider = (
+        "alpaca_sip" if planned_fallback_feed == "sip" else "yahoo"
+    )
+
+    if actual_bars < coverage_threshold:
+        warning_extra = {
+            "symbol": symbol,
+            "expected_bars": expected_bars,
+            "primary_actual_bars": primary_actual_bars,
+            "actual_bars": actual_bars,
+            "materially_short": materially_short,
+            "insufficient_intraday": insufficient_intraday,
+            "from_feed": current_feed,
+            "active_feed": current_feed,
+            "fallback_feed": planned_fallback_feed,
+            "fallback_provider": planned_fallback_provider,
+            "fallback_attempted": False,
+            "fallback_used": False,
+            "fallback_exhausted": False,
+            "start": primary_start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+        }
+        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
+        coverage_warning_logged = True
+
+        fallback_start_dt = max(
+            end_dt - timedelta(minutes=intraday_lookback), start_dt
+        )
+        fallback_expected_bars = max(
+            int((end_dt - fallback_start_dt).total_seconds() // 60), 1
+        )
+
+        global _SIP_UNAUTHORIZED_LOGGED
+
+        sip_allowed = (
+            current_feed != "sip"
+            and _sip_authorized()
+            and data_fetcher_module._sip_configured()
+            and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            and not provider_monitor.is_disabled("alpaca_sip")
+        )
+
         if sip_allowed:
-            sip_recovery_attempted = True
-            sip_kwargs = _minute_fetch_kwargs(extra={"feed": "sip"})
+            fallback_attempted = True
             try:
-                sip_df_raw = get_minute_df(symbol, start_dt, end_dt, **sip_kwargs)
-            except Exception as sip_exc:  # pragma: no cover - best effort logging
+                sip_fetcher = build_fetcher(prefer="alpaca", force_feed="sip")
+                sip_raw = sip_fetcher.get_bars(
+                    symbol=symbol,
+                    timeframe="1Min",
+                    start=fallback_start_dt,
+                    end=end_dt,
+                )
+            except Exception as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
                     "SIP_RECOVERY_FAILED",
                     extra={
                         "symbol": symbol,
                         "prev_feed": current_feed,
-                        "error": str(sip_exc),
+                        "error": str(exc),
                     },
                 )
-            else:
-                if sip_df_raw is not None and not getattr(sip_df_raw, "empty", True):
-                    sip_df = _sanitize_minute_df(
-                        sip_df_raw,
-                        symbol=symbol,
-                        current_now=now_utc,
-                    )
-                    try:
-                        sip_bars = int(len(sip_df))
-                    except Exception:
-                        sip_bars = 0
-                    if sip_bars > actual_bars:
-                        prev_cov = actual_bars / max(expected_bars, 1)
-                        new_cov = sip_bars / max(expected_bars, 1)
-                        logger.warning(
-                            "COVERAGE_RECOVERY_SIP",
-                            extra={
-                                "symbol": symbol,
-                                "prev_feed": current_feed,
-                                "prev_cov": round(prev_cov, 4),
-                                "new_feed": "sip",
-                                "new_cov": round(new_cov, 4),
-                                "expected_bars": expected_bars,
-                                "prev_bars": actual_bars,
-                                "new_bars": sip_bars,
-                            },
-                        )
-                        df = sip_df
-                        active_feed = "sip"
-                        fallback_feed = "sip"
-                        fallback_provider = "alpaca_sip"
-                        fallback_used = True
-                        fallback_feed_used = "sip"
-                        coverage = _coverage_metrics(
-                            df,
-                            expected=expected_bars,
-                            intraday_requirement=intraday_lookback,
-                        )
-                        actual_bars = int(coverage["actual"])
-                        coverage_threshold = int(coverage["threshold"])
-                        materially_short = bool(coverage["materially_short"])
-                        insufficient_intraday = bool(coverage["insufficient_intraday"])
-                        low_coverage = bool(coverage["low_coverage"])
-                    else:
-                        logger.debug(
-                            "SIP_RECOVERY_NO_IMPROVEMENT",
-                            extra={
-                                "symbol": symbol,
-                                "prev_feed": current_feed,
-                                "prev_bars": actual_bars,
-                                "sip_bars": sip_bars,
-                                "expected_bars": expected_bars,
-                            },
-                        )
-                else:
-                    logger.debug(
-                        "SIP_RECOVERY_EMPTY",
-                        extra={
-                            "symbol": symbol,
-                            "prev_feed": current_feed,
-                            "expected_bars": expected_bars,
-                        },
-                    )
-    if sip_recovery_attempted:
-        fallback_attempted = True
+                sip_raw = None
 
-    if low_coverage:
-        fallback_feed, fallback_provider = _determine_fallback_feed(current_feed)
-        if active_backfill is None and auto_gap_fill:
-            active_backfill = "ffill"
-
-        fetch_kwargs = _minute_fetch_kwargs()
-        if fallback_feed and fallback_feed != current_feed:
-            fetch_kwargs["feed"] = fallback_feed
-
-        fallback_attempted = True
-        try:
-            df_alt = get_minute_df(symbol, start_dt, end_dt, **fetch_kwargs)
-        except Exception as exc:  # pragma: no cover - fallback errors are logged
-            logger.warning(
-                "MINUTE_DATA_FALLBACK_FAILED",
-                extra={
-                    "symbol": symbol,
-                    "expected_bars": expected_bars,
-                    "actual_bars": actual_bars,
-                    "from_feed": current_feed,
-                    "fallback_feed": (fallback_feed or ""),
-                    "fallback_provider": (fallback_provider or ""),
-                    "start": start_dt.isoformat(),
-                    "end": end_dt.isoformat(),
-                    "error": str(exc),
-                },
-            )
-        else:
-            if df_alt is not None and not getattr(df_alt, "empty", True):
-                df = _sanitize_minute_df(
-                    df_alt,
+            if sip_raw is not None and not getattr(sip_raw, "empty", True):
+                sip_df = _sanitize_minute_df(
+                    sip_raw,
                     symbol=symbol,
                     current_now=now_utc,
                 )
-                metadata = data_fetcher_module.get_fallback_metadata(
-                    symbol,
-                    "1Min",
-                    start_dt,
-                    end_dt,
+                try:
+                    sip_bars = int(len(sip_df))
+                except Exception:
+                    sip_bars = 0
+            else:
+                sip_df = None
+                sip_bars = 0
+
+            if sip_df is not None and sip_bars > primary_actual_bars:
+                prev_expected = max(expected_bars or 0, 1)
+                prev_cov = primary_actual_bars / prev_expected
+                new_cov = sip_bars / max(fallback_expected_bars, 1)
+                logger.warning(
+                    "COVERAGE_RECOVERY_SIP",
+                    extra={
+                        "symbol": symbol,
+                        "prev_feed": current_feed,
+                        "prev_cov": round(prev_cov, 4),
+                        "new_feed": "sip",
+                        "new_cov": round(new_cov, 4),
+                        "expected_bars": fallback_expected_bars,
+                        "prev_bars": primary_actual_bars,
+                        "new_bars": sip_bars,
+                    },
                 )
-                if metadata:
-                    provider_meta = metadata.get("fallback_provider")
-                    if provider_meta:
-                        fallback_provider = provider_meta
-                    feed_meta = metadata.get("fallback_feed")
-                    if not feed_meta and provider_meta and provider_meta.startswith("alpaca_"):
-                        feed_meta = provider_meta.split("_", 1)[1]
-                    if feed_meta:
-                        fallback_feed = feed_meta
-                        if provider_meta and not provider_meta.startswith("alpaca_"):
-                            active_feed = feed_meta
-                        elif provider_meta and provider_meta.startswith("alpaca_"):
-                            active_feed = feed_meta
+                df = sip_df
+                start_dt = fallback_start_dt
+                expected_bars = fallback_expected_bars
                 coverage = _coverage_metrics(
                     df,
                     expected=expected_bars,
@@ -3408,54 +3368,122 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
-                if fallback_feed:
-                    active_feed = fallback_feed
-                if fallback_feed and fallback_feed != current_feed:
-                    fallback_used = True
-                    fallback_feed_used = fallback_feed
+                fallback_used = True
+                fallback_feed = "sip"
+                fallback_feed_used = "sip"
+                fallback_provider = "alpaca_sip"
+                active_feed = "sip"
+                _cache_cycle_fallback_feed("sip")
+            else:
+                logger.warning(
+                    "COVERAGE_RECOVERY_INSUFFICIENT",
+                    extra={
+                        "symbol": symbol,
+                        "expected_bars": fallback_expected_bars,
+                        "prev_bars": primary_actual_bars,
+                        "new_bars": sip_bars,
+                    },
+                )
+                fallback_feed = "sip"
+                fallback_provider = "alpaca_sip"
+        else:
+            if (
+                (not _sip_authorized())
+                or getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            ) and not _SIP_UNAUTHORIZED_LOGGED:
+                logger.warning(
+                    "UNAUTHORIZED_SIP",
+                    extra={
+                        "provider": "alpaca",
+                        "status": "unauthorized",
+                        "feed": "sip",
+                        "timeframe": "1Min",
+                    },
+                )
+                _SIP_UNAUTHORIZED_LOGGED = True
+            fallback_feed = "sip"
+            fallback_provider = "alpaca_sip"
 
-        coverage = _coverage_metrics(
-            df,
-            expected=expected_bars,
-            intraday_requirement=intraday_lookback,
-        )
-        actual_bars = int(coverage["actual"])
-        coverage_threshold = int(coverage["threshold"])
-        materially_short = bool(coverage["materially_short"])
-        insufficient_intraday = bool(coverage["insufficient_intraday"])
-        low_coverage = bool(coverage["low_coverage"])
+        if not fallback_used:
+            fallback_attempted = True
+            logger.info(
+                "BACKUP_PROVIDER_USED",
+                extra={
+                    "provider": "yahoo",
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "start": fallback_start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                },
+            )
+            try:
+                yahoo_fetcher = build_fetcher(prefer="yahoo")
+                yahoo_raw = yahoo_fetcher.get_bars(
+                    symbol,
+                    "1Min",
+                    fallback_start_dt,
+                    end_dt,
+                )
+            except Exception as exc:  # pragma: no cover - diagnostics only
+                logger.debug(
+                    "BACKUP_PROVIDER_FAILED",
+                    extra={"provider": "yahoo", "symbol": symbol, "error": str(exc)},
+                )
+                yahoo_raw = None
 
-        warning_extra = {
-            "symbol": symbol,
-            "expected_bars": expected_bars,
-            "primary_actual_bars": primary_actual_bars,
-            "actual_bars": actual_bars,
-            "materially_short": materially_short,
-            "insufficient_intraday": insufficient_intraday,
-            "from_feed": current_feed,
-            "active_feed": active_feed,
-            "fallback_feed": (fallback_feed or ""),
-            "fallback_provider": (fallback_provider or ""),
-            "fallback_attempted": fallback_attempted,
-            "fallback_used": fallback_used,
-            "fallback_exhausted": low_coverage,
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-        }
-        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
-        coverage_warning_logged = True
+            if yahoo_raw is not None and not getattr(yahoo_raw, "empty", True):
+                yahoo_df = _sanitize_minute_df(
+                    yahoo_raw,
+                    symbol=symbol,
+                    current_now=now_utc,
+                )
+                try:
+                    yahoo_bars = int(len(yahoo_df))
+                except Exception:
+                    yahoo_bars = 0
+            else:
+                yahoo_df = None
+                yahoo_bars = 0
 
-        if (
-            fallback_used
-            and fallback_feed_used
-            and configured_feed
-            and not low_coverage
-        ):
-            cache = getattr(state, "minute_feed_cache", None)
-            if not isinstance(cache, dict):
-                cache = {}
-                setattr(state, "minute_feed_cache", cache)
-            cache[configured_feed] = fallback_feed_used
+            if yahoo_df is not None and yahoo_bars > primary_actual_bars:
+                df = yahoo_df
+                start_dt = fallback_start_dt
+                expected_bars = fallback_expected_bars
+                coverage = _coverage_metrics(
+                    df,
+                    expected=expected_bars,
+                    intraday_requirement=intraday_lookback,
+                )
+                actual_bars = int(coverage["actual"])
+                coverage_threshold = int(coverage["threshold"])
+                materially_short = bool(coverage["materially_short"])
+                insufficient_intraday = bool(coverage["insufficient_intraday"])
+                low_coverage = bool(coverage["low_coverage"])
+                fallback_used = True
+                fallback_feed = "yahoo"
+                fallback_feed_used = "yahoo"
+                fallback_provider = "yahoo"
+                active_feed = "yahoo"
+                _cache_cycle_fallback_feed("yahoo")
+            else:
+                logger.warning(
+                    "COVERAGE_RECOVERY_INSUFFICIENT",
+                    extra={
+                        "symbol": symbol,
+                        "expected_bars": fallback_expected_bars,
+                        "prev_bars": primary_actual_bars,
+                        "new_bars": yahoo_bars,
+                    },
+                )
+                fallback_feed = "yahoo"
+                fallback_provider = "yahoo"
+
+    if fallback_used and fallback_feed_used and configured_feed:
+        cache = getattr(state, "minute_feed_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            setattr(state, "minute_feed_cache", cache)
+        cache[configured_feed] = fallback_feed_used
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
@@ -3522,6 +3550,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed_used = "sip"
             if not fallback_provider:
                 fallback_provider = "alpaca_sip"
+            _cache_cycle_fallback_feed("sip")
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
@@ -11335,25 +11364,20 @@ def _enter_long(
             "alpaca_unavailable",
             _ALPACA_DISABLED_SENTINEL,
         }:
-            logger.warning(
-                "SKIP_ORDER_ALPACA_UNAVAILABLE",
-                extra={"symbol": symbol, "price_source": price_source},
+            logger.info(
+                "FEATURE_PRICE_USED",
+                extra={"symbol": symbol, "price_source": "feature_close"},
             )
-            auth_skipped = getattr(state, "auth_skipped_symbols", None)
-            if isinstance(auth_skipped, set):
-                auth_skipped.add(symbol)
-            return True
+            quote_price = float(current_price)
+            price_source = "feature_close"
+            _PRICE_SOURCE[symbol] = price_source
 
     if quote_price is None:
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
         if fallback_price is not None:
-            logger.warning(
-                "FALLBACK_TO_FEATURE_CLOSE",
-                extra={
-                    "symbol": symbol,
-                    "price_source": price_source,
-                    "quote": quote_price,
-                },
+            logger.info(
+                "FEATURE_PRICE_USED",
+                extra={"symbol": symbol, "price_source": "feature_close"},
             )
             quote_price = float(fallback_price)
             price_source = "feature_close"
@@ -11375,7 +11399,7 @@ def _enter_long(
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if not _is_primary_price_source(price_source):
+    if price_source != "feature_close" and not _is_primary_price_source(price_source):
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -15074,7 +15098,7 @@ def _process_symbols(
         _budget_sec = float(_budget_sec)  # type: ignore[arg-type]
     except (TypeError, ValueError):  # pragma: no cover - defensive cast
         _budget_sec = 300.0
-    proc_budget = SoftBudget(interval_sec=float(_budget_sec), fraction=1.0)
+    proc_budget = SoftBudget(int(max(0.0, float(_budget_sec)) * 1000))
 
     quota_notice_logged = False
     quota_notice_lock = Lock()
@@ -15111,7 +15135,7 @@ def _process_symbols(
                 },
             )
             break
-        if proc_budget.over():
+        if proc_budget.over_budget():
             logger.warning(
                 "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
                 extra={

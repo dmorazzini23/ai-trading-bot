@@ -736,7 +736,7 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
     )
     monkeypatch.setattr(bot_engine, "state", bot_engine.BotState())
 
-    budget = SoftBudget(interval_sec=0.07, fraction=1.0)
+    budget = SoftBudget(70)
 
     with caplog.at_level(logging.WARNING):
         with budget:
@@ -749,7 +749,7 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
     assert bot_engine.state.minute_feed_cache.get("iex") == "sip"
     warning_messages = [rec.message for rec in caplog.records]
     assert warning_messages.count("MINUTE_DATA_COVERAGE_WARNING") == 1
-    assert not budget.over()
+    assert not budget.over_budget()
 
 
 def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
@@ -1296,4 +1296,3 @@ def test_fetch_feature_data_skips_when_minute_stale(monkeypatch):
     assert feat_df is None
     assert skip_flag is True
     assert halt_calls == []
-

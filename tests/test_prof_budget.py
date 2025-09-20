@@ -4,7 +4,7 @@ from ai_trading.utils.prof import SoftBudget
 
 
 def test_soft_budget_direct_usage_elapsed_and_over():
-    budget = SoftBudget(interval_sec=0.05, fraction=1.0)
+    budget = SoftBudget(50)
 
     initial_elapsed = budget.elapsed_ms()
     assert initial_elapsed <= 1
@@ -14,12 +14,12 @@ def test_soft_budget_direct_usage_elapsed_and_over():
     assert budget.remaining() > 0.0
 
     time.sleep(0.07)
-    assert budget.over() is True
+    assert budget.over_budget() is True
     assert budget.remaining() == 0.0
 
 
 def test_soft_budget_context_manager_resets_start():
-    budget = SoftBudget(interval_sec=0.05, fraction=1.0)
+    budget = SoftBudget(50)
     time.sleep(0.005)
     assert budget.elapsed_ms() >= 1
 
@@ -33,4 +33,4 @@ def test_soft_budget_context_manager_resets_start():
         assert managed_budget.remaining() > 0.0
 
     time.sleep(0.07)
-    assert budget.over() is True
+    assert budget.over_budget() is True

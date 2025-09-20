@@ -1069,7 +1069,9 @@ def main(argv: list[str] | None = None) -> None:
             effective_interval = int(closed_interval if closed else interval)
             budget = None
             try:
-                budget = SoftBudget(interval_sec=float(effective_interval), fraction=fraction)
+                interval_ms = max(0.0, float(effective_interval)) * 1000.0
+                fraction_clamped = max(0.0, min(1.0, float(fraction)))
+                budget = SoftBudget(int(interval_ms * fraction_clamped))
                 try:
                     if count % memory_check_interval == 0:
                         gc_result = optimize_memory()
@@ -1082,7 +1084,7 @@ def main(argv: list[str] | None = None) -> None:
                         _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
                     except Exception:
                         pass
-                    if budget.over():
+                    if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
                         try:
                             _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
@@ -1095,7 +1097,7 @@ def main(argv: list[str] | None = None) -> None:
                         _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, _mono() - _t1))  # type: ignore[call-arg]
                     except Exception:
                         pass
-                    if budget.over():
+                    if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
                         try:
                             _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
@@ -1108,7 +1110,7 @@ def main(argv: list[str] | None = None) -> None:
                         _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, _mono() - _t2))  # type: ignore[call-arg]
                     except Exception:
                         pass
-                    if budget.over():
+                    if budget.over_budget():
                         logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
                         try:
                             _cycle_budget_over_total.labels(stage="execute").inc()  # type: ignore[call-arg]
@@ -1136,7 +1138,10 @@ def main(argv: list[str] | None = None) -> None:
             if budget is None:
                 continue
             count += 1
-            logger.info("CYCLE_TIMING", extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over()})
+            logger.info(
+                "CYCLE_TIMING",
+                extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over_budget()},
+            )
             now_mono = time.monotonic()
             if now_mono - last_health >= max(30, health_tick_seconds):
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": effective_interval, "closed": closed})

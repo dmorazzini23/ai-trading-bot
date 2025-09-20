@@ -18,27 +18,29 @@ def StageTimer(logger, stage_name: str, **extra):
 
 class SoftBudget:
 
-    def __init__(self, interval_sec: float, fraction: float):
-        now = time.monotonic()
-        self._deadline = now + max(0.0, interval_sec) * max(0.1, min(1.0, fraction))
-        self._start = now
+    def __init__(self, millis: int):
+        self.budget_ms = max(0, int(millis))
+        self._start = time.perf_counter()
 
     def __enter__(self) -> "SoftBudget":
-        self._start = time.monotonic()
+        self.reset()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
-        # nothing to clean up and don't suppress exceptions
-        return None
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
 
-    def remaining(self) -> float:
-        return max(0.0, self._deadline - time.monotonic())
+    def reset(self) -> None:
+        self._start = time.perf_counter()
 
     def elapsed_ms(self) -> int:
-        elapsed = time.monotonic() - self._start
-        if elapsed < 1e-9:
-            return 0
-        return max(1, math.ceil(elapsed * 1000))
+        elapsed = time.perf_counter() - self._start
+        return max(0, int(elapsed * 1000))
 
-    def over(self) -> bool:
-        return time.monotonic() >= self._deadline
+    def over_budget(self) -> bool:
+        return self.elapsed_ms() >= self.budget_ms
+
+    def remaining(self) -> float:
+        return max(0.0, (self.budget_ms - self.elapsed_ms()) / 1000.0)
+
+    def over(self) -> bool:  # Backward compatibility
+        return self.over_budget()
