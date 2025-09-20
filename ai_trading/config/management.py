@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Callable, Iterable, Mapping, Optional, TypeVar
+from urllib.parse import urlparse
 
 from pathlib import Path
 
@@ -18,6 +19,43 @@ from .runtime import (
 )
 
 T = TypeVar("T")
+
+
+def _normalize_alpaca_base_url(value: str | None, *, source_key: str) -> tuple[str | None, str | None]:
+    """Validate Alpaca base URL strings returning sanitized value and error."""
+
+    if value is None:
+        return None, None
+
+    raw = value.strip()
+    if not raw:
+        return None, None
+
+    if "${" in raw:
+        return None, (f"{source_key} looks like an unresolved placeholder ({raw}). "
+                      "Set ALPACA_API_URL to a full https://... endpoint.")
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, (f"{source_key} must include an HTTP/HTTPS scheme (got {raw}). "
+                      "Provide a complete Alpaca REST endpoint.")
+
+    return raw, None
+
+
+def _select_alpaca_base_url(env: Mapping[str, str] | None = None) -> tuple[str | None, list[tuple[str, str, str]]]:
+    env_map = env or os.environ
+    invalid_entries: list[tuple[str, str, str]] = []
+
+    for env_key in ("ALPACA_BASE_URL", "ALPACA_API_URL"):
+        raw = env_map.get(env_key)
+        normalized, message = _normalize_alpaca_base_url(raw, source_key=env_key)
+        if normalized:
+            return normalized, invalid_entries
+        if raw and message:
+            invalid_entries.append((env_key, raw, message))
+
+    return None, invalid_entries
 
 
 def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True) -> str | None:
@@ -148,7 +186,14 @@ def validate_required_env(
 
 def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     cfg = get_trading_config()
-    return cfg.alpaca_api_key, cfg.alpaca_secret_key, cfg.alpaca_base_url
+    base_url, errors = _select_alpaca_base_url({
+        "ALPACA_BASE_URL": cfg.alpaca_base_url or "",
+        "ALPACA_API_URL": cfg.alpaca_base_url or "",
+    })
+    for env_key, raw, message in errors:
+        logger.error(message, extra={"env_key": env_key, "value": raw})
+    resolved = base_url or cfg.alpaca_base_url or "https://paper-api.alpaca.markets"
+    return cfg.alpaca_api_key, cfg.alpaca_secret_key, resolved
 
 
 def validate_alpaca_credentials() -> None:

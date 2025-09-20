@@ -701,83 +701,48 @@ for spec in CONFIG_SPECS:
         SPEC_BY_ENV[legacy.upper()] = spec
 
 
-@dataclass(frozen=True)
 class TradingConfig:
-    seed: int
-    app_env: str
-    testing: bool
-    pytest_running: bool
-    shadow_mode: bool
-    alpaca_api_key: str | None
-    alpaca_secret_key: str | None
-    alpaca_oauth_token: str | None
-    alpaca_base_url: str
-    alpaca_allow_sip: bool
-    alpaca_has_sip: bool
-    allow_after_hours: bool
-    api_host: str
-    api_port: int
-    webhook_secret: str | None
-    capital_cap: float
-    dollar_risk_limit: float
-    daily_loss_limit: float
-    disaster_dd_limit: float
-    max_drawdown_threshold: float
-    max_position_size: float
-    max_position_equity_fallback: float
-    position_size_min_usd: float
-    sector_exposure_cap: float
-    take_profit_factor: float | None
-    trailing_factor: float | None
-    kelly_fraction: float | None
-    kelly_fraction_max: float
-    min_confidence: float
-    conf_threshold: float
-    min_sample_size: int
-    confidence_level: float
-    signal_confirmation_bars: int
-    delta_threshold: float
-    allow_after_hours_volume_threshold: float
-    minute_data_freshness_tolerance_seconds: int
-    alpaca_data_feed: str
-    alpaca_feed_failover: tuple[str, ...]
-    alpaca_empty_to_backup: bool
-    data_provider_priority: tuple[str, ...]
-    max_data_fallbacks: int
-    data_provider_backoff_factor: float
-    data_provider_max_cooldown: int
-    http_timeout_seconds: float
-    host_concurrency_limit: int
-    max_empty_retries: int
-    symbol_process_budget_seconds: float
-    cycle_budget_fraction: float
-    cycle_compute_budget_factor: float | None
-    signal_hold_epsilon: float
-    strict_model_loading: bool
-    warn_if_model_missing: bool
-    default_model_url: str | None
-    max_symbols_per_cycle: int
-    health_tick_seconds: float
-    hard_stop_cooldown_min: int
-    force_continue_on_exposure: bool
-    log_level_yfinance: str
-    log_quiet_libraries: tuple[str, ...]
-    max_slippage_bps: int
-    slippage_limit_tolerance_bps: float
-    sentiment_api_key: str | None
-    sentiment_api_url: str
-    alternative_sentiment_api_key: str | None
-    alternative_sentiment_api_url: str | None
-    sentiment_retry_max: int
-    sentiment_backoff_base: float
-    sentiment_backoff_strategy: str
-    enable_finnhub: bool
-    finnhub_api_key: str | None
-    timeframe: str
+    """Immutable container mapping config specifications to resolved values."""
+
+    __slots__ = ("_values",)
+
+    def __init__(self, **values: Any) -> None:
+        object.__setattr__(self, "_values", values)
+
+    def __getattr__(self, item: str) -> Any:  # pragma: no cover - attribute passthrough
+        try:
+            return self._values[item]
+        except KeyError as exc:  # noqa: F401
+            raise AttributeError(item) from exc
+
+    def __setattr__(self, key: str, value: Any) -> None:  # pragma: no cover - immutability
+        raise AttributeError("TradingConfig is immutable")
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self._values)
+
+    def snapshot_sanitized(self) -> dict[str, Any]:
+        data = {
+            "risk": {
+                "capital_cap": self.capital_cap,
+                "dollar_risk_limit": self.dollar_risk_limit,
+                "daily_loss_limit": self.daily_loss_limit,
+                "max_drawdown_threshold": self.max_drawdown_threshold,
+            },
+            "data": {
+                "feed": getattr(self, "alpaca_data_feed", None),
+                "provider": getattr(self, "data_provider", None),
+            },
+            "auth": {
+                "alpaca_api_key": "***" if getattr(self, "alpaca_api_key", None) else "",
+                "alpaca_secret_key": "***" if getattr(self, "alpaca_secret_key", None) else "",
+            },
+        }
+        return data
 
     @property
     def symbol_process_budget_ms(self) -> int:
-        return int(max(0.0, self.symbol_process_budget_seconds) * 1000)
+        return int(max(0.0, self._values["symbol_process_budget_seconds"]) * 1000)
 
     @classmethod
     def from_env(
@@ -790,6 +755,11 @@ class TradingConfig:
 
         if values["cycle_compute_budget_factor"] is None:
             values["cycle_compute_budget_factor"] = values["cycle_budget_fraction"]
+
+        # Derived convenience fields expected by legacy callers.
+        values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
+        values.setdefault("paper", _infer_paper_mode(values))
+        values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
 
         return cls(**values)
 
