@@ -12,6 +12,7 @@ from ai_trading.logging import logger
 from .runtime import (
     CONFIG_SPECS,
     SPEC_BY_ENV,
+    SPEC_BY_FIELD,
     TradingConfig,
     generate_config_schema,
     get_trading_config,
@@ -208,6 +209,30 @@ def get_config_schema() -> str:
     return generate_config_schema()
 
 
+def from_env_relaxed(env_overrides: Mapping[str, Any] | None = None) -> TradingConfig:
+    """Build TradingConfig tolerating missing drawdown thresholds.
+
+    Legacy callers expect the trading configuration to fall back to the
+    documented default drawdown threshold (0.08) even when the environment is
+    misconfigured. When strict parsing fails, we override the drawdown env vars
+    with their defaults and retry once.
+    """
+
+    try:
+        return TradingConfig.from_env(env_overrides)
+    except RuntimeError as exc:
+        logger.warning(
+            "TRADING_CONFIG_RELAXED_FALLBACK",
+            extra={"error": str(exc)},
+        )
+        relaxed_overrides: dict[str, Any] = dict(env_overrides or {})
+        default_drawdown = SPEC_BY_FIELD["max_drawdown_threshold"].default
+        # Ensure both canonical and legacy keys receive the default.
+        relaxed_overrides.setdefault("MAX_DRAWDOWN_THRESHOLD", default_drawdown)
+        relaxed_overrides.setdefault("AI_TRADING_MAX_DRAWDOWN_THRESHOLD", default_drawdown)
+        return TradingConfig.from_env(relaxed_overrides)
+
+
 SEED = get_trading_config().seed
 MAX_EMPTY_RETRIES = get_trading_config().max_empty_retries
 
@@ -224,6 +249,7 @@ __all__ = [
     "validate_alpaca_credentials",
     "_resolve_alpaca_env",
     "get_config_schema",
+    "from_env_relaxed",
     "SEED",
     "MAX_EMPTY_RETRIES",
 ]
