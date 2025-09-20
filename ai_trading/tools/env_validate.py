@@ -10,12 +10,24 @@ REQUIRED_KEYS: tuple[str, ...] = (
     'ALPACA_SECRET_KEY',
     'ALPACA_BASE_URL',
 )
+
+INTERCHANGEABLE_URL_KEYS: tuple[str, ...] = (
+    'ALPACA_BASE_URL',
+    'ALPACA_API_URL',
+)
 REQUIRED_PACKAGES: tuple[str, ...] = ('hmmlearn',)
 
 def validate_env(env: Mapping[str, str] | None=None) -> list[str]:
     """Return list of missing required environment keys or packages."""
     env = env or os.environ
-    missing = [k for k in REQUIRED_KEYS if not env.get(k)]
+    missing: list[str] = []
+    for key in REQUIRED_KEYS:
+        if key == 'ALPACA_BASE_URL':
+            if not any(env.get(url_key) for url_key in INTERCHANGEABLE_URL_KEYS):
+                missing.append(key)
+            continue
+        if not env.get(key):
+            missing.append(key)
     for pkg in REQUIRED_PACKAGES:
         if importlib.util.find_spec(pkg) is None:
             missing.append(pkg)
