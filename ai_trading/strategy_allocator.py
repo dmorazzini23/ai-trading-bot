@@ -7,9 +7,7 @@ from dataclasses import replace
 import logging
 from typing import Any
 
-from ai_trading.config.management import TradingConfig
-
-CONFIG = TradingConfig()
+from ai_trading.config.management import TradingConfig, get_trading_config
 logger = logging.getLogger(__name__)
 _missing_attr_warned: set[str] = set()
 _invalid_value_warned: set[str] = set()
@@ -28,7 +26,8 @@ class StrategyAllocator:
     """Allocator implementing signal confirmation and confidence gating."""
 
     def __init__(self, config: Any | None = None) -> None:
-        self.config = copy.deepcopy(config or CONFIG)
+        base_config = config if config is not None else get_trading_config()
+        self.config = copy.deepcopy(base_config)
         self._ensure_config_attributes()
         self.signal_history: dict[str, list[float]] = {}
         self.last_direction: dict[str, str] = {}

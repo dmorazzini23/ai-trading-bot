@@ -9,6 +9,7 @@ from ai_trading.config.management import (
     SEED,
     TradingConfig,
     get_env,
+    get_trading_config,
     validate_required_env,
 )
 from ai_trading.strategies.base import StrategySignal as TradeSignal
@@ -35,7 +36,7 @@ class RiskEngine:
 
     def __init__(self, cfg: TradingConfig | None=None) -> None:
         """Initialize the engine with an optional trading config."""
-        self.config = cfg if cfg is not None else TradingConfig()
+        self.config = cfg if cfg is not None else get_trading_config()
         try:
             exposure_cap = getattr(self.config, 'exposure_cap_aggressive', 0.8)
             if not isinstance(exposure_cap, (int, float)) or not 0 < exposure_cap <= 1.0:
@@ -698,7 +699,7 @@ def calculate_position_size(*args, **kwargs) -> int:
     - Considers portfolio heat and correlation limits
     - Scales position size based on signal confidence
     """
-    engine = RiskEngine()
+    engine = RiskEngine(get_trading_config())
     if len(args) == 2 and (not kwargs):
         cash, price = args
         if not isinstance(cash, (int, float)) or cash <= 0:

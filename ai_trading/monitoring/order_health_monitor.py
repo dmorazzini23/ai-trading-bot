@@ -7,18 +7,25 @@ Addresses the critical issues:
 - Need for comprehensive order status monitoring
 """
 from __future__ import annotations
+
 import json
-from ai_trading.logging import get_logger
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
+
 from ai_trading.config import management as config
-from ai_trading.config.management import TradingConfig
+from ai_trading.config.management import get_trading_config
+from ai_trading.logging import get_logger
 from ai_trading.utils.time import safe_utcnow
 from ai_trading.utils.timing import sleep as psleep
-CONFIG = TradingConfig()
+
+if TYPE_CHECKING:  # pragma: no cover - typing helper
+    from ai_trading.config.runtime import TradingConfig
+
+CONFIG = cast('TradingConfig', get_trading_config())
 
 @dataclass(slots=True)
 class OrderInfo:
@@ -79,13 +86,23 @@ class OrderHealthMonitor:
         """Initialize the order health monitor."""
         self.execution_engine = execution_engine
         self.logger = get_logger(__name__ + '.OrderHealthMonitor')
+        cfg = CONFIG
+        self._config: 'TradingConfig' = cfg
         self._partial_fills: dict[str, PartialFillInfo] = {}
         self._fill_times: deque = deque(maxlen=1000)
         self._order_metrics: deque = deque(maxlen=100)
-        self.order_timeout_seconds = getattr(config, 'ORDER_TIMEOUT_SECONDS', 300)
-        self.cleanup_interval = getattr(config, 'ORDER_STALE_CLEANUP_INTERVAL', 60)
-        self.fill_rate_target = getattr(config, 'ORDER_FILL_RATE_TARGET', 0.8)
-        self.max_retry_attempts = getattr(config, 'ORDER_MAX_RETRY_ATTEMPTS', 3)
+        self.order_timeout_seconds = getattr(
+            cfg, 'order_timeout_seconds', getattr(config, 'ORDER_TIMEOUT_SECONDS', 300)
+        )
+        self.cleanup_interval = getattr(
+            cfg, 'order_stale_cleanup_interval', getattr(config, 'ORDER_STALE_CLEANUP_INTERVAL', 60)
+        )
+        self.fill_rate_target = getattr(
+            cfg, 'order_fill_rate_target', getattr(config, 'ORDER_FILL_RATE_TARGET', 0.8)
+        )
+        self.max_retry_attempts = getattr(
+            cfg, 'order_max_retry_attempts', getattr(config, 'ORDER_MAX_RETRY_ATTEMPTS', 3)
+        )
         self._monitoring_active = False
         self._monitor_thread = None
         self._lock = threading.Lock()

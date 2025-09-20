@@ -23,12 +23,30 @@ def _to_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Remove trailing inline comments introduced with ``#``.
+
+    Inline comments are considered to begin when a ``#`` follows whitespace or
+    starts the string (e.g. ``"1.0  # note"``).  Content preceding the comment
+    is returned with surrounding whitespace trimmed.  Hash symbols that are part
+    of the actual value (e.g. ``"abc#123"``) remain untouched.
+    """
+
+    for idx, char in enumerate(value):
+        if char == "#" and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
+    return value.rstrip()
+
+
 def _split_csv(value: str) -> tuple[str, ...]:
-    return tuple(filter(None, (part.strip() for part in value.split(","))))
+    return tuple(
+        filter(None, (part.strip() for part in _strip_inline_comment(value).split(",")))
+    )
 
 
 def _parse_numeric_sequence(value: str) -> tuple[float, ...]:
-    cleaned = [chunk.strip() for chunk in value.split(",") if chunk.strip()]
+    cleaned_value = _strip_inline_comment(value)
+    cleaned = [chunk.strip() for chunk in cleaned_value.split(",") if chunk.strip()]
     return tuple(float(chunk) for chunk in cleaned)
 
 
@@ -56,15 +74,15 @@ def _cast_value(spec: ConfigSpec, raw: str) -> Any:
         if kind == "str":
             return raw
         if kind == "int":
-            return int(raw)
+            return int(_strip_inline_comment(raw))
         if kind == "float":
-            return float(raw)
+            return float(_strip_inline_comment(raw))
         if kind == "bool":
-            return _to_bool(raw)
+            return _to_bool(_strip_inline_comment(raw))
         if kind == "tuple[str]":
             return _split_csv(raw)
         if kind == "tuple[float]":
-            return _parse_numeric_sequence(raw)
+            return _parse_numeric_sequence(_strip_inline_comment(raw))
         if kind == "json":
             return json.loads(raw)
         raise ValueError(f"Unsupported cast kind: {kind}")
