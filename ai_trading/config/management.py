@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from ai_trading.logging import logger
+from .settings import Settings, get_settings
 from .runtime import (
     CONFIG_SPECS,
     SPEC_BY_ENV,
@@ -233,6 +234,22 @@ def from_env_relaxed(env_overrides: Mapping[str, Any] | None = None) -> TradingC
         return TradingConfig.from_env(relaxed_overrides)
 
 
+def derive_cap_from_settings(
+    settings: Settings | None = None,
+    *,
+    equity: float | None = None,
+    fallback: float = 8000.0,
+    capital_cap: float | None = None,
+) -> float:
+    """Calculate maximum capital allocation based on equity and capital cap."""
+
+    s = settings or get_settings()
+    cap = capital_cap if capital_cap is not None else float(getattr(s, "capital_cap", 0.25))
+    if equity and equity > 0:
+        return float(equity) * cap
+    return float(fallback)
+
+
 SEED = get_trading_config().seed
 MAX_EMPTY_RETRIES = get_trading_config().max_empty_retries
 
@@ -252,4 +269,6 @@ __all__ = [
     "from_env_relaxed",
     "SEED",
     "MAX_EMPTY_RETRIES",
+    "Settings",
+    "derive_cap_from_settings",
 ]

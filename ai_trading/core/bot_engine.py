@@ -126,6 +126,7 @@ from ai_trading.config.management import (
     get_env,
     is_shadow_mode,
     TradingConfig,
+    get_trading_config,
 )
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
@@ -725,10 +726,80 @@ def _cache_cycle_fallback_feed(feed: str | None) -> None:
 
 
 def _sip_authorized() -> bool:
-    """Return True when SIP entitlement environment flag allows access."""
+    """Return True when SIP entitlement checks permit access."""
 
-    value = str(os.getenv("ALPACA_ALLOW_SIP", "")).strip().lower()
-    return value in {"1", "true", "yes"}
+    truthy = {"1", "true", "yes", "on", "enable", "enabled"}
+    falsy = {"0", "false", "no", "off", "disable", "disabled"}
+
+    raw_allow = os.getenv("ALPACA_ALLOW_SIP")
+    allow_flag: bool | None = None
+    if raw_allow is not None:
+        lowered = raw_allow.strip().lower()
+        if lowered in truthy:
+            allow_flag = True
+        elif lowered in falsy:
+            return False
+
+    has_key = bool(os.getenv("ALPACA_API_KEY"))
+    has_secret = bool(os.getenv("ALPACA_SECRET_KEY"))
+    if not (has_key and has_secret):
+        if allow_flag:
+            return False
+        # fall back to config allowance when credentials missing
+        try:
+            cfg = get_trading_config()
+            has_key = bool(getattr(cfg, "alpaca_api_key", None))
+            has_secret = bool(getattr(cfg, "alpaca_secret_key", None))
+        except Exception:  # pragma: no cover
+            pass
+
+    has_entitlement: bool | None = None
+    raw_entitlement = os.getenv("ALPACA_HAS_SIP")
+    if raw_entitlement is not None:
+        lowered = raw_entitlement.strip().lower()
+        if lowered in truthy:
+            has_entitlement = True
+        elif lowered in falsy:
+            has_entitlement = False
+
+    if allow_flag is True and has_entitlement is False:
+        return False
+
+    if allow_flag is True and has_key and has_secret:
+        return True
+
+    if allow_flag is None and has_key and has_secret:
+        if has_entitlement is False:
+            return False
+        return True
+
+    try:
+        cfg = get_trading_config()
+    except Exception:  # pragma: no cover - diagnostics only
+        cfg = None
+
+    if cfg is not None:
+        cfg_allow = bool(getattr(cfg, "alpaca_allow_sip", False))
+        cfg_entitled = getattr(cfg, "alpaca_has_sip", None)
+        if cfg_allow and cfg_entitled is False:
+            return False
+        if cfg_allow and has_key and has_secret:
+            return True
+        if cfg_allow and cfg_entitled in (None, True):
+            return True
+
+    try:
+        failover = getattr(CFG, "alpaca_feed_failover", ())
+        if isinstance(failover, str):
+            candidates = (failover,)
+        else:
+            candidates = tuple(failover or ())  # type: ignore[arg-type]
+        if any(str(feed).lower() == "sip" for feed in candidates):
+            return True
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    return False
 
 def _alpaca_diag_info() -> dict[str, object]:
     """Collect Alpaca env & mode diagnostics for operator visibility."""
@@ -2797,6 +2868,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     Uses Regular Trading Hours (RTH) windows to avoid spanning weekends/holidays,
     which reduces empty responses and noisy fallbacks from providers.
     """
+    global _GLOBAL_INTRADAY_FALLBACK_FEED
     from ai_trading.utils.base import is_market_open, EASTERN_TZ
     from ai_trading.data.market_calendar import rth_session_utc, previous_trading_session
 
@@ -3060,6 +3132,36 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         return data_fetcher_module._DEFAULT_FEED
 
     configured_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
+
+    cache = getattr(state, "minute_feed_cache", None)
+    cache_ts = getattr(state, "minute_feed_cache_ts", None)
+    if not isinstance(cache_ts, dict):
+        cache_ts = {}
+        if isinstance(cache, dict) and cache:
+            setattr(state, "minute_feed_cache_ts", cache_ts)
+    if isinstance(cache, dict) and cache:
+        raw_ttl = getattr(CFG, "minute_feed_cache_ttl_seconds", 600)
+        try:
+            ttl_seconds = max(60, int(raw_ttl))
+        except (TypeError, ValueError):
+            ttl_seconds = 600
+        cutoff = now_utc - timedelta(seconds=ttl_seconds)
+        stale_keys: list[str] = []
+        for feed_name, ts in list(cache_ts.items()):
+            try:
+                if ts is None or ts < cutoff:
+                    stale_keys.append(feed_name)
+            except TypeError:
+                stale_keys.append(feed_name)
+        for feed_name in stale_keys:
+            cache.pop(feed_name, None)
+            cache_ts.pop(feed_name, None)
+        if not cache:
+            setattr(state, "minute_feed_cache", {})
+            _GLOBAL_INTRADAY_FALLBACK_FEED = None
+    else:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = None
+
     cycle_pref = _prefer_feed_this_cycle()
     current_feed = cycle_pref or configured_feed
     try:
@@ -3286,9 +3388,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
         coverage_warning_logged = True
 
-        fallback_start_dt = max(
-            end_dt - timedelta(minutes=intraday_lookback), start_dt
-        )
+        if materially_short:
+            fallback_start_dt = start_dt
+        else:
+            fallback_start_dt = max(
+                end_dt - timedelta(minutes=intraday_lookback), start_dt
+            )
         fallback_expected_bars = max(
             int((end_dt - fallback_start_dt).total_seconds() // 60), 1
         )
@@ -3303,15 +3408,19 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             and not provider_monitor.is_disabled("alpaca_sip")
         )
 
+        sip_attempted = False
+
         if sip_allowed:
             fallback_attempted = True
+            sip_attempted = True
+            sip_df = None
+            sip_bars = 0
             try:
-                sip_fetcher = build_fetcher(prefer="alpaca", force_feed="sip")
-                sip_raw = sip_fetcher.get_bars(
-                    symbol=symbol,
-                    timeframe="1Min",
-                    start=fallback_start_dt,
-                    end=end_dt,
+                sip_df = get_minute_df(
+                    symbol,
+                    fallback_start_dt,
+                    end_dt,
+                    feed="sip",
                 )
             except Exception as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
@@ -3322,21 +3431,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         "error": str(exc),
                     },
                 )
-                sip_raw = None
-
-            if sip_raw is not None and not getattr(sip_raw, "empty", True):
-                sip_df = _sanitize_minute_df(
-                    sip_raw,
-                    symbol=symbol,
-                    current_now=now_utc,
-                )
-                try:
-                    sip_bars = int(len(sip_df))
-                except Exception:
-                    sip_bars = 0
             else:
-                sip_df = None
-                sip_bars = 0
+                if sip_df is not None and not getattr(sip_df, "empty", True):
+                    try:
+                        sip_bars = int(len(sip_df))
+                    except Exception:
+                        sip_bars = 0
+                else:
+                    sip_df = None
 
             if sip_df is not None and sip_bars > primary_actual_bars:
                 prev_expected = max(expected_bars or 0, 1)
@@ -3384,6 +3486,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         "new_bars": sip_bars,
                     },
                 )
+                sip_df = None
+                sip_bars = 0
                 fallback_feed = "sip"
                 fallback_provider = "alpaca_sip"
         else:
@@ -3404,7 +3508,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed = "sip"
             fallback_provider = "alpaca_sip"
 
-        if not fallback_used:
+        if not fallback_used and not sip_attempted:
             fallback_attempted = True
             logger.info(
                 "BACKUP_PROVIDER_USED",
@@ -3417,23 +3521,22 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 },
             )
             try:
-                yahoo_fetcher = build_fetcher(prefer="yahoo")
-                yahoo_raw = yahoo_fetcher.get_bars(
+                yahoo_df = get_minute_df(
                     symbol,
-                    "1Min",
                     fallback_start_dt,
                     end_dt,
+                    feed="yahoo",
                 )
             except Exception as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
                     "BACKUP_PROVIDER_FAILED",
                     extra={"provider": "yahoo", "symbol": symbol, "error": str(exc)},
                 )
-                yahoo_raw = None
+                yahoo_df = None
 
-            if yahoo_raw is not None and not getattr(yahoo_raw, "empty", True):
+            if yahoo_df is not None and not getattr(yahoo_df, "empty", True):
                 yahoo_df = _sanitize_minute_df(
-                    yahoo_raw,
+                    yahoo_df,
                     symbol=symbol,
                     current_now=now_utc,
                 )
@@ -3442,8 +3545,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 except Exception:
                     yahoo_bars = 0
             else:
-                yahoo_df = None
                 yahoo_bars = 0
+                yahoo_df = None
 
             if yahoo_df is not None and yahoo_bars > primary_actual_bars:
                 df = yahoo_df
@@ -3484,6 +3587,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             cache = {}
             setattr(state, "minute_feed_cache", cache)
         cache[configured_feed] = fallback_feed_used
+        ts_cache = getattr(state, "minute_feed_cache_ts", None)
+        if not isinstance(ts_cache, dict):
+            ts_cache = {}
+            setattr(state, "minute_feed_cache_ts", ts_cache)
+        ts_cache[configured_feed] = now_utc
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
@@ -11356,8 +11464,8 @@ def _enter_long(
             "alpaca_unavailable",
             _ALPACA_DISABLED_SENTINEL,
         }:
-            logger.info(
-                "FEATURE_PRICE_USED",
+            logger.warning(
+                "FALLBACK_TO_FEATURE_CLOSE",
                 extra={"symbol": symbol, "price_source": "feature_close"},
             )
             quote_price = float(current_price)
@@ -11367,8 +11475,8 @@ def _enter_long(
     if quote_price is None:
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
         if fallback_price is not None:
-            logger.info(
-                "FEATURE_PRICE_USED",
+            logger.warning(
+                "FALLBACK_TO_FEATURE_CLOSE",
                 extra={"symbol": symbol, "price_source": "feature_close"},
             )
             quote_price = float(fallback_price)

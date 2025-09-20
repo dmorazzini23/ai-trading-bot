@@ -320,6 +320,16 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Custom take-profit multiplier overriding mode defaults.",
     ),
     ConfigSpec(
+        field="buy_threshold",
+        env=("BUY_THRESHOLD", "AI_TRADING_BUY_THRESHOLD"),
+        cast="float",
+        default=0.4,
+        description="Signal confidence threshold required to enter long positions.",
+        min_value=0.0,
+        max_value=1.0,
+        deprecated_env={"AI_TRADING_BUY_THRESHOLD": "Use BUY_THRESHOLD instead."},
+    ),
+    ConfigSpec(
         field="trailing_factor",
         env=("TRAILING_FACTOR",),
         cast="float",
@@ -616,6 +626,65 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=0.0,
     ),
     ConfigSpec(
+        field="order_timeout_seconds",
+        env=("ORDER_TIMEOUT_SECONDS",),
+        cast="int",
+        default=300,
+        description="Maximum seconds to wait before cancelling unfilled orders.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="order_stale_cleanup_interval",
+        env=("ORDER_STALE_CLEANUP_INTERVAL",),
+        cast="int",
+        default=60,
+        description="Interval in seconds between stale order cleanup sweeps.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="order_fill_rate_target",
+        env=("ORDER_FILL_RATE_TARGET",),
+        cast="float",
+        default=0.80,
+        description="Target fraction of orders that should fill within timeout windows.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
+        field="liquidity_spread_threshold",
+        env=("LIQUIDITY_SPREAD_THRESHOLD",),
+        cast="float",
+        default=0.005,
+        description="Maximum allowable bid/ask spread (fractional) before pausing liquidity provision.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="liquidity_vol_threshold",
+        env=("LIQUIDITY_VOL_THRESHOLD",),
+        cast="float",
+        default=250000.0,
+        description="Minimum rolling dollar volume required to participate in a symbol.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="liquidity_reduction_aggressive",
+        env=("LIQUIDITY_REDUCTION_AGGRESSIVE",),
+        cast="float",
+        default=0.75,
+        description="Fractional liquidity reduction applied when conditions are extreme.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
+        field="liquidity_reduction_moderate",
+        env=("LIQUIDITY_REDUCTION_MODERATE",),
+        cast="float",
+        default=0.90,
+        description="Fractional liquidity reduction applied when spreads are elevated but not extreme.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
         field="sentiment_api_key",
         env=("SENTIMENT_API_KEY",),
         cast="str",
@@ -646,6 +715,37 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Fallback sentiment API endpoint.",
     ),
     ConfigSpec(
+        field="sentiment_enhanced_caching",
+        env=("SENTIMENT_ENHANCED_CACHING",),
+        cast="bool",
+        default=True,
+        description="Enable extended caching for sentiment data and fallbacks.",
+    ),
+    ConfigSpec(
+        field="sentiment_fallback_sources",
+        env=("SENTIMENT_FALLBACK_SOURCES",),
+        cast="tuple[str]",
+        default=("similar_symbol", "sector_proxy", "news_cache"),
+        description="Ordered sentiment fallback strategies when primary data is unavailable.",
+    ),
+    ConfigSpec(
+        field="sentiment_success_rate_target",
+        env=("SENTIMENT_SUCCESS_RATE_TARGET",),
+        cast="float",
+        default=0.90,
+        description="Target success rate for sentiment fetches before alerting.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
+        field="sentiment_recovery_timeout_secs",
+        env=("SENTIMENT_RECOVERY_TIMEOUT_SECS",),
+        cast="int",
+        default=1800,
+        description="Circuit breaker recovery timeout (seconds) after sentiment failures.",
+        min_value=0,
+    ),
+    ConfigSpec(
         field="sentiment_retry_max",
         env=("SENTIMENT_MAX_RETRIES",),
         cast="int",
@@ -667,6 +767,30 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="str",
         default="exponential",
         description="Algorithm applied to sentiment retry backoff (linear/exponential).",
+    ),
+    ConfigSpec(
+        field="meta_learning_bootstrap_enabled",
+        env=("META_LEARNING_BOOTSTRAP_ENABLED",),
+        cast="bool",
+        default=True,
+        description="Enable bootstrap trade generation when historical data is sparse.",
+    ),
+    ConfigSpec(
+        field="meta_learning_bootstrap_win_rate",
+        env=("META_LEARNING_BOOTSTRAP_WIN_RATE",),
+        cast="float",
+        default=0.55,
+        description="Assumed win rate for generated bootstrap trades.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
+        field="meta_learning_min_trades_reduced",
+        env=("META_LEARNING_MIN_TRADES_REDUCED",),
+        cast="int",
+        default=10,
+        description="Reduced minimum trade count required to trigger meta-learning retraining.",
+        min_value=1,
     ),
     ConfigSpec(
         field="enable_finnhub",
@@ -763,6 +887,14 @@ class TradingConfig:
 
         if values["cycle_compute_budget_factor"] is None:
             values["cycle_compute_budget_factor"] = values["cycle_budget_fraction"]
+
+        if (env_map.get("DOLLAR_RISK_LIMIT") in (None, "")) and values["dollar_risk_limit"] == SPEC_BY_FIELD["dollar_risk_limit"].default:
+            for legacy_key in ("DAILY_LOSS_LIMIT", "AI_TRADING_DAILY_LOSS_LIMIT"):
+                raw_alias = env_map.get(legacy_key)
+                if raw_alias not in (None, ""):
+                    spec = SPEC_BY_FIELD["dollar_risk_limit"]
+                    values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
+                    break
 
         # Derived convenience fields expected by legacy callers.
         values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])

@@ -4,6 +4,7 @@ Sentiment analysis module for AI trading bot.
 This module provides sentiment analysis functionality using FinBERT and NewsAPI,
 extracted from bot_engine.py to enable standalone imports and testing.
 """
+import os
 import time as pytime
 from datetime import datetime
 from threading import Lock
@@ -361,10 +362,10 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
 
 def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     """Try alternative sentiment data sources when primary is rate limited."""
-    alt_api_key = get_env("ALTERNATIVE_SENTIMENT_API_KEY")
-    alt_api_url = get_env("ALTERNATIVE_SENTIMENT_API_URL")
-    primary_url = get_env("SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
-    primary_key = get_env("SENTIMENT_API_KEY")
+    alt_api_key = get_env("ALTERNATIVE_SENTIMENT_API_KEY") or os.getenv("ALTERNATIVE_SENTIMENT_API_KEY")
+    alt_api_url = get_env("ALTERNATIVE_SENTIMENT_API_URL") or os.getenv("ALTERNATIVE_SENTIMENT_API_URL")
+    primary_url = get_env("SENTIMENT_API_URL", "https://newsapi.org/v2/everything") or os.getenv("SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
+    primary_key = get_env("SENTIMENT_API_KEY") or os.getenv("SENTIMENT_API_KEY")
     try:
         primary_url_full = f'{primary_url}?symbol={ticker}&apikey={primary_key}'
         timeout_v = HTTP_TIMEOUT

@@ -973,6 +973,13 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
     end_dt = ensure_datetime(end)
     try:
         df = fh_fetcher.fetch(symbol, start_dt, end_dt, resolution=resolution)
+        if isinstance(df, pd_local.DataFrame):
+            if "close" in df.columns:
+                for col in ("open", "high", "low"):
+                    if col not in df.columns:
+                        df[col] = df["close"]
+            if "volume" not in df.columns:
+                df["volume"] = 0.0
     except FinnhubAPIException:
         df = None
     except Exception:
@@ -1386,6 +1393,31 @@ def _fetch_bars(
             )
             return pd.DataFrame()
         raise
+    if not _has_alpaca_keys():
+        global _ALPACA_KEYS_MISSING_LOGGED
+        if not _ALPACA_KEYS_MISSING_LOGGED:
+            try:
+                logger.warning(
+                    "ALPACA_KEYS_MISSING_USING_BACKUP",
+                    extra={
+                        "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
+                        "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
+                    },
+                )
+                provider_monitor.alert_manager.create_alert(
+                    AlertType.SYSTEM,
+                    AlertSeverity.CRITICAL,
+                    "Alpaca credentials missing; using backup provider",
+                    metadata={"provider": getattr(get_settings(), "backup_data_provider", "yahoo")},
+                )
+            except Exception:
+                pass
+            _ALPACA_KEYS_MISSING_LOGGED = True
+        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+        fb_int = interval_map.get(_interval)
+        if fb_int:
+            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+        return pd.DataFrame()
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
@@ -1944,7 +1976,7 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
-            if empty_attempts == 1:
+            if empty_attempts == 1 and not _ENABLE_HTTP_FALLBACK:
                 _state["delay"] = 0.25
             else:
                 _state.pop("delay", None)
@@ -1981,7 +2013,7 @@ def _fetch_bars(
             }
             if attempt <= max_retries:
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
-            if empty_attempts == 1:
+            if empty_attempts == 1 and not _ENABLE_HTTP_FALLBACK:
                 retry_delay = _state.get("delay", 0.25)
                 logger.warning(
                     "RETRY_SCHEDULED",
@@ -2575,6 +2607,7 @@ def get_minute_df(
     end_dt = ensure_datetime(end)
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
+    normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     if tf_key in _SKIPPED_SYMBOLS and window_has_session:
         logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")

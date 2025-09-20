@@ -867,7 +867,8 @@ def retrain_meta_learner(trade_log_path: str=None, model_path: str='meta_model.p
     y = df['outcome'].values
     sample_w = df['pnl'].abs() + 0.001
     if not SKLEARN_AVAILABLE:
-        raise ImportError('scikit-learn is required for retrain_meta_learner')
+        logger.warning('META_LEARNING_SKLEARN_MISSING: Skipping retraining due to missing scikit-learn dependency')
+        return False
     from sklearn.linear_model import Ridge
     model = Ridge(alpha=1.0, fit_intercept=True)
     if not (callable(getattr(model, 'fit', None)) and callable(getattr(model, 'predict', None))):
