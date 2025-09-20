@@ -701,6 +701,14 @@ for spec in CONFIG_SPECS:
         SPEC_BY_ENV[legacy.upper()] = spec
 
 
+def _infer_paper_mode(values: Mapping[str, Any]) -> bool:
+    base_url = str(values.get("alpaca_base_url") or "").lower()
+    if "paper" in base_url:
+        return True
+    app_env = str(values.get("app_env") or "test").lower()
+    return app_env != "prod"
+
+
 class TradingConfig:
     """Immutable container mapping config specifications to resolved values."""
 
