@@ -27,6 +27,7 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
         candidate = Path.cwd() / ".env"
         path = candidate if candidate.exists() else None
     if path is None:
+        reload_trading_config()
         return None
     load_dotenv(dotenv_path=path, override=override)
     reload_trading_config()
@@ -95,13 +96,45 @@ def validate_required_env(
     required_fields = {
         "ALPACA_API_KEY": cfg.alpaca_api_key,
         "ALPACA_SECRET_KEY": cfg.alpaca_secret_key,
+        "ALPACA_DATA_FEED": cfg.alpaca_data_feed,
         "ALPACA_API_URL": cfg.alpaca_base_url,
         "WEBHOOK_SECRET": cfg.webhook_secret,
         "CAPITAL_CAP": cfg.capital_cap,
         "DOLLAR_RISK_LIMIT": cfg.dollar_risk_limit,
     }
     if keys is not None:
-        required_fields = {k: required_fields[k] for k in keys}
+        filtered: dict[str, str | None] = {}
+        for key in keys:
+            if key in required_fields:
+                filtered[key] = required_fields[key]
+            else:
+                filtered[key] = getattr(cfg, key.lower(), None)
+        required_fields = filtered
+
+    env_lookup: dict[str, str] = {}
+    if env is not None:
+        env_lookup = {k.upper(): str(v) for k, v in env.items() if v not in (None, "")}
+    if "ALPACA_API_URL" not in env_lookup and "ALPACA_BASE_URL" in env_lookup:
+        env_lookup["ALPACA_API_URL"] = env_lookup["ALPACA_BASE_URL"]
+    alias_sources: dict[str, tuple[str, ...]] = {
+        "ALPACA_API_URL": ("ALPACA_BASE_URL",),
+    }
+
+    for key, value in list(required_fields.items()):
+        if value in (None, ""):
+            fallback = env_lookup.get(key)
+            if fallback in (None, ""):
+                fallback = os.environ.get(key)
+            if fallback not in (None, ""):
+                required_fields[key] = fallback
+                continue
+            for alias in alias_sources.get(key, ()):  # pragma: no branch - small tuple
+                alias_value = env_lookup.get(alias)
+                if alias_value in (None, ""):
+                    alias_value = os.environ.get(alias)
+                if alias_value not in (None, ""):
+                    required_fields[key] = alias_value
+                    break
 
     missing = [name for name, value in required_fields.items() if not value]
     if missing:
