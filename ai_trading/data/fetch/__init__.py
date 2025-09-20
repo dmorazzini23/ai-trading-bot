@@ -50,6 +50,7 @@ from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
+from .validators import validate_adjustment, validate_feed
 
 logger = get_logger(__name__)
 
@@ -138,31 +139,28 @@ def _to_timeframe_str(tf: object) -> str:
     return _canon_tf(tf)
 
 
-def _to_feed_str(feed: object) -> str:
-    """Return canonical feed string with strict validation.
-
-    Unknown feeds (for example ``"yahoo"`` or ``"alpaca_yahoo"``) are
-    sanitized to the configured default to avoid provider flapping. A single
-    warning is emitted so operators can correct the upstream configuration.
-    """
+def _normalize_feed_value(feed: object) -> str:
+    """Return canonical feed string while enforcing validation."""
 
     try:
-        s = str(feed).strip().lower()
-    except Exception:  # pragma: no cover - defensive
-        logger.warning(
-            "FEED_SANITIZED",
-            extra=_norm_extra({"given": repr(feed), "using": _DEFAULT_FEED}),
-        )
-        return _DEFAULT_FEED
-    if "iex" in s:
-        return "iex"
-    if "sip" in s:
-        return "sip"
-    logger.warning(
-        "FEED_SANITIZED",
-        extra=_norm_extra({"given": s or repr(feed), "using": _DEFAULT_FEED}),
-    )
-    return _DEFAULT_FEED
+        candidate = str(feed).strip().lower()
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ValueError(f"invalid feed: {feed!r}") from exc
+
+    if not candidate:
+        raise ValueError("invalid feed: ''")
+
+    if candidate.startswith("alpaca_"):
+        candidate = candidate.split("_", 1)[1]
+
+    validate_feed(candidate)
+    return candidate
+
+
+def _to_feed_str(feed: object) -> str:
+    """Return canonical feed string with strict validation."""
+
+    return _normalize_feed_value(feed)
 
 
 class DataFetchError(Exception):
@@ -1274,29 +1272,29 @@ def build_fetcher(
     force_feed: str | None = None,
     *,
     cache_minutes: int = 15,
-) -> "DataFetcher":
+):
     """
     Returns a DataFetcher. If prefer/force_feed are provided, build a fresh, directed
-    fetcher (no singleton) to avoid cross-talk with the default.
+    fetcher (no singleton). Import the class first to avoid local variable shadowing.
     """
-    # Import FIRST so it's bound before any use (avoids UnboundLocalError)
-    import importlib
-    bot_mod = importlib.import_module("ai_trading.core.bot_engine")
-    DF = getattr(bot_mod, "DataFetcher")
 
-    # Fast path: directed fetcher for coverage-recovery or special flows
+    from ai_trading.core.bot_engine import DataFetcher  # import FIRST
+
+    if prefer:
+        prefer = _normalize_feed_value(prefer)
+    if force_feed:
+        force_feed = _normalize_feed_value(force_feed)
+
     if prefer or force_feed:
-        fetcher = DF(prefer=prefer, force_feed=force_feed)
-        # (Optional) tag for logging/diagnostics:
-        setattr(fetcher, "source", "directed")
-        return fetcher
+        f = DataFetcher(prefer=prefer, force_feed=force_feed, cache_minutes=cache_minutes)
+        setattr(f, "source", "directed")
+        return f
 
-    # Singleton for the general case
     global _FETCHER_SINGLETON
     if _FETCHER_SINGLETON is not None:
         return _FETCHER_SINGLETON
 
-    _FETCHER_SINGLETON = DF(cache_minutes=cache_minutes)
+    _FETCHER_SINGLETON = DataFetcher(cache_minutes=cache_minutes)
     setattr(_FETCHER_SINGLETON, "source", "singleton")
     return _FETCHER_SINGLETON
 
@@ -1362,7 +1360,9 @@ def _fetch_bars(
         raise ValueError("session_required")
     _interval = _canon_tf(timeframe)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
-    _validate_alpaca_params(_start, _end, _interval, _feed, adjustment)
+    adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
+    validate_adjustment(adjustment_norm)
+    _validate_alpaca_params(_start, _end, _interval, _feed, adjustment_norm)
     try:
         if not _window_has_trading_session(_start, _end):
             raise ValueError("window_no_trading_session")
@@ -2451,6 +2451,7 @@ def _fetch_bars(
             # provider priority is customized or empty.
             fallback = (_interval, "sip", _start, _end)
     # Attempt request with bounded retries when empty or transient issues occur
+    normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     df = None
     empty_attempts = 0
     for _ in range(max(1, max_retries)):
@@ -2551,7 +2552,7 @@ def get_minute_df(
             "alpaca",
             symbol=symbol,
             timeframe="1Min",
-            feed=feed or _DEFAULT_FEED,
+            feed=normalized_feed or _DEFAULT_FEED,
             retries=cnt,
         )
         raise
@@ -2565,8 +2566,13 @@ def get_minute_df(
     df = None
     if _has_alpaca_keys():
         try:
-            requested_feed = feed or _DEFAULT_FEED
-            override_feed = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
+            requested_feed = normalized_feed or _DEFAULT_FEED
+            override_raw = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
+            override_feed = (
+                _normalize_feed_value(override_raw)
+                if override_raw is not None
+                else None
+            )
             feed_to_use = override_feed or requested_feed
             initial_feed = requested_feed
             proactive_switch = False
@@ -2625,7 +2631,7 @@ def get_minute_df(
                         "alpaca",
                         symbol=symbol,
                         timeframe="1Min",
-                        feed=feed or _DEFAULT_FEED,
+                        feed=normalized_feed or _DEFAULT_FEED,
                         retries=cnt,
                     )
                     _SKIPPED_SYMBOLS.add(tf_key)
@@ -2638,14 +2644,14 @@ def get_minute_df(
                         "occurrences": cnt,
                         "backoff": backoff,
                         "finnhub_enabled": use_finnhub,
-                        "feed": feed or _DEFAULT_FEED,
+                        "feed": normalized_feed or _DEFAULT_FEED,
                     }
                     logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
                     time.sleep(backoff)
                     alt_feed = None
                     if max_data_fallbacks() >= 1:
                         prio = provider_priority()
-                        cur = feed or _DEFAULT_FEED
+                        cur = normalized_feed or _DEFAULT_FEED
                         idx = prio.index(f"alpaca_{cur}") if prio else -1
                         for prov in prio[idx + 1 :]:
                             if prov == "alpaca_sip":
@@ -2656,7 +2662,7 @@ def get_minute_df(
                             if prov == "alpaca_iex":
                                 alt_feed = "iex"
                                 break
-                    if alt_feed and alt_feed != (feed or _DEFAULT_FEED):
+                    if alt_feed and alt_feed != (normalized_feed or _DEFAULT_FEED):
                         _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(alt_feed)
                         try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
@@ -2665,7 +2671,7 @@ def get_minute_df(
                                 "ALPACA_ALT_FEED_FAILED",
                                 extra={
                                     "symbol": symbol,
-                                    "from_feed": feed or _DEFAULT_FEED,
+                                    "from_feed": normalized_feed or _DEFAULT_FEED,
                                     "to_feed": alt_feed,
                                     "err": str(alt_err),
                                 },
@@ -2677,7 +2683,7 @@ def get_minute_df(
                                     "ALPACA_ALT_FEED_SUCCESS",
                                     extra={
                                         "symbol": symbol,
-                                        "from_feed": feed or _DEFAULT_FEED,
+                                        "from_feed": normalized_feed or _DEFAULT_FEED,
                                         "to_feed": alt_feed,
                                         "timeframe": "1Min",
                                     },
@@ -2699,11 +2705,17 @@ def get_minute_df(
                                 "timeframe": "1Min",
                                 "start": short_start.isoformat(),
                                 "end": end_dt.isoformat(),
-                                "feed": feed or _DEFAULT_FEED,
+                                "feed": normalized_feed or _DEFAULT_FEED,
                             },
                         )
                         try:
-                            df_short = _fetch_bars(symbol, short_start, end_dt, "1Min", feed=feed or _DEFAULT_FEED)
+                            df_short = _fetch_bars(
+                                symbol,
+                                short_start,
+                                end_dt,
+                                "1Min",
+                                feed=normalized_feed or _DEFAULT_FEED,
+                            )
                         except (EmptyBarsError, ValueError, RuntimeError):
                             df_short = None
                         else:
@@ -2713,7 +2725,7 @@ def get_minute_df(
                                     extra={
                                         "symbol": symbol,
                                         "timeframe": "1Min",
-                                        "feed": feed or _DEFAULT_FEED,
+                                        "feed": normalized_feed or _DEFAULT_FEED,
                                         "start": short_start.isoformat(),
                                         "end": end_dt.isoformat(),
                                     },
@@ -2732,7 +2744,7 @@ def get_minute_df(
                         extra={
                             "symbol": symbol,
                             "timeframe": "1Min",
-                            "feed": feed or _DEFAULT_FEED,
+                            "feed": normalized_feed or _DEFAULT_FEED,
                             "occurrences": cnt,
                         },
                     )
@@ -2820,7 +2832,7 @@ def get_minute_df(
                     "1Min",
                     start_dt,
                     end_dt,
-                    from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
                 )
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
@@ -2836,7 +2848,7 @@ def get_minute_df(
                     "1Min",
                     start_dt,
                     end_dt,
-                    from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
                 )
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
@@ -2852,7 +2864,7 @@ def get_minute_df(
                     "1Min",
                     start_dt,
                     end_dt,
-                    from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
                 )
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
@@ -2870,7 +2882,7 @@ def get_minute_df(
                 "1Min",
                 start_dt,
                 end_dt,
-                from_provider=f"alpaca_{feed or _DEFAULT_FEED}",
+                from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
             )
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
@@ -2891,18 +2903,25 @@ def get_daily_df(
     except Exception as exc:  # pragma: no cover - optional dependency
         raise DataFetchError("Alpaca API unavailable") from exc
 
+    normalized_feed = _normalize_feed_value(feed) if feed is not None else None
+
     if feed is None:
         tf_key = (symbol, _canon_tf("1Day"))
         override = _FEED_OVERRIDE_BY_TF.get(tf_key)
         if override:
-            feed = override
+            normalized_feed = _normalize_feed_value(override)
+
+    adjustment = adjustment or "raw"
+    if isinstance(adjustment, str):
+        adjustment = adjustment.lower()
+    validate_adjustment(adjustment)
 
     df = _get_bars_df(
         symbol,
         timeframe="1Day",
         start=start,
         end=end,
-        feed=feed,
+        feed=normalized_feed,
         adjustment=adjustment,
     )
 
@@ -2951,19 +2970,31 @@ def get_bars(
     # If a client-like object is passed for `feed`, route via client helper for tests
     if feed is not None and not isinstance(feed, str):
         return _alpaca_get_bars(feed, symbol, start, end, timeframe=_canon_tf(timeframe))
+    normalized_feed: str | None = None
+    if isinstance(feed, str):
+        normalized_feed = _normalize_feed_value(feed)
+
     # Resolve feed preference from settings when not explicitly provided
     tf_norm = _canon_tf(timeframe)
-    if feed is None:
+    if normalized_feed is None:
         override = _FEED_OVERRIDE_BY_TF.get((symbol, tf_norm))
         if override:
-            feed = override
-        prio = provider_priority(S)
-        for prov in prio:
-            if prov.startswith("alpaca_"):
-                feed = prov.split("_", 1)[1]
-                break
-        feed = feed or getattr(S, 'data_feed', getattr(S, 'alpaca_data_feed', 'iex'))
+            normalized_feed = _normalize_feed_value(override)
+        else:
+            prio = provider_priority(S)
+            feed_candidate: str | None = None
+            for prov in prio:
+                if prov.startswith("alpaca_"):
+                    feed_candidate = prov.split("_", 1)[1]
+                    break
+            if feed_candidate is None:
+                feed_candidate = getattr(S, "data_feed", getattr(S, "alpaca_data_feed", "iex"))
+            normalized_feed = _normalize_feed_value(feed_candidate)
+
     adjustment = adjustment or S.alpaca_adjustment
+    if isinstance(adjustment, str):
+        adjustment = adjustment.lower()
+    validate_adjustment(adjustment)
     # If Alpaca credentials are missing, skip direct Alpaca HTTP calls and
     # fall back to the Yahoo helper to avoid noisy empty/unauthorized logs.
     if not _has_alpaca_keys():
@@ -3005,7 +3036,7 @@ def get_bars(
         except Exception:
             # Defer to Alpaca path (will return None) to preserve behavior
             return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
-    return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
+    return _fetch_bars(symbol, start, end, timeframe, feed=normalized_feed, adjustment=adjustment)
 
 
 def get_bars_batch(

@@ -475,7 +475,7 @@ import types
 import uuid
 import warnings
 from collections.abc import Callable  # AI-AGENT-REF: now_provider hooks
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 import time as _time
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 from pathlib import Path
@@ -581,6 +581,10 @@ class BotEngine:
         # Eagerly load the configured model so misconfiguration fails fast
         _load_required_model()
 
+        # Cycle-scoped feed preference cache populated during minute fetches
+        self._cycle_id: int | None = None
+        self._intraday_fallback_feed: str | None = None
+
     @property
     def ctx(self):
         """Return the lazily-initialized bot context."""
@@ -605,6 +609,29 @@ class BotEngine:
                 url_override=base_url,
             )
         return cls
+
+    # ------------------------------------------------------------------
+    # Cycle-scoped helpers
+    # ------------------------------------------------------------------
+
+    def _begin_cycle(self) -> None:
+        """Reset per-cycle caches and stamp a fresh cycle id."""
+
+        _reset_cycle_cache()
+        self._cycle_id = _GLOBAL_CYCLE_ID
+        self._intraday_fallback_feed = None
+
+    def _prefer_feed_this_cycle(self) -> str | None:
+        """Return cached intraday fallback feed for the current cycle."""
+
+        return self._intraday_fallback_feed
+
+    def _cache_cycle_fallback_feed(self, feed: str | None) -> None:
+        """Remember *feed* for subsequent minute fetches within the cycle."""
+
+        if feed:
+            self._intraday_fallback_feed = feed
+            _cache_cycle_fallback_feed(feed)
 
     @cached_property
     def data_client(self):
@@ -666,6 +693,34 @@ def _is_primary_price_source(source: str) -> bool:
         return True
     return normalized in _PRIMARY_PRICE_SOURCES
 logger = get_logger(__name__)
+
+
+# Cycle-scoped fallback cache shared across helpers/tests
+_GLOBAL_CYCLE_ID: int | None = None
+_GLOBAL_INTRADAY_FALLBACK_FEED: str | None = None
+
+
+def _reset_cycle_cache() -> None:
+    """Reset module-level cycle tracking state."""
+
+    global _GLOBAL_CYCLE_ID, _GLOBAL_INTRADAY_FALLBACK_FEED
+    now = datetime.now(timezone.utc)
+    _GLOBAL_CYCLE_ID = int(now.timestamp())
+    _GLOBAL_INTRADAY_FALLBACK_FEED = None
+
+
+def _prefer_feed_this_cycle() -> str | None:
+    """Return cached intraday fallback feed for the active cycle."""
+
+    return _GLOBAL_INTRADAY_FALLBACK_FEED
+
+
+def _cache_cycle_fallback_feed(feed: str | None) -> None:
+    """Remember *feed* for reuse later in the same trading cycle."""
+
+    global _GLOBAL_INTRADAY_FALLBACK_FEED
+    if feed:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = feed
 
 def _alpaca_diag_info() -> dict[str, object]:
     """Collect Alpaca env & mode diagnostics for operator visibility."""
@@ -2995,14 +3050,15 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         return data_fetcher_module._DEFAULT_FEED
 
     configured_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
-    current_feed = configured_feed
+    cycle_pref = _prefer_feed_this_cycle()
+    current_feed = cycle_pref or configured_feed
     try:
         cached_feeds = getattr(state, "minute_feed_cache", None)
     except Exception:
         cached_feeds = None
     if isinstance(cached_feeds, dict):
         preferred_feed = cached_feeds.get(configured_feed)
-        if preferred_feed:
+        if preferred_feed and not cycle_pref:
             current_feed = preferred_feed
 
     def _initial_fetch_kwargs() -> dict[str, object]:
@@ -15605,6 +15661,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             feed_cache.clear()
         else:
             state.minute_feed_cache = {}
+        _reset_cycle_cache()
         state.running = True
         state.last_run_at = now
         if not getattr(state, "_strategies_loaded", False):
