@@ -92,6 +92,8 @@ def _cast_value(spec: ConfigSpec, raw: str) -> Any:
 def _validate_bounds(spec: ConfigSpec, value: Any) -> Any:
     if isinstance(value, (int, float)):
         if spec.min_value is not None and value < spec.min_value:
+            if spec.field == "max_position_size":
+                raise ValueError("MAX_POSITION_SIZE must be positive")
             raise ValueError(
                 f"{spec.field} must be >= {spec.min_value}, got {value}"
             )
@@ -216,6 +218,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=1,
         max_value=65535,
         deprecated_env={"AI_TRADING_API_PORT": "Use API_PORT instead."},
+    ),
+    ConfigSpec(
+        field="market_calendar",
+        env=("MARKET_CALENDAR",),
+        cast="str",
+        default=None,
+        description="Identifier for the trading calendar (e.g., XNAS).",
     ),
     ConfigSpec(
         field="webhook_secret",
@@ -814,7 +823,113 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         default="1Min",
         description="Default Alpaca timeframe used when one is not specified explicitly.",
     ),
+    ConfigSpec(
+        field="confirmation_count",
+        env=("CONFIRMATION_COUNT",),
+        cast="int",
+        default=2,
+        description="Number of consecutive confirmations required before executing trades.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="signal_period",
+        env=("SIGNAL_PERIOD",),
+        cast="int",
+        default=9,
+        description="Signal smoothing period used for MACD calculations.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="fast_period",
+        env=("FAST_PERIOD",),
+        cast="int",
+        default=12,
+        description="Fast period used for MACD calculations.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="slow_period",
+        env=("SLOW_PERIOD",),
+        cast="int",
+        default=26,
+        description="Slow period used for MACD calculations.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="max_portfolio_risk",
+        env=("MAX_PORTFOLIO_RISK",),
+        cast="float",
+        default=0.025,
+        description="Maximum allowable portfolio risk as a fraction of equity.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
+        field="max_portfolio_positions",
+        env=("AI_TRADING_MAX_PORTFOLIO_POSITIONS",),
+        cast="int",
+        default=20,
+        description="Maximum number of concurrent portfolio positions permitted.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="limit_order_slippage",
+        env=("LIMIT_ORDER_SLIPPAGE",),
+        cast="float",
+        default=0.005,
+        description="Expected fractional slippage applied to limit orders to ensure fills.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="participation_rate",
+        env=("PARTICIPATION_RATE",),
+        cast="float",
+        default=0.15,
+        description="Target participation rate for POV execution.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
+    ConfigSpec(
+        field="pov_slice_pct",
+        env=("POV_SLICE_PCT",),
+        cast="float",
+        default=0.05,
+        description="Slice percentage used for participation-of-volume execution.",
+        min_value=0.0,
+        max_value=1.0,
+    ),
 )
+
+
+MODE_PARAMETERS: dict[str, dict[str, float]] = {
+    "conservative": {
+        "kelly_fraction": 0.25,
+        "conf_threshold": 0.85,
+        "daily_loss_limit": 0.03,
+        "max_position_size": 5000.0,
+        "capital_cap": 0.20,
+        "confirmation_count": 3,
+        "take_profit_factor": 1.5,
+    },
+    "balanced": {
+        "kelly_fraction": 0.6,
+        "conf_threshold": 0.75,
+        "daily_loss_limit": 0.05,
+        "max_position_size": 8000.0,
+        "capital_cap": 0.25,
+        "confirmation_count": 2,
+        "take_profit_factor": 1.8,
+    },
+    "aggressive": {
+        "kelly_fraction": 0.75,
+        "conf_threshold": 0.65,
+        "daily_loss_limit": 0.08,
+        "max_position_size": 12000.0,
+        "capital_cap": 0.30,
+        "confirmation_count": 1,
+        "take_profit_factor": 2.5,
+    },
+}
 
 
 for spec in CONFIG_SPECS:
@@ -839,7 +954,15 @@ class TradingConfig:
     __slots__ = ("_values",)
 
     def __init__(self, **values: Any) -> None:
-        object.__setattr__(self, "_values", values)
+        normalized: dict[str, Any] = {}
+        if not values:
+            for spec in CONFIG_SPECS:
+                normalized[spec.field] = spec.default
+        else:
+            normalized.update(values)
+            for spec in CONFIG_SPECS:
+                normalized.setdefault(spec.field, spec.default)
+        object.__setattr__(self, "_values", normalized)
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - attribute passthrough
         try:
@@ -877,10 +1000,27 @@ class TradingConfig:
         return int(max(0.0, self._values["symbol_process_budget_seconds"]) * 1000)
 
     @classmethod
+    def from_optimization(cls, params: Mapping[str, Any]) -> "TradingConfig":
+        base = cls.from_env()
+        values = base.to_dict()
+        values.update(params)
+        return cls(**values)
+
+    @classmethod
     def from_env(
-        cls, env_overrides: Mapping[str, Any] | None = None
+        cls,
+        env_overrides: Mapping[str, Any] | str | None = None,
+        *,
+        allow_missing_drawdown: bool = False,
     ) -> "TradingConfig":
         env_map = _env_snapshot(env_overrides)
+        if not allow_missing_drawdown:
+            has_drawdown = any(
+                env_map.get(key) not in (None, "")
+                for key in ("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD")
+            )
+            if not has_drawdown:
+                raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
         values: dict[str, Any] = {}
         for spec in CONFIG_SPECS:
             values[spec.field] = _build_value(spec, env_map)
@@ -900,6 +1040,17 @@ class TradingConfig:
         values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
         values.setdefault("paper", _infer_paper_mode(values))
         values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
+
+        mode_name = str(env_map.get("TRADING_MODE", "balanced")).lower()
+        mode_defaults = MODE_PARAMETERS.get(mode_name)
+        if mode_defaults:
+            for field, default_value in mode_defaults.items():
+                spec = SPEC_BY_FIELD.get(field)
+                if spec is None:
+                    continue
+                provided = any(env_map.get(env_key) not in (None, "") for env_key in spec.env)
+                if not provided:
+                    values[field] = default_value
 
         return cls(**values)
 
@@ -943,7 +1094,10 @@ def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
 def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
     snap = {k: v for k, v in os.environ.items() if isinstance(v, str)}
     if overrides:
-        snap.update({k.upper(): str(v) for k, v in overrides.items()})
+        if isinstance(overrides, str):
+            snap["TRADING_MODE"] = overrides
+        else:
+            snap.update({k.upper(): str(v) for k, v in overrides.items()})
     return snap
 
 
