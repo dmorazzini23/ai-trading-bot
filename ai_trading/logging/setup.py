@@ -33,7 +33,11 @@ def _apply_library_filters() -> None:
         "peewee": logging.WARNING,
     }
     raw = config.get_env("LOG_QUIET_LIBRARIES", "")
-    for item in raw.split(","):
+    if isinstance(raw, tuple):
+        items = raw
+    else:
+        items = tuple(part.strip() for part in str(raw).split(",") if part.strip())
+    for item in items:
         name, _, level = item.partition("=")
         if name.strip() and level.strip():
             filters[name.strip()] = getattr(logging, level.strip().upper(), logging.INFO)
