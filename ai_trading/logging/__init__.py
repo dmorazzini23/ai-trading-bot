@@ -23,11 +23,15 @@ from typing import Any
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
-from ai_trading.data.metrics import backup_provider_used
 
-if os.getenv("FINNHUB_API_KEY") and os.getenv("ENABLE_FINNHUB") is None:
-    os.environ["ENABLE_FINNHUB"] = "1"
-    logging.getLogger(__name__).debug("ENABLE_FINNHUB_SET", extra={"enabled": True})
+def _ensure_finnhub_enabled_flag() -> None:
+    """Set ENABLE_FINNHUB when a key is present; safe to call multiple times."""
+
+    if os.getenv("FINNHUB_API_KEY") and os.getenv("ENABLE_FINNHUB") is None:
+        os.environ["ENABLE_FINNHUB"] = "1"
+        logging.getLogger(__name__).debug(
+            "ENABLE_FINNHUB_SET", extra={"enabled": True}
+        )
 
 def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
@@ -332,6 +336,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
     environment variable.
     """
     global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
+    _ensure_finnhub_enabled_flag()
     if _LOGGING_CONFIGURED and _configured:
         return logging.getLogger()
     if debug:
@@ -587,7 +592,15 @@ def log_backup_provider_used(
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
-    backup_provider_used.labels(provider=provider, symbol=symbol).inc()
+    try:
+        from ai_trading.data.metrics import backup_provider_used as _backup_counter
+
+        _backup_counter.labels(provider=provider, symbol=symbol).inc()
+    except COMMON_EXC:
+        logger.debug(
+            "METRIC_BACKUP_PROVIDER_FAILED",
+            extra={"provider": provider, "symbol": symbol},
+        )
     logger.info("BACKUP_PROVIDER_USED", extra=payload)
 
 
