@@ -1930,7 +1930,24 @@ def _fetch_bars(
             time.sleep(backoff)
             return _req(session, fallback, headers=headers, timeout=timeout)
         df = pd.DataFrame(data)
+        if data:
+            _state.pop("empty_attempts", None)
         if df.empty:
+            empty_attempts = _state.get("empty_attempts", 0) + 1
+            _state["empty_attempts"] = empty_attempts
+            logger.info(
+                "EMPTY_BARS_DETECTED",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": _interval,
+                    "feed": _feed,
+                    "attempt": empty_attempts,
+                },
+            )
+            if empty_attempts == 1:
+                _state["delay"] = 0.25
+            else:
+                _state.pop("delay", None)
             attempt = _state["retries"] + 1
             remaining_retries = max(0, max_retries - attempt)
             can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
@@ -1964,6 +1981,30 @@ def _fetch_bars(
             }
             if attempt <= max_retries:
                 log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
+            if empty_attempts == 1:
+                retry_delay = _state.get("delay", 0.25)
+                logger.warning(
+                    "RETRY_SCHEDULED",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": _interval,
+                        "delay": retry_delay,
+                        "reason": "empty_bars",
+                    },
+                )
+                time.sleep(retry_delay)
+                return _req(session, fallback, headers=headers, timeout=timeout)
+            if empty_attempts >= 2:
+                logger.warning(
+                    "PERSISTENT_EMPTY_ABORT",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": _interval,
+                        "attempts": empty_attempts,
+                    },
+                )
+                _state.pop("empty_attempts", None)
+                return None
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             base_interval = _interval

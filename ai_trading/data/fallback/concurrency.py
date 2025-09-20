@@ -131,6 +131,36 @@ FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
 
 
+async def run_with_concurrency_limit(
+    coroutines: Iterable[Awaitable[T]],
+    limit: int,
+    per_task_timeout: float = 5.0,
+) -> tuple[list[T | Exception], int, int]:
+    """Run *coroutines* with bounded concurrency.
+
+    Returns the gathered results (preserving order) and counts of succeeded and
+    failed tasks.  Exceptions are captured in the results list.
+    """
+
+    semaphore = asyncio.Semaphore(max(1, int(limit)))
+
+    async def _wrap(coro: Awaitable[T]) -> T | Exception:
+        async with semaphore:
+            try:
+                return await asyncio.wait_for(coro, timeout=per_task_timeout)
+            except Exception as exc:  # noqa: BLE001 - propagate as captured result
+                return exc
+
+    tasks = [asyncio.create_task(_wrap(coro)) for coro in coroutines]
+    if not tasks:
+        return [], 0, 0
+
+    results: list[T | Exception] = await asyncio.gather(*tasks)
+    succeeded = sum(1 for res in results if not isinstance(res, Exception))
+    failed = len(results) - succeeded
+    return results, succeeded, failed
+
+
 async def run_with_concurrency(
     symbols: Iterable[str],
     worker: Callable[[str], Awaitable[T]],
@@ -316,43 +346,42 @@ async def run_with_concurrency(
         nonlocal running, peak_running
         async with counter_lock:
             running += 1
-            if running > peak_running:
-                peak_running = running
-            assert (
-                running <= concurrency_limit
-            ), f"Exceeded max_concurrency={concurrency_limit}: running={running}"
+            peak_running = max(peak_running, running)
 
     async def _decrement() -> None:
         nonlocal running
         async with counter_lock:
             running -= 1
 
-    semaphore = asyncio.Semaphore(concurrency_limit)
+    async def _execute(sym: str) -> tuple[str, T | None]:
+        await _increment()
+        try:
+            coro = worker(sym)
+            if timeout is not None:
+                coro = asyncio.wait_for(coro, timeout)
+            result = await coro
+            return sym, result
+        except Exception:  # noqa: BLE001 - treat failure as None result
+            return sym, None
+        finally:
+            await _decrement()
 
-    async def _bounded_execute(sym: str) -> None:
-        async with semaphore:
-            res: T | None = None
-            await _increment()
-            try:
-                coro = worker(sym)
-                if timeout is not None:
-                    coro = asyncio.wait_for(coro, timeout)
-                res = await coro
-            except asyncio.CancelledError:  # pragma: no cover - cancel treated as failure
-                res = None
-            except Exception:  # pragma: no cover - worker errors become None
-                res = None
-            finally:
-                results[sym] = res
-                if res is None:
-                    FAILED_SYMBOLS.add(sym)
-                else:
-                    SUCCESSFUL_SYMBOLS.add(sym)
-                await _decrement()
+    coroutines = [_execute(sym) for sym in symbols]
+    gathered, _, _ = await run_with_concurrency_limit(
+        coroutines,
+        concurrency_limit,
+        per_task_timeout=timeout if timeout is not None else 5.0,
+    )
 
-    tasks = [asyncio.create_task(_bounded_execute(sym)) for sym in symbols]
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    for entry in gathered:
+        if isinstance(entry, Exception):
+            continue
+        sym, res = entry
+        results[sym] = res
+        if res is None:
+            FAILED_SYMBOLS.add(sym)
+        else:
+            SUCCESSFUL_SYMBOLS.add(sym)
 
     global PEAK_SIMULTANEOUS_WORKERS
     PEAK_SIMULTANEOUS_WORKERS = peak_running
@@ -362,6 +391,7 @@ async def run_with_concurrency(
 
 __all__ = [
     "run_with_concurrency",
+    "run_with_concurrency_limit",
     "SUCCESSFUL_SYMBOLS",
     "FAILED_SYMBOLS",
     "PEAK_SIMULTANEOUS_WORKERS",

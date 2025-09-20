@@ -19,6 +19,7 @@ class _Cache:
     ts: datetime | None = None
     equity: float | None = None
     equity_error: str | None = None
+    equity_missing_logged: bool = False
 _CACHE = _Cache()
 
 def _now_utc() -> datetime:
@@ -72,12 +73,23 @@ def _resolve_max_position_size(
     if provided > 0:
         return (float(provided), "provided")
 
-    if equity is None:
-        logger_once.warning(
-            "EQUITY_MISSING",
-            key="equity_missing",
-            extra={"field": "equity", "default_equity": default_equity, "capital_cap": capital_cap},
+    if equity in (None, 0) or (isinstance(equity, float) and equity <= 0):
+        if not _CACHE.equity_missing_logged:
+            _log.warning(
+                "EQUITY_MISSING",
+                extra={
+                    "field": "equity",
+                    "default_equity": default_equity,
+                    "capital_cap": capital_cap,
+                },
+            )
+            _CACHE.equity_missing_logged = True
+    elif _CACHE.equity_missing_logged:
+        _log.info(
+            "EQUITY_RECOVERED",
+            extra={"equity": equity, "capital_cap": capital_cap},
         )
+        _CACHE.equity_missing_logged = False
     basis = equity if equity is not None and equity > 0 else default_equity
     resolved = float(round(capital_cap * basis, 2))
     _log.info(
@@ -447,4 +459,3 @@ def get_max_position_size(
 
 
 __all__ = ["resolve_max_position_size", "get_max_position_size"]
-

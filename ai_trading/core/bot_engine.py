@@ -10368,33 +10368,19 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
     if not order_args.get("client_order_id"):
         try:
             from ai_trading.core.order_ids import generate_client_order_id as _gen_id
-            cid = _gen_id("ai")
-            order_args["client_order_id"] = cid
-            ids = getattr(api, "client_order_ids", None)
-            if isinstance(ids, list):
-                ids_list = ids
-            else:
-                if ids is None:
-                    ids_list: list[Any] = []
-                elif isinstance(ids, (tuple, set)):
-                    ids_list = list(ids)
-                else:
-                    ids_list = []
-                assigned = False
-                try:
-                    setattr(api, "client_order_ids", ids_list)
-                except (AttributeError, TypeError):
-                    assigned = False
-                else:
-                    assigned = True
-                if assigned:
-                    refreshed = getattr(api, "client_order_ids", ids_list)
-                    if isinstance(refreshed, list):
-                        ids_list = refreshed
-                ids = ids_list
-            ids.append(cid)
-        except (ImportError, AttributeError):
-            pass
+
+            client_order_id = _gen_id("ai")
+        except Exception:
+            client_order_id = f"ai-{uuid.uuid4()}"
+        order_args["client_order_id"] = client_order_id
+        ids_attr = getattr(api, "client_order_ids", None)
+        if isinstance(ids_attr, list):
+            ids_attr.append(client_order_id)
+        else:
+            try:
+                setattr(api, "client_order_ids", [client_order_id])
+            except Exception:
+                pass
 
     # Deduplicate via idempotency cache before sending to broker
     try:
@@ -10491,6 +10477,12 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                         continue
                 else:
                     raise
+
+            if getattr(order, "client_order_id", None) in (None, "", 0):
+                try:
+                    setattr(order, "client_order_id", order_args.get("client_order_id"))
+                except Exception:
+                    pass
 
             start_ts = time.monotonic()
             pending_new = getattr(OrderStatus, "PENDING_NEW", "pending_new")
@@ -13806,6 +13798,7 @@ def screen_universe(
                     _SCREEN_CACHE[sym] = float(atr_val)
                     logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
                     valid += 1
+                    logger.info("SCREEN_TAG", extra={"symbol": sym, "tag": "VALID"})
                 else:
                     failed += 1
                     filtered_out[sym] = "atr_nan"
