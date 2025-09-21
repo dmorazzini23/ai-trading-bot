@@ -11,7 +11,6 @@ from .runtime import (
     get_trading_config,
     reload_trading_config,
     generate_config_schema,
-    _strip_inline_comment,
 )
 from .management import (
     get_env,
@@ -68,6 +67,15 @@ def _env_value(*names: str) -> str | None:
         if value not in (None, ""):
             return value
     return None
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Remove trailing inline comments introduced with ``#``."""
+
+    for idx, char in enumerate(value):
+        if char == "#" and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
+    return value.strip()
 
 
 def _env_float(*names: str, default: float) -> float:
