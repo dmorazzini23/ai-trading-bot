@@ -534,15 +534,52 @@ def log_finnhub_disabled(symbol: str) -> None:
     )
 
 
-def warn_finnhub_disabled_no_data(symbol: str) -> None:
-    """Log once per symbol when Finnhub is disabled and no data is returned."""
+def warn_finnhub_disabled_no_data(
+    symbol: str,
+    *,
+    timeframe: str | None = None,
+    start: datetime | str | None = None,
+    end: datetime | str | None = None,
+) -> None:
+    """Log once when Finnhub is disabled and a fetch produced no data.
+
+    The ``EmitOnceLogger`` originally deduped purely on *symbol*, which meant
+    separate requests for different windows could silence each other when
+    tests (or runtime checks) exercised multiple scenarios in the same
+    process. Extend the key with the request window so distinct fetch attempts
+    during the same run still produce the expected audit log.
+    """
+
+    def _normalize_range_component(value: datetime | str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    key_parts: list[str] = [symbol]
+    if timeframe:
+        key_parts.append(str(timeframe))
+    start_key = _normalize_range_component(start)
+    end_key = _normalize_range_component(end)
+    if start_key or end_key:
+        key_parts.append(f"{start_key or ''}->{end_key or ''}")
+    dedupe_key = ":".join(key_parts)
+    extra = {
+        "symbol": symbol,
+        "recommendation": "set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY",
+    }
+    if timeframe:
+        extra["timeframe"] = str(timeframe)
+    if start_key:
+        extra["start"] = start_key
+    if end_key:
+        extra["end"] = end_key
+
     logger_once.info(
         "FINNHUB_DISABLED_NO_DATA",
-        key=f"FINNHUB_DISABLED_NO_DATA:{symbol}",
-        extra={
-            "symbol": symbol,
-            "recommendation": "set ENABLE_FINNHUB=1 and provide FINNHUB_API_KEY",
-        },
+        key=f"FINNHUB_DISABLED_NO_DATA:{dedupe_key}",
+        extra=extra,
     )
 
 def log_fetch_attempt(provider: str, *, status: int | None = None, error: str | None = None, **extra: Any) -> None:

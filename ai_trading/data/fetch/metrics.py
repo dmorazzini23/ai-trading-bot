@@ -20,6 +20,7 @@ _TIMEOUTS: Counter[str] = Counter()
 _UNAUTH_SIP: Counter[str] = Counter()
 _EMPTY: Counter[tuple[str, str]] = Counter()
 _FETCH_ATTEMPTS: Counter[str] = Counter()
+_BACKUP_PROVIDER_USED_COUNTS: Counter[tuple[str, str]] = Counter()
 _ALPACA_FAILED: int = 0
 
 # Module-level gauges mirroring ``ai_trading.data.metrics.metrics`` values.
@@ -36,6 +37,7 @@ _TIMEOUT_LOCK = Lock()
 _UNAUTH_LOCK = Lock()
 _EMPTY_LOCK = Lock()
 _FETCH_ATTEMPT_LOCK = Lock()
+_BACKUP_PROVIDER_LOCK = Lock()
 _ALPACA_FAILED_LOCK = Lock()
 
 
@@ -130,9 +132,17 @@ def inc_provider_fallback(from_provider: str, to_provider: str) -> int:
 
 def inc_backup_provider_used(provider: str, symbol: str) -> int:
     """Increment backup-provider counter and return the current value."""
+    with _BACKUP_PROVIDER_LOCK:
+        key = (provider, symbol)
+        _BACKUP_PROVIDER_USED_COUNTS[key] += 1
+        local_value = _BACKUP_PROVIDER_USED_COUNTS[key]
     metric = _backup_provider_used_counter.labels(provider=provider, symbol=symbol)
-    metric.inc()
-    return _current_value(metric)
+    try:
+        metric.inc()
+        prom_value = _current_value(metric)
+    except Exception:
+        prom_value = 0
+    return prom_value or local_value
 
 
 def inc_provider_disable_total(provider: str) -> int:
@@ -168,6 +178,7 @@ def reset() -> None:
     _UNAUTH_SIP.clear()
     _EMPTY.clear()
     _FETCH_ATTEMPTS.clear()
+    _BACKUP_PROVIDER_USED_COUNTS.clear()
     global _ALPACA_FAILED
     _ALPACA_FAILED = 0
     global rate_limit, timeout, unauthorized, empty_payload, feed_switch, empty_fallback
@@ -213,4 +224,3 @@ __all__ = [
     "inc_fetch_attempt",
     "inc_alpaca_failed",
 ]
-

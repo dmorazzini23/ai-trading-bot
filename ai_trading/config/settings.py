@@ -11,6 +11,22 @@ def get_settings() -> Settings:
     """Return cached Settings instance."""
     return _base_get_settings()
 
+
+_original_cache_clear = get_settings.cache_clear
+
+
+def _cache_clear() -> None:
+    """Clear cached settings, including the base Settings singleton."""
+
+    _original_cache_clear()
+    try:
+        _base_get_settings.cache_clear()  # type: ignore[attr-defined]
+    except AttributeError:
+        pass
+
+
+get_settings.cache_clear = _cache_clear  # type: ignore[assignment]
+
 def broker_keys(s: Settings | None=None) -> dict[str, str]:
     """Return broker credential mapping."""
     s = s or get_settings()

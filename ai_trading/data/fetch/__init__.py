@@ -2847,7 +2847,12 @@ def get_minute_df(
             df = finnhub_df
             used_backup = True
         elif not enable_finnhub:
-            warn_finnhub_disabled_no_data(symbol)
+            warn_finnhub_disabled_no_data(
+                symbol,
+                timeframe="1Min",
+                start=start_dt,
+                end=end_dt,
+            )
         else:
             log_finnhub_disabled(symbol)
     if df is None or getattr(df, "empty", True):
