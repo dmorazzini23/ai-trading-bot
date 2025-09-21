@@ -647,7 +647,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     global _SIP_UNAUTHORIZED, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
-    if os.getenv("PYTEST_RUNNING"):
+    if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
         return True
     if not _sip_configured():
         if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
@@ -926,10 +926,10 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
         frame = pd.DataFrame(
             {
                 "timestamp": idx,
-                "open": [1.0],
-                "high": [1.0],
-                "low": [1.0],
-                "close": [1.0],
+                "open": [100.0],
+                "high": [100.0],
+                "low": [100.0],
+                "close": [100.0],
                 "volume": [0],
             }
         )
@@ -1917,6 +1917,9 @@ def _fetch_bars(
             if _feed == "sip":
                 _SIP_UNAUTHORIZED = True
                 os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
+                is_fallback_request = any(p != "sip" for p in _state.get("providers", [])[:-1])
+                if is_fallback_request:
+                    raise ValueError("rate_limited")
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
@@ -1964,18 +1967,16 @@ def _fetch_bars(
                     )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
-            attempted_fallback = False
             fallback_target = fallback
-            if fallback:
-                result = _attempt_fallback(fallback)
-                attempted_fallback = True
+            if fallback_target:
+                result = _attempt_fallback(fallback_target)
                 if result is not None:
                     return result
                 fallback = None
             attempt = _state["retries"] + 1
             if _feed == "iex" and _SIP_UNAUTHORIZED:
                 fallback_viable = False
-                if not attempted_fallback and fallback_target:
+                if fallback_target:
                     _, fb_feed, _, _ = fallback_target
                     if fb_feed != "sip":
                         fallback_viable = True

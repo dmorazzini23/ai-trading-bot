@@ -16,8 +16,7 @@ _PROVIDER_DISABLE_TOTALS: dict[str, int] = {}
 
 
 def register_provider_disable(provider: str) -> None:
-    current = _PROVIDER_DISABLE_TOTALS.get(provider, 0)
-    _PROVIDER_DISABLE_TOTALS[provider] = current + 1
+    _PROVIDER_DISABLE_TOTALS[provider] = _PROVIDER_DISABLE_TOTALS.get(provider, 0) + 1
 
 
 # In-memory counters.  We use ``Counter`` for automatic zero initialization and
@@ -147,17 +146,16 @@ def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
     metric = _provider_disable_total_counter.labels(provider=provider)
     metric.inc()
-    try:
-        from ai_trading.data.provider_monitor import provider_monitor as _pm
-    except Exception:
-        _pm = None
-    if _pm is not None:
-        has_active = provider in _pm.disable_counts or any(
-            key.startswith(f"{provider}_") for key in _pm.disable_counts
-        )
-        if not has_active:
-            _PROVIDER_DISABLE_TOTALS.pop(provider, None)
-    return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
+    value = _current_value(metric)
+    if value == 0 and not hasattr(metric, '_value'):
+        try:
+            from ai_trading.data.provider_monitor import provider_monitor as _pm
+            if not _pm.disable_counts:
+                _PROVIDER_DISABLE_TOTALS.pop(provider, None)
+            return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
+        except Exception:  # pragma: no cover - defensive fallback
+            return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
+    return value
 
 
 def provider_disabled(provider: str) -> int:
