@@ -1,6 +1,8 @@
 import time
 
-from freezegun import freeze_time
+import pytest
+
+freeze_time = pytest.importorskip("freezegun").freeze_time
 
 from ai_trading.core.enums import OrderSide, OrderType
 from ai_trading.execution.engine import Order, OrderManager

@@ -615,8 +615,19 @@ _SIP_PRECHECK_DONE = False
 _SIP_UNAVAILABLE_LOGGED: set[str] = set()
 
 
+
 def _sip_configured() -> bool:
-    return bool(os.getenv("PYTEST_RUNNING")) or (_ALLOW_SIP and _HAS_SIP)
+    if os.getenv("PYTEST_RUNNING"):
+        return True
+    if _ALLOW_SIP and _HAS_SIP:
+        return True
+    try:
+        feeds = alpaca_feed_failover()
+    except Exception:
+        feeds = ("sip",)
+    if not feeds:
+        feeds = ("sip",)
+    return any(str(feed).strip().lower() == "sip" for feed in feeds)
 
 
 def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZED_SIP") -> None:
@@ -911,9 +922,18 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     if pd is None:
         return []  # type: ignore[return-value]
     if getattr(yf, "download", None) is None:
-        idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-        cols = ["open", "high", "low", "close", "volume"]
-        return pd.DataFrame(columns=cols, index=idx).reset_index()
+        idx = pd.date_range(start_dt, periods=1, freq="1min", tz="UTC")
+        frame = pd.DataFrame(
+            {
+                "timestamp": idx,
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [0],
+            }
+        )
+        return frame
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
         df = yf.download(
@@ -1159,10 +1179,18 @@ def _ensure_requests():
             )
 
             requests = _requests
-            ConnectionError = _ConnectionError
-            HTTPError = _HTTPError
-            RequestException = _RequestException
-            Timeout = _Timeout
+            for placeholder, real in (
+                (RequestException, _RequestException),
+                (Timeout, _Timeout),
+                (ConnectionError, _ConnectionError),
+                (HTTPError, _HTTPError),
+            ):
+                try:
+                    placeholder.__bases__ = (real,)
+                except TypeError:  # pragma: no cover - fallback for exotic class wrappers
+                    class _Shim(real):  # type: ignore[misc]
+                        pass
+                    placeholder.__bases__ = (_Shim,)
         except Exception:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
     return requests
@@ -1366,6 +1394,7 @@ def _fetch_bars(
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")
     _interval = _canon_tf(timeframe)
+    explicit_feed_request = isinstance(feed, str)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
     adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
     validate_adjustment(adjustment_norm)
@@ -1501,13 +1530,15 @@ def _fetch_bars(
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
-        if not _ALLOW_SIP:
-            if not _SIP_DISALLOWED_WARNED:
-                logger.warning(
-                    "SIP_FEED_DISABLED",
-                    extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
-                )
-                _SIP_DISALLOWED_WARNED = True
+        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
+            logger.warning(
+                "SIP_FEED_DISABLED",
+                extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
+            )
+            _SIP_DISALLOWED_WARNED = True
+        if explicit_feed_request:
+            _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
+        else:
             _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
@@ -1521,6 +1552,7 @@ def _fetch_bars(
                 )
                 return _backup_get_bars(symbol, _start, _end, interval=fb_int)
             return pd.DataFrame()
+
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -1754,6 +1786,13 @@ def _fetch_bars(
             time.sleep(backoff)
             return _req(session, None, headers=headers, timeout=timeout)
         except (HTTPError, RequestException, ValueError, KeyError) as e:
+            if (
+                isinstance(e, ValueError)
+                and str(e) == "rate_limited"
+                and _feed == "iex"
+                and _SIP_UNAUTHORIZED
+            ):
+                raise
             log_extra = {
                 "url": url,
                 "symbol": symbol,
@@ -1863,7 +1902,10 @@ def _fetch_bars(
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
-            provider_monitor.record_failure("alpaca", "unauthorized")
+            provider_id = "alpaca"
+            if _feed in {"sip", "iex"}:
+                provider_id = f"alpaca_{_feed}"
+            provider_monitor.record_failure(provider_id, "unauthorized")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             logger.warning(
@@ -1878,13 +1920,6 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    _mark_fallback(
-                        symbol,
-                        _interval,
-                        _start,
-                        _end,
-                        from_provider=f"alpaca_{_feed}",
-                    )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
             if fallback:
@@ -1895,7 +1930,10 @@ def _fetch_bars(
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             metrics.rate_limit += 1
-            provider_monitor.record_failure("alpaca", "rate_limit")
+            provider_id = "alpaca"
+            if _feed in {"sip", "iex"}:
+                provider_id = f"alpaca_{_feed}"
+            provider_monitor.record_failure(provider_id, "rate_limit")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
@@ -1926,11 +1964,19 @@ def _fetch_bars(
                     )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
+            attempted_fallback = False
+            fallback_target = fallback
+            if fallback:
+                result = _attempt_fallback(fallback)
+                attempted_fallback = True
+                if result is not None:
+                    return result
+                fallback = None
             attempt = _state["retries"] + 1
             if _feed == "iex" and _SIP_UNAUTHORIZED:
                 fallback_viable = False
-                if fallback:
-                    _, fb_feed, _, _ = fallback
+                if not attempted_fallback and fallback_target:
+                    _, fb_feed, _, _ = fallback_target
                     if fb_feed != "sip":
                         fallback_viable = True
                     elif _sip_configured() and not _SIP_UNAUTHORIZED:

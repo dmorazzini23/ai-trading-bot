@@ -1,7 +1,8 @@
 import types
 
-import joblib
 import pytest
+
+joblib = pytest.importorskip("joblib")
 pd = pytest.importorskip("pandas")
 
 from tests.vendor_stubs import alpaca as _alpaca  # noqa: F401
