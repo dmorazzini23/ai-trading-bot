@@ -1115,12 +1115,24 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
 
 @lru_cache(maxsize=1)
 def get_trading_config() -> TradingConfig:
-    return TradingConfig.from_env()
+    """Return the cached trading configuration with relaxed drawdown defaults."""
+
+    return TradingConfig.from_env(allow_missing_drawdown=True)
 
 
-def reload_trading_config(env_overrides: Mapping[str, Any] | None = None) -> TradingConfig:
+def reload_trading_config(
+    env_overrides: Mapping[str, Any] | None = None,
+    *,
+    allow_missing_drawdown: bool = True,
+) -> TradingConfig:
+    """Reload the cached trading configuration.
+
+    Callers may opt into strict drawdown enforcement by setting
+    ``allow_missing_drawdown`` to ``False``.
+    """
+
     get_trading_config.cache_clear()  # type: ignore[attr-defined]
-    return TradingConfig.from_env(env_overrides)
+    return TradingConfig.from_env(env_overrides, allow_missing_drawdown=allow_missing_drawdown)
 
 
 def generate_config_schema() -> str:

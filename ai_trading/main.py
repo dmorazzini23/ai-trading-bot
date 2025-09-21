@@ -31,9 +31,16 @@ _logging.configure_logging(log_file=LOG_FILE)
 logger = _logging.get_logger(__name__)
 
 # Detect Alpaca SDK availability without importing heavy modules
+def _safe_find_spec(module_name: str):
+    try:
+        return importlib.util.find_spec(module_name)
+    except ValueError:
+        return None
+
+
 ALPACA_AVAILABLE = (
-    importlib.util.find_spec("alpaca") is not None
-    and importlib.util.find_spec("alpaca.trading.client") is not None
+    _safe_find_spec("alpaca") is not None
+    and _safe_find_spec("alpaca.trading.client") is not None
 )
 
 from ai_trading.settings import get_seed_int

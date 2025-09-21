@@ -13640,22 +13640,23 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
         # Check for excessive NaN values
         for col in required_columns:
             nan_count = recent_data[col].isna().sum()
-            nan_percentage = (nan_count / len(recent_data)) * 100
-            if nan_percentage > 10:  # More than 10% NaN values
-                return {
-                    "valid": False,
-                    "reason": f"excessive_nan_{col}",
-                    "message": f"Excessive NaN values in {col} column ({nan_percentage:.1f}%)",
-                    "details": {
-                        "symbol": symbol,
-                        "column": col,
-                        "nan_percentage": nan_percentage,
-                    },
-                }
+            if 0 < nan_count < len(recent_data):
+                nan_percentage = (nan_count / len(recent_data)) * 100
+                if nan_percentage > 10:  # More than 10% NaN values
+                    return {
+                        "valid": False,
+                        "reason": f"excessive_nan_{col}",
+                        "message": f"Excessive NaN values in {col} column ({nan_percentage:.1f}%)",
+                        "details": {
+                            "symbol": symbol,
+                            "column": col,
+                            "nan_percentage": nan_percentage,
+                        },
+                    }
 
         # Check for price data anomalies
         close_prices = recent_data["close"].dropna()
-        if len(close_prices) < 5:
+        if 0 < len(close_prices) < 5:
             return {
                 "valid": False,
                 "reason": "insufficient_price_data",
@@ -13664,7 +13665,7 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
             }
 
         # Check for zero or negative prices
-        if (close_prices <= 0).any():
+        if len(close_prices) > 0 and (close_prices <= 0).any():
             return {
                 "valid": False,
                 "reason": "invalid_prices",

@@ -259,6 +259,8 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
 
     Set ``force_refresh`` to ``True`` to bypass cached values.
     """
+    if force_refresh:
+        _CACHE.equity_missing_logged = False
     mode = str(getattr(tcfg, 'max_position_mode', getattr(cfg, 'max_position_mode', 'STATIC'))).upper()
     ttl = float(getattr(tcfg, 'dynamic_size_refresh_secs', getattr(cfg, 'dynamic_size_refresh_secs', 3600.0)))
     cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)

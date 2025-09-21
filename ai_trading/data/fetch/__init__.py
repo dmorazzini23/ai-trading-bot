@@ -1976,45 +1976,72 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
-            if empty_attempts == 1 and not _ENABLE_HTTP_FALLBACK:
-                _state["delay"] = 0.25
-            else:
-                _state.pop("delay", None)
             attempt = _state["retries"] + 1
             remaining_retries = max(0, max_retries - attempt)
             can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
             planned_retry_meta: dict[str, Any] = {}
             planned_backoff: float | None = None
-            outside_market_hours = False
+            outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
             if (
                 attempt <= max_retries
                 and can_retry_timeframe
                 and _state["retries"] < max_retries
             ):
-                outside_market_hours = _outside_market_hours(_start, _end)
                 if not outside_market_hours:
                     planned_backoff = min(
                         _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
                         _FETCH_BARS_BACKOFF_CAP,
                     )
-                    planned_retry_meta = _coerce_json_primitives(
-                        retry_empty_fetch_once(
-                            delay=planned_backoff,
-                            attempt=attempt,
-                            max_retries=max_retries,
-                            previous_correlation_id=prev_corr,
-                            total_elapsed=time.monotonic() - start_time,
+                    if _state["retries"] >= 1:
+                        planned_retry_meta = _coerce_json_primitives(
+                            retry_empty_fetch_once(
+                                delay=planned_backoff,
+                                attempt=attempt,
+                                max_retries=max_retries,
+                                previous_correlation_id=prev_corr,
+                                total_elapsed=time.monotonic() - start_time,
+                            )
                         )
-                    )
-            log_extra_with_remaining = {
-                **planned_retry_meta,
-                "remaining_retries": remaining_retries,
-                **log_extra,
-            }
-            if attempt <= max_retries:
-                log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
-            if empty_attempts == 1 and not _ENABLE_HTTP_FALLBACK:
+            should_backoff_first_empty = not outside_market_hours
+            if should_backoff_first_empty and _ENABLE_HTTP_FALLBACK:
+                try:
+                    if max_data_fallbacks() > 0:
+                        should_backoff_first_empty = False
+                except Exception:
+                    should_backoff_first_empty = True
+            logged_attempt = False
+            if empty_attempts == 1 and should_backoff_first_empty:
                 retry_delay = _state.get("delay", 0.25)
+                _state["delay"] = retry_delay
+                log_extra["delay"] = retry_delay
+                _state["retries"] = attempt
+                try:
+                    market_open = is_market_open()
+                except Exception:
+                    market_open = False
+                if market_open:
+                    _now = datetime.now(UTC)
+                    _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
+                    if _empty_should_emit(_key, _now):
+                        lvl = _empty_classify(is_market_open=True)
+                        cnt = _empty_record(_key, _now)
+                        logger.log(
+                            lvl,
+                            "EMPTY_DATA",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "status": "empty",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "occurrences": cnt,
+                                    "symbol": symbol,
+                                    "start": _start.isoformat(),
+                                    "end": _end.isoformat(),
+                                    "correlation_id": _state["corr_id"],
+                                }
+                            ),
+                        )
                 logger.warning(
                     "RETRY_SCHEDULED",
                     extra={
@@ -2024,9 +2051,27 @@ def _fetch_bars(
                         "reason": "empty_bars",
                     },
                 )
+                log_payload = {
+                    **planned_retry_meta,
+                    "remaining_retries": remaining_retries,
+                    **log_extra,
+                }
+                log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
+                logged_attempt = True
                 time.sleep(retry_delay)
                 return _req(session, fallback, headers=headers, timeout=timeout)
-            if empty_attempts >= 2:
+            else:
+                _state.pop("delay", None)
+                log_extra.pop("delay", None)
+            if not logged_attempt and attempt <= max_retries:
+                log_payload = {
+                    **planned_retry_meta,
+                    "remaining_retries": remaining_retries,
+                    **log_extra,
+                }
+                log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
+            persistent_empty = empty_attempts >= 2
+            if persistent_empty:
                 logger.warning(
                     "PERSISTENT_EMPTY_ABORT",
                     extra={
@@ -2036,7 +2081,25 @@ def _fetch_bars(
                     },
                 )
                 _state.pop("empty_attempts", None)
-                return None
+                if remaining_retries > 0:
+                    logger.warning(
+                        "ALPACA_FETCH_ABORTED",
+                        extra=_norm_extra(
+                            {
+                                "provider": "alpaca",
+                                "status": "empty",
+                                "feed": _feed,
+                                "timeframe": _interval,
+                                "symbol": symbol,
+                                "start": _start.isoformat(),
+                                "end": _end.isoformat(),
+                                "correlation_id": _state["corr_id"],
+                                "retries": _state["retries"],
+                                "remaining_retries": remaining_retries,
+                            }
+                        ),
+                    )
+                    _state["abort_logged"] = True
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             base_interval = _interval
@@ -2439,30 +2502,32 @@ def _fetch_bars(
                 if remaining_retries > 0
                 else "ALPACA_FETCH_RETRY_LIMIT"
             )
-            logger.warning(
-                log_event,
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "status": "empty",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "start": _start.isoformat(),
-                        "end": _end.isoformat(),
-                        "correlation_id": _state["corr_id"],
-                        "retries": _state["retries"],
-                        "remaining_retries": remaining_retries,
-                        "reason": reason,
-                    }
-                ),
-            )
+            if not (log_event == "ALPACA_FETCH_ABORTED" and _state.get("abort_logged")):
+                logger.warning(
+                    log_event,
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "status": "empty",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": _state["corr_id"],
+                            "retries": _state["retries"],
+                            "remaining_retries": remaining_retries,
+                            "reason": reason,
+                        }
+                    ),
+                )
             if log_event == "ALPACA_FETCH_RETRY_LIMIT":
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
                     f" retries={_state['retries']}"
                 )
+            _state.pop("abort_logged", None)
             return None
         _alpaca_empty_streak = 0
         ts_col = None

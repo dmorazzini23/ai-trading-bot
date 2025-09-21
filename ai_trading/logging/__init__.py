@@ -33,6 +33,9 @@ def _ensure_finnhub_enabled_flag() -> None:
             "ENABLE_FINNHUB_SET", extra={"enabled": True}
         )
 
+
+_ensure_finnhub_enabled_flag()
+
 def _ensure_single_handler(log: logging.Logger, level: int | None=None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
 
