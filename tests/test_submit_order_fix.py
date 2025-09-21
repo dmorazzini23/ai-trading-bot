@@ -6,24 +6,36 @@ from ai_trading.core.enums import OrderSide
 
 import pytest
 
-# Set test environment BEFORE any imports
-os.environ["PYTEST_RUNNING"] = "1"
-os.environ.update({
-    "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",
-    "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",
-    "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
-    "WEBHOOK_SECRET": "fake-test-webhook-not-real",
-    "FLASK_PORT": "9000",
-    "TRADING_MODE": "balanced",
-    "DOLLAR_RISK_LIMIT": "0.05",
-    "TESTING": "1",
-    "TRADE_LOG_FILE": "test_trades.csv",
-    "SEED": "42",
-    "RATE_LIMIT_BUDGET": "190",
-    "DISABLE_DAILY_RETRAIN": "1",
-    "DRY_RUN": "1",
-    "SHADOW_MODE": "1",
-})
+
+@pytest.fixture(autouse=True)
+def _ensure_env(monkeypatch):
+    """Provide deterministic environment for submit_order tests."""
+
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    overrides = {
+        "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",
+        "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",
+        "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+        "WEBHOOK_SECRET": "fake-test-webhook-not-real",
+        "FLASK_PORT": "9000",
+        "TRADING_MODE": "balanced",
+        "DOLLAR_RISK_LIMIT": "0.05",
+        "TESTING": "1",
+        "TRADE_LOG_FILE": "test_trades.csv",
+        "SEED": "42",
+        "RATE_LIMIT_BUDGET": "190",
+        "DISABLE_DAILY_RETRAIN": "1",
+        "DRY_RUN": "1",
+        "SHADOW_MODE": "1",
+    }
+    for key, value in overrides.items():
+        monkeypatch.setenv(key, value)
+
+    from ai_trading.config.management import reload_trading_config
+
+    reload_trading_config()
+    yield
+    reload_trading_config()
 
 
 def test_submit_order_with_uninitialized_exec_engine():

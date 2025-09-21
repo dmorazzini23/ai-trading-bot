@@ -20,6 +20,8 @@ from .runtime import (
     reload_trading_config,
 )
 
+TESTING = str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
+
 T = TypeVar("T")
 
 
@@ -34,13 +36,17 @@ def _normalize_alpaca_base_url(value: str | None, *, source_key: str) -> tuple[s
         return None, None
 
     if "${" in raw:
-        return None, (f"{source_key} looks like an unresolved placeholder ({raw}). "
-                      "Set ALPACA_API_URL to a full https://... endpoint.")
+        return None, (
+            f"{source_key} looks like an unresolved placeholder ({raw}). "
+            "Set ALPACA_API_URL or ALPACA_BASE_URL to a full https://... endpoint."
+        )
 
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None, (f"{source_key} must include an HTTP/HTTPS scheme (got {raw}). "
-                      "Provide a complete Alpaca REST endpoint.")
+        return None, (
+            f"{source_key} must include an HTTP scheme (got {raw}). "
+            "Provide a complete Alpaca REST endpoint such as https://paper-api.alpaca.markets."
+        )
 
     return raw, None
 
@@ -158,6 +164,8 @@ def validate_required_env(
         env_lookup["ALPACA_API_URL"] = env_lookup["ALPACA_BASE_URL"]
     alias_sources: dict[str, tuple[str, ...]] = {
         "ALPACA_API_URL": ("ALPACA_BASE_URL",),
+        "ALPACA_API_KEY": ("APCA_API_KEY_ID",),
+        "ALPACA_SECRET_KEY": ("APCA_API_SECRET_KEY",),
     }
 
     for key, value in list(required_fields.items()):
@@ -194,11 +202,24 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     })
     for env_key, raw, message in errors:
         logger.error(message, extra={"env_key": env_key, "value": raw})
-    resolved = base_url or cfg.alpaca_base_url or "https://paper-api.alpaca.markets"
-    return cfg.alpaca_api_key, cfg.alpaca_secret_key, resolved
+    api_key = cfg.alpaca_api_key or os.getenv("APCA_API_KEY_ID")
+    secret = cfg.alpaca_secret_key or os.getenv("APCA_API_SECRET_KEY")
+    if base_url:
+        resolved = base_url
+    else:
+        normalized_cfg, _ = _normalize_alpaca_base_url(cfg.alpaca_base_url, source_key="ALPACA_API_URL")
+        resolved = normalized_cfg or "https://paper-api.alpaca.markets"
+    return api_key, secret, resolved
 
 
 def validate_alpaca_credentials() -> None:
+    if TESTING:
+        return
+    reload_trading_config()
+    _, url_errors = _select_alpaca_base_url()
+    if url_errors:
+        messages = "; ".join(error for _, _, error in url_errors)
+        raise RuntimeError(messages)
     try:
         validate_required_env(("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_API_URL"))
     except RuntimeError as exc:

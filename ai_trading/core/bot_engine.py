@@ -2257,6 +2257,11 @@ def _ensure_alpaca_classes() -> None:
     StockLatestQuoteRequest = _StockLatestQuoteRequest
 
 
+# Ensure fallback classes are available during import when Alpaca SDK is missing.
+if not ALPACA_AVAILABLE:
+    _ensure_alpaca_classes()
+
+
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
 
@@ -2389,8 +2394,7 @@ def _ensure_alpaca_env_or_raise():
     # Check for shadow mode
     shadow_mode = is_shadow_mode()
     pytest_running = str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
-    testing_mode = str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
-    if shadow_mode or pytest_running or testing_mode:
+    if shadow_mode:
         return k, s, b
     if not (k and s):
         logger.critical("Alpaca credentials missing – aborting client initialization")
@@ -7931,9 +7935,15 @@ def _initialize_alpaca_clients() -> bool:
             data_client = None
             raise
         if not (key and secret):
-            # In SHADOW_MODE we may not have creds; skip client init
             diag = _alpaca_diag_info()
-            # AI-AGENT-REF: surface skip reason for tests via standard logger
+            if not is_shadow_mode():
+                logger_once.error(
+                    "ALPACA_CLIENT_INIT_FAILED - missing credentials",
+                    key="alpaca_client_init_failed",
+                )
+                logger.info("ALPACA_DIAG", extra=_redact(diag))
+                raise RuntimeError("Missing Alpaca API credentials")
+            # In SHADOW_MODE we may not have creds; skip client init
             logger.info(
                 "Shadow mode or missing credentials: skipping Alpaca client initialization"
             )

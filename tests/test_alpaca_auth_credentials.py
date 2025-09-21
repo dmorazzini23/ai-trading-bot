@@ -19,11 +19,18 @@ def test_trading_client_api_key_only(monkeypatch):
     monkeypatch.delenv("ALPACA_OAUTH", raising=False)
     monkeypatch.setattr("ai_trading.risk.engine.StockHistoricalDataClient", Dummy)
     get_settings.cache_clear()
+    from ai_trading.config.management import reload_trading_config, get_trading_config
+
+    reload_trading_config()
+    cfg = get_trading_config()
+    assert cfg.alpaca_api_key == "key"
+    assert get_settings().alpaca_api_key == "key"
 
     RiskEngine()
 
     assert calls.get("api_key") == "key"
     assert calls.get("secret_key") == "secret"
+    reload_trading_config()
     assert "oauth_token" not in calls
 
 

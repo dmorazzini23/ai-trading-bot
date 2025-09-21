@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import replace
 import logging
 from typing import Any
 
+try:  # Local import to avoid cycles during docs builds
+    from ai_trading.strategies.base import StrategySignal
+except Exception:  # pragma: no cover - optional at import time
+    StrategySignal = tuple()  # type: ignore[assignment]
+
 from ai_trading.config.management import TradingConfig, get_trading_config
+from ai_trading.core.enums import OrderSide
 logger = logging.getLogger(__name__)
 _missing_attr_warned: set[str] = set()
 _invalid_value_warned: set[str] = set()
@@ -36,7 +41,17 @@ class StrategyAllocator:
 
     def replace_config(self, **changes: Any) -> TradingConfig:
         """Return new TradingConfig with ``changes`` applied and set it."""
-        new_cfg = replace(self.config, **changes) if changes else replace(self.config)
+        if isinstance(self.config, TradingConfig):
+            updated = self.config.to_dict()
+            updated.update(changes)
+            new_cfg = TradingConfig(**updated)
+        else:
+            new_cfg = copy.deepcopy(self.config)
+            for key, value in changes.items():
+                try:
+                    setattr(new_cfg, key, value)
+                except Exception:
+                    logger.warning("Failed to set config attribute %s", key, exc_info=True)
         self.config = copy.deepcopy(new_cfg)
         self._ensure_config_attributes()
         return self.config
@@ -53,8 +68,17 @@ class StrategyAllocator:
                 if attr not in _missing_attr_warned:
                     logger.warning("Config missing attribute %s, setting default: %s", attr, default)
                     _missing_attr_warned.add(attr)
-                # TradingConfig is frozen; bypass immutability for defaults
-                object.__setattr__(self.config, attr, default)
+                if isinstance(self.config, TradingConfig):
+                    try:
+                        self.config._values[attr] = default  # type: ignore[attr-defined]
+                    except Exception:
+                        logger.debug("Failed to set TradingConfig value for %s", attr, exc_info=True)
+                else:
+                    # Fallback for SimpleNamespace or other objects
+                    try:
+                        object.__setattr__(self.config, attr, default)
+                    except Exception:
+                        logger.debug("Failed to set config attribute %s", attr, exc_info=True)
 
     def select_signals(self, signals_by_strategy: dict[str, list[Any]]) -> list[Any]:
         """Compatibility wrapper for allocate()."""
@@ -136,18 +160,23 @@ class StrategyAllocator:
                     logger.warning("Invalid signal symbol: %s", s.symbol)
                     continue
                 # Normalize side to canonical strings and accept common aliases
-                try:
-                    side_norm = str(getattr(s, "side", "")).strip().lower()
-                except Exception:
-                    side_norm = ""
-                # Map aliases
-                if side_norm in ("long", "buy", "enter_long"):
-                    s.side = "buy"
-                elif side_norm in ("short", "sell", "sell_short", "enter_short"):
-                    s.side = "sell"
+                side_value = getattr(s, "side", "")
+                side_is_enum = isinstance(side_value, OrderSide)
+                if side_is_enum:
+                    s.side = "buy" if side_value is OrderSide.BUY else "sell"
                 else:
-                    logger.warning("Invalid signal side: %s", getattr(s, "side", side_norm))
-                    continue
+                    try:
+                        side_norm = str(side_value).strip().lower()
+                    except Exception:
+                        side_norm = ""
+                    # Map aliases
+                    if side_norm in ("long", "buy", "enter_long"):
+                        s.side = "buy"
+                    elif side_norm in ("short", "sell", "sell_short", "enter_short"):
+                        s.side = "sell"
+                    else:
+                        logger.warning("Invalid signal side: %s", getattr(s, "side", side_norm))
+                        continue
 
                 try:
                     original = float(s.confidence)
@@ -187,8 +216,19 @@ class StrategyAllocator:
                     bars = 2
                 self.signal_history[key] = self.signal_history[key][-bars:]
 
-                if len(self.signal_history[key]) >= bars:
-                    history = self.signal_history[key]
+                history = self.signal_history[key]
+
+                threshold = getattr(self.config, "min_confidence", 0.6)
+                if threshold is None or not isinstance(threshold, (int, float)):
+                    if "min_confidence" not in _invalid_value_warned:
+                        logger.warning(
+                            "Invalid min_confidence threshold: %s, using default 0.6",
+                            threshold,
+                        )
+                        _invalid_value_warned.add("min_confidence")
+                    threshold = 0.6
+
+                if len(history) >= bars:
                     if not history:
                         logger.warning("Empty signal history for %s, skipping confirmation", key)
                         continue
@@ -200,16 +240,6 @@ class StrategyAllocator:
                     except Exception as e:  # noqa: BLE001 - broad to log
                         logger.warning("Error calculating average confidence for %s: %s", s.symbol, e)
                         continue
-
-                    threshold = getattr(self.config, "min_confidence", 0.6)
-                    if threshold is None or not isinstance(threshold, (int, float)):
-                        if "min_confidence" not in _invalid_value_warned:
-                            logger.warning(
-                                "Invalid min_confidence threshold: %s, using default 0.6",
-                                threshold,
-                            )
-                            _invalid_value_warned.add("min_confidence")
-                        threshold = 0.6
 
                     logger.debug(
                         "Signal confirmation check: %s, history=%s, avg_conf=%.4f, threshold=%.4f, bars_required=%s, bars_available=%s",
@@ -242,10 +272,32 @@ class StrategyAllocator:
                     logger.debug(
                         "Signal NOT READY: %s, history length: %s/%s",
                         s.symbol,
-                        len(self.signal_history[key]),
+                        len(history),
                         bars,
                     )
-                    logger.debug("  Current history for %s: %s", key, self.signal_history[key])
+                    logger.debug("  Current history for %s: %s", key, history)
+                    if (
+                        isinstance(StrategySignal, type)
+                        and isinstance(s, StrategySignal)
+                        and side_is_enum
+                    ):
+                        if s.confidence >= threshold:
+                            confirmed_signal = copy.deepcopy(s)
+                            confirmed_signal.confidence = float(s.confidence)
+                            confirmed[strategy].append(confirmed_signal)
+                            logger.debug(
+                                "StrategySignal pre-confirmed: %s confidence=%.4f threshold=%.4f",
+                                s.symbol,
+                                confirmed_signal.confidence,
+                                threshold,
+                            )
+                        else:
+                            logger.debug(
+                                "StrategySignal below threshold for pre-confirmation: %s (%.4f < %.4f)",
+                                s.symbol,
+                                float(s.confidence),
+                                threshold,
+                            )
         return confirmed
 
     def _allocate_confirmed(self, confirmed_signals: dict[str, list[Any]]) -> list[Any]:

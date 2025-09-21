@@ -26,6 +26,7 @@ from ai_trading.config.management import (
     TradingConfig,
     get_env,
     get_trading_config,
+    _resolve_alpaca_env,
     validate_required_env,
 )
 from ai_trading.config.settings import get_settings
@@ -179,8 +180,9 @@ class RiskEngine:
         self._volatility_cache: dict[str, tuple] = {}
         self.data_client = None
         try:
-            secret = get_alpaca_secret_key_plain()
-            api_key = getattr(settings, 'alpaca_api_key', None)
+            cfg_key, cfg_secret, _ = _resolve_alpaca_env()
+            api_key = cfg_key or getattr(settings, 'alpaca_api_key', None)
+            secret = cfg_secret or get_alpaca_secret_key_plain()
             oauth = get_env('ALPACA_OAUTH')
             has_keypair = bool(api_key and secret)
             if has_keypair and oauth:

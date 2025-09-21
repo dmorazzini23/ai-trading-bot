@@ -21,7 +21,7 @@ class DummyAPI:
 def test_submit_order_shadow(monkeypatch):
     api = DummyAPI()
     monkeypatch.setenv("SHADOW_MODE", "1")
-    res = alpaca_api.submit_order("AAPL", "buy", qty=1, client=api)
+    res = alpaca_api.submit_order("AAPL", "buy", qty=1, client=api, shadow=True)
     assert res["id"].startswith("shadow-")
     assert api.calls == 0
 

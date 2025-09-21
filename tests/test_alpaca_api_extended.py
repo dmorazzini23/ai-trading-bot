@@ -2,6 +2,16 @@ import types
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _reset_shadow_mode(monkeypatch):
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
+    from ai_trading.config.management import reload_trading_config
+
+    reload_trading_config()
+    yield
+    reload_trading_config()
+
 from ai_trading import alpaca_api
 
 

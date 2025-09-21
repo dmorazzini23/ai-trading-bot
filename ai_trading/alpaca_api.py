@@ -14,7 +14,14 @@ from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
 from ai_trading.logging import get_logger
-from ai_trading.config.management import is_shadow_mode, _resolve_alpaca_env
+try:
+    from ai_trading.config.management import is_shadow_mode, _resolve_alpaca_env
+except ImportError:  # pragma: no cover - fallback for tests stubbing config
+    def is_shadow_mode() -> bool:
+        return False
+
+    def _resolve_alpaca_env():
+        return None, None, "https://paper-api.alpaca.markets"
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.metrics import get_counter, get_histogram
 from ai_trading.utils.optional_dep import missing
@@ -784,6 +791,11 @@ def submit_order(
     q_int = _as_int(qty)
     timeout = clamp_request_timeout(timeout)
     idempotency_key = idempotency_key or generate_client_order_id()
+
+    if client is not None and shadow is None:
+        # Respect explicit shadow override but default to real execution when a
+        # client is supplied (callers may choose shadow=True explicitly).
+        do_shadow = False
 
     if do_shadow:
         _record_client_order_id(client, idempotency_key)

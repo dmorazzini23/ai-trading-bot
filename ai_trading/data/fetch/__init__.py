@@ -618,7 +618,9 @@ _SIP_UNAVAILABLE_LOGGED: set[str] = set()
 
 def _sip_configured() -> bool:
     if os.getenv("PYTEST_RUNNING"):
-        return True
+        return bool(_ALLOW_SIP)
+    if not _ALLOW_SIP:
+        return False
     if _ALLOW_SIP and _HAS_SIP:
         return True
     try:
@@ -648,7 +650,9 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
-        return True
+        return bool(_ALLOW_SIP)
+    if not _ALLOW_SIP:
+        return False
     if not _sip_configured():
         if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
             logger.warning(
@@ -2049,8 +2053,8 @@ def _fetch_bars(
                                 total_elapsed=time.monotonic() - start_time,
                             )
                         )
-            should_backoff_first_empty = not outside_market_hours
-            if should_backoff_first_empty and _ENABLE_HTTP_FALLBACK:
+            should_backoff_first_empty = _ENABLE_HTTP_FALLBACK and not outside_market_hours
+            if should_backoff_first_empty:
                 try:
                     if max_data_fallbacks() > 0:
                         should_backoff_first_empty = False
