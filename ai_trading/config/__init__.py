@@ -11,6 +11,7 @@ from .runtime import (
     get_trading_config,
     reload_trading_config,
     generate_config_schema,
+    _strip_inline_comment,
 )
 from .management import (
     get_env,
@@ -74,7 +75,8 @@ def _env_float(*names: str, default: float) -> float:
     if raw is None:
         return float(default)
     try:
-        return float(raw)
+        cleaned = _strip_inline_comment(raw)
+        return float(cleaned)
     except ValueError as exc:  # pragma: no cover - configuration error
         raise RuntimeError(f"Invalid float for {'/'.join(names)}: {raw}") from exc
 
