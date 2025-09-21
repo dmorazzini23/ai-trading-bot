@@ -9,6 +9,7 @@ call :func:`get_trading_config` when runtime settings are required.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -218,6 +219,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=1,
         max_value=65535,
         deprecated_env={"AI_TRADING_API_PORT": "Use API_PORT instead."},
+    ),
+    ConfigSpec(
+        field="disable_daily_retrain",
+        env=("DISABLE_DAILY_RETRAIN",),
+        cast="bool",
+        default=False,
+        description="Disable scheduled daily retraining jobs when true.",
     ),
     ConfigSpec(
         field="market_calendar",
@@ -1005,6 +1013,10 @@ class TradingConfig:
         values = base.to_dict()
         values.update(params)
         return cls(**values)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "TradingConfig":
+        copied_values = copy.deepcopy(self._values, memo)
+        return TradingConfig(**copied_values)
 
     @classmethod
     def from_env(

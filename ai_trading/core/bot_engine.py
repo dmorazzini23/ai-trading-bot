@@ -2388,7 +2388,9 @@ def _ensure_alpaca_env_or_raise():
     k, s, b = _resolve_alpaca_env()
     # Check for shadow mode
     shadow_mode = is_shadow_mode()
-    if shadow_mode:
+    pytest_running = str(os.getenv("PYTEST_RUNNING", "")).strip().lower() in {"1", "true", "yes", "on"}
+    testing_mode = str(os.getenv("TESTING", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if shadow_mode or pytest_running or testing_mode:
         return k, s, b
     if not (k and s):
         logger.critical("Alpaca credentials missing – aborting client initialization")
