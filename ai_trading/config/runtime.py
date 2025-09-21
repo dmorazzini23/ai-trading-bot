@@ -13,8 +13,8 @@ import copy
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
@@ -939,6 +939,38 @@ MODE_PARAMETERS: dict[str, dict[str, float]] = {
     },
 }
 
+_CACHE_LOCK = threading.Lock()
+_CACHED_CONFIG: TradingConfig | None = None
+_CACHED_SIGNATURE: tuple[tuple[str, str | None], ...] | None = None
+
+_SENSITIVE_ENV_KEYS: tuple[str, ...] | None = None
+
+
+def _get_sensitive_env_keys() -> tuple[str, ...]:
+    """Return environment keys that impact configuration caching."""
+
+    global _SENSITIVE_ENV_KEYS
+    if _SENSITIVE_ENV_KEYS is not None:
+        return _SENSITIVE_ENV_KEYS
+
+    keys: set[str] = {"TRADING_MODE", "AI_TRADING_TRADING_MODE"}
+    for spec in CONFIG_SPECS:
+        keys.update(spec.env)
+        keys.update(spec.deprecated_env.keys())
+    # Additional guards for lock behaviour and shadow-mode toggles accessed
+    # outside the declarative specs.
+    keys.update({"CONFIG_LOCK_TIMEOUT", "CONFIG_VALIDATION_LOCK_TIMEOUT"})
+
+    _SENSITIVE_ENV_KEYS = tuple(sorted(keys))
+    return _SENSITIVE_ENV_KEYS
+
+
+def _signature_from_snapshot(snapshot: Mapping[str, str]) -> tuple[tuple[str, str | None], ...]:
+    """Build a deterministic signature for configuration-affecting env vars."""
+
+    keys = _get_sensitive_env_keys()
+    return tuple((key, snapshot.get(key)) for key in keys)
+
 
 for spec in CONFIG_SPECS:
     SPEC_BY_FIELD[spec.field] = spec
@@ -1113,11 +1145,31 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
     return snap
 
 
-@lru_cache(maxsize=1)
 def get_trading_config() -> TradingConfig:
-    """Return the cached trading configuration with relaxed drawdown defaults."""
+    """Return cached trading configuration that reflects current environment."""
 
-    return TradingConfig.from_env(allow_missing_drawdown=True)
+    global _CACHED_CONFIG, _CACHED_SIGNATURE
+    snap = _env_snapshot()
+    signature = _signature_from_snapshot(snap)
+    with _CACHE_LOCK:
+        if _CACHED_CONFIG is not None and _CACHED_SIGNATURE == signature:
+            return _CACHED_CONFIG
+        cfg = TradingConfig.from_env(snap, allow_missing_drawdown=True)
+        _CACHED_CONFIG = cfg
+        _CACHED_SIGNATURE = signature
+        return cfg
+
+
+def _clear_trading_config_cache() -> None:
+    """Clear cached configuration state."""
+
+    with _CACHE_LOCK:
+        global _CACHED_CONFIG, _CACHED_SIGNATURE
+        _CACHED_CONFIG = None
+        _CACHED_SIGNATURE = None
+
+
+get_trading_config.cache_clear = _clear_trading_config_cache  # type: ignore[attr-defined]
 
 
 def reload_trading_config(
@@ -1131,8 +1183,13 @@ def reload_trading_config(
     ``allow_missing_drawdown`` to ``False``.
     """
 
-    get_trading_config.cache_clear()  # type: ignore[attr-defined]
-    return TradingConfig.from_env(env_overrides, allow_missing_drawdown=allow_missing_drawdown)
+    snap = _env_snapshot(env_overrides)
+    cfg = TradingConfig.from_env(env_overrides, allow_missing_drawdown=allow_missing_drawdown)
+    with _CACHE_LOCK:
+        global _CACHED_CONFIG, _CACHED_SIGNATURE
+        _CACHED_CONFIG = cfg
+        _CACHED_SIGNATURE = _signature_from_snapshot(snap)
+    return cfg
 
 
 def generate_config_schema() -> str:
