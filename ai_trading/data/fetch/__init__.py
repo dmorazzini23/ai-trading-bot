@@ -2749,6 +2749,7 @@ def get_minute_df(
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
+    finnhub_disabled_requested = False
     df = None
     if _has_alpaca_keys():
         try:
@@ -2959,7 +2960,7 @@ def get_minute_df(
             df = finnhub_df
             used_backup = True
         elif not enable_finnhub:
-            warn_finnhub_disabled_no_data(symbol)
+            finnhub_disabled_requested = True
         else:
             log_finnhub_disabled(symbol)
     if df is None or getattr(df, "empty", True):
@@ -3007,6 +3008,8 @@ def get_minute_df(
                 set_cached_minute_timestamp(symbol, last_ts)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
+    if finnhub_disabled_requested and (df is None or getattr(df, "empty", True)):
+        warn_finnhub_disabled_no_data(symbol)
     original_df = df
     if original_df is None:
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
