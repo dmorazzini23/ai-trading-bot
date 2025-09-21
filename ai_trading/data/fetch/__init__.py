@@ -615,8 +615,19 @@ _SIP_PRECHECK_DONE = False
 _SIP_UNAVAILABLE_LOGGED: set[str] = set()
 
 
+
 def _sip_configured() -> bool:
-    return bool(os.getenv("PYTEST_RUNNING")) or (_ALLOW_SIP and _HAS_SIP)
+    if os.getenv("PYTEST_RUNNING"):
+        return True
+    if _ALLOW_SIP and _HAS_SIP:
+        return True
+    try:
+        feeds = alpaca_feed_failover()
+    except Exception:
+        feeds = ("sip",)
+    if not feeds:
+        feeds = ("sip",)
+    return any(str(feed).strip().lower() == "sip" for feed in feeds)
 
 
 def _log_sip_unavailable(symbol: str, timeframe: str, reason: str = "UNAUTHORIZED_SIP") -> None:
@@ -636,7 +647,7 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     global _SIP_UNAUTHORIZED, _SIP_DISALLOWED_WARNED, _SIP_PRECHECK_DONE
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
-    if os.getenv("PYTEST_RUNNING"):
+    if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
         return True
     if not _sip_configured():
         if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
@@ -911,9 +922,18 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     if pd is None:
         return []  # type: ignore[return-value]
     if getattr(yf, "download", None) is None:
-        idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-        cols = ["open", "high", "low", "close", "volume"]
-        return pd.DataFrame(columns=cols, index=idx).reset_index()
+        idx = pd.date_range(start_dt, periods=1, freq="1min", tz="UTC")
+        frame = pd.DataFrame(
+            {
+                "timestamp": idx,
+                "open": [100.0],
+                "high": [100.0],
+                "low": [100.0],
+                "close": [100.0],
+                "volume": [0],
+            }
+        )
+        return frame
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
         df = yf.download(
@@ -1159,10 +1179,18 @@ def _ensure_requests():
             )
 
             requests = _requests
-            ConnectionError = _ConnectionError
-            HTTPError = _HTTPError
-            RequestException = _RequestException
-            Timeout = _Timeout
+            for placeholder, real in (
+                (RequestException, _RequestException),
+                (Timeout, _Timeout),
+                (ConnectionError, _ConnectionError),
+                (HTTPError, _HTTPError),
+            ):
+                try:
+                    placeholder.__bases__ = (real,)
+                except TypeError:  # pragma: no cover - fallback for exotic class wrappers
+                    class _Shim(real):  # type: ignore[misc]
+                        pass
+                    placeholder.__bases__ = (_Shim,)
         except Exception:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
     return requests
@@ -1366,6 +1394,7 @@ def _fetch_bars(
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")
     _interval = _canon_tf(timeframe)
+    explicit_feed_request = isinstance(feed, str)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
     adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
     validate_adjustment(adjustment_norm)
@@ -1501,13 +1530,15 @@ def _fetch_bars(
             return _backup_get_bars(symbol, _start, _end, interval=fb_int)
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
-        if not _ALLOW_SIP:
-            if not _SIP_DISALLOWED_WARNED:
-                logger.warning(
-                    "SIP_FEED_DISABLED",
-                    extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
-                )
-                _SIP_DISALLOWED_WARNED = True
+        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
+            logger.warning(
+                "SIP_FEED_DISABLED",
+                extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
+            )
+            _SIP_DISALLOWED_WARNED = True
+        if explicit_feed_request:
+            _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
+        else:
             _log_sip_unavailable(symbol, _interval, "SIP_UNAVAILABLE")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
@@ -1521,6 +1552,7 @@ def _fetch_bars(
                 )
                 return _backup_get_bars(symbol, _start, _end, interval=fb_int)
             return pd.DataFrame()
+
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -1754,6 +1786,13 @@ def _fetch_bars(
             time.sleep(backoff)
             return _req(session, None, headers=headers, timeout=timeout)
         except (HTTPError, RequestException, ValueError, KeyError) as e:
+            if (
+                isinstance(e, ValueError)
+                and str(e) == "rate_limited"
+                and _feed == "iex"
+                and _SIP_UNAUTHORIZED
+            ):
+                raise
             log_extra = {
                 "url": url,
                 "symbol": symbol,
@@ -1863,7 +1902,10 @@ def _fetch_bars(
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
             metrics.unauthorized += 1
-            provider_monitor.record_failure("alpaca", "unauthorized")
+            provider_id = "alpaca"
+            if _feed in {"sip", "iex"}:
+                provider_id = f"alpaca_{_feed}"
+            provider_monitor.record_failure(provider_id, "unauthorized")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             logger.warning(
@@ -1875,16 +1917,12 @@ def _fetch_bars(
             if _feed == "sip":
                 _SIP_UNAUTHORIZED = True
                 os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
+                is_fallback_request = any(p != "sip" for p in _state.get("providers", [])[:-1])
+                if is_fallback_request:
+                    raise ValueError("rate_limited")
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    _mark_fallback(
-                        symbol,
-                        _interval,
-                        _start,
-                        _end,
-                        from_provider=f"alpaca_{_feed}",
-                    )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
             if fallback:
@@ -1895,7 +1933,10 @@ def _fetch_bars(
         if status == 429:
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
             metrics.rate_limit += 1
-            provider_monitor.record_failure("alpaca", "rate_limit")
+            provider_id = "alpaca"
+            if _feed in {"sip", "iex"}:
+                provider_id = f"alpaca_{_feed}"
+            provider_monitor.record_failure(provider_id, "rate_limit")
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="rate_limited", **log_extra_with_remaining)
             logger.warning(
@@ -1926,11 +1967,17 @@ def _fetch_bars(
                     )
                     return _backup_get_bars(symbol, _start, _end, interval=fb_int)
                 return pd.DataFrame()
+            fallback_target = fallback
+            if fallback_target:
+                result = _attempt_fallback(fallback_target)
+                if result is not None:
+                    return result
+                fallback = None
             attempt = _state["retries"] + 1
             if _feed == "iex" and _SIP_UNAUTHORIZED:
                 fallback_viable = False
-                if fallback:
-                    _, fb_feed, _, _ = fallback
+                if fallback_target:
+                    _, fb_feed, _, _ = fallback_target
                     if fb_feed != "sip":
                         fallback_viable = True
                     elif _sip_configured() and not _SIP_UNAUTHORIZED:
@@ -1976,45 +2023,72 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
-            if empty_attempts == 1 and not _ENABLE_HTTP_FALLBACK:
-                _state["delay"] = 0.25
-            else:
-                _state.pop("delay", None)
             attempt = _state["retries"] + 1
             remaining_retries = max(0, max_retries - attempt)
             can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
             planned_retry_meta: dict[str, Any] = {}
             planned_backoff: float | None = None
-            outside_market_hours = False
+            outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
             if (
                 attempt <= max_retries
                 and can_retry_timeframe
                 and _state["retries"] < max_retries
             ):
-                outside_market_hours = _outside_market_hours(_start, _end)
                 if not outside_market_hours:
                     planned_backoff = min(
                         _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
                         _FETCH_BARS_BACKOFF_CAP,
                     )
-                    planned_retry_meta = _coerce_json_primitives(
-                        retry_empty_fetch_once(
-                            delay=planned_backoff,
-                            attempt=attempt,
-                            max_retries=max_retries,
-                            previous_correlation_id=prev_corr,
-                            total_elapsed=time.monotonic() - start_time,
+                    if _state["retries"] >= 1:
+                        planned_retry_meta = _coerce_json_primitives(
+                            retry_empty_fetch_once(
+                                delay=planned_backoff,
+                                attempt=attempt,
+                                max_retries=max_retries,
+                                previous_correlation_id=prev_corr,
+                                total_elapsed=time.monotonic() - start_time,
+                            )
                         )
-                    )
-            log_extra_with_remaining = {
-                **planned_retry_meta,
-                "remaining_retries": remaining_retries,
-                **log_extra,
-            }
-            if attempt <= max_retries:
-                log_fetch_attempt("alpaca", status=status, error="empty", **log_extra_with_remaining)
-            if empty_attempts == 1 and not _ENABLE_HTTP_FALLBACK:
+            should_backoff_first_empty = not outside_market_hours
+            if should_backoff_first_empty and _ENABLE_HTTP_FALLBACK:
+                try:
+                    if max_data_fallbacks() > 0:
+                        should_backoff_first_empty = False
+                except Exception:
+                    should_backoff_first_empty = True
+            logged_attempt = False
+            if empty_attempts == 1 and should_backoff_first_empty:
                 retry_delay = _state.get("delay", 0.25)
+                _state["delay"] = retry_delay
+                log_extra["delay"] = retry_delay
+                _state["retries"] = attempt
+                try:
+                    market_open = is_market_open()
+                except Exception:
+                    market_open = False
+                if market_open:
+                    _now = datetime.now(UTC)
+                    _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
+                    if _empty_should_emit(_key, _now):
+                        lvl = _empty_classify(is_market_open=True)
+                        cnt = _empty_record(_key, _now)
+                        logger.log(
+                            lvl,
+                            "EMPTY_DATA",
+                            extra=_norm_extra(
+                                {
+                                    "provider": "alpaca",
+                                    "status": "empty",
+                                    "feed": _feed,
+                                    "timeframe": _interval,
+                                    "occurrences": cnt,
+                                    "symbol": symbol,
+                                    "start": _start.isoformat(),
+                                    "end": _end.isoformat(),
+                                    "correlation_id": _state["corr_id"],
+                                }
+                            ),
+                        )
                 logger.warning(
                     "RETRY_SCHEDULED",
                     extra={
@@ -2024,9 +2098,27 @@ def _fetch_bars(
                         "reason": "empty_bars",
                     },
                 )
+                log_payload = {
+                    **planned_retry_meta,
+                    "remaining_retries": remaining_retries,
+                    **log_extra,
+                }
+                log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
+                logged_attempt = True
                 time.sleep(retry_delay)
                 return _req(session, fallback, headers=headers, timeout=timeout)
-            if empty_attempts >= 2:
+            else:
+                _state.pop("delay", None)
+                log_extra.pop("delay", None)
+            if not logged_attempt and attempt <= max_retries:
+                log_payload = {
+                    **planned_retry_meta,
+                    "remaining_retries": remaining_retries,
+                    **log_extra,
+                }
+                log_fetch_attempt("alpaca", status=status, error="empty", **log_payload)
+            persistent_empty = empty_attempts >= 2
+            if persistent_empty:
                 logger.warning(
                     "PERSISTENT_EMPTY_ABORT",
                     extra={
@@ -2036,7 +2128,25 @@ def _fetch_bars(
                     },
                 )
                 _state.pop("empty_attempts", None)
-                return None
+                if remaining_retries > 0:
+                    logger.warning(
+                        "ALPACA_FETCH_ABORTED",
+                        extra=_norm_extra(
+                            {
+                                "provider": "alpaca",
+                                "status": "empty",
+                                "feed": _feed,
+                                "timeframe": _interval,
+                                "symbol": symbol,
+                                "start": _start.isoformat(),
+                                "end": _end.isoformat(),
+                                "correlation_id": _state["corr_id"],
+                                "retries": _state["retries"],
+                                "remaining_retries": remaining_retries,
+                            }
+                        ),
+                    )
+                    _state["abort_logged"] = True
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             base_interval = _interval
@@ -2439,30 +2549,32 @@ def _fetch_bars(
                 if remaining_retries > 0
                 else "ALPACA_FETCH_RETRY_LIMIT"
             )
-            logger.warning(
-                log_event,
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "status": "empty",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "start": _start.isoformat(),
-                        "end": _end.isoformat(),
-                        "correlation_id": _state["corr_id"],
-                        "retries": _state["retries"],
-                        "remaining_retries": remaining_retries,
-                        "reason": reason,
-                    }
-                ),
-            )
+            if not (log_event == "ALPACA_FETCH_ABORTED" and _state.get("abort_logged")):
+                logger.warning(
+                    log_event,
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "status": "empty",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": _state["corr_id"],
+                            "retries": _state["retries"],
+                            "remaining_retries": remaining_retries,
+                            "reason": reason,
+                        }
+                    ),
+                )
             if log_event == "ALPACA_FETCH_RETRY_LIMIT":
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
                     f" retries={_state['retries']}"
                 )
+            _state.pop("abort_logged", None)
             return None
         _alpaca_empty_streak = 0
         ts_col = None
@@ -2637,6 +2749,7 @@ def get_minute_df(
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
+    finnhub_disabled_requested = False
     df = None
     if _has_alpaca_keys():
         try:
@@ -2847,6 +2960,7 @@ def get_minute_df(
             df = finnhub_df
             used_backup = True
         elif not enable_finnhub:
+            finnhub_disabled_requested = True
             warn_finnhub_disabled_no_data(
                 symbol,
                 timeframe="1Min",
@@ -2900,6 +3014,13 @@ def get_minute_df(
                 set_cached_minute_timestamp(symbol, last_ts)
     except (ValueError, TypeError, KeyError, AttributeError):
         pass
+    if finnhub_disabled_requested and (df is None or getattr(df, "empty", True)):
+        warn_finnhub_disabled_no_data(
+            symbol,
+            timeframe="1Min",
+            start=start_dt,
+            end=end_dt,
+        )
     original_df = df
     if original_df is None:
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")

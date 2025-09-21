@@ -10,7 +10,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 self_path = Path(__file__).resolve()
-pyfiles = [p for p in ROOT.rglob("*.py") if p != self_path]
+EXCLUDED_DIRS = {".venv", "venv", "__pycache__", ".git", "site-packages"}
+pyfiles = [
+    p
+    for p in ROOT.rglob("*.py")
+    if p != self_path and not any(part in EXCLUDED_DIRS for part in p.parts)
+]
 
 issues: list[tuple[Path, str]] = []
 for path in pyfiles:

@@ -185,8 +185,22 @@ class ProviderMonitor:
                 self._current_switch_cooldowns.pop(key, None)
                 self._alert_cooldown_until.pop(key, None)
                 self._last_switch_time.pop(key, None)
+            disable_clear = [key for key in self.disabled_until if key.startswith(f"{provider}_")]
+            for key in disable_clear:
+                self.disabled_until.pop(key, None)
+                self.disabled_since.pop(key, None)
+                try:
+                    provider_disabled.labels(provider=key).set(0)
+                except Exception:  # pragma: no cover - defensive
+                    pass
         if not self.consecutive_switches_by_provider:
             self.consecutive_switches = 0
+        self.disabled_until.pop(provider, None)
+        self.disabled_since.pop(provider, None)
+        try:
+            provider_disabled.labels(provider=provider).set(0)
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def record_switchover(self, from_provider: str, to_provider: str) -> None:
         """Record a switchover from one provider to another.
@@ -287,6 +301,11 @@ class ProviderMonitor:
         self.disabled_until[provider] = until
         self.disabled_since[provider] = now
         provider_disable_total.labels(provider=provider).inc()
+        try:
+            from ai_trading.data.fetch.metrics import register_provider_disable
+            register_provider_disable(provider)
+        except Exception:  # pragma: no cover - defensive
+            pass
         provider_disabled.labels(provider=provider).set(1)
         logger.warning(
             "DATA_PROVIDER_DISABLED",

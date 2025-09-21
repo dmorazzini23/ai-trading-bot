@@ -9,6 +9,7 @@ call :func:`get_trading_config` when runtime settings are required.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -218,6 +219,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=1,
         max_value=65535,
         deprecated_env={"AI_TRADING_API_PORT": "Use API_PORT instead."},
+    ),
+    ConfigSpec(
+        field="disable_daily_retrain",
+        env=("DISABLE_DAILY_RETRAIN",),
+        cast="bool",
+        default=False,
+        description="Disable scheduled daily retraining jobs when true.",
     ),
     ConfigSpec(
         field="market_calendar",
@@ -1006,6 +1014,10 @@ class TradingConfig:
         values.update(params)
         return cls(**values)
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "TradingConfig":
+        copied_values = copy.deepcopy(self._values, memo)
+        return TradingConfig(**copied_values)
+
     @classmethod
     def from_env(
         cls,
@@ -1103,12 +1115,24 @@ def _env_snapshot(overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
 
 @lru_cache(maxsize=1)
 def get_trading_config() -> TradingConfig:
-    return TradingConfig.from_env()
+    """Return the cached trading configuration with relaxed drawdown defaults."""
+
+    return TradingConfig.from_env(allow_missing_drawdown=True)
 
 
-def reload_trading_config(env_overrides: Mapping[str, Any] | None = None) -> TradingConfig:
+def reload_trading_config(
+    env_overrides: Mapping[str, Any] | None = None,
+    *,
+    allow_missing_drawdown: bool = True,
+) -> TradingConfig:
+    """Reload the cached trading configuration.
+
+    Callers may opt into strict drawdown enforcement by setting
+    ``allow_missing_drawdown`` to ``False``.
+    """
+
     get_trading_config.cache_clear()  # type: ignore[attr-defined]
-    return TradingConfig.from_env(env_overrides)
+    return TradingConfig.from_env(env_overrides, allow_missing_drawdown=allow_missing_drawdown)
 
 
 def generate_config_schema() -> str:

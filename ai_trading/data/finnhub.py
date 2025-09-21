@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from ai_trading.config import management as config
-from ai_trading.logging import logger_once, log_finnhub_disabled
+from ai_trading.logging import logger_once, log_finnhub_disabled, logger
 
 _SENT_DEPS_LOGGED: set[str] = set()
 
@@ -35,6 +35,7 @@ class _FinnhubFetcherStub:
 
 
 def _build_fetcher() -> Any:
+    config.reload_trading_config()
     raw_enable = config.get_env("ENABLE_FINNHUB", "1")
     if isinstance(raw_enable, str):
         enable = raw_enable.strip().lower() not in {"0", "false", "off", "no"}
@@ -43,6 +44,7 @@ def _build_fetcher() -> Any:
     if not enable:
         if "finnhub" not in _SENT_DEPS_LOGGED:
             log_finnhub_disabled("GLOBAL")
+            logger.debug("FINNHUB_DISABLED", extra={"symbol": "GLOBAL"})
             _SENT_DEPS_LOGGED.add("finnhub")
         return _FinnhubFetcherStub()
     try:
@@ -70,6 +72,7 @@ def _build_fetcher() -> Any:
     if not api_key:
         if "finnhub" not in _SENT_DEPS_LOGGED:
             log_finnhub_disabled("GLOBAL")
+            logger.debug("FINNHUB_DISABLED", extra={"symbol": "GLOBAL"})
             _SENT_DEPS_LOGGED.add("finnhub")
         return _FinnhubFetcherStub()
 

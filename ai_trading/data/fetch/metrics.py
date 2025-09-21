@@ -12,6 +12,13 @@ from ai_trading.data.metrics import (
     provider_fallback as _provider_fallback_counter,
 )
 
+_PROVIDER_DISABLE_TOTALS: dict[str, int] = {}
+
+
+def register_provider_disable(provider: str) -> None:
+    _PROVIDER_DISABLE_TOTALS[provider] = _PROVIDER_DISABLE_TOTALS.get(provider, 0) + 1
+
+
 # In-memory counters.  We use ``Counter`` for automatic zero initialization and
 # guard updates with simple locks to ensure thread safety.
 _SKIPPED_SYMBOLS: Counter[tuple[str, str]] = Counter()
@@ -149,13 +156,34 @@ def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
     metric = _provider_disable_total_counter.labels(provider=provider)
     metric.inc()
-    return _current_value(metric)
+    value = _current_value(metric)
+    if value == 0 and not hasattr(metric, '_value'):
+        try:
+            from ai_trading.data.provider_monitor import provider_monitor as _pm
+            if not _pm.disable_counts:
+                _PROVIDER_DISABLE_TOTALS.pop(provider, None)
+            return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
+        except Exception:  # pragma: no cover - defensive fallback
+            return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
+    return value
 
 
 def provider_disabled(provider: str) -> int:
     """Return the current disabled gauge value for ``provider``."""
     metric = _provider_disabled_gauge.labels(provider=provider)
-    return _current_value(metric)
+    value = _current_value(metric)
+    if value == 0 and not hasattr(metric, '_value'):
+        try:
+            from ai_trading.data.provider_monitor import provider_monitor as _pm
+            disabled = getattr(_pm, 'disabled_until', {})
+            if provider in disabled:
+                return 1
+            if provider == 'alpaca' and any(key.startswith('alpaca_') for key in disabled):
+                return 1
+            return 0
+        except Exception:  # pragma: no cover - defensive fallback
+            return 0
+    return value
 
 
 def snapshot(metrics_state: object | None = None) -> dict[str, int]:

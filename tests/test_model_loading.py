@@ -3,8 +3,9 @@ import logging
 import sys
 import types
 
-import joblib
 import pytest
+
+joblib = pytest.importorskip("joblib")
 
 
 def reload_bot_engine():

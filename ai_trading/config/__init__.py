@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+import threading
 from typing import Sequence
 
 from .runtime import (
@@ -41,6 +44,47 @@ from ai_trading.validation.require_env import (
 _CFG = get_trading_config()
 _CONFIG_LOGGED = False
 
+_LOCK_TIMEOUT = int(os.getenv("CONFIG_LOCK_TIMEOUT", "30"))
+_VALIDATION_LOCK = threading.Lock()
+_LOCK_STATE = threading.local()
+
+
+def _is_lock_held_by_current_thread() -> bool:
+    """Return True when the calling thread currently holds the validation lock."""
+
+    return bool(getattr(_LOCK_STATE, "held", False))
+
+
+def _set_lock_held_by_current_thread(held: bool) -> None:
+    """Record whether the calling thread owns the validation lock."""
+
+    _LOCK_STATE.held = bool(held)
+
+
+@contextmanager
+def _validation_lock() -> Iterator[None]:
+    """Acquire the validation lock with timeout handling.
+
+    Re-entrant usage within the same thread is permitted to avoid the
+    historical deadlock where ``validate_env_vars`` invoked
+    ``validate_environment`` while already holding the lock.
+    """
+
+    if _is_lock_held_by_current_thread():
+        yield
+        return
+
+    acquired = _VALIDATION_LOCK.acquire(timeout=_LOCK_TIMEOUT)
+    if not acquired:
+        raise TimeoutError("CONFIG_VALIDATION_LOCK_TIMEOUT")
+
+    try:
+        _set_lock_held_by_current_thread(True)
+        yield
+    finally:
+        _set_lock_held_by_current_thread(False)
+        _VALIDATION_LOCK.release()
+
 SENTIMENT_API_KEY = _CFG.sentiment_api_key
 SENTIMENT_API_URL = _CFG.sentiment_api_url
 SENTIMENT_ENHANCED_CACHING = bool(_CFG.sentiment_enhanced_caching)
@@ -69,12 +113,22 @@ def _env_value(*names: str) -> str | None:
     return None
 
 
+def _strip_inline_comment(value: str) -> str:
+    """Remove trailing inline comments introduced with ``#``."""
+
+    for idx, char in enumerate(value):
+        if char == "#" and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
+    return value.strip()
+
+
 def _env_float(*names: str, default: float) -> float:
     raw = _env_value(*names)
     if raw is None:
         return float(default)
     try:
-        return float(raw)
+        cleaned = _strip_inline_comment(raw)
+        return float(cleaned)
     except ValueError as exc:  # pragma: no cover - configuration error
         raise RuntimeError(f"Invalid float for {'/'.join(names)}: {raw}") from exc
 
@@ -131,15 +185,21 @@ def derive_cap_from_settings(
 def validate_environment() -> None:
     """Validate required environment variables are present."""
 
-    if _env_value("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD") is None:
-        raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
-    validate_required_env()
+    with _validation_lock():
+        reload_trading_config()
+        if _env_value("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD") is None:
+            raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
+        validate_required_env()
 
 
 def validate_env_vars(*names: str) -> None:
     """Ensure specific environment variables are defined."""
 
-    _require_env_vars(*names)
+    with _validation_lock():
+        reload_trading_config()
+        if names:
+            _require_env_vars(*names)
+        validate_required_env()
 
 
 def get_max_drawdown_threshold() -> float:

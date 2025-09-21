@@ -1227,12 +1227,20 @@ class ExecutionEngine:
                 or getattr(order, "price_source", None)
                 or "unknown"
             )
-            if isinstance(price_source, str) and price_source.startswith("alpaca"):
-                base_threshold = get_env(
-                    "MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float
-                )
+            base_threshold_env = get_env(
+                "MAX_SLIPPAGE_BPS", str(order.max_slippage_bps), cast=float
+            )
+            apply_slippage_controls = bool(
+                had_manual_price
+                or (isinstance(price_source, str) and price_source.startswith("alpaca"))
+            )
+            if apply_slippage_controls:
+                base_threshold = base_threshold_env
                 threshold = self._adaptive_slippage_threshold(order.symbol, base_threshold)
-                base_price = self._apply_slippage(order, base_price, expected, threshold)
+                if isinstance(price_source, str) and price_source.startswith("alpaca"):
+                    base_price = self._apply_slippage(order, base_price, expected, threshold)
+                else:
+                    order.slippage_bps = 0.0
             else:
                 order.slippage_bps = 0.0
                 threshold = float("inf")
