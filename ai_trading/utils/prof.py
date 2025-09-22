@@ -34,13 +34,19 @@ class SoftBudget:
 
     def elapsed_ms(self) -> int:
         elapsed = time.perf_counter() - self._start
-        return max(0, int(elapsed * 1000))
+        if elapsed <= 0:
+            return 0
+        return math.ceil(elapsed * 1000)
 
     def over_budget(self) -> bool:
         return self.elapsed_ms() >= self.budget_ms
 
     def remaining(self) -> float:
-        return max(0.0, (self.budget_ms - self.elapsed_ms()) / 1000.0)
+        elapsed = time.perf_counter() - self._start
+        remaining_ms = self.budget_ms - (elapsed * 1000)
+        if remaining_ms <= 0:
+            return 0.0
+        return math.ceil(remaining_ms) / 1000.0
 
     def over(self) -> bool:  # Backward compatibility
         return self.over_budget()
