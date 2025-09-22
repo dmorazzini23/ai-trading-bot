@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import os
-
 from ai_trading.logging import get_logger
 from ai_trading.config import get_execution_settings
+from ai_trading.utils.env import (
+    alpaca_credential_status,
+    get_alpaca_base_url,
+)
 
 _logger = get_logger(__name__)
 
@@ -17,12 +19,18 @@ from .engine import ExecutionEngine as _SimExecutionEngine
 
 
 def _missing_creds() -> list[str]:
-    required = ("ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY", "ALPACA_BASE_URL")
-    return [key for key in required if not os.getenv(key)]
+    has_key, has_secret = alpaca_credential_status()
+    missing: list[str] = []
+    if not has_key:
+        missing.append("ALPACA_API_KEY_ID")
+    if not has_secret:
+        missing.append("ALPACA_API_SECRET_KEY")
+    return missing
 
 
 def _creds_ok() -> bool:
-    return not _missing_creds()
+    has_key, has_secret = alpaca_credential_status()
+    return has_key and has_secret
 
 
 def _select_execution_engine() -> type[_SimExecutionEngine]:
@@ -53,6 +61,9 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
     missing_creds: list[str] | None = None
     reason: str | None = None
 
+    has_key, has_secret = alpaca_credential_status()
+    base_url = get_alpaca_base_url()
+
     if normalized_mode in {"paper", "live"}:
         missing_creds = _missing_creds() or None
         try:
@@ -69,7 +80,11 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
             if missing_creds:
                 _logger.error(
                     "EXECUTION_CREDS_MISSING",
-                    extra={"missing": tuple(missing_creds)},
+                    extra={
+                        "has_key": has_key,
+                        "has_secret": has_secret,
+                        "base_url": base_url,
+                    },
                 )
     elif normalized_mode not in {"sim"}:
         reason = "mode_unknown"
@@ -86,6 +101,9 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
             "shadow_mode": shadow,
             "creds_missing": tuple(missing_creds) if missing_creds else None,
             "reason": reason,
+            "has_key": has_key,
+            "has_secret": has_secret,
+            "base_url": base_url,
         },
     )
     return engine_cls

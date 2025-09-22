@@ -4,10 +4,17 @@ Live trading execution engine with real Alpaca SDK integration.
 This module provides production-ready order execution with proper error handling,
 retry mechanisms, circuit breakers, and comprehensive monitoring.
 """
-from ai_trading.logging import get_logger
+import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+
+from ai_trading.logging import get_logger
+from ai_trading.utils.env import (
+    alpaca_credential_status,
+    get_alpaca_base_url,
+    get_alpaca_creds,
+)
 try:  # pragma: no cover - optional dependency
     from alpaca.common.exceptions import APIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
@@ -57,22 +64,72 @@ class ExecutionEngine:
     - Performance tracking and reporting
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        ctx: Any | None = None,
+        execution_mode: str | None = None,
+        shadow_mode: bool = False,
+        **_: Any,
+    ) -> None:
         """Initialize Alpaca execution engine."""
+
+        self.ctx = ctx
+        requested_mode = (
+            execution_mode
+            or getattr(ctx, "execution_mode", None)
+            or os.getenv("EXECUTION_MODE")
+            or "paper"
+        )
+        self._explicit_mode = execution_mode
+        self._explicit_shadow = shadow_mode
+
         self.trading_client = None
         self.config: AlpacaConfig | None = None
         self.settings = None
-        self.execution_mode = "sim"
-        self.shadow_mode = False
+        self.execution_mode = str(requested_mode).lower()
+        self.shadow_mode = bool(shadow_mode)
         self.order_timeout_seconds = 0
         self.slippage_limit_bps = 0
         self.price_provider_order: tuple[str, ...] = ()
         self.data_feed_intraday = "iex"
         self.is_initialized = False
-        self.circuit_breaker = {'failure_count': 0, 'max_failures': 5, 'reset_time': 300, 'last_failure': None, 'is_open': False}
-        self.retry_config = {'max_attempts': 3, 'base_delay': 1.0, 'max_delay': 30.0, 'exponential_base': 2.0}
-        self.stats = {'total_orders': 0, 'successful_orders': 0, 'failed_orders': 0, 'retry_count': 0, 'circuit_breaker_trips': 0, 'total_execution_time': 0.0, 'last_reset': datetime.now(UTC)}
+        self.circuit_breaker = {
+            'failure_count': 0,
+            'max_failures': 5,
+            'reset_time': 300,
+            'last_failure': None,
+            'is_open': False,
+        }
+        self.retry_config = {
+            'max_attempts': 3,
+            'base_delay': 1.0,
+            'max_delay': 30.0,
+            'exponential_base': 2.0,
+        }
+        self.stats = {
+            'total_orders': 0,
+            'successful_orders': 0,
+            'failed_orders': 0,
+            'retry_count': 0,
+            'circuit_breaker_trips': 0,
+            'total_execution_time': 0.0,
+            'last_reset': datetime.now(UTC),
+        }
+        self.base_url = get_alpaca_base_url()
+        self._api_key: str | None = None
+        self._api_secret: str | None = None
+        self._cred_error: Exception | None = None
+        try:
+            key, secret = get_alpaca_creds()
+        except RuntimeError as exc:
+            self._cred_error = exc
+        else:
+            self._api_key, self._api_secret = key, secret
         self._refresh_settings()
+        if self._explicit_mode is not None:
+            self.execution_mode = str(self._explicit_mode).lower()
+        if self._explicit_shadow is not None:
+            self.shadow_mode = bool(self._explicit_shadow)
         logger.info(
             'ExecutionEngine initialized',
             extra={
@@ -108,7 +165,10 @@ class ExecutionEngine:
         """
         try:
             self._refresh_settings()
-            import os
+            if self._explicit_mode is not None:
+                self.execution_mode = str(self._explicit_mode).lower()
+            if self._explicit_shadow is not None:
+                self.shadow_mode = bool(self._explicit_shadow)
             if os.environ.get('PYTEST_RUNNING'):
                 try:
                     from tests.support.mocks import MockTradingClient  # type: ignore
@@ -118,16 +178,50 @@ class ExecutionEngine:
                     self.trading_client = MockTradingClient(paper=True)
                     self.is_initialized = True
                     return True
-            self.config = get_alpaca_config()
+            key = self._api_key
+            secret = self._api_secret
+            if not key or not secret:
+                try:
+                    key, secret = get_alpaca_creds()
+                except RuntimeError as exc:
+                    has_key, has_secret = alpaca_credential_status()
+                    logger.error(
+                        'EXECUTION_CREDS_UNAVAILABLE',
+                        extra={
+                            'has_key': has_key,
+                            'has_secret': has_secret,
+                            'base_url': self.base_url,
+                            'detail': str(exc),
+                        },
+                    )
+                    return False
+                else:
+                    self._api_key, self._api_secret = key, secret
+            base_url = self.base_url or get_alpaca_base_url()
+            paper = 'paper' in base_url.lower()
+            mode = self.execution_mode
+            if mode == 'live':
+                paper = False
+            elif mode == 'paper':
+                paper = True
+            try:
+                self.config = get_alpaca_config()
+            except Exception:
+                self.config = None
+            if self.config is not None:
+                base_url = self.config.base_url or base_url
+                paper = bool(self.config.use_paper)
+            self.base_url = base_url
             raw_client = AlpacaREST(
-                api_key=self.config.key_id,
-                secret_key=self.config.secret_key,
-                url_override=self.config.base_url,
+                api_key=key,
+                secret_key=secret,
+                url_override=base_url,
             )
+            config_paper = paper if self.config is None else bool(self.config.use_paper)
             logger.info(
                 'Real Alpaca client initialized',
                 extra={
-                    'paper': self.config.use_paper,
+                    'paper': config_paper,
                     'execution_mode': self.execution_mode,
                     'shadow_mode': self.shadow_mode,
                 },
