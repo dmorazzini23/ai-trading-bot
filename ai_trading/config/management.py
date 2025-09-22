@@ -137,7 +137,13 @@ def validate_required_env(
 ) -> Mapping[str, str]:
     """Ensure mandatory Alpaca credentials and risk limits are present."""
 
-    cfg = TradingConfig.from_env(env) if env is not None else get_trading_config()
+    env_snapshot: dict[str, str] = {
+        k: v for k, v in os.environ.items() if isinstance(v, str)
+    }
+    if env is not None:
+        env_snapshot.update({k: str(v) for k, v in env.items() if v is not None})
+
+    cfg = TradingConfig.from_env(env_snapshot, allow_missing_drawdown=True)
 
     required_fields = {
         "ALPACA_API_KEY": cfg.alpaca_api_key,
@@ -157,9 +163,9 @@ def validate_required_env(
                 filtered[key] = getattr(cfg, key.lower(), None)
         required_fields = filtered
 
-    env_lookup: dict[str, str] = {}
-    if env is not None:
-        env_lookup = {k.upper(): str(v) for k, v in env.items() if v not in (None, "")}
+    env_lookup: dict[str, str] = {
+        k.upper(): v for k, v in env_snapshot.items() if v not in (None, "")
+    }
     if "ALPACA_API_URL" not in env_lookup and "ALPACA_BASE_URL" in env_lookup:
         env_lookup["ALPACA_API_URL"] = env_lookup["ALPACA_BASE_URL"]
     alias_sources: dict[str, tuple[str, ...]] = {
@@ -171,21 +177,21 @@ def validate_required_env(
     for key, value in list(required_fields.items()):
         if value in (None, ""):
             fallback = env_lookup.get(key)
-            if fallback in (None, ""):
-                fallback = os.environ.get(key)
             if fallback not in (None, ""):
                 required_fields[key] = fallback
                 continue
             for alias in alias_sources.get(key, ()):  # pragma: no branch - small tuple
                 alias_value = env_lookup.get(alias)
-                if alias_value in (None, ""):
-                    alias_value = os.environ.get(alias)
                 if alias_value not in (None, ""):
                     required_fields[key] = alias_value
                     break
 
     missing = [name for name, value in required_fields.items() if not value]
     if missing:
+        logger.error(
+            "CONFIG_REQUIRED_ENV_MISSING",
+            extra={"missing": tuple(sorted(missing)), "requested": tuple(sorted(keys)) if keys else None},
+        )
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
     masked: dict[str, str] = {}
