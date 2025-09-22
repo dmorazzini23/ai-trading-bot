@@ -9,6 +9,7 @@ processing large symbol lists.
 from __future__ import annotations
 
 import asyncio
+import functools
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import fields, is_dataclass
 from types import ModuleType, SimpleNamespace
@@ -131,8 +132,11 @@ FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
 
 
+CoroutineFactory = Callable[[], Awaitable[T]]
+
+
 async def run_with_concurrency_limit(
-    coroutines: Iterable[Awaitable[T]],
+    coroutines: Iterable[Awaitable[T] | CoroutineFactory],
     limit: int,
     per_task_timeout: float = 5.0,
 ) -> tuple[list[T | Exception], int, int]:
@@ -144,10 +148,11 @@ async def run_with_concurrency_limit(
 
     semaphore = asyncio.Semaphore(max(1, int(limit)))
 
-    async def _wrap(coro: Awaitable[T]) -> T | Exception:
+    async def _wrap(coro: Awaitable[T] | CoroutineFactory) -> T | Exception:
         async with semaphore:
             try:
-                return await asyncio.wait_for(coro, timeout=per_task_timeout)
+                awaitable = coro() if callable(coro) else coro
+                return await asyncio.wait_for(awaitable, timeout=per_task_timeout)
             except Exception as exc:  # noqa: BLE001 - propagate as captured result
                 return exc
 
@@ -192,6 +197,9 @@ async def run_with_concurrency(
 
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
+
+    global PEAK_SIMULTANEOUS_WORKERS
+    PEAK_SIMULTANEOUS_WORKERS = 0
 
     results: dict[str, T | None] = {}
 
@@ -366,7 +374,7 @@ async def run_with_concurrency(
         finally:
             await _decrement()
 
-    coroutines = [_execute(sym) for sym in symbols]
+    coroutines = [functools.partial(_execute, sym) for sym in symbols]
     gathered, _, _ = await run_with_concurrency_limit(
         coroutines,
         concurrency_limit,
@@ -383,10 +391,12 @@ async def run_with_concurrency(
         else:
             SUCCESSFUL_SYMBOLS.add(sym)
 
-    global PEAK_SIMULTANEOUS_WORKERS
     PEAK_SIMULTANEOUS_WORKERS = peak_running
 
-    return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
+    try:
+        return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
+    finally:
+        PEAK_SIMULTANEOUS_WORKERS = 0
 
 
 __all__ = [
