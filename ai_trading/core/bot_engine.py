@@ -3028,7 +3028,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         symbol: str,
         current_now: datetime,
     ) -> pd.DataFrame:
+        try:
+            raw_attrs = dict(getattr(raw_df, "attrs", {}) or {})
+        except Exception:
+            raw_attrs = {}
         df = raw_df.copy()
+        if raw_attrs:
+            try:
+                df.attrs.update(raw_attrs)
+            except Exception:  # pragma: no cover - metadata best-effort only
+                pass
         # Drop bars with zero volume or from the current (incomplete) minute
         try:
             current_minute = current_now.replace(second=0, microsecond=0)
@@ -3123,6 +3132,20 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             raise err
 
         return df
+
+    def _df_provider_info(
+        frame: pd.DataFrame | None,
+    ) -> tuple[str | None, str | None]:
+        if frame is None:
+            return None, None
+        attrs = getattr(frame, "attrs", None)
+        if isinstance(attrs, dict):
+            provider = attrs.get("data_provider") or attrs.get("fallback_provider")
+            feed = attrs.get("data_feed") or attrs.get("fallback_feed")
+            provider_str = str(provider) if provider is not None else None
+            feed_str = str(feed) if feed is not None else None
+            return provider_str, feed_str
+        return None, None
 
     def _normalize_feed_name(value: object) -> str:
         try:
@@ -3450,13 +3473,23 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 prev_expected = max(expected_bars or 0, 1)
                 prev_cov = primary_actual_bars / prev_expected
                 new_cov = sip_bars / max(fallback_expected_bars, 1)
+                provider_override, feed_override = _df_provider_info(sip_df)
+                resolved_feed = feed_override or "sip"
+                resolved_provider = provider_override
+                if not resolved_feed:
+                    resolved_feed = "sip"
+                if not resolved_provider:
+                    if resolved_feed in {"sip", "iex"}:
+                        resolved_provider = f"alpaca_{resolved_feed}"
+                    else:
+                        resolved_provider = resolved_feed
                 logger.warning(
                     "COVERAGE_RECOVERY_SIP",
                     extra={
                         "symbol": symbol,
                         "prev_feed": current_feed,
                         "prev_cov": round(prev_cov, 4),
-                        "new_feed": "sip",
+                        "new_feed": resolved_feed,
                         "new_cov": round(new_cov, 4),
                         "expected_bars": fallback_expected_bars,
                         "prev_bars": primary_actual_bars,
@@ -3477,11 +3510,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
                 fallback_used = True
-                fallback_feed = "sip"
-                fallback_feed_used = "sip"
-                fallback_provider = "alpaca_sip"
-                active_feed = "sip"
-                _cache_cycle_fallback_feed("sip")
+                fallback_feed = resolved_feed
+                fallback_feed_used = resolved_feed
+                fallback_provider = resolved_provider
+                active_feed = resolved_feed
+                _cache_cycle_fallback_feed(resolved_feed)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -3656,15 +3689,24 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             end=end_dt,
         )
         if sip_recovery_df is not None:
+            provider_override, feed_override = _df_provider_info(sip_recovery_df)
+            resolved_feed = feed_override or "sip"
+            resolved_provider = provider_override
+            if not resolved_feed:
+                resolved_feed = "sip"
+            if not resolved_provider:
+                if resolved_feed in {"sip", "iex"}:
+                    resolved_provider = f"alpaca_{resolved_feed}"
+                else:
+                    resolved_provider = resolved_feed
             df = sip_recovery_df
-            active_feed = "sip"
+            active_feed = resolved_feed
             fallback_attempted = True
             fallback_used = True
-            fallback_feed = "sip"
-            fallback_feed_used = "sip"
-            if not fallback_provider:
-                fallback_provider = "alpaca_sip"
-            _cache_cycle_fallback_feed("sip")
+            fallback_feed = resolved_feed
+            fallback_feed_used = resolved_feed
+            fallback_provider = resolved_provider
+            _cache_cycle_fallback_feed(resolved_feed)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
