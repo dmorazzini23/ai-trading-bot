@@ -51,6 +51,17 @@ def _parse_numeric_sequence(value: str) -> tuple[float, ...]:
     return tuple(float(chunk) for chunk in cleaned)
 
 
+def _parse_max_position_mode(raw: str) -> str:
+    value = _strip_inline_comment(raw).strip().upper()
+    if value in {"", "STATIC"}:
+        return "STATIC"
+    if value == "AUTO":
+        return "AUTO"
+    raise ValueError(
+        "MAX_POSITION_MODE must be one of: STATIC, AUTO"
+    )
+
+
 CastFn = Callable[[str], Any]
 
 
@@ -292,6 +303,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=0.0,
         max_value=1.0,
         deprecated_env={"AI_TRADING_MAX_DRAWDOWN_THRESHOLD": "Use MAX_DRAWDOWN_THRESHOLD instead."},
+    ),
+    ConfigSpec(
+        field="max_position_mode",
+        env=("MAX_POSITION_MODE", "AI_TRADING_MAX_POSITION_MODE"),
+        cast=_parse_max_position_mode,
+        default="STATIC",
+        description="Controls whether max_position_size is STATIC or AUTO sized.",
     ),
     ConfigSpec(
         field="max_position_size",

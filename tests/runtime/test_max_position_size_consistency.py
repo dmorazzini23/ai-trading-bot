@@ -1,5 +1,7 @@
-import logging
 import contextlib
+import logging
+from math import floor
+
 import pytest
 
 from ai_trading import main
@@ -61,3 +63,39 @@ def test_max_position_size_consistency(monkeypatch, caplog):
     runtime = captured["runtime"]
     record = next(r for r in caplog.records if r.msg in {"POSITION_SIZING_RESOLVED", "POSITION_SIZING_FALLBACK"})
     assert runtime.params["MAX_POSITION_SIZE"] == pytest.approx(record.resolved)
+
+
+def test_auto_max_position_mode_overrides_provided_size(monkeypatch, caplog):
+    capital_cap = 0.05
+    equity = 125_432.78
+    expected_size = float(floor(equity * capital_cap))
+
+    monkeypatch.setenv("CAPITAL_CAP", str(capital_cap))
+    monkeypatch.setenv("MAX_POSITION_MODE", "auto")
+    monkeypatch.setenv("MAX_POSITION_SIZE", "99999")
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.15")
+
+    monkeypatch.setattr(
+        "ai_trading.core.runtime._get_equity_from_alpaca",
+        lambda cfg, force_refresh=True: equity,
+    )
+    monkeypatch.setattr(
+        "ai_trading.position_sizing._get_equity_from_alpaca",
+        lambda cfg, force_refresh=True: equity,
+    )
+
+    from ai_trading.config.management import TradingConfig
+    from ai_trading.core.runtime import build_runtime
+
+    cfg = TradingConfig.from_env()
+
+    with caplog.at_level(logging.INFO, logger="ai_trading.core.runtime"):
+        runtime = build_runtime(cfg)
+
+    record = next(
+        r for r in caplog.records if r.msg in {"POSITION_SIZING_RESOLVED", "POSITION_SIZING_FALLBACK"}
+    )
+    assert getattr(record, "mode", None) == "AUTO"
+    assert getattr(record, "source", None) == "alpaca"
+    assert runtime.params["MAX_POSITION_SIZE"] == expected_size
+    assert cfg.max_position_size == expected_size
