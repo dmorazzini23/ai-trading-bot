@@ -2847,21 +2847,47 @@ def get_minute_df(
                     logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
                     time.sleep(backoff)
                     alt_feed = None
-                    if max_data_fallbacks() >= 1:
-                        prio = provider_priority()
-                        cur = normalized_feed or _DEFAULT_FEED
-                        idx = prio.index(f"alpaca_{cur}") if prio else -1
-                        for prov in prio[idx + 1 :]:
-                            if prov == "alpaca_sip":
-                                if _sip_configured() and not _SIP_UNAUTHORIZED:
-                                    alt_feed = "sip"
-                                    break
+                    max_fb = max_data_fallbacks()
+                    attempted_feeds = _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set())
+                    current_feed = normalized_feed or _DEFAULT_FEED
+                    if max_fb >= 1 and len(attempted_feeds) < max_fb:
+                        priority_order = list(provider_priority())
+                        try:
+                            cur_idx = priority_order.index(f"alpaca_{current_feed}")
+                        except ValueError:
+                            cur_idx = -1
+                        ordered_scan: list[str] = []
+                        if cur_idx >= 0:
+                            ordered_scan.extend(priority_order[cur_idx + 1 :])
+                            ordered_scan.extend(reversed(priority_order[:cur_idx]))
+                        else:
+                            ordered_scan = priority_order
+                        for prov in ordered_scan:
+                            if not prov.startswith("alpaca_"):
                                 continue
-                            if prov == "alpaca_iex":
-                                alt_feed = "iex"
-                                break
-                    if alt_feed and alt_feed != (normalized_feed or _DEFAULT_FEED):
-                        _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(alt_feed)
+                            candidate = prov.split("_", 1)[1]
+                            if candidate == current_feed:
+                                continue
+                            if candidate not in {"iex", "sip"}:
+                                continue
+                            if candidate in attempted_feeds:
+                                continue
+                            if candidate == "sip" and (not _sip_configured() or _SIP_UNAUTHORIZED):
+                                continue
+                            alt_feed = candidate
+                            break
+                    if (
+                        alt_feed is None
+                        and max_fb >= 1
+                        and len(attempted_feeds) < max_fb
+                        and current_feed == "iex"
+                        and _sip_configured()
+                        and not _SIP_UNAUTHORIZED
+                        and "sip" not in attempted_feeds
+                    ):
+                        alt_feed = "sip"
+                    if alt_feed and alt_feed != current_feed:
+                        attempted_feeds.add(alt_feed)
                         try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
@@ -2892,6 +2918,8 @@ def get_minute_df(
                                 df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
                                 if df_alt is not None and not getattr(df_alt, "empty", True):
                                     mark_success(symbol, "1Min")
+                                    _EMPTY_BAR_COUNTS.pop(tf_key, None)
+                                    _SKIPPED_SYMBOLS.discard(tf_key)
                                     return df_alt
                                 df = df_alt
                     if end_dt - start_dt > _dt.timedelta(days=1):
@@ -3034,6 +3062,10 @@ def get_minute_df(
         )
     original_df = df
     if original_df is None:
+        if not use_finnhub and not has_finnhub:
+            _SKIPPED_SYMBOLS.discard(tf_key)
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     if getattr(original_df, "empty", False):
         if allow_empty_return:
