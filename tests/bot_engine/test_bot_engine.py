@@ -309,6 +309,40 @@ def test_get_latest_price_skips_primary_during_cooldown(monkeypatch):
     assert bot_engine._PRICE_SOURCE["AAPL"] == bot_engine._ALPACA_DISABLED_SENTINEL
 
 
+def test_get_latest_price_prefers_backup_when_primary_disabled(monkeypatch):
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
+    )
+
+    def _fail_alpaca_symbols():  # pragma: no cover - should not be invoked
+        raise AssertionError("Alpaca should not be queried when disabled")
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", _fail_alpaca_symbols)
+
+    called: dict[str, int] = {"backup": 0}
+
+    def _fake_backup_get_bars(symbol, start, end, interval):  # noqa: D401, ANN001
+        called["backup"] += 1
+        return object()
+
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_backup_get_bars",
+        _fake_backup_get_bars,
+    )
+    monkeypatch.setattr(bot_engine, "get_latest_close", lambda _df: 123.45)
+
+    price = bot_engine.get_latest_price("AAPL", prefer_backup=True)
+
+    assert price == 123.45
+    assert called["backup"] == 1
+    assert bot_engine._PRICE_SOURCE["AAPL"] == "yahoo"
+
+
 def test_enter_long_skips_when_primary_disabled(monkeypatch, caplog):
     pd = pytest.importorskip("pandas")
 
