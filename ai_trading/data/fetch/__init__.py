@@ -451,6 +451,40 @@ def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
 
 
+def _annotate_df_source(
+    df: pd.DataFrame | None,
+    *,
+    provider: str,
+    feed: str | None = None,
+) -> pd.DataFrame | None:
+    """Attach provider/feed metadata to ``df`` when supported."""
+
+    pd_local = _ensure_pandas()
+    if pd_local is None or df is None or not isinstance(df, pd_local.DataFrame):
+        return df
+    try:
+        attrs = df.attrs  # type: ignore[attr-defined]
+    except AttributeError:  # pragma: no cover - extremely defensive
+        return df
+
+    try:
+        attrs["data_provider"] = provider
+        attrs.setdefault("fallback_provider", provider)
+        if feed:
+            attrs["data_feed"] = feed
+            attrs.setdefault("fallback_feed", feed)
+    except Exception:  # pragma: no cover - metadata best-effort only
+        pass
+    return df
+
+
+def _resolve_backup_provider() -> tuple[str, str]:
+    provider_val = getattr(get_settings(), "backup_data_provider", "yahoo")
+    provider_str = str(provider_val).strip()
+    normalized = provider_str.lower()
+    return provider_str, normalized
+
+
 def get_fallback_metadata(
     symbol: str,
     timeframe: str,
@@ -1030,7 +1064,8 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
 def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Route to configured backup provider or return empty DataFrame."""
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-    normalized = str(provider).strip().lower()
+    provider_str = str(provider).strip()
+    normalized = provider_str.lower()
     if normalized in {"finnhub", "finnhub_low_latency"}:
         df = _finnhub_get_bars(symbol, start, end, interval)
         if isinstance(df, list):  # pragma: no cover - defensive for stub returns
@@ -1040,7 +1075,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 "BACKUP_PROVIDER_EMPTY",
                 extra={"provider": provider, "symbol": symbol, "interval": interval},
             )
-        return df
+        return _annotate_df_source(df, provider=normalized, feed=normalized)
     if normalized == "yahoo":
         try:
             _start = ensure_datetime(start)
@@ -1051,7 +1086,8 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         if key not in _BACKUP_USAGE_LOGGED:
             logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
             _BACKUP_USAGE_LOGGED.add(key)
-        return _yahoo_get_bars(symbol, start, end, interval)
+        df = _yahoo_get_bars(symbol, start, end, interval)
+        return _annotate_df_source(df, provider=normalized, feed=normalized)
     pd_local = _ensure_pandas()
     if normalized in ("", "none"):
         logger.info("BACKUP_PROVIDER_DISABLED", extra={"symbol": symbol})
@@ -1061,7 +1097,8 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         return []  # type: ignore[return-value]
     idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
     cols = ["open", "high", "low", "close", "volume"]
-    return pd_local.DataFrame(columns=cols, index=idx).reset_index()
+    empty_df = pd_local.DataFrame(columns=cols, index=idx).reset_index()
+    return _annotate_df_source(empty_df, provider=normalized or "none", feed=normalized or None)
 
 
 def _post_process(
@@ -1500,7 +1537,13 @@ def _fetch_bars(
                     _end,
                     from_provider=f"alpaca_{_feed}",
                 )
-                return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                provider_str, normalized_provider = _resolve_backup_provider()
+                return _annotate_df_source(
+                    fallback_df,
+                    provider=normalized_provider or provider_str,
+                    feed=normalized_provider or None,
+                )
         else:
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
@@ -1527,7 +1570,13 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            provider_str, normalized_provider = _resolve_backup_provider()
+            return _annotate_df_source(
+                fallback_df,
+                provider=normalized_provider or provider_str,
+                feed=normalized_provider or None,
+            )
     # Respect recent fallback TTL at coarse granularity
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
@@ -1538,7 +1587,13 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            provider_str, normalized_provider = _resolve_backup_provider()
+            return _annotate_df_source(
+                fallback_df,
+                provider=normalized_provider or provider_str,
+                feed=normalized_provider or None,
+            )
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
         if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
@@ -1561,7 +1616,13 @@ def _fetch_bars(
                     _end,
                     from_provider=f"alpaca_{_feed}",
                 )
-                return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                provider_str, normalized_provider = _resolve_backup_provider()
+                return _annotate_df_source(
+                    fallback_df,
+                    provider=normalized_provider or provider_str,
+                    feed=normalized_provider or None,
+                )
             return pd.DataFrame()
 
 
@@ -1583,7 +1644,13 @@ def _fetch_bars(
                 _end,
                 from_provider=f"alpaca_{_feed}",
             )
-            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            provider_str, normalized_provider = _resolve_backup_provider()
+            return _annotate_df_source(
+                fallback_df,
+                provider=normalized_provider or provider_str,
+                feed=normalized_provider or None,
+            )
         return pd.DataFrame()
 
     headers = {
@@ -2996,6 +3063,11 @@ def get_minute_df(
                         "rows": getattr(finnhub_df, "shape", (0,))[0] if finnhub_df is not None else 0,
                     },
                 )
+                finnhub_df = _annotate_df_source(
+                    finnhub_df,
+                    provider="finnhub",
+                    feed="finnhub",
+                )
             df = finnhub_df
             used_backup = True
         elif not enable_finnhub:
@@ -3030,6 +3102,15 @@ def get_minute_df(
                 cur_start = cur_end
             if pd is not None and dfs:
                 df = pd.concat(dfs, ignore_index=True)
+                first_attrs = getattr(dfs[0], "attrs", {}) if dfs else {}
+                provider_attr = first_attrs.get("data_provider") or first_attrs.get("fallback_provider")
+                feed_attr = first_attrs.get("data_feed") or first_attrs.get("fallback_feed")
+                if provider_attr:
+                    df = _annotate_df_source(
+                        df,
+                        provider=str(provider_attr),
+                        feed=str(feed_attr) if feed_attr else None,
+                    )
             elif dfs:
                 df = dfs[0]
             else:
