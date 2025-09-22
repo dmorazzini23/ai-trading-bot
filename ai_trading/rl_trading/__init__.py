@@ -147,13 +147,15 @@ def _load_train_module() -> Any:
     """Dynamically import :mod:`ai_trading.rl_trading.train` when requested."""
 
     module_name = f"{__name__}.train"
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
-        raise AttributeError(
-            f"module {__name__!r} has no attribute 'train'"
-        ) from exc
-    sys.modules["ai_trading.rl_trading.train"] = module
+    module = sys.modules.get(module_name)
+    if module is None:
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
+            raise AttributeError(
+                f"module {__name__!r} has no attribute 'train'"
+            ) from exc
+    module = sys.modules.setdefault(module_name, module)
     globals()["train"] = module
     return module
 
