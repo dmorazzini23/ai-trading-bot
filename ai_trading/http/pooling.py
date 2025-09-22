@@ -16,6 +16,15 @@ _HOST_SEMAPHORES: WeakKeyDictionary[
 ] = WeakKeyDictionary()
 
 
+def reset_host_semaphores() -> None:
+    """Clear cached host semaphores.
+
+    Useful for ensuring a clean slate when the module is reloaded in tests.
+    """
+
+    _HOST_SEMAPHORES.clear()
+
+
 def _resolve_limit() -> int:
     raw = os.getenv("AI_TRADING_HOST_LIMIT")
     if raw not in (None, ""):
