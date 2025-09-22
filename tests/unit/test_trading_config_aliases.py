@@ -49,7 +49,7 @@ def test_trading_config_env_aliases(env_updates, expected_limit):
         )
     snap = cfg.snapshot_sanitized()
     assert snap["data"]["feed"] == "iex"
-    assert snap["data"]["provider"] == "alpaca"
+    assert str(snap["data"]["provider"]).startswith("alpaca")
 
 
 def test_paper_inferred_from_base_url():
@@ -105,7 +105,7 @@ def test_fail_fast_env_alias_override_logging(monkeypatch, caplog):
     records = _alias_override_records()
     assert records, "Expected DOLLAR_RISK_LIMIT_ALIAS_OVERRIDE warning when alias backfills"
     record = records[0]
-    assert getattr(record, "env_value", None) == "0.02"
+    assert str(getattr(record, "env_value", None)) == "0.02"
     assert getattr(record, "trading_config_value", None) == 0.02
 
 

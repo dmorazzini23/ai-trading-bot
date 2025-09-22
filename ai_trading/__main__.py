@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from collections.abc import Callable
 from typing import Any, Literal
+
+sys.dont_write_bytecode = True
 
 from ai_trading.exc import HTTPError
 from pydantic import BaseModel, ValidationError, field_validator
 
 from ai_trading.logging import get_logger
+from ai_trading.runtime.shutdown import (
+    install_runtime_timer,
+    register_signal_handlers,
+    request_stop,
+    should_stop,
+    stop_event,
+)
 
 logger = get_logger(__name__)
+register_signal_handlers()
 
 
 def _build_parser(description: str, *, symbols: bool = False) -> argparse.ArgumentParser:
@@ -19,6 +30,17 @@ def _build_parser(description: str, *, symbols: bool = False) -> argparse.Argume
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--dry-run", action="store_true", help="Exit before heavy imports")
     parser.add_argument("--once", action="store_true", help="Run a single iteration and exit")
+    parser.add_argument(
+        "--max-runtime-seconds",
+        type=float,
+        default=None,
+        help="Cooperatively request shutdown after N seconds",
+    )
+    parser.add_argument(
+        "--graceful-exit",
+        action="store_true",
+        help="Request a cooperative shutdown at the next checkpoint",
+    )
     parser.add_argument(
         "--interval",
         type=float,
@@ -37,10 +59,8 @@ def _build_parser(description: str, *, symbols: bool = False) -> argparse.Argume
 def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> None:
     """Execute ``fn`` respecting --once/--interval and uniform error handling."""
 
-    import time
-
     try:
-        while True:
+        while not should_stop():
             try:
                 fn()
             except (ValueError, HTTPError) as e:
@@ -50,8 +70,14 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
                 raise
             if args.once:
                 break
-            time.sleep(args.interval)
+            interval = max(0.0, float(getattr(args, "interval", 0.0)))
+            if interval <= 0:
+                continue
+            deadline = time.monotonic() + interval
+            while not should_stop() and time.monotonic() < deadline:
+                time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
     except KeyboardInterrupt:
+        request_stop("keyboard-interrupt")
         logger.info("%s interrupted", label)
         sys.exit(0)
     except SystemExit as e:  # AI-AGENT-REF: do not crash the service on exit codes
@@ -112,6 +138,12 @@ def run_trade() -> None:
 
     parser = _build_parser("AI Trading Bot", symbols=True)
     args = parser.parse_args()
+    stop_event.clear()
+    timer = None
+    if getattr(args, "max_runtime_seconds", None):
+        timer = install_runtime_timer(float(args.max_runtime_seconds))
+    if getattr(args, "graceful_exit", False):
+        request_stop("cli-graceful-exit")
     if args.dry_run:
         logger.info("AI Trade: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
@@ -132,7 +164,11 @@ def run_trade() -> None:
 
     _main.preflight_import_health()
 
-    _run_loop(_main.run_cycle, args, "Trade")
+    try:
+        _run_loop(_main.run_cycle, args, "Trade")
+    finally:
+        if timer is not None:
+            timer.cancel()
 
 
 def run_backtest() -> None:
@@ -140,6 +176,12 @@ def run_backtest() -> None:
 
     parser = _build_parser("AI Trading Bot Backtesting", symbols=True)
     args = parser.parse_args()
+    stop_event.clear()
+    timer = None
+    if getattr(args, "max_runtime_seconds", None):
+        timer = install_runtime_timer(float(args.max_runtime_seconds))
+    if getattr(args, "graceful_exit", False):
+        request_stop("cli-graceful-exit")
     if args.dry_run:
         logger.info("AI Backtest: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
@@ -160,7 +202,11 @@ def run_backtest() -> None:
 
     _main.preflight_import_health()
 
-    _run_loop(_main.run_cycle, args, "Backtest")
+    try:
+        _run_loop(_main.run_cycle, args, "Backtest")
+    finally:
+        if timer is not None:
+            timer.cancel()
 
 
 def run_healthcheck() -> None:
@@ -168,6 +214,12 @@ def run_healthcheck() -> None:
 
     parser = _build_parser("AI Trading Bot Health Check")
     args = parser.parse_args()
+    stop_event.clear()
+    timer = None
+    if getattr(args, "max_runtime_seconds", None):
+        timer = install_runtime_timer(float(args.max_runtime_seconds))
+    if getattr(args, "graceful_exit", False):
+        request_stop("cli-graceful-exit")
     if args.dry_run:
         logger.info("AI Health: Dry run - exiting")
         logger.info("INDICATOR_IMPORT_OK")
@@ -189,7 +241,11 @@ def run_healthcheck() -> None:
 
     _main.preflight_import_health()
 
-    _run_loop(run_health_check, args, "Health check")
+    try:
+        _run_loop(run_health_check, args, "Health check")
+    finally:
+        if timer is not None:
+            timer.cancel()
 
 
 def main() -> int:
@@ -198,6 +254,12 @@ def main() -> int:
     try:
         parser = _build_parser("AI Trading Bot", symbols=True)
         args = parser.parse_args()
+        stop_event.clear()
+        timer = None
+        if getattr(args, "max_runtime_seconds", None):
+            timer = install_runtime_timer(float(args.max_runtime_seconds))
+        if getattr(args, "graceful_exit", False):
+            request_stop("cli-graceful-exit")
         if args.dry_run:
             logger.info("AI Main: Dry run - exiting")
             logger.info("INDICATOR_IMPORT_OK")
@@ -233,8 +295,12 @@ def main() -> int:
             mapped_argv.extend(["--iterations", "1"])
 
         # Delegate to main; it starts the API server thread and the scheduler loop
-        _main.main(mapped_argv)
-        return 0
+        try:
+            _main.main(mapped_argv)
+            return 0
+        finally:
+            if timer is not None:
+                timer.cancel()
     except SystemExit as e:
         code = getattr(e, "code", None)
         logger.error("ai_trading.main exited with code %s", code, exc_info=True)

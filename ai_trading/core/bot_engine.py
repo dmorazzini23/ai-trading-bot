@@ -62,6 +62,7 @@ from ai_trading.data.fetch import (
     _sip_configured,
     build_fetcher,
 )
+from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
     from ai_trading.data.bars import TimeFrame
@@ -15858,7 +15859,24 @@ def _process_symbols(
         log_skip_cooldown(cd_skipped)
 
     def process_symbol(symbol: str) -> None:
+        completed_stages: list[str] = []
+
+        def _checkpoint(pending: str) -> bool:
+            if should_stop():
+                logger.info(
+                    "PROCESS_SYMBOL_STOP",
+                    extra={
+                        "symbol": symbol,
+                        "completed": ",".join(completed_stages) if completed_stages else "",
+                        "pending": pending,
+                    },
+                )
+                return True
+            return False
+
         try:
+            if _checkpoint("start"):
+                return
             logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
             if not is_market_open():
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
@@ -15875,7 +15893,10 @@ def _process_symbols(
                     except (AttributeError, RuntimeError) as hm_exc:  # noqa: BLE001
                         logger.error("HALT_MANAGER_ERROR", extra={"cause": str(hm_exc)})
             try:
+                if _checkpoint("fetch"):
+                    return
                 price_df = fetch_minute_df_safe(symbol)
+                completed_stages.append("fetch")
             except DataFetchError as exc:
                 reason = getattr(exc, "fetch_reason", "")
                 if reason in {
@@ -15908,6 +15929,8 @@ def _process_symbols(
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
+            if _checkpoint("trade"):
+                return
             _safe_trade(
                 ctx,
                 state,
@@ -15917,6 +15940,7 @@ def _process_symbols(
                 regime_ok,
                 price_df=price_df,
             )
+            completed_stages.append("trade")
         except (
             KeyError,
             ValueError,
@@ -15946,7 +15970,14 @@ def _process_symbols(
         raise RuntimeError("ThreadPool executors unavailable after initialization")
 
     futures = [_pred.submit(process_symbol, s) for s in symbols]
+    if should_stop():
+        for fut in futures:
+            fut.cancel()
+        return processed, row_counts
     for f in futures:
+        if should_stop():
+            f.cancel()
+            continue
         f.result()
     return processed, row_counts
 

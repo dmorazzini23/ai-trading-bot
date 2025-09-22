@@ -1356,7 +1356,12 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
         if current_config is None:
             logger.warning('Config not available for meta-learning conversion')
             return False
-        trade_log_path = getattr(current_config, 'TRADE_LOG_FILE', 'logs/trades.csv')
+        if hasattr(current_config, 'TRADE_LOG_FILE') and getattr(current_config, 'TRADE_LOG_FILE'):
+            trade_log_path = getattr(current_config, 'TRADE_LOG_FILE')
+        else:
+            from ai_trading.paths import LOG_DIR
+
+            trade_log_path = str((LOG_DIR / 'trades.csv').resolve())
         try:
             trade_log_path_obj = Path(trade_log_path)
         except (TypeError, ValueError) as e:
@@ -1439,7 +1444,12 @@ def store_meta_learning_data(converted_data: dict) -> bool:
         if config is None:
             logger.warning('Config not available for storing meta-learning data')
             return False
-        meta_log_path = getattr(config, 'META_LEARNING_LOG_FILE', 'logs/meta_trades.csv')
+        if hasattr(config, 'META_LEARNING_LOG_FILE') and getattr(config, 'META_LEARNING_LOG_FILE'):
+            meta_log_path = getattr(config, 'META_LEARNING_LOG_FILE')
+        else:
+            from ai_trading.paths import LOG_DIR
+
+            meta_log_path = str((LOG_DIR / 'meta_trades.csv').resolve())
         meta_log_dir = Path(meta_log_path).parent
         meta_log_dir.mkdir(parents=True, exist_ok=True)
         if pd is not None:
