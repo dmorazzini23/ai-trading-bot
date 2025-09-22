@@ -91,8 +91,10 @@ class ProductionExecutionCoordinator:
         Returns:
             Order execution result
         """
+        execution_result: ExecutionResult | None = None
+        execution_time_ms = 0.0
+        start_time = time.time()
         try:
-            start_time = time.time()
             md = dict(metadata or {})
             # Apply execution policy toggles (safe rollout)
             try:
@@ -117,22 +119,33 @@ class ProductionExecutionCoordinator:
             safety_result = await self._comprehensive_safety_check(order)
             if not safety_result['approved']:
                 await self._handle_order_rejection(order, safety_result['reason'])
-                return self._create_order_result(order, 'rejected', safety_result['reason'])
+                execution_result = self._create_order_result(order, 'rejected', safety_result['reason'])
+                execution_time_ms = (time.time() - start_time) * 1000
+                return execution_result
             sizing_result = await self._optimize_order_size(order)
             if sizing_result['final_quantity'] == 0:
                 await self._handle_order_rejection(order, 'Position sizing resulted in zero quantity')
-                return self._create_order_result(order, 'rejected', 'Invalid position size')
+                execution_result = self._create_order_result(order, 'rejected', 'Invalid position size')
+                execution_time_ms = (time.time() - start_time) * 1000
+                return execution_result
             original_quantity = order.quantity
             order.quantity = sizing_result['final_quantity']
             impact_analysis = await self._analyze_market_impact(order)
             execution_result = await self._execute_order_with_monitoring(order, impact_analysis)
             await self._post_execution_processing(order, execution_result, original_quantity)
             execution_time_ms = (time.time() - start_time) * 1000
-            await self._update_execution_statistics(execution_result, execution_time_ms)
             return execution_result
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ORDER_API_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'op': 'submit', 'order_id': 'unknown'})
             raise
+        finally:
+            if execution_result is not None:
+                if execution_time_ms <= 0:
+                    execution_time_ms = execution_result.execution_time_ms or 0.0
+                try:
+                    await self._update_execution_statistics(execution_result.to_dict(), execution_time_ms)
+                except Exception as exc:
+                    logger.error('EXECUTION_STATS_FINALIZE_FAILED', extra={'cause': exc.__class__.__name__, 'detail': str(exc)})
 
     async def _comprehensive_safety_check(self, order: Order) -> dict[str, Any]:
         """Perform comprehensive safety checks before execution."""
