@@ -28,8 +28,11 @@ from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_set
 logger = get_logger(__name__)
 try:  # pragma: no cover - optional dependency
     from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 except (ValueError, TypeError, ModuleNotFoundError, ImportError):
     AlpacaREST = None
+    OrderSide = TimeInForce = LimitOrderRequest = MarketOrderRequest = None  # type: ignore[assignment]
 
 def _req_str(name: str, v: str | None) -> str:
     if not v:
@@ -634,36 +637,102 @@ class ExecutionEngine:
         return True
 
     def _submit_order_to_alpaca(self, order_data: dict[str, Any]) -> dict[str, Any]:
-        """Submit order to Alpaca API."""
+        """Submit an order using Alpaca TradingClient."""
         import os
+
         if os.environ.get('PYTEST_RUNNING'):
-            symbol = order_data.get('symbol', '')
-            quantity = order_data.get('quantity', 0)
-            side = order_data.get('side', '')
+            symbol = str(order_data.get('symbol', ''))
+            quantity = int(order_data.get('quantity', 0) or 0)
+            side = str(order_data.get('side', '')).lower()
             if not symbol or symbol == 'INVALID' or len(symbol) < 1:
-                logger.error(f'Invalid symbol rejected: {symbol}')
+                logger.error('Invalid symbol rejected', extra={'symbol': symbol})
                 return None
             if quantity <= 0:
-                logger.error(f'Invalid quantity rejected: {quantity}')
+                logger.error('Invalid quantity rejected', extra={'quantity': quantity})
                 return None
-            if side not in ['buy', 'sell']:
-                logger.error(f'Invalid side rejected: {side}')
+            if side not in {'buy', 'sell'}:
+                logger.error('Invalid side rejected', extra={'side': side})
                 return None
-            mock_resp = {'id': f'mock_order_{int(time.time())}', 'status': 'filled', 'symbol': order_data['symbol'], 'side': order_data['side'], 'quantity': order_data['quantity']}
-            logger.debug('ORDER_SUBMIT_OK', extra={'symbol': order_data['symbol'], 'qty': order_data['quantity'], 'side': order_data['side'], 'id': mock_resp['id']})
-            return mock_resp
+
+            mock_resp = {
+                'id': f'mock_order_{int(time.time())}',
+                'status': 'filled',
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+            }
+            normalized = {
+                'id': mock_resp['id'],
+                'client_order_id': order_data.get('client_order_id'),
+                'status': mock_resp['status'],
+                'symbol': symbol,
+                'qty': quantity,
+                'limit_price': order_data.get('limit_price'),
+                'raw': mock_resp,
+            }
+            logger.debug('ORDER_SUBMIT_OK', extra={'symbol': symbol, 'qty': quantity, 'side': side, 'id': mock_resp['id']})
+            return normalized
+
+        if self.trading_client is None or OrderSide is None or MarketOrderRequest is None or TimeInForce is None:
+            raise RuntimeError('Alpaca TradingClient is not initialized')
+
+        side = OrderSide.BUY if str(order_data['side']).lower() == 'buy' else OrderSide.SELL
+        tif = TimeInForce.DAY
+
+        order_type = str(order_data.get('type', 'limit')).lower()
+        if order_type == 'market':
+            req = MarketOrderRequest(
+                symbol=order_data['symbol'],
+                qty=order_data['quantity'],
+                side=side,
+                time_in_force=tif,
+                client_order_id=order_data.get('client_order_id'),
+            )
         else:
-            try:
-                if order_data['type'] == 'market':
-                    resp = self.trading_client.submit_order(symbol=order_data['symbol'], qty=order_data['quantity'], side=order_data['side'], type='market', time_in_force='day', client_order_id=order_data.get('client_order_id'))
-                else:
-                    resp = self.trading_client.submit_order(symbol=order_data['symbol'], qty=order_data['quantity'], side=order_data['side'], type='limit', time_in_force='day', limit_price=order_data['limit_price'], client_order_id=order_data.get('client_order_id'))
-            except (APIError, TimeoutError, ConnectionError) as e:
-                logger.error('ORDER_API_FAILED', extra={'op': 'submit', 'cause': e.__class__.__name__, 'detail': str(e), 'symbol': order_data.get('symbol'), 'qty': order_data.get('quantity'), 'side': order_data.get('side'), 'type': order_data.get('type'), 'time_in_force': order_data.get('time_in_force')})
-                raise
-            else:
-                logger.debug('ORDER_SUBMIT_OK', extra={'symbol': order_data.get('symbol'), 'qty': order_data.get('quantity'), 'side': order_data.get('side'), 'id': getattr(resp, 'id', None)})
-                return {'id': resp.id, 'status': resp.status, 'symbol': resp.symbol, 'side': resp.side, 'quantity': resp.qty, 'filled_qty': resp.filled_qty, 'filled_avg_price': resp.filled_avg_price}
+            req = LimitOrderRequest(
+                symbol=order_data['symbol'],
+                qty=order_data['quantity'],
+                side=side,
+                time_in_force=tif,
+                limit_price=order_data['limit_price'],
+                client_order_id=order_data.get('client_order_id'),
+            )
+
+        try:
+            resp = self.trading_client.submit_order(order_data=req)
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                'ORDER_API_FAILED',
+                extra={
+                    'op': 'submit',
+                    'cause': e.__class__.__name__,
+                    'detail': str(e),
+                    'symbol': order_data.get('symbol'),
+                    'qty': order_data.get('quantity'),
+                    'side': order_data.get('side'),
+                    'type': order_data.get('type'),
+                    'time_in_force': 'day',
+                },
+            )
+            raise
+
+        status = getattr(resp, 'status', None)
+        if hasattr(status, 'value'):
+            status = status.value
+        elif status is not None:
+            status = str(status)
+
+        normalized = {
+            'id': str(getattr(resp, 'id', '')),
+            'client_order_id': getattr(resp, 'client_order_id', order_data.get('client_order_id')),
+            'status': status,
+            'symbol': getattr(resp, 'symbol', order_data['symbol']),
+            'qty': getattr(resp, 'qty', order_data['quantity']),
+            'limit_price': getattr(resp, 'limit_price', order_data.get('limit_price')),
+            'raw': getattr(resp, '__dict__', None) or resp,
+        }
+        logger.debug('ORDER_SUBMIT_OK', extra={'symbol': normalized['symbol'], 'qty': normalized['qty'], 'side': order_data.get('side'), 'id': normalized['id']})
+        return normalized
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""
