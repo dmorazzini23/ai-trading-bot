@@ -127,43 +127,57 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
             except Exception:  # pragma: no cover - defensive
                 pass
 
-    # Resolve max_position_size consistently with position_sizing helper.
+    mode = str(getattr(cfg, "max_position_mode", "STATIC")).upper()
     raw_cfg_value = getattr(cfg, "max_position_size", object())
     explicit_none = raw_cfg_value is None
     val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)
     sizing_meta: dict[str, Any] = {}
-    if val is None and not explicit_none:
-        try:
-            from ai_trading.config.management import get_env
-
-            env_val = get_env("MAX_POSITION_SIZE", cast=float)
-        except (ImportError, RuntimeError):
-            env_val = None
-        if env_val is not None:
-            val = env_val
-
-    if val is None and explicit_none:
-        resolved = float(REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"])
-        sizing_meta = {
-            "mode": str(getattr(cfg, "max_position_mode", "STATIC")).upper(),
-            "source": "required_default",
-            "capital_cap": getattr(cfg, "capital_cap", 0.0),
-        }
-    elif val is None:
+    if mode == "AUTO":
         resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
     else:
-        resolved = float(val)
-        sizing_meta = {
-            "mode": str(getattr(cfg, "max_position_mode", "STATIC")).upper(),
-            "source": "provided",
-            "capital_cap": getattr(cfg, "capital_cap", 0.0),
-        }
+        if val is None and not explicit_none:
+            try:
+                from ai_trading.config.management import get_env
 
+                env_val = get_env("MAX_POSITION_SIZE", cast=float)
+            except (ImportError, RuntimeError):
+                env_val = None
+            if env_val is not None:
+                val = env_val
+
+        if val is None and explicit_none:
+            resolved = float(REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"])
+            sizing_meta = {
+                "mode": mode,
+                "source": "required_default",
+                "capital_cap": getattr(cfg, "capital_cap", 0.0),
+            }
+        elif val is None:
+            resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
+        else:
+            resolved = float(val)
+            sizing_meta = {
+                "mode": mode,
+                "source": "provided",
+                "capital_cap": getattr(cfg, "capital_cap", 0.0),
+            }
+
+    if not sizing_meta:
+        sizing_meta = {"mode": mode, "capital_cap": getattr(cfg, "capital_cap", 0.0)}
+
+    storage = getattr(cfg, "_values", None)
+    if isinstance(storage, dict):
+        storage["max_position_size"] = float(resolved)
+        if sizing_meta:
+            storage["max_position_size_meta"] = dict(sizing_meta)
     if getattr(cfg, "max_position_size", None) != resolved:
         try:
             object.__setattr__(cfg, "max_position_size", float(resolved))
         except Exception:
-            pass
+            try:
+                setattr(cfg, "max_position_size", float(resolved))
+            except Exception:
+                pass
     if resolved <= 0:
         raise ValueError("MAX_POSITION_SIZE must be positive")
     params["MAX_POSITION_SIZE"] = float(resolved)
