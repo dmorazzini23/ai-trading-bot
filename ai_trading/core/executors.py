@@ -7,6 +7,7 @@ by core.bot_engine and other modules to avoid oversubscription on 1 vCPU
 targets and to provide simple, testable behavior.
 """
 
+import atexit
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -63,6 +64,7 @@ def cleanup_executors() -> None:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
             logger.debug("Main executor shutdown successfully")
+            executor = None
     except Exception as e:  # defensive: never raise in cleanup
         logger.warning("Error shutting down main executor: %s", e)
 
@@ -70,6 +72,10 @@ def cleanup_executors() -> None:
         if prediction_executor is not None:
             prediction_executor.shutdown(wait=True, cancel_futures=True)
             logger.debug("Prediction executor shutdown successfully")
+            prediction_executor = None
     except Exception as e:  # defensive: never raise in cleanup
         logger.warning("Error shutting down prediction executor: %s", e)
+
+
+atexit.register(cleanup_executors)
 

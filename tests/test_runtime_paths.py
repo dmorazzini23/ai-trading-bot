@@ -58,11 +58,10 @@ def test_runtime_paths_writable():
         pytest.fail(f"OUTPUT_DIR {paths.OUTPUT_DIR} is not writable")
 
 
-def test_cache_dir_falls_back(monkeypatch, tmp_path):
-    """Cache dir falls back to a temp path if configured location is read-only."""
+def test_cache_dir_unwritable_env_errors(monkeypatch, tmp_path):
+    """An unwritable cache directory supplied via env should raise."""
     import errno
     import importlib
-    import tempfile
     from pathlib import Path
 
     monkeypatch.setenv('AI_TRADING_DATA_DIR', str(tmp_path / 'data'))
@@ -78,13 +77,9 @@ def test_cache_dir_falls_back(monkeypatch, tmp_path):
         return orig_mkdir(self, parents=parents, exist_ok=exist_ok)
 
     monkeypatch.setattr(Path, 'mkdir', fake_mkdir)
-    import ai_trading.paths as paths
-    importlib.reload(paths)
-
-    fallback = Path(tempfile.gettempdir()) / paths.APP_NAME
-    assert paths.CACHE_DIR == fallback
-    assert fallback.exists()
-    assert stat.S_IMODE(fallback.stat().st_mode) == 0o700
+    with pytest.raises(RuntimeError):
+        import ai_trading.paths as paths
+        importlib.reload(paths)
 
 
 def test_paths_module_imports():

@@ -7,7 +7,6 @@ import logging
 from threading import Thread
 import errno
 import socket
-import signal
 import sys
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
@@ -19,9 +18,27 @@ from ai_trading.env import ensure_dotenv_loaded
 ensure_dotenv_loaded()
 
 import ai_trading.logging as _logging
+from ai_trading.paths import LOG_DIR, ensure_runtime_paths
+from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
 
-# Determine log file from environment
-LOG_FILE = os.getenv("BOT_LOG_FILE", "logs/bot.log")
+
+def _resolve_log_file() -> str:
+    """Resolve the bot log path from environment or defaults."""
+
+    explicit = os.getenv("BOT_LOG_FILE")
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_absolute():
+            raise SystemExit("BOT_LOG_FILE must be an absolute path when set")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return str(path)
+    ensure_runtime_paths()
+    log_path = (LOG_DIR / "bot.log").resolve()
+    log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return str(log_path)
+
+
+LOG_FILE = _resolve_log_file()
 # Configure logging with the desired file
 # Logging must be initialized once here before importing heavy modules like
 # ``ai_trading.core.bot_engine``.
@@ -106,6 +123,10 @@ def _check_alpaca_sdk() -> None:
 def run_cycle() -> None:
     """Execute a single trading cycle using the core bot engine."""
 
+    if should_stop():
+        logger.info("CYCLE_STOP_REQUESTED", extra={"stage": "start"})
+        return
+
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     if not allow_after_hours:
         try:
@@ -170,7 +191,7 @@ def run_cycle() -> None:
 
     if hasattr(data_fetcher_module, "is_primary_provider_enabled") and not data_fetcher_module.is_primary_provider_enabled():
         logger.info("PRIMARY_PROVIDER_DISABLED_CYCLE_SKIP")
-        time.sleep(5.0)
+        _interruptible_sleep(5.0)
         return
 
     state = BotState()
@@ -250,7 +271,7 @@ class ExistingApiDetected(PortInUseError):
         super().__init__(port, pid=None)
 
 config: Any | None = None
-_SHUTDOWN = threading.Event()
+register_signal_handlers()
 
 
 def _get_int_env(var: str, default: int | None = None) -> int | None:
@@ -274,14 +295,9 @@ def _as_float(val, default: float = 0.0) -> float:
 
 
 def _install_signal_handlers() -> None:
-    """Install SIGINT/SIGTERM handlers."""
+    """Ensure cooperative signal handlers are active."""
 
-    def _handler(signum, frame):
-        logger.info("SERVICE_SIGNAL", extra={"signal": signum, "ts": datetime.now(tz=UTC).isoformat()})
-        _SHUTDOWN.set()
-
-    signal.signal(signal.SIGINT, _handler)
-    signal.signal(signal.SIGTERM, _handler)
+    register_signal_handlers()
 
 
 def _fail_fast_env() -> None:
@@ -442,11 +458,13 @@ def _validate_runtime_config(cfg, tcfg) -> None:
 
 
 def _interruptible_sleep(total_seconds: float) -> None:
-    """Sleep in slices while honoring shutdown."""
+    """Sleep in slices while honoring shutdown requests."""
+
     remaining = float(total_seconds)
     step = 0.25
-    while remaining > 0 and (not _SHUTDOWN.is_set()):
-        time.sleep(min(step, remaining))
+    while remaining > 0 and (not should_stop()):
+        slice_seconds = min(step, remaining)
+        time.sleep(max(0.0, slice_seconds))
         remaining -= step
 
 
@@ -479,16 +497,19 @@ def validate_environment() -> None:
         )
 
     _ = get_settings()
-    import os
+    from ai_trading.paths import CACHE_DIR, DATA_DIR, LOG_DIR, MODELS_DIR, OUTPUT_DIR, ensure_runtime_paths
 
-    data_dir = "data"
-    if not os.path.exists(data_dir):
-        logger.info("Creating data directory: %s", data_dir)
-        os.makedirs(data_dir, exist_ok=True)
-    logs_dir = "logs"
-    if not os.path.exists(logs_dir):
-        logger.info("Creating logs directory: %s", logs_dir)
-        os.makedirs(logs_dir, exist_ok=True)
+    ensure_runtime_paths()
+    logger.info(
+        "RUNTIME_PATHS_READY",
+        extra={
+            "data": str(DATA_DIR),
+            "log": str(LOG_DIR),
+            "cache": str(CACHE_DIR),
+            "models": str(MODELS_DIR),
+            "output": str(OUTPUT_DIR),
+        },
+    )
 
 
 _TRADE_LOG_INITIALIZED = False
@@ -639,7 +660,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     deadline = time.monotonic() + wait_seconds
     attempt = 0
 
-    while True:
+    while not should_stop():
         attempt += 1
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as test_socket:
             test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -685,10 +706,15 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                             "remaining_seconds": round(remaining, 2),
                         },
                     )
-                    time.sleep(sleep_for)
+                    _interruptible_sleep(sleep_for)
                     continue
                 raise
             break
+    if should_stop():
+        logger.info("API_STARTUP_ABORTED", extra={"reason": "shutdown"})
+        if ready_signal is not None:
+            ready_signal.set()
+        return
 
     run_flask_app(port, ready_signal)
 
@@ -714,6 +740,9 @@ def _assert_singleton_api(settings) -> None:
 
 def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event) -> None:
     """Start API server and signal readiness/errors."""
+    if should_stop():
+        api_ready.set()
+        return
     try:
         start_api(api_ready)
     except Exception as exc:  # noqa: BLE001
@@ -728,6 +757,9 @@ def start_api_with_signal(api_ready: threading.Event, api_error: threading.Event
 def _init_http_session(cfg, retries: int = 3, delay: float = 1.0) -> bool:
     """Initialize the global HTTP client session with retry logic."""
     for attempt in range(1, retries + 1):
+        if should_stop():
+            logger.info("HTTP_SESSION_INIT_ABORT", extra={"attempt": attempt})
+            return False
         try:
             connect_timeout = clamp_request_timeout(
                 float(getattr(cfg, "http_connect_timeout", 5.0))
@@ -894,6 +926,9 @@ def main(argv: list[str] | None = None) -> None:
     except ValueError as e:
         logger.critical("RUNTIME_CONFIG_INVALID", extra={"error": str(e)})
         raise
+    if should_stop():
+        logger.info("SERVICE_SHUTDOWN", extra={"reason": "preflight-stop"})
+        return
     if not _init_http_session(config):
         return
     banner = {
@@ -917,21 +952,18 @@ def main(argv: list[str] | None = None) -> None:
             "Warm-up run_cycle failed during trading initialization; shutting down",
             exc_info=e,
         )
-        logging.shutdown()
         raise SystemExit(1) from e
     except SystemExit as e:
         logger.error(
             "Warm-up run_cycle triggered SystemExit; shutting down",
             exc_info=e,
         )
-        logging.shutdown()
         raise
     except Exception as e:  # noqa: BLE001
         logger.exception(
             "Warm-up run_cycle failed unexpectedly; shutting down",
             exc_info=e,
         )
-        logging.shutdown()
         raise SystemExit(1) from e
     logger.info("Warm-up run_cycle completed")
     api_ready = threading.Event()
@@ -1148,7 +1180,7 @@ def main(argv: list[str] | None = None) -> None:
                     backoff_seconds = interval
                 backoff_seconds = max(1, min(30, backoff_seconds))
                 _interruptible_sleep(backoff_seconds)
-                if _SHUTDOWN.is_set():
+                if should_stop():
                     logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})
                     break
                 continue
@@ -1182,10 +1214,11 @@ def main(argv: list[str] | None = None) -> None:
             except (ValueError, KeyError, TypeError) as e:
                 logger.warning("RUNTIME_SIZING_UPDATE_FAILED", exc_info=e)
             _interruptible_sleep(int(max(1, effective_interval)))
-            if _SHUTDOWN.is_set():
+            if should_stop():
                 logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})
                 break
     except KeyboardInterrupt:
+        request_stop("keyboard-interrupt")
         logger.info("KeyboardInterrupt received — shutting down gracefully")
         return
     # If a finite number of iterations was requested, exit promptly so tests

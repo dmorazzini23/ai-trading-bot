@@ -434,6 +434,7 @@ def setup_logging(debug: bool=False, log_file: str | None=None) -> logging.Logge
             _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
             _listener.start()
         atexit.register(_safe_shutdown_logging)
+        atexit.register(logging.shutdown)
         _LOGGING_CONFIGURED = True
         logging.getLogger(__name__).info('Logging configured successfully - no duplicates possible')
         for h in handlers:
@@ -700,7 +701,14 @@ def init_logger(log_file: str) -> logging.Logger:
     """Wrapper used by utilities to initialize logging."""
     return setup_logging(log_file=log_file)
 
-def log_performance_metrics(exposure_pct: float, equity_curve: list[float], regime: str, filename: str='logs/performance.csv', *, as_of: date | None=None) -> None:
+def log_performance_metrics(
+    exposure_pct: float,
+    equity_curve: list[float],
+    regime: str,
+    filename: str | None = None,
+    *,
+    as_of: date | None = None,
+) -> None:
     """Log daily performance metrics to ``filename``."""
     import numpy as np
     import pandas as pd
@@ -718,6 +726,12 @@ def log_performance_metrics(exposure_pct: float, equity_curve: list[float], regi
         realized_vol = roll.std(ddof=0) * np.sqrt(252 / 20)
     max_dd = _get_metrics_logger().compute_max_drawdown(equity_curve)
     rec = {'date': str(as_of), 'exposure_pct': exposure_pct, 'sharpe20': sharpe, 'sortino20': sortino, 'realized_vol': realized_vol, 'max_drawdown': max_dd, 'regime': regime}
+    if filename is None:
+        from pathlib import Path
+
+        from ai_trading.paths import LOG_DIR
+
+        filename = str((LOG_DIR / "performance.csv").resolve())
     try:
         os.makedirs(os.path.dirname(filename), mode=0o700, exist_ok=True)
     except PermissionError as exc:

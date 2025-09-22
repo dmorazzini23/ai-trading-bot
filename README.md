@@ -57,26 +57,46 @@ The script fetches a small sample of SPY bars using `alpaca-py` and exits with s
 
 ## Runtime paths
 
-`ai_trading.paths` creates writable data, log, and cache directories on import.
-If a target directory is on a read-only filesystem, it falls back to
-`tempfile.gettempdir() / APP_NAME` and logs a warning so the application
-continues with a writable location.
+`ai_trading.paths` resolves all writable locations from the environment at
+import time. The service expects `AI_TRADING_DATA_DIR`, `AI_TRADING_CACHE_DIR`,
+`AI_TRADING_LOG_DIR`, `AI_TRADING_MODELS_DIR`, and `AI_TRADING_OUTPUT_DIR` to
+point at absolute paths. When unset, safe defaults under `/var/lib`,
+`/var/cache`, and `/var/log` are used. Each directory is created with
+`0700` permissions and the process exits with a clear `RuntimeError` if any
+location cannot be created or is not writable.
 
-Set `AI_TRADING_CACHE_DIR` to point to a custom writable cache directory when
-the default `~/.cache/ai-trading-bot` is unavailable (for example, if the home
-directory is mounted read-only). The directory is created with `0700`
-permissions during startup.
+Trade logs, model checkpoints, cache files, and TensorBoard runs therefore stay
+within the directories that systemd marks writable (`/var/lib/ai-trading-bot`,
+`/var/cache/ai-trading-bot`, `/var/log/ai-trading-bot`).
 
-Trade logs write to the path resolved by `TRADE_LOG_PATH` (or the legacy
-`AI_TRADING_TRADE_LOG_PATH`). When unset, the bot prefers
-`/var/log/ai-trading-bot/trades.jsonl`. If that directory—or an explicit
-override—cannot be created or written, the engine emits a once-per-process
-warning and falls back to a user-writable state directory such as
-`$XDG_STATE_HOME/ai-trading-bot/trades.jsonl` (or
-`~/.local/state/ai-trading-bot/trades.jsonl` when `XDG_STATE_HOME` is unset),
-preserving the configured filename.
-Startup logs the final trade log location via `ensure_trade_log_path()` so
-operators can confirm where records are stored.
+Startup logs the resolved directories via `validate_environment()` so operators
+can confirm where data, cache files, and outputs will be written.
+
+## Systemd Operation
+
+The production unit sets `HOME=/var/lib/ai-trading-bot` and marks the project
+checkout read-only via `ProtectSystem=strict`. The runtime responds to
+`SIGTERM`, `SIGINT`, and `SIGQUIT` by setting a global shutdown event and
+finishing the current safe checkpoint before exiting with status **0**.
+
+Key operational points:
+
+* `python -m ai_trading` registers signal handlers immediately and honours
+  cooperative stop requests in the main scheduler, API bootstrap, and per-symbol
+  execution loops.
+* `--max-runtime-seconds N` arms a daemon timer that triggers the same graceful
+  stop path after *N* seconds. `--graceful-exit` can be combined with other CLI
+  options to request an orderly shutdown at the next checkpoint.
+* Logging writes to both stdout (picked up by `journald`) and the file path
+  defined by `BOT_LOG_FILE` or `$AI_TRADING_LOG_DIR/bot.log`. Handlers flush and
+  close automatically at exit.
+* All HTTP requests use explicit connect/read timeouts sourced from settings;
+  background thread pools are shut down with `cancel_futures=True` when the
+  stop event is raised.
+
+Because writable paths live under `/var/{lib,cache,log}/ai-trading-bot`, the
+service runs cleanly under systemd without attempting to modify the read-only
+deployment checkout.
 
 To load ML models from a custom location, set `AI_TRADING_MODELS_DIR` before
 startup. The path may reside outside the repository; each model file is
