@@ -113,25 +113,6 @@ def _env_value(*names: str) -> str | None:
     return None
 
 
-def _strip_inline_comment(value: str) -> str:
-    """Remove trailing inline comments introduced with ``#``."""
-
-    for idx, char in enumerate(value):
-        if char == "#" and (idx == 0 or value[idx - 1].isspace()):
-            return value[:idx].rstrip()
-    return value.strip()
-
-
-def _env_float(*names: str, default: float) -> float:
-    raw = _env_value(*names)
-    if raw is None:
-        return float(default)
-    try:
-        cleaned = _strip_inline_comment(raw)
-        return float(cleaned)
-    except ValueError as exc:  # pragma: no cover - configuration error
-        raise RuntimeError(f"Invalid float for {'/'.join(names)}: {raw}") from exc
-
 MODE_PARAMETERS = {
     "conservative": {
         "kelly_fraction": 0.25,
@@ -154,12 +135,22 @@ MODE_PARAMETERS = {
 }
 
 TRADING_MODE = (os.getenv("TRADING_MODE") or os.getenv("AI_TRADING_TRADING_MODE") or "balanced").lower()
-_MODE_DEFAULTS = MODE_PARAMETERS.get(TRADING_MODE, MODE_PARAMETERS["balanced"])
 
-CONF_THRESHOLD = _env_float("CONF_THRESHOLD", "AI_TRADING_CONF_THRESHOLD", default=_MODE_DEFAULTS["conf_threshold"])
-MAX_POSITION_SIZE = _env_float("MAX_POSITION_SIZE", "AI_TRADING_MAX_POSITION_SIZE", default=_MODE_DEFAULTS["max_position_size"])
-CAPITAL_CAP = _env_float("CAPITAL_CAP", "AI_TRADING_CAPITAL_CAP", default=float(getattr(_CFG, "capital_cap", 0.25)))
-DOLLAR_RISK_LIMIT = _env_float("DOLLAR_RISK_LIMIT", "AI_TRADING_DOLLAR_RISK_LIMIT", default=float(getattr(_CFG, "dollar_risk_limit", 0.05)))
+
+def _cfg_float(field: str, fallback: float) -> float:
+    value = getattr(_CFG, field, None)
+    if value in (None, ""):
+        return float(fallback)
+    try:
+        return float(value)
+    except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+        return float(fallback)
+
+
+CONF_THRESHOLD = _cfg_float("conf_threshold", MODE_PARAMETERS["balanced"]["conf_threshold"])
+MAX_POSITION_SIZE = _cfg_float("max_position_size", MODE_PARAMETERS["balanced"]["max_position_size"])
+CAPITAL_CAP = _cfg_float("capital_cap", 0.25)
+DOLLAR_RISK_LIMIT = _cfg_float("dollar_risk_limit", 0.05)
 
 ALPACA_API_KEY = _env_value("ALPACA_API_KEY") or ""
 ALPACA_SECRET_KEY = _env_value("ALPACA_SECRET_KEY") or ""

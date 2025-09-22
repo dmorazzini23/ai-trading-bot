@@ -267,7 +267,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="daily_loss_limit",
         env=("DAILY_LOSS_LIMIT", "AI_TRADING_DAILY_LOSS_LIMIT"),
         cast="float",
-        default=0.03,
+        default=0.05,
         description="Maximum tolerated realised drawdown over a single trading day.",
         min_value=0.0,
         max_value=1.0,
@@ -1093,6 +1093,11 @@ class TradingConfig:
                 if spec is None:
                     continue
                 provided = any(env_map.get(env_key) not in (None, "") for env_key in spec.env)
+                if not provided and spec.deprecated_env:
+                    provided = any(
+                        env_map.get(alias) not in (None, "")
+                        for alias in spec.deprecated_env
+                    )
                 if not provided:
                     values[field] = default_value
 
