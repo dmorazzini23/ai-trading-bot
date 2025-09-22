@@ -7,6 +7,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 import threading
+from dataclasses import dataclass
 from typing import Sequence
 
 from .runtime import (
@@ -106,6 +107,17 @@ LIQUIDITY_VOL_THRESHOLD = float(_CFG.liquidity_vol_threshold)
 LIQUIDITY_REDUCTION_AGGRESSIVE = float(_CFG.liquidity_reduction_aggressive)
 LIQUIDITY_REDUCTION_MODERATE = float(_CFG.liquidity_reduction_moderate)
 ORDER_STALE_CLEANUP_INTERVAL = int(_CFG.order_stale_cleanup_interval)
+EXECUTION_MODE = str(getattr(_CFG, "execution_mode", "sim") or "sim").lower()
+SHADOW_MODE = bool(getattr(_CFG, "shadow_mode", False))
+DATA_FEED_INTRADAY = str(getattr(_CFG, "data_feed_intraday", getattr(_CFG, "alpaca_data_feed", "iex")) or "iex").lower()
+SLIPPAGE_LIMIT_BPS = int(getattr(_CFG, "slippage_limit_bps", getattr(_CFG, "max_slippage_bps", 75)))
+PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", (
+    "alpaca_quote",
+    "alpaca_trade",
+    "alpaca_minute_close",
+    "yahoo",
+    "bars",
+)))
 
 
 def _env_value(*names: str) -> str | None:
@@ -174,6 +186,35 @@ def derive_cap_from_settings(
     if equity and equity > 0:
         return float(equity) * cap
     return float(fallback)
+
+
+@dataclass(frozen=True)
+class ExecutionSettingsSnapshot:
+    """Lightweight snapshot of execution-related configuration."""
+
+    mode: str
+    shadow_mode: bool
+    order_timeout_seconds: int
+    slippage_limit_bps: int
+    price_provider_order: tuple[str, ...]
+    data_feed_intraday: str
+
+
+def get_execution_settings() -> ExecutionSettingsSnapshot:
+    """Return a cached snapshot of live execution configuration."""
+
+    cfg = get_trading_config()
+    provider_order = tuple(getattr(cfg, "price_provider_order", ()) or PRICE_PROVIDER_ORDER)
+    return ExecutionSettingsSnapshot(
+        mode=str(getattr(cfg, "execution_mode", EXECUTION_MODE) or EXECUTION_MODE).lower(),
+        shadow_mode=bool(getattr(cfg, "shadow_mode", SHADOW_MODE)),
+        order_timeout_seconds=int(getattr(cfg, "order_timeout_seconds", ORDER_TIMEOUT_SECONDS)),
+        slippage_limit_bps=int(getattr(cfg, "slippage_limit_bps", SLIPPAGE_LIMIT_BPS)),
+        price_provider_order=provider_order,
+        data_feed_intraday=str(
+            getattr(cfg, "data_feed_intraday", DATA_FEED_INTRADAY) or DATA_FEED_INTRADAY
+        ).lower(),
+    )
 
 
 def validate_environment() -> None:
@@ -245,7 +286,11 @@ __all__ = sorted([
     "ALPACA_SECRET_KEY",
     "CAPITAL_CAP",
     "CONF_THRESHOLD",
+    "CONFIG_SPECS",
+    "DATA_FEED_INTRADAY",
     "DOLLAR_RISK_LIMIT",
+    "EXECUTION_MODE",
+    "ExecutionSettingsSnapshot",
     "META_LEARNING_BOOTSTRAP_ENABLED",
     "META_LEARNING_BOOTSTRAP_WIN_RATE",
     "META_LEARNING_MIN_TRADES_REDUCED",
@@ -254,6 +299,7 @@ __all__ = sorted([
     "ORDER_FILL_RATE_TARGET",
     "ORDER_TIMEOUT_SECONDS",
     "ORDER_STALE_CLEANUP_INTERVAL",
+    "PRICE_PROVIDER_ORDER",
     "SENTIMENT_API_KEY",
     "SENTIMENT_API_URL",
     "SENTIMENT_ENHANCED_CACHING",
@@ -261,17 +307,23 @@ __all__ = sorted([
     "SENTIMENT_RECOVERY_TIMEOUT_SECS",
     "SENTIMENT_SUCCESS_RATE_TARGET",
     "Settings",
+    "SHADOW_MODE",
+    "SLIPPAGE_LIMIT_BPS",
     "TradingConfig",
     "TRADING_MODE",
     "_require_env_vars",
     "broker_keys",
     "derive_cap_from_settings",
+    "generate_config_schema",
     "get_alpaca_config",
     "get_env",
+    "get_execution_settings",
     "get_max_drawdown_threshold",
     "get_settings",
+    "get_trading_config",
     "log_config",
     "reload_env",
+    "reload_trading_config",
     "require_env_vars",
     "validate_alpaca_credentials",
     "validate_env_vars",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from ai_trading.logging import get_logger
+from ai_trading.config import get_execution_settings
 
 _logger = get_logger(__name__)
 
@@ -24,27 +25,73 @@ def _creds_ok() -> bool:
     return not _missing_creds()
 
 
-_impl_raw = os.getenv("AI_TRADING_EXECUTION_IMPL", os.getenv("EXECUTION_IMPL", "sim"))
-_impl = (_impl_raw or "sim").lower()
+def _select_execution_engine() -> type[_SimExecutionEngine]:
+    """Return the execution engine class based on runtime configuration."""
 
-ExecutionEngine = _SimExecutionEngine
-
-if _impl in {"live", "broker", "alpaca"} and _creds_ok():
     try:
-        from .live_trading import AlpacaExecutionEngine as _LiveExecutionEngine
-    except Exception as exc:  # pragma: no cover - runtime guard
+        settings = get_execution_settings()
+    except Exception as exc:  # pragma: no cover - defensive configuration guard
         _logger.error(
-            "TRADING_ENGINE_IMPORT_FAILED",
-            extra={"impl": _impl, "error": str(exc)},
+            "EXECUTION_SETTINGS_UNAVAILABLE",
+            extra={"error": str(exc)},
         )
-    else:
-        ExecutionEngine = _LiveExecutionEngine
-elif _impl in {"live", "broker", "alpaca"}:
-    missing = _missing_creds()
-    _logger.error(
-        "TRADING_CREDS_MISSING_FALLBACK_SIM",
-        extra={"missing": missing},
+        settings = None
+
+    mode = "sim"
+    shadow = False
+    if settings is not None:
+        mode = str(settings.mode or "sim").lower()
+        shadow = bool(settings.shadow_mode)
+
+    normalized_mode = {
+        "broker": "paper",
+        "alpaca": "paper",
+    }.get(mode, mode)
+
+    engine_cls: type[_SimExecutionEngine] = _SimExecutionEngine
+    engine_class_path = f"{engine_cls.__module__}.{engine_cls.__qualname__}"
+    missing_creds: list[str] | None = None
+    reason: str | None = None
+
+    if normalized_mode in {"paper", "live"}:
+        missing_creds = _missing_creds() or None
+        try:
+            from .live_trading import ExecutionEngine as _LiveExecutionEngine
+        except Exception as exc:  # pragma: no cover - runtime guard
+            reason = "import_failed"
+            _logger.error(
+                "EXECUTION_ENGINE_IMPORT_FAILED",
+                extra={"mode": normalized_mode, "error": str(exc)},
+            )
+        else:
+            engine_cls = _LiveExecutionEngine  # type: ignore[assignment]
+            engine_class_path = f"{engine_cls.__module__}.{engine_cls.__qualname__}"
+            if missing_creds:
+                _logger.error(
+                    "EXECUTION_CREDS_MISSING",
+                    extra={"missing": tuple(missing_creds)},
+                )
+    elif normalized_mode not in {"sim"}:
+        reason = "mode_unknown"
+        _logger.warning(
+            "EXECUTION_MODE_UNKNOWN",
+            extra={"requested_mode": mode},
+        )
+
+    _logger.info(
+        "EXECUTION_ENGINE_SELECTED",
+        extra={
+            "execution_mode": normalized_mode,
+            "engine_class": engine_class_path,
+            "shadow_mode": shadow,
+            "creds_missing": tuple(missing_creds) if missing_creds else None,
+            "reason": reason,
+        },
     )
+    return engine_cls
+
+
+ExecutionEngine = _select_execution_engine()
 
 # Optional submodule: algorithms
 try:  # pragma: no cover - optional dependency

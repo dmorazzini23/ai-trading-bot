@@ -15,8 +15,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         """Fallback APIError when alpaca-py is unavailable."""
 
         pass
-from ai_trading.config import AlpacaConfig, get_alpaca_config
-from ai_trading.logging import logger
+from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
 
 logger = get_logger(__name__)
 try:  # pragma: no cover - optional dependency
@@ -46,7 +45,7 @@ def submit_market_order(symbol: str, side: str, quantity: int):
         return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
     return {'status': 'submitted', 'symbol': symbol, 'side': side, 'quantity': quantity}
 
-class AlpacaExecutionEngine:
+class ExecutionEngine:
     """
     Live trading execution engine using real Alpaca SDK.
 
@@ -62,11 +61,43 @@ class AlpacaExecutionEngine:
         """Initialize Alpaca execution engine."""
         self.trading_client = None
         self.config: AlpacaConfig | None = None
+        self.settings = None
+        self.execution_mode = "sim"
+        self.shadow_mode = False
+        self.order_timeout_seconds = 0
+        self.slippage_limit_bps = 0
+        self.price_provider_order: tuple[str, ...] = ()
+        self.data_feed_intraday = "iex"
         self.is_initialized = False
         self.circuit_breaker = {'failure_count': 0, 'max_failures': 5, 'reset_time': 300, 'last_failure': None, 'is_open': False}
         self.retry_config = {'max_attempts': 3, 'base_delay': 1.0, 'max_delay': 30.0, 'exponential_base': 2.0}
         self.stats = {'total_orders': 0, 'successful_orders': 0, 'failed_orders': 0, 'retry_count': 0, 'circuit_breaker_trips': 0, 'total_execution_time': 0.0, 'last_reset': datetime.now(UTC)}
-        logger.info('AlpacaExecutionEngine initialized')
+        self._refresh_settings()
+        logger.info(
+            'ExecutionEngine initialized',
+            extra={
+                'execution_mode': self.execution_mode,
+                'shadow_mode': self.shadow_mode,
+                'slippage_limit_bps': self.slippage_limit_bps,
+            },
+        )
+
+    def _refresh_settings(self) -> None:
+        """Refresh cached execution settings from configuration."""
+
+        try:
+            settings = get_execution_settings()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning('EXECUTION_SETTINGS_REFRESH_FAILED', extra={'error': str(exc)})
+            return
+
+        self.settings = settings
+        self.execution_mode = str(settings.mode or 'sim').lower()
+        self.shadow_mode = bool(settings.shadow_mode)
+        self.order_timeout_seconds = int(settings.order_timeout_seconds)
+        self.slippage_limit_bps = int(settings.slippage_limit_bps)
+        self.price_provider_order = tuple(settings.price_provider_order)
+        self.data_feed_intraday = str(settings.data_feed_intraday or 'iex').lower()
 
     def initialize(self) -> bool:
         """
@@ -76,6 +107,7 @@ class AlpacaExecutionEngine:
             True if initialization successful, False otherwise
         """
         try:
+            self._refresh_settings()
             import os
             if os.environ.get('PYTEST_RUNNING'):
                 try:
@@ -93,7 +125,12 @@ class AlpacaExecutionEngine:
                 url_override=self.config.base_url,
             )
             logger.info(
-                f'Real Alpaca client initialized (paper={self.config.use_paper})'
+                'Real Alpaca client initialized',
+                extra={
+                    'paper': self.config.use_paper,
+                    'execution_mode': self.execution_mode,
+                    'shadow_mode': self.shadow_mode,
+                },
             )
             self.trading_client = raw_client
             if self._validate_connection():
@@ -113,6 +150,11 @@ class AlpacaExecutionEngine:
             logger.error(f'Alpaca API error initializing execution engine: {e}')
             return False
 
+    def _ensure_initialized(self) -> bool:
+        if self.is_initialized:
+            return True
+        return self.initialize()
+
     def submit_market_order(self, symbol: str, side: str, quantity: int, **kwargs) -> dict | None:
         """
         Submit a market order with comprehensive error handling.
@@ -126,6 +168,9 @@ class AlpacaExecutionEngine:
         Returns:
             Order details if successful, None if failed
         """
+        self._refresh_settings()
+        if not self.is_initialized and not self._ensure_initialized():
+            return None
         if not self._pre_execution_checks():
             return None
         try:
@@ -136,9 +181,34 @@ class AlpacaExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error('ORDER_INPUT_INVALID', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
+        client_order_id = kwargs.get('client_order_id', f'order_{int(time.time())}')
+        order_data = {
+            'symbol': symbol,
+            'side': side.lower(),
+            'quantity': quantity,
+            'type': 'market',
+            'time_in_force': kwargs.get('time_in_force', 'day'),
+            'client_order_id': client_order_id,
+        }
+        if self.shadow_mode:
+            self.stats['total_orders'] += 1
+            self.stats['successful_orders'] += 1
+            logger.info(
+                'SHADOW_MODE_NOOP',
+                extra={'symbol': symbol, 'side': side.lower(), 'quantity': quantity, 'client_order_id': client_order_id},
+            )
+            return {
+                'status': 'shadow',
+                'symbol': symbol,
+                'side': side.lower(),
+                'quantity': quantity,
+                'client_order_id': client_order_id,
+            }
         start_time = time.time()
-        order_data = {'symbol': symbol, 'side': side.lower(), 'quantity': quantity, 'type': 'market', 'time_in_force': kwargs.get('time_in_force', 'day'), 'client_order_id': kwargs.get('client_order_id', f'order_{int(time.time())}')}
-        logger.info(f'Submitting market order: {side} {quantity} {symbol}')
+        logger.info(
+            'Submitting market order',
+            extra={'side': side, 'quantity': quantity, 'symbol': symbol, 'client_order_id': client_order_id},
+        )
         result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         execution_time = time.time() - start_time
         self.stats['total_execution_time'] += execution_time
@@ -165,6 +235,9 @@ class AlpacaExecutionEngine:
         Returns:
             Order details if successful, None if failed
         """
+        self._refresh_settings()
+        if not self.is_initialized and not self._ensure_initialized():
+            return None
         if not self._pre_execution_checks():
             return None
         try:
@@ -176,9 +249,36 @@ class AlpacaExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error('ORDER_INPUT_INVALID', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
+        client_order_id = kwargs.get('client_order_id', f'order_{int(time.time())}')
+        order_data = {
+            'symbol': symbol,
+            'side': side.lower(),
+            'quantity': quantity,
+            'type': 'limit',
+            'limit_price': limit_price,
+            'time_in_force': kwargs.get('time_in_force', 'day'),
+            'client_order_id': client_order_id,
+        }
+        if self.shadow_mode:
+            self.stats['total_orders'] += 1
+            self.stats['successful_orders'] += 1
+            logger.info(
+                'SHADOW_MODE_NOOP',
+                extra={'symbol': symbol, 'side': side.lower(), 'quantity': quantity, 'limit_price': limit_price, 'client_order_id': client_order_id},
+            )
+            return {
+                'status': 'shadow',
+                'symbol': symbol,
+                'side': side.lower(),
+                'quantity': quantity,
+                'limit_price': limit_price,
+                'client_order_id': client_order_id,
+            }
         start_time = time.time()
-        order_data = {'symbol': symbol, 'side': side.lower(), 'quantity': quantity, 'type': 'limit', 'limit_price': limit_price, 'time_in_force': kwargs.get('time_in_force', 'day'), 'client_order_id': kwargs.get('client_order_id', f'order_{int(time.time())}')}
-        logger.info(f'Submitting limit order: {side} {quantity} {symbol} @ ${limit_price}')
+        logger.info(
+            'Submitting limit order',
+            extra={'side': side, 'quantity': quantity, 'symbol': symbol, 'limit_price': limit_price, 'client_order_id': client_order_id},
+        )
         result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         execution_time = time.time() - start_time
         self.stats['total_execution_time'] += execution_time
@@ -433,3 +533,13 @@ class AlpacaExecutionEngine:
                 }
                 for pos in positions
             ]
+
+
+AlpacaExecutionEngine = ExecutionEngine
+
+
+__all__ = [
+    'submit_market_order',
+    'ExecutionEngine',
+    'AlpacaExecutionEngine',
+]
