@@ -3,6 +3,12 @@ import asyncio
 from tests.conftest import reload_module
 
 
+def _reload_pooling(mod_or_name="ai_trading.http.pooling"):
+    pooling = reload_module(mod_or_name)
+    pooling.reset_host_semaphores()
+    return pooling
+
+
 async def _max_concurrency(pooling, worker_count: int) -> int:
     semaphore = pooling.get_host_semaphore()
     current = 0
@@ -30,18 +36,18 @@ async def _refresh_and_get_id(pooling) -> int:
 
 def test_host_limit_enforced(monkeypatch):
     monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
-    pooling = reload_module("ai_trading.http.pooling")
+    pooling = _reload_pooling()
 
     max_seen = asyncio.run(_max_concurrency(pooling, worker_count=5))
     assert max_seen == 2
 
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-    reload_module(pooling)
+    pooling = _reload_pooling(pooling)
 
 
 def test_host_limit_updates_when_env_changes(monkeypatch):
     monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
-    pooling = reload_module("ai_trading.http.pooling")
+    pooling = _reload_pooling()
 
     loop = asyncio.new_event_loop()
     try:
@@ -61,12 +67,12 @@ def test_host_limit_updates_when_env_changes(monkeypatch):
         loop.close()
 
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-    reload_module(pooling)
+    _reload_pooling(pooling)
 
 
 def test_host_semaphore_is_scoped_per_event_loop(monkeypatch):
     monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "3")
-    pooling = reload_module("ai_trading.http.pooling")
+    pooling = _reload_pooling()
 
     loop_a = asyncio.new_event_loop()
     loop_b = asyncio.new_event_loop()
@@ -95,4 +101,4 @@ def test_host_semaphore_is_scoped_per_event_loop(monkeypatch):
         loop_b.close()
 
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
-    reload_module(pooling)
+    _reload_pooling(pooling)
