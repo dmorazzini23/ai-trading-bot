@@ -346,6 +346,8 @@ def pov_submit(
             pytime.sleep(seconds)
 
     placed = 0
+    intended_total = 0
+    partial_fill_summaries: list[dict[str, Any]] = []
     retries = 0
     interval = cfg.sleep_interval
     while placed < total_qty:
@@ -420,19 +422,24 @@ def pov_submit(
                     extra={"symbol": symbol, "slice_qty": slice_qty},
                 )
                 continue
+            intended_total += slice_qty
             actual_filled = int(getattr(order, "filled_qty", "0") or "0")
+            new_total_filled = placed + actual_filled
             if actual_filled < slice_qty:
-                logger.warning(
-                    "POV_SLICE_PARTIAL_FILL",
-                    extra={
-                        "symbol": symbol,
-                        "intended_qty": slice_qty,
-                        "actual_filled": actual_filled,
-                        "order_id": getattr(order, "id", ""),
-                        "status": getattr(order, "status", ""),
-                    },
-                )
-            placed += actual_filled
+                partial_summary = {
+                    "symbol": symbol,
+                    "slice_index": len(partial_fill_summaries) + 1,
+                    "intended_slice_qty": slice_qty,
+                    "actual_slice_filled": actual_filled,
+                    "running_intended_total": intended_total,
+                    "running_actual_total": new_total_filled,
+                    "running_fill_gap": max(0, intended_total - new_total_filled),
+                    "order_id": getattr(order, "id", ""),
+                    "status": getattr(order, "status", ""),
+                }
+                partial_fill_summaries.append(partial_summary)
+                logger.warning("POV_SLICE_PARTIAL_FILL", extra=partial_summary)
+            placed = new_total_filled
         except Exception as e:
             logger.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
@@ -441,10 +448,30 @@ def pov_submit(
             return False
         logger.info(
             "POV_SUBMIT_SLICE",
-            extra={"symbol": symbol, "slice_qty": slice_qty, "actual_filled": actual_filled, "total_placed": placed},
+            extra={
+                "symbol": symbol,
+                "slice_qty": slice_qty,
+                "actual_filled": actual_filled,
+                "total_placed": placed,
+                "intended_total": intended_total,
+            },
         )
         _sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
-    logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
+    if partial_fill_summaries:
+        summary_payload = {
+            "symbol": symbol,
+            "total_intended": intended_total,
+            "total_actual": placed,
+            "fill_gap": max(0, intended_total - placed),
+            "partial_fills": partial_fill_summaries,
+        }
+        logger.info("POV_PARTIAL_FILL_SUMMARY", extra=summary_payload)
+        if hasattr(ctx, "partial_fill_tracker") and isinstance(ctx.partial_fill_tracker, dict):
+            ctx.partial_fill_tracker[symbol] = summary_payload
+    logger.info(
+        "POV_SUBMIT_COMPLETE",
+        extra={"symbol": symbol, "placed": placed, "intended_total": intended_total},
+    )
     return True
 
 __all__.append("pov_submit")
