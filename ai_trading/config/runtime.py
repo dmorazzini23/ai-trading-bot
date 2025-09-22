@@ -62,6 +62,78 @@ def _parse_max_position_mode(raw: str) -> str:
     )
 
 
+def _parse_execution_mode(raw: str) -> str:
+    """Return normalized execution mode from environment input."""
+
+    value = _strip_inline_comment(raw).strip().lower()
+    if not value:
+        return "sim"
+    aliases = {
+        "broker": "paper",
+        "alpaca": "paper",
+        "paper": "paper",
+        "live": "live",
+        "production": "live",
+        "prod": "live",
+        "simulation": "sim",
+        "sim": "sim",
+        "test": "sim",
+    }
+    normalized = aliases.get(value, value)
+    if normalized not in {"sim", "paper", "live"}:
+        raise ValueError(
+            "EXECUTION_MODE must be one of: sim, paper, live"
+        )
+    return normalized
+
+
+def _parse_intraday_feed(raw: str) -> str:
+    """Return normalized intraday feed identifier."""
+
+    value = _strip_inline_comment(raw).strip().lower()
+    if value in {"", "iex"}:
+        return "iex"
+    if value == "sip":
+        return "sip"
+    raise ValueError("DATA_FEED_INTRADAY must be one of: iex, sip")
+
+
+_VALID_PRICE_PROVIDERS = {
+    "alpaca_trade",
+    "alpaca_quote",
+    "alpaca_minute_close",
+    "alpaca_bid",
+    "alpaca_ask",
+    "yahoo",
+    "bars",
+}
+
+
+def _parse_price_provider_order(raw: str) -> tuple[str, ...]:
+    """Parse comma separated provider order ensuring supported identifiers."""
+
+    providers = _split_csv(raw)
+    normalized: list[str] = []
+    for provider in providers:
+        name = provider.strip().lower()
+        if not name:
+            continue
+        if name not in _VALID_PRICE_PROVIDERS:
+            raise ValueError(
+                "PRICE_PROVIDER_ORDER entries must be known providers"
+            )
+        normalized.append(name)
+    if not normalized:
+        return (
+            "alpaca_quote",
+            "alpaca_trade",
+            "alpaca_minute_close",
+            "yahoo",
+            "bars",
+        )
+    return tuple(normalized)
+
+
 CastFn = Callable[[str], Any]
 
 
@@ -160,6 +232,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="bool",
         default=False,
         description="When true the service mirrors production flow without submitting trades.",
+    ),
+    ConfigSpec(
+        field="execution_mode",
+        env=("EXECUTION_MODE", "AI_TRADING_EXECUTION_MODE", "AI_TRADING_EXECUTION_IMPL", "EXECUTION_IMPL"),
+        cast=_parse_execution_mode,
+        default="sim",
+        description="Execution environment selector (sim, paper, live).",
     ),
     ConfigSpec(
         field="alpaca_api_key",
@@ -478,6 +557,13 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         deprecated_env={"DATA_FEED": "Use ALPACA_DATA_FEED instead."},
     ),
     ConfigSpec(
+        field="data_feed_intraday",
+        env=("DATA_FEED_INTRADAY",),
+        cast=_parse_intraday_feed,
+        default="iex",
+        description="Intraday data feed preference for execution pricing.",
+    ),
+    ConfigSpec(
         field="alpaca_feed_failover",
         env=("ALPACA_FEED_FAILOVER",),
         cast="tuple[str]",
@@ -505,6 +591,19 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         default=2,
         description="Maximum number of provider fallbacks attempted per fetch.",
         min_value=0,
+    ),
+    ConfigSpec(
+        field="price_provider_order",
+        env=("PRICE_PROVIDER_ORDER",),
+        cast=_parse_price_provider_order,
+        default=(
+            "alpaca_quote",
+            "alpaca_trade",
+            "alpaca_minute_close",
+            "yahoo",
+            "bars",
+        ),
+        description="Comma separated list defining execution price provider preference order.",
     ),
     ConfigSpec(
         field="data_provider_backoff_factor",
@@ -659,6 +758,14 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         default=25.0,
         description="Additional slippage headroom permitted before positions are trimmed.",
         min_value=0.0,
+    ),
+    ConfigSpec(
+        field="slippage_limit_bps",
+        env=("SLIPPAGE_LIMIT_BPS",),
+        cast="int",
+        default=75,
+        description="Maximum slippage tolerance applied when evaluating live fills.",
+        min_value=0,
     ),
     ConfigSpec(
         field="order_timeout_seconds",
@@ -1046,6 +1153,14 @@ class TradingConfig:
                 "feed": getattr(self, "alpaca_data_feed", None),
                 "provider": getattr(self, "data_provider", None),
             },
+            "execution": {
+                "mode": getattr(self, "execution_mode", None),
+                "shadow_mode": bool(getattr(self, "shadow_mode", False)),
+                "order_timeout_seconds": getattr(self, "order_timeout_seconds", None),
+                "slippage_limit_bps": getattr(self, "slippage_limit_bps", None),
+                "price_providers": tuple(getattr(self, "price_provider_order", ()) or ()),
+                "intraday_feed": getattr(self, "data_feed_intraday", None),
+            },
             "auth": {
                 "alpaca_api_key": "***" if getattr(self, "alpaca_api_key", None) else "",
                 "alpaca_secret_key": "***" if getattr(self, "alpaca_secret_key", None) else "",
@@ -1121,6 +1236,15 @@ class TradingConfig:
                 if provided:
                     continue
                 values[field] = _validate_bounds(spec, preset_value)
+
+        if (
+            values.get("data_feed_intraday") == "sip"
+            and not values.get("alpaca_allow_sip")
+            and not values.get("alpaca_has_sip")
+        ):
+            raise ValueError(
+                "DATA_FEED_INTRADAY=sip requires ALPACA_ALLOW_SIP=1 or ALPACA_HAS_SIP=1"
+            )
 
         # Derived convenience fields expected by legacy callers.
         values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])

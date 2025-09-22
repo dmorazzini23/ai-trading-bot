@@ -12,7 +12,7 @@ import os
 import stat
 import tempfile
 import sys
-from typing import Any, Dict, Iterable, TYPE_CHECKING, cast
+from typing import Any, Dict, Iterable, Mapping, TYPE_CHECKING, cast
 from collections import deque
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
@@ -127,6 +127,11 @@ from ai_trading.config.management import (
     is_shadow_mode,
     TradingConfig,
     get_trading_config,
+)
+from ai_trading.config import (
+    get_execution_settings,
+    PRICE_PROVIDER_ORDER,
+    DATA_FEED_INTRADAY,
 )
 from ai_trading.config.settings import minute_data_freshness_tolerance
 from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
@@ -680,6 +685,10 @@ _PRIMARY_PRICE_SOURCES = frozenset(
         "alpaca_midpoint",
     }
 )
+_PRICE_PROVIDER_ORDER_CACHE: tuple[str, ...] | None = None
+_PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
+_PRICE_WARNING_INTERVAL = 60.0
+_INTRADAY_FEED_CACHE: str | None = None
 
 
 def _is_primary_price_source(source: str) -> bool:
@@ -693,7 +702,365 @@ def _is_primary_price_source(source: str) -> bool:
     if normalized.startswith("alpaca"):
         return True
     return normalized in _PRIMARY_PRICE_SOURCES
+
+
+def _get_intraday_feed() -> str:
+    """Return configured intraday feed preference."""
+
+    global _INTRADAY_FEED_CACHE
+    if _INTRADAY_FEED_CACHE is not None:
+        return _INTRADAY_FEED_CACHE
+    try:
+        settings = get_execution_settings()
+        feed = settings.data_feed_intraday
+    except Exception:
+        feed = DATA_FEED_INTRADAY
+    normalized = str(feed or DATA_FEED_INTRADAY).strip().lower() or "iex"
+    _INTRADAY_FEED_CACHE = normalized
+    return normalized
+
+
+def _get_price_provider_order() -> tuple[str, ...]:
+    """Return execution price provider preference order."""
+
+    global _PRICE_PROVIDER_ORDER_CACHE
+    if _PRICE_PROVIDER_ORDER_CACHE is not None:
+        return _PRICE_PROVIDER_ORDER_CACHE
+    try:
+        settings = get_execution_settings()
+        order_seq = tuple(settings.price_provider_order)
+    except Exception:
+        order_seq = tuple(PRICE_PROVIDER_ORDER)
+    if not order_seq:
+        order_seq = tuple(PRICE_PROVIDER_ORDER)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for provider in order_seq:
+        name = str(provider).strip().lower()
+        if not name or name in seen:
+            continue
+        normalized.append(name)
+        seen.add(name)
+    for fallback_provider in ("yahoo", "bars"):
+        if fallback_provider not in seen:
+            normalized.append(fallback_provider)
+            seen.add(fallback_provider)
+    _PRICE_PROVIDER_ORDER_CACHE = tuple(normalized)
+    return _PRICE_PROVIDER_ORDER_CACHE
+
+
+def _log_price_warning(
+    message: str,
+    *,
+    provider: str,
+    symbol: str,
+    level: int = logging.WARNING,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Emit rate-limited warnings for price provider failures."""
+
+    key = (provider, symbol)
+    now = time.monotonic()
+    last = _PRICE_WARNING_TS.get(key)
+    if last is not None and now - last < _PRICE_WARNING_INTERVAL:
+        return
+    _PRICE_WARNING_TS[key] = now
+    payload = {'provider': provider, 'symbol': symbol}
+    if extra:
+        payload.update(extra)
+    logger.log(level, message, extra=payload)
+
+
+def _normalize_price(raw_value: Any, provider: str, symbol: str) -> float | None:
+    """Coerce *raw_value* to a positive float or log why it is rejected."""
+
+    if raw_value is None:
+        _log_price_warning("PRICE_PROVIDER_NONE", provider=provider, symbol=symbol)
+        return None
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        _log_price_warning(
+            "PRICE_PROVIDER_INVALID",
+            provider=provider,
+            symbol=symbol,
+            extra={'raw': raw_value},
+        )
+        return None
+    if value <= 0:
+        _log_price_warning(
+            "PRICE_PROVIDER_NONPOSITIVE",
+            provider=provider,
+            symbol=symbol,
+            extra={'price': value},
+        )
+        return None
+    return value
+
+
+def _extract_trade_price(payload: Any, symbol: str) -> float | None:
+    """Extract trade price from Alpaca trade payload variants."""
+
+    if not isinstance(payload, dict):
+        return None
+    for key in ("price", "p"):
+        if key in payload:
+            return _normalize_price(payload[key], "alpaca_trade", symbol)
+    trade_obj = payload.get("trade") or payload.get("last") or payload.get("last_trade")
+    if isinstance(trade_obj, dict):
+        for key in ("price", "p", "trade_price", "last_price"):
+            if key in trade_obj:
+                return _normalize_price(trade_obj[key], "alpaca_trade", symbol)
+    symbol_payload = payload.get(symbol)
+    if isinstance(symbol_payload, dict):
+        return _extract_trade_price(symbol_payload, symbol)
+    return None
+
+
+def _iter_quote_sources(payload: Mapping[str, Any]) -> Iterable[tuple[str, Any]]:
+    """Yield potential quote price candidates from Alpaca payload."""
+
+    def _lookup(keys: Iterable[str]) -> Any:
+        for key in keys:
+            if key in payload:
+                return payload[key]
+        return None
+
+    yield "alpaca_ask", _lookup(("ask_price", "ap"))
+
+    last_obj = _lookup(("last", "last_trade", "lastTrade"))
+    last_value: Any = None
+    if isinstance(last_obj, dict):
+        for key in ("price", "p", "trade_price", "last_price"):
+            if key in last_obj:
+                last_value = last_obj[key]
+                break
+    elif last_obj is not None:
+        last_value = last_obj
+    if last_value is None:
+        last_value = _lookup(("last_price", "lp"))
+    yield "alpaca_last", last_value
+
+    yield "alpaca_midpoint", _lookup(("midpoint", "mid_price", "mp"))
+    yield "alpaca_bid", _lookup(("bid_price", "bp"))
+
+
+def _extract_quote_price(
+    payloads: Iterable[Mapping[str, Any]],
+    symbol: str,
+) -> tuple[float | None, str, tuple[str, Any] | None, bool, bool, dict[str, float | None]]:
+    """Return price info extracted from Alpaca quote payloads."""
+
+    price: float | None = None
+    price_source = "alpaca_invalid"
+    pending_bid: tuple[str, Any] | None = None
+    ask_unusable = False
+    last_unusable = False
+    values: dict[str, float | None] = {}
+
+    for payload in payloads:
+        for source_label, raw_value in _iter_quote_sources(payload):
+            if source_label == "alpaca_bid":
+                if pending_bid is None:
+                    pending_bid = (source_label, raw_value)
+                values[source_label] = _normalize_price(raw_value, source_label, symbol)
+                continue
+
+            candidate = _normalize_price(raw_value, source_label, symbol)
+            values[source_label] = candidate
+            if candidate is not None and price is None:
+                price = candidate
+                price_source = source_label
+
+            if source_label == "alpaca_ask" and candidate is None:
+                ask_unusable = True
+            elif source_label == "alpaca_last" and candidate is None:
+                last_unusable = True
+
+    return price, price_source, pending_bid, ask_unusable, last_unusable, values
+
+
 logger = get_logger(__name__)
+
+
+def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
+    if cache.get('trade_attempted'):
+        return cache.get('trade_price'), cache.get('trade_source', 'alpaca_trade_error')
+    cache['trade_attempted'] = True
+    try:
+        alpaca_get, _ = _alpaca_symbols()
+    except Exception as exc:  # pragma: no cover - network availability guard
+        _log_price_warning('ALPACA_TRADE_FETCH_FAILED', provider='alpaca_trade', symbol=symbol, extra={'error': str(exc)})
+        cache['trade_source'] = 'alpaca_trade_error'
+        cache['trade_price'] = None
+        return None, cache['trade_source']
+    params = {'feed': feed} if feed else None
+    try:
+        payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", params=params)
+    except AlpacaAuthenticationError as exc:
+        logger.error('ALPACA_PRICE_AUTH_FAILED', extra={'symbol': symbol, 'detail': str(exc)})
+        cache['trade_source'] = 'alpaca_auth_failed'
+        cache['trade_price'] = None
+        return None, cache['trade_source']
+    except AlpacaOrderHTTPError as exc:
+        _log_price_warning(
+            'ALPACA_TRADE_HTTP_ERROR',
+            provider='alpaca_trade',
+            symbol=symbol,
+            extra={'status': getattr(exc, 'status_code', None), 'error': str(exc)},
+        )
+        cache['trade_source'] = 'alpaca_trade_http_error'
+        cache['trade_price'] = None
+        return None, cache['trade_source']
+    except Exception as exc:  # pragma: no cover - defensive
+        _log_price_warning('ALPACA_TRADE_FETCH_FAILED', provider='alpaca_trade', symbol=symbol, extra={'error': str(exc)})
+        cache['trade_source'] = 'alpaca_trade_error'
+        cache['trade_price'] = None
+        return None, cache['trade_source']
+    price = _extract_trade_price(payload, symbol)
+    if price is None:
+        cache['trade_source'] = 'alpaca_trade_invalid'
+        cache['trade_price'] = None
+        return None, cache['trade_source']
+    cache['trade_price'] = price
+    cache['trade_source'] = 'alpaca_trade'
+    return price, cache['trade_source']
+
+
+def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
+    if cache.get('quote_attempted'):
+        return cache.get('quote_price'), cache.get('quote_source', 'alpaca_invalid')
+    cache['quote_attempted'] = True
+    try:
+        alpaca_get, _ = _alpaca_symbols()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        _log_price_warning('ALPACA_PRICE_ERROR', provider='alpaca_quote', symbol=symbol, extra={'error': str(exc)})
+        cache['quote_source'] = 'alpaca_quote_error'
+        cache['quote_price'] = None
+        return None, cache['quote_source']
+    params = {'feed': feed} if feed else None
+    try:
+        data = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest", params=params)
+    except AlpacaAuthenticationError as exc:
+        logger.error('ALPACA_PRICE_AUTH_FAILED', extra={'symbol': symbol, 'detail': str(exc)})
+        cache['quote_source'] = 'alpaca_auth_failed'
+        cache['quote_price'] = None
+        return None, cache['quote_source']
+    except AlpacaOrderHTTPError as exc:
+        _log_price_warning(
+            'ALPACA_PRICE_HTTP_ERROR',
+            provider='alpaca_quote',
+            symbol=symbol,
+            extra={'status': getattr(exc, 'status_code', None), 'error': str(exc)},
+        )
+        cache['quote_source'] = 'alpaca_http_error'
+        cache['quote_price'] = None
+        return None, cache['quote_source']
+    except (
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        JSONDecodeError,
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+    ) as exc:
+        _log_price_warning('ALPACA_PRICE_ERROR', provider='alpaca_quote', symbol=symbol, extra={'error': str(exc)})
+        cache['quote_source'] = 'alpaca_quote_error'
+        cache['quote_price'] = None
+        return None, cache['quote_source']
+    payloads: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        payloads.append(data)
+        nested = data.get('quote')
+        if isinstance(nested, dict):
+            payloads.append(nested)
+            nested_symbol = nested.get(symbol)
+            if isinstance(nested_symbol, dict):
+                payloads.append(nested_symbol)
+        symbol_payload = data.get(symbol)
+        if isinstance(symbol_payload, dict):
+            payloads.append(symbol_payload)
+    price, source, pending_bid, ask_unusable, last_unusable, values = _extract_quote_price(payloads, symbol)
+    cache['quote_price'] = price
+    cache['quote_source'] = source
+    cache['quote_pending_bid'] = pending_bid
+    cache['quote_ask_unusable'] = ask_unusable
+    cache['quote_last_unusable'] = last_unusable
+    cache['quote_values'] = values
+    return price, source
+
+
+def _attempt_alpaca_minute_close(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
+    if cache.get('minute_attempted'):
+        return cache.get('minute_price'), cache.get('minute_source', 'alpaca_minute_invalid')
+    cache['minute_attempted'] = True
+    try:
+        alpaca_get, _ = _alpaca_symbols()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        _log_price_warning('ALPACA_MINUTE_FETCH_FAILED', provider='alpaca_minute_close', symbol=symbol, extra={'error': str(exc)})
+        cache['minute_source'] = 'alpaca_minute_error'
+        cache['minute_price'] = None
+        return None, cache['minute_source']
+    params = {'feed': feed, 'timeframe': '1Min'} if feed else {'timeframe': '1Min'}
+    try:
+        payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/bars/latest", params=params)
+    except (AlpacaAuthenticationError, AlpacaOrderHTTPError) as exc:
+        _log_price_warning(
+            'ALPACA_MINUTE_FETCH_FAILED',
+            provider='alpaca_minute_close',
+            symbol=symbol,
+            extra={'error': str(exc)},
+        )
+        cache['minute_source'] = 'alpaca_minute_error'
+        cache['minute_price'] = None
+        return None, cache['minute_source']
+    except Exception as exc:  # pragma: no cover - defensive
+        _log_price_warning('ALPACA_MINUTE_FETCH_FAILED', provider='alpaca_minute_close', symbol=symbol, extra={'error': str(exc)})
+        cache['minute_source'] = 'alpaca_minute_error'
+        cache['minute_price'] = None
+        return None, cache['minute_source']
+    close_value = None
+    if isinstance(payload, dict):
+        bar = payload.get('bar') or payload.get('bars') or payload.get('latest_bar')
+        if isinstance(bar, dict):
+            close_value = bar.get('close') or bar.get('c')
+        elif symbol in payload and isinstance(payload[symbol], dict):
+            close_value = payload[symbol].get('close') or payload[symbol].get('c')
+    price = _normalize_price(close_value, 'alpaca_minute_close', symbol)
+    cache['minute_price'] = price
+    cache['minute_source'] = 'alpaca_minute_close' if price is not None else 'alpaca_minute_invalid'
+    return price, cache['minute_source']
+
+
+def _attempt_yahoo_price(symbol: str) -> tuple[float | None, str]:
+    try:
+        from datetime import UTC, datetime, timedelta
+        from ai_trading.data.fetch import _backup_get_bars as _yahoo_get_bars
+
+        start = datetime.now(UTC) - timedelta(days=5)
+        end = datetime.now(UTC)
+        df = _yahoo_get_bars(symbol, start, end, interval="1d")
+        price = _normalize_price(get_latest_close(df), 'yahoo', symbol)
+        if price is not None:
+            return price, 'yahoo'
+        return None, 'yahoo_invalid'
+    except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as exc:  # pragma: no cover - defensive
+        _log_price_warning('YAHOO_PRICE_ERROR', provider='yahoo', symbol=symbol, extra={'error': str(exc)})
+        return None, 'yahoo_error'
+
+
+def _attempt_bars_price(symbol: str) -> tuple[float | None, str]:
+    try:
+        df = get_bars_df(symbol)
+        price = _normalize_price(get_latest_close(df), 'bars', symbol)
+        if price is not None:
+            return price, 'bars'
+        return None, 'bars_invalid'
+    except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as exc:  # pragma: no cover - defensive
+        logger.error('LATEST_PRICE_FALLBACK_FAILED', extra={'symbol': symbol, 'error': str(exc)})
+        return None, 'bars_error'
 
 
 # Cycle-scoped fallback cache shared across helpers/tests
@@ -17285,34 +17652,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             if not prefer_backup:
                 return None
 
-    def _normalize_price(raw_value: Any, provider: str) -> float | None:
-        """Coerce *raw_value* to a positive float or log why it is rejected."""
-
-        if raw_value is None:
-            logger.warning(
-                "PRICE_PROVIDER_NONE",
-                extra={"symbol": symbol, "provider": provider},
-            )
-            return None
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError):
-            logger.warning(
-                "PRICE_PROVIDER_INVALID",
-                extra={"symbol": symbol, "provider": provider, "raw": raw_value},
-            )
-            return None
-        if value <= 0:
-            logger.warning(
-                "PRICE_PROVIDER_NONPOSITIVE",
-                extra={"symbol": symbol, "provider": provider, "price": value},
-            )
-            return None
-        return value
-    pending_bid: tuple[str, Any] | None = None
-    ask_unusable = False
-    last_unusable = False
-
     skip_primary = prefer_backup or provider_disabled
     if not skip_primary and not is_alpaca_service_available():
         skip_primary = True
@@ -17320,169 +17659,123 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if primary_failure_source is None:
             primary_failure_source = price_source
 
-    if not skip_primary:
-        try:
-            alpaca_get, _ = _alpaca_symbols()  # AI-AGENT-REF: lazy fetch import
-            feed = get_env("ALPACA_DATA_FEED", "iex")
-            params = {"feed": feed} if feed else None
-            data = alpaca_get(
-                f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest",
-                params=params,
-            )
+    provider_order = _get_price_provider_order()
+    if skip_primary:
+        provider_order = tuple(
+            provider
+            for provider in provider_order
+            if not _is_primary_price_source(provider)
+        )
+    if not provider_order:
+        provider_order = ("yahoo", "bars")
 
-            def _iter_price_sources(payload: Any) -> Iterable[tuple[str, Any]]:
-                """Yield potential Alpaca price fields with source labels."""
+    cache: dict[str, Any] = {}
 
-                if not isinstance(payload, dict):
-                    return
+    cycle_feed = _prefer_feed_this_cycle()
+    feed = cycle_feed or _get_intraday_feed()
+    switchover_reason: str | None = None
+    if feed == "sip":
+        if not data_fetcher_module._sip_configured():
+            switchover_reason = "sip_not_configured"
+        elif not _sip_authorized():
+            switchover_reason = "sip_not_authorized"
+        if switchover_reason:
+            fallback_feed = "iex"
+            if cycle_feed != fallback_feed:
+                logger_once.warning(
+                    "DATA_PROVIDER_SWITCHOVER",
+                    key=f"data_provider_switchover:{feed}->{fallback_feed}:{switchover_reason}",
+                    extra={
+                        "symbol": symbol,
+                        "from_feed": feed,
+                        "to_feed": fallback_feed,
+                        "reason": switchover_reason,
+                        "scope": "latest_price",
+                    },
+                )
+            feed = fallback_feed
+            _cache_cycle_fallback_feed(feed)
+    elif cycle_feed is None:
+        _cache_cycle_fallback_feed(feed)
 
-                def _lookup(keys: Iterable[str]) -> Any:
-                    for key in keys:
-                        if key in payload:
-                            return payload[key]
-                    return None
+    def _record_primary_failure(source_label: str | None) -> None:
+        nonlocal primary_failure_source
+        if source_label and primary_failure_source is None:
+            if _is_primary_price_source(source_label):
+                primary_failure_source = source_label
 
-                # Ask price first (primary source)
-                ask_value = _lookup(("ask_price", "ap"))
-                yield "alpaca_ask", ask_value
+    def _attempt_provider(provider: str) -> tuple[float | None, str]:
+        if provider == "alpaca_trade":
+            return _attempt_alpaca_trade(symbol, feed, cache)
+        if provider == "alpaca_quote":
+            return _attempt_alpaca_quote(symbol, feed, cache)
+        if provider in {"alpaca_ask", "alpaca_bid"}:
+            if not cache.get("quote_attempted"):
+                _attempt_alpaca_quote(symbol, feed, cache)
+            values = cache.get("quote_values") or {}
+            value = values.get(provider)
+            if value is None and provider == "alpaca_bid":
+                pending = cache.get("quote_pending_bid")
+                if pending:
+                    value = _normalize_price(pending[1], pending[0], symbol)
+            if value is None:
+                return None, f"{provider}_invalid"
+            return value, provider
+        if provider == "alpaca_minute_close":
+            return _attempt_alpaca_minute_close(symbol, feed, cache)
+        if provider == "yahoo":
+            return _attempt_yahoo_price(symbol)
+        if provider == "bars":
+            return _attempt_bars_price(symbol)
+        return None, f"{provider}_unsupported"
 
-                # Last trade can appear in multiple shapes
-                last_obj = _lookup(("last", "last_trade", "lastTrade"))
-                last_value: Any = None
-                if isinstance(last_obj, dict):
-                    for key in ("price", "p", "trade_price", "last_price"):
-                        if key in last_obj:
-                            last_value = last_obj[key]
-                            break
-                elif last_obj is not None:
-                    last_value = last_obj
-                if last_value is None:
-                    last_value = _lookup(("last_price", "lp"))
-                yield "alpaca_last", last_value
-
-                # Midpoint if provided by the API (eg. SIP feed)
-                midpoint_value = _lookup(("midpoint", "mid_price", "mp"))
-                yield "alpaca_midpoint", midpoint_value
-
-                # Bid price retained for degraded fallback paths
-                bid_value = _lookup(("bid_price", "bp"))
-                yield "alpaca_bid", bid_value
-
-            payloads: list[dict[str, Any]] = []
-            if isinstance(data, dict):
-                payloads.append(data)
-                nested = data.get("quote")
-                if isinstance(nested, dict):
-                    payloads.append(nested)
-                    nested_symbol = nested.get(symbol)
-                    if isinstance(nested_symbol, dict):
-                        payloads.append(nested_symbol)
-                symbol_payload = data.get(symbol)
-                if isinstance(symbol_payload, dict):
-                    payloads.append(symbol_payload)
-
-            for payload in payloads:
-                for source_label, raw_value in _iter_price_sources(payload):
-                    if source_label == "alpaca_bid":
-                        if pending_bid is None:
-                            pending_bid = (source_label, raw_value)
-                        continue
-
-                    candidate = _normalize_price(raw_value, source_label)
-                    if candidate is not None:
-                        price = candidate
-                        price_source = source_label
-                        break
-
-                    if source_label == "alpaca_ask":
-                        ask_unusable = True
-                    elif source_label == "alpaca_last":
-                        last_unusable = True
-                if price is not None:
-                    break
-            if price is None:
-                price_source = "alpaca_invalid"
-                if primary_failure_source is None:
-                    primary_failure_source = price_source
-        except AlpacaAuthenticationError as exc:
-            logger.error(
-                "ALPACA_PRICE_AUTH_FAILED",
-                extra={"symbol": symbol, "detail": str(exc)},
-            )
-            _PRICE_SOURCE[symbol] = "alpaca_auth_failed"
-            return None
-        except AlpacaOrderHTTPError as exc:
-            logger.warning(
-                "ALPACA_PRICE_HTTP_ERROR",
-                extra={
-                    "symbol": symbol,
-                    "status": getattr(exc, "status_code", None),
-                    "error": str(exc),
-                },
-            )
-            price_source = "alpaca_http_error"
-            if primary_failure_source is None:
-                primary_failure_source = price_source
+    last_source = price_source
+    prev_source = price_source
+    for provider in provider_order:
+        candidate, source = _attempt_provider(provider)
+        if source:
+            prev_source = last_source
+            last_source = source
+        if source == "alpaca_auth_failed":
+            price_source = source
             _PRICE_SOURCE[symbol] = price_source
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning("ALPACA_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
-    else:
-        if price_source == "unknown" and prefer_backup:
+            return None
+        if candidate is not None:
+            price = candidate
+            price_source = source
+            break
+        _record_primary_failure(source or provider)
+
+    if price is None and cache.get("quote_pending_bid"):
+        pending_bid = cache.get("quote_pending_bid")
+        ask_unusable = bool(cache.get("quote_ask_unusable"))
+        last_unusable = bool(cache.get("quote_last_unusable"))
+        if isinstance(pending_bid, tuple) and len(pending_bid) == 2:
+            bid_price = _normalize_price(pending_bid[1], pending_bid[0], symbol)
+            if bid_price is not None:
+                price = bid_price
+                if ask_unusable and last_unusable:
+                    price_source = f"{pending_bid[0]}_degraded"
+                else:
+                    price_source = pending_bid[0]
+
+    if price is None:
+        if last_source != "unknown":
+            price_source = last_source
+            if price_source.endswith("_error") and prev_source != "unknown":
+                price_source = prev_source
+        elif primary_failure_source is not None:
+            price_source = primary_failure_source
+        elif prefer_backup:
             price_source = "alpaca_skipped"
+    elif price_source == "unknown" and prefer_backup:
+        price_source = "alpaca_skipped"
+    elif price_source == "unknown" and primary_failure_source is not None:
+        price_source = primary_failure_source
 
-    if price is None:
-        try:
-            from datetime import UTC, datetime, timedelta
-            from ai_trading.data.fetch import _backup_get_bars as _yahoo_get_bars
-
-            start = datetime.now(UTC) - timedelta(days=5)
-            end = datetime.now(UTC)
-            df = _yahoo_get_bars(symbol, start, end, interval="1d")
-            price = _normalize_price(get_latest_close(df), "yahoo")
-            if price is not None:
-                price_source = "yahoo"
-            else:
-                price_source = "yahoo_invalid"
-        except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
-            logger.warning("YAHOO_PRICE_ERROR", extra={"symbol": symbol, "error": str(e)})
-
-    if price is None:
-        try:
-            df = get_bars_df(symbol)
-            price = _normalize_price(get_latest_close(df), "bars")
-            if price is not None:
-                price_source = "bars"
-            else:
-                price_source = "bars_invalid"
-        except (ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:  # pragma: no cover - defensive
-            logger.error("LATEST_PRICE_FALLBACK_FAILED", extra={"symbol": symbol, "error": str(e)})
-            price = None
-
-    if price is None and pending_bid is not None:
-        bid_source_label, bid_raw_value = pending_bid
-        bid_price = _normalize_price(bid_raw_value, bid_source_label)
-        if bid_price is not None:
-            price = bid_price
-            if ask_unusable and last_unusable:
-                price_source = f"{bid_source_label}_degraded"
-            else:
-                price_source = bid_source_label
-
-    final_price_source = price_source
-    if price is None and primary_failure_source is not None:
-        final_price_source = primary_failure_source
-
-    _PRICE_SOURCE[symbol] = final_price_source
+    _PRICE_SOURCE[symbol] = price_source
     return price
+
 
 
 def _resolve_order_quote(
