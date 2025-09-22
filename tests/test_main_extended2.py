@@ -88,10 +88,20 @@ def test_run_flask_app_skips_ipv6_port(monkeypatch):
 def test_run_bot_calls_cycle(monkeypatch):
     """run_bot executes a trading cycle in-process."""
     called = {}
+    trade_log_calls = {"count": 0}
+
+    def _fake_ensure():
+        trade_log_calls["count"] += 1
+        main._TRADE_LOG_INITIALIZED = True
 
     monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("ran", True))
+    monkeypatch.setattr(main, "ensure_trade_log_path", _fake_ensure)
+    monkeypatch.setenv("IMPORT_PREFLIGHT_DISABLED", "1")
+    main._TRADE_LOG_INITIALIZED = False
+
     assert main.run_bot() == 0
     assert called["ran"]
+    assert trade_log_calls["count"] == 1
 
 
 def test_validate_environment_missing(monkeypatch):

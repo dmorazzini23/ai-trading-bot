@@ -491,9 +491,17 @@ def validate_environment() -> None:
         os.makedirs(logs_dir, exist_ok=True)
 
 
+_TRADE_LOG_INITIALIZED = False
+
+
 def ensure_trade_log_path() -> None:
     """Initialize trade log and verify the path is writable."""
     from ai_trading.core.bot_engine import get_trade_logger
+
+    global _TRADE_LOG_INITIALIZED
+
+    if _TRADE_LOG_INITIALIZED:
+        return
 
     tl = get_trade_logger()
     path = Path(tl.path)
@@ -512,6 +520,7 @@ def ensure_trade_log_path() -> None:
             "TRADE_LOG_PATH_READY",
             extra={"path": str(path)},
         )
+        _TRADE_LOG_INITIALIZED = True
 
 
 def run_bot(*_a, **_k) -> int:
@@ -545,7 +554,8 @@ def run_bot(*_a, **_k) -> int:
             logger.info("Memory optimization enabled")
         logger.info("Bot startup complete - entering main loop")
         preflight_import_health()
-        ensure_trade_log_path()
+        if not _TRADE_LOG_INITIALIZED:
+            ensure_trade_log_path()
         run_cycle()
         return 0
     except (ValueError, TypeError, RuntimeError) as e:
