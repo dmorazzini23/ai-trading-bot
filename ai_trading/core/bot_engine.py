@@ -11460,6 +11460,29 @@ def _exit_positions_if_needed(
     return False
 
 
+def _should_skip_order_for_alpaca_unavailable(
+    state: BotState,
+    symbol: str,
+    price_source: str,
+) -> bool:
+    """Return ``True`` if *price_source* signals Alpaca is unavailable."""
+
+    if price_source in {
+        "alpaca_auth_failed",
+        "alpaca_unavailable",
+        _ALPACA_DISABLED_SENTINEL,
+    }:
+        logger.warning(
+            "SKIP_ORDER_ALPACA_UNAVAILABLE",
+            extra={"symbol": symbol, "price_source": price_source},
+        )
+        auth_skipped = getattr(state, "auth_skipped_symbols", None)
+        if isinstance(auth_skipped, set):
+            auth_skipped.add(symbol)
+        return True
+    return False
+
+
 def _enter_long(
     ctx: BotContext,
     state: BotState,
@@ -11515,18 +11538,10 @@ def _enter_long(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        if price_source in {
-            "alpaca_auth_failed",
-            "alpaca_unavailable",
-            _ALPACA_DISABLED_SENTINEL,
-        }:
-            logger.warning(
-                "FALLBACK_TO_FEATURE_CLOSE",
-                extra={"symbol": symbol, "price_source": "feature_close"},
-            )
-            quote_price = float(current_price)
-            price_source = "feature_close"
-            _PRICE_SOURCE[symbol] = price_source
+        if _should_skip_order_for_alpaca_unavailable(
+            state, symbol, price_source
+        ):
+            return True
 
     if quote_price is None:
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
@@ -11759,18 +11774,9 @@ def _enter_short(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        if price_source in {
-            "alpaca_auth_failed",
-            "alpaca_unavailable",
-            _ALPACA_DISABLED_SENTINEL,
-        }:
-            logger.warning(
-                "SKIP_ORDER_ALPACA_UNAVAILABLE",
-                extra={"symbol": symbol, "price_source": price_source},
-            )
-            auth_skipped = getattr(state, "auth_skipped_symbols", None)
-            if isinstance(auth_skipped, set):
-                auth_skipped.add(symbol)
+        if _should_skip_order_for_alpaca_unavailable(
+            state, symbol, price_source
+        ):
             return True
     if quote_price is None:
         logger.warning(
