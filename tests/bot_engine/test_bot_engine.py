@@ -450,6 +450,63 @@ def test_enter_long_skips_when_alpaca_auth_failed(monkeypatch, caplog):
     )
 
 
+def test_enter_long_skips_when_backup_quote_degraded(monkeypatch, caplog):
+    pd = pytest.importorskip("pandas")
+
+    symbol = "AAPL"
+    orders: list[tuple[str, int, str, float | None]] = []
+    ctx, state, feat_df = _build_dummy_long_context(pd, symbol)
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    monkeypatch.setattr(
+        bot_engine,
+        "submit_order",
+        lambda _ctx, sym, qty, side, price=None: orders.append((sym, qty, side, price))
+        or types.SimpleNamespace(id="order-1"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_resolve_order_quote",
+        lambda *_a, **_k: bot_engine._PRICE_SOURCE.__setitem__(
+            symbol, "yahoo_invalid"
+        )
+        or (None, "yahoo_invalid"),
+    )
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "is_primary_provider_enabled",
+        lambda: False,
+        raising=False,
+    )
+
+    caplog.set_level("WARNING")
+
+    result = bot_engine._enter_long(
+        ctx,
+        state,
+        symbol,
+        balance=100000.0,
+        feat_df=feat_df,
+        final_score=1.0,
+        conf=0.8,
+        strat="degraded_quote_test",
+    )
+
+    assert result is True
+    assert orders == []
+    assert "alpaca" in state.degraded_providers
+    assert symbol in state.degraded_providers
+    assert any(
+        record.message == "SKIP_ORDER_DEGRADED_QUOTE" for record in caplog.records
+    )
+    assert not any(
+        record.message == "FALLBACK_TO_FEATURE_CLOSE" for record in caplog.records
+    )
+
+
 def _build_dummy_long_context(pd, symbol):
     class _DummyAPI:
         def list_positions(self):

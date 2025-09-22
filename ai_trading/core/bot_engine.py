@@ -11544,6 +11544,26 @@ def _enter_long(
             return True
 
     if quote_price is None:
+        price_source_label = str(price_source or "unknown")
+        source_degraded = prefer_backup_quote or price_source_label.endswith(
+            ("_invalid", "_degraded")
+        )
+        if source_degraded:
+            degraded = getattr(state, "degraded_providers", None)
+            if degraded is None:
+                degraded = set()
+                setattr(state, "degraded_providers", degraded)
+            degraded.add("alpaca")
+            degraded.add(symbol)
+            logger.warning(
+                "SKIP_ORDER_DEGRADED_QUOTE",
+                extra={
+                    "symbol": symbol,
+                    "price_source": price_source_label,
+                    "prefer_backup": prefer_backup_quote,
+                },
+            )
+            return True
         fallback_price = current_price if np.isfinite(current_price) and current_price > 0 else None
         if fallback_price is not None:
             logger.warning(
