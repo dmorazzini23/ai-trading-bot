@@ -6,12 +6,13 @@ from typing import Any
 from types import SimpleNamespace
 import os
 from json import JSONDecodeError
-from ai_trading.logging import get_logger, logger_once
+from ai_trading.logging import EmitOnceLogger, get_logger
 from ai_trading.net.http import get_global_session
 from ai_trading.settings import get_alpaca_secret_key_plain
 from ai_trading.exc import HTTPError, RequestException
 from ai_trading.alpaca_api import ALPACA_AVAILABLE, get_trading_client_cls
 _log = get_logger(__name__)
+_once_logger = EmitOnceLogger(_log.logger)
 
 @dataclass
 class _Cache:
@@ -85,7 +86,7 @@ def _resolve_max_position_size(
         numeric_equity = None
 
     if numeric_equity is None or numeric_equity <= 0.0:
-        logger_once.warning(
+        _once_logger.warning(
             "EQUITY_MISSING",
             key="position_sizing:equity_missing",
             extra={

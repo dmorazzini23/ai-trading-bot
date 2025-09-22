@@ -5,7 +5,6 @@ import pytest
 
 import ai_trading.position_sizing as ps
 import ai_trading.core.runtime as rt
-from ai_trading.logging import logger_once
 
 
 def test_fetch_equity_sets_paper(monkeypatch):
@@ -36,7 +35,7 @@ def test_fetch_equity_sets_paper(monkeypatch):
 def test_get_max_position_size_uses_cached_equity(monkeypatch, caplog):
     # Ensure cache is clear
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
-    logger_once._emitted_keys.clear()
+    ps._once_logger._emitted_keys.clear()
 
     # Stub equity fetcher to return a positive value
     monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 1000.0)
@@ -75,7 +74,7 @@ def test_get_max_position_size_auto_multiplies_equity(monkeypatch):
 
 def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, caplog):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
-    logger_once._emitted_keys.clear()
+    ps._once_logger._emitted_keys.clear()
     calls = {"n": 0}
 
     def fake_fetch(cfg, force_refresh=False):
@@ -98,7 +97,7 @@ def test_resolve_max_position_size_uses_real_equity_and_caches(monkeypatch, capl
 
 def test_failed_equity_fetch_warns_once_and_caches(monkeypatch, caplog):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
-    logger_once._emitted_keys.clear()
+    ps._once_logger._emitted_keys.clear()
     calls = {"n": 0}
 
     def fake_fetch(cfg, force_refresh=False):
@@ -116,12 +115,15 @@ def test_failed_equity_fetch_warns_once_and_caches(monkeypatch, caplog):
     assert size1 == size2
     assert meta2["source"] == "cache"
     assert calls["n"] == 1
-    assert [r.msg for r in caplog.records].count("EQUITY_MISSING") == 1
+    equity_missing = [
+        r for r in caplog.records if r.name == "ai_trading.position_sizing" and r.msg == "EQUITY_MISSING"
+    ]
+    assert len(equity_missing) == 1
 
 
 def test_equity_recovered_emits_warning_once(monkeypatch, caplog):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
-    logger_once._emitted_keys.clear()
+    ps._once_logger._emitted_keys.clear()
 
     monkeypatch.setattr(ps, "_get_equity_from_alpaca", lambda cfg, force_refresh=False: 0.0)
 
