@@ -721,6 +721,15 @@ def _get_intraday_feed() -> str:
     return normalized
 
 
+def _sanitize_alpaca_feed(feed: str | None) -> str | None:
+    """Return Alpaca-supported feed value when valid."""
+
+    if feed is None:
+        return None
+    normalized = str(feed).strip().lower()
+    return normalized if normalized in {"iex", "sip"} else None
+
+
 def _get_price_provider_order() -> tuple[str, ...]:
     """Return execution price provider preference order."""
 
@@ -888,6 +897,15 @@ def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
     if cache.get('trade_attempted'):
         return cache.get('trade_price'), cache.get('trade_source', 'alpaca_trade_error')
     cache['trade_attempted'] = True
+    sanitized_feed = _sanitize_alpaca_feed(feed)
+    if feed and sanitized_feed is None:
+        logger.warning(
+            'ALPACA_INVALID_FEED_SKIPPED',
+            extra={'provider': 'alpaca_trade', 'requested_feed': feed, 'symbol': symbol},
+        )
+        cache['trade_source'] = 'alpaca_trade_invalid_feed'
+        cache['trade_price'] = None
+        return None, cache['trade_source']
     try:
         alpaca_get, _ = _alpaca_symbols()
     except Exception as exc:  # pragma: no cover - network availability guard
@@ -895,7 +913,7 @@ def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
         cache['trade_source'] = 'alpaca_trade_error'
         cache['trade_price'] = None
         return None, cache['trade_source']
-    params = {'feed': feed} if feed else None
+    params = {'feed': sanitized_feed} if sanitized_feed else None
     try:
         payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", params=params)
     except AlpacaAuthenticationError as exc:
@@ -932,6 +950,15 @@ def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
     if cache.get('quote_attempted'):
         return cache.get('quote_price'), cache.get('quote_source', 'alpaca_invalid')
     cache['quote_attempted'] = True
+    sanitized_feed = _sanitize_alpaca_feed(feed)
+    if feed and sanitized_feed is None:
+        logger.warning(
+            'ALPACA_INVALID_FEED_SKIPPED',
+            extra={'provider': 'alpaca_quote', 'requested_feed': feed, 'symbol': symbol},
+        )
+        cache['quote_source'] = 'alpaca_quote_invalid_feed'
+        cache['quote_price'] = None
+        return None, cache['quote_source']
     try:
         alpaca_get, _ = _alpaca_symbols()
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -939,7 +966,7 @@ def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
         cache['quote_source'] = 'alpaca_quote_error'
         cache['quote_price'] = None
         return None, cache['quote_source']
-    params = {'feed': feed} if feed else None
+    params = {'feed': sanitized_feed} if sanitized_feed else None
     try:
         data = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest", params=params)
     except AlpacaAuthenticationError as exc:
@@ -997,6 +1024,15 @@ def _attempt_alpaca_minute_close(symbol: str, feed: str, cache: dict[str, Any]) 
     if cache.get('minute_attempted'):
         return cache.get('minute_price'), cache.get('minute_source', 'alpaca_minute_invalid')
     cache['minute_attempted'] = True
+    sanitized_feed = _sanitize_alpaca_feed(feed)
+    if feed and sanitized_feed is None:
+        logger.warning(
+            'ALPACA_INVALID_FEED_SKIPPED',
+            extra={'provider': 'alpaca_minute_close', 'requested_feed': feed, 'symbol': symbol},
+        )
+        cache['minute_source'] = 'alpaca_minute_invalid_feed'
+        cache['minute_price'] = None
+        return None, cache['minute_source']
     try:
         alpaca_get, _ = _alpaca_symbols()
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -1004,7 +1040,9 @@ def _attempt_alpaca_minute_close(symbol: str, feed: str, cache: dict[str, Any]) 
         cache['minute_source'] = 'alpaca_minute_error'
         cache['minute_price'] = None
         return None, cache['minute_source']
-    params = {'feed': feed, 'timeframe': '1Min'} if feed else {'timeframe': '1Min'}
+    params = {'timeframe': '1Min'}
+    if sanitized_feed:
+        params['feed'] = sanitized_feed
     try:
         payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/bars/latest", params=params)
     except (AlpacaAuthenticationError, AlpacaOrderHTTPError) as exc:
@@ -10816,7 +10854,7 @@ def submit_order(
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.
         return _exec_engine.execute_order(symbol, core_side, qty, price=price)
-    except (APIError, TimeoutError, ConnectionError) as e:
+    except (APIError, TimeoutError, ConnectionError, AlpacaOrderHTTPError) as e:
         logger.error(
             "BROKER_OP_FAILED",
             extra={

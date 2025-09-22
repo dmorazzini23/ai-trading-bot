@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         """Fallback APIError when alpaca-py is unavailable."""
 
         pass
+from ai_trading.alpaca_api import AlpacaOrderHTTPError
 from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
 
 logger = get_logger(__name__)
@@ -384,6 +385,94 @@ class ExecutionEngine:
             self.stats['failed_orders'] += 1
             logger.error(f'Failed to execute limit order: {side} {quantity} {symbol} @ ${limit_price}')
         return result
+
+    def execute_order(
+        self,
+        symbol: str,
+        core_side: "CoreOrderSide",
+        qty: int,
+        price: float | None = None,
+        *,
+        tif: str | None = None,
+        extended_hours: bool | None = None,
+    ) -> str:
+        """Adapter for core.bot_engine.submit_order(...) returning Alpaca order id."""
+
+        side = self._map_core_side(core_side)
+        if qty <= 0:
+            raise ValueError(f"execute_order invalid qty={qty}")
+
+        order_kwargs: dict[str, Any] = {}
+        if tif:
+            order_kwargs['time_in_force'] = tif
+        if extended_hours is not None:
+            order_kwargs['extended_hours'] = extended_hours
+
+        order_type = 'market' if price is None else 'limit'
+        try:
+            if price is None:
+                order = self.submit_market_order(symbol, side, qty, **order_kwargs)
+            else:
+                order = self.submit_limit_order(symbol, side, qty, limit_price=price, **order_kwargs)
+        except (APIError, TimeoutError, ConnectionError) as exc:
+            status_code = getattr(exc, 'status_code', None)
+            if not status_code:
+                if isinstance(exc, TimeoutError):
+                    status_code = 504
+                elif isinstance(exc, ConnectionError):
+                    status_code = 503
+                else:
+                    status_code = 500
+            message = str(exc) or 'order execution failed'
+            raise AlpacaOrderHTTPError(status_code, message) from exc
+
+        if not order:
+            raise AlpacaOrderHTTPError(500, 'order submission returned empty response', payload={'symbol': symbol, 'side': side, 'type': order_type})
+
+        if isinstance(order, dict):
+            order_id = order.get('id') or order.get('client_order_id')
+        else:
+            order_id = getattr(order, 'id', None) or getattr(order, 'client_order_id', None)
+
+        if not order_id:
+            raise AlpacaOrderHTTPError(500, 'order submission missing id', payload={'symbol': symbol, 'side': side, 'type': order_type})
+
+        logger.info(
+            'EXEC_ENGINE_EXECUTE_ORDER',
+            extra={
+                'symbol': symbol,
+                'side': side,
+                'core_side': getattr(core_side, 'name', str(core_side)),
+                'qty': qty,
+                'type': order_type,
+                'tif': tif,
+                'extended_hours': extended_hours,
+                'order_id': order_id,
+            },
+        )
+        return str(order_id)
+
+    def _map_core_side(self, core_side: "CoreOrderSide") -> str:
+        """Map core OrderSide enum to Alpaca's side representation."""
+
+        value = getattr(core_side, 'value', None)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+        else:
+            normalized = str(core_side).strip().lower()
+        if normalized in {'buy', 'cover', 'long'}:
+            return 'buy'
+        if normalized in {'sell', 'sell_short', 'short', 'exit'}:
+            return 'sell'
+        return 'buy'
+
+    def check_stops(self) -> None:
+        """Hook for risk-stop enforcement from core loop (currently no-op)."""
+
+        logger.debug(
+            'EXEC_ENGINE_CHECK_STOPS_NOOP',
+            extra={'shadow_mode': getattr(self, 'shadow_mode', False)},
+        )
 
     def cancel_order(self, order_id: str) -> bool:
         """
