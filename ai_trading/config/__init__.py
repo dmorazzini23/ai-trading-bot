@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -47,6 +48,8 @@ _CONFIG_LOGGED = False
 _LOCK_TIMEOUT = int(os.getenv("CONFIG_LOCK_TIMEOUT", "30"))
 _VALIDATION_LOCK = threading.Lock()
 _LOCK_STATE = threading.local()
+
+logger = logging.getLogger(__name__)
 
 
 def _is_lock_held_by_current_thread() -> bool:
@@ -186,10 +189,18 @@ def validate_environment() -> None:
     """Validate required environment variables are present."""
 
     with _validation_lock():
-        reload_trading_config()
+        logger.debug("CONFIG_ENV_VALIDATION_START")
+        reload_trading_config(allow_missing_drawdown=False)
         if _env_value("MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD") is None:
+            logger.error("CONFIG_ENV_MISSING_DRAWDOWN")
             raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
-        validate_required_env()
+        snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        try:
+            validate_required_env(env=snapshot)
+        except Exception:
+            logger.exception("CONFIG_ENV_VALIDATION_FAILED")
+            raise
+        logger.debug("CONFIG_ENV_VALIDATION_SUCCESS")
 
 
 def validate_env_vars(*names: str) -> None:
