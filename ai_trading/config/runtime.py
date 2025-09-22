@@ -1080,15 +1080,17 @@ class TradingConfig:
                     values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
                     break
 
-        # Derived convenience fields expected by legacy callers.
-        values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
-        values.setdefault("paper", _infer_paper_mode(values))
-        values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
-
-        mode_name = str(env_map.get("TRADING_MODE", "balanced")).lower()
+        mode_candidates = ("TRADING_MODE", "AI_TRADING_TRADING_MODE")
+        selected_mode: str | None = None
+        for candidate in mode_candidates:
+            raw_mode = env_map.get(candidate)
+            if raw_mode not in (None, ""):
+                selected_mode = str(raw_mode)
+                break
+        mode_name = (selected_mode or "balanced").lower()
         mode_defaults = MODE_PARAMETERS.get(mode_name)
         if mode_defaults:
-            for field, default_value in mode_defaults.items():
+            for field, preset_value in mode_defaults.items():
                 spec = SPEC_BY_FIELD.get(field)
                 if spec is None:
                     continue
@@ -1098,8 +1100,14 @@ class TradingConfig:
                         env_map.get(alias) not in (None, "")
                         for alias in spec.deprecated_env
                     )
-                if not provided:
-                    values[field] = default_value
+                if provided:
+                    continue
+                values[field] = _validate_bounds(spec, preset_value)
+
+        # Derived convenience fields expected by legacy callers.
+        values.setdefault("data_provider", values.get("data_provider_priority", (None,))[0])
+        values.setdefault("paper", _infer_paper_mode(values))
+        values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
 
         return cls(**values)
 
@@ -1189,11 +1197,8 @@ def reload_trading_config(
     """
 
     snap = _env_snapshot(env_overrides)
-    cfg = TradingConfig.from_env(env_overrides, allow_missing_drawdown=allow_missing_drawdown)
-    with _CACHE_LOCK:
-        global _CACHED_CONFIG, _CACHED_SIGNATURE
-        _CACHED_CONFIG = cfg
-        _CACHED_SIGNATURE = _signature_from_snapshot(snap)
+    cfg = TradingConfig.from_env(snap, allow_missing_drawdown=allow_missing_drawdown)
+    _clear_trading_config_cache()
     return cfg
 
 

@@ -15,6 +15,7 @@ os.environ["MAX_DRAWDOWN_THRESHOLD"] = "0.2"
 os.environ.pop("MAX_POSITION_SIZE", None)
 
 from ai_trading.config import TradingConfig
+from ai_trading.config.management import get_env, reload_trading_config
 from ai_trading.core.bot_engine import BotMode
 
 
@@ -131,6 +132,113 @@ class TestCentralizedConfig:
         assert config.max_position_size == pytest.approx(expected["max_position_size"])
         # Ensure unrelated env defaults remain intact
         assert config.dollar_risk_limit == pytest.approx(float(os.environ["DOLLAR_RISK_LIMIT"]))
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            (
+                "conservative",
+                {
+                    "kelly_fraction": 0.25,
+                    "conf_threshold": 0.85,
+                    "daily_loss_limit": 0.03,
+                    "max_position_size": 5000.0,
+                    "capital_cap": 0.20,
+                    "confirmation_count": 3,
+                    "take_profit_factor": 1.5,
+                },
+            ),
+            (
+                "balanced",
+                {
+                    "kelly_fraction": 0.6,
+                    "conf_threshold": 0.75,
+                    "daily_loss_limit": 0.05,
+                    "max_position_size": 8000.0,
+                    "capital_cap": 0.25,
+                    "confirmation_count": 2,
+                    "take_profit_factor": 1.8,
+                },
+            ),
+            (
+                "aggressive",
+                {
+                    "kelly_fraction": 0.75,
+                    "conf_threshold": 0.65,
+                    "daily_loss_limit": 0.08,
+                    "max_position_size": 12000.0,
+                    "capital_cap": 0.30,
+                    "confirmation_count": 1,
+                    "take_profit_factor": 2.5,
+                },
+            ),
+        ],
+    )
+    def test_get_env_reflects_mode_overlays(self, monkeypatch, mode, expected):
+        """Reloaded configs should expose preset values via get_env."""
+
+        for key in (
+            "TRADING_MODE",
+            "AI_TRADING_TRADING_MODE",
+            "KELLY_FRACTION",
+            "AI_TRADING_KELLY_FRACTION",
+            "CONF_THRESHOLD",
+            "AI_TRADING_CONF_THRESHOLD",
+            "DAILY_LOSS_LIMIT",
+            "AI_TRADING_DAILY_LOSS_LIMIT",
+            "MAX_POSITION_SIZE",
+            "AI_TRADING_MAX_POSITION_SIZE",
+            "CAPITAL_CAP",
+            "AI_TRADING_CAPITAL_CAP",
+            "CONFIRMATION_COUNT",
+            "TAKE_PROFIT_FACTOR",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        monkeypatch.setenv("TRADING_MODE", mode)
+        reload_trading_config()
+
+        assert get_env("KELLY_FRACTION", cast=float) == pytest.approx(expected["kelly_fraction"])
+        assert get_env("CONF_THRESHOLD", cast=float) == pytest.approx(expected["conf_threshold"])
+        assert get_env("DAILY_LOSS_LIMIT", cast=float) == pytest.approx(expected["daily_loss_limit"])
+        assert get_env("MAX_POSITION_SIZE", cast=float) == pytest.approx(expected["max_position_size"])
+        assert get_env("CAPITAL_CAP", cast=float) == pytest.approx(expected["capital_cap"])
+        assert get_env("CONFIRMATION_COUNT", cast=int) == expected["confirmation_count"]
+        assert get_env("TAKE_PROFIT_FACTOR", cast=float) == pytest.approx(expected["take_profit_factor"])
+
+    def test_mode_overlays_respect_explicit_env(self, monkeypatch):
+        """Explicit env vars must take precedence over presets."""
+
+        for key in (
+            "TRADING_MODE",
+            "MAX_POSITION_SIZE",
+            "AI_TRADING_MAX_POSITION_SIZE",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        monkeypatch.setenv("TRADING_MODE", "conservative")
+        monkeypatch.setenv("MAX_POSITION_SIZE", "9100")
+
+        reload_trading_config()
+
+        assert get_env("MAX_POSITION_SIZE", cast=float) == pytest.approx(9100.0)
+
+    def test_mode_overlays_respect_deprecated_alias(self, monkeypatch):
+        """Deprecated aliases should still override presets."""
+
+        for key in (
+            "TRADING_MODE",
+            "CONF_THRESHOLD",
+            "AI_TRADING_CONF_THRESHOLD",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        monkeypatch.setenv("TRADING_MODE", "aggressive")
+        monkeypatch.setenv("AI_TRADING_CONF_THRESHOLD", "0.91")
+
+        reload_trading_config()
+
+        assert get_env("CONF_THRESHOLD", cast=float) == pytest.approx(0.91)
 
     def test_conservative_mode_parameters(self, monkeypatch):
         """Test conservative mode specific values."""
