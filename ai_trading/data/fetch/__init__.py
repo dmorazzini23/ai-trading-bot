@@ -48,11 +48,21 @@ from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.utils.env import alpaca_credential_status, resolve_alpaca_feed
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
 from .validators import validate_adjustment, validate_feed
 
 logger = get_logger(__name__)
+
+
+_YF_INTERVAL_MAP = {
+    "1Min": "1m",
+    "5Min": "5m",
+    "15Min": "15m",
+    "1Hour": "60m",
+    "1Day": "1d",
+}
 
 
 # Lightweight indirection to support tests monkeypatching `data_fetcher.get_settings`
@@ -577,7 +587,8 @@ def _window_has_trading_session(start: _dt.datetime, end: _dt.datetime) -> bool:
 
 def _has_alpaca_keys() -> bool:
     """Return True if Alpaca API credentials appear configured."""
-    return bool(os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY"))
+    has_key, has_secret = alpaca_credential_status()
+    return has_key and has_secret
 
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
@@ -1444,6 +1455,27 @@ def _fetch_bars(
     _interval = _canon_tf(timeframe)
     explicit_feed_request = isinstance(feed, str)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
+    resolved_feed = resolve_alpaca_feed(_feed)
+    if resolved_feed is None:
+        provider_fallback.labels(
+            from_provider=f"alpaca_{_feed}", to_provider="yahoo"
+        ).inc()
+        provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
+        logger.warning(
+            "ALPACA_FEED_SWITCHOVER",
+            extra=_norm_extra(
+                {
+                    "provider": "alpaca",
+                    "requested_feed": _feed,
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                    "fallback": "yahoo",
+                }
+            ),
+        )
+        yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+        return _backup_get_bars(symbol, _start, _end, interval=yf_interval)
+    _feed = resolved_feed
     adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
     validate_adjustment(adjustment_norm)
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment_norm)
@@ -1976,6 +2008,26 @@ def _fetch_bars(
         if status == 400:
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra_with_remaining)
+            if "invalid feed" in text.lower():
+                provider_fallback.labels(
+                    from_provider=f"alpaca_{_feed}", to_provider="yahoo"
+                ).inc()
+                provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
+                logger.warning(
+                    "ALPACA_FEED_SWITCHOVER",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "requested_feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "fallback": "yahoo",
+                            "reason": "invalid_feed",
+                        }
+                    ),
+                )
+                yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
+                return _backup_get_bars(symbol, _start, _end, interval=yf_interval)
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())

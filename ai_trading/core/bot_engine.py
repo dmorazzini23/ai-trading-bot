@@ -53,6 +53,7 @@ import warnings
 
 import ai_trading.data.fetch as data_fetcher_module
 from ai_trading.data.fetch import (
+    EmptyBarsError,
     get_bars,
     get_bars_batch,
     get_minute_df,
@@ -11623,6 +11624,28 @@ def _fetch_feature_data(
     if raw_df is None:
         try:
             raw_df = fetch_minute_df_safe(symbol)
+        except EmptyBarsError as exc:
+            logger.warning(
+                "MINUTE_DATA_UNAVAILABLE",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "cause": "EmptyBarsError",
+                    "detail": str(exc),
+                },
+            )
+            return None, None, True
+        except (TimeoutError, data_fetcher_module.Timeout) as exc:
+            logger.warning(
+                "MINUTE_DATA_UNAVAILABLE",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "cause": type(exc).__name__,
+                    "detail": str(exc),
+                },
+            )
+            return None, None, True
         except DataFetchError as exc:
             reason = getattr(exc, "fetch_reason", "")
             if reason == "stale_minute_data":
