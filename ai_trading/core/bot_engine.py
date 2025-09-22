@@ -10494,11 +10494,36 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             client_order_id = f"ai-{uuid.uuid4()}"
         order_args["client_order_id"] = client_order_id
         ids_attr = getattr(api, "client_order_ids", None)
+        appended = False
         if isinstance(ids_attr, list):
             ids_attr.append(client_order_id)
-        else:
+            appended = True
+        elif hasattr(ids_attr, "append"):
             try:
-                setattr(api, "client_order_ids", [client_order_id])
+                ids_attr.append(client_order_id)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            else:
+                appended = True
+        elif hasattr(ids_attr, "add"):
+            try:
+                ids_attr.add(client_order_id)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            else:
+                appended = True
+        if not appended:
+            try:
+                if ids_attr is None:
+                    ids_list = [client_order_id]
+                elif isinstance(ids_attr, (str, bytes)):
+                    ids_list = [ids_attr, client_order_id]
+                elif isinstance(ids_attr, Iterable):
+                    ids_list = list(ids_attr)
+                    ids_list.append(client_order_id)
+                else:
+                    ids_list = [client_order_id]
+                setattr(api, "client_order_ids", ids_list)
             except Exception:
                 pass
 
@@ -10606,14 +10631,27 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
             start_ts = time.monotonic()
             pending_new = getattr(OrderStatus, "PENDING_NEW", "pending_new")
-            while getattr(order, "status", None) == pending_new:
+            last_order = order
+            while getattr(last_order, "status", None) == pending_new:
                 if time.monotonic() - start_ts > 1:
                     logger.warning(
                         f"Order stuck in PENDING_NEW: {order_args.get('symbol')}, retrying or monitoring required."
                     )
                     break
                 time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
-                order = api.get_order(order.id)
+                try:
+                    next_order = api.get_order(last_order.id)
+                except Exception:
+                    break
+                if next_order is None:
+                    break
+                if getattr(next_order, "symbol", None) in (None, "") and getattr(last_order, "symbol", None):
+                    try:
+                        setattr(next_order, "symbol", getattr(last_order, "symbol", ""))
+                    except Exception:
+                        pass
+                last_order = next_order
+            order = last_order
             logger.info(
                 f"Order status for {order_args.get('symbol')}: {getattr(order, 'status', '')}"
             )
@@ -10654,12 +10692,18 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             def _coerce_numeric(o: Any, attr: str, default: float = 0.0) -> None:
                 val = getattr(o, attr, None)
                 if val is None:
-                    setattr(o, attr, default)
+                    setattr(o, attr, float(default))
                     return
+                if isinstance(val, bool):
+                    raise ValueError(f"order.{attr} must be numeric")
                 try:
                     num = float(val)
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"order.{attr} must be numeric") from exc
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
+                    # Preserve integer semantics when the source is an int-like value.
+                    if isinstance(val, int):
+                        num = float(val)
                 setattr(o, attr, num)
 
             _coerce_numeric(order, "qty", float(order_args.get("qty", 0) or 0))
