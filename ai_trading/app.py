@@ -46,17 +46,17 @@ def create_app():
     def health():
         """Lightweight liveness probe with Alpaca diagnostics."""
         ok = True
-        error: str | None = None
+        errors: list[str] = []
         try:
             try:
                 from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
             except ImportError as exc:
                 sdk_ok = False
                 ok = False
-                error = str(exc)
+                errors.append(str(exc))
             except (KeyError, ValueError, TypeError) as exc:
                 sdk_ok = False
-                error = str(exc)
+                errors.append(str(exc))
 
             try:
                 from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client
@@ -64,14 +64,14 @@ def create_app():
                 paper = bool(base_url and 'paper' in base_url)
             except (KeyError, ValueError, TypeError) as exc:
                 trading_client, key, secret, base_url, paper = (None, None, None, '', False)
-                if error is None:
-                    error = str(exc)
+                if not errors:
+                    errors.append(str(exc))
 
             from ai_trading.config.management import is_shadow_mode
 
             shadow = is_shadow_mode()
 
-            if error is not None:
+            if errors:
                 ok = False
 
             payload = dict(
@@ -87,8 +87,8 @@ def create_app():
                     shadow_mode=shadow,
                 ),
             )
-            if error is not None:
-                payload["error"] = error
+            if errors:
+                payload["error"] = "; ".join(errors)
             return jsonify(payload)
         except Exception as e:  # /health must not raise
             _log.exception("HEALTH_CHECK_FAILED")
