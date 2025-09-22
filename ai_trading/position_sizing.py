@@ -49,6 +49,7 @@ def _resolve_max_position_size(
     equity: float | None,
     *,
     default_equity: float = 200000.0,
+    force_refresh: bool = False,
 ) -> tuple[float, str]:
     """Resolve ``max_position_size`` with strict validation.
 
@@ -73,24 +74,37 @@ def _resolve_max_position_size(
     if provided > 0:
         return (float(provided), "provided")
 
-    if equity in (None, 0) or (isinstance(equity, float) and equity <= 0):
-        if not _CACHE.equity_missing_logged:
-            _log.warning(
-                "EQUITY_MISSING",
-                extra={
-                    "field": "equity",
-                    "default_equity": default_equity,
-                    "capital_cap": capital_cap,
-                },
-            )
-            _CACHE.equity_missing_logged = True
-    elif _CACHE.equity_missing_logged:
+    was_missing_logged = _CACHE.equity_missing_logged
+    if force_refresh:
+        _CACHE.equity_missing_logged = False
+
+    numeric_equity: float | None
+    try:
+        numeric_equity = float(equity) if equity is not None else None
+    except (TypeError, ValueError):
+        numeric_equity = None
+
+    if numeric_equity is None or numeric_equity <= 0.0:
+        logger_once.warning(
+            "EQUITY_MISSING",
+            key="position_sizing:equity_missing",
+            extra={
+                "field": "equity",
+                "default_equity": default_equity,
+                "capital_cap": capital_cap,
+            },
+        )
+        _CACHE.equity_missing_logged = True
+    elif was_missing_logged:
         _log.info(
             "EQUITY_RECOVERED",
-            extra={"equity": equity, "capital_cap": capital_cap},
+            extra={"equity": numeric_equity, "capital_cap": capital_cap},
         )
         _CACHE.equity_missing_logged = False
-    basis = equity if equity is not None and equity > 0 else default_equity
+    else:
+        _CACHE.equity_missing_logged = False
+
+    basis = numeric_equity if numeric_equity is not None and numeric_equity > 0 else default_equity
     resolved = float(round(capital_cap * basis, 2))
     _log.info(
         "CONFIG_AUTOFIX",
@@ -98,8 +112,8 @@ def _resolve_max_position_size(
             "field": "max_position_size",
             "given": float(provided),
             "fallback": resolved,
-            "reason": "derived_equity_cap" if equity in (None, 0) else "derived_from_equity",
-            "equity": equity,
+            "reason": "derived_from_equity" if numeric_equity is not None and numeric_equity > 0 else "derived_equity_cap",
+            "equity": numeric_equity if numeric_equity is not None else equity,
             "capital_cap": capital_cap,
         },
     )
@@ -259,8 +273,6 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
 
     Set ``force_refresh`` to ``True`` to bypass cached values.
     """
-    if force_refresh:
-        _CACHE.equity_missing_logged = False
     mode = str(getattr(tcfg, 'max_position_mode', getattr(cfg, 'max_position_mode', 'STATIC'))).upper()
     ttl = float(getattr(tcfg, 'dynamic_size_refresh_secs', getattr(cfg, 'dynamic_size_refresh_secs', 3600.0)))
     cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)
@@ -303,7 +315,13 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                                 pass
                 else:
                     eq = None
-            cur, source = _resolve_max_position_size(cur, cap, eq, default_equity=default_eq)
+            cur, source = _resolve_max_position_size(
+                cur,
+                cap,
+                eq,
+                default_equity=default_eq,
+                force_refresh=force_refresh,
+            )
             _CACHE.equity = eq
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
         return (
