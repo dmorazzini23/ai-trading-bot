@@ -292,9 +292,13 @@ class Settings(BaseSettings):
 
     @field_validator('alpaca_feed_failover', mode='before')
     @classmethod
-    def _split_feed_failover(cls, v):
+    def _split_feed_failover(cls, v, info):
         if isinstance(v, FieldInfo) or v is None:
-            return tuple()
+            try:
+                default = cls.model_fields[info.field_name].default  # type: ignore[index]
+            except Exception:
+                default = ('sip',)
+            return tuple(default or ())
         if isinstance(v, str):
             if not v.strip():
                 return tuple()
@@ -304,17 +308,10 @@ class Settings(BaseSettings):
     @field_validator('alpaca_feed_failover', mode='after')
     @classmethod
     def _normalize_feed_failover(cls, v: tuple[str, ...]) -> tuple[str, ...]:
-        allow_sip = str(os.getenv('ALPACA_ALLOW_SIP', '0')).strip().lower() in {
-            '1',
-            'true',
-            'yes',
-        }
         normalized: list[str] = []
         for feed in v:
             feed_norm = str(feed).lower().strip()
             if feed_norm not in {'iex', 'sip'}:
-                continue
-            if feed_norm == 'sip' and not allow_sip:
                 continue
             if feed_norm not in normalized:
                 normalized.append(feed_norm)

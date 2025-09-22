@@ -685,6 +685,8 @@ def _sdk_submit(
                 "side": side,
                 "status": getattr(order, "status", None),
             }
+    if "status" not in data or data.get("status") in (None, ""):
+        data["status"] = "accepted"
     return _to_public_dict(data)
 
 
@@ -797,8 +799,9 @@ def submit_order(
         # client is supplied (callers may choose shadow=True explicitly).
         do_shadow = False
 
+    _record_client_order_id(client, idempotency_key)
+
     if do_shadow:
-        _record_client_order_id(client, idempotency_key)
         oid = f"shadow-{uuid.uuid4().hex[:16]}"
         return {
             "id": oid,

@@ -604,7 +604,14 @@ def _prefers_sip() -> bool:
     if "sip" in feed:
         return True
     failover = os.getenv("ALPACA_FEED_FAILOVER", "")
-    return any(part.strip().lower() == "sip" for part in failover.split(","))
+    if any(part.strip().lower() == "sip" for part in failover.split(",")):
+        return True
+    try:
+        settings = get_settings()
+    except Exception:
+        return False
+    failover_tuple = getattr(settings, "alpaca_feed_failover", ()) or ()
+    return any(str(part).strip().lower() == "sip" for part in failover_tuple)
 
 
 _SIP_UNAUTHORIZED = _env_flag("ALPACA_SIP_UNAUTHORIZED")
