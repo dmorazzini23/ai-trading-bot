@@ -2912,7 +2912,7 @@ def get_minute_df(
                                         "timeframe": "1Min",
                                     },
                                 )
-                                _record_feed_switch(symbol, "1Min", cur, alt_feed)
+                                _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 df_alt = _post_process(df_alt, symbol=symbol, timeframe="1Min")
                                 df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
@@ -3038,9 +3038,7 @@ def get_minute_df(
             df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
     attempt_count_snapshot = max(attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot))
-    allow_empty_return = (not window_has_session) or (
-        used_backup and attempt_count_snapshot < _EMPTY_BAR_THRESHOLD
-    )
+    allow_empty_return = not window_has_session
     try:
         if pd is not None and isinstance(df, pd.DataFrame) and (not df.empty):
             if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
@@ -3062,7 +3060,17 @@ def get_minute_df(
         )
     original_df = df
     if original_df is None:
-        if not use_finnhub and not has_finnhub:
+        if allow_empty_return:
+            if used_backup and not fallback_logged:
+                _mark_fallback(
+                    symbol,
+                    "1Min",
+                    start_dt,
+                    end_dt,
+                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
+                )
+                fallback_logged = True
+            _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]

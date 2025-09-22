@@ -1,7 +1,11 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from ai_trading.data import fetch
+
+pd = pytest.importorskip("pandas")
 
 
 class _Resp:
@@ -125,3 +129,52 @@ def test_feed_override_used_on_subsequent_requests(monkeypatch):
     assert not getattr(df_second, "empty", True)
     assert len(second_session.calls) == 1
     assert second_session.calls[0]["feed"] == "sip"
+
+
+def test_alt_feed_switch_records_override(monkeypatch):
+    _reset_state()
+    fetch._SKIPPED_SYMBOLS.clear()
+    fetch._EMPTY_BAR_COUNTS.clear()
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("ENABLE_FINNHUB", "0")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
+    monkeypatch.setattr(fetch, "_sip_configured", lambda: True)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
+    monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
+    monkeypatch.setattr(fetch, "_verify_minute_continuity", lambda df, *a, **k: df)
+    monkeypatch.setattr(fetch, "_post_process", lambda df, *a, **k: df)
+    monkeypatch.setattr(fetch, "_backup_get_bars", lambda *a, **k: pd.DataFrame())
+
+    symbol = "AAPL"
+    start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    tf_key = (symbol, "1Min")
+    fetch._EMPTY_BAR_COUNTS[tf_key] = fetch._EMPTY_BAR_THRESHOLD
+
+    def fake_fetch(_, __, ___, timeframe, *, feed=None):
+        if feed == "iex":
+            raise fetch.EmptyBarsError("empty")
+        assert feed == "sip"
+        df = pd.DataFrame(
+            {
+                "timestamp": [pd.Timestamp(start)],
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1],
+            }
+        )
+        return df
+
+    monkeypatch.setattr(fetch, "_fetch_bars", fake_fetch)
+
+    df = fetch.get_minute_df(symbol, start, end)
+
+    assert hasattr(df, "empty")
+    assert not getattr(df, "empty", True)
+    assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
+    assert (symbol, "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
