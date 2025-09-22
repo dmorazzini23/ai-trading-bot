@@ -17224,7 +17224,9 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     price: float | None = None
     price_source = "unknown"
+    primary_failure_source: str | None = None
 
+    provider_disabled = False
     primary_provider_fn = getattr(
         data_fetcher_module, "is_primary_provider_enabled", None
     )
@@ -17234,9 +17236,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         except Exception:  # pragma: no cover - defensive guard
             provider_enabled = True
         if not provider_enabled:
+            provider_disabled = True
             price_source = _ALPACA_DISABLED_SENTINEL
+            primary_failure_source = price_source
             _PRICE_SOURCE[symbol] = price_source
-            return None
+            if not prefer_backup:
+                return None
 
     def _normalize_price(raw_value: Any, provider: str) -> float | None:
         """Coerce *raw_value* to a positive float or log why it is rejected."""
@@ -17266,10 +17271,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     ask_unusable = False
     last_unusable = False
 
-    skip_primary = prefer_backup
+    skip_primary = prefer_backup or provider_disabled
     if not skip_primary and not is_alpaca_service_available():
         skip_primary = True
         price_source = "alpaca_unavailable"
+        if primary_failure_source is None:
+            primary_failure_source = price_source
 
     if not skip_primary:
         try:
@@ -17353,6 +17360,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                     break
             if price is None:
                 price_source = "alpaca_invalid"
+                if primary_failure_source is None:
+                    primary_failure_source = price_source
         except AlpacaAuthenticationError as exc:
             logger.error(
                 "ALPACA_PRICE_AUTH_FAILED",
@@ -17370,6 +17379,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 },
             )
             price_source = "alpaca_http_error"
+            if primary_failure_source is None:
+                primary_failure_source = price_source
             _PRICE_SOURCE[symbol] = price_source
         except (
             FileNotFoundError,
@@ -17424,7 +17435,11 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             else:
                 price_source = bid_source_label
 
-    _PRICE_SOURCE[symbol] = price_source
+    final_price_source = price_source
+    if price is None and primary_failure_source is not None:
+        final_price_source = primary_failure_source
+
+    _PRICE_SOURCE[symbol] = final_price_source
     return price
 
 
