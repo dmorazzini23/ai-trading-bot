@@ -141,6 +141,7 @@ from ai_trading.settings import get_settings, get_alpaca_secret_key_plain
 from ai_trading.broker.alpaca_credentials import check_alpaca_available
 from ai_trading import portfolio  # expose portfolio module for tests/monkeypatching
 from ai_trading.utils import portfolio_lock  # expose lock for tests/monkeypatching
+from ai_trading.meta_learning.persistence import load_trade_history
 
 
 _PENDING_ORDER_STATUSES = frozenset({"new", "pending_new"})
@@ -7390,58 +7391,68 @@ def _read_trade_log(
     path: str = TRADE_LOG_FILE,
     usecols: list[str] | None = None,
     dtype: dict | str | None = None,
+    sync_from_broker: bool = False,
+    broker: Any | None = None,
 ):
-    """Safely load the trade log CSV or return ``None`` if unavailable.
+    """Load the trade log with canonical and broker fallbacks."""
 
-    Emits a warning when the log file is missing or empty with guidance on
-    initializing the trade log via :func:`get_trade_logger`.
-    """
-    # Ensure the trade log exists with headers before attempting to read. The
-    # :func:`get_trade_logger` helper will create the file and write the header
-    # row on first use. Calling it here prevents downstream consumers from
-    # failing when the trade log is missing or empty during startup or in fresh
-    # deployments.
+    global _EMPTY_TRADE_LOG_INFO_EMITTED
     get_trade_logger()
 
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
-        logger.warning(
-            "TRADE_LOG_MISSING_OR_EMPTY | path=%s | hint=call get_trade_logger() to initialize",
-            path,
-        )
-        return None
     try:  # AI-AGENT-REF: gate heavy import
         import pandas as pd  # type: ignore
     except ImportError:
         logger.warning("pandas not available; cannot load trade log at %s", path)
         return None
-    try:
-        df = pd.read_csv(
-            path,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=usecols,
-            dtype=dtype,
-        )
-    except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
-        logger.warning(
-            "Failed to parse trade log %s: %s | hint=call get_trade_logger() to initialize",
-            path,
-            e,
-        )
-        return None
-    if df.empty:
-        # Startup may legitimately run before any trades have executed; use INFO
-        # instead of WARNING to reduce noise when the log exists but has no
-        # rows yet.
-        global _EMPTY_TRADE_LOG_INFO_EMITTED
-        if not _EMPTY_TRADE_LOG_INFO_EMITTED:
-            logger.info(
-                "Trade log %s parsed but contains no rows | hint=call get_trade_logger() to initialize",
+
+    local_frame: "pd.DataFrame" | None = None
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        try:
+            local_frame = pd.read_csv(
                 path,
+                on_bad_lines="skip",
+                engine="python",
+                usecols=usecols,
+                dtype=dtype,
             )
+        except (pd.errors.EmptyDataError, pd.errors.ParserError):
+            local_frame = None
+
+    frame = local_frame
+    source = "local" if frame is not None and not frame.empty else None
+    if frame is None or frame.empty:
+        fallback_frame, fallback_source = load_trade_history(
+            sync_from_broker=sync_from_broker,
+            broker=broker,
+        )
+        frame = fallback_frame
+        source = fallback_source
+
+    if frame is None or frame.empty:
+        if not _EMPTY_TRADE_LOG_INFO_EMITTED:
+            logger.info("TRADE_LOG_EMPTY | action=fall_back_allow_all")
             _EMPTY_TRADE_LOG_INFO_EMITTED = True
         return None
-    return df
+
+    if usecols:
+        available = [col for col in usecols if col in frame.columns]
+        if available:
+            frame = frame[available]
+    if isinstance(dtype, dict):
+        coerces = {col: dtype[col] for col in dtype if col in frame.columns}
+        if coerces:
+            try:
+                frame = frame.astype(coerces)
+            except (TypeError, ValueError):
+                pass
+
+    logger.info(
+        "TRADE_LOG_LOADED | rows=%s source=%s",
+        len(frame),
+        source or "local",
+    )
+    _EMPTY_TRADE_LOG_INFO_EMITTED = False
+    return frame
 
 
 def _load_trade_log_cache() -> Any | None:
@@ -7449,7 +7460,9 @@ def _load_trade_log_cache() -> Any | None:
     global _TRADE_LOG_CACHE, _TRADE_LOG_CACHE_LOADED
     if not _TRADE_LOG_CACHE_LOADED:
         _TRADE_LOG_CACHE = _read_trade_log(
-            TRADE_LOG_FILE, usecols=["symbol", "exit_time"]
+            TRADE_LOG_FILE,
+            usecols=["symbol", "exit_time"],
+            sync_from_broker=True,
         )
         _TRADE_LOG_CACHE_LOADED = True
     return _TRADE_LOG_CACHE

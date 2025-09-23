@@ -13,9 +13,11 @@ except Exception:  # pragma: no cover - optional at import time
 
 from ai_trading.config.management import TradingConfig, get_trading_config
 from ai_trading.core.enums import OrderSide
+
 logger = logging.getLogger(__name__)
 _missing_attr_warned: set[str] = set()
 _invalid_value_warned: set[str] = set()
+EPS = 1e-6
 
 
 def _resolve_conf_threshold(cfg) -> float:
@@ -209,9 +211,7 @@ class StrategyAllocator:
                 bars = getattr(self.config, "signal_confirmation_bars", 2)
                 if bars is None or not isinstance(bars, int) or bars < 1:
                     if "signal_confirmation_bars" not in _invalid_value_warned:
-                        logger.warning(
-                            "Invalid signal_confirmation_bars: %s, using default 2", bars
-                        )
+                        logger.warning("Invalid signal_confirmation_bars: %s, using default 2", bars)
                         _invalid_value_warned.add("signal_confirmation_bars")
                     bars = 2
                 self.signal_history[key] = self.signal_history[key][-bars:]
@@ -276,11 +276,7 @@ class StrategyAllocator:
                         bars,
                     )
                     logger.debug("  Current history for %s: %s", key, history)
-                    if (
-                        isinstance(StrategySignal, type)
-                        and isinstance(s, StrategySignal)
-                        and side_is_enum
-                    ):
+                    if isinstance(StrategySignal, type) and isinstance(s, StrategySignal) and side_is_enum:
                         if s.confidence >= threshold:
                             confirmed_signal = copy.deepcopy(s)
                             confirmed_signal.confidence = float(s.confidence)
@@ -381,26 +377,14 @@ class StrategyAllocator:
                 equal = min(max_total / len(buys), 0.15)
                 for signal in buys:
                     signal.weight = equal
-                    logger.debug(
-                        "Assigned equal weight %.3f to %s", equal, signal.symbol
-                    )
+                    logger.debug("Assigned equal weight %.3f to %s", equal, signal.symbol)
 
         for signal in sells:
             max_exit = min(0.25, max_total / max(len(sells), 1))
             signal.weight = max_exit
-            logger.debug(
-                "Assigned exit weight %.3f to %s", signal.weight, signal.symbol
-            )
+            logger.debug("Assigned exit weight %.3f to %s", signal.weight, signal.symbol)
 
-        total_buy = sum(s.weight for s in buys)
-        if total_buy > max_total:
-            logger.warning(
-                "Total buy weight %.3f exceeds cap %.3f, scaling down", total_buy, max_total
-            )
-            scale = max_total / total_buy
-            for signal in buys:
-                signal.weight *= scale
-                logger.debug("Scaled weight to %.3f for %s", signal.weight, signal.symbol)
+        self._scale_buy_weights(buys, max_total)
 
         logger.info(
             "Portfolio allocation: %s buys (total weight: %.3f), %s sells",
@@ -408,6 +392,66 @@ class StrategyAllocator:
             sum(s.weight for s in buys),
             len(sells),
         )
+
+    def _scale_buy_weights(self, buys: list[Any], cap: float) -> bool:
+        """Scale buy weights proportionally when exceeding ``cap``."""
+
+        if not buys:
+            return False
+        try:
+            total_before = sum(max(float(getattr(sig, "weight", 0.0)), 0.0) for sig in buys)
+        except (TypeError, ValueError):
+            total_before = sum(max(float(sig.weight), 0.0) for sig in buys if hasattr(sig, "weight"))
+        if total_before <= 0 or total_before <= cap + EPS:
+            return False
+        scale = cap / total_before
+        scaled_weights: list[tuple[Any, float]] = []
+        for sig in buys:
+            try:
+                weight = float(getattr(sig, "weight", 0.0))
+            except (TypeError, ValueError):
+                weight = 0.0
+            scaled = max(weight, 0.0) * scale
+            scaled_weights.append((sig, scaled))
+        total_scaled = sum(weight for _, weight in scaled_weights)
+        cap_target = min(cap, total_scaled) if total_scaled > 0 else 0.0
+        normalised: list[tuple[Any, float]] = []
+        if total_scaled > 0:
+            ratio = cap_target / total_scaled
+            for sig, scaled in scaled_weights:
+                normalised.append((sig, scaled * ratio))
+        else:
+            normalised = [(sig, 0.0) for sig, _ in scaled_weights]
+
+        for sig, scaled in normalised:
+            sig.weight = round(max(scaled, 0.0), 7)
+
+        total_after = sum(getattr(sig, "weight", 0.0) for sig in buys)
+        if total_after > cap + EPS:
+            excess = total_after - cap
+            for sig, _ in sorted(normalised, key=lambda item: getattr(item[0], "weight", 0.0), reverse=True):
+                if excess <= EPS:
+                    break
+                current_weight = getattr(sig, "weight", 0.0)
+                reduction = min(current_weight, excess)
+                sig.weight = round(max(current_weight - reduction, 0.0), 7)
+                excess -= reduction
+            total_after = sum(getattr(sig, "weight", 0.0) for sig in buys)
+        if total_after > cap + EPS:
+            largest = max(buys, key=lambda s: getattr(s, "weight", 0.0))
+            adjustment = total_after - cap
+            largest.weight = round(max(getattr(largest, "weight", 0.0) - adjustment, 0.0), 7)
+            total_after = sum(getattr(sig, "weight", 0.0) for sig in buys)
+
+        total_after = min(total_after, cap + EPS)
+        logger.info(
+            "ALLOCATION_SCALED | buys=%d total_weight_before=%.6f total_weight_after=%.6f cap=%.6f method=proportional",
+            len(buys),
+            total_before,
+            total_after,
+            cap,
+        )
+        return True
 
     def update_reward(self, strategy: str, reward: float) -> None:
         """Update reward for a strategy (compatibility hook for tests)."""

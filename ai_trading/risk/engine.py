@@ -12,11 +12,15 @@ import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
 from ai_trading.data.fetch import normalize_ohlcv_columns
+
 try:
     from alpaca.common.exceptions import APIError
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
+
     class APIError(Exception):
         pass
+
+
 try:
     from alpaca.trading.client import TradingClient
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
@@ -36,7 +40,7 @@ from ai_trading.settings import (
     get_position_size_min_usd,
 )
 
-if not hasattr(np, 'NaN'):
+if not hasattr(np, "NaN"):
     np.NaN = np.nan
 
 # Lazy pandas proxy
@@ -71,11 +75,7 @@ def _derive_minimum_quantity(engine: "RiskEngine", price: float) -> int:
         fallback_usd = POSITION_SIZE_MIN_USD_DEFAULT
     fallback_qty = max(int(fallback_usd / price), 1)
 
-    if (
-        min_usd_value is not None
-        and _is_finite_number(min_usd_value)
-        and min_usd_value > 0
-    ):
+    if min_usd_value is not None and _is_finite_number(min_usd_value) and min_usd_value > 0:
         return max(int(min_usd_value / price), 1)
 
     if not getattr(engine, "_invalid_min_size_logged", False):
@@ -118,6 +118,8 @@ def _calculate_position_size(
 
     qty = max(int(raw_qty), min_qty)
     return max(qty, 0)
+
+
 try:
     from alpaca.data.historical.stock import StockHistoricalDataClient
 except ImportError:  # pragma: no cover - allow import without alpaca for tests
@@ -130,6 +132,7 @@ def _safe_call(fn, *a, **k):
     except AttributeError:
         return None
 
+
 @dataclass
 class TradeSignal:
     symbol: str
@@ -139,19 +142,23 @@ class TradeSignal:
     weight: float
     asset_class: str
     strength: float = 1.0
+
+
 logger = get_logger(__name__)
 
 random.seed(SEED)
 np.random.seed(SEED)
-if not hasattr(np, 'NaN'):
+if not hasattr(np, "NaN"):
     np.NaN = np.nan
 MAX_DRAWDOWN = 0.05
 
+
 class RiskEngine:
     """Cross-strategy risk manager."""
+
     _lock: object | None = None
 
-    def __init__(self, cfg: TradingConfig | None=None) -> None:
+    def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""
         self._validate_env()
         logger.info("Risk engine initialized")
@@ -163,13 +170,13 @@ class RiskEngine:
         settings = get_settings()
         self.enable_portfolio_features = settings.ENABLE_PORTFOLIO_FEATURES
         try:
-            exposure_cap = getattr(self.config, 'exposure_cap_aggressive', 0.8)
+            exposure_cap = getattr(self.config, "exposure_cap_aggressive", 0.8)
             if not isinstance(exposure_cap, int | float) or not 0 < exposure_cap <= 1.0:
-                logger.warning('Invalid exposure_cap_aggressive %s, using default 0.8', exposure_cap)
+                logger.warning("Invalid exposure_cap_aggressive %s, using default 0.8", exposure_cap)
                 exposure_cap = 0.8
             self.global_limit = exposure_cap
         except (TypeError, ValueError) as e:  # config may contain non-numeric values
-            logger.error('Error validating exposure_cap_aggressive: %s, using default', e)
+            logger.error("Error validating exposure_cap_aggressive: %s, using default", e)
             self.global_limit = 0.8
         self.asset_limits: dict[str, float] = {}
         self.strategy_limits: dict[str, float] = {}
@@ -181,47 +188,44 @@ class RiskEngine:
         self.data_client = None
         try:
             cfg_key, cfg_secret, _ = _resolve_alpaca_env()
-            api_key = cfg_key or getattr(settings, 'alpaca_api_key', None)
+            api_key = cfg_key or getattr(settings, "alpaca_api_key", None)
             secret = cfg_secret or get_alpaca_secret_key_plain()
-            oauth = get_env('ALPACA_OAUTH')
+            oauth = get_env("ALPACA_OAUTH")
             has_keypair = bool(api_key and secret)
             if has_keypair and oauth:
-                raise RuntimeError(
-                    'Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both'
-                )
+                raise RuntimeError("Provide either ALPACA_API_KEY/ALPACA_SECRET_KEY or ALPACA_OAUTH, not both")
             if has_keypair:
-                self.data_client = StockHistoricalDataClient(
-                    api_key=api_key, secret_key=secret
-                )
+                self.data_client = StockHistoricalDataClient(api_key=api_key, secret_key=secret)
             elif oauth:
                 self.data_client = StockHistoricalDataClient(oauth_token=oauth)
         except (APIError, TypeError, AttributeError, OSError) as e:
-            logger.warning('Could not initialize data client: %s', e)
+            logger.warning("Could not initialize data client: %s", e)
         self._returns: list[float] = []
         self._drawdowns: list[float] = []
         self._last_portfolio_cap: float | None = None
         self._last_equity_cap: float | None = None
         from threading import Event
+
         self._update_event = Event()
         self._last_update = 0.0
         self._invalid_min_size_logged = False
         try:
-            max_drawdown = get_env('MAX_DRAWDOWN_THRESHOLD', '0.15', cast=float)
+            max_drawdown = get_env("MAX_DRAWDOWN_THRESHOLD", "0.15", cast=float)
             if not 0 < max_drawdown <= 1.0:
-                logger.warning('Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15', max_drawdown)
+                logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15", max_drawdown)
                 max_drawdown = 0.15
             self.max_drawdown_threshold = float(max_drawdown)
         except (RuntimeError, ValueError, TypeError) as e:
-            logger.error('Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15', e)
+            logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15", e)
             self.max_drawdown_threshold = 0.15
         try:
-            cooldown = get_env('HARD_STOP_COOLDOWN_MIN', '10', cast=float)
+            cooldown = get_env("HARD_STOP_COOLDOWN_MIN", "10", cast=float)
             if cooldown < 0:
-                logger.warning('Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10', cooldown)
+                logger.warning("Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10", cooldown)
                 cooldown = 10.0
             self.hard_stop_cooldown = float(cooldown)
         except (RuntimeError, ValueError, TypeError) as e:
-            logger.error('Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10', e)
+            logger.error("Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10", e)
             self.hard_stop_cooldown = 10.0
         self._hard_stop_until: float | None = None
 
@@ -232,13 +236,20 @@ class RiskEngine:
         env_count = len(validate_required_env())
         logger.debug("Validated %d environment variables", env_count)
 
-    def _dynamic_cap(self, asset_class: str, volatility: float | None=None, cash_ratio: float | None=None) -> float:
+    def _dynamic_cap(self, asset_class: str, volatility: float | None = None, cash_ratio: float | None = None) -> float:
         """Return exposure cap for ``asset_class`` using adaptive rules."""
         base_cap = self.asset_limits.get(asset_class, self.global_limit)
         port_cap = self._adaptive_global_cap()
         vol = self._current_volatility()
-        if self._last_portfolio_cap is None or abs(self._last_portfolio_cap - port_cap) > 0.01 or self._last_equity_cap is None or (abs(self._last_equity_cap - base_cap) > 0.01):
-            logger.info('Adaptive exposure caps: portfolio=%.1f, equity=%.1f (volatility=%.1f%%)', port_cap, base_cap, vol * 100)
+        if (
+            self._last_portfolio_cap is None
+            or abs(self._last_portfolio_cap - port_cap) > 0.01
+            or self._last_equity_cap is None
+            or (abs(self._last_equity_cap - base_cap) > 0.01)
+        ):
+            logger.info(
+                "Adaptive exposure caps: portfolio=%.1f, equity=%.1f (volatility=%.1f%%)", port_cap, base_cap, vol * 100
+            )
             self._last_portfolio_cap = port_cap
             self._last_equity_cap = base_cap
         return min(base_cap, port_cap)
@@ -246,7 +257,7 @@ class RiskEngine:
     def _current_volatility(self) -> float:
         return float(np.std(self._returns[-10:])) if self._returns else 0.0
 
-    def _get_atr_data(self, symbol: str, lookback: int=14) -> float | None:
+    def _get_atr_data(self, symbol: str, lookback: int = 14) -> float | None:
         """Return ATR value for ``symbol``."""
         try:
             lookback = max(int(lookback), 1)
@@ -254,8 +265,9 @@ class RiskEngine:
                 ts, val = self._atr_cache[symbol]
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
-            ctx = getattr(self, 'ctx', None)
-            client = getattr(ctx, 'data_client', None) or self.data_client or getattr(ctx, 'api', None)
+            ctx = getattr(self, "ctx", None)
+            client = getattr(ctx, "data_client", None) or self.data_client or getattr(ctx, "api", None)
+
             def _safe_bar_value(bar: Any, names: Sequence[str]) -> Any:
                 if isinstance(bar, dict):
                     for name in names:
@@ -278,13 +290,13 @@ class RiskEngine:
                         df_local = df_in.copy() if isinstance(df_in, pd.DataFrame) else df_in
                 except (ValueError, TypeError, AttributeError):
                     return (None, None, None)
-                if getattr(df_local, 'empty', True):
+                if getattr(df_local, "empty", True):
                     return (None, None, None)
                 df_local = normalize_ohlcv_columns(df_local)
-                if pd is not None and hasattr(pd, 'RangeIndex') and isinstance(df_local.index, pd.RangeIndex):
+                if pd is not None and hasattr(pd, "RangeIndex") and isinstance(df_local.index, pd.RangeIndex):
                     df_local = df_local.reset_index(drop=True)
 
-                def _series(df_obj: 'pd.DataFrame', name: str) -> np.ndarray | None:
+                def _series(df_obj: "pd.DataFrame", name: str) -> np.ndarray | None:
                     if name in df_obj:
                         try:
                             return df_obj[name].dropna().to_numpy()
@@ -293,12 +305,14 @@ class RiskEngine:
                     return None
 
                 return (
-                    _series(df_local, 'high'),
-                    _series(df_local, 'low'),
-                    _series(df_local, 'close'),
+                    _series(df_local, "high"),
+                    _series(df_local, "low"),
+                    _series(df_local, "close"),
                 )
 
-            def _sequence_to_arrays(seq: Sequence[Any]) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+            def _sequence_to_arrays(
+                seq: Sequence[Any],
+            ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
                 if not seq:
                     return (None, None, None)
                 df_from_seq = None
@@ -308,11 +322,11 @@ class RiskEngine:
                         for bar in seq:
                             if isinstance(bar, dict):
                                 records.append(bar)
-                            elif hasattr(bar, '__dict__'):
+                            elif hasattr(bar, "__dict__"):
                                 records.append(vars(bar))
                             else:
                                 record = {}
-                                for attr in ('open', 'high', 'low', 'close', 'o', 'h', 'l', 'c'):
+                                for attr in ("open", "high", "low", "close", "o", "h", "l", "c"):
                                     if hasattr(bar, attr):
                                         record[attr] = getattr(bar, attr)
                                 if record:
@@ -328,20 +342,20 @@ class RiskEngine:
                         OSError,
                         AttributeError,
                     ) as exc:  # pragma: no cover - defensive
-                        logger.debug('ATR bars sequence conversion failed for %s: %s', symbol, exc)
+                        logger.debug("ATR bars sequence conversion failed for %s: %s", symbol, exc)
                         df_from_seq = None
-                if df_from_seq is not None and getattr(df_from_seq, 'empty', True) is False:
+                if df_from_seq is not None and getattr(df_from_seq, "empty", True) is False:
                     try:
                         return _extract_arrays(df_from_seq)
                     except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover - defensive
-                        logger.debug('ATR sequence dataframe extraction failed for %s: %s', symbol, exc)
+                        logger.debug("ATR sequence dataframe extraction failed for %s: %s", symbol, exc)
                 highs: list[float] = []
                 lows: list[float] = []
                 closes: list[float] = []
                 for bar in seq:
-                    high_val = _safe_bar_value(bar, ('high', 'h'))
-                    low_val = _safe_bar_value(bar, ('low', 'l'))
-                    close_val = _safe_bar_value(bar, ('close', 'c'))
+                    high_val = _safe_bar_value(bar, ("high", "h"))
+                    low_val = _safe_bar_value(bar, ("low", "l"))
+                    close_val = _safe_bar_value(bar, ("close", "c"))
                     if None in (high_val, low_val, close_val):
                         continue
                     highs.append(float(high_val))
@@ -361,12 +375,14 @@ class RiskEngine:
                     return (None, None, None, None)
                 seq_candidate: Sequence[Any] | None = None
                 cand_high = cand_low = cand_close = None
-                if pd is not None and hasattr(candidate, 'empty'):
+                if pd is not None and hasattr(candidate, "empty"):
                     try:
-                        df_candidate = candidate.copy() if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
+                        df_candidate = (
+                            candidate.copy() if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
+                        )
                     except (ValueError, TypeError, AttributeError):
                         df_candidate = None
-                    if df_candidate is not None and getattr(df_candidate, 'empty', True) is False:
+                    if df_candidate is not None and getattr(df_candidate, "empty", True) is False:
                         cand_high, cand_low, cand_close = _extract_arrays(df_candidate)
                 if cand_high is None or cand_low is None or cand_close is None:
                     if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
@@ -376,7 +392,7 @@ class RiskEngine:
                     (cand_high is None or cand_low is None or cand_close is None)
                     and seq_candidate is None
                     and not isinstance(candidate, (str, bytes, bytearray))
-                    and not hasattr(candidate, 'empty')
+                    and not hasattr(candidate, "empty")
                 ):
                     try:
                         seq_list = list(candidate)
@@ -386,12 +402,12 @@ class RiskEngine:
                         seq_candidate = seq_list
                         cand_high, cand_low, cand_close = _sequence_to_arrays(seq_list)
                 if cand_high is None or cand_low is None or cand_close is None:
-                    if pd is not None and not hasattr(candidate, 'empty'):
+                    if pd is not None and not hasattr(candidate, "empty"):
                         try:
                             df_candidate = pd.DataFrame(candidate)
                         except (ValueError, TypeError, AttributeError):
                             df_candidate = None
-                        if df_candidate is not None and getattr(df_candidate, 'empty', True) is False:
+                        if df_candidate is not None and getattr(df_candidate, "empty", True) is False:
                             cand_high, cand_low, cand_close = _extract_arrays(df_candidate)
                 return cand_high, cand_low, cand_close, seq_candidate
 
@@ -402,12 +418,14 @@ class RiskEngine:
             attempted_simple_get = False
             limit: int | None = None
             if client:
-                has_stock_bars = callable(getattr(client, 'get_stock_bars', None)) or callable(getattr(client, 'get_bars', None))
+                has_stock_bars = callable(getattr(client, "get_stock_bars", None)) or callable(
+                    getattr(client, "get_bars", None)
+                )
                 if has_stock_bars:
-                    feed = getattr(get_settings(), 'alpaca_data_feed', None)
+                    feed = getattr(get_settings(), "alpaca_data_feed", None)
                     limit = max(lookback + 10, lookback + 1, 2)
-                    timeframe = getattr(TimeFrame, 'Day', '1Day')
-                    simple_get = getattr(client, 'get_bars', None)
+                    timeframe = getattr(TimeFrame, "Day", "1Day")
+                    simple_get = getattr(client, "get_bars", None)
                     try:
                         request = StockBarsRequest(
                             symbol_or_symbols=symbol,
@@ -415,8 +433,8 @@ class RiskEngine:
                             limit=limit,
                             feed=feed,
                         )
-                        bars_df = safe_get_stock_bars(client, request, symbol, context='risk_engine_atr')
-                        if hasattr(bars_df, 'empty'):
+                        bars_df = safe_get_stock_bars(client, request, symbol, context="risk_engine_atr")
+                        if hasattr(bars_df, "empty"):
                             if not bars_df.empty:
                                 df = bars_df.copy()
                         elif bars_df is not None and pd is not None:
@@ -430,7 +448,7 @@ class RiskEngine:
                         OSError,
                         AttributeError,
                     ) as exc:  # pragma: no cover - provider variance
-                        logger.warning('ATR client fetch failed for %s: %s', symbol, exc)
+                        logger.warning("ATR client fetch failed for %s: %s", symbol, exc)
                         if callable(simple_get):
                             attempted_simple_get = True
                             try:
@@ -444,27 +462,23 @@ class RiskEngine:
                                 ValueError,
                                 OSError,
                             ) as fallback_exc:  # pragma: no cover - provider variance
-                                logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
+                                logger.debug("ATR simple get_bars failed for %s: %s", symbol, fallback_exc)
                                 candidate = None
                             if candidate is not None:
                                 cand_high, cand_low, cand_close, seq_candidate = _candidate_to_arrays(candidate)
-                                if (
-                                    cand_high is not None
-                                    and cand_low is not None
-                                    and cand_close is not None
-                                ):
+                                if cand_high is not None and cand_low is not None and cand_close is not None:
                                     high, low, close = cand_high, cand_low, cand_close
                                 elif seq_candidate:
                                     bars_sequence = seq_candidate
                 else:
-                    logger.warning('missing stock bars fetch for %s', symbol)
+                    logger.warning("missing stock bars fetch for %s", symbol)
             else:
-                logger.warning('No data client available; attempting to use context data for %s', symbol)
+                logger.warning("No data client available; attempting to use context data for %s", symbol)
             if df is not None:
                 try:
                     high, low, close = _extract_arrays(df)
                 except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover - defensive
-                    logger.debug('ATR dataframe extraction failed for %s: %s', symbol, exc)
+                    logger.debug("ATR dataframe extraction failed for %s: %s", symbol, exc)
                     high = low = close = None
             if (
                 any(x is None for x in (high, low, close))
@@ -484,39 +498,31 @@ class RiskEngine:
                     ValueError,
                     OSError,
                 ) as fallback_exc:  # pragma: no cover - provider variance
-                    logger.debug('ATR simple get_bars failed for %s: %s', symbol, fallback_exc)
+                    logger.debug("ATR simple get_bars failed for %s: %s", symbol, fallback_exc)
                     candidate = None
                 if candidate is not None:
                     cand_high, cand_low, cand_close, seq_candidate = _candidate_to_arrays(candidate)
-                    if (
-                        cand_high is not None
-                        and cand_low is not None
-                        and cand_close is not None
-                    ):
+                    if cand_high is not None and cand_low is not None and cand_close is not None:
                         high, low, close = cand_high, cand_low, cand_close
                     elif seq_candidate:
                         bars_sequence = seq_candidate
                 attempted_simple_get = True
             if any(x is None for x in (high, low, close)) and bars_sequence:
                 seq_high, seq_low, seq_close = _sequence_to_arrays(bars_sequence)
-                if (
-                    seq_high is not None
-                    and seq_low is not None
-                    and seq_close is not None
-                ):
+                if seq_high is not None and seq_low is not None and seq_close is not None:
                     high, low, close = seq_high, seq_low, seq_close
             if any(x is None for x in (high, low, close)):
                 data = None
                 if ctx is not None:
-                    data = getattr(ctx, 'minute_data', {}).get(symbol)
+                    data = getattr(ctx, "minute_data", {}).get(symbol)
                     if data is None:
-                        data = getattr(ctx, 'daily_data', {}).get(symbol)
+                        data = getattr(ctx, "daily_data", {}).get(symbol)
                 df_fallback = None
                 if data is not None:
                     df_fallback = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
                 if df_fallback is None:
-                    fetcher = getattr(ctx, 'data_fetcher', None)
-                    if fetcher is not None and hasattr(fetcher, 'get_daily_df'):
+                    fetcher = getattr(ctx, "data_fetcher", None)
+                    if fetcher is not None and hasattr(fetcher, "get_daily_df"):
                         try:
                             df_fallback = fetcher.get_daily_df(ctx, symbol)
                         except (
@@ -528,12 +534,12 @@ class RiskEngine:
                             OSError,
                             AttributeError,
                         ) as exc:  # pragma: no cover - defensive
-                            logger.debug('ATR fetcher fallback failed for %s: %s', symbol, exc)
+                            logger.debug("ATR fetcher fallback failed for %s: %s", symbol, exc)
                             df_fallback = None
-                if df_fallback is not None and getattr(df_fallback, 'empty', False) is False:
+                if df_fallback is not None and getattr(df_fallback, "empty", False) is False:
                     high, low, close = _extract_arrays(df_fallback)
             if any(x is None for x in (high, low, close)):
-                logger.warning('Insufficient OHLC data for ATR calculation for %s', symbol)
+                logger.warning("Insufficient OHLC data for ATR calculation for %s", symbol)
                 return None
             min_len = min(len(high), len(low), len(close))
             if min_len == 0:
@@ -551,13 +557,13 @@ class RiskEngine:
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
         except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            logger.warning('ATR calculation error for %s: %s', symbol, exc, extra={'cause': exc.__class__.__name__})
+            logger.warning("ATR calculation error for %s: %s", symbol, exc, extra={"cause": exc.__class__.__name__})
             return None
 
     def _adaptive_global_cap(self) -> float:
         base_cap = self.global_limit
-        volatility_lookback_days = getattr(self.config, 'volatility_lookback_days', 10)
-        getattr(self.config, 'exposure_cap_conservative', 1.0)
+        volatility_lookback_days = getattr(self.config, "volatility_lookback_days", 10)
+        getattr(self.config, "exposure_cap_conservative", 1.0)
         if len(self._returns) < 3:
             return base_cap
         recent_returns = np.array(self._returns[-volatility_lookback_days:])
@@ -577,7 +583,32 @@ class RiskEngine:
         adaptive_cap = base_cap * multiplier
         return np.clip(adaptive_cap, base_cap * 0.3, base_cap * 1.5)
 
-    def update_portfolio_metrics(self, returns: list[float] | None=None, drawdown: float | None=None) -> None:
+    def available_exposure(self, *, cap: float | None = None) -> float:
+        """Return remaining exposure capacity against the effective cap."""
+
+        try:
+            total_exposure = sum(float(value) for value in self.exposure.values() if isinstance(value, (int, float)))
+        except (TypeError, ValueError):
+            total_exposure = 0.0
+
+        if cap is None:
+            try:
+                adaptive = float(self._adaptive_global_cap())
+            except (TypeError, ValueError):
+                adaptive = float(self.global_limit)
+        else:
+            try:
+                adaptive = float(cap)
+            except (TypeError, ValueError):
+                adaptive = float(self.global_limit)
+
+        effective_cap = min(float(self.global_limit), adaptive)
+        available = effective_cap - total_exposure
+        if available <= 0:
+            return 0.0
+        return float(min(available, effective_cap))
+
+    def update_portfolio_metrics(self, returns: list[float] | None = None, drawdown: float | None = None) -> None:
         if not self.enable_portfolio_features:
             return
         if returns:
@@ -590,31 +621,40 @@ class RiskEngine:
         """Synchronize exposure with live positions."""
         try:
             positions = api.list_positions()
-            logger.debug('Raw Alpaca positions: %s', positions)
+            logger.debug("Raw Alpaca positions: %s", positions)
             acct = api.get_account()
-            equity = float(getattr(acct, 'equity', 0) or 0)
+            equity = float(getattr(acct, "equity", 0) or 0)
             exposure: dict[str, float] = {}
             for p in positions:
-                asset = getattr(p, 'asset_class', 'equity')
-                qty = float(getattr(p, 'qty', 0) or 0)
-                price = float(getattr(p, 'avg_entry_price', 0) or 0)
+                asset = getattr(p, "asset_class", "equity")
+                qty = float(getattr(p, "qty", 0) or 0)
+                price = float(getattr(p, "avg_entry_price", 0) or 0)
                 weight = qty * price / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
             self.exposure = exposure
         except (AttributeError, APIError) as exc:
-            logger.warning('refresh_positions failed: %s', exc, extra={'cause': exc.__class__.__name__})
+            logger.warning("refresh_positions failed: %s", exc, extra={"cause": exc.__class__.__name__})
 
     def position_exists(self, api, symbol: str) -> bool:
         """Return True if ``symbol`` exists in current Alpaca positions."""
         try:
             for p in api.list_positions():
-                if getattr(p, 'symbol', '') == symbol:
+                if getattr(p, "symbol", "") == symbol:
                     return True
         except (AttributeError, APIError) as exc:
-            logger.warning('position_exists failed for %s: %s', symbol, exc, extra={'cause': exc.__class__.__name__})
+            logger.warning("position_exists failed for %s: %s", symbol, exc, extra={"cause": exc.__class__.__name__})
         return False
 
-    def can_trade(self, signal: TradeSignal, *, pending: float=0.0, volatility: float | None=None, cash_ratio: float | None=None, returns: list[float] | None=None, drawdowns: list[float] | None=None) -> bool:
+    def can_trade(
+        self,
+        signal: TradeSignal,
+        *,
+        pending: float = 0.0,
+        volatility: float | None = None,
+        cash_ratio: float | None = None,
+        returns: list[float] | None = None,
+        drawdowns: list[float] | None = None,
+    ) -> bool:
         if returns:
             self._returns.extend(list(returns))
         if drawdowns:
@@ -626,10 +666,10 @@ class RiskEngine:
             self._check_drawdown_and_update_stop(current_dd)
         self._maybe_lift_hard_stop()
         if self.hard_stop:
-            logger.error('TRADING_HALTED_RISK_LIMIT')
+            logger.error("TRADING_HALTED_RISK_LIMIT")
             return False
         if not isinstance(signal, TradeSignal):
-            logger.error('can_trade called with invalid signal type')
+            logger.error("can_trade called with invalid signal type")
             return False
         asset_exp = self.exposure.get(signal.asset_class, 0.0) + max(pending, 0.0)
         asset_cap = 1.1 * self._dynamic_cap(signal.asset_class, volatility, cash_ratio)
@@ -637,48 +677,81 @@ class RiskEngine:
         try:
             signal_weight = float(signal.weight)
         except (ValueError, TypeError) as e:
-            logger.warning("Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s", signal.weight, signal.symbol, e)
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s", signal.weight, signal.symbol, e
+            )
             signal_weight = 0.0
         if asset_exp + signal_weight > asset_cap:
-            logger.warning('Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f', signal.symbol, getattr(signal, 'qty', 'n/a'), signal_weight, asset_exp + signal_weight, asset_cap)
-            if not get_env('FORCE_CONTINUE_ON_EXPOSURE', 'false', cast=bool):
+            logger.warning(
+                "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
+                signal.symbol,
+                getattr(signal, "qty", "n/a"),
+                signal_weight,
+                asset_exp + signal_weight,
+                asset_cap,
+            )
+            if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
-            logger.warning('FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap')
+            logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
         if signal_weight > strat_cap:
-            logger.warning('Strategy %s weight %.2f exceeds cap %.2f', signal.strategy, signal_weight, strat_cap)
-            if not get_env('FORCE_CONTINUE_ON_EXPOSURE', 'false', cast=bool):
+            logger.warning("Strategy %s weight %.2f exceeds cap %.2f", signal.strategy, signal_weight, strat_cap)
+            if not get_env("FORCE_CONTINUE_ON_EXPOSURE", "false", cast=bool):
                 return False
-            logger.warning('FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap')
+            logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
         return True
 
     def register_fill(self, signal: TradeSignal) -> None:
         if not isinstance(signal, TradeSignal):
-            logger.error('register_fill called with invalid signal type')
+            logger.error("register_fill called with invalid signal type")
             return
         prev = self.exposure.get(signal.asset_class, 0.0)
         try:
             signal_weight = float(signal.weight)
         except (ValueError, TypeError) as e:
-            logger.warning("Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s", signal.weight, signal.symbol, e)
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s",
+                signal.weight,
+                signal.symbol,
+                e,
+            )
             signal_weight = 0.0
-        delta = signal_weight if signal.side.lower() == 'buy' else -signal_weight
+        delta = signal_weight if signal.side.lower() == "buy" else -signal_weight
         new_exposure = prev + delta
-        if new_exposure < 0 and signal.side.lower() == 'sell':
-            logger.warning('EXPOSURE_NEGATIVE_PREVENTED', extra={'asset': signal.asset_class, 'symbol': getattr(signal, 'symbol', 'UNKNOWN'), 'prev': prev, 'delta': delta, 'would_be': new_exposure})
+        if new_exposure < 0 and signal.side.lower() == "sell":
+            logger.warning(
+                "EXPOSURE_NEGATIVE_PREVENTED",
+                extra={
+                    "asset": signal.asset_class,
+                    "symbol": getattr(signal, "symbol", "UNKNOWN"),
+                    "prev": prev,
+                    "delta": delta,
+                    "would_be": new_exposure,
+                },
+            )
             new_exposure = 0.0
             delta = -prev
         self.exposure[signal.asset_class] = new_exposure
         s_prev = self.strategy_exposure.get(signal.strategy, 0.0)
         self.strategy_exposure[signal.strategy] = s_prev + delta
-        logger.info('EXPOSURE_UPDATED', extra={'asset': signal.asset_class, 'prev': prev, 'new': self.exposure[signal.asset_class], 'side': signal.side, 'symbol': getattr(signal, 'symbol', 'UNKNOWN')})
+        logger.info(
+            "EXPOSURE_UPDATED",
+            extra={
+                "asset": signal.asset_class,
+                "prev": prev,
+                "new": self.exposure[signal.asset_class],
+                "side": signal.side,
+                "symbol": getattr(signal, "symbol", "UNKNOWN"),
+            },
+        )
         import time
+
         self._last_update = time.monotonic()
         self._update_event.set()
 
     def update_position(self, symbol: str, quantity: int, side: str) -> None:
         """Update exposure for a symbol."""
-        if side == 'buy':
+        if side == "buy":
             self._positions[symbol] = self._positions.get(symbol, 0) + quantity
         else:
             self._positions[symbol] = self._positions.get(symbol, 0) - quantity
@@ -702,8 +775,11 @@ class RiskEngine:
         if current_drawdown >= self.max_drawdown_threshold and (not self.hard_stop):
             self.hard_stop = True
             import time
+
             self._hard_stop_until = time.time() + self.hard_stop_cooldown * 60
-            logger.error('HARD_STOP_TRIGGERED', extra={'drawdown': current_drawdown, 'threshold': self.max_drawdown_threshold})
+            logger.error(
+                "HARD_STOP_TRIGGERED", extra={"drawdown": current_drawdown, "threshold": self.max_drawdown_threshold}
+            )
 
     def _maybe_lift_hard_stop(self) -> None:
         """
@@ -711,11 +787,12 @@ class RiskEngine:
         should be called before evaluating new trades.
         """
         import time
+
         if self.hard_stop and self._hard_stop_until is not None:
             if time.time() >= self._hard_stop_until:
                 self.hard_stop = False
                 self._hard_stop_until = None
-                logger.info('HARD_STOP_CLEARED')
+                logger.info("HARD_STOP_CLEARED")
 
     def acquire_trade_slot(self) -> bool:
         """Thread-safe check & increment of current_trades against max_trades."""
@@ -738,7 +815,7 @@ class RiskEngine:
     def trigger_hard_stop(self) -> None:
         self.hard_stop = True
 
-    def wait_for_exposure_update(self, timeout: float=0.5) -> None:
+    def wait_for_exposure_update(self, timeout: float = 0.5) -> None:
         """Block until an exposure update occurs or ``timeout`` elapses."""
         self._update_event.wait(timeout)
         self._update_event.clear()
@@ -748,16 +825,18 @@ class RiskEngine:
         Recalculate/update exposure. Prefer the provided context.
         Backward compatible: if context is None, fall back to self.ctx (if set).
         """
-        ctx = context if context is not None else getattr(self, 'ctx', None)
+        ctx = context if context is not None else getattr(self, "ctx", None)
         if ctx is None:
-            raise RuntimeError('RiskEngine.update_exposure: context is required')
+            raise RuntimeError("RiskEngine.update_exposure: context is required")
         try:
             self.refresh_positions(ctx.api)
-            logger.debug('Exposure updated successfully')
+            logger.debug("Exposure updated successfully")
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
-            logger.warning('Failed to update exposure: %s', exc)
+            logger.warning("Failed to update exposure: %s", exc)
 
-    def apply_risk_scaling(self, signal: TradeSignal, *, volatility: float | None=None, returns: Sequence[float] | None=None) -> TradeSignal:
+    def apply_risk_scaling(
+        self, signal: TradeSignal, *, volatility: float | None = None, returns: Sequence[float] | None = None
+    ) -> TradeSignal:
         """
         Adjust a signal's weight based on volatility and CVaR.  This function
         uses a simple inverse‑volatility rule and CVaR scaling to shrink
@@ -771,6 +850,7 @@ class RiskEngine:
             if returns:
                 import numpy as np
                 from ai_trading.capital_scaling import cvar_scaling
+
                 arr = np.asarray(list(returns), dtype=float)
                 arr = arr[np.isfinite(arr)]
                 if arr.size > 0:
@@ -780,7 +860,7 @@ class RiskEngine:
             signal.weight = max(0.0, float(signal.weight) * scale)
             return signal
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
-            logger.error('Risk scaling failed: %s', exc)
+            logger.error("Risk scaling failed: %s", exc)
             return signal
 
     def check_max_drawdown(self, api) -> bool:
@@ -788,12 +868,12 @@ class RiskEngine:
             account = api.get_account()
             pnl = float(account.equity) - float(account.last_equity)
             if pnl < -MAX_DRAWDOWN * float(account.last_equity):
-                logger.error('HARD_STOP_MAX_DRAWDOWN', extra={'pnl': pnl})
+                logger.error("HARD_STOP_MAX_DRAWDOWN", extra={"pnl": pnl})
                 self.hard_stop = True
                 return False
             return True
         except (RuntimeError, AttributeError, ValueError) as exc:
-            logger.error('check_max_drawdown failed: %s', exc)
+            logger.error("check_max_drawdown failed: %s", exc)
             return False
 
     def position_size(self, signal: Any, cash: float, price: float, api=None) -> int:
@@ -813,26 +893,26 @@ class RiskEngine:
         if api and (not self.check_max_drawdown(api)):
             return 0
         if price <= 0:
-            logger.warning('Invalid price %s for %s', price, getattr(signal, 'symbol', 'UNKNOWN'))
+            logger.warning("Invalid price %s for %s", price, getattr(signal, "symbol", "UNKNOWN"))
             return 0
         if cash <= 0:
-            logger.warning('Invalid cash amount %s for %s', cash, getattr(signal, 'symbol', 'UNKNOWN'))
+            logger.warning("Invalid cash amount %s for %s", cash, getattr(signal, "symbol", "UNKNOWN"))
             return 0
         try:
             if api:
                 account = api.get_account()
-                total_equity = float(getattr(account, 'equity', cash))
+                total_equity = float(getattr(account, "equity", cash))
             else:
                 total_equity = cash
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
-            logger.warning('Error getting account equity: %s', e)
+            logger.warning("Error getting account equity: %s", e)
             total_equity = cash
         if total_equity <= 0:
-            logger.warning('Invalid total equity %s for %s', total_equity, getattr(signal, 'symbol', 'UNKNOWN'))
+            logger.warning("Invalid total equity %s for %s", total_equity, getattr(signal, "symbol", "UNKNOWN"))
             return 0
         try:
-            if not hasattr(signal, 'symbol'):
-                logger.warning('Invalid signal object missing symbol attribute')
+            if not hasattr(signal, "symbol"):
+                logger.warning("Invalid signal object missing symbol attribute")
                 return 0
             atr_data = self._get_atr_data(signal.symbol)
             if atr_data and atr_data > 0:
@@ -843,42 +923,57 @@ class RiskEngine:
                 weight = self._apply_weight_limits(signal)
                 raw_qty = total_equity * weight / price
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
-            logger.warning('ATR calculation failed for %s: %s', getattr(signal, 'symbol', 'UNKNOWN'), exc)
+            logger.warning("ATR calculation failed for %s: %s", getattr(signal, "symbol", "UNKNOWN"), exc)
             try:
                 weight = self._apply_weight_limits(signal)
                 raw_qty = total_equity * weight / price
             except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):
-                logger.warning('Failed to calculate position size, returning 0')
+                logger.warning("Failed to calculate position size, returning 0")
                 return 0
         try:
             qty = _calculate_position_size(self, raw_qty, price, signal)
-            if getattr(signal, 'strategy', '') == 'default':
+            if getattr(signal, "strategy", "") == "default":
                 qty = max(qty, 10)
             return max(qty, 0)
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
-            logger.warning('Error calculating final quantity: %s', exc)
+            logger.warning("Error calculating final quantity: %s", exc)
             return 0
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
         """Apply confidence-based weight limits considering current exposure."""
         try:
-            if not hasattr(sig, 'asset_class') or not hasattr(sig, 'strategy') or (not hasattr(sig, 'weight')) or (not hasattr(sig, 'confidence')):
-                logger.warning('Invalid signal object missing required attributes')
+            if (
+                not hasattr(sig, "asset_class")
+                or not hasattr(sig, "strategy")
+                or (not hasattr(sig, "weight"))
+                or (not hasattr(sig, "confidence"))
+            ):
+                logger.warning("Invalid signal object missing required attributes")
                 return 0.0
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):
-            logger.warning('Error validating signal object')
+            logger.warning("Error validating signal object")
             return 0.0
         current_asset_exposure = self.exposure.get(sig.asset_class, 0.0)
         current_strategy_exposure = self.strategy_exposure.get(sig.strategy, 0.0)
         asset_limit = self.asset_limits.get(sig.asset_class, self.global_limit)
         strategy_limit = self.strategy_limits.get(sig.strategy, self.global_limit)
-        available_asset_capacity = max(0.0, asset_limit - current_asset_exposure)
-        available_strategy_capacity = max(0.0, strategy_limit - current_strategy_exposure)
-        max_allowed = min(available_asset_capacity, available_strategy_capacity)
+        available_asset_capacity = max(0.0, float(asset_limit) - float(current_asset_exposure))
+        available_strategy_capacity = max(0.0, float(strategy_limit) - float(current_strategy_exposure))
+        available_global_capacity = self.available_exposure()
+        max_allowed = min(
+            available_asset_capacity,
+            available_strategy_capacity,
+            available_global_capacity,
+        )
         try:
             requested_weight = float(sig.weight)
         except (ValueError, TypeError) as e:
-            logger.warning("Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s", sig.weight, sig.symbol, e)
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s",
+                sig.weight,
+                sig.symbol,
+                e,
+            )
             requested_weight = 0.0
         base_weight = min(requested_weight, max_allowed)
         return round(base_weight, 1)
@@ -886,44 +981,53 @@ class RiskEngine:
     def compute_volatility(self, returns: np.ndarray) -> dict:
         """Return multiple volatility estimates."""
         if len(returns) == 0:
-            return {'volatility': 0.0, 'mad': 0.0, 'garch_vol': 0.0}
+            return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
         try:
             returns_array = np.asarray(returns)
             has_invalid = False
             try:
-                if hasattr(np, 'any') and hasattr(np, 'isnan') and hasattr(np, 'isinf'):
+                if hasattr(np, "any") and hasattr(np, "isnan") and hasattr(np, "isinf"):
                     has_invalid = np.any(np.isnan(returns_array)) or np.any(np.isinf(returns_array))
                 else:
                     for val in returns_array:
-                        if str(val).lower() in ['nan', 'inf', '-inf']:
+                        if str(val).lower() in ["nan", "inf", "-inf"]:
                             has_invalid = True
                             break
             except (AttributeError, TypeError):
-                has_invalid = any((str(val).lower() in ['nan', 'inf', '-inf'] for val in returns_array))
+                has_invalid = any((str(val).lower() in ["nan", "inf", "-inf"] for val in returns_array))
             if has_invalid:
-                logger.error('compute_volatility: invalid values in returns array')
-                return {'volatility': 0.0, 'mad': 0.0, 'garch_vol': 0.0}
+                logger.error("compute_volatility: invalid values in returns array")
+                return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
             try:
                 std_vol = float(np.std(returns_array))
             except (AttributeError, TypeError):
                 mean_val = sum(returns_array) / len(returns_array)
                 variance = sum(((x - mean_val) ** 2 for x in returns_array)) / len(returns_array)
-                std_vol = variance ** 0.5
+                std_vol = variance**0.5
             try:
-                if hasattr(np, 'median') and hasattr(np, 'abs'):
+                if hasattr(np, "median") and hasattr(np, "abs"):
                     mad = float(np.median(np.abs(returns_array - np.median(returns_array))))
                 else:
                     sorted_returns = sorted(returns_array)
                     n = len(sorted_returns)
-                    median_val = sorted_returns[n // 2] if n % 2 == 1 else (sorted_returns[n // 2 - 1] + sorted_returns[n // 2]) / 2
+                    median_val = (
+                        sorted_returns[n // 2]
+                        if n % 2 == 1
+                        else (sorted_returns[n // 2 - 1] + sorted_returns[n // 2]) / 2
+                    )
                     abs_deviations = [abs(x - median_val) for x in returns_array]
                     sorted_abs_dev = sorted(abs_deviations)
-                    mad = sorted_abs_dev[len(sorted_abs_dev) // 2] if len(sorted_abs_dev) % 2 == 1 else (sorted_abs_dev[len(sorted_abs_dev) // 2 - 1] + sorted_abs_dev[len(sorted_abs_dev) // 2]) / 2
+                    mad = (
+                        sorted_abs_dev[len(sorted_abs_dev) // 2]
+                        if len(sorted_abs_dev) % 2 == 1
+                        else (sorted_abs_dev[len(sorted_abs_dev) // 2 - 1] + sorted_abs_dev[len(sorted_abs_dev) // 2])
+                        / 2
+                    )
             except (AttributeError, TypeError):
                 mad = std_vol
         except (ValueError, TypeError, RuntimeError, AttributeError) as exc:
-            logger.error('compute_volatility: error in numpy operations: %s', exc)
-            return {'volatility': 0.0, 'mad': 0.0, 'garch_vol': 0.0}
+            logger.error("compute_volatility: error in numpy operations: %s", exc)
+            return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
         try:
             alpha, beta = (0.1, 0.85)
             garch_vol = 0.0
@@ -932,11 +1036,17 @@ class RiskEngine:
             try:
                 garch_vol = float(np.sqrt(garch_vol))
             except (AttributeError, TypeError):
-                garch_vol = float(garch_vol ** 0.5)
+                garch_vol = float(garch_vol**0.5)
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):
             garch_vol = std_vol
         primary_vol = std_vol
-        return {'volatility': primary_vol, 'std_vol': std_vol, 'mad': mad, 'mad_scaled': mad * 1.4826, 'garch_vol': garch_vol}
+        return {
+            "volatility": primary_vol,
+            "std_vol": std_vol,
+            "mad": mad,
+            "mad_scaled": mad * 1.4826,
+            "garch_vol": garch_vol,
+        }
 
     def get_current_exposure(self) -> dict[str, float]:
         """
@@ -960,7 +1070,7 @@ class RiskEngine:
             Maximum number of orders that can be active simultaneously.
             Prevents overwhelming the broker with too many pending orders.
         """
-        return getattr(self.config, 'max_concurrent_orders', 50)
+        return getattr(self.config, "max_concurrent_orders", 50)
 
     def max_exposure(self) -> float:
         """
@@ -984,7 +1094,7 @@ class RiskEngine:
             Minimum seconds to wait between submitting orders.
             Prevents rapid-fire order submission that could trigger rate limits.
         """
-        return getattr(self.config, 'order_spacing_seconds', 1.0)
+        return getattr(self.config, "order_spacing_seconds", 1.0)
 
     def check_position_limits(self, symbol: str, quantity: float) -> bool:
         """
@@ -1005,17 +1115,27 @@ class RiskEngine:
         try:
             current_exposure = self.exposure.get(symbol, 0.0)
             new_exposure = current_exposure + abs(quantity) * 0.001
-            max_symbol_exposure = getattr(self.config, 'max_symbol_exposure', 0.1)
+            max_symbol_exposure = getattr(self.config, "max_symbol_exposure", 0.1)
             if new_exposure > max_symbol_exposure:
-                logger.warning('Position for %s would exceed symbol exposure limit: %.3f > %.3f', symbol, new_exposure, max_symbol_exposure)
+                logger.warning(
+                    "Position for %s would exceed symbol exposure limit: %.3f > %.3f",
+                    symbol,
+                    new_exposure,
+                    max_symbol_exposure,
+                )
                 return False
             total_exposure = sum(self.exposure.values()) + abs(quantity) * 0.001
             if total_exposure > self.global_limit:
-                logger.warning('Position for %s would exceed total exposure limit: %.3f > %.3f', symbol, total_exposure, self.global_limit)
+                logger.warning(
+                    "Position for %s would exceed total exposure limit: %.3f > %.3f",
+                    symbol,
+                    total_exposure,
+                    self.global_limit,
+                )
                 return False
             return True
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
-            logger.error('Error checking position limits for %s: %s', symbol, e)
+            logger.error("Error checking position limits for %s: %s", symbol, e)
             return False
 
     def validate_order_size(self, symbol: str, quantity: float, price: float) -> bool:
@@ -1038,23 +1158,26 @@ class RiskEngine:
         """
         try:
             order_value = abs(quantity) * price
-            min_order_value = getattr(self.config, 'min_order_value', 100.0)
+            min_order_value = getattr(self.config, "min_order_value", 100.0)
             if order_value < min_order_value:
-                logger.warning('Order for %s below minimum value: $%.2f < $%.2f', symbol, order_value, min_order_value)
+                logger.warning("Order for %s below minimum value: $%.2f < $%.2f", symbol, order_value, min_order_value)
                 return False
-            max_order_value = getattr(self.config, 'max_order_value', 50000.0)
+            max_order_value = getattr(self.config, "max_order_value", 50000.0)
             if order_value > max_order_value:
-                logger.warning('Order for %s exceeds maximum value: $%.2f > $%.2f', symbol, order_value, max_order_value)
+                logger.warning(
+                    "Order for %s exceeds maximum value: $%.2f > $%.2f", symbol, order_value, max_order_value
+                )
                 return False
             if abs(quantity) < 1:
-                logger.warning('Order quantity too small: %s shares', quantity)
+                logger.warning("Order quantity too small: %s shares", quantity)
                 return False
             if abs(quantity) > 10000:
-                logger.warning('Order quantity unusually large: %s shares', quantity)
+                logger.warning("Order quantity unusually large: %s shares", quantity)
             return True
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
-            logger.error('Error validating order size for %s: %s', symbol, e)
+            logger.error("Error validating order size for %s: %s", symbol, e)
             return False
+
 
 def dynamic_position_size(capital: float, volatility: float, drawdown: float) -> float:
     """Return position size using volatility and drawdown aware Kelly fraction.
@@ -1070,6 +1193,7 @@ def dynamic_position_size(capital: float, volatility: float, drawdown: float) ->
     if drawdown > 0.1:
         kelly_fraction *= 0.5
     return capital * kelly_fraction
+
 
 def calculate_position_size(*args, **kwargs) -> int:
     """
@@ -1140,27 +1264,28 @@ def calculate_position_size(*args, **kwargs) -> int:
     if len(args) == 2 and (not kwargs):
         cash, price = args
         if not isinstance(cash, int | float) or cash <= 0:
-            logger.warning(f'Invalid cash amount: {cash}')
+            logger.warning(f"Invalid cash amount: {cash}")
             return 0
         if not isinstance(price, int | float) or price <= 0:
-            logger.warning(f'Invalid price: {price}')
+            logger.warning(f"Invalid price: {price}")
             return 0
-        dummy = TradeSignal(symbol='DUMMY', side='buy', confidence=1.0, strategy='default')
+        dummy = TradeSignal(symbol="DUMMY", side="buy", confidence=1.0, strategy="default")
         return engine.position_size(dummy, cash, price)
     if len(args) >= 3:
         signal, cash, price = args[:3]
         if not isinstance(cash, int | float) or cash <= 0:
-            logger.warning(f'Invalid cash amount: {cash}')
+            logger.warning(f"Invalid cash amount: {cash}")
             return 0
         if not isinstance(price, int | float) or price <= 0:
-            logger.warning(f'Invalid price: {price}')
+            logger.warning(f"Invalid price: {price}")
             return 0
-        if not hasattr(signal, 'confidence') or not hasattr(signal, 'symbol'):
-            logger.error(f'Invalid signal object: {type(signal)}')
+        if not hasattr(signal, "confidence") or not hasattr(signal, "symbol"):
+            logger.error(f"Invalid signal object: {type(signal)}")
             return 0
-        api = args[3] if len(args) > 3 else kwargs.get('api')
+        api = args[3] if len(args) > 3 else kwargs.get("api")
         return engine.position_size(signal, cash, price, api)
-    raise TypeError('Invalid arguments for calculate_position_size. Expected (cash, price) or (signal, cash, price)')
+    raise TypeError("Invalid arguments for calculate_position_size. Expected (cash, price) or (signal, cash, price)")
+
 
 def check_max_drawdown(state: dict[str, float]) -> bool:
     """
@@ -1192,98 +1317,120 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
     - Used for automated risk management decisions
     """
     if not isinstance(state, dict):
-        logger.warning(f'Invalid state type: {type(state)}')
+        logger.warning(f"Invalid state type: {type(state)}")
         return False
-    current_dd = state.get('current_drawdown', 0)
-    max_dd = state.get('max_drawdown', 0)
+    current_dd = state.get("current_drawdown", 0)
+    max_dd = state.get("max_drawdown", 0)
     if not isinstance(current_dd, int | float) or current_dd < 0:
-        logger.warning(f'Invalid current_drawdown: {current_dd}')
+        logger.warning(f"Invalid current_drawdown: {current_dd}")
         return False
     if not isinstance(max_dd, int | float) or max_dd <= 0:
-        logger.warning(f'Invalid max_drawdown: {max_dd}')
+        logger.warning(f"Invalid max_drawdown: {max_dd}")
         return False
     return current_dd > max_dd
+
 
 def can_trade(engine: RiskEngine) -> bool:
     """Return True if trading should proceed based on engine state."""
     return not engine.hard_stop and engine.current_trades < engine.max_trades
 
+
 def register_trade(engine: RiskEngine, size: int) -> dict | None:
     """Register a trade and increment the count if allowed."""
     if size <= 0 or not engine.acquire_trade_slot():
         return None
-    return {'size': size}
+    return {"size": size}
+
 
 def check_exposure_caps(portfolio, exposure, cap):
     for sym, pos in portfolio.positions.items():
         if pos.quantity > 0 and exposure[sym] > cap:
-            logger.warning('Exposure cap triggered, blocking new orders for %s', sym)
+            logger.warning("Exposure cap triggered, blocking new orders for %s", sym)
             return False
 
-def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float, *, context: Any | None=None, symbol: str='SYMBOL', qty: int | None=None) -> None:
+
+def apply_trailing_atr_stop(
+    df: pd.DataFrame, entry_price: float, *, context: Any | None = None, symbol: str = "SYMBOL", qty: int | None = None
+) -> None:
     """Exit ``qty`` at market if the trailing stop is triggered."""
     try:
         if entry_price <= 0:
-            logger.warning('apply_trailing_atr_stop invalid entry price: %.2f', entry_price)
+            logger.warning("apply_trailing_atr_stop invalid entry price: %.2f", entry_price)
             return
         ta_mod = load_pandas_ta()
-        if ta_mod is not None and hasattr(df, 'ta'):
+        if ta_mod is not None and hasattr(df, "ta"):
             atr = df.ta.atr()
         else:
             from ai_trading.indicators import atr as _atr
-            atr = _atr(df['High'], df['Low'], df['Close'])
+
+            atr = _atr(df["High"], df["Low"], df["Close"])
         trailing_stop = entry_price - 2 * atr
-        last_valid_close = df['Close'].dropna()
+        last_valid_close = df["Close"].dropna()
         if not last_valid_close.empty:
             price = last_valid_close.iloc[-1]
         else:
-            logger.critical('All NaNs in close column for ATR stop')
+            logger.critical("All NaNs in close column for ATR stop")
             price = 0.0
-        logger.debug('Latest 5 rows for ATR stop:\n%s', df.tail(5))
-        logger.debug('Computed price for ATR stop: %s', price)
+        logger.debug("Latest 5 rows for ATR stop:\n%s", df.tail(5))
+        logger.debug("Computed price for ATR stop: %s", price)
         if price <= 0 or pd.isna(price):
-            logger.critical('Invalid price computed for ATR stop: %s', price)
+            logger.critical("Invalid price computed for ATR stop: %s", price)
             return
         if price < trailing_stop.iloc[-1]:
-            logger.info('ATR stop hit: price=%s vs stop=%s', price, trailing_stop.iloc[-1])
+            logger.info("ATR stop hit: price=%s vs stop=%s", price, trailing_stop.iloc[-1])
             if context is not None and qty:
                 try:
-                    if hasattr(context, 'risk_engine') and (not context.risk_engine.position_exists(context.api, symbol)):
-                        logger.info('No position to sell for %s, skipping.', symbol)
+                    if hasattr(context, "risk_engine") and (
+                        not context.risk_engine.position_exists(context.api, symbol)
+                    ):
+                        logger.info("No position to sell for %s, skipping.", symbol)
                         return
-                    bot_mod = importlib.import_module('ai_trading.core.bot_engine')
-                    bot_mod.send_exit_order(context, symbol, abs(int(qty)), price, 'atr_stop')
+                    bot_mod = importlib.import_module("ai_trading.core.bot_engine")
+                    bot_mod.send_exit_order(context, symbol, abs(int(qty)), price, "atr_stop")
                 except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:
-                    logger.error('ATR stop exit failed: %s', exc)
+                    logger.error("ATR stop exit failed: %s", exc)
             else:
-                logger.warning('ATR stop triggered but no context/qty provided')
+                logger.warning("ATR stop triggered but no context/qty provided")
             schedule_reentry_check(symbol, lookahead_days=2)
     except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:
-        logger.error('ATR stop error: %s', e)
+        logger.error("ATR stop error: %s", e)
+
 
 def schedule_reentry_check(symbol: str, lookahead_days: int) -> None:
     """Log a re-entry check after a stop out."""
-    logger.info('Scheduling reentry for %s in %s days', symbol, lookahead_days)
+    logger.info("Scheduling reentry for %s in %s days", symbol, lookahead_days)
 
-def calculate_atr_stop(entry_price: float, atr: float, multiplier: float=1.5, direction: str='long') -> float:
+
+def calculate_atr_stop(entry_price: float, atr: float, multiplier: float = 1.5, direction: str = "long") -> float:
     """Return ATR-based stop price."""
-    stop = entry_price - multiplier * atr if direction == 'long' else entry_price + multiplier * atr
+    stop = entry_price - multiplier * atr if direction == "long" else entry_price + multiplier * atr
     from ai_trading.telemetry import metrics_logger
-    _safe_call(metrics_logger.log_atr_stop, symbol='generic', stop=stop)
+
+    _safe_call(metrics_logger.log_atr_stop, symbol="generic", stop=stop)
     return stop
 
-def calculate_bollinger_stop(price: float, upper_band: float, lower_band: float, direction: str='long') -> float:
+
+def calculate_bollinger_stop(price: float, upper_band: float, lower_band: float, direction: str = "long") -> float:
     """Return stop price using Bollinger band width."""
     mid = (upper_band + lower_band) / 2
-    if direction == 'long':
+    if direction == "long":
         stop = min(price, mid)
     else:
         stop = max(price, mid)
     from ai_trading.telemetry import metrics_logger
-    _safe_call(metrics_logger.log_atr_stop, symbol='bb', stop=stop)
+
+    _safe_call(metrics_logger.log_atr_stop, symbol="bb", stop=stop)
     return stop
 
-def dynamic_stop_price(entry_price: float, atr: float | None=None, upper_band: float | None=None, lower_band: float | None=None, percent: float | None=None, direction: str='long') -> float:
+
+def dynamic_stop_price(
+    entry_price: float,
+    atr: float | None = None,
+    upper_band: float | None = None,
+    lower_band: float | None = None,
+    percent: float | None = None,
+    direction: str = "long",
+) -> float:
     """Return the tightest stop price based on ATR, Bollinger width or percent."""
     stops: list[float] = []
     if atr is not None:
@@ -1291,17 +1438,19 @@ def dynamic_stop_price(entry_price: float, atr: float | None=None, upper_band: f
     if upper_band is not None and lower_band is not None:
         stops.append(calculate_bollinger_stop(entry_price, upper_band, lower_band, direction=direction))
     if percent is not None:
-        pct_stop = entry_price * (1 - percent) if direction == 'long' else entry_price * (1 + percent)
+        pct_stop = entry_price * (1 - percent) if direction == "long" else entry_price * (1 + percent)
         stops.append(pct_stop)
     if not stops:
         return entry_price
-    return max(stops) if direction == 'long' else min(stops)
+    return max(stops) if direction == "long" else min(stops)
 
-def compute_stop_levels(entry_price: float, atr: float, take_mult: float=2.0) -> tuple[float, float]:
+
+def compute_stop_levels(entry_price: float, atr: float, take_mult: float = 2.0) -> tuple[float, float]:
     """Return stop-loss and take-profit levels using ATR."""
     stop = entry_price - atr
     take = entry_price + take_mult * atr
     return (stop, take)
+
 
 def correlation_position_weights(corr: pd.DataFrame, base: dict[str, float]) -> dict[str, float]:
     """Scale weights inversely proportional to asset correlations."""
@@ -1315,12 +1464,14 @@ def correlation_position_weights(corr: pd.DataFrame, base: dict[str, float]) -> 
             weights[sym] = w
     return weights
 
-def drawdown_circuit(drawdowns: Sequence[float], limit: float=0.2) -> bool:
+
+def drawdown_circuit(drawdowns: Sequence[float], limit: float = 0.2) -> bool:
     """Return True if cumulative drawdown exceeds ``limit``."""
     dd = abs(min(0.0, *drawdowns)) if drawdowns else 0.0
     return dd > limit
 
-def volatility_filter(atr: float, sma: float, threshold: float=0.05) -> bool:
+
+def volatility_filter(atr: float, sma: float, threshold: float = 0.05) -> bool:
     """Return True when volatility below ``threshold`` relative to SMA."""
     if sma == 0:
         return True

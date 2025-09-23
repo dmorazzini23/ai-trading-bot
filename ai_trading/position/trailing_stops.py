@@ -9,6 +9,7 @@ Implements sophisticated trailing stop strategies:
 
 AI-AGENT-REF: Advanced trailing stop management with multiple algorithms
 """
+
 from __future__ import annotations
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
@@ -19,20 +20,26 @@ from ai_trading.utils.lazy_imports import load_pandas
 
 if TYPE_CHECKING:
     import pandas as pd
+
 logger = get_logger(__name__)
+PRICE_EPSILON = 1e-6
+
 
 class TrailingStopType(Enum):
     """Types of trailing stop algorithms."""
-    FIXED_PERCENT = 'fixed_percent'
-    ATR_BASED = 'atr_based'
-    MOMENTUM_BASED = 'momentum_based'
-    TIME_DECAY = 'time_decay'
-    BREAKEVEN_PROTECT = 'breakeven_protect'
-    ADAPTIVE = 'adaptive'
+
+    FIXED_PERCENT = "fixed_percent"
+    ATR_BASED = "atr_based"
+    MOMENTUM_BASED = "momentum_based"
+    TIME_DECAY = "time_decay"
+    BREAKEVEN_PROTECT = "breakeven_protect"
+    ADAPTIVE = "adaptive"
+
 
 @dataclass
 class TrailingStopLevel:
     """Trailing stop level information."""
+
     symbol: str
     current_price: float
     stop_price: float
@@ -43,8 +50,13 @@ class TrailingStopLevel:
     unrealized_gain_pct: float
     days_held: int
     last_updated: datetime
+    side: str = "long"
+    trail_pct: float = 0.03
+    max_price_since_entry: float = 0.0
+    min_price_since_entry: float = 0.0
     is_triggered: bool = False
-    trigger_reason: str = ''
+    trigger_reason: str = ""
+
 
 class TrailingStopManager:
     """
@@ -60,7 +72,7 @@ class TrailingStopManager:
 
     def __init__(self, ctx=None):
         self.ctx = ctx
-        self.logger = get_logger(__name__ + '.TrailingStopManager')
+        self.logger = get_logger(__name__ + ".TrailingStopManager")
         self.base_trail_percent = 3.0
         self.atr_multiplier = 2.0
         self.atr_period = 14
@@ -88,30 +100,65 @@ class TrailingStopManager:
         try:
             if not position_data:
                 return None
-            entry_price = float(getattr(position_data, 'avg_entry_price', 0))
-            qty = int(getattr(position_data, 'qty', 0))
+            entry_price = float(getattr(position_data, "avg_entry_price", 0))
+            qty = int(getattr(position_data, "qty", 0))
             if entry_price <= 0 or qty == 0:
                 return None
             unrealized_gain_pct = (current_price - entry_price) / entry_price * 100
             if symbol not in self.stop_levels:
-                self.stop_levels[symbol] = self._initialize_stop_level(symbol, entry_price, current_price, position_data)
+                self.stop_levels[symbol] = self._initialize_stop_level(
+                    symbol, entry_price, current_price, position_data
+                )
             stop_level = self.stop_levels[symbol]
-            stop_level.max_price_achieved = max(stop_level.max_price_achieved, current_price)
+            previous_side = stop_level.side
+            stop_level.side = "long" if qty > 0 else "short"
+            if previous_side != stop_level.side:
+                stop_level.max_price_since_entry = max(stop_level.entry_price, current_price)
+                stop_level.min_price_since_entry = min(stop_level.entry_price, current_price)
+                stop_level.stop_price = 0.0
+            if stop_level.max_price_since_entry <= 0:
+                stop_level.max_price_since_entry = max(stop_level.entry_price, current_price)
+            if stop_level.min_price_since_entry <= 0:
+                stop_level.min_price_since_entry = min(stop_level.entry_price, current_price)
+            stop_level.max_price_since_entry = max(stop_level.max_price_since_entry, current_price)
+            stop_level.min_price_since_entry = min(stop_level.min_price_since_entry, current_price)
+            stop_level.max_price_achieved = max(stop_level.max_price_achieved, stop_level.max_price_since_entry)
             stop_level.current_price = current_price
             stop_level.unrealized_gain_pct = unrealized_gain_pct
             stop_level.days_held = self._calculate_days_held(position_data)
             stop_level.last_updated = datetime.now(UTC)
-            new_stop_price = self._calculate_adaptive_stop(symbol, stop_level)
-            if qty > 0:
-                stop_level.stop_price = max(stop_level.stop_price, new_stop_price)
+            trail_pct = getattr(stop_level, "trail_pct", None)
+            if trail_pct is None or trail_pct <= 0:
+                trail_pct = self.base_trail_percent / 100.0
+            stop_level.trail_pct = trail_pct
+            try:
+                existing_stop = float(stop_level.stop_price)
+            except (TypeError, ValueError):
+                existing_stop = 0.0
+            if stop_level.side == "long":
+                candidate = stop_level.max_price_since_entry * (1 - trail_pct)
+                stop_level.stop_price = self._merge_stop_prices(existing_stop, candidate, "long")
             else:
-                stop_level.stop_price = min(stop_level.stop_price, new_stop_price)
-            stop_level.trail_distance = abs((current_price - stop_level.stop_price) / current_price) * 100
+                candidate = stop_level.min_price_since_entry * (1 + trail_pct)
+                stop_level.stop_price = self._merge_stop_prices(existing_stop, candidate, "short")
+            self._ensure_directional_stop(stop_level, current_price, candidate=candidate)
             self._check_stop_trigger(stop_level, qty)
-            self.logger.info('TRAILING_STOP_UPDATE | %s price=%.2f stop=%.2f trail=%.2f%% gain=%.2f%%', symbol, current_price, stop_level.stop_price, stop_level.trail_distance, unrealized_gain_pct)
+            try:
+                stop_level.trail_distance = abs((current_price - stop_level.stop_price) / current_price) * 100
+            except (TypeError, ZeroDivisionError):
+                stop_level.trail_distance = trail_pct * 100
+            self.logger.info(
+                "TRAILING_STOP_UPDATE | %s price=%.2f stop=%.2f trail=%.2f%% gain=%.2f%% side=%s",
+                symbol,
+                current_price,
+                stop_level.stop_price,
+                stop_level.trail_distance,
+                unrealized_gain_pct,
+                stop_level.side,
+            )
             return stop_level
         except (ValueError, TypeError) as exc:
-            self.logger.warning('update_trailing_stop failed for %s: %s', symbol, exc)
+            self.logger.warning("update_trailing_stop failed for %s: %s", symbol, exc)
             return None
 
     def get_stop_level(self, symbol: str) -> TrailingStopLevel | None:
@@ -121,23 +168,58 @@ class TrailingStopManager:
     def remove_stop_level(self, symbol: str) -> None:
         """Remove trailing stop tracking for symbol."""
         if symbol in self.stop_levels:
-            self.logger.info('TRAILING_STOP_REMOVED | %s', symbol)
+            self.logger.info("TRAILING_STOP_REMOVED | %s", symbol)
             del self.stop_levels[symbol]
 
     def get_triggered_stops(self) -> list[TrailingStopLevel]:
         """Get list of triggered trailing stops that need action."""
         return [stop for stop in self.stop_levels.values() if stop.is_triggered]
 
-    def _initialize_stop_level(self, symbol: str, entry_price: float, current_price: float, position_data: Any) -> TrailingStopLevel:
+    def _initialize_stop_level(
+        self, symbol: str, entry_price: float, current_price: float, position_data: Any
+    ) -> TrailingStopLevel:
         """Initialize new trailing stop level."""
-        initial_distance = self._calculate_initial_stop_distance(symbol)
-        qty = int(getattr(position_data, 'qty', 0))
-        if qty > 0:
-            initial_stop = current_price * (1 - initial_distance / 100)
+        qty = int(getattr(position_data, "qty", 0))
+        side = "long" if qty >= 0 else "short"
+        configured_pct = getattr(position_data, "trail_pct", None)
+        try:
+            base_pct = float(configured_pct) if configured_pct is not None else self.base_trail_percent
+        except (TypeError, ValueError):
+            base_pct = self.base_trail_percent
+        trail_pct = max(base_pct, 0.01) / 100.0
+        initial_distance = trail_pct * 100
+        max_since = max(entry_price, current_price)
+        min_since = min(entry_price, current_price)
+        if side == "long":
+            initial_stop = max_since * (1 - trail_pct)
         else:
-            initial_stop = current_price * (1 + initial_distance / 100)
-        stop_level = TrailingStopLevel(symbol=symbol, current_price=current_price, stop_price=initial_stop, stop_type=TrailingStopType.ADAPTIVE, trail_distance=initial_distance, max_price_achieved=current_price, entry_price=entry_price, unrealized_gain_pct=(current_price - entry_price) / entry_price * 100, days_held=0, last_updated=datetime.now(UTC))
-        self.logger.info('TRAILING_STOP_INIT | %s entry=%.2f current=%.2f stop=%.2f distance=%.2f%%', symbol, entry_price, current_price, initial_stop, initial_distance)
+            initial_stop = min_since * (1 + trail_pct)
+        stop_level = TrailingStopLevel(
+            symbol=symbol,
+            current_price=current_price,
+            stop_price=initial_stop,
+            stop_type=TrailingStopType.ADAPTIVE,
+            trail_distance=initial_distance,
+            max_price_achieved=max_since,
+            entry_price=entry_price,
+            unrealized_gain_pct=(current_price - entry_price) / entry_price * 100,
+            days_held=0,
+            last_updated=datetime.now(UTC),
+            side=side,
+            trail_pct=trail_pct,
+            max_price_since_entry=max_since,
+            min_price_since_entry=min_since,
+        )
+        self._ensure_directional_stop(stop_level, current_price, candidate=initial_stop, was_init=True)
+        self.logger.info(
+            "TRAILING_STOP_INIT | %s entry=%.2f current=%.2f stop=%.2f distance=%.2f%% side=%s",
+            symbol,
+            entry_price,
+            current_price,
+            stop_level.stop_price,
+            initial_distance,
+            side,
+        )
         return stop_level
 
     def _calculate_adaptive_stop(self, symbol: str, stop_level: TrailingStopLevel) -> float:
@@ -147,28 +229,96 @@ class TrailingStopManager:
             entry_price = stop_level.entry_price
             market_data = self._get_market_data(symbol)
             distances = {}
-            distances['fixed'] = self.base_trail_percent
+            distances["fixed"] = self.base_trail_percent
             if market_data is not None:
                 atr_distance = self._calculate_atr_stop_distance(market_data)
-                distances['atr'] = atr_distance
+                distances["atr"] = atr_distance
             else:
-                distances['atr'] = self.base_trail_percent
+                distances["atr"] = self.base_trail_percent
             momentum_multiplier = self._calculate_momentum_multiplier(symbol, market_data)
-            distances['momentum'] = self.base_trail_percent * momentum_multiplier
+            distances["momentum"] = self.base_trail_percent * momentum_multiplier
             time_multiplier = self._calculate_time_decay_multiplier(stop_level.days_held)
-            distances['time_decay'] = self.base_trail_percent * time_multiplier
+            distances["time_decay"] = self.base_trail_percent * time_multiplier
             breakeven_distance = self._calculate_breakeven_distance(stop_level)
             if breakeven_distance is not None:
-                distances['breakeven'] = breakeven_distance
+                distances["breakeven"] = breakeven_distance
             final_distance = self._combine_stop_distances(distances, stop_level)
-            if hasattr(stop_level, 'qty') or current_price > entry_price:
+            if hasattr(stop_level, "qty") or current_price > entry_price:
                 new_stop = current_price * (1 - final_distance / 100)
             else:
                 new_stop = current_price * (1 + final_distance / 100)
             return new_stop
         except (ValueError, TypeError) as exc:
-            self.logger.warning('_calculate_adaptive_stop failed for %s: %s', symbol, exc)
+            self.logger.warning("_calculate_adaptive_stop failed for %s: %s", symbol, exc)
             return stop_level.current_price * (1 - self.base_trail_percent / 100)
+
+    def _merge_stop_prices(self, existing_stop: float, candidate: float, side: str) -> float:
+        """Combine ``existing_stop`` with ``candidate`` respecting ``side`` direction."""
+
+        try:
+            existing_value = float(existing_stop)
+        except (TypeError, ValueError):
+            existing_value = 0.0
+
+        if existing_value <= 0:
+            return float(candidate)
+
+        if side == "long":
+            return max(existing_value, float(candidate))
+        return min(existing_value, float(candidate))
+
+    def _ensure_directional_stop(
+        self,
+        stop_level: TrailingStopLevel,
+        current_price: float,
+        *,
+        candidate: float | None = None,
+        was_init: bool = False,
+    ) -> None:
+        """Ensure stop aligns with side and avoids immediate triggers."""
+
+        epsilon = PRICE_EPSILON
+        try:
+            stop_price = float(stop_level.stop_price)
+        except (TypeError, ValueError):
+            stop_price = 0.0
+        corrected = False
+        if stop_level.side == "long":
+            reference = stop_level.max_price_since_entry or max(stop_level.entry_price, current_price)
+            candidate_value = float(candidate) if candidate is not None else reference * (1 - stop_level.trail_pct)
+            limit = current_price * (1 - epsilon)
+            if candidate_value >= current_price:
+                desired = candidate_value
+            else:
+                desired = min(candidate_value, limit)
+                if desired <= 0:
+                    desired = limit
+            if stop_price <= 0 or stop_price >= current_price or stop_price > limit + epsilon:
+                stop_level.stop_price = desired
+                corrected = True
+        else:
+            reference = stop_level.min_price_since_entry or min(stop_level.entry_price, current_price)
+            candidate_value = float(candidate) if candidate is not None else reference * (1 + stop_level.trail_pct)
+            limit = current_price * (1 + epsilon)
+            if candidate_value <= current_price:
+                desired = candidate_value
+            else:
+                desired = max(candidate_value, limit)
+            if stop_price <= 0 or stop_price <= current_price or stop_price < limit - epsilon:
+                stop_level.stop_price = desired
+                corrected = True
+        if corrected:
+            payload = {
+                "symbol": stop_level.symbol,
+                "side": stop_level.side,
+                "trail_pct": stop_level.trail_pct,
+                "stop_price": stop_level.stop_price,
+                "current_price": current_price,
+                "max_since_entry": stop_level.max_price_since_entry,
+                "min_since_entry": stop_level.min_price_since_entry,
+                "reason": "initialization" if was_init else "state_correction",
+            }
+            self.logger.info("TRAILING_STOP_CORRECTED", extra=payload)
 
     def _calculate_initial_stop_distance(self, symbol: str) -> float:
         """Calculate initial stop distance based on volatility."""
@@ -185,11 +335,16 @@ class TrailingStopManager:
         """Calculate ATR-based stop distance."""
         pd = load_pandas()
         try:
-            if 'high' not in data.columns or 'low' not in data.columns or 'close' not in data.columns or (len(data) < self.atr_period):
+            if (
+                "high" not in data.columns
+                or "low" not in data.columns
+                or "close" not in data.columns
+                or (len(data) < self.atr_period)
+            ):
                 return self.base_trail_percent
-            high = data['high']
-            low = data['low']
-            close = data['close']
+            high = data["high"]
+            low = data["low"]
+            close = data["close"]
             prev_close = close.shift(1)
             tr1 = high - low
             tr2 = abs(high - prev_close)
@@ -208,9 +363,9 @@ class TrailingStopManager:
     def _calculate_momentum_multiplier(self, symbol: str, data: "pd.DataFrame" | None) -> float:
         """Calculate momentum-based multiplier for stop distance."""
         try:
-            if data is None or 'close' not in data.columns or len(data) < self.momentum_period:
+            if data is None or "close" not in data.columns or len(data) < self.momentum_period:
                 return 1.0
-            closes = data['close']
+            closes = data["close"]
             rsi = self._calculate_rsi(closes, self.momentum_period)
             pd = load_pandas()
             if pd.isna(rsi):
@@ -254,13 +409,13 @@ class TrailingStopManager:
     def _combine_stop_distances(self, distances: dict[str, float], stop_level: TrailingStopLevel) -> float:
         """Combine multiple stop distance calculations."""
         try:
-            weights = {'fixed': 0.2, 'atr': 0.3, 'momentum': 0.2, 'time_decay': 0.2, 'breakeven': 0.1}
-            if 'breakeven' in distances:
-                weights['breakeven'] = 0.4
-                weights['atr'] = 0.2
-                weights['momentum'] = 0.2
-                weights['time_decay'] = 0.1
-                weights['fixed'] = 0.1
+            weights = {"fixed": 0.2, "atr": 0.3, "momentum": 0.2, "time_decay": 0.2, "breakeven": 0.1}
+            if "breakeven" in distances:
+                weights["breakeven"] = 0.4
+                weights["atr"] = 0.2
+                weights["momentum"] = 0.2
+                weights["time_decay"] = 0.1
+                weights["fixed"] = 0.1
             total_weight = 0
             weighted_sum = 0
             for method, distance in distances.items():
@@ -277,27 +432,49 @@ class TrailingStopManager:
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return self.base_trail_percent
 
-    def _check_stop_trigger(self, stop_level: TrailingStopLevel, qty: int) -> None:
+    def _check_stop_trigger(self, stop_level: TrailingStopLevel, qty: int) -> bool:
         """Check if trailing stop has been triggered."""
+
         try:
             current_price = stop_level.current_price
             stop_price = stop_level.stop_price
-            if qty > 0:
-                if current_price <= stop_price:
-                    stop_level.is_triggered = True
-                    stop_level.trigger_reason = f'Price {current_price:.2f} <= Stop {stop_price:.2f}'
-            elif current_price >= stop_price:
+            try:
+                stop_price_val = float(stop_price)
+            except (TypeError, ValueError):
+                stop_price_val = float("nan")
+            side = stop_level.side
+            if side == "long":
+                triggered = current_price <= stop_price_val
+            else:
+                triggered = current_price >= stop_price_val
+            if triggered:
                 stop_level.is_triggered = True
-                stop_level.trigger_reason = f'Price {current_price:.2f} >= Stop {stop_price:.2f}'
-            if stop_level.is_triggered:
-                self.logger.warning('TRAILING_STOP_TRIGGERED | %s %s', stop_level.symbol, stop_level.trigger_reason)
+                stop_level.trigger_reason = "price_crossed_stop"
+                payload = {
+                    "symbol": stop_level.symbol,
+                    "side": side,
+                    "trail_pct": stop_level.trail_pct,
+                    "stop_price": stop_price_val,
+                    "current_price": current_price,
+                    "reason": "price_crossed_stop",
+                }
+                if side == "long":
+                    payload["max_since_entry"] = stop_level.max_price_since_entry
+                else:
+                    payload["min_since_entry"] = stop_level.min_price_since_entry
+                self.logger.warning("TRAILING_STOP_TRIGGERED", extra=payload)
+                return True
+            stop_level.is_triggered = False
+            stop_level.trigger_reason = ""
+            return False
         except (ValueError, TypeError) as exc:
-            self.logger.warning('_check_stop_trigger failed: %s', exc)
+            self.logger.warning("_check_stop_trigger failed: %s", exc)
+            return False
 
     def _get_market_data(self, symbol: str) -> "pd.DataFrame" | None:
         """Get market data for stop calculations."""
         try:
-            if self.ctx and hasattr(self.ctx, 'data_fetcher'):
+            if self.ctx and hasattr(self.ctx, "data_fetcher"):
                 df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
                 if df is not None and (not df.empty) and (len(df) >= self.atr_period):
                     return df
