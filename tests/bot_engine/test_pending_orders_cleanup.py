@@ -78,7 +78,7 @@ def _order(status: str, oid: str = "order-1"):
 
 
 def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
-    runtime = types.SimpleNamespace()
+    runtime = types.SimpleNamespace(state={})
     cancel_mock = MagicMock()
     monkeypatch.setattr(be, "cancel_all_open_orders", cancel_mock)
     monkeypatch.setattr(
@@ -88,8 +88,6 @@ def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
     )
     clock = types.SimpleNamespace(value=100.0)
     monkeypatch.setattr(be.time, "time", lambda: clock.value)
-    be._pending_orders_since = None
-    be._pending_orders_last_log = None
 
     caplog.set_level(logging.INFO)
     orders = [_order("pending_new", "o-1")]
@@ -100,6 +98,8 @@ def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
     assert first_record.pending_ids == ["o-1"]
     assert first_record.cleanup_after_s == 12
     assert cancel_mock.call_count == 0
+    tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
+    assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] == clock.value
 
     clock.value = 105.0
     caplog.clear()
@@ -113,18 +113,40 @@ def test_handle_pending_orders_grace_then_cleanup(monkeypatch, caplog):
     cancel_mock.assert_called_once_with(runtime)
     messages = [record.message for record in caplog.records]
     assert "PENDING_ORDERS_CANCELED" in messages
-    assert be._pending_orders_since is None
-    assert be._pending_orders_last_log is None
+    tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
+    assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] is None
+    assert tracker[be._PENDING_ORDER_LAST_LOG_KEY] is None
 
 
 def test_handle_pending_orders_clears_tracker(monkeypatch, caplog):
-    be._pending_orders_since = 95.0
-    be._pending_orders_last_log = 95.0
+    runtime = types.SimpleNamespace(state={})
+    tracker = runtime.state.setdefault(
+        be._PENDING_ORDER_TRACKER_KEY,
+        {
+            be._PENDING_ORDER_FIRST_SEEN_KEY: 95.0,
+            be._PENDING_ORDER_LAST_LOG_KEY: 95.0,
+        },
+    )
     monkeypatch.setattr(be.time, "time", lambda: 150.0)
     caplog.set_level(logging.INFO)
 
-    runtime = types.SimpleNamespace()
     assert be._handle_pending_orders([], runtime) is False
-    assert be._pending_orders_since is None
-    assert be._pending_orders_last_log is None
+    assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] is None
+    assert tracker[be._PENDING_ORDER_LAST_LOG_KEY] is None
     assert any(record.message == "PENDING_ORDERS_CLEARED" for record in caplog.records)
+
+
+def test_handle_pending_orders_creates_state(monkeypatch):
+    runtime = types.SimpleNamespace()
+    monkeypatch.setattr(
+        be,
+        "get_trading_config",
+        lambda: types.SimpleNamespace(order_stale_cleanup_interval=15),
+    )
+    monkeypatch.setattr(be.time, "time", lambda: 10.0)
+    orders = [_order("pending_new", "o-state")]
+
+    assert be._handle_pending_orders(orders, runtime) is True
+    assert isinstance(getattr(runtime, "state", None), dict)
+    tracker = runtime.state[be._PENDING_ORDER_TRACKER_KEY]
+    assert tracker[be._PENDING_ORDER_FIRST_SEEN_KEY] == 10.0
