@@ -11196,9 +11196,23 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     pass
 
             start_ts = time.monotonic()
-            pending_new = getattr(OrderStatus, "PENDING_NEW", "pending_new")
+            def _normalize_order_status(value: Any) -> str:
+                """Return a lowercase status string regardless of input type."""
+
+                if value is None:
+                    return ""
+                status_value = getattr(value, "value", value)
+                if isinstance(status_value, str):
+                    return status_value.lower()
+                try:
+                    return str(status_value).lower()
+                except Exception:
+                    return ""
+
+            pending_new_attr = getattr(OrderStatus, "PENDING_NEW", "pending_new")
+            pending_new = _normalize_order_status(pending_new_attr)
             last_order = order
-            while getattr(last_order, "status", None) == pending_new:
+            while _normalize_order_status(getattr(last_order, "status", None)) == pending_new:
                 if time.monotonic() - start_ts > 1:
                     logger.warning(
                         f"Order stuck in PENDING_NEW: {order_args.get('symbol')}, retrying or monitoring required."
@@ -11221,7 +11235,8 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             logger.info(
                 f"Order status for {order_args.get('symbol')}: {getattr(order, 'status', '')}"
             )
-            status = getattr(order, "status", "")
+            status_raw = getattr(order, "status", "")
+            status = _normalize_order_status(status_raw)
             filled_qty = getattr(order, "filled_qty", 0) or 0
             if status == "filled":
                 logger.info(
@@ -11242,7 +11257,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 raise OrderExecutionError(
                     f"Buy failed for {order_args.get('symbol')}: {status}"
                 )
-            elif status == getattr(OrderStatus, "NEW", "new"):
+            elif status == _normalize_order_status(getattr(OrderStatus, "NEW", "new")):
                 logger.info(
                     f"Order for {order_args.get('symbol')} is NEW; awaiting fill"
                 )

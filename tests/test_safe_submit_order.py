@@ -1,5 +1,7 @@
+import logging
 import sys
 import types
+from enum import Enum
 from typing import Any
 
 import pytest
@@ -113,6 +115,49 @@ def test_safe_submit_order_pending_new_symbol(monkeypatch):
     assert order.symbol == "MSFT"
     assert isinstance(order.filled_qty, (int, float))
     assert isinstance(order.qty, (int, float))
+
+
+class EnumStatus(Enum):
+    PENDING_NEW = "pending_new"
+    NEW = "new"
+    FILLED = "filled"
+
+
+class EnumOrderAPI:
+    def __init__(self):
+        self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
+        self.list_positions = lambda: []
+        self._order = types.SimpleNamespace(
+            id=1,
+            status=EnumStatus.PENDING_NEW,
+            filled_qty=0,
+            qty=1,
+            symbol="AAPL",
+        )
+
+    def submit_order(self, symbol: str, **_kwargs):
+        return self._order
+
+    def get_order(self, order_id):
+        self._order.status = EnumStatus.NEW
+        return self._order
+
+
+def test_safe_submit_order_pending_new_enum(monkeypatch, caplog):
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda _api: True)
+    monkeypatch.setattr(bot_engine, "OrderStatus", EnumStatus, raising=False)
+
+    api = EnumOrderAPI()
+    req = types.SimpleNamespace(symbol="AAPL", qty=1, side="buy")
+
+    caplog.set_level("ERROR")
+    order = bot_engine.safe_submit_order(api, req)
+
+    assert order.status is EnumStatus.NEW
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
 class MissingFieldsAPI:
