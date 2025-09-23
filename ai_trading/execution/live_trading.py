@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ai_trading.logging import get_logger
+from ai_trading.market.symbol_specs import get_tick_size
+from ai_trading.math.money import Money
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -344,6 +346,20 @@ class ExecutionEngine:
                 return {'status': 'error', 'code': 'SYMBOL_INVALID', 'error': symbol, 'order_id': None}
             quantity = int(_pos_num('qty', quantity))
             limit_price = _pos_num('limit_price', limit_price)
+            tick_size = get_tick_size(symbol)
+            original_money = Money(limit_price)
+            snapped_money = original_money.quantize(tick_size)
+            if snapped_money.amount != original_money.amount:
+                logger.debug(
+                    'LIMIT_PRICE_NORMALIZED',
+                    extra={
+                        'symbol': symbol,
+                        'input_price': float(original_money.amount),
+                        'normalized_price': float(snapped_money.amount),
+                        'tick_size': float(tick_size),
+                    },
+                )
+            limit_price = float(snapped_money.amount)
         except (ValueError, TypeError) as e:
             logger.error('ORDER_INPUT_INVALID', extra={'cause': e.__class__.__name__, 'detail': str(e)})
             return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}

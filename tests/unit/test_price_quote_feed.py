@@ -275,3 +275,49 @@ def test_execute_order_routes_limit(monkeypatch):
     assert limit_call["kwargs"]["extended_hours"] is True
     assert "market" not in calls
 
+
+def test_submit_limit_order_quantizes_price(monkeypatch):
+    engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {
+        "total_execution_time": 0.0,
+        "total_orders": 0,
+        "successful_orders": 0,
+        "failed_orders": 0,
+    }
+
+    monkeypatch.setattr(engine, "_refresh_settings", lambda: None)
+    monkeypatch.setattr(engine, "_ensure_initialized", lambda: True)
+    monkeypatch.setattr(engine, "_pre_execution_checks", lambda: True)
+
+    captured: dict[str, object] = {}
+
+    def fake_submit(self, order_data):
+        captured["order_data"] = order_data
+        return {"status": "submitted", "id": "OID-LIMIT"}
+
+    def fake_execute(self, func, order_data):
+        captured["execute_order_data"] = order_data
+        return func(order_data)
+
+    monkeypatch.setattr(
+        engine,
+        "_submit_order_to_alpaca",
+        types.MethodType(fake_submit, engine),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_execute_with_retry",
+        types.MethodType(fake_execute, engine),
+    )
+
+    price = 935.8800048828125
+    response = engine.submit_limit_order("AAPL", "buy", 5, limit_price=price)
+
+    assert response == {"status": "submitted", "id": "OID-LIMIT"}
+    assert "order_data" in captured
+    submitted_price = captured["order_data"]["limit_price"]
+    assert submitted_price == pytest.approx(935.88)
+    assert captured["execute_order_data"]["limit_price"] == submitted_price
+
