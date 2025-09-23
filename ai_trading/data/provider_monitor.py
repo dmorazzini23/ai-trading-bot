@@ -14,7 +14,7 @@ production deployments receive notifications about outages.
 
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import Callable
+from typing import Callable, Dict, Tuple
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -71,6 +71,7 @@ class ProviderMonitor:
             if max_cooldown is not None
             else int(get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int))
         )
+        self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -365,6 +366,95 @@ class ProviderMonitor:
             )
             self.disable_counts.pop(provider, None)
         return False
+
+    def active_provider(self, primary: str, backup: str) -> str:
+        """Return the currently active provider for ``(primary, backup)``."""
+
+        key = (primary, backup)
+        state = self._pair_states.get(key)
+        if state is None:
+            state = {"active": primary, "last_switch": None, "consecutive_passes": 0}
+            self._pair_states[key] = state
+        return str(state.get("active", primary))
+
+    def update_data_health(
+        self,
+        primary: str,
+        backup: str,
+        *,
+        healthy: bool,
+        reason: str,
+    ) -> str:
+        """Update health state and potentially switch providers.
+
+        Returns the provider that should remain active after evaluating health.
+        """
+
+        cooldown_default = int(get_env("DATA_COOLDOWN_SECONDS", "120", cast=int))
+        key = (primary, backup)
+        state = self._pair_states.setdefault(
+            key,
+            {"active": primary, "last_switch": None, "consecutive_passes": 0},
+        )
+        now = datetime.now(UTC)
+        active = str(state.get("active", primary))
+        last_switch = state.get("last_switch")
+        consecutive = int(state.get("consecutive_passes", 0))
+
+        if healthy:
+            consecutive += 1
+            state["consecutive_passes"] = consecutive
+            if active == backup:
+                if consecutive >= 2:
+                    cooldown_seconds = max(0, int(state.get("cooldown", cooldown_default)))
+                    last_switch_dt = last_switch if isinstance(last_switch, datetime) else now
+                    elapsed = (now - last_switch_dt).total_seconds()
+                    if elapsed >= cooldown_seconds:
+                        state["active"] = primary
+                        state["last_switch"] = now
+                        state["consecutive_passes"] = 0
+                        state["cooldown"] = cooldown_default
+                        logger.info(
+                            "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s",
+                            backup,
+                            primary,
+                            reason or "recovered",
+                        )
+                        return primary
+                    logger.info(
+                        "DATA_PROVIDER_STAY | provider=%s reason=cooldown_active",
+                        backup,
+                    )
+                    return backup
+                logger.info(
+                    "DATA_PROVIDER_STAY | provider=%s reason=insufficient_health_passes",
+                    backup,
+                )
+                return backup
+            logger.info(
+                "DATA_PROVIDER_STAY | provider=%s reason=healthy",
+                active,
+            )
+            return active
+
+        # Unhealthy path
+        state["consecutive_passes"] = 0
+        if active != backup:
+            state["active"] = backup
+            state["last_switch"] = now
+            state["cooldown"] = cooldown_default
+            logger.info(
+                "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s",
+                active,
+                backup,
+                reason or "unhealthy",
+            )
+            return backup
+        logger.info(
+            "DATA_PROVIDER_STAY | provider=%s reason=unhealthy",
+            backup,
+        )
+        return backup
 
 
 provider_monitor = ProviderMonitor()

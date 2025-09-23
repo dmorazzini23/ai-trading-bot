@@ -25,7 +25,7 @@ from ai_trading.logging import (
     warn_finnhub_disabled_no_data,
     get_logger,
 )
-from ai_trading.config.management import MAX_EMPTY_RETRIES
+from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
 from ai_trading.config.settings import (
     provider_priority,
     max_data_fallbacks,
@@ -1182,6 +1182,186 @@ def _verify_minute_continuity(
         df[cols] = df[cols].ffill().bfill()
 
     return df.reset_index()
+
+
+def _normalize_window_bounds(
+    start: _dt.datetime,
+    end: _dt.datetime,
+    tz: ZoneInfo,
+) -> tuple[pd.DatetimeIndex, pd.Timestamp, pd.Timestamp]:
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        raise RuntimeError("pandas required for window normalization")
+    start_ts = pd_local.Timestamp(start)
+    if start_ts.tzinfo is None:
+        start_ts = start_ts.tz_localize("UTC")
+    end_ts = pd_local.Timestamp(end)
+    if end_ts.tzinfo is None:
+        end_ts = end_ts.tz_localize("UTC")
+    start_local = start_ts.tz_convert(tz)
+    end_local = end_ts.tz_convert(tz)
+    expected = pd_local.date_range(
+        start_local,
+        end_local,
+        freq="T",
+        tz=tz,
+        inclusive="left",
+    )
+    return expected, start_ts.tz_convert("UTC"), end_ts.tz_convert("UTC")
+
+
+def _repair_rth_minute_gaps(
+    df: pd.DataFrame | None,
+    *,
+    symbol: str,
+    start: _dt.datetime,
+    end: _dt.datetime,
+    tz: ZoneInfo,
+) -> tuple[pd.DataFrame | None, dict[str, object], bool]:
+    """Attempt to fill missing RTH minutes using the configured backup provider."""
+
+    pd_local = _ensure_pandas()
+    if pd_local is None or df is None or getattr(df, "empty", True):
+        return df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False
+
+    expected_local, start_utc, end_utc = _normalize_window_bounds(start, end, tz)
+    expected_utc = expected_local.tz_convert("UTC")
+    expected_count = int(expected_utc.size)
+    if expected_count == 0:
+        return df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False
+
+    work_df = df.copy()
+    try:
+        timestamps = pd_local.to_datetime(work_df["timestamp"], utc=True)
+    except Exception:
+        return df, {"expected": expected_count, "missing_after": expected_count, "gap_ratio": 1.0}, False
+    work_df.set_index(timestamps, inplace=True)
+    work_df.index.name = "timestamp"
+    missing = expected_utc.difference(work_df.index)
+    used_backup = False
+    if len(missing) > 0:
+        try:
+            missing_start = missing.min()
+            missing_end = missing.max() + _dt.timedelta(minutes=1)
+        except ValueError:
+            missing_start = None
+            missing_end = None
+        if missing_start is not None and missing_end is not None:
+            try:
+                fallback_df = _backup_get_bars(
+                    symbol,
+                    missing_start,
+                    missing_end,
+                    interval="1m",
+                )
+            except Exception:
+                fallback_df = None
+            else:
+                fallback_df = _post_process(
+                    fallback_df,
+                    symbol=symbol,
+                    timeframe="1Min",
+                )
+            if fallback_df is not None and not getattr(fallback_df, "empty", True):
+                try:
+                    fb_idx = pd_local.to_datetime(fallback_df["timestamp"], utc=True)
+                except Exception:
+                    fb_idx = pd_local.DatetimeIndex([])
+                fallback_df = fallback_df.set_index(fb_idx)
+                needed = fallback_df.loc[fallback_df.index.intersection(missing)]
+                if not needed.empty:
+                    used_backup = True
+                    work_df = pd_local.concat([work_df, needed])
+                    work_df = work_df[~work_df.index.duplicated(keep="last")]
+                    work_df.sort_index(inplace=True)
+    work_df = work_df.reset_index()
+    work_df.rename(columns={"timestamp": "timestamp"}, inplace=True)
+    try:
+        combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
+    except Exception:
+        combined_idx = pd_local.DatetimeIndex([])
+    missing_after = int(expected_utc.difference(combined_idx).size)
+    gap_ratio = (missing_after / expected_count) if expected_count else 0.0
+    metadata: dict[str, object] = {
+        "expected": expected_count,
+        "missing_after": missing_after,
+        "gap_ratio": gap_ratio,
+        "window_start": start_utc,
+        "window_end": end_utc,
+        "used_backup": used_backup,
+    }
+    try:
+        attrs = work_df.attrs  # type: ignore[attr-defined]
+        attrs.setdefault("symbol", symbol)
+        attrs["_coverage_meta"] = metadata
+    except Exception:
+        pass
+    return work_df, metadata, used_backup
+
+
+_SKIP_LOGGED: set[tuple[str, _dt.date]] = set()
+
+
+def should_skip_symbol(
+    df: pd.DataFrame,
+    *,
+    window: tuple[_dt.datetime, _dt.datetime],
+    tz: str | ZoneInfo,
+    max_gap_ratio: float,
+) -> bool:
+    """Return ``True`` when the DataFrame should be skipped due to coverage gaps."""
+
+    pd_local = _ensure_pandas()
+    if pd_local is None or df is None or getattr(df, "empty", True):
+        return False
+    tzinfo = ZoneInfo(tz) if isinstance(tz, str) else tz
+    start, end = window
+    expected_local, _, _ = _normalize_window_bounds(start, end, tzinfo)
+    expected_count = int(expected_local.size)
+    if expected_count == 0:
+        return False
+    try:
+        timestamps = pd_local.to_datetime(df["timestamp"], utc=True).tz_convert(tzinfo)
+    except Exception:
+        timestamps = pd_local.DatetimeIndex([])
+    missing_after = int(expected_local.difference(timestamps).size)
+    gap_ratio = missing_after / expected_count if expected_count else 0.0
+    metadata = getattr(df, "attrs", {}).get("_coverage_meta")
+    if isinstance(metadata, dict):
+        metadata.update(
+            {
+                "expected": expected_count,
+                "missing_after": missing_after,
+                "gap_ratio": gap_ratio,
+            }
+        )
+    symbol = getattr(getattr(df, "attrs", {}), "get", lambda *_: None)("symbol")
+    if callable(symbol):
+        symbol = df.attrs.get("symbol")  # type: ignore[assignment]
+    symbol_str = str(symbol) if symbol else "UNKNOWN"
+    skip = gap_ratio > max_gap_ratio
+    if skip:
+        try:
+            coverage_meta = df.attrs.setdefault("_coverage_meta", {})  # type: ignore[attr-defined]
+        except Exception:
+            coverage_meta = {}
+        if isinstance(coverage_meta, dict):
+            coverage_meta["skip_flagged"] = True
+            coverage_meta["gap_ratio"] = gap_ratio
+            coverage_meta["missing_after"] = missing_after
+            coverage_meta["expected"] = expected_count
+        gap_bps = gap_ratio * 10000
+        key = (symbol_str, start.date())
+        if key not in _SKIP_LOGGED:
+            logger.warning(
+                "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_bps=%.2f",
+                symbol_str,
+                missing_after,
+                expected_count,
+                gap_bps,
+            )
+            _SKIP_LOGGED.add(key)
+    return skip
 
 
 def _ensure_http_client():
@@ -2881,7 +3061,25 @@ def get_minute_df(
     use_finnhub = enable_finnhub and bool(has_finnhub)
     finnhub_disabled_requested = False
     df = None
-    if _has_alpaca_keys():
+    provider_str, backup_normalized = _resolve_backup_provider()
+    backup_label = (backup_normalized or provider_str.lower() or "").strip()
+    primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
+    force_primary_fetch = True
+    if backup_label:
+        active_provider = provider_monitor.active_provider(primary_label, backup_label)
+        if active_provider == backup_label:
+            try:
+                df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+            except Exception:
+                df = None
+            else:
+                df = _post_process(df, symbol=symbol, timeframe="1Min")
+                if df is not None and not getattr(df, "empty", True):
+                    used_backup = True
+                    force_primary_fetch = False
+                else:
+                    df = None
+    if _has_alpaca_keys() and force_primary_fetch:
         try:
             requested_feed = normalized_feed or _DEFAULT_FEED
             override_raw = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
@@ -3240,6 +3438,38 @@ def get_minute_df(
             return original_df if original_df is not None else df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
+    coverage_meta: dict[str, object] = {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}
+    repair_used_backup = False
+    tz_info = ZoneInfo("America/New_York")
+    df, coverage_meta, repair_used_backup = _repair_rth_minute_gaps(
+        df,
+        symbol=symbol,
+        start=start_dt,
+        end=end_dt,
+        tz=tz_info,
+    )
+    if repair_used_backup:
+        used_backup = True
+    try:
+        attrs = getattr(df, "attrs", None)
+        if isinstance(attrs, dict):
+            attrs.setdefault("symbol", symbol)
+            attrs["_coverage_meta"] = coverage_meta
+    except Exception:
+        pass
+    try:
+        max_gap_bps = float(get_env("MAX_GAP_RATIO_BPS", "5", cast=float))
+    except Exception:
+        max_gap_bps = 5.0
+    max_gap_ratio = max(0.0, max_gap_bps / 10000.0)
+    gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
+    if backup_label:
+        provider_monitor.update_data_health(
+            primary_label,
+            backup_label,
+            healthy=gap_ratio <= max_gap_ratio,
+            reason=f"gap_ratio={gap_ratio * 100:.2f}%",
+        )
     if df is None or getattr(df, "empty", False):
         if allow_empty_return:
             if used_backup and not fallback_logged:
@@ -3494,4 +3724,5 @@ __all__ = [
     "_build_daily_url",
     "retry_empty_fetch_once",
     "is_primary_provider_enabled",
+    "should_skip_symbol",
 ]

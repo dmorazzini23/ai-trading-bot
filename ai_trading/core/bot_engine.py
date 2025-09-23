@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import inspect
+import json
 import os
 import stat
 import tempfile
@@ -62,6 +63,7 @@ from ai_trading.data.fetch import (
     last_minute_bar_age_seconds,
     _sip_configured,
     build_fetcher,
+    should_skip_symbol,
 )
 from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
@@ -15470,6 +15472,157 @@ def _resolve_exec_price(
     return price, "minute_close"
 
 
+def _quote_to_mid(quote: Any | None) -> tuple[float | None, float, float]:
+    """Return (mid, bid, ask) for ``quote`` when available."""
+
+    if quote is None:
+        return None, 0.0, 0.0
+    try:
+        bid = float(getattr(quote, "bid_price", 0) or 0)
+    except Exception:
+        bid = 0.0
+    try:
+        ask = float(getattr(quote, "ask_price", 0) or 0)
+    except Exception:
+        ask = 0.0
+    if bid > 0 and ask > 0:
+        return (bid + ask) / 2.0, bid, ask
+    return None, bid, ask
+
+
+def _apply_slippage_limit(
+    side: str,
+    mid: float,
+    bid: float | None,
+    ask: float | None,
+    slippage_bps: float,
+) -> float:
+    """Apply side-aware slippage bounds to ``mid`` price."""
+
+    slip = max(0.0, float(slippage_bps)) / 10000.0
+    if side.lower() == "buy":
+        limit = mid * (1.0 + slip)
+        if ask and ask > 0:
+            limit = min(limit, ask)
+        return max(limit, 0.0)
+    limit = mid * (1.0 - slip)
+    if bid and bid > 0:
+        limit = max(limit, bid)
+    return max(limit, 0.0)
+
+
+def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | None:
+    """Fetch the latest quote using the configured data client."""
+
+    try:
+        _ensure_alpaca_classes()
+        if feed:
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=feed)
+        else:
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        return ctx.data_client.get_stock_latest_quote(req)
+    except Exception as exc:  # pragma: no cover - best effort logging
+        logger.debug(
+            "QUOTE_FETCH_FAILED",
+            extra={
+                "symbol": symbol,
+                "feed": feed or "nbbo",
+                "error": str(exc),
+            },
+        )
+        return None
+
+
+def _log_price_source(
+    symbol: str,
+    source: str,
+    fallback_chain: list[str],
+    limit_price: float,
+    side: str,
+    slippage_bps: float,
+) -> None:
+    logger.info(
+        "PRICE_SOURCE | symbol=%s source=%s fallback_chain=%s limit=%.4f side=%s slippage_bps=%s",
+        symbol,
+        source,
+        json.dumps(fallback_chain),
+        float(limit_price),
+        side,
+        slippage_bps,
+    )
+
+
+def _resolve_limit_price(
+    ctx: Any,
+    symbol: str,
+    side: str,
+    minute_df: pd.DataFrame | None,
+    last_close: float | None,
+) -> tuple[float | None, str | None]:
+    """Determine a limit price using deterministic priority with slippage."""
+
+    try:
+        slippage_bps = float(get_env("SLIPPAGE_BPS", "2", cast=float))
+    except Exception:
+        slippage_bps = 2.0
+    slippage_bps = max(0.0, slippage_bps)
+    nbbo_quote = _fetch_quote(ctx, symbol)
+    mid, bid, ask = _quote_to_mid(nbbo_quote)
+    if mid is not None:
+        limit = _apply_slippage_limit(side, mid, bid, ask, slippage_bps)
+        _log_price_source(
+            symbol,
+            "broker_nbbo",
+            ["primary_mid", "backup_mid", "last_close"],
+            limit,
+            side,
+            slippage_bps,
+        )
+        return limit, "broker_nbbo"
+
+    primary_feed = DATA_FEED_INTRADAY or "iex"
+    primary_quote = _fetch_quote(ctx, symbol, feed=primary_feed)
+    mid, bid, ask = _quote_to_mid(primary_quote)
+    if mid is not None:
+        limit = _apply_slippage_limit(side, mid, bid, ask, slippage_bps)
+        _log_price_source(
+            symbol,
+            "primary_mid",
+            ["backup_mid", "last_close"],
+            limit,
+            side,
+            slippage_bps,
+        )
+        return limit, "primary_mid"
+
+    backup_feed = None
+    if primary_feed != "sip" and data_fetcher_module._sip_configured():
+        backup_feed = "sip"
+    elif primary_feed != "iex":
+        backup_feed = "iex"
+    if backup_feed and backup_feed != primary_feed:
+        backup_quote = _fetch_quote(ctx, symbol, feed=backup_feed)
+        mid, bid, ask = _quote_to_mid(backup_quote)
+        if mid is not None:
+            limit = _apply_slippage_limit(side, mid, bid, ask, slippage_bps)
+            _log_price_source(
+                symbol,
+                "backup_mid",
+                ["last_close"],
+                limit,
+                side,
+                slippage_bps,
+            )
+            return limit, "backup_mid"
+
+    if last_close and last_close > 0:
+        limit = _apply_slippage_limit(side, float(last_close), None, None, slippage_bps)
+        _log_price_source(symbol, "last_close", [], limit, side, slippage_bps)
+        return limit, "last_close"
+
+    return None, None
+
+
 def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
@@ -15632,53 +15785,67 @@ def run_multi_strategy(ctx) -> None:
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
         sig = to_trade_signal(sig)
-        retries = 0
-        price = 0.0
         minute_df: pd.DataFrame | None = None
         last_close: float | None = None
-        skip_symbol = False
-        while price <= 0 and retries < 3:
+        try:
+            minute_df = fetch_minute_df_safe(sig.symbol)
+        except DataFetchError:
+            minute_df = pd.DataFrame()
+        if minute_df is not None and not minute_df.empty:
+            last_close = utils.get_latest_close(minute_df)
+            coverage_meta = getattr(minute_df, "attrs", {}).get("_coverage_meta", {})
+            tz_info = ZoneInfo("America/New_York")
+            start_val = coverage_meta.get("window_start") if isinstance(coverage_meta, dict) else None
+            end_val = coverage_meta.get("window_end") if isinstance(coverage_meta, dict) else None
+            def _normalize_window(val):
+                if hasattr(val, "to_pydatetime"):
+                    dt_val = val.to_pydatetime()
+                elif isinstance(val, datetime):
+                    dt_val = val
+                else:
+                    return None
+                if dt_val.tzinfo is None:
+                    dt_val = dt_val.replace(tzinfo=UTC)
+                return dt_val.astimezone(tz_info)
+
+            start_window = _normalize_window(start_val)
+            end_window = _normalize_window(end_val)
+            if start_window is None or end_window is None:
+                now_local = datetime.now(tz_info)
+                start_window = now_local.replace(hour=9, minute=30, second=0, microsecond=0)
+                end_window = now_local.replace(hour=16, minute=0, second=0, microsecond=0)
             try:
-                req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
-                quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-                price = float(getattr(quote, "ask_price", 0) or 0)
-            except APIError as e:
-                logger.warning("[run_all_trades] quote failed for %s: %s", sig.symbol, e)
-                price = 0.0
-            if price <= 0:
-                time.sleep(2)
-                try:
-                    minute_df = fetch_minute_df_safe(sig.symbol)
-                except DataFetchError:
-                    minute_df = pd.DataFrame()
-                if minute_df is not None and not minute_df.empty:
-                    row = minute_df.iloc[-1]
-                    logger.debug(
-                        "Fetched minute data for %s: %s",
-                        sig.symbol,
-                        row.to_dict(),
-                    )
-                    last_close = utils.get_latest_close(minute_df)
-                    resolved_price, _ = _resolve_exec_price(
-                        sig.symbol, minute_df, last_close
-                    )
-                    if resolved_price is None:
-                        skip_symbol = True
-                        break
-                    price = resolved_price
-                if skip_symbol:
-                    break
-                if price <= 0:
-                    logger.warning(
-                        "Retry %s: price %.2f <= 0 for %s, refetching data",
-                        retries + 1,
-                        price,
-                        sig.symbol,
-                    )
-                    retries += 1
-            else:
-                break
-        if skip_symbol or price <= 0:
+                max_gap_bps = float(get_env("MAX_GAP_RATIO_BPS", "5", cast=float))
+            except Exception:
+                max_gap_bps = 5.0
+            max_gap_ratio = max_gap_bps / 10000.0
+            if should_skip_symbol(
+                minute_df,
+                window=(start_window, end_window),
+                tz=tz_info,
+                max_gap_ratio=max_gap_ratio,
+            ):
+                gap_ratio = 0.0
+                if isinstance(coverage_meta, dict):
+                    try:
+                        gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
+                    except (TypeError, ValueError):
+                        gap_ratio = 0.0
+                logger.info(
+                    "SKIP_SYMBOL_DATA_GAPS",
+                    extra={"symbol": sig.symbol, "gap_ratio": gap_ratio},
+                )
+                continue
+        else:
+            minute_df = None
+        price, _price_source = _resolve_limit_price(
+            ctx,
+            sig.symbol,
+            sig.side,
+            minute_df,
+            last_close,
+        )
+        if price is None or price <= 0:
             logger.info("SKIP_SYMBOL_NO_VALID_PRICE", extra={"symbol": sig.symbol})
             continue
         # Provide the account equity (cash) when sizing positions; this allows
