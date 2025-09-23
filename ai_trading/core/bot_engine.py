@@ -150,6 +150,20 @@ def _alpaca_available() -> bool:
 
 from ai_trading.data import bars
 
+
+def _coverage_recovery_event(resolved_feed: str | None) -> str:
+    """Return a log event name that reflects the resolved recovery feed."""
+
+    if not resolved_feed:
+        return "COVERAGE_RECOVERY"
+    feed_token = "".join(
+        ch if ch.isalnum() else "_"
+        for ch in str(resolved_feed).upper()
+    ).strip("_")
+    if not feed_token:
+        return "COVERAGE_RECOVERY"
+    return f"COVERAGE_RECOVERY_{feed_token}"
+
 try:  # pragma: no cover
     from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
 except ImportError:  # pragma: no cover
@@ -3933,8 +3947,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         resolved_provider = f"alpaca_{resolved_feed}"
                     else:
                         resolved_provider = resolved_feed
+                event_name = _coverage_recovery_event(resolved_feed)
                 logger.warning(
-                    "COVERAGE_RECOVERY_SIP",
+                    event_name,
                     extra={
                         "symbol": symbol,
                         "prev_feed": current_feed,
@@ -6845,8 +6860,9 @@ def _try_sip_recovery(
 
     new_cov = round(new_bars / max(expected_bars, 1), 4)
     prev_cov = round(primary_actual_bars / max(expected_bars, 1), 4)
+    event_name = _coverage_recovery_event("sip")
     logger.warning(
-        "COVERAGE_RECOVERY_SIP",
+        event_name,
         extra={
             "symbol": symbol,
             "prev_feed": "iex",
