@@ -57,7 +57,6 @@ from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call
 from .timing import clamp_timeout, sleep
-from ai_trading.http.timeouts import get_session_timeout
 
 _log = get_logger(__name__)
 _session = None
@@ -70,6 +69,15 @@ _pool_stats = {
     "responses": 0,
     "errors": 0,
 }
+
+
+def _get_session_timeout() -> float | int | None:
+    try:
+        from ai_trading.http.timeouts import get_session_timeout as _get
+
+        return _get()
+    except ImportError:
+        return clamp_timeout(None)
 
 
 def clamp_request_timeout(
@@ -105,7 +113,7 @@ if REQUESTS_AVAILABLE:
         def __init__(self, timeout: float | int | None = None) -> None:
             super().__init__()
             if timeout is None:
-                timeout = get_session_timeout()
+                timeout = _get_session_timeout()
             self._timeout = clamp_request_timeout(timeout)
             _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
             _pool_stats["workers"] = int(
