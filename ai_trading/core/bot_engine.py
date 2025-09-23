@@ -1164,8 +1164,20 @@ def _cache_cycle_fallback_feed(feed: str | None) -> None:
         _GLOBAL_INTRADAY_FALLBACK_FEED = sanitized
 
 
+def _sip_lockout_active() -> bool:
+    """Return ``True`` when the runtime has flagged SIP access as unauthorized."""
+
+    return bool(os.getenv("ALPACA_SIP_UNAUTHORIZED")) or bool(
+        getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+    )
+
+
 def _sip_authorized() -> bool:
     """Return True when SIP entitlement checks permit access."""
+
+    if _sip_lockout_active():
+        # Runtime lockout kicks in after Alpaca denies SIP access until cleared.
+        return False
 
     truthy = {"1", "true", "yes", "on", "enable", "enabled"}
     falsy = {"0", "false", "no", "off", "disable", "disabled"}
@@ -17892,10 +17904,16 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             if not prefer_backup:
                 return None
 
+    sip_lockout = _sip_lockout_active()
     skip_primary = prefer_backup or provider_disabled
     if not skip_primary and not is_alpaca_service_available():
         skip_primary = True
         price_source = "alpaca_unavailable"
+        if primary_failure_source is None:
+            primary_failure_source = price_source
+    if not skip_primary and sip_lockout:
+        skip_primary = True
+        price_source = "alpaca_sip_unauthorized"
         if primary_failure_source is None:
             primary_failure_source = price_source
 
