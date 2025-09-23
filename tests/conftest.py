@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 import pathlib
 import types
 
+if "dotenv" not in sys.modules:
+    dotenv_stub = types.ModuleType("dotenv")
+    dotenv_stub.load_dotenv = lambda *args, **kwargs: None
+    sys.modules["dotenv"] = dotenv_stub
+
 import pytest
 import ai_trading.data.fetch as data_fetcher
 
