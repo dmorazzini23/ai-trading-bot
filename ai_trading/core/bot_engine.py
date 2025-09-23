@@ -4270,18 +4270,27 @@ def cancel_all_open_orders(runtime) -> None:
         open_orders = list_open_orders(runtime.api)
         if not open_orders:
             return
+        cancelable_statuses = {"open", "new", "pending_new"}
         for od in open_orders:
-            if getattr(od, "status", "").lower() == "open":
+            status_value = getattr(od, "status", "")
+            status = getattr(status_value, "value", status_value)
+            if not isinstance(status, str):
                 try:
-                    runtime.api.cancel_order(od.id)
-                except APIError as exc:
-                    # AI-AGENT-REF: narrow Alpaca API exceptions
-                    logger.exception(
-                        "Failed to cancel order %s",
-                        getattr(od, "id", "unknown"),
-                        exc_info=exc,
-                        extra={"cause": exc.__class__.__name__},
-                    )
+                    status = str(status)
+                except Exception:
+                    status = ""
+            if status.lower() not in cancelable_statuses:
+                continue
+            try:
+                runtime.api.cancel_order(od.id)
+            except APIError as exc:
+                # AI-AGENT-REF: narrow Alpaca API exceptions
+                logger.exception(
+                    "Failed to cancel order %s",
+                    getattr(od, "id", "unknown"),
+                    exc_info=exc,
+                    extra={"cause": exc.__class__.__name__},
+                )
     except APIError as exc:
         logger.warning(
             "Failed to cancel open orders: %s",
