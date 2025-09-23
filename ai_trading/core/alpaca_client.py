@@ -222,7 +222,12 @@ def _initialize_alpaca_clients() -> bool:
             be.data_client = None
             return False
         try:
-            be.trading_client = AlpacaREST(api_key=key, secret_key=secret, url_override=base_url)
+            be.trading_client = AlpacaREST(
+                api_key=key,
+                secret_key=secret,
+                paper="paper" in str(base_url).lower(),
+                url_override=base_url,
+            )
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
             logger.error("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})

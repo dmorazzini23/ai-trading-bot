@@ -8,6 +8,7 @@ capabilities, including end-to-end workflows, risk management, and compliance.
 import asyncio
 import datetime as dt
 import os
+from types import SimpleNamespace
 
 import pytest
 from tests.optdeps import require
@@ -335,3 +336,52 @@ class TestTradingBotIntegration:
 if __name__ == "__main__":
     """Run tests when executed directly."""
     pytest.main([__file__, "-v", "--tb=short"])
+
+@pytest.mark.parametrize(
+    ("mode", "base_url", "expected_paper"),
+    [
+        ("paper", "https://paper-api.alpaca.markets", True),
+        ("live", "https://api.alpaca.markets", False),
+    ],
+)
+def test_initialize_sets_paper_flag(monkeypatch, mode, base_url, expected_paper):
+    """Execution engine should propagate the paper flag to AlpacaREST."""
+
+    captured_kwargs: dict[str, object] = {}
+
+    class DummyClient:  # noqa: D401 - minimal capture stub
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.delenv("PYTEST_RUNNING", raising=False)
+    monkeypatch.setattr("ai_trading.execution.live_trading.AlpacaREST", DummyClient)
+    monkeypatch.setattr(
+        "ai_trading.execution.live_trading.get_execution_settings",
+        lambda: SimpleNamespace(
+            mode=mode,
+            shadow_mode=False,
+            order_timeout_seconds=30,
+            slippage_limit_bps=0,
+            price_provider_order=(),
+            data_feed_intraday="iex",
+        ),
+    )
+    monkeypatch.setattr(
+        "ai_trading.execution.live_trading.get_alpaca_creds",
+        lambda: ("key", "secret"),
+    )
+    monkeypatch.setattr(
+        "ai_trading.execution.live_trading.get_alpaca_base_url",
+        lambda: base_url,
+    )
+    monkeypatch.setattr("ai_trading.execution.live_trading.get_alpaca_config", lambda: None)
+    monkeypatch.setattr(
+        "ai_trading.execution.live_trading.ExecutionEngine._validate_connection",
+        lambda self: True,
+    )
+
+    engine = AlpacaExecutionEngine(execution_mode=mode)
+    assert engine.initialize() is True
+    assert captured_kwargs["paper"] is expected_paper
+    assert captured_kwargs["url_override"] == base_url
+
