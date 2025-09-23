@@ -1,5 +1,6 @@
 import sys
 import types
+from typing import Any
 
 import pytest
 
@@ -153,6 +154,75 @@ def test_safe_submit_order_raises_on_non_numeric(monkeypatch):
     req = types.SimpleNamespace(symbol="TSLA", qty=1, side="buy")
     with pytest.raises(ValueError):
         bot_engine.safe_submit_order(api, req)
+
+
+def test_safe_submit_order_uses_order_request(monkeypatch):
+    """safe_submit_order should build request objects when required."""
+
+    from ai_trading.core import bot_engine
+
+    monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)
+    monkeypatch.setattr(bot_engine, "check_alpaca_available", lambda x: True)
+
+    class FakeAPIError(bot_engine.APIError):
+        def __init__(self, available: int):
+            super().__init__("insufficient qty")
+            self.code = 40310000
+            self._raw_errors = [{"available": available}]
+
+    class OrderDataAPI:
+        def __init__(self, available: int) -> None:
+            self.available = available
+            self.client_order_ids: list[str] = []
+            self.calls: list[Any] = []
+            self.get_account = lambda: types.SimpleNamespace(buying_power="1000")
+            self.list_positions = lambda: []
+
+        def submit_order(self, *, order_data):  # type: ignore[no-untyped-def]
+            self.calls.append(order_data)
+            if len(self.calls) == 1:
+                raise FakeAPIError(self.available)
+            qty = getattr(order_data, "qty", 0)
+            symbol = getattr(order_data, "symbol", "")
+            return types.SimpleNamespace(
+                id=1,
+                status="filled",
+                filled_qty=qty,
+                qty=qty,
+                symbol=symbol,
+                client_order_id=getattr(order_data, "client_order_id", None),
+            )
+
+        def get_order(self, order_id):  # type: ignore[no-untyped-def]
+            if not self.calls:
+                return types.SimpleNamespace(
+                    id=order_id,
+                    status="filled",
+                    filled_qty=0,
+                    qty=0,
+                    symbol=None,
+                )
+            latest = self.calls[-1]
+            qty = getattr(latest, "qty", 0)
+            return types.SimpleNamespace(
+                id=order_id,
+                status="filled",
+                filled_qty=qty,
+                qty=qty,
+                symbol=getattr(latest, "symbol", ""),
+            )
+
+    api = OrderDataAPI(available=2)
+    req = types.SimpleNamespace(symbol="NVDA", qty=5, side="buy", time_in_force="day")
+
+    order = bot_engine.safe_submit_order(api, req)
+
+    assert len(api.calls) == 2, "submit_order should be retried after adjustment"
+    assert isinstance(api.calls[-1], bot_engine.MarketOrderRequest)
+    assert getattr(api.calls[-1], "qty") == 2
+    assert float(order.qty) == 2.0
+    assert float(order.filled_qty) == 2.0
+    assert getattr(order, "client_order_id", "")
 
 
 def test_safe_submit_order_generates_id(monkeypatch):

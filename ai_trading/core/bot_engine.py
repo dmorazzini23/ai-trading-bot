@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import os
 import stat
 import tempfile
@@ -2586,13 +2587,15 @@ OrderStatus: Any | None = None
 TimeInForce: Any | None = None
 MarketOrderRequest: Any | None = None
 LimitOrderRequest: Any | None = None
+StopOrderRequest: Any | None = None
+StopLimitOrderRequest: Any | None = None
 StockLatestQuoteRequest: Any | None = None
 _ALPACA_IMPORT_ERROR: Exception | None = None
 
 
 def _ensure_alpaca_classes() -> None:
     """Import Alpaca SDK types on demand."""
-    global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, LimitOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
+    global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, LimitOrderRequest, StopOrderRequest, StopLimitOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
     if Quote is not None or _ALPACA_IMPORT_ERROR is not None:
         return
     try:  # pragma: no cover - independent imports with fallbacks
@@ -2607,6 +2610,8 @@ def _ensure_alpaca_classes() -> None:
         from alpaca.trading.requests import (
             MarketOrderRequest as _MarketOrderRequest,
             LimitOrderRequest as _LimitOrderRequest,
+            StopOrderRequest as _StopOrderRequest,
+            StopLimitOrderRequest as _StopLimitOrderRequest,
         )
     except ImportError:
         from dataclasses import dataclass
@@ -2628,6 +2633,25 @@ def _ensure_alpaca_classes() -> None:
             side: Any
             time_in_force: Any
             limit_price: float
+            client_order_id: str | None = None
+
+        @dataclass
+        class _StopOrderRequest:  # pragma: no cover - minimal request object
+            symbol: str
+            qty: int
+            side: Any
+            time_in_force: Any
+            stop_price: float
+            client_order_id: str | None = None
+
+        @dataclass
+        class _StopLimitOrderRequest:  # pragma: no cover - minimal request object
+            symbol: str
+            qty: int
+            side: Any
+            time_in_force: Any
+            limit_price: float
+            stop_price: float
             client_order_id: str | None = None
     try:
         from alpaca.trading.enums import (
@@ -2678,6 +2702,8 @@ def _ensure_alpaca_classes() -> None:
     TimeInForce = _TimeInForce
     MarketOrderRequest = _MarketOrderRequest
     LimitOrderRequest = _LimitOrderRequest
+    StopOrderRequest = _StopOrderRequest
+    StopLimitOrderRequest = _StopLimitOrderRequest
     StockLatestQuoteRequest = _StockLatestQuoteRequest
 
 
@@ -10941,6 +10967,79 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
     order_args = _req_to_args(req)
 
+    def _coerce_enum(enum_cls: Any, value: Any) -> Any:
+        if enum_cls is None or value is None:
+            return value
+        if isinstance(value, enum_cls):
+            return value
+        try:
+            return enum_cls(value)
+        except Exception:
+            try:
+                return getattr(enum_cls, str(value).upper())
+            except Exception:
+                return value
+
+    def _build_order_request_from_args(args: dict[str, Any]):
+        _ensure_alpaca_classes()
+        side = _coerce_enum(OrderSide, args.get("side"))
+        tif = _coerce_enum(TimeInForce, args.get("time_in_force"))
+        base_kwargs: dict[str, Any] = {
+            "symbol": args.get("symbol"),
+            "qty": args.get("qty"),
+            "side": side,
+            "time_in_force": tif,
+        }
+        client_order_id = args.get("client_order_id")
+        if client_order_id:
+            base_kwargs["client_order_id"] = client_order_id
+        limit_price = args.get("limit_price")
+        stop_price = args.get("stop_price")
+        order_type = str(args.get("type") or "market").lower()
+        if order_type == "limit" and limit_price is not None:
+            base_kwargs["limit_price"] = limit_price
+            return LimitOrderRequest(**base_kwargs)
+        if (
+            order_type == "stop_limit"
+            and limit_price is not None
+            and stop_price is not None
+        ):
+            base_kwargs["limit_price"] = limit_price
+            base_kwargs["stop_price"] = stop_price
+            return StopLimitOrderRequest(**base_kwargs)
+        if order_type == "stop" and stop_price is not None:
+            base_kwargs["stop_price"] = stop_price
+            return StopOrderRequest(**base_kwargs)
+        return MarketOrderRequest(**base_kwargs)
+
+    def _submit_order_expects_request(submit_fn: Any) -> bool:
+        if submit_fn is None:
+            return False
+        try:
+            sig = inspect.signature(submit_fn)
+        except (TypeError, ValueError):
+            return False
+        return "order_data" in sig.parameters
+
+    submit_requires_order_data = _submit_order_expects_request(
+        getattr(api, "submit_order", None)
+    )
+
+    def _invoke_submit(args: dict[str, Any]):
+        nonlocal submit_requires_order_data
+        if submit_requires_order_data:
+            req_obj = _build_order_request_from_args(args)
+            return api.submit_order(order_data=req_obj)
+        try:
+            return api.submit_order(**args)
+        except TypeError as exc:
+            message = str(exc)
+            if "order_data" in message and not submit_requires_order_data:
+                submit_requires_order_data = True
+                req_obj = _build_order_request_from_args(args)
+                return api.submit_order(order_data=req_obj)
+            raise
+
     def _dummy_order(status: str) -> Any:
         """Return a placeholder order object with minimal attributes."""
         return types.SimpleNamespace(
@@ -11070,7 +11169,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     return _dummy_order("insufficient_position")
 
             try:
-                order = api.submit_order(**order_args)
+                order = _invoke_submit(order_args)
             except APIError as e:
                 if getattr(e, "code", None) == 40310000:
                     available = int(
@@ -11081,7 +11180,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                             f"Adjusting order for {order_args.get('symbol')} to available qty={available}"
                         )
                         order_args["qty"] = available
-                        order = api.submit_order(**order_args)
+                        order = _invoke_submit(order_args)
                     else:
                         logger.warning(
                             f"Skipping {order_args.get('symbol')}, no available qty"
