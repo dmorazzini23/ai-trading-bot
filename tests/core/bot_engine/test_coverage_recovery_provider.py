@@ -126,8 +126,9 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
     assert isinstance(result, pd.DataFrame)
     assert call_history.count("sip") >= 1
     assert result.attrs.get("data_provider") == "yahoo"
+    expected_event = "COVERAGE_RECOVERY_YAHOO"
     assert any(
-        record.message == "COVERAGE_RECOVERY_SIP" and getattr(record, "new_feed", None) == "yahoo"
+        record.message == expected_event and getattr(record, "new_feed", None) == "yahoo"
         for record in caplog.records
     )
     assert cached_feeds == ["yahoo"]
