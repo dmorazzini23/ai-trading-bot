@@ -617,7 +617,9 @@ class ExecutionEngine:
         while attempt < self.retry_config['max_attempts']:
             try:
                 result = func(*args, **kwargs)
-                self.circuit_breaker['failure_count'] = min(self.circuit_breaker['failure_count'], 0)
+                self.circuit_breaker['failure_count'] = 0
+                self.circuit_breaker['is_open'] = False
+                self.circuit_breaker['last_failure'] = None
                 return result
             except (APIError, TimeoutError, ConnectionError) as e:
                 attempt += 1
