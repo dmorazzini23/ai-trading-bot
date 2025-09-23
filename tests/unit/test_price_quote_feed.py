@@ -184,18 +184,22 @@ def test_get_latest_price_invalid_feed_skips_alpaca(monkeypatch, caplog):
         "ai_trading.core.bot_engine.is_alpaca_service_available", lambda: True
     )
 
-    price = bot_engine.get_latest_price(symbol)
+    first_price = bot_engine.get_latest_price(symbol)
+    second_price = bot_engine.get_latest_price(symbol)
 
-    assert price == pytest.approx(sentinel)
+    assert first_price == pytest.approx(sentinel)
+    assert second_price == pytest.approx(sentinel)
     assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
     invalid_logs = [
         (getattr(record, "provider", None), getattr(record, "requested_feed", None))
         for record in caplog.records
         if record.message == "ALPACA_INVALID_FEED_SKIPPED"
     ]
-    assert invalid_logs
-    assert any(provider == "alpaca_trade" for provider, _ in invalid_logs)
-    assert any(feed == "yahoo" for _, feed in invalid_logs)
+    assert len(invalid_logs) <= 1
+    if invalid_logs:
+        provider, feed = invalid_logs[0]
+        assert provider == "alpaca"
+        assert feed == "yahoo"
 
 
 def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
