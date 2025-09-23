@@ -198,6 +198,54 @@ def test_get_latest_price_invalid_feed_skips_alpaca(monkeypatch, caplog):
     assert any(feed == "yahoo" for _, feed in invalid_logs)
 
 
+def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
+    symbol = "AAPL"
+    bot_engine._reset_cycle_cache()
+    caplog.set_level("WARNING")
+    monkeypatch.setattr(bot_engine, "_INTRADAY_FEED_CACHE", None, raising=False)
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.is_alpaca_service_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_price_provider_order",
+        lambda: ("alpaca_trade",),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_alpaca_get(url, *, params=None, **_):
+        captured["url"] = url
+        captured["params"] = params
+        return {"price": 145.0}
+
+    monkeypatch.setattr(
+        bot_engine,
+        "_alpaca_symbols",
+        lambda: (fake_alpaca_get, None),
+    )
+
+    bot_engine._cache_cycle_fallback_feed("alpaca_sip")
+    assert bot_engine._prefer_feed_this_cycle() == "sip"
+
+    price = bot_engine.get_latest_price(symbol)
+
+    assert price == pytest.approx(145.0)
+    assert captured["params"] == {"feed": "sip"}
+    assert not any(
+        record.message == "ALPACA_INVALID_FEED_SKIPPED" for record in caplog.records
+    )
+
+
 def test_execute_order_routes_market(monkeypatch):
     engine = live_trading.ExecutionEngine.__new__(live_trading.ExecutionEngine)
     calls: dict[str, dict[str, object]] = {}
