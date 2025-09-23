@@ -17775,8 +17775,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             for provider in provider_order
             if not _is_primary_price_source(provider)
         )
-    if not provider_order:
-        provider_order = ("yahoo", "bars")
 
     cache: dict[str, Any] = {}
 
@@ -17809,6 +17807,21 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             _cache_cycle_fallback_feed(fallback_feed)
     elif cycle_feed is None and sanitized_feed:
         _cache_cycle_fallback_feed(sanitized_feed)
+
+    if feed and _sanitize_alpaca_feed(feed) is None:
+        filtered_order = tuple(
+            provider for provider in provider_order if not provider.startswith("alpaca")
+        )
+        if filtered_order != provider_order:
+            logger_once.warning(
+                "ALPACA_INVALID_FEED_SKIPPED",
+                key=f"alpaca_invalid_feed_skipped:{feed}",
+                extra={"provider": "alpaca", "requested_feed": feed, "symbol": symbol},
+            )
+        provider_order = filtered_order
+
+    if not provider_order:
+        provider_order = ("yahoo", "bars")
 
     def _record_primary_failure(source_label: str | None) -> None:
         nonlocal primary_failure_source
