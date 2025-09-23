@@ -637,9 +637,10 @@ class BotEngine:
     def _cache_cycle_fallback_feed(self, feed: str | None) -> None:
         """Remember *feed* for subsequent minute fetches within the cycle."""
 
-        if feed:
-            self._intraday_fallback_feed = feed
-            _cache_cycle_fallback_feed(feed)
+        sanitized = _normalize_cycle_feed(feed)
+        if sanitized:
+            self._intraday_fallback_feed = sanitized
+            _cache_cycle_fallback_feed(sanitized)
 
     @cached_property
     def data_client(self):
@@ -729,6 +730,21 @@ def _sanitize_alpaca_feed(feed: str | None) -> str | None:
         return None
     normalized = str(feed).strip().lower()
     return normalized if normalized in {"iex", "sip"} else None
+
+
+def _normalize_cycle_feed(feed: str | None) -> str | None:
+    """Return sanitized cycle feed limited to Alpaca-supported values."""
+
+    if feed is None:
+        return None
+    sanitized = _sanitize_alpaca_feed(feed)
+    if sanitized:
+        return sanitized
+    try:
+        normalized = data_fetcher_module._normalize_feed_value(feed)
+    except Exception:
+        return None
+    return _sanitize_alpaca_feed(normalized)
 
 
 def _get_price_provider_order() -> tuple[str, ...]:
@@ -1128,8 +1144,9 @@ def _cache_cycle_fallback_feed(feed: str | None) -> None:
     """Remember *feed* for reuse later in the same trading cycle."""
 
     global _GLOBAL_INTRADAY_FALLBACK_FEED
-    if feed:
-        _GLOBAL_INTRADAY_FALLBACK_FEED = feed
+    sanitized = _normalize_cycle_feed(feed)
+    if sanitized:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = sanitized
 
 
 def _sip_authorized() -> bool:
@@ -17764,9 +17781,11 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     cache: dict[str, Any] = {}
 
     cycle_feed = _prefer_feed_this_cycle()
-    feed = cycle_feed or _get_intraday_feed()
+    configured_feed = cycle_feed or _get_intraday_feed()
+    sanitized_feed = _normalize_cycle_feed(configured_feed)
+    feed = sanitized_feed or configured_feed
     switchover_reason: str | None = None
-    if feed == "sip":
+    if sanitized_feed == "sip":
         if not data_fetcher_module._sip_configured():
             switchover_reason = "sip_not_configured"
         elif not _sip_authorized():
@@ -17785,10 +17804,11 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                         "scope": "latest_price",
                     },
                 )
+            sanitized_feed = fallback_feed
             feed = fallback_feed
-            _cache_cycle_fallback_feed(feed)
-    elif cycle_feed is None:
-        _cache_cycle_fallback_feed(feed)
+            _cache_cycle_fallback_feed(fallback_feed)
+    elif cycle_feed is None and sanitized_feed:
+        _cache_cycle_fallback_feed(sanitized_feed)
 
     def _record_primary_failure(source_label: str | None) -> None:
         nonlocal primary_failure_source
