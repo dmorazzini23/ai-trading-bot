@@ -202,6 +202,42 @@ def test_get_latest_price_invalid_feed_skips_alpaca(monkeypatch, caplog):
         assert feed == "yahoo"
 
 
+def test_get_latest_price_uses_fallback_when_sip_lockout(monkeypatch):
+    symbol = "SPY"
+    bot_engine._reset_cycle_cache()
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
+    monkeypatch.setattr(
+        "ai_trading.data.fetch._SIP_UNAUTHORIZED", True, raising=False
+    )
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.is_alpaca_service_available", lambda: True
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_price_provider_order",
+        lambda: ("alpaca_trade", "alpaca_quote", "yahoo"),
+    )
+
+    def _fail_alpaca_symbols():
+        raise AssertionError("alpaca should not be called when SIP is locked out")
+
+    monkeypatch.setattr(bot_engine, "_alpaca_symbols", _fail_alpaca_symbols)
+
+    sentinel = 245.67
+    monkeypatch.setattr(
+        bot_engine, "_attempt_yahoo_price", lambda _s: (sentinel, "yahoo")
+    )
+
+    price = bot_engine.get_latest_price(symbol)
+
+    assert price == pytest.approx(sentinel)
+    assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
+
+
 def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
     symbol = "AAPL"
     bot_engine._reset_cycle_cache()
