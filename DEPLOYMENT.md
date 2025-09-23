@@ -147,6 +147,7 @@ User=ai-trading
 Group=ai-trading
 WorkingDirectory=/opt/ai-trading-bot
 Environment=PATH=/opt/ai-trading-bot/venv/bin
+Environment=API_PORT=9001
 ExecStart=/opt/ai-trading-bot/venv/bin/python -m ai_trading
 Restart=on-failure
 RestartSec=10
