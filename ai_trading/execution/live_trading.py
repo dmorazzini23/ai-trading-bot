@@ -4,10 +4,13 @@ Live trading execution engine with real Alpaca SDK integration.
 This module provides production-ready order execution with proper error handling,
 retry mechanisms, circuit breakers, and comprehensive monitoring.
 """
+
+import inspect
 import os
 import time
 from datetime import UTC, datetime
-from typing import Any
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from ai_trading.logging import get_logger
 from ai_trading.market.symbol_specs import get_tick_size
@@ -17,15 +20,23 @@ from ai_trading.utils.env import (
     get_alpaca_base_url,
     get_alpaca_creds,
 )
+
 try:  # pragma: no cover - optional dependency
     from alpaca.common.exceptions import APIError  # type: ignore
 except Exception:  # pragma: no cover - fallback when SDK missing
+
     class APIError(Exception):
         """Fallback APIError when alpaca-py is unavailable."""
 
         pass
+
+
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
 from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
+from ai_trading.execution.engine import ExecutionResult
+
+if TYPE_CHECKING:  # pragma: no cover - import for typing only
+    from ai_trading.core.enums import OrderSide as CoreOrderSide
 
 logger = get_logger(__name__)
 try:  # pragma: no cover - optional dependency
@@ -36,27 +47,31 @@ except (ValueError, TypeError, ModuleNotFoundError, ImportError):
     AlpacaREST = None
     OrderSide = TimeInForce = LimitOrderRequest = MarketOrderRequest = None  # type: ignore[assignment]
 
+
 def _req_str(name: str, v: str | None) -> str:
     if not v:
-        raise ValueError(f'{name}_empty')
+        raise ValueError(f"{name}_empty")
     return v
+
 
 def _pos_num(name: str, v) -> float:
     x = float(v)
     if not x > 0:
-        raise ValueError(f'{name}_nonpositive:{v}')
+        raise ValueError(f"{name}_nonpositive:{v}")
     return x
+
 
 def submit_market_order(symbol: str, side: str, quantity: int):
     symbol = str(symbol)
     if not symbol or len(symbol) > 5 or (not symbol.isalpha()):
-        return {'status': 'error', 'code': 'SYMBOL_INVALID', 'error': symbol}
+        return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol}
     try:
-        quantity = int(_pos_num('qty', quantity))
+        quantity = int(_pos_num("qty", quantity))
     except (ValueError, TypeError) as e:
-        logger.error('ORDER_INPUT_INVALID', extra={'cause': type(e).__name__, 'detail': str(e)})
-        return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
-    return {'status': 'submitted', 'symbol': symbol, 'side': side, 'quantity': quantity}
+        logger.error("ORDER_INPUT_INVALID", extra={"cause": type(e).__name__, "detail": str(e)})
+        return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+    return {"status": "submitted", "symbol": symbol, "side": side, "quantity": quantity}
+
 
 class ExecutionEngine:
     """
@@ -81,10 +96,7 @@ class ExecutionEngine:
 
         self.ctx = ctx
         requested_mode = (
-            execution_mode
-            or getattr(ctx, "execution_mode", None)
-            or os.getenv("EXECUTION_MODE")
-            or "paper"
+            execution_mode or getattr(ctx, "execution_mode", None) or os.getenv("EXECUTION_MODE") or "paper"
         )
         self._explicit_mode = execution_mode
         self._explicit_shadow = shadow_mode
@@ -99,27 +111,28 @@ class ExecutionEngine:
         self.price_provider_order: tuple[str, ...] = ()
         self.data_feed_intraday = "iex"
         self.is_initialized = False
+        self._asset_class_support: bool | None = None
         self.circuit_breaker = {
-            'failure_count': 0,
-            'max_failures': 5,
-            'reset_time': 300,
-            'last_failure': None,
-            'is_open': False,
+            "failure_count": 0,
+            "max_failures": 5,
+            "reset_time": 300,
+            "last_failure": None,
+            "is_open": False,
         }
         self.retry_config = {
-            'max_attempts': 3,
-            'base_delay': 1.0,
-            'max_delay': 30.0,
-            'exponential_base': 2.0,
+            "max_attempts": 3,
+            "base_delay": 1.0,
+            "max_delay": 30.0,
+            "exponential_base": 2.0,
         }
         self.stats = {
-            'total_orders': 0,
-            'successful_orders': 0,
-            'failed_orders': 0,
-            'retry_count': 0,
-            'circuit_breaker_trips': 0,
-            'total_execution_time': 0.0,
-            'last_reset': datetime.now(UTC),
+            "total_orders": 0,
+            "successful_orders": 0,
+            "failed_orders": 0,
+            "retry_count": 0,
+            "circuit_breaker_trips": 0,
+            "total_execution_time": 0.0,
+            "last_reset": datetime.now(UTC),
         }
         self.base_url = get_alpaca_base_url()
         self._api_key: str | None = None
@@ -137,11 +150,11 @@ class ExecutionEngine:
         if self._explicit_shadow is not None:
             self.shadow_mode = bool(self._explicit_shadow)
         logger.info(
-            'ExecutionEngine initialized',
+            "ExecutionEngine initialized",
             extra={
-                'execution_mode': self.execution_mode,
-                'shadow_mode': self.shadow_mode,
-                'slippage_limit_bps': self.slippage_limit_bps,
+                "execution_mode": self.execution_mode,
+                "shadow_mode": self.shadow_mode,
+                "slippage_limit_bps": self.slippage_limit_bps,
             },
         )
 
@@ -151,16 +164,16 @@ class ExecutionEngine:
         try:
             settings = get_execution_settings()
         except Exception as exc:  # pragma: no cover - defensive guard
-            logger.warning('EXECUTION_SETTINGS_REFRESH_FAILED', extra={'error': str(exc)})
+            logger.warning("EXECUTION_SETTINGS_REFRESH_FAILED", extra={"error": str(exc)})
             return
 
         self.settings = settings
-        self.execution_mode = str(settings.mode or 'sim').lower()
+        self.execution_mode = str(settings.mode or "sim").lower()
         self.shadow_mode = bool(settings.shadow_mode)
         self.order_timeout_seconds = int(settings.order_timeout_seconds)
         self.slippage_limit_bps = int(settings.slippage_limit_bps)
         self.price_provider_order = tuple(settings.price_provider_order)
-        self.data_feed_intraday = str(settings.data_feed_intraday or 'iex').lower()
+        self.data_feed_intraday = str(settings.data_feed_intraday or "iex").lower()
 
     def initialize(self) -> bool:
         """
@@ -175,7 +188,7 @@ class ExecutionEngine:
                 self.execution_mode = str(self._explicit_mode).lower()
             if self._explicit_shadow is not None:
                 self.shadow_mode = bool(self._explicit_shadow)
-            if os.environ.get('PYTEST_RUNNING'):
+            if os.environ.get("PYTEST_RUNNING"):
                 try:
                     from tests.support.mocks import MockTradingClient  # type: ignore
                 except (ModuleNotFoundError, ImportError, ValueError, TypeError):
@@ -192,23 +205,23 @@ class ExecutionEngine:
                 except RuntimeError as exc:
                     has_key, has_secret = alpaca_credential_status()
                     logger.error(
-                        'EXECUTION_CREDS_UNAVAILABLE',
+                        "EXECUTION_CREDS_UNAVAILABLE",
                         extra={
-                            'has_key': has_key,
-                            'has_secret': has_secret,
-                            'base_url': self.base_url,
-                            'detail': str(exc),
+                            "has_key": has_key,
+                            "has_secret": has_secret,
+                            "base_url": self.base_url,
+                            "detail": str(exc),
                         },
                     )
                     return False
                 else:
                     self._api_key, self._api_secret = key, secret
             base_url = self.base_url or get_alpaca_base_url()
-            paper = 'paper' in base_url.lower()
+            paper = "paper" in base_url.lower()
             mode = self.execution_mode
-            if mode == 'live':
+            if mode == "live":
                 paper = False
-            elif mode == 'paper':
+            elif mode == "paper":
                 paper = True
             try:
                 self.config = get_alpaca_config()
@@ -226,29 +239,29 @@ class ExecutionEngine:
             )
             config_paper = paper if self.config is None else bool(self.config.use_paper)
             logger.info(
-                'Real Alpaca client initialized',
+                "Real Alpaca client initialized",
                 extra={
-                    'paper': config_paper,
-                    'execution_mode': self.execution_mode,
-                    'shadow_mode': self.shadow_mode,
+                    "paper": config_paper,
+                    "execution_mode": self.execution_mode,
+                    "shadow_mode": self.shadow_mode,
                 },
             )
             self.trading_client = raw_client
             if self._validate_connection():
                 self.is_initialized = True
-                logger.info('Alpaca execution engine ready for trading')
+                logger.info("Alpaca execution engine ready for trading")
                 return True
             else:
-                logger.error('Failed to validate Alpaca connection')
+                logger.error("Failed to validate Alpaca connection")
                 return False
         except (ValueError, KeyError, AttributeError) as e:
-            logger.error(f'Configuration error initializing Alpaca execution engine: {e}')
+            logger.error(f"Configuration error initializing Alpaca execution engine: {e}")
             return False
         except (ConnectionError, TimeoutError) as e:
-            logger.error(f'Network error initializing Alpaca execution engine: {e}')
+            logger.error(f"Network error initializing Alpaca execution engine: {e}")
             return False
         except APIError as e:
-            logger.error(f'Alpaca API error initializing execution engine: {e}')
+            logger.error(f"Alpaca API error initializing execution engine: {e}")
             return False
 
     def _ensure_initialized(self) -> bool:
@@ -275,51 +288,59 @@ class ExecutionEngine:
         if not self._pre_execution_checks():
             return None
         try:
-            symbol = _req_str('symbol', symbol)
+            symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
-                return {'status': 'error', 'code': 'SYMBOL_INVALID', 'error': symbol, 'order_id': None}
-            quantity = int(_pos_num('qty', quantity))
+                return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
+            quantity = int(_pos_num("qty", quantity))
         except (ValueError, TypeError) as e:
-            logger.error('ORDER_INPUT_INVALID', extra={'cause': e.__class__.__name__, 'detail': str(e)})
-            return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
-        client_order_id = kwargs.get('client_order_id', f'order_{int(time.time())}')
+            logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
+            return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+        client_order_id = kwargs.get("client_order_id", f"order_{int(time.time())}")
         order_data = {
-            'symbol': symbol,
-            'side': side.lower(),
-            'quantity': quantity,
-            'type': 'market',
-            'time_in_force': kwargs.get('time_in_force', 'day'),
-            'client_order_id': client_order_id,
+            "symbol": symbol,
+            "side": side.lower(),
+            "quantity": quantity,
+            "type": "market",
+            "time_in_force": kwargs.get("time_in_force", "day"),
+            "client_order_id": client_order_id,
         }
+        if kwargs.get("asset_class"):
+            order_data["asset_class"] = kwargs["asset_class"]
         if self.shadow_mode:
-            self.stats['total_orders'] += 1
-            self.stats['successful_orders'] += 1
+            self.stats["total_orders"] += 1
+            self.stats["successful_orders"] += 1
             logger.info(
-                'SHADOW_MODE_NOOP',
-                extra={'symbol': symbol, 'side': side.lower(), 'quantity': quantity, 'client_order_id': client_order_id},
+                "SHADOW_MODE_NOOP",
+                extra={
+                    "symbol": symbol,
+                    "side": side.lower(),
+                    "quantity": quantity,
+                    "client_order_id": client_order_id,
+                },
             )
             return {
-                'status': 'shadow',
-                'symbol': symbol,
-                'side': side.lower(),
-                'quantity': quantity,
-                'client_order_id': client_order_id,
+                "status": "shadow",
+                "symbol": symbol,
+                "side": side.lower(),
+                "quantity": quantity,
+                "client_order_id": client_order_id,
+                "asset_class": kwargs.get("asset_class"),
             }
         start_time = time.time()
         logger.info(
-            'Submitting market order',
-            extra={'side': side, 'quantity': quantity, 'symbol': symbol, 'client_order_id': client_order_id},
+            "Submitting market order",
+            extra={"side": side, "quantity": quantity, "symbol": symbol, "client_order_id": client_order_id},
         )
         result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         execution_time = time.time() - start_time
-        self.stats['total_execution_time'] += execution_time
-        self.stats['total_orders'] += 1
+        self.stats["total_execution_time"] += execution_time
+        self.stats["total_orders"] += 1
         if result:
-            self.stats['successful_orders'] += 1
+            self.stats["successful_orders"] += 1
             logger.info(f"Market order executed successfully: {result.get('id', 'unknown')}")
         else:
-            self.stats['failed_orders'] += 1
-            logger.error(f'Failed to execute market order: {side} {quantity} {symbol}')
+            self.stats["failed_orders"] += 1
+            logger.error(f"Failed to execute market order: {side} {quantity} {symbol}")
         return result
 
     def submit_limit_order(self, symbol: str, side: str, quantity: int, limit_price: float, **kwargs) -> dict | None:
@@ -342,100 +363,153 @@ class ExecutionEngine:
         if not self._pre_execution_checks():
             return None
         try:
-            symbol = _req_str('symbol', symbol)
+            symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
-                return {'status': 'error', 'code': 'SYMBOL_INVALID', 'error': symbol, 'order_id': None}
-            quantity = int(_pos_num('qty', quantity))
-            limit_price = _pos_num('limit_price', limit_price)
+                return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
+            quantity = int(_pos_num("qty", quantity))
+            limit_price = _pos_num("limit_price", limit_price)
             tick_size = get_tick_size(symbol)
             original_money = Money(limit_price)
             snapped_money = original_money.quantize(tick_size)
             if snapped_money.amount != original_money.amount:
                 logger.debug(
-                    'LIMIT_PRICE_NORMALIZED',
+                    "LIMIT_PRICE_NORMALIZED",
                     extra={
-                        'symbol': symbol,
-                        'input_price': float(original_money.amount),
-                        'normalized_price': float(snapped_money.amount),
-                        'tick_size': float(tick_size),
+                        "symbol": symbol,
+                        "input_price": float(original_money.amount),
+                        "normalized_price": float(snapped_money.amount),
+                        "tick_size": float(tick_size),
                     },
                 )
             limit_price = float(snapped_money.amount)
         except (ValueError, TypeError) as e:
-            logger.error('ORDER_INPUT_INVALID', extra={'cause': e.__class__.__name__, 'detail': str(e)})
-            return {'status': 'error', 'code': 'ORDER_INPUT_INVALID', 'error': str(e), 'order_id': None}
-        client_order_id = kwargs.get('client_order_id', f'order_{int(time.time())}')
+            logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
+            return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+        client_order_id = kwargs.get("client_order_id", f"order_{int(time.time())}")
         order_data = {
-            'symbol': symbol,
-            'side': side.lower(),
-            'quantity': quantity,
-            'type': 'limit',
-            'limit_price': limit_price,
-            'time_in_force': kwargs.get('time_in_force', 'day'),
-            'client_order_id': client_order_id,
+            "symbol": symbol,
+            "side": side.lower(),
+            "quantity": quantity,
+            "type": "limit",
+            "limit_price": limit_price,
+            "time_in_force": kwargs.get("time_in_force", "day"),
+            "client_order_id": client_order_id,
         }
+        if kwargs.get("asset_class"):
+            order_data["asset_class"] = kwargs["asset_class"]
         if self.shadow_mode:
-            self.stats['total_orders'] += 1
-            self.stats['successful_orders'] += 1
+            self.stats["total_orders"] += 1
+            self.stats["successful_orders"] += 1
             logger.info(
-                'SHADOW_MODE_NOOP',
-                extra={'symbol': symbol, 'side': side.lower(), 'quantity': quantity, 'limit_price': limit_price, 'client_order_id': client_order_id},
+                "SHADOW_MODE_NOOP",
+                extra={
+                    "symbol": symbol,
+                    "side": side.lower(),
+                    "quantity": quantity,
+                    "limit_price": limit_price,
+                    "client_order_id": client_order_id,
+                },
             )
             return {
-                'status': 'shadow',
-                'symbol': symbol,
-                'side': side.lower(),
-                'quantity': quantity,
-                'limit_price': limit_price,
-                'client_order_id': client_order_id,
+                "status": "shadow",
+                "symbol": symbol,
+                "side": side.lower(),
+                "quantity": quantity,
+                "limit_price": limit_price,
+                "client_order_id": client_order_id,
+                "asset_class": kwargs.get("asset_class"),
             }
         start_time = time.time()
         logger.info(
-            'Submitting limit order',
-            extra={'side': side, 'quantity': quantity, 'symbol': symbol, 'limit_price': limit_price, 'client_order_id': client_order_id},
+            "Submitting limit order",
+            extra={
+                "side": side,
+                "quantity": quantity,
+                "symbol": symbol,
+                "limit_price": limit_price,
+                "client_order_id": client_order_id,
+            },
         )
         result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         execution_time = time.time() - start_time
-        self.stats['total_execution_time'] += execution_time
-        self.stats['total_orders'] += 1
+        self.stats["total_execution_time"] += execution_time
+        self.stats["total_orders"] += 1
         if result:
-            self.stats['successful_orders'] += 1
+            self.stats["successful_orders"] += 1
             logger.info(f"Limit order executed successfully: {result.get('id', 'unknown')}")
         else:
-            self.stats['failed_orders'] += 1
-            logger.error(f'Failed to execute limit order: {side} {quantity} {symbol} @ ${limit_price}')
+            self.stats["failed_orders"] += 1
+            logger.error(f"Failed to execute limit order: {side} {quantity} {symbol} @ ${limit_price}")
         return result
 
     def execute_order(
         self,
         symbol: str,
-        core_side: "CoreOrderSide",
+        side: Literal["buy", "sell", "short", "cover"],
         qty: int,
-        price: float | None = None,
-        *,
-        tif: str | None = None,
-        extended_hours: bool | None = None,
-    ) -> str:
-        """Adapter for core.bot_engine.submit_order(...) returning Alpaca order id."""
+        order_type: Literal["market", "limit"] = "limit",
+        limit_price: Optional[float] = None,
+        asset_class: Optional[str] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Place an order while tolerating forward-compatible keyword arguments."""
 
-        side = self._map_core_side(core_side)
+        mapped_side = self._map_core_side(side)
         if qty <= 0:
             raise ValueError(f"execute_order invalid qty={qty}")
 
-        order_kwargs: dict[str, Any] = {}
-        if tif:
-            order_kwargs['time_in_force'] = tif
-        if extended_hours is not None:
-            order_kwargs['extended_hours'] = extended_hours
+        time_in_force = kwargs.pop("tif", None)
+        extended_hours = kwargs.pop("extended_hours", None)
+        kwargs.pop("signal", None)
+        signal_weight = kwargs.pop("signal_weight", None)
+        price_alias = kwargs.pop("price", None)
+        if limit_price is None and price_alias is not None:
+            limit_price = price_alias
 
-        order_type = 'market' if price is None else 'limit'
-        try:
-            if price is None:
-                order = self.submit_market_order(symbol, side, qty, **order_kwargs)
+        order_type_normalized = str(order_type or "limit").lower()
+        if limit_price is None and order_type_normalized == "limit":
+            order_type_normalized = "market"
+        elif limit_price is not None:
+            order_type_normalized = "limit"
+
+        order_kwargs: dict[str, Any] = {}
+        if time_in_force:
+            order_kwargs["time_in_force"] = time_in_force
+        if extended_hours is not None:
+            order_kwargs["extended_hours"] = extended_hours
+        for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price"):
+            if passthrough in kwargs:
+                order_kwargs[passthrough] = kwargs.pop(passthrough)
+
+        supported_asset_class = False
+        if asset_class:
+            supported_asset_class = self._supports_asset_class()
+            if supported_asset_class:
+                order_kwargs["asset_class"] = asset_class
             else:
-                order = self.submit_limit_order(symbol, side, qty, limit_price=price, **order_kwargs)
+                logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class"})
+
+        ignored_keys = list(kwargs.keys())
+        for key in ignored_keys:
+            kwargs.pop(key, None)
+            logger.debug("EXEC_IGNORED_KWARG", extra={"kw": key})
+
+        if order_type_normalized == "limit" and limit_price is None:
+            raise ValueError("limit_price required for limit orders")
+
+        try:
+            if order_type_normalized == "market":
+                order = self.submit_market_order(symbol, mapped_side, qty, **order_kwargs)
+            else:
+                order = self.submit_limit_order(
+                    symbol,
+                    mapped_side,
+                    qty,
+                    limit_price=limit_price,
+                    **order_kwargs,
+                )
         except (APIError, TimeoutError, ConnectionError) as exc:
-            status_code = getattr(exc, 'status_code', None)
+            status_code = getattr(exc, "status_code", None)
             if not status_code:
                 if isinstance(exc, TimeoutError):
                     status_code = 504
@@ -443,55 +517,105 @@ class ExecutionEngine:
                     status_code = 503
                 else:
                     status_code = 500
-            message = str(exc) or 'order execution failed'
+            message = str(exc) or "order execution failed"
             raise AlpacaOrderHTTPError(status_code, message) from exc
 
         if not order:
-            raise AlpacaOrderHTTPError(500, 'order submission returned empty response', payload={'symbol': symbol, 'side': side, 'type': order_type})
+            raise AlpacaOrderHTTPError(
+                500,
+                "order submission returned empty response",
+                payload={"symbol": symbol, "side": mapped_side, "type": order_type_normalized},
+            )
 
         if isinstance(order, dict):
-            order_id = order.get('id') or order.get('client_order_id')
+            order_id = order.get("id") or order.get("client_order_id")
+            status = order.get("status") or "submitted"
+            filled_qty = order.get("filled_qty") or order.get("filled_quantity") or 0
+            requested_qty = order.get("qty") or qty
+            order_obj: Any = SimpleNamespace(**{k: order.get(k) for k in ("id", "symbol", "side", "qty", "status")})
         else:
-            order_id = getattr(order, 'id', None) or getattr(order, 'client_order_id', None)
+            order_id = getattr(order, "id", None) or getattr(order, "client_order_id", None)
+            status = getattr(order, "status", None) or "submitted"
+            filled_qty = getattr(order, "filled_qty", None) or getattr(order, "filled_quantity", None) or 0
+            requested_qty = getattr(order, "qty", None) or getattr(order, "quantity", None) or qty
+            order_obj = order
 
         if not order_id:
-            raise AlpacaOrderHTTPError(500, 'order submission missing id', payload={'symbol': symbol, 'side': side, 'type': order_type})
+            raise AlpacaOrderHTTPError(
+                500,
+                "order submission missing id",
+                payload={"symbol": symbol, "side": mapped_side, "type": order_type_normalized},
+            )
+
+        execution_result = ExecutionResult(
+            order_obj,
+            status,
+            int(filled_qty or 0),
+            int(requested_qty or qty),
+            None if signal_weight is None else float(signal_weight),
+        )
 
         logger.info(
-            'EXEC_ENGINE_EXECUTE_ORDER',
+            "EXEC_ENGINE_EXECUTE_ORDER",
             extra={
-                'symbol': symbol,
-                'side': side,
-                'core_side': getattr(core_side, 'name', str(core_side)),
-                'qty': qty,
-                'type': order_type,
-                'tif': tif,
-                'extended_hours': extended_hours,
-                'order_id': order_id,
+                "symbol": symbol,
+                "side": mapped_side,
+                "core_side": getattr(side, "name", str(side)),
+                "qty": qty,
+                "type": order_type_normalized,
+                "tif": time_in_force,
+                "extended_hours": extended_hours,
+                "order_id": str(execution_result),
             },
         )
-        return str(order_id)
+        return execution_result
 
-    def _map_core_side(self, core_side: "CoreOrderSide") -> str:
+    def _supports_asset_class(self) -> bool:
+        """Detect once whether Alpaca request models accept ``asset_class``."""
+
+        if self._asset_class_support is not None:
+            return self._asset_class_support
+
+        support = False
+        for req in (MarketOrderRequest, LimitOrderRequest):
+            if req is None:
+                continue
+            for candidate in (req, getattr(req, "__init__", None)):
+                if candidate is None:
+                    continue
+                try:
+                    params = inspect.signature(candidate).parameters
+                except (TypeError, ValueError):
+                    continue
+                if "asset_class" in params:
+                    support = True
+                    break
+            if support:
+                break
+
+        self._asset_class_support = support
+        return support
+
+    def _map_core_side(self, core_side: Any) -> str:
         """Map core OrderSide enum to Alpaca's side representation."""
 
-        value = getattr(core_side, 'value', None)
+        value = getattr(core_side, "value", None)
         if isinstance(value, str):
             normalized = value.strip().lower()
         else:
             normalized = str(core_side).strip().lower()
-        if normalized in {'buy', 'cover', 'long'}:
-            return 'buy'
-        if normalized in {'sell', 'sell_short', 'short', 'exit'}:
-            return 'sell'
-        return 'buy'
+        if normalized in {"buy", "cover", "long"}:
+            return "buy"
+        if normalized in {"sell", "sell_short", "short", "exit"}:
+            return "sell"
+        return "buy"
 
     def check_stops(self) -> None:
         """Hook for risk-stop enforcement from core loop (currently no-op)."""
 
         logger.debug(
-            'EXEC_ENGINE_CHECK_STOPS_NOOP',
-            extra={'shadow_mode': getattr(self, 'shadow_mode', False)},
+            "EXEC_ENGINE_CHECK_STOPS_NOOP",
+            extra={"shadow_mode": getattr(self, "shadow_mode", False)},
         )
 
     def cancel_order(self, order_id: str) -> bool:
@@ -507,17 +631,17 @@ class ExecutionEngine:
         if not self._pre_execution_checks():
             return False
         try:
-            order_id = _req_str('order_id', order_id)
+            order_id = _req_str("order_id", order_id)
         except (ValueError, TypeError) as e:
-            logger.error('ORDER_INPUT_INVALID', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return False
-        logger.info(f'Cancelling order: {order_id}')
+        logger.info(f"Cancelling order: {order_id}")
         result = self._execute_with_retry(self._cancel_order_alpaca, order_id)
         if result:
-            logger.info(f'Order cancelled successfully: {order_id}')
+            logger.info(f"Order cancelled successfully: {order_id}")
             return True
         else:
-            logger.error(f'Failed to cancel order: {order_id}')
+            logger.error(f"Failed to cancel order: {order_id}")
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:
@@ -536,7 +660,9 @@ class ExecutionEngine:
             result = self._execute_with_retry(self._get_order_status_alpaca, order_id)
             return result
         except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error('ORDER_STATUS_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'order_id': order_id})
+            logger.error(
+                "ORDER_STATUS_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e), "order_id": order_id}
+            )
             return None
 
     def get_account_info(self) -> dict | None:
@@ -552,7 +678,7 @@ class ExecutionEngine:
             result = self._execute_with_retry(self._get_account_alpaca)
             return result
         except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error('ACCOUNT_INFO_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error("ACCOUNT_INFO_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return None
 
     def get_positions(self) -> list[dict] | None:
@@ -568,32 +694,36 @@ class ExecutionEngine:
             result = self._execute_with_retry(self._get_positions_alpaca)
             return result
         except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error('POSITIONS_FETCH_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error("POSITIONS_FETCH_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return None
 
     def get_execution_stats(self) -> dict:
         """Get execution engine statistics."""
         stats = self.stats.copy()
-        stats['success_rate'] = self.stats['successful_orders'] / self.stats['total_orders'] if self.stats['total_orders'] > 0 else 0
-        stats['average_execution_time'] = self.stats['total_execution_time'] / self.stats['total_orders'] if self.stats['total_orders'] > 0 else 0
-        stats['circuit_breaker_status'] = 'open' if self.circuit_breaker['is_open'] else 'closed'
-        stats['is_initialized'] = self.is_initialized
+        stats["success_rate"] = (
+            self.stats["successful_orders"] / self.stats["total_orders"] if self.stats["total_orders"] > 0 else 0
+        )
+        stats["average_execution_time"] = (
+            self.stats["total_execution_time"] / self.stats["total_orders"] if self.stats["total_orders"] > 0 else 0
+        )
+        stats["circuit_breaker_status"] = "open" if self.circuit_breaker["is_open"] else "closed"
+        stats["is_initialized"] = self.is_initialized
         return stats
 
     def reset_circuit_breaker(self):
         """Manually reset the circuit breaker."""
-        self.circuit_breaker['is_open'] = False
-        self.circuit_breaker['failure_count'] = 0
-        self.circuit_breaker['last_failure'] = None
-        logger.info('Circuit breaker manually reset')
+        self.circuit_breaker["is_open"] = False
+        self.circuit_breaker["failure_count"] = 0
+        self.circuit_breaker["last_failure"] = None
+        logger.info("Circuit breaker manually reset")
 
     def _pre_execution_checks(self) -> bool:
         """Perform pre-execution validation checks."""
         if not self.is_initialized:
-            logger.error('Execution engine not initialized')
+            logger.error("Execution engine not initialized")
             return False
         if self._is_circuit_breaker_open():
-            logger.error('Circuit breaker is open - execution blocked')
+            logger.error("Circuit breaker is open - execution blocked")
             return False
         return True
 
@@ -602,56 +732,62 @@ class ExecutionEngine:
         try:
             account = self.trading_client.get_account()
             if account:
-                logger.info('Alpaca connection validated successfully')
+                logger.info("Alpaca connection validated successfully")
                 return True
             else:
-                logger.error('Failed to get account info during validation')
+                logger.error("Failed to get account info during validation")
                 return False
         except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error('CONNECTION_VALIDATION_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+            logger.error("CONNECTION_VALIDATION_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return False
 
     def _execute_with_retry(self, func, *args, **kwargs):
         """Execute function with exponential backoff retry logic."""
         attempt = 0
-        delay = self.retry_config['base_delay']
-        while attempt < self.retry_config['max_attempts']:
+        delay = self.retry_config["base_delay"]
+        while attempt < self.retry_config["max_attempts"]:
             try:
                 result = func(*args, **kwargs)
-                self.circuit_breaker['failure_count'] = 0
-                self.circuit_breaker['is_open'] = False
-                self.circuit_breaker['last_failure'] = None
+                self.circuit_breaker["failure_count"] = 0
+                self.circuit_breaker["is_open"] = False
+                self.circuit_breaker["last_failure"] = None
                 return result
             except (APIError, TimeoutError, ConnectionError) as e:
                 attempt += 1
-                self.stats['retry_count'] += 1
-                if attempt >= self.retry_config['max_attempts']:
-                    logger.error('RETRY_MAX_ATTEMPTS', extra={'cause': e.__class__.__name__, 'detail': str(e), 'func': func.__name__})
+                self.stats["retry_count"] += 1
+                if attempt >= self.retry_config["max_attempts"]:
+                    logger.error(
+                        "RETRY_MAX_ATTEMPTS",
+                        extra={"cause": e.__class__.__name__, "detail": str(e), "func": func.__name__},
+                    )
                     self._handle_execution_failure(e)
                     raise
-                logger.warning('RETRY_ATTEMPT_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e), 'func': func.__name__, 'attempt': attempt})
+                logger.warning(
+                    "RETRY_ATTEMPT_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e), "func": func.__name__, "attempt": attempt},
+                )
                 time.sleep(delay)
-                delay = min(delay * self.retry_config['exponential_base'], self.retry_config['max_delay'])
+                delay = min(delay * self.retry_config["exponential_base"], self.retry_config["max_delay"])
         return None
 
     def _handle_execution_failure(self, error: Exception):
         """Handle execution failures and update circuit breaker."""
-        self.circuit_breaker['failure_count'] += 1
-        self.circuit_breaker['last_failure'] = datetime.now(UTC)
-        if self.circuit_breaker['failure_count'] >= self.circuit_breaker['max_failures']:
-            self.circuit_breaker['is_open'] = True
-            self.stats['circuit_breaker_trips'] += 1
+        self.circuit_breaker["failure_count"] += 1
+        self.circuit_breaker["last_failure"] = datetime.now(UTC)
+        if self.circuit_breaker["failure_count"] >= self.circuit_breaker["max_failures"]:
+            self.circuit_breaker["is_open"] = True
+            self.stats["circuit_breaker_trips"] += 1
             logger.critical(f"Circuit breaker opened after {self.circuit_breaker['max_failures']} failures")
 
     def _is_circuit_breaker_open(self) -> bool:
         """Check if circuit breaker should reset."""
-        if not self.circuit_breaker['is_open']:
+        if not self.circuit_breaker["is_open"]:
             return False
-        if self.circuit_breaker['last_failure']:
-            time_since_failure = (datetime.now(UTC) - self.circuit_breaker['last_failure']).total_seconds()
-            if time_since_failure > self.circuit_breaker['reset_time']:
+        if self.circuit_breaker["last_failure"]:
+            time_since_failure = (datetime.now(UTC) - self.circuit_breaker["last_failure"]).total_seconds()
+            if time_since_failure > self.circuit_breaker["reset_time"]:
                 self.reset_circuit_breaker()
-                logger.info('Circuit breaker auto-reset after timeout')
+                logger.info("Circuit breaker auto-reset after timeout")
                 return False
         return True
 
@@ -659,148 +795,190 @@ class ExecutionEngine:
         """Submit an order using Alpaca TradingClient."""
         import os
 
-        if os.environ.get('PYTEST_RUNNING'):
-            symbol = str(order_data.get('symbol', ''))
-            quantity = int(order_data.get('quantity', 0) or 0)
-            side = str(order_data.get('side', '')).lower()
-            if not symbol or symbol == 'INVALID' or len(symbol) < 1:
-                logger.error('Invalid symbol rejected', extra={'symbol': symbol})
+        if os.environ.get("PYTEST_RUNNING"):
+            symbol = str(order_data.get("symbol", ""))
+            quantity = int(order_data.get("quantity", 0) or 0)
+            side = str(order_data.get("side", "")).lower()
+            if not symbol or symbol == "INVALID" or len(symbol) < 1:
+                logger.error("Invalid symbol rejected", extra={"symbol": symbol})
                 return None
             if quantity <= 0:
-                logger.error('Invalid quantity rejected', extra={'quantity': quantity})
+                logger.error("Invalid quantity rejected", extra={"quantity": quantity})
                 return None
-            if side not in {'buy', 'sell'}:
-                logger.error('Invalid side rejected', extra={'side': side})
+            if side not in {"buy", "sell"}:
+                logger.error("Invalid side rejected", extra={"side": side})
                 return None
 
             mock_resp = {
-                'id': f'mock_order_{int(time.time())}',
-                'status': 'filled',
-                'symbol': symbol,
-                'side': side,
-                'quantity': quantity,
+                "id": f"mock_order_{int(time.time())}",
+                "status": "filled",
+                "symbol": symbol,
+                "side": side,
+                "quantity": quantity,
             }
             normalized = {
-                'id': mock_resp['id'],
-                'client_order_id': order_data.get('client_order_id'),
-                'status': mock_resp['status'],
-                'symbol': symbol,
-                'qty': quantity,
-                'limit_price': order_data.get('limit_price'),
-                'raw': mock_resp,
+                "id": mock_resp["id"],
+                "client_order_id": order_data.get("client_order_id"),
+                "status": mock_resp["status"],
+                "symbol": symbol,
+                "qty": quantity,
+                "limit_price": order_data.get("limit_price"),
+                "raw": mock_resp,
             }
-            logger.debug('ORDER_SUBMIT_OK', extra={'symbol': symbol, 'qty': quantity, 'side': side, 'id': mock_resp['id']})
+            logger.debug(
+                "ORDER_SUBMIT_OK", extra={"symbol": symbol, "qty": quantity, "side": side, "id": mock_resp["id"]}
+            )
             return normalized
 
         if self.trading_client is None or OrderSide is None or MarketOrderRequest is None or TimeInForce is None:
-            raise RuntimeError('Alpaca TradingClient is not initialized')
+            raise RuntimeError("Alpaca TradingClient is not initialized")
 
-        side = OrderSide.BUY if str(order_data['side']).lower() == 'buy' else OrderSide.SELL
+        side = OrderSide.BUY if str(order_data["side"]).lower() == "buy" else OrderSide.SELL
         tif = TimeInForce.DAY
 
-        order_type = str(order_data.get('type', 'limit')).lower()
-        if order_type == 'market':
-            req = MarketOrderRequest(
-                symbol=order_data['symbol'],
-                qty=order_data['quantity'],
-                side=side,
-                time_in_force=tif,
-                client_order_id=order_data.get('client_order_id'),
-            )
-        else:
-            req = LimitOrderRequest(
-                symbol=order_data['symbol'],
-                qty=order_data['quantity'],
-                side=side,
-                time_in_force=tif,
-                limit_price=order_data['limit_price'],
-                client_order_id=order_data.get('client_order_id'),
-            )
+        order_type = str(order_data.get("type", "limit")).lower()
+        common_kwargs = {
+            "symbol": order_data["symbol"],
+            "qty": order_data["quantity"],
+            "side": side,
+            "time_in_force": tif,
+            "client_order_id": order_data.get("client_order_id"),
+        }
+        asset_class = order_data.get("asset_class")
+        if asset_class:
+            common_kwargs["asset_class"] = asset_class
+
+        try:
+            if order_type == "market":
+                req = MarketOrderRequest(**common_kwargs)
+            else:
+                req = LimitOrderRequest(
+                    limit_price=order_data["limit_price"],
+                    **common_kwargs,
+                )
+        except TypeError as exc:
+            if asset_class and "asset_class" in common_kwargs:
+                common_kwargs.pop("asset_class", None)
+                logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
+                if order_type == "market":
+                    req = MarketOrderRequest(**common_kwargs)
+                else:
+                    req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
+            else:
+                raise
 
         try:
             resp = self.trading_client.submit_order(order_data=req)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
-                'ORDER_API_FAILED',
+                "ORDER_API_FAILED",
                 extra={
-                    'op': 'submit',
-                    'cause': e.__class__.__name__,
-                    'detail': str(e),
-                    'symbol': order_data.get('symbol'),
-                    'qty': order_data.get('quantity'),
-                    'side': order_data.get('side'),
-                    'type': order_data.get('type'),
-                    'time_in_force': 'day',
+                    "op": "submit",
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "symbol": order_data.get("symbol"),
+                    "qty": order_data.get("quantity"),
+                    "side": order_data.get("side"),
+                    "type": order_data.get("type"),
+                    "time_in_force": "day",
                 },
             )
             raise
 
-        status = getattr(resp, 'status', None)
-        if hasattr(status, 'value'):
+        status = getattr(resp, "status", None)
+        if hasattr(status, "value"):
             status = status.value
         elif status is not None:
             status = str(status)
 
         normalized = {
-            'id': str(getattr(resp, 'id', '')),
-            'client_order_id': getattr(resp, 'client_order_id', order_data.get('client_order_id')),
-            'status': status,
-            'symbol': getattr(resp, 'symbol', order_data['symbol']),
-            'qty': getattr(resp, 'qty', order_data['quantity']),
-            'limit_price': getattr(resp, 'limit_price', order_data.get('limit_price')),
-            'raw': getattr(resp, '__dict__', None) or resp,
+            "id": str(getattr(resp, "id", "")),
+            "client_order_id": getattr(resp, "client_order_id", order_data.get("client_order_id")),
+            "status": status,
+            "symbol": getattr(resp, "symbol", order_data["symbol"]),
+            "qty": getattr(resp, "qty", order_data["quantity"]),
+            "limit_price": getattr(resp, "limit_price", order_data.get("limit_price")),
+            "raw": getattr(resp, "__dict__", None) or resp,
         }
-        logger.debug('ORDER_SUBMIT_OK', extra={'symbol': normalized['symbol'], 'qty': normalized['qty'], 'side': order_data.get('side'), 'id': normalized['id']})
+        logger.debug(
+            "ORDER_SUBMIT_OK",
+            extra={
+                "symbol": normalized["symbol"],
+                "qty": normalized["qty"],
+                "side": order_data.get("side"),
+                "id": normalized["id"],
+            },
+        )
         return normalized
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""
         import os
-        if os.environ.get('PYTEST_RUNNING'):
-            logger.debug('ORDER_CANCEL_OK', extra={'id': order_id})
+
+        if os.environ.get("PYTEST_RUNNING"):
+            logger.debug("ORDER_CANCEL_OK", extra={"id": order_id})
             return True
         else:
             try:
                 self.trading_client.cancel_order(order_id)
             except (APIError, TimeoutError, ConnectionError) as e:
-                logger.error('ORDER_API_FAILED', extra={'op': 'cancel', 'cause': e.__class__.__name__, 'detail': str(e), 'id': order_id})
+                logger.error(
+                    "ORDER_API_FAILED",
+                    extra={"op": "cancel", "cause": e.__class__.__name__, "detail": str(e), "id": order_id},
+                )
                 raise
             else:
-                logger.debug('ORDER_CANCEL_OK', extra={'id': order_id})
+                logger.debug("ORDER_CANCEL_OK", extra={"id": order_id})
                 return True
 
     def _get_order_status_alpaca(self, order_id: str) -> dict:
         """Get order status via Alpaca API."""
         import os
-        if os.environ.get('PYTEST_RUNNING'):
-            return {'id': order_id, 'status': 'filled', 'filled_qty': '100'}
+
+        if os.environ.get("PYTEST_RUNNING"):
+            return {"id": order_id, "status": "filled", "filled_qty": "100"}
         else:
             order = self.trading_client.get_order(order_id)
-            return {'id': order.id, 'status': order.status, 'symbol': order.symbol, 'side': order.side, 'quantity': order.qty, 'filled_qty': order.filled_qty, 'filled_avg_price': order.filled_avg_price}
+            return {
+                "id": order.id,
+                "status": order.status,
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": order.qty,
+                "filled_qty": order.filled_qty,
+                "filled_avg_price": order.filled_avg_price,
+            }
 
     def _get_account_alpaca(self) -> dict:
         """Get account info via Alpaca API."""
         import os
-        if os.environ.get('PYTEST_RUNNING'):
-            return {'equity': '100000', 'buying_power': '100000'}
+
+        if os.environ.get("PYTEST_RUNNING"):
+            return {"equity": "100000", "buying_power": "100000"}
         else:
             account = self.trading_client.get_account()
-            return {'equity': account.equity, 'buying_power': account.buying_power, 'cash': account.cash, 'portfolio_value': account.portfolio_value}
+            return {
+                "equity": account.equity,
+                "buying_power": account.buying_power,
+                "cash": account.cash,
+                "portfolio_value": account.portfolio_value,
+            }
 
     def _get_positions_alpaca(self) -> list[dict]:
         """Get positions via Alpaca API."""
         import os
-        if os.environ.get('PYTEST_RUNNING'):
+
+        if os.environ.get("PYTEST_RUNNING"):
             return []
         else:
             positions = self.trading_client.list_positions()
             return [
                 {
-                    'symbol': pos.symbol,
-                    'qty': pos.qty,
-                    'side': pos.side,
-                    'market_value': pos.market_value,
-                    'unrealized_pl': pos.unrealized_pl,
+                    "symbol": pos.symbol,
+                    "qty": pos.qty,
+                    "side": pos.side,
+                    "market_value": pos.market_value,
+                    "unrealized_pl": pos.unrealized_pl,
                 }
                 for pos in positions
             ]
@@ -810,7 +988,7 @@ AlpacaExecutionEngine = ExecutionEngine
 
 
 __all__ = [
-    'submit_market_order',
-    'ExecutionEngine',
-    'AlpacaExecutionEngine',
+    "submit_market_order",
+    "ExecutionEngine",
+    "AlpacaExecutionEngine",
 ]
