@@ -9,7 +9,44 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
 
-from ai_trading.net.http import HTTPSession, get_http_session
+try:
+    from alpaca.trading.client import TradingClient
+    ALPACA_AVAILABLE = True
+except Exception:
+    TradingClient = None  # type: ignore[assignment]
+    ALPACA_AVAILABLE = False
+
+# Only used for type hints; does NOT run at import time.
+if TYPE_CHECKING:
+    from ai_trading.net.http import HTTPSession  # pragma: no cover
+
+
+def _lazy_http_session() -> "Optional[HTTPSession]":
+    """Return the shared HTTP session, importing lazily to avoid cycles."""
+
+    try:
+        from ai_trading.net.http import get_http_session  # local import breaks the cycle
+
+        return get_http_session()
+    except Exception:
+        return None
+
+
+_HTTP_SESSION: "Optional[HTTPSession]" = None
+
+
+def _get_http_session() -> "HTTPSession":
+    """Return the shared HTTP session, raising if it is unavailable."""
+
+    global _HTTP_SESSION
+
+    if _HTTP_SESSION is None:
+        _HTTP_SESSION = _lazy_http_session()
+
+    session = _HTTP_SESSION
+    if session is None:
+        raise RuntimeError("HTTP session is not available yet")
+    return session
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
@@ -34,7 +71,6 @@ _log = get_logger(__name__)
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 _UTC = timezone.utc  # AI-AGENT-REF: prefer stdlib UTC
-_HTTP: HTTPSession = get_http_session()
 
 # Lightweight Prometheus metrics (no-op when client unavailable)
 _alpaca_calls_total = get_counter("alpaca_calls_total", "Total Alpaca calls")
@@ -55,7 +91,7 @@ def eastern_tz() -> ZoneInfo:
 
 EASTERN_TZ = eastern_tz()
 
-ALPACA_AVAILABLE = not missing("alpaca", "alpaca")
+ALPACA_AVAILABLE = ALPACA_AVAILABLE and not missing("alpaca", "alpaca")
 HAS_PANDAS: bool = not missing("pandas", "pandas")
 _ALPACA_SERVICE_AVAILABLE: bool = True
 
@@ -172,9 +208,10 @@ generate_client_order_id = _make_client_order_id
 
 
 def get_trading_client_cls():
-    """Return the Alpaca TradingClient class via lazy import."""
-    from alpaca.trading.client import TradingClient  # type: ignore
+    """Return the Alpaca TradingClient class if available."""
 
+    if not ALPACA_AVAILABLE or TradingClient is None:
+        raise RuntimeError("alpaca-py TradingClient not available")
     return TradingClient
 
 
@@ -728,7 +765,8 @@ def _http_submit(
     _err: Exception | None = None
     try:
         timeout_v = clamp_request_timeout(timeout or 10)
-        call = _HTTP.post
+        session = _get_http_session()
+        call = session.post
         if retry is not None:
             call = _with_retry(call)
         resp = call(url, headers=headers, json=payload, timeout=timeout_v)
@@ -906,7 +944,8 @@ def alpaca_get(
     resp: Any | None = None
     try:
         timeout_v = clamp_request_timeout(timeout or 10)
-        call = _HTTP.get
+        session = _get_http_session()
+        call = session.get
         if retry is not None:
             call = _with_retry(call)
         resp = call(url, headers=headers, params=params, timeout=timeout_v)
