@@ -8441,6 +8441,7 @@ def _initialize_alpaca_clients() -> bool:
             trading_client = AlpacaREST(
                 api_key=key,
                 secret_key=secret,
+                paper="paper" in str(base_url).lower(),
                 url_override=base_url,
             )
             data_client = stock_client_cls(

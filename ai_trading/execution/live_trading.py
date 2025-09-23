@@ -221,6 +221,7 @@ class ExecutionEngine:
             raw_client = AlpacaREST(
                 api_key=key,
                 secret_key=secret,
+                paper=paper,
                 url_override=base_url,
             )
             config_paper = paper if self.config is None else bool(self.config.use_paper)
