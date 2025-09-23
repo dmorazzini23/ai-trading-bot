@@ -146,8 +146,41 @@ from ai_trading.utils import portfolio_lock  # expose lock for tests/monkeypatch
 _PENDING_ORDER_STATUSES = frozenset({"new", "pending_new"})
 _PENDING_ORDER_SAMPLE_LIMIT = 20
 _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
-_pending_orders_since: float | None = None
-_pending_orders_last_log: float | None = None
+_PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
+_PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
+_PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
+
+
+def _ensure_runtime_state(runtime: Any | None) -> dict[str, Any]:
+    """Return a mutable runtime.state mapping, creating one if required."""
+
+    if runtime is None:
+        return {}
+    state = getattr(runtime, "state", None)
+    if not isinstance(state, dict):
+        state = {}
+        try:
+            setattr(runtime, "state", state)
+        except Exception:  # pragma: no cover - defensive
+            return state
+    return state
+
+
+def _get_pending_tracker(runtime: Any | None) -> dict[str, float | None]:
+    """Return the pending-order tracker dictionary stored on the runtime."""
+
+    state = _ensure_runtime_state(runtime)
+    tracker = state.get(_PENDING_ORDER_TRACKER_KEY)
+    if not isinstance(tracker, dict):
+        tracker = {
+            _PENDING_ORDER_FIRST_SEEN_KEY: None,
+            _PENDING_ORDER_LAST_LOG_KEY: None,
+        }
+        state[_PENDING_ORDER_TRACKER_KEY] = tracker
+    else:
+        tracker.setdefault(_PENDING_ORDER_FIRST_SEEN_KEY, None)
+        tracker.setdefault(_PENDING_ORDER_LAST_LOG_KEY, None)
+    return tracker
 
 
 def _alpaca_available() -> bool:
@@ -16363,8 +16396,6 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     stale orders are automatically cancelled to unstick the run loop.
     """
 
-    global _pending_orders_since, _pending_orders_last_log
-
     if isinstance(open_orders, list):
         open_list = open_orders
     else:
@@ -16383,9 +16414,13 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             pending_ids.append(str(getattr(order, "id", "?")))
             pending_statuses.add(status)
 
+    tracker = _get_pending_tracker(runtime)
+    first_seen = tracker.get(_PENDING_ORDER_FIRST_SEEN_KEY)
+    last_log = tracker.get(_PENDING_ORDER_LAST_LOG_KEY)
+
     if not pending_ids:
-        if _pending_orders_since is not None:
-            resolved_age = time.time() - _pending_orders_since
+        if first_seen is not None:
+            resolved_age = time.time() - first_seen
             logger.info(
                 "PENDING_ORDERS_CLEARED",
                 extra={
@@ -16393,8 +16428,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                     "resolved_age_s": int(max(resolved_age, 0)),
                 },
             )
-        _pending_orders_since = None
-        _pending_orders_last_log = None
+        tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
+        tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
         return False
 
     cfg_interval = getattr(
@@ -16413,9 +16448,9 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     sample_ids = pending_ids[:_PENDING_ORDER_SAMPLE_LIMIT]
     statuses = sorted(pending_statuses)
 
-    if _pending_orders_since is None:
-        _pending_orders_since = now
-        _pending_orders_last_log = now
+    if first_seen is None:
+        tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = now
+        tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
         logger.warning(
             "PENDING_ORDERS_DETECTED",
             extra={
@@ -16429,11 +16464,11 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         )
         return True
 
-    age = now - _pending_orders_since
+    age = now - float(first_seen)
 
     if (
-        _pending_orders_last_log is None
-        or now - _pending_orders_last_log >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
+        last_log is None
+        or now - float(last_log) >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
     ):
         logger.warning(
             "PENDING_ORDERS_STILL_PRESENT",
@@ -16446,7 +16481,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
                 "cleanup_after_s": int(cleanup_after),
             },
         )
-        _pending_orders_last_log = now
+        tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
 
     if age < cleanup_after:
         return True
@@ -16454,7 +16489,7 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     try:
         cancel_all_open_orders(runtime)
     except Exception as exc:  # pragma: no cover - network/API failure
-        _pending_orders_last_log = now
+        tracker[_PENDING_ORDER_LAST_LOG_KEY] = now
         logger.warning(
             "PENDING_ORDERS_CLEANUP_FAILED",
             extra={
@@ -16477,8 +16512,8 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
             "age_s": int(max(age, 0)),
         },
     )
-    _pending_orders_since = None
-    _pending_orders_last_log = None
+    tracker[_PENDING_ORDER_FIRST_SEEN_KEY] = None
+    tracker[_PENDING_ORDER_LAST_LOG_KEY] = None
     return False
 
 

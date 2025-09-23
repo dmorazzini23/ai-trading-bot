@@ -20,6 +20,7 @@ ensure_dotenv_loaded()
 import ai_trading.logging as _logging
 from ai_trading.paths import LOG_DIR, ensure_runtime_paths
 from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
+from ai_trading.utils.datetime import ensure_datetime
 
 
 def _resolve_log_file() -> str:
@@ -46,6 +47,8 @@ _logging.configure_logging(log_file=LOG_FILE)
 
 # Module logger
 logger = _logging.get_logger(__name__)
+
+_STARTUP_PENDING_RECONCILED = False
 
 # Detect Alpaca SDK availability without importing heavy modules
 def _safe_find_spec(module_name: str):
@@ -174,6 +177,9 @@ def run_cycle() -> None:
         run_all_trades_worker,
         get_ctx,
         get_trade_logger,
+        ensure_alpaca_attached,
+        list_open_orders,
+        cancel_all_open_orders,
     )
     from ai_trading.core.runtime import (
         build_runtime,
@@ -215,6 +221,93 @@ def run_cycle() -> None:
     if hasattr(state, "ctx") and state.ctx is None:
         state.ctx = lazy_ctx
     runtime = enhance_runtime_with_context(runtime, lazy_ctx)
+
+    if not isinstance(getattr(runtime, "state", None), dict):
+        try:
+            runtime.state = {}
+        except Exception:
+            pass
+
+    global _STARTUP_PENDING_RECONCILED
+    if not _STARTUP_PENDING_RECONCILED:
+        try:
+            ensure_alpaca_attached(runtime)
+            api = getattr(runtime, "api", None)
+            if api is None:
+                raise RuntimeError("runtime.api missing")
+            open_orders = list_open_orders(api)
+        except Exception:
+            logger.debug("STARTUP_PENDING_RECONCILE_SKIPPED", exc_info=True)
+        else:
+            now_dt = datetime.now(UTC)
+            pending_ids: list[str] = []
+            pending_ages: list[int | None] = []
+            for order in open_orders:
+                status_raw = getattr(order, "status", "")
+                status_val = getattr(status_raw, "value", status_raw)
+                try:
+                    status = str(status_val).lower()
+                except Exception:
+                    status = ""
+                if status not in {"new", "pending_new"}:
+                    continue
+                pending_ids.append(str(getattr(order, "id", "?")))
+                age_s: int | None = None
+                for attr in ("updated_at", "submitted_at", "created_at"):
+                    raw_ts = getattr(order, attr, None)
+                    if not raw_ts:
+                        continue
+                    try:
+                        submitted = ensure_datetime(raw_ts)
+                    except Exception:
+                        continue
+                    age_s = int(max(0.0, (now_dt - submitted).total_seconds()))
+                    break
+                pending_ages.append(age_s)
+
+            try:
+                cleanup_after = float(getattr(cfg, "order_stale_cleanup_interval", 120))
+            except (TypeError, ValueError):
+                cleanup_after = 120.0
+            cleanup_after = max(10.0, min(cleanup_after, 3600.0))
+            cleanup_after_int = int(cleanup_after)
+
+            if pending_ids:
+                numeric_ages = [age for age in pending_ages if age is not None]
+                should_cancel = False
+                if numeric_ages:
+                    max_age = max(numeric_ages)
+                    should_cancel = max_age >= cleanup_after
+                else:
+                    should_cancel = True
+                if should_cancel:
+                    try:
+                        cancel_all_open_orders(runtime)
+                    except Exception as exc:
+                        extra = {
+                            "canceled_ids": pending_ids[:20],
+                            "cleanup_after_s": cleanup_after_int,
+                            "detail": str(exc),
+                        }
+                        if numeric_ages:
+                            extra["max_age_s"] = max_age
+                        logger.warning(
+                            "PENDING_ORDERS_STARTUP_CLEANUP_FAILED",
+                            extra=extra,
+                            exc_info=True,
+                        )
+                    else:
+                        extra = {
+                            "canceled_ids": pending_ids[:20],
+                            "cleanup_after_s": cleanup_after_int,
+                        }
+                        if numeric_ages:
+                            extra["max_age_s"] = max_age
+                        logger.info(
+                            "PENDING_ORDERS_STARTUP_CLEANUP",
+                            extra=extra,
+                        )
+            _STARTUP_PENDING_RECONCILED = True
 
     missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
     if missing:

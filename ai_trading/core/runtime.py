@@ -69,6 +69,7 @@ class BotRuntime:
     drawdown_circuit_breaker: Any = None
     model: Any = None
     allocator: AllocatorProtocol | None = None
+    state: dict[str, Any] = field(default_factory=dict)
 
 def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     """
