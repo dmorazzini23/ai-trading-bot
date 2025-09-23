@@ -105,7 +105,85 @@ def _validate_trading_api(api: Any) -> bool:
         except Exception:
             # Non-fatal; caller may handle attribute absence
             pass
-    TradingClient = get_trading_client_cls()
+
+    if not hasattr(api, "cancel_order"):
+        cancel_by_id = getattr(api, "cancel_order_by_id", None)
+        cancel_orders = getattr(api, "cancel_orders", None)
+
+        if callable(cancel_by_id):
+            def _cancel_order_wrapper(order_id: Any):
+                return cancel_by_id(order_id)
+
+            setattr(api, "cancel_order", _cancel_order_wrapper)  # type: ignore[attr-defined]
+            logger_once.info(
+                "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
+            )
+        elif callable(cancel_orders):
+            def _cancel_order_via_batch(order_id: Any):
+                requests_mod = None
+                try:
+                    requests_mod = __import__(
+                        "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
+                    )
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    raise RuntimeError(
+                        "Alpaca client cancel_orders shim requires CancelOrdersRequest"
+                    ) from exc
+
+                CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
+                if CancelOrdersRequest is None:
+                    raise RuntimeError(
+                        "Alpaca client cancel_orders shim requires CancelOrdersRequest"
+                    )
+
+                last_error: Exception | None = None
+                init_variants = (
+                    {"order_id": order_id},
+                    {"order_ids": [order_id]},
+                    {"client_order_id": order_id},
+                )
+
+                for init_kwargs in init_variants:
+                    try:
+                        request_obj = CancelOrdersRequest(**init_kwargs)
+                    except TypeError as exc:
+                        last_error = exc
+                        continue
+
+                    for caller in (
+                        lambda ro=request_obj: cancel_orders(ro),
+                        lambda ro=request_obj: cancel_orders(request=ro),
+                        lambda ro=request_obj: cancel_orders(
+                            cancel_orders_request=ro
+                        ),
+                    ):
+                        try:
+                            return caller()
+                        except TypeError as exc:
+                            last_error = exc
+                            continue
+
+                raise RuntimeError(
+                    "Alpaca client cancel_orders shim could not adapt provided API"
+                ) from last_error
+
+            setattr(api, "cancel_order", _cancel_order_via_batch)  # type: ignore[attr-defined]
+            logger_once.info(
+                "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
+            )
+        else:
+            logger_once.error(
+                "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"
+            )
+            raise RuntimeError("Alpaca client missing cancel order capability")
+    try:
+        TradingClient = get_trading_client_cls()
+    except RuntimeError:
+        logger_once.warning(
+            "ALPACA_TRADING_CLIENT_CLASS_MISSING",
+            key="alpaca_trading_client_class_missing",
+        )
+        return True
     if not isinstance(api, TradingClient):
         logger_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
     return True
