@@ -143,6 +143,13 @@ from ai_trading import portfolio  # expose portfolio module for tests/monkeypatc
 from ai_trading.utils import portfolio_lock  # expose lock for tests/monkeypatching
 
 
+_PENDING_ORDER_STATUSES = frozenset({"new", "pending_new"})
+_PENDING_ORDER_SAMPLE_LIMIT = 20
+_PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
+_pending_orders_since: float | None = None
+_pending_orders_last_log: float | None = None
+
+
 def _alpaca_available() -> bool:
     """Return ``True`` if the Alpaca SDK is importable."""
 
@@ -16348,6 +16355,133 @@ def _log_market_closed(msg: str) -> None:
         _LAST_MARKET_CLOSED_LOG = now
 
 
+def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
+    """Handle pending orders and decide whether to skip the current cycle.
+
+    Returns ``True`` when the trade cycle should be skipped and ``False`` when
+    it may proceed. Pending orders trigger a configurable grace window before
+    stale orders are automatically cancelled to unstick the run loop.
+    """
+
+    global _pending_orders_since, _pending_orders_last_log
+
+    if isinstance(open_orders, list):
+        open_list = open_orders
+    else:
+        open_list = list(open_orders)
+
+    pending_ids: list[str] = []
+    pending_statuses: set[str] = set()
+    for order in open_list:
+        status_raw = getattr(order, "status", "")
+        status_val = getattr(status_raw, "value", status_raw)
+        try:
+            status = str(status_val).lower()
+        except Exception:  # pragma: no cover - defensive
+            status = ""
+        if status in _PENDING_ORDER_STATUSES:
+            pending_ids.append(str(getattr(order, "id", "?")))
+            pending_statuses.add(status)
+
+    if not pending_ids:
+        if _pending_orders_since is not None:
+            resolved_age = time.time() - _pending_orders_since
+            logger.info(
+                "PENDING_ORDERS_CLEARED",
+                extra={
+                    "open_count": len(open_list),
+                    "resolved_age_s": int(max(resolved_age, 0)),
+                },
+            )
+        _pending_orders_since = None
+        _pending_orders_last_log = None
+        return False
+
+    cfg_interval = getattr(
+        get_trading_config(),
+        "order_stale_cleanup_interval",
+        120,
+    )
+    try:
+        cleanup_after = float(cfg_interval)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        cleanup_after = 120.0
+    cleanup_after = max(10.0, min(cleanup_after, 3600.0))
+
+    now = time.time()
+
+    sample_ids = pending_ids[:_PENDING_ORDER_SAMPLE_LIMIT]
+    statuses = sorted(pending_statuses)
+
+    if _pending_orders_since is None:
+        _pending_orders_since = now
+        _pending_orders_last_log = now
+        logger.warning(
+            "PENDING_ORDERS_DETECTED",
+            extra={
+                "open_count": len(open_list),
+                "pending_count": len(pending_ids),
+                "pending_ids": sample_ids,
+                "pending_statuses": statuses,
+                "age_s": 0,
+                "cleanup_after_s": int(cleanup_after),
+            },
+        )
+        return True
+
+    age = now - _pending_orders_since
+
+    if (
+        _pending_orders_last_log is None
+        or now - _pending_orders_last_log >= _PENDING_ORDER_LOG_INTERVAL_SECONDS
+    ):
+        logger.warning(
+            "PENDING_ORDERS_STILL_PRESENT",
+            extra={
+                "open_count": len(open_list),
+                "pending_count": len(pending_ids),
+                "pending_ids": sample_ids,
+                "pending_statuses": statuses,
+                "age_s": int(max(age, 0)),
+                "cleanup_after_s": int(cleanup_after),
+            },
+        )
+        _pending_orders_last_log = now
+
+    if age < cleanup_after:
+        return True
+
+    try:
+        cancel_all_open_orders(runtime)
+    except Exception as exc:  # pragma: no cover - network/API failure
+        _pending_orders_last_log = now
+        logger.warning(
+            "PENDING_ORDERS_CLEANUP_FAILED",
+            extra={
+                "open_count": len(open_list),
+                "pending_count": len(pending_ids),
+                "pending_ids": sample_ids,
+                "pending_statuses": statuses,
+                "age_s": int(max(age, 0)),
+                "detail": str(exc),
+            },
+            exc_info=True,
+        )
+        return True
+
+    logger.info(
+        "PENDING_ORDERS_CANCELED",
+        extra={
+            "canceled_ids": sample_ids,
+            "pending_count": len(pending_ids),
+            "age_s": int(max(age, 0)),
+        },
+    )
+    _pending_orders_since = None
+    _pending_orders_last_log = None
+    return False
+
+
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
 def run_all_trades_worker(state: BotState, runtime) -> None:
     """
@@ -16560,8 +16694,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
                 open_orders = []
-            if any(o.status in ("new", "pending_new") for o in open_orders):
-                logger.warning("Detected pending orders; skipping this trade cycle")
+            if _handle_pending_orders(open_orders, runtime):
                 return
             if get_verbose_logging():
                 logger.info(

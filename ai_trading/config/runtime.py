@@ -779,9 +779,10 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         field="order_stale_cleanup_interval",
         env=("ORDER_STALE_CLEANUP_INTERVAL",),
         cast="int",
-        default=60,
-        description="Interval in seconds between stale order cleanup sweeps.",
-        min_value=1,
+        default=120,
+        description="Seconds to wait before auto-canceling pending/new orders to unstick the trade loop.",
+        min_value=10,
+        max_value=3600,
     ),
     ConfigSpec(
         field="order_fill_rate_target",

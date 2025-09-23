@@ -308,7 +308,7 @@ class TestOrderManagementFixes(unittest.TestCase):
     def test_order_timeout_configuration(self):
         """Test that order timeout is properly configured."""
         self.assertEqual(config.ORDER_TIMEOUT_SECONDS, 300)  # 5 minutes
-        self.assertEqual(config.ORDER_STALE_CLEANUP_INTERVAL, 60)  # 1 minute
+        self.assertEqual(config.ORDER_STALE_CLEANUP_INTERVAL, 120)  # 2 minutes
         self.assertEqual(config.ORDER_FILL_RATE_TARGET, 0.80)  # 80%
 
     @patch('time.time')
