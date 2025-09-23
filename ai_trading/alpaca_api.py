@@ -16,6 +16,50 @@ except Exception:
     TradingClient = None  # type: ignore[assignment]
     ALPACA_AVAILABLE = False
 
+try:  # pragma: no cover - exercised via stub classes in tests
+    from alpaca.trading.requests import (
+        LimitOrderRequest as _LimitOrderRequest,
+        MarketOrderRequest as _MarketOrderRequest,
+        StopOrderRequest as _StopOrderRequest,
+        StopLimitOrderRequest as _StopLimitOrderRequest,
+    )
+except Exception:
+    _MarketOrderRequest = _LimitOrderRequest = _StopOrderRequest = _StopLimitOrderRequest = None  # type: ignore[assignment]
+
+
+if _MarketOrderRequest is None:  # pragma: no cover - fallback when SDK unavailable
+    @dataclass
+    class _OrderRequest:
+        symbol: Any
+        qty: Any
+        side: Any
+        time_in_force: Any
+        limit_price: Any | None = None
+        stop_price: Any | None = None
+        client_order_id: str | None = None
+
+
+    class _MarketOrderRequest(_OrderRequest):
+        pass
+
+
+    class _LimitOrderRequest(_OrderRequest):
+        pass
+
+
+    class _StopOrderRequest(_OrderRequest):
+        pass
+
+
+    class _StopLimitOrderRequest(_OrderRequest):
+        pass
+
+
+MarketOrderRequest = _MarketOrderRequest
+LimitOrderRequest = _LimitOrderRequest
+StopOrderRequest = _StopOrderRequest
+StopLimitOrderRequest = _StopLimitOrderRequest
+
 # Only used for type hints; does NOT run at import time.
 if TYPE_CHECKING:
     from ai_trading.net.http import HTTPSession  # pragma: no cover
@@ -676,26 +720,111 @@ def _sdk_submit(
     if submit is None:
         raise AttributeError("client.submit_order is not available")
 
-    kwargs: dict[str, Any] = dict(
-        symbol=symbol,
-        qty=str(qty),
-        side=side,
-        type=type,
-        time_in_force=time_in_force,
-    )
+    try:
+        sig = inspect.signature(submit)
+    except (TypeError, ValueError):  # pragma: no cover - builtin/descriptor
+        sig = None
+
+    params: dict[str, inspect.Parameter] = sig.parameters if sig is not None else {}
+    has_var_kw = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ) if params else True
+
+    first_named: str | None = None
+    for p in params.values():
+        if p.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        if p.name == "self":
+            continue
+        first_named = p.name
+        break
+
+    use_request_object = False
+    if "order_data" in params:
+        use_request_object = True
+    elif first_named == "order_data":
+        use_request_object = True
+
+    request_obj: Any | None = None
+    request_kwargs: dict[str, Any]
+    if use_request_object:
+        order_type = str(type or "market").lower()
+        request_cls_map: dict[str, type] = {}
+        if MarketOrderRequest is not None:
+            request_cls_map["market"] = MarketOrderRequest
+        if LimitOrderRequest is not None:
+            request_cls_map["limit"] = LimitOrderRequest
+        if StopOrderRequest is not None:
+            request_cls_map["stop"] = StopOrderRequest
+        if StopLimitOrderRequest is not None:
+            request_cls_map["stop_limit"] = StopLimitOrderRequest
+
+        req_cls = request_cls_map.get(order_type)
+        if req_cls is None:
+            # Fallback to any available request class (preferring market)
+            for candidate in (
+                MarketOrderRequest,
+                LimitOrderRequest,
+                StopOrderRequest,
+                StopLimitOrderRequest,
+            ):
+                if candidate is not None:
+                    req_cls = candidate
+                    break
+
+        if req_cls is not None:
+            request_kwargs = {
+                "symbol": symbol,
+                "qty": str(qty),
+                "side": side,
+                "time_in_force": time_in_force,
+            }
+            if limit_price is not None:
+                request_kwargs["limit_price"] = str(limit_price)
+            if stop_price is not None:
+                request_kwargs["stop_price"] = str(stop_price)
+            if idempotency_key:
+                request_kwargs["client_order_id"] = idempotency_key
+            try:
+                request_obj = req_cls(**request_kwargs)  # type: ignore[misc]
+            except Exception:
+                request_obj = None
+
+    extra_kwargs: dict[str, Any] = {}
+    if request_obj is not None:
+        if idempotency_key and (has_var_kw or "idempotency_key" in params):
+            extra_kwargs["idempotency_key"] = idempotency_key
+        if timeout is not None and (has_var_kw or "timeout" in params):
+            extra_kwargs["timeout"] = timeout
+    else:
+        use_request_object = False
+
+    legacy_kwargs: dict[str, Any] = {
+        "symbol": symbol,
+        "qty": str(qty),
+        "side": side,
+        "type": type,
+        "time_in_force": time_in_force,
+    }
     if limit_price is not None:
-        kwargs["limit_price"] = str(limit_price)
+        legacy_kwargs["limit_price"] = str(limit_price)
     if stop_price is not None:
-        kwargs["stop_price"] = str(stop_price)
+        legacy_kwargs["stop_price"] = str(stop_price)
     if idempotency_key:
-        kwargs["client_order_id"] = idempotency_key
+        legacy_kwargs["client_order_id"] = idempotency_key
 
     # Optional retry wrapper for SDK submit
     call = submit if retry is None else _with_retry(submit)
     _start_t = _mono()
     _err: Exception | None = None
     try:
-        order = call(**kwargs)
+        if use_request_object and request_obj is not None:
+            order = call(order_data=request_obj, **extra_kwargs)
+        else:
+            order = call(**legacy_kwargs)
     except Exception as e:
         _err = e
         raise
