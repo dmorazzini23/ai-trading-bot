@@ -12,6 +12,7 @@ The monitor integrates with :mod:`ai_trading.monitoring.alerts` so
 production deployments receive notifications about outages.
 """
 
+import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Callable, Dict, Tuple
@@ -77,6 +78,8 @@ class ProviderMonitor:
             max_cooldown if max_cooldown is not None else int(get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int))
         )
         self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
+        self._last_switch_logged: tuple[str, str] | None = None
+        self._last_switch_ts: float | None = None
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -270,14 +273,22 @@ class ProviderMonitor:
         streak = self.consecutive_switches_by_provider[from_key] + 1
         self.consecutive_switches_by_provider[from_key] = streak
         self.consecutive_switches = streak
-        logger.info(
-            "DATA_PROVIDER_SWITCHOVER",
-            extra={
-                "from_provider": from_key,
-                "to_provider": to_key,
-                "count": self.switch_counts[key],
-            },
-        )
+        now_monotonic = time.monotonic()
+        if not (
+            self._last_switch_logged == key
+            and self._last_switch_ts is not None
+            and now_monotonic - self._last_switch_ts < 1.0
+        ):
+            logger.info(
+                "DATA_PROVIDER_SWITCHOVER",
+                extra={
+                    "from_provider": from_key,
+                    "to_provider": to_key,
+                    "count": self.switch_counts[key],
+                },
+            )
+            self._last_switch_logged = key
+            self._last_switch_ts = now_monotonic
         disabled_since = self.disabled_since.get(from_key)
         if disabled_since:
             duration = (now - disabled_since).total_seconds()

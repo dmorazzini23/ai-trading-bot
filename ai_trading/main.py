@@ -21,6 +21,7 @@ import ai_trading.logging as _logging
 from ai_trading.paths import LOG_DIR, ensure_runtime_paths
 from ai_trading.runtime.shutdown import register_signal_handlers, request_stop, should_stop
 from ai_trading.data.fetch import DataFetchError, EmptyBarsError
+from ai_trading.execution.live_trading import NonRetryableBrokerError
 from ai_trading.utils.datetime import ensure_datetime
 
 
@@ -319,7 +320,7 @@ def run_cycle() -> None:
 
     try:
         run_all_trades_worker(state, runtime)
-    except (EmptyBarsError, DataFetchError) as exc:
+    except (EmptyBarsError, DataFetchError, NonRetryableBrokerError) as exc:
         logger.warning(
             "WARMUP_SYMBOL_ERRORS_TOLERATED",
             extra={"error": str(exc), "exc_type": exc.__class__.__name__},
