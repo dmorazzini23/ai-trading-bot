@@ -87,7 +87,7 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
-from ai_trading.logging import logger_once
+from ai_trading.logging import flush_log_throttle_summaries, logger_once
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
     AlpacaOrderHTTPError,
@@ -17585,6 +17585,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state._strategies_loaded = False
             state.last_loop_duration = time.monotonic() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
+            flush_log_throttle_summaries()
 
             _check_runtime_stops(runtime)
 
