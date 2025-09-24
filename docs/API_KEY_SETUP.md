@@ -149,7 +149,9 @@ creds = resolve_alpaca_credentials()
 print(creds.api_key)
 ```
 
-`resolve_alpaca_credentials` returns an `AlpacaCredentials` dataclass with `api_key`, `secret_key`, and `base_url` fields.
+`resolve_alpaca_credentials` returns an `AlpacaCredentials` dataclass with
+`api_key`, `secret_key`, and `base_url` fields along with `api_source` and
+`secret_source` metadata describing which environment variables were used.
 
 ## ❌ Common Issues
 
