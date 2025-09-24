@@ -273,9 +273,57 @@ _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
-# symbol/timeframe/window. This keeps production logs concise while preserving
-# the first occurrence for observability.
-_BACKUP_USAGE_LOGGED: set[tuple[str, str, int, int]] = set()
+# symbol/timeframe per cycle. The mapping is pruned as cycles advance to avoid
+# unbounded growth.
+_BACKUP_USAGE_LOGGED: dict[str, set[tuple[str, str]]] = {}
+_BACKUP_USAGE_MAX_CYCLES = 6
+
+# Track repeated missing-credential warnings per cycle so noisy environments
+# don't emit the same warning every few seconds.
+_ALPACA_MISSING_WARNED: dict[str, set[tuple[str, str]]] = {}
+_MISSING_WARN_MAX_CYCLES = 6
+
+# Throttled Yahoo Finance warnings per event -> cycle -> symbols
+_YF_WARNING_CACHE: dict[str, dict[str, set[tuple[str, str]]]] = {}
+_YF_WARNING_MAX_CYCLES = 6
+
+
+def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tuple[str, set[tuple[str, str]]]:
+    """Return the per-cycle set for ``store`` while pruning old entries."""
+
+    cycle_id = _get_cycle_id()
+    bucket = store.setdefault(cycle_id, set())
+    if len(store) > max_cycles:
+        for key in list(store.keys()):
+            if key == cycle_id:
+                continue
+            store.pop(key, None)
+            if len(store) <= max_cycles:
+                break
+    return cycle_id, bucket
+
+
+def _warn_missing_alpaca(symbol: str, timeframe: str) -> None:
+    """Emit an Alpaca credential warning at most once per cycle and symbol."""
+
+    _, bucket = _cycle_bucket(_ALPACA_MISSING_WARNED, _MISSING_WARN_MAX_CYCLES)
+    key = (str(symbol).upper(), str(timeframe).upper())
+    if key in bucket:
+        return
+    logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": timeframe})
+    bucket.add(key)
+
+
+def _log_yf_warning(event: str, symbol: str, timeframe: str, extra: dict[str, object]) -> None:
+    """Log Yahoo Finance warnings once per cycle/event/symbol."""
+
+    store = _YF_WARNING_CACHE.setdefault(event, {})
+    _, bucket = _cycle_bucket(store, _YF_WARNING_MAX_CYCLES)
+    key = (str(symbol).upper(), str(timeframe).upper())
+    if key in bucket:
+        return
+    logger.warning(event, extra=extra)
+    bucket.add(key)
 
 # Track feed failovers so we avoid redundant retries for the same symbol/timeframe.
 _FEED_OVERRIDE_BY_TF: dict[tuple[str, str], str] = {}
@@ -622,6 +670,29 @@ def _has_alpaca_keys() -> bool:
         if now - cached_ts < _ALPACA_CREDS_TTL_SECONDS:
             return cached_value
 
+    # Prefer credential truth from the live execution engine when available.
+    try:
+        from ai_trading.execution import live_trading as _live_exec
+
+        truth_fn = getattr(_live_exec, "get_cached_credential_truth", None)
+    except Exception:
+        truth_fn = None
+    if callable(truth_fn):
+        try:
+            has_key_live, has_secret_live, ts = truth_fn()
+        except Exception:
+            has_key_live = has_secret_live = False
+            ts = 0.0
+        else:
+            if ts:
+                if has_key_live and has_secret_live:
+                    _ALPACA_CREDS_CACHE = (True, now)
+                    return True
+                # When live trading explicitly reports missing credentials,
+                # cache the negative result but continue checking env/env-config
+                # to allow startup environments to recover later in the cycle.
+                _ALPACA_CREDS_CACHE = (False, now)
+
     has_key, has_secret = alpaca_credential_status()
     if has_key and has_secret:
         _ALPACA_CREDS_CACHE = (True, now)
@@ -639,8 +710,13 @@ def _has_alpaca_keys() -> bool:
         secret = getattr(cfg, "alpaca_secret_key", None)
         resolved = bool(key) and bool(secret)
 
-    _ALPACA_CREDS_CACHE = (resolved, now)
-    return resolved
+    if resolved:
+        _ALPACA_CREDS_CACHE = (True, now)
+        return True
+
+    # Restore cache entry when no sources yield credentials.
+    _ALPACA_CREDS_CACHE = (False, now)
+    return False
 
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
@@ -1094,6 +1170,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     yf = _ensure_yfinance()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    window_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
     if pd is None:
         return []  # type: ignore[return-value]
     if getattr(yf, "download", None) is None:
@@ -1109,23 +1186,90 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
             }
         )
         return frame
+    error_cls = None
+    try:
+        error_cls = getattr(getattr(yf, "shared", None), "YFPricesMissingError", None)
+    except Exception:
+        error_cls = None
+
+    def _download(_start: _dt.datetime) -> pd.DataFrame | None:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
+            return yf.download(
+                symbol,
+                start=_start,
+                end=end_dt,
+                interval=interval,
+                auto_adjust=True,
+                threads=False,
+                progress=False,
+                group_by="column",
+            )
+
+    try:
+        df = _download(start_dt)
+    except Exception as exc:  # pragma: no cover - yfinance error formatting varies
+        message = str(exc).lower()
+        if (error_cls and isinstance(exc, error_cls)) or "possibly delisted" in message:
+            _log_yf_warning(
+                "YF_PRICES_MISSING",
+                symbol,
+                interval,
+                {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "detail": str(exc),
+                },
+            )
+            metrics.empty_payload += 1
+            idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
+            cols = ["open", "high", "low", "close", "volume"]
+            return pd.DataFrame(columns=cols, index=idx).reset_index()
+        raise
+
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
-        df = yf.download(
-            symbol,
-            start=start_dt,
-            end=end_dt,
-            interval=interval,
-            auto_adjust=True,
-            threads=False,
-            progress=False,
-            group_by="column",
-        )
-    if df is None or df.empty:
+    if df is None or getattr(df, "empty", True):
         metrics.empty_payload += 1
-        idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-        cols = ["open", "high", "low", "close", "volume"]
-        return pd.DataFrame(columns=cols, index=idx).reset_index()
+        if window_seconds < 180:
+            widened_start = start_dt - _dt.timedelta(minutes=3)
+            try:
+                widened = _download(widened_start)
+            except Exception as exc:
+                message = str(exc).lower()
+                if (error_cls and isinstance(exc, error_cls)) or "possibly delisted" in message:
+                    _log_yf_warning(
+                        "YF_PRICES_MISSING",
+                        symbol,
+                        interval,
+                        {
+                            "symbol": symbol,
+                            "interval": interval,
+                            "detail": str(exc),
+                            "phase": "widened",
+                        },
+                    )
+                    widened = None
+                else:
+                    widened = None
+            if widened is not None and not getattr(widened, "empty", True):
+                df = widened
+        if df is None or getattr(df, "empty", True):
+            _log_yf_warning(
+                "YAHOO_EDGE_WINDOW_EMPTY",
+                symbol,
+                interval,
+                {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "window_seconds": window_seconds,
+                },
+            )
+            idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
+            cols = ["open", "high", "low", "close", "volume"]
+            return pd.DataFrame(columns=cols, index=idx).reset_index()
     df = df.reset_index().rename(columns={df.index.name or "Date": "timestamp"})
     if "timestamp" not in df.columns:
         for c in df.columns:
@@ -1207,15 +1351,11 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             )
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     if normalized == "yahoo":
-        try:
-            _start = ensure_datetime(start)
-            _end = ensure_datetime(end)
-            key = _fallback_key(symbol, interval, _start, _end)
-        except Exception:
-            key = (symbol, interval, 0, 0)
-        if key not in _BACKUP_USAGE_LOGGED:
+        _, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
+        key = (str(symbol).upper(), str(interval))
+        if key not in bucket:
             logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
-            _BACKUP_USAGE_LOGGED.add(key)
+            bucket.add(key)
         df = _yahoo_get_bars(symbol, start, end, interval)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     pd_local = _ensure_pandas()
@@ -1348,6 +1488,7 @@ def _repair_rth_minute_gaps(
         return df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False
 
     work_df = df.copy()
+    filled_backup = False
     try:
         timestamps = pd_local.to_datetime(work_df["timestamp"], utc=True)
     except Exception:
@@ -1388,9 +1529,15 @@ def _repair_rth_minute_gaps(
                 needed = fallback_df.loc[fallback_df.index.intersection(missing)]
                 if not needed.empty:
                     used_backup = True
+                    filled_backup = True
                     work_df = pd_local.concat([work_df, needed])
                     work_df = work_df[~work_df.index.duplicated(keep="last")]
                     work_df.sort_index(inplace=True)
+    if filled_backup:
+        logger.info(
+            "MINUTE_GAPS_BACKFILLED",
+            extra={"symbol": symbol, "window_start": start.isoformat(), "window_end": end.isoformat()},
+        )
     if isinstance(work_df.index, pd_local.DatetimeIndex):
         if "timestamp" in work_df.columns:
             work_df = work_df.drop(columns=["timestamp"], errors="ignore")
@@ -1405,6 +1552,11 @@ def _repair_rth_minute_gaps(
         combined_idx = pd_local.DatetimeIndex([])
     missing_after = int(expected_utc.difference(combined_idx).size)
     gap_ratio = (missing_after / expected_count) if expected_count else 0.0
+    tolerated = False
+    if missing_after and gap_ratio <= 0.015:
+        tolerated = True
+        missing_after = 0
+        gap_ratio = 0.0
     metadata: dict[str, object] = {
         "expected": expected_count,
         "missing_after": missing_after,
@@ -1413,6 +1565,11 @@ def _repair_rth_minute_gaps(
         "window_end": end_utc,
         "used_backup": used_backup,
     }
+    if tolerated:
+        logger.info(
+            "MINUTE_GAPS_TOLERATED",
+            extra={"symbol": symbol, "gap_ratio": 0.0, "window_start": start.isoformat(), "window_end": end.isoformat()},
+        )
     try:
         attrs = work_df.attrs  # type: ignore[attr-defined]
         attrs.setdefault("symbol", symbol)
@@ -3403,7 +3560,7 @@ def get_minute_df(
                 logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
                 df = None
     else:
-        logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": "1Min"})
+        _warn_missing_alpaca(symbol, "1Min")
         df = None
     if df is None or getattr(df, "empty", True):
         if use_finnhub:

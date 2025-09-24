@@ -31,6 +31,45 @@ except Exception:  # pragma: no cover - fallback when SDK missing
         pass
 
 
+class NonRetryableBrokerError(Exception):
+    """Raised when the broker reports a non-retriable execution condition."""
+
+    def __init__(self, message: str, *, code: Any | None = None, status: int | None = None, symbol: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.symbol = symbol
+
+
+_CREDENTIAL_STATE: dict[str, Any] = {
+    "has_key": False,
+    "has_secret": False,
+    "timestamp": 0.0,
+}
+
+
+def _update_credential_state(has_key: bool, has_secret: bool) -> None:
+    """Record the latest Alpaca credential status for downstream consumers."""
+
+    try:
+        ts = time.monotonic()
+    except Exception:
+        ts = 0.0
+    _CREDENTIAL_STATE["has_key"] = bool(has_key)
+    _CREDENTIAL_STATE["has_secret"] = bool(has_secret)
+    _CREDENTIAL_STATE["timestamp"] = ts
+
+
+def get_cached_credential_truth() -> tuple[bool, bool, float]:
+    """Return the last known Alpaca credential availability."""
+
+    return (
+        bool(_CREDENTIAL_STATE.get("has_key")),
+        bool(_CREDENTIAL_STATE.get("has_secret")),
+        float(_CREDENTIAL_STATE.get("timestamp", 0.0)),
+    )
+
+
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
 from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
 from ai_trading.execution.engine import ExecutionResult
@@ -133,6 +172,8 @@ class ExecutionEngine:
             "circuit_breaker_trips": 0,
             "total_execution_time": 0.0,
             "last_reset": datetime.now(UTC),
+            "capacity_skips": 0,
+            "skipped_orders": 0,
         }
         self.base_url = get_alpaca_base_url()
         self._api_key: str | None = None
@@ -142,8 +183,10 @@ class ExecutionEngine:
             key, secret = get_alpaca_creds()
         except RuntimeError as exc:
             self._cred_error = exc
+            _update_credential_state(False, False)
         else:
             self._api_key, self._api_secret = key, secret
+            _update_credential_state(bool(key), bool(secret))
         self._refresh_settings()
         if self._explicit_mode is not None:
             self.execution_mode = str(self._explicit_mode).lower()
@@ -213,9 +256,11 @@ class ExecutionEngine:
                             "detail": str(exc),
                         },
                     )
+                    _update_credential_state(bool(has_key), bool(has_secret))
                     return False
                 else:
                     self._api_key, self._api_secret = key, secret
+            _update_credential_state(bool(key), bool(secret))
             base_url = self.base_url or get_alpaca_base_url()
             paper = "paper" in base_url.lower()
             mode = self.execution_mode
@@ -331,7 +376,19 @@ class ExecutionEngine:
             "Submitting market order",
             extra={"side": side, "quantity": quantity, "symbol": symbol, "client_order_id": client_order_id},
         )
-        result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+        try:
+            result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+        except NonRetryableBrokerError as exc:
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE",
+                extra={
+                    "symbol": symbol,
+                    "side": side.lower(),
+                    "reason": str(exc),
+                    "code": getattr(exc, "code", None),
+                },
+            )
+            return None
         execution_time = time.time() - start_time
         self.stats["total_execution_time"] += execution_time
         self.stats["total_orders"] += 1
@@ -430,7 +487,19 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
             },
         )
-        result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+        try:
+            result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+        except NonRetryableBrokerError as exc:
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE",
+                extra={
+                    "symbol": symbol,
+                    "side": side.lower(),
+                    "reason": str(exc),
+                    "code": getattr(exc, "code", None),
+                },
+            )
+            return None
         execution_time = time.time() - start_time
         self.stats["total_execution_time"] += execution_time
         self.stats["total_orders"] += 1
@@ -513,6 +582,17 @@ class ExecutionEngine:
                     limit_price=limit_price,
                     **order_kwargs,
                 )
+        except NonRetryableBrokerError as exc:
+            logger.warning(
+                "ORDER_SKIPPED_NONRETRYABLE",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "reason": str(exc),
+                    "code": getattr(exc, "code", None),
+                },
+            )
+            return None
         except (APIError, TimeoutError, ConnectionError) as exc:
             status_code = getattr(exc, "status_code", None)
             if not status_code:
@@ -746,6 +826,58 @@ class ExecutionEngine:
             logger.error("CONNECTION_VALIDATION_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return False
 
+    def _handle_nonretryable_api_error(
+        self,
+        exc: APIError,
+        *call_args: Any,
+    ) -> NonRetryableBrokerError | None:
+        """Return NonRetryableBrokerError when Alpaca reports capacity exhaustion."""
+
+        status = getattr(exc, "status_code", None)
+        code = getattr(exc, "code", None)
+        message = getattr(exc, "message", None)
+        if isinstance(message, dict):
+            code = message.get("code", code)
+            message = message.get("message")
+        payload = getattr(exc, "_error", None)
+        if isinstance(payload, dict):
+            code = payload.get("code", code)
+            payload_message = payload.get("message")
+            if payload_message:
+                message = payload_message
+        message_str = str(message or exc)
+        normalized_message = message_str.lower()
+        code_str = str(code) if code is not None else ""
+        is_day_trading_power = "insufficient day trading buying power" in normalized_message
+        if code_str == "40310000" or is_day_trading_power:
+            status_val = int(status) if isinstance(status, (int, float)) else 403
+        else:
+            status_val = int(status) if isinstance(status, (int, float)) else None
+        if status_val == 403 and (code_str == "40310000" or is_day_trading_power):
+            symbol: str | None = None
+            if call_args:
+                candidate = call_args[0]
+                if isinstance(candidate, dict):
+                    symbol_val = candidate.get("symbol")
+                    if isinstance(symbol_val, str):
+                        symbol = symbol_val
+                elif isinstance(candidate, str):
+                    symbol = candidate
+            extra = {
+                "code": code,
+                "status": status_val,
+                "message": message_str,
+            }
+            if symbol:
+                extra["symbol"] = symbol
+            logger.warning("BROKER_CAPACITY_EXCEEDED", extra=extra)
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            return NonRetryableBrokerError(message_str, code=code, status=status_val, symbol=symbol)
+        return None
+
     def _execute_with_retry(self, func, *args, **kwargs):
         """Execute function with exponential backoff retry logic."""
         attempt = 0
@@ -758,6 +890,10 @@ class ExecutionEngine:
                 self.circuit_breaker["last_failure"] = None
                 return result
             except (APIError, TimeoutError, ConnectionError) as e:
+                if isinstance(e, APIError):
+                    nonretryable = self._handle_nonretryable_api_error(e, *args, **kwargs)
+                    if nonretryable:
+                        raise nonretryable
                 attempt += 1
                 self.stats["retry_count"] += 1
                 if attempt >= self.retry_config["max_attempts"]:

@@ -16394,6 +16394,22 @@ def _process_symbols(
 
     data_stats_lock = Lock()
     data_stats = {"failed": 0, "succeeded": 0}
+    broker_stats_before = {"capacity_skips": 0, "retry_count": 0, "skipped_orders": 0}
+    exec_engine = getattr(ctx, "execution_engine", None)
+    stats_snapshot = getattr(exec_engine, "stats", None)
+    if isinstance(stats_snapshot, dict):
+        try:
+            broker_stats_before["capacity_skips"] = int(stats_snapshot.get("capacity_skips", 0) or 0)
+        except (TypeError, ValueError):
+            broker_stats_before["capacity_skips"] = 0
+        try:
+            broker_stats_before["retry_count"] = int(stats_snapshot.get("retry_count", 0) or 0)
+        except (TypeError, ValueError):
+            broker_stats_before["retry_count"] = 0
+        try:
+            broker_stats_before["skipped_orders"] = int(stats_snapshot.get("skipped_orders", 0) or 0)
+        except (TypeError, ValueError):
+            broker_stats_before["skipped_orders"] = 0
 
     def process_symbol(symbol: str) -> None:
         completed_stages: list[str] = []
@@ -16549,6 +16565,38 @@ def _process_symbols(
     logger.info(
         "CYCLE_DATA_ERRORS",
         extra={"failed": failed, "succeeded": succeeded, "skipped": skipped},
+    )
+    broker_nonretryable = broker_retryable = broker_skipped = 0
+    stats_latest = getattr(exec_engine, "stats", None) if exec_engine is not None else None
+    if isinstance(stats_latest, dict):
+        try:
+            broker_nonretryable = max(
+                int(stats_latest.get("capacity_skips", 0) or 0) - broker_stats_before["capacity_skips"],
+                0,
+            )
+        except (TypeError, ValueError):
+            broker_nonretryable = 0
+        try:
+            broker_retryable = max(
+                int(stats_latest.get("retry_count", 0) or 0) - broker_stats_before["retry_count"],
+                0,
+            )
+        except (TypeError, ValueError):
+            broker_retryable = 0
+        try:
+            broker_skipped = max(
+                int(stats_latest.get("skipped_orders", 0) or 0) - broker_stats_before["skipped_orders"],
+                0,
+            )
+        except (TypeError, ValueError):
+            broker_skipped = 0
+    logger.info(
+        "CYCLE_BROKER_ERRORS",
+        extra={
+            "nonretryable": broker_nonretryable,
+            "retryable": broker_retryable,
+            "skipped": broker_skipped,
+        },
     )
     return processed, row_counts
 
