@@ -15533,22 +15533,38 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
         return None
 
 
+def _format_price_component(value: float | None) -> str:
+    if value is None:
+        return "na"
+    try:
+        return f"{float(value):.6f}"
+    except (TypeError, ValueError):
+        return "na"
+
+
 def _log_price_source(
     symbol: str,
     source: str,
-    fallback_chain: list[str],
+    *,
     limit_price: float,
     side: str,
     slippage_bps: float,
+    reason: str,
+    bid: float | None = None,
+    ask: float | None = None,
+    mid: float | None = None,
 ) -> None:
     logger.info(
-        "PRICE_SOURCE | symbol=%s source=%s fallback_chain=%s limit=%.4f side=%s slippage_bps=%s",
+        "ORDER_PRICE_SOURCE | symbol=%s source=%s reason=%s limit=%.6f bid=%s ask=%s mid=%s side=%s slippage_bps=%.4f",
         symbol,
         source,
-        json.dumps(fallback_chain),
+        reason,
         float(limit_price),
+        _format_price_component(bid),
+        _format_price_component(ask),
+        _format_price_component(mid),
         side,
-        slippage_bps,
+        float(slippage_bps),
     )
 
 
@@ -15561,11 +15577,25 @@ def _resolve_limit_price(
 ) -> tuple[float | None, str | None]:
     """Determine a limit price using deterministic priority with slippage."""
 
-    try:
-        slippage_bps = float(get_env("SLIPPAGE_BPS", "2", cast=float))
-    except Exception:
-        slippage_bps = 2.0
-    slippage_bps = max(0.0, slippage_bps)
+    def _slippage_setting() -> float:
+        for key in ("PRICE_SLIPPAGE_BPS", "SLIPPAGE_BPS"):
+            try:
+                value = get_env(key, None, cast=float)
+            except Exception:
+                continue
+            if value is not None:
+                try:
+                    return max(float(value), 0.0)
+                except (TypeError, ValueError):
+                    continue
+        return 2.0
+
+    def _reason_summary(reasons: list[str]) -> str:
+        return "ok" if not reasons else ";".join(reasons)
+
+    slippage_bps = _slippage_setting()
+    failure_reasons: list[str] = []
+
     nbbo_quote = _fetch_quote(ctx, symbol)
     mid, bid, ask = _quote_to_mid(nbbo_quote)
     if mid is not None:
@@ -15573,12 +15603,21 @@ def _resolve_limit_price(
         _log_price_source(
             symbol,
             "broker_nbbo",
-            ["primary_mid", "backup_mid", "last_close"],
-            limit,
-            side,
-            slippage_bps,
+            limit_price=limit,
+            side=side,
+            slippage_bps=slippage_bps,
+            reason=_reason_summary(failure_reasons),
+            bid=bid,
+            ask=ask,
+            mid=mid,
         )
         return limit, "broker_nbbo"
+    if nbbo_quote is None:
+        failure_reasons.append("broker_nbbo:unavailable")
+    elif bid <= 0 and ask <= 0:
+        failure_reasons.append("broker_nbbo:no_bid_ask")
+    else:
+        failure_reasons.append("broker_nbbo:no_mid")
 
     primary_feed = DATA_FEED_INTRADAY or "iex"
     primary_quote = _fetch_quote(ctx, symbol, feed=primary_feed)
@@ -15588,12 +15627,21 @@ def _resolve_limit_price(
         _log_price_source(
             symbol,
             "primary_mid",
-            ["backup_mid", "last_close"],
-            limit,
-            side,
-            slippage_bps,
+            limit_price=limit,
+            side=side,
+            slippage_bps=slippage_bps,
+            reason=_reason_summary(failure_reasons),
+            bid=bid,
+            ask=ask,
+            mid=mid,
         )
         return limit, "primary_mid"
+    if primary_quote is None:
+        failure_reasons.append(f"primary_mid:{primary_feed}:unavailable")
+    elif bid <= 0 and ask <= 0:
+        failure_reasons.append(f"primary_mid:{primary_feed}:no_bid_ask")
+    else:
+        failure_reasons.append(f"primary_mid:{primary_feed}:no_mid")
 
     backup_feed = None
     if primary_feed != "sip" and data_fetcher_module._sip_configured():
@@ -15608,16 +15656,35 @@ def _resolve_limit_price(
             _log_price_source(
                 symbol,
                 "backup_mid",
-                ["last_close"],
-                limit,
-                side,
-                slippage_bps,
+                limit_price=limit,
+                side=side,
+                slippage_bps=slippage_bps,
+                reason=_reason_summary(failure_reasons),
+                bid=bid,
+                ask=ask,
+                mid=mid,
             )
             return limit, "backup_mid"
+        if backup_quote is None:
+            failure_reasons.append(f"backup_mid:{backup_feed}:unavailable")
+        elif bid <= 0 and ask <= 0:
+            failure_reasons.append(f"backup_mid:{backup_feed}:no_bid_ask")
+        else:
+            failure_reasons.append(f"backup_mid:{backup_feed}:no_mid")
 
     if last_close and last_close > 0:
         limit = _apply_slippage_limit(side, float(last_close), None, None, slippage_bps)
-        _log_price_source(symbol, "last_close", [], limit, side, slippage_bps)
+        _log_price_source(
+            symbol,
+            "last_close",
+            limit_price=limit,
+            side=side,
+            slippage_bps=slippage_bps,
+            reason=_reason_summary(failure_reasons),
+            bid=None,
+            ask=None,
+            mid=float(last_close),
+        )
         return limit, "last_close"
 
     return None, None
@@ -15814,10 +15881,20 @@ def run_multi_strategy(ctx) -> None:
                 now_local = datetime.now(tz_info)
                 start_window = now_local.replace(hour=9, minute=30, second=0, microsecond=0)
                 end_window = now_local.replace(hour=16, minute=0, second=0, microsecond=0)
-            try:
-                max_gap_bps = float(get_env("MAX_GAP_RATIO_BPS", "5", cast=float))
-            except Exception:
-                max_gap_bps = 5.0
+            def _gap_ratio_setting() -> float:
+                for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
+                    try:
+                        value = get_env(key, None, cast=float)
+                    except Exception:
+                        continue
+                    if value is not None:
+                        try:
+                            return max(float(value), 0.0)
+                        except (TypeError, ValueError):
+                            continue
+                return 5.0
+
+            max_gap_bps = _gap_ratio_setting()
             max_gap_ratio = max_gap_bps / 10000.0
             if should_skip_symbol(
                 minute_df,
@@ -15832,8 +15909,9 @@ def run_multi_strategy(ctx) -> None:
                     except (TypeError, ValueError):
                         gap_ratio = 0.0
                 logger.info(
-                    "SKIP_SYMBOL_DATA_GAPS",
-                    extra={"symbol": sig.symbol, "gap_ratio": gap_ratio},
+                    "SKIP_SYMBOL_DATA_GAPS | symbol=%s gap_ratio=%s",
+                    sig.symbol,
+                    f"{gap_ratio:.4%}",
                 )
                 continue
         else:

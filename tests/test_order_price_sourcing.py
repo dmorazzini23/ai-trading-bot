@@ -27,7 +27,7 @@ def _ctx_with_quotes(quotes: dict[str | None, Any]) -> SimpleNamespace:
 
 def test_price_source_prefers_nbbo(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
-    monkeypatch.setenv("SLIPPAGE_BPS", "2")
+    monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     quotes = {
         None: SimpleNamespace(bid_price=100.0, ask_price=100.5),
     }
@@ -35,12 +35,15 @@ def test_price_source_prefers_nbbo(monkeypatch: pytest.MonkeyPatch, caplog: pyte
     price, source = bot_engine._resolve_limit_price(ctx, "AAPL", "buy", None, None)
     assert source == "broker_nbbo"
     assert price == pytest.approx(100.27005, rel=1e-6)
-    assert any("fallback_chain=[\"primary_mid\",\"backup_mid\",\"last_close\"]" in rec.message for rec in caplog.records)
+    messages = [rec.message for rec in caplog.records if rec.message.startswith("ORDER_PRICE_SOURCE")]
+    assert messages and "reason=ok" in messages[-1]
 
 
-def test_price_source_primary_mid_when_nbbo_missing(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_price_source_primary_mid_when_nbbo_missing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     caplog.set_level(logging.INFO)
-    monkeypatch.setenv("SLIPPAGE_BPS", "2")
+    monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
     quotes = {
         None: SimpleNamespace(bid_price=0.0, ask_price=0.0),
@@ -50,12 +53,13 @@ def test_price_source_primary_mid_when_nbbo_missing(monkeypatch: pytest.MonkeyPa
     price, source = bot_engine._resolve_limit_price(ctx, "MSFT", "sell", None, None)
     assert source == "primary_mid"
     assert price == pytest.approx(104.4791, rel=1e-6)
-    assert any("fallback_chain=[\"backup_mid\",\"last_close\"]" in rec.message for rec in caplog.records)
+    messages = [rec.message for rec in caplog.records if rec.message.startswith("ORDER_PRICE_SOURCE")]
+    assert messages and "reason=broker_nbbo:no_bid_ask" in messages[-1]
 
 
 def test_price_source_backup_mid(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
-    monkeypatch.setenv("SLIPPAGE_BPS", "2")
+    monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
     monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: True, raising=False)
     quotes = {
@@ -67,12 +71,13 @@ def test_price_source_backup_mid(monkeypatch: pytest.MonkeyPatch, caplog: pytest
     price, source = bot_engine._resolve_limit_price(ctx, "TSLA", "buy", None, None)
     assert source == "backup_mid"
     assert price == pytest.approx(200.0402, rel=1e-6)
-    assert any("fallback_chain=[\"last_close\"]" in rec.message for rec in caplog.records)
+    messages = [rec.message for rec in caplog.records if rec.message.startswith("ORDER_PRICE_SOURCE")]
+    assert messages and "primary_mid:iex:no_bid_ask" in messages[-1]
 
 
 def test_price_source_last_close_fallback(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
-    monkeypatch.setenv("SLIPPAGE_BPS", "2")
+    monkeypatch.setenv("PRICE_SLIPPAGE_BPS", "2")
     monkeypatch.setattr(bot_engine, "DATA_FEED_INTRADAY", "iex", raising=False)
     monkeypatch.setattr(bot_engine.data_fetcher_module, "_sip_configured", lambda: False, raising=False)
     quotes = {
@@ -84,4 +89,5 @@ def test_price_source_last_close_fallback(monkeypatch: pytest.MonkeyPatch, caplo
     price, source = bot_engine._resolve_limit_price(ctx, "NFLX", "buy", minute_df, 50.0)
     assert source == "last_close"
     assert price == pytest.approx(50.01, rel=1e-6)
-    assert any("fallback_chain=[]" in rec.message for rec in caplog.records)
+    messages = [rec.message for rec in caplog.records if rec.message.startswith("ORDER_PRICE_SOURCE")]
+    assert messages and "reason=broker_nbbo:unavailable;primary_mid:iex:unavailable" in messages[-1]

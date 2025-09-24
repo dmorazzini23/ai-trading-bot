@@ -342,6 +342,7 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
         )
         _FEED_SWITCH_LOGGED.add(log_key)
 
+
 # Track consecutive empty Alpaca responses across all symbols to temporarily
 # disable Alpaca fetching when upstream repeatedly returns empty payloads.
 _ALPACA_DISABLE_THRESHOLD = 3
@@ -358,6 +359,7 @@ def is_primary_provider_enabled() -> bool:
     if _alpaca_disabled_until is None:
         return True
     return _dt.datetime.now(UTC) >= _alpaca_disabled_until
+
 
 # Emit a one-time explanatory log when Alpaca keys are missing to make
 # backup-provider usage obvious in production logs without spamming.
@@ -629,12 +631,12 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
 try:
     _cfg_default = get_settings()
     _DEFAULT_FEED = (
-        getattr(_cfg_default, "data_feed", None)
-        or getattr(_cfg_default, "alpaca_data_feed", "iex")
-        or "iex"
+        getattr(_cfg_default, "data_feed", None) or getattr(_cfg_default, "alpaca_data_feed", "iex") or "iex"
     )
 except Exception:  # pragma: no cover - defensive default
     _DEFAULT_FEED = "iex"
+
+
 def _env_flag(key: str, default: bool = False) -> bool:
     """Return truthy flag for ``key`` honouring ``default`` when unset."""
 
@@ -665,7 +667,6 @@ _ALLOW_SIP = _env_flag("ALPACA_ALLOW_SIP", default=_HAS_SIP or _prefers_sip())
 _SIP_DISALLOWED_WARNED = False
 _SIP_PRECHECK_DONE = False
 _SIP_UNAVAILABLE_LOGGED: set[str] = set()
-
 
 
 def _sip_configured() -> bool:
@@ -1127,9 +1128,7 @@ def _post_process(
     return _flatten_and_normalize_ohlcv(df, symbol, timeframe)
 
 
-def _verify_minute_continuity(
-    df: pd.DataFrame | None, symbol: str, backfill: str | None = None
-) -> pd.DataFrame | None:
+def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: str | None = None) -> pd.DataFrame | None:
     """Verify 1-minute bar continuity and optionally backfill gaps."""
 
     pd_local = _ensure_pandas()
@@ -1350,15 +1349,14 @@ def should_skip_symbol(
             coverage_meta["gap_ratio"] = gap_ratio
             coverage_meta["missing_after"] = missing_after
             coverage_meta["expected"] = expected_count
-        gap_bps = gap_ratio * 10000
         key = (symbol_str, start.date())
         if key not in _SKIP_LOGGED:
             logger.warning(
-                "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_bps=%.2f",
+                "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s missing=%d expected=%d gap_ratio=%s",
                 symbol_str,
                 missing_after,
                 expected_count,
-                gap_bps,
+                f"{gap_ratio:.4%}",
             )
             _SKIP_LOGGED.add(key)
     return skip
@@ -1427,8 +1425,10 @@ def _ensure_requests():
                 try:
                     placeholder.__bases__ = (real,)
                 except TypeError:  # pragma: no cover - fallback for exotic class wrappers
+
                     class _Shim(real):  # type: ignore[misc]
                         pass
+
                     placeholder.__bases__ = (_Shim,)
         except Exception:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
@@ -1637,9 +1637,7 @@ def _fetch_bars(
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
     resolved_feed = resolve_alpaca_feed(_feed)
     if resolved_feed is None:
-        provider_fallback.labels(
-            from_provider=f"alpaca_{_feed}", to_provider="yahoo"
-        ).inc()
+        provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
         provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
         logger.warning(
             "ALPACA_FEED_SWITCHOVER",
@@ -1836,7 +1834,6 @@ def _fetch_bars(
                     feed=normalized_provider or None,
                 )
             return pd.DataFrame()
-
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -2076,12 +2073,7 @@ def _fetch_bars(
             time.sleep(backoff)
             return _req(session, None, headers=headers, timeout=timeout)
         except (HTTPError, RequestException, ValueError, KeyError) as e:
-            if (
-                isinstance(e, ValueError)
-                and str(e) == "rate_limited"
-                and _feed == "iex"
-                and _SIP_UNAUTHORIZED
-            ):
+            if isinstance(e, ValueError) and str(e) == "rate_limited" and _feed == "iex" and _SIP_UNAUTHORIZED:
                 raise
             log_extra = {
                 "url": url,
@@ -2189,9 +2181,7 @@ def _fetch_bars(
             log_extra_with_remaining = {"remaining_retries": max_retries - _state["retries"], **log_extra}
             log_fetch_attempt("alpaca", status=status, error="bad_request", **log_extra_with_remaining)
             if "invalid feed" in text.lower():
-                provider_fallback.labels(
-                    from_provider=f"alpaca_{_feed}", to_provider="yahoo"
-                ).inc()
+                provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
                 provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
                 logger.warning(
                     "ALPACA_FEED_SWITCHOVER",
@@ -2339,11 +2329,7 @@ def _fetch_bars(
             planned_retry_meta: dict[str, Any] = {}
             planned_backoff: float | None = None
             outside_market_hours = _outside_market_hours(_start, _end) if can_retry_timeframe else False
-            if (
-                attempt <= max_retries
-                and can_retry_timeframe
-                and _state["retries"] < max_retries
-            ):
+            if attempt <= max_retries and can_retry_timeframe and _state["retries"] < max_retries:
                 if not outside_market_hours:
                     planned_backoff = min(
                         _FETCH_BARS_BACKOFF_BASE ** (_state["retries"]),
@@ -2741,11 +2727,7 @@ def _fetch_bars(
                     except Exception:  # pragma: no cover - alerting best effort
                         logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                 remaining_retries = max_retries - _state["retries"]
-                log_event = (
-                    "ALPACA_FETCH_ABORTED"
-                    if remaining_retries > 0
-                    else "ALPACA_FETCH_RETRY_LIMIT"
-                )
+                log_event = "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT"
                 logger.warning(
                     log_event,
                     extra=_norm_extra(
@@ -2854,11 +2836,7 @@ def _fetch_bars(
                 except Exception:
                     return pd.DataFrame()
             remaining_retries = max_retries - _state["retries"]
-            log_event = (
-                "ALPACA_FETCH_ABORTED"
-                if remaining_retries > 0
-                else "ALPACA_FETCH_RETRY_LIMIT"
-            )
+            log_event = "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT"
             if not (log_event == "ALPACA_FETCH_ABORTED" and _state.get("abort_logged")):
                 logger.warning(
                     log_event,
@@ -3083,11 +3061,7 @@ def get_minute_df(
         try:
             requested_feed = normalized_feed or _DEFAULT_FEED
             override_raw = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
-            override_feed = (
-                _normalize_feed_value(override_raw)
-                if override_raw is not None
-                else None
-            )
+            override_feed = _normalize_feed_value(override_raw) if override_raw is not None else None
             feed_to_use = override_feed or requested_feed
             initial_feed = requested_feed
             proactive_switch = False
@@ -3104,12 +3078,7 @@ def get_minute_df(
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
-            if (
-                proactive_switch
-                and feed_to_use != initial_feed
-                and df is not None
-                and not getattr(df, "empty", True)
-            ):
+            if proactive_switch and feed_to_use != initial_feed and df is not None and not getattr(df, "empty", True):
                 _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
         except (EmptyBarsError, ValueError, RuntimeError, AttributeError) as e:
             if isinstance(e, EmptyBarsError):
@@ -3457,10 +3426,21 @@ def get_minute_df(
             attrs["_coverage_meta"] = coverage_meta
     except Exception:
         pass
-    try:
-        max_gap_bps = float(get_env("MAX_GAP_RATIO_BPS", "5", cast=float))
-    except Exception:
-        max_gap_bps = 5.0
+
+    def _gap_ratio_setting() -> float:
+        for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
+            try:
+                value = get_env(key, None, cast=float)
+            except Exception:
+                continue
+            if value is not None:
+                try:
+                    return max(float(value), 0.0)
+                except (TypeError, ValueError):
+                    continue
+        return 5.0
+
+    max_gap_bps = _gap_ratio_setting()
     max_gap_ratio = max(0.0, max_gap_bps / 10000.0)
     gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
     if backup_label:

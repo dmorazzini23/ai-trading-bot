@@ -153,16 +153,26 @@ class MessageThrottleFilter(logging.Filter):
 
     @staticmethod
     def _resolve_throttle_seconds(value: float | None) -> float:
+        """Resolve throttle interval honouring millisecond and legacy knobs."""
+
         if value is not None:
             try:
                 return max(float(value), 0.0)
             except (TypeError, ValueError):
-                return 2.0
-        raw = os.getenv("LOG_THROTTLE_SECONDS")
+                return 0.5
+
+        raw_ms = os.getenv("LOG_TIMING_THROTTLE_MS")
+        if raw_ms is not None:
+            try:
+                return max(float(raw_ms) / 1000.0, 0.0)
+            except (TypeError, ValueError):
+                return 0.5
+
+        raw_seconds = os.getenv("LOG_THROTTLE_SECONDS")
         try:
-            return max(float(raw), 0.0) if raw is not None else 2.0
+            return max(float(raw_seconds), 0.0) if raw_seconds is not None else 0.5
         except (TypeError, ValueError):
-            return 2.0
+            return 0.5
 
     def _now(self) -> float:
         return time.monotonic()
