@@ -606,11 +606,17 @@ class ExecutionEngine:
             raise AlpacaOrderHTTPError(status_code, message) from exc
 
         if not order:
-            raise AlpacaOrderHTTPError(
-                500,
-                "order submission returned empty response",
-                payload={"symbol": symbol, "side": mapped_side, "type": order_type_normalized},
+            logger.debug(
+                "ORDER_EXECUTION_SKIPPED",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "type": order_type_normalized,
+                    "tif": time_in_force,
+                    "extended_hours": extended_hours,
+                },
             )
+            return None
 
         if isinstance(order, dict):
             order_id = order.get("id") or order.get("client_order_id")

@@ -665,12 +665,21 @@ def _has_alpaca_keys() -> bool:
 
     global _ALPACA_CREDS_CACHE
     now = time.monotonic()
+    cached_value: bool | None = None
+    cached_ts = 0.0
     if _ALPACA_CREDS_CACHE is not None:
         cached_value, cached_ts = _ALPACA_CREDS_CACHE
-        if now - cached_ts < _ALPACA_CREDS_TTL_SECONDS:
-            return cached_value
+        # A positive cache hit can return immediately, but a negative value needs
+        # to allow for newly provided credentials during the TTL window.
+        if cached_value and now - cached_ts < _ALPACA_CREDS_TTL_SECONDS:
+            return True
 
-    # Prefer credential truth from the live execution engine when available.
+    # Prefer credential truth from the live execution engine when available so
+    # the data layer immediately observes credential updates without waiting for
+    # the cache TTL to expire. The execution engine records the timestamp using
+    # ``time.monotonic`` so we can safely compare it against the cache entry.
+    live_truth: bool | None = None
+    live_ts = 0.0
     try:
         from ai_trading.execution import live_trading as _live_exec
 
@@ -684,19 +693,32 @@ def _has_alpaca_keys() -> bool:
             has_key_live = has_secret_live = False
             ts = 0.0
         else:
-            if ts:
-                if has_key_live and has_secret_live:
-                    _ALPACA_CREDS_CACHE = (True, now)
-                    return True
-                # When live trading explicitly reports missing credentials,
-                # cache the negative result but continue checking env/env-config
-                # to allow startup environments to recover later in the cycle.
+            live_truth = bool(has_key_live and has_secret_live)
+            live_ts = float(ts or 0.0)
+            if live_truth:
+                _ALPACA_CREDS_CACHE = (True, now)
+                return True
+            # Record fresher negative information from the execution engine so
+            # downstream checks do not repeatedly reload configuration during
+            # the cache window.
+            if live_ts and live_ts > cached_ts:
                 _ALPACA_CREDS_CACHE = (False, now)
+                cached_value, cached_ts = _ALPACA_CREDS_CACHE
 
     has_key, has_secret = alpaca_credential_status()
     if has_key and has_secret:
         _ALPACA_CREDS_CACHE = (True, now)
         return True
+
+    # When the cache already reports missing credentials and the TTL has not
+    # expired, avoid the expensive TradingConfig construction on every call
+    # unless newer execution-engine data suggested otherwise.
+    if (
+        cached_value is False
+        and now - cached_ts < _ALPACA_CREDS_TTL_SECONDS
+        and (live_truth is False or live_ts <= cached_ts)
+    ):
+        return False
 
     resolved = False
     try:
@@ -1022,6 +1044,19 @@ def _flatten_and_normalize_ohlcv(
         df["close"] = df["adj_close"]
 
     required = ["open", "high", "low", "close", "volume"]
+
+    # When the frame is empty, ensure the canonical OHLCV columns exist so
+    # downstream consumers can treat it as "no data" without raising
+    # normalization errors. Columns added here inherit float dtypes to avoid
+    # pandas ``object`` fallbacks in later numeric casts.
+    if getattr(df, "empty", False):
+        for col in required:
+            if col not in df.columns:
+                df[col] = pd.Series(dtype="float64")
+        if "timestamp" not in df.columns:
+            df["timestamp"] = pd.Series(pd.DatetimeIndex([], tz="UTC"))
+        return df
+
     missing = [col for col in required if col not in df.columns]
     if missing:
         extra = {
