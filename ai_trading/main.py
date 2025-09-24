@@ -1276,13 +1276,18 @@ def main(argv: list[str] | None = None) -> None:
                 fraction_clamped = max(0.0, min(1.0, float(fraction)))
                 budget = SoftBudget(int(interval_ms * fraction_clamped))
                 try:
-                    if count % memory_check_interval == 0:
-                        gc_result = optimize_memory()
-                        if gc_result.get("objects_collected", 0) > 100:
-                            logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
                     _t0 = _mono()
                     with StageTimer(logger, "CYCLE_FETCH"):
-                        pass
+                        if count % memory_check_interval == 0:
+                            gc_result = optimize_memory()
+                            if gc_result.get("objects_collected", 0) > 100:
+                                logger.info(
+                                    "CYCLE_FETCH_GC",
+                                    extra={
+                                        "cycle": count,
+                                        "objects_collected": gc_result["objects_collected"],
+                                    },
+                                )
                     try:
                         _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
                     except Exception:

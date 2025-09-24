@@ -5479,6 +5479,7 @@ meta_lock = Lock()
 run_lock = Lock()
 
 _DAILY_FETCH_MEMO: dict[tuple[str, str], tuple[float, Any]] = {}
+_DAILY_FETCH_DEBOUNCE: dict[tuple[str, str], tuple[float, bool]] = {}
 try:
     _DAILY_FETCH_MEMO_TTL = float(os.getenv("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
@@ -5985,6 +5986,41 @@ class DataFetcher:
             return self.prefer
         return normalized
 
+    def _daily_fetch_min_interval(self, ctx: BotContext | None) -> float:
+        """Return the configured debounce window for daily fetches in seconds."""
+
+        candidates: list[Any] = []
+        if ctx is not None:
+            cfg = getattr(ctx, "cfg", None)
+            if cfg is not None:
+                data_cfg = getattr(cfg, "data", None)
+                if data_cfg is not None:
+                    candidates.append(
+                        getattr(data_cfg, "daily_fetch_min_interval_s", None)
+                    )
+                candidates.append(getattr(cfg, "daily_fetch_min_interval_s", None))
+                candidates.append(
+                    getattr(cfg, "data_daily_fetch_min_interval_s", None)
+                )
+        candidates.append(
+            getattr(self.settings, "data_daily_fetch_min_interval_s", None)
+        )
+        candidates.append(getattr(self.settings, "daily_fetch_min_interval_s", None))
+        candidates.append(
+            getattr(self.settings, "daily_fetch_min_interval_seconds", None)
+        )
+        for raw in candidates:
+            if raw in (None, ""):
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value <= 0:
+                continue
+            return float(value)
+        return 0.0
+
     def get_bars(
         self,
         symbol: str,
@@ -6099,20 +6135,71 @@ class DataFetcher:
                     memo_candidate = memo_df
                 else:
                     _DAILY_FETCH_MEMO.pop(memo_key, None)
+
+        min_interval = self._daily_fetch_min_interval(ctx)
+        if min_interval > 0:
+            debounce_candidate: tuple[Any, float, bool] | None = None
+            with cache_lock:
+                debounce_entry = _DAILY_FETCH_DEBOUNCE.get(memo_key)
+                if debounce_entry:
+                    last_ts, hit_logged = debounce_entry
+                    if now_monotonic - last_ts < min_interval:
+                        cached_df = memo_candidate
+                        if cached_df is None:
+                            entry = self._daily_cache.get(symbol)
+                            if entry and entry[0] == fetch_date:
+                                cached_df = entry[1]
+                        if cached_df is not None:
+                            stamp = time.monotonic()
+                            _DAILY_FETCH_MEMO[memo_key] = (stamp, cached_df)
+                            debounce_candidate = (cached_df, last_ts, hit_logged)
+            if debounce_candidate is not None:
+                cached_df, last_ts, hit_logged = debounce_candidate
+                if not hit_logged:
+                    if not self._daily_cache_hit_logged:
+                        logger.info(
+                            "DAILY_FETCH_CACHE_HIT",
+                            extra={"symbol": symbol, "debounced": True},
+                        )
+                        self._daily_cache_hit_logged = True
+                    elif logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "DAILY_FETCH_CACHE_HIT",
+                            extra={"symbol": symbol, "debounced": True},
+                        )
+                elif logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "DAILY_FETCH_CACHE_HIT",
+                        extra={"symbol": symbol, "debounced": True},
+                    )
+                with cache_lock:
+                    _DAILY_FETCH_DEBOUNCE[memo_key] = (last_ts, True)
+                return cached_df
+
         if memo_candidate is not None:
+            logged = False
             if not self._daily_cache_hit_logged:
                 logger.info(
                     "DAILY_FETCH_CACHE_HIT",
                     extra={"symbol": symbol, "memoized": True},
                 )
                 self._daily_cache_hit_logged = True
+                logged = True
             elif logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "DAILY_FETCH_CACHE_HIT",
                     extra={"symbol": symbol, "memoized": True},
                 )
+                logged = True
+            stamp = time.monotonic()
             with cache_lock:
-                _DAILY_FETCH_MEMO[memo_key] = (time.monotonic(), memo_candidate)
+                _DAILY_FETCH_MEMO[memo_key] = (stamp, memo_candidate)
+                if min_interval > 0:
+                    prev = _DAILY_FETCH_DEBOUNCE.get(memo_key)
+                    if prev:
+                        _DAILY_FETCH_DEBOUNCE[memo_key] = (prev[0], prev[1] or logged)
+                    else:
+                        _DAILY_FETCH_DEBOUNCE[memo_key] = (stamp, logged)
             return memo_candidate
         with cache_lock:
             entry = self._daily_cache.get(symbol)
@@ -6133,12 +6220,25 @@ class DataFetcher:
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
                 cached_df = entry[1]
-                _DAILY_FETCH_MEMO[memo_key] = (time.monotonic(), cached_df)
+                stamp = time.monotonic()
+                _DAILY_FETCH_MEMO[memo_key] = (stamp, cached_df)
+                hit_logged = False
                 if not self._daily_cache_hit_logged:
                     logger.info("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
                     self._daily_cache_hit_logged = True
+                    hit_logged = True
                 elif logger.isEnabledFor(logging.DEBUG):
                     logger.debug("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
+                    hit_logged = True
+                if min_interval > 0:
+                    prev = _DAILY_FETCH_DEBOUNCE.get(memo_key)
+                    if prev:
+                        _DAILY_FETCH_DEBOUNCE[memo_key] = (
+                            prev[0],
+                            prev[1] or hit_logged,
+                        )
+                    else:
+                        _DAILY_FETCH_DEBOUNCE[memo_key] = (stamp, hit_logged)
                 return cached_df
             # purge stale cache entry if present
             self._daily_cache.pop(symbol, None)
@@ -6478,8 +6578,11 @@ class DataFetcher:
 
         df = self._prepare_daily_dataframe(df, symbol)
         with cache_lock:
+            stamp = time.monotonic()
             self._daily_cache[symbol] = (fetch_date, df)
-            _DAILY_FETCH_MEMO[memo_key] = (time.monotonic(), df)
+            _DAILY_FETCH_MEMO[memo_key] = (stamp, df)
+            if min_interval > 0:
+                _DAILY_FETCH_DEBOUNCE[memo_key] = (stamp, False)
         if daily_cache_miss:
             try:
                 daily_cache_miss.inc()
