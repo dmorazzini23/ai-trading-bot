@@ -1,0 +1,151 @@
+"""Daily fetch memo ensures repeated calls reuse cached data."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import sys
+import types
+
+if "ai_trading.indicators" not in sys.modules:
+    indicators_stub = types.ModuleType("ai_trading.indicators")
+
+    def _unavailable_indicator(*_args, **_kwargs):  # pragma: no cover - safety stub
+        raise RuntimeError("Indicator module unavailable in tests")
+
+    indicators_stub.compute_atr = _unavailable_indicator
+    indicators_stub.atr = _unavailable_indicator
+    indicators_stub.mean_reversion_zscore = _unavailable_indicator
+    indicators_stub.rsi = _unavailable_indicator
+    sys.modules["ai_trading.indicators"] = indicators_stub
+
+if "ai_trading.signals" not in sys.modules:
+    signals_stub = types.ModuleType("ai_trading.signals")
+    signals_indicators_stub = types.ModuleType("ai_trading.signals.indicators")
+
+    def _composite_confidence_stub(*_args, **_kwargs):  # pragma: no cover - safety stub
+        return {}
+
+    signals_indicators_stub.composite_signal_confidence = _composite_confidence_stub
+    sys.modules["ai_trading.signals"] = signals_stub
+    sys.modules["ai_trading.signals.indicators"] = signals_indicators_stub
+    signals_stub.indicators = signals_indicators_stub
+
+if "ai_trading.features" not in sys.modules:
+    features_stub = types.ModuleType("ai_trading.features")
+    features_indicators_stub = types.ModuleType("ai_trading.features.indicators")
+
+    def _feature_passthrough(df, **_kwargs):  # pragma: no cover - safety stub
+        return df
+
+    features_indicators_stub.compute_macd = _feature_passthrough
+    features_indicators_stub.compute_macds = _feature_passthrough
+    features_indicators_stub.compute_vwap = _feature_passthrough
+    features_indicators_stub.compute_atr = _feature_passthrough
+    features_indicators_stub.compute_sma = _feature_passthrough
+    features_indicators_stub.ensure_columns = _feature_passthrough
+    sys.modules["ai_trading.features"] = features_stub
+    sys.modules["ai_trading.features.indicators"] = features_indicators_stub
+    features_stub.indicators = features_indicators_stub
+
+if "portalocker" not in sys.modules:
+    portalocker_stub = types.ModuleType("portalocker")
+    portalocker_stub.LOCK_EX = 1
+
+    def _noop_lock(*_args, **_kwargs):  # pragma: no cover - safety stub
+        return None
+
+    portalocker_stub.lock = _noop_lock
+    portalocker_stub.unlock = _noop_lock
+    sys.modules["portalocker"] = portalocker_stub
+
+if "bs4" not in sys.modules:
+    bs4_stub = types.ModuleType("bs4")
+
+    class _BeautifulSoup:  # pragma: no cover - safety stub
+        def __init__(self, *_args, **_kwargs):
+            self.text = ""
+
+        def find(self, *_args, **_kwargs):
+            return None
+
+    bs4_stub.BeautifulSoup = _BeautifulSoup
+    sys.modules["bs4"] = bs4_stub
+
+if "dotenv" not in sys.modules:
+    dotenv_stub = types.ModuleType("dotenv")
+    dotenv_stub.load_dotenv = lambda *a, **k: None
+    sys.modules["dotenv"] = dotenv_stub
+
+if "numpy" not in sys.modules:
+    numpy_stub = types.ModuleType("numpy")
+    numpy_stub.array = lambda *a, **k: a
+    numpy_stub.ndarray = object
+    numpy_stub.float64 = float
+    numpy_stub.int64 = int
+    numpy_stub.nan = float("nan")
+    numpy_stub.NaN = float("nan")
+    numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
+    sys.modules["numpy"] = numpy_stub
+
+from ai_trading.core import bot_engine as be
+
+
+class FixedDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):  # noqa: D401 - match datetime API
+        base = datetime(2024, 1, 3, 12, 0, tzinfo=UTC)
+        if tz is None:
+            return base.replace(tzinfo=None)
+        return base.astimezone(tz)
+
+
+def _stub_fetcher(monkeypatch) -> be.DataFetcher:
+    monkeypatch.setattr(be.DataFetcher, "__post_init__", lambda self: None)
+    fetcher = be.DataFetcher()
+    fetcher.settings = types.SimpleNamespace(
+        alpaca_api_key="key",
+        alpaca_secret_key_plain="secret",
+        data_feed="iex",
+        alpaca_data_feed=None,
+    )
+    fetcher._daily_cache = {}
+    fetcher._daily_cache_hit_logged = False
+    fetcher._warn_seen = {}
+    fetcher._warn_once = lambda *a, **k: None
+    fetcher._prepare_daily_dataframe = lambda df, symbol: df
+    return fetcher
+
+
+def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    be.bars = types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day"))
+
+    monotonic_values = iter([10.0, 11.0, 120.0, 121.0, 130.0, 140.0, 150.0])
+    monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    memo_key = (symbol, fetch_date.isoformat())
+
+    memo_df = {"memo": True}
+    cached_df = {"cached": True}
+
+    be._DAILY_FETCH_MEMO_TTL = 60.0
+    be._DAILY_FETCH_MEMO = {memo_key: (0.0, memo_df)}
+    fetcher._daily_cache[symbol] = (fetch_date, cached_df)
+
+    first = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    assert first is memo_df
+
+    # Simulate memo expiry and verify the cached entry refreshes memo storage
+    be._DAILY_FETCH_MEMO[memo_key] = (0.0, memo_df)
+    second = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    assert second is cached_df
+    assert memo_key in be._DAILY_FETCH_MEMO
+    assert be._DAILY_FETCH_MEMO[memo_key][1] is cached_df
