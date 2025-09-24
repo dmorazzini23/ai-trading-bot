@@ -14,7 +14,7 @@ import os
 import stat
 import tempfile
 import sys
-from typing import Any, Dict, Iterable, Mapping, TYPE_CHECKING, cast
+from typing import Any, Dict, Iterable, Mapping, Sequence, TYPE_CHECKING, cast
 from collections import deque
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
@@ -705,6 +705,9 @@ class BotEngine:
         _reset_cycle_cache()
         self._cycle_id = _GLOBAL_CYCLE_ID
         self._intraday_fallback_feed = None
+        manager = getattr(self._ctx, "signal_manager", None)
+        if hasattr(manager, "begin_cycle"):
+            manager.begin_cycle()
 
     def _prefer_feed_this_cycle(self) -> str | None:
         """Return cached intraday fallback feed for the current cycle."""
@@ -7448,6 +7451,8 @@ def _read_trade_log(
     dtype: dict | str | None = None,
     sync_from_broker: bool = False,
     broker: Any | None = None,
+    *,
+    return_source: bool = False,
 ):
     """Load the trade log with canonical and broker fallbacks."""
 
@@ -7510,6 +7515,8 @@ def _read_trade_log(
         source or "local",
     )
     _EMPTY_TRADE_LOG_INFO_EMITTED = False
+    if return_source:
+        return frame, source or "local"
     return frame
 
 
@@ -7733,6 +7740,51 @@ class SignalManager:
         self.mean_rev_zscore_threshold = 2.0
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
         self._last_components: list[tuple[int, float, str]] = []
+        self._cycle_trade_log: pd.DataFrame | None = None
+        self._cycle_trade_log_source: str | None = None
+        self._cycle_trade_log_cycle_id: int | None = None
+
+    def begin_cycle(self) -> None:
+        """Cache the trade log once per active trading cycle."""
+
+        cycle_id = _GLOBAL_CYCLE_ID
+        if cycle_id is None:
+            _reset_cycle_cache()
+            cycle_id = _GLOBAL_CYCLE_ID
+        if self._cycle_trade_log_cycle_id == cycle_id:
+            return
+        frame_source = _read_trade_log(TRADE_LOG_FILE, return_source=True)
+        if isinstance(frame_source, tuple):
+            frame, source = frame_source
+        else:
+            frame, source = frame_source, "local"
+        self._cycle_trade_log = frame
+        self._cycle_trade_log_source = source or "local"
+        self._cycle_trade_log_cycle_id = cycle_id
+        rows = len(frame) if frame is not None else 0
+        logger.info(
+            "TRADE_LOG_CACHED | rows=%s source=%s",
+            rows,
+            self._cycle_trade_log_source,
+        )
+
+    def get_cycle_trade_log(
+        self, columns: Sequence[str] | None = None
+    ) -> tuple[pd.DataFrame | None, str | None]:
+        """Return a shallow copy of the cached trade log for the active cycle."""
+
+        frame = self._cycle_trade_log
+        if frame is None:
+            return None, self._cycle_trade_log_source
+        if columns:
+            available = [col for col in columns if col in frame.columns]
+            if available:
+                subset = frame.loc[:, available].copy(deep=False)
+            else:
+                subset = frame.copy(deep=False)
+        else:
+            subset = frame.copy(deep=False)
+        return subset, self._cycle_trade_log_source
 
     @property
     def last_components(self) -> list[tuple[int, float, str]]:
@@ -13512,17 +13564,43 @@ def load_global_signal_performance(
             os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.3")
         )  # Reduced from 0.4 to 0.3
     try:
-        df = _read_trade_log(
-            TRADE_LOG_FILE,
-            usecols=["exit_price", "entry_price", "signal_tags", "side"],
-        )
+        manager = getattr(_get_runtime_context_or_none(), "signal_manager", None)
+        if not hasattr(manager, "get_cycle_trade_log"):
+            manager = signal_manager
+        cached_df: Any | None = None
+        cached_source: str | None = None
+        if hasattr(manager, "get_cycle_trade_log"):
+            cached_df, cached_source = manager.get_cycle_trade_log(
+                ["exit_price", "entry_price", "signal_tags", "side"]
+            )
+        if cached_df is not None:
+            df = cached_df
+            source = cached_source or "local"
+        else:
+            frame_source = _read_trade_log(
+                TRADE_LOG_FILE,
+                usecols=["exit_price", "entry_price", "signal_tags", "side"],
+                return_source=True,
+            )
+            if isinstance(frame_source, tuple):
+                df, source = frame_source
+            else:
+                df, source = frame_source, "local"
         if df is None:
             logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
             return {}
+        rows_total = len(df)
+        filters_applied: list[str] = []
         df = df.dropna(subset=["exit_price", "entry_price", "signal_tags"])
+        filters_applied.append("dropna(entry_price,exit_price,signal_tags)")
 
         if df.empty:
-            logger.info("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
+            logger.debug(
+                "METALEARN_NO_TRAINING_SET | rows_total=%s rows_after_filters=%s filters=%s",
+                rows_total,
+                len(df),
+                filters_applied,
+            )
             return {}
 
         # Enhanced data validation and cleaning
@@ -17157,6 +17235,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 runtime.data_fetcher = getattr(ctx, "data_fetcher", None)
             ensure_data_fetcher(runtime)
             get_trade_logger()
+            manager = getattr(runtime, "signal_manager", None)
+            if manager is None and ctx is not None:
+                manager = getattr(ctx, "signal_manager", None)
+            if manager is None:
+                manager = signal_manager
+            if hasattr(manager, "begin_cycle"):
+                manager.begin_cycle()
 
             for attempt in range(3):
                 try:
