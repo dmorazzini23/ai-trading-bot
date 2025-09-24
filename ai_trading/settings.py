@@ -179,6 +179,13 @@ class Settings(BaseSettings):
         default=120,
         env="DATA_COOLDOWN_SECONDS",
     )
+    data_daily_fetch_min_interval_s: float = Field(
+        0.0,
+        validation_alias=AliasChoices(
+            "DATA_DAILY_FETCH_MIN_INTERVAL_S",
+            "DAILY_FETCH_MIN_INTERVAL_S",
+        ),
+    )
     price_slippage_bps: float = Field(
         default=10.0,
         env="PRICE_SLIPPAGE_BPS",
