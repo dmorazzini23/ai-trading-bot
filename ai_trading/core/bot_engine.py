@@ -14,6 +14,7 @@ import os
 import stat
 import tempfile
 import sys
+import errno
 from typing import Any, Dict, Iterable, Mapping, TYPE_CHECKING, cast
 from collections import deque
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
@@ -11208,12 +11209,27 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
     # Ensure client_order_id present for idempotency across retries
     if not order_args.get("client_order_id"):
+        client_order_id: str | None = None
         try:
-            from ai_trading.core.order_ids import generate_client_order_id as _gen_id
-
-            client_order_id = _gen_id("ai")
+            from ai_trading.core.order_ids import stable_client_order_id
         except Exception:
-            client_order_id = f"ai-{uuid.uuid4()}"
+            stable_client_order_id = None  # type: ignore[assignment]
+        else:
+            symbol_val = str(order_args.get("symbol", "") or "")
+            side_val = order_args.get("side", "")
+            side_str = getattr(side_val, "value", side_val)
+            epoch_minute = int(time.time() // 60)
+            try:
+                client_order_id = stable_client_order_id(symbol_val, str(side_str or ""), epoch_minute)
+            except Exception:
+                client_order_id = None
+        if not client_order_id:
+            try:
+                from ai_trading.core.order_ids import generate_client_order_id as _gen_id
+
+                client_order_id = _gen_id("ai")
+            except Exception:
+                client_order_id = f"ai-{uuid.uuid4()}"
         order_args["client_order_id"] = client_order_id
         ids_attr = getattr(api, "client_order_ids", None)
         appended = False
@@ -11273,7 +11289,59 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             )
             return _dummy_order("duplicate")
 
-    for attempt in range(2):
+    retry_schedule = {1: 0.5, 2: 1.0}
+    max_attempts = len(retry_schedule) + 1
+    fallback_delay = retry_schedule[max(retry_schedule)]
+    symbol_for_logs = order_args.get("symbol", "")
+
+    def _transient_reason(exc: Exception) -> tuple[bool, str]:
+        if isinstance(exc, TimeoutError):
+            return True, "timeout"
+        if isinstance(exc, ConnectionError):
+            err_no = getattr(exc, "errno", None)
+            if err_no == errno.ECONNRESET:
+                return True, "connection_reset"
+            return True, "connection_error"
+        if isinstance(exc, APIError):
+            for attr in ("status_code", "http_status", "status"):
+                status_val = getattr(exc, attr, None)
+                try:
+                    status_int = int(status_val)
+                except (TypeError, ValueError):
+                    continue
+                if 500 <= status_int < 600:
+                    return True, f"http_{status_int}"
+            detail = str(exc).lower()
+            if "server error" in detail or "timeout" in detail:
+                return True, "http_5xx"
+        return False, ""
+
+    def _schedule_retry(attempt_index: int, reason: str) -> None:
+        next_attempt = attempt_index + 1
+        base_delay = retry_schedule.get(attempt_index, fallback_delay)
+        jitter = random.uniform(0.0, base_delay * 0.25)
+        logger.info(
+            "ORDER_RETRY_SCHEDULED",
+            extra={
+                "attempt": next_attempt,
+                "reason": reason,
+                "symbol": symbol_for_logs,
+            },
+        )
+        time.sleep(base_delay + jitter)
+
+    def _log_give_up(reason: str, attempt_index: int) -> None:
+        logger.error(
+            "ORDER_RETRY_GAVE_UP",
+            extra={
+                "reason": reason,
+                "attempt": attempt_index,
+                "symbol": symbol_for_logs,
+            },
+        )
+
+    attempt = 1
+    while attempt <= max_attempts:
         try:
             try:
                 acct = api.get_account()
@@ -11341,6 +11409,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                         logger.warning(
                             f"Skipping {order_args.get('symbol')}, no available qty"
                         )
+                        attempt += 1
                         continue
                 else:
                     raise
@@ -11350,21 +11419,27 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     setattr(order, "client_order_id", order_args.get("client_order_id"))
                 except Exception:
                     pass
+            if getattr(order, "id", None) in (None, "", 0):
+                try:
+                    setattr(order, "id", order_args.get("client_order_id"))
+                except Exception:
+                    pass
 
-            start_ts = time.monotonic()
-            def _normalize_order_status(value: Any) -> str:
-                """Return a lowercase status string regardless of input type."""
-
-                if value is None:
-                    return ""
-                status_value = getattr(value, "value", value)
+            def _normalize_order_status(status_value: Any) -> str:
                 if isinstance(status_value, str):
                     return status_value.lower()
+                if hasattr(status_value, "value"):
+                    return str(getattr(status_value, "value", "")).lower()
+                if hasattr(status_value, "name"):
+                    return str(getattr(status_value, "name", "")).lower()
+                if isinstance(status_value, Enum):
+                    return str(status_value.value).lower()
                 try:
                     return str(status_value).lower()
                 except Exception:
                     return ""
 
+            start_ts = time.monotonic()
             pending_new_attr = getattr(OrderStatus, "PENDING_NEW", "pending_new")
             pending_new = _normalize_order_status(pending_new_attr)
             last_order = order
@@ -11438,7 +11513,6 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"order.{attr} must be numeric") from exc
                 if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    # Preserve integer semantics when the source is an int-like value.
                     if isinstance(val, int):
                         num = float(val)
                 setattr(o, attr, num)
@@ -11452,31 +11526,42 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                     f"insufficient qty available for {order_args.get('symbol')}: {e}"
                 )
                 return _dummy_order("insufficient_qty")
-            time.sleep(1)
-            if attempt == 1:
-                logger.error(
-                    "BROKER_OP_FAILED",
-                    extra={
-                        "cause": e.__class__.__name__,
-                        "detail": str(e),
-                        "op": "submit",
-                        "symbol": order_args.get("symbol", ""),
-                    },
-                )
-                raise
+            retryable, reason = _transient_reason(e)
+            if retryable and attempt < max_attempts:
+                _schedule_retry(attempt, reason or "api_error")
+                attempt += 1
+                continue
+            if retryable:
+                _log_give_up(reason or "api_error", attempt)
+            logger.error(
+                "BROKER_OP_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "op": "submit",
+                    "symbol": order_args.get("symbol", ""),
+                },
+            )
+            raise
         except (TimeoutError, ConnectionError) as e:
-            time.sleep(1)
-            if attempt == 1:
-                logger.error(
-                    "BROKER_OP_FAILED",
-                    extra={
-                        "cause": e.__class__.__name__,
-                        "detail": str(e),
-                        "op": "submit",
-                        "symbol": getattr(req, "symbol", ""),
-                    },
-                )
-                raise
+            retryable, reason = _transient_reason(e)
+            if retryable and attempt < max_attempts:
+                _schedule_retry(attempt, reason or e.__class__.__name__.lower())
+                attempt += 1
+                continue
+            if retryable:
+                _log_give_up(reason or e.__class__.__name__.lower(), attempt)
+            logger.error(
+                "BROKER_OP_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "op": "submit",
+                    "symbol": getattr(req, "symbol", ""),
+                },
+            )
+            raise
+        attempt += 1
     return _dummy_order("failed")
 
 
