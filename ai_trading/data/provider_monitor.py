@@ -67,9 +67,7 @@ class ProviderMonitor:
             else float(get_env("DATA_PROVIDER_BACKOFF_FACTOR", "2", cast=float))
         )
         self.max_cooldown = (
-            max_cooldown
-            if max_cooldown is not None
-            else int(get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int))
+            max_cooldown if max_cooldown is not None else int(get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int))
         )
         self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
 
@@ -133,7 +131,7 @@ class ProviderMonitor:
             diagnostics["exception_repr"] = repr(exception)
         disable_count = self.disable_counts.get(provider, 0)
         projected_cooldown = min(
-            self.cooldown * (self.backoff_factor ** disable_count),
+            self.cooldown * (self.backoff_factor**disable_count),
             self.max_cooldown,
         )
         diagnostics["projected_cooldown"] = projected_cooldown
@@ -304,6 +302,7 @@ class ProviderMonitor:
         provider_disable_total.labels(provider=provider).inc()
         try:
             from ai_trading.data.fetch.metrics import register_provider_disable
+
             register_provider_disable(provider)
         except Exception:  # pragma: no cover - defensive
             pass
@@ -323,9 +322,7 @@ class ProviderMonitor:
             try:
                 cb(timedelta(seconds=cooldown_s))
             except Exception:  # pragma: no cover - defensive
-                logger.exception(
-                    "PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider}
-                )
+                logger.exception("PROVIDER_DISABLE_CALLBACK_ERROR", extra={"provider": provider})
 
     def is_disabled(self, provider: str) -> bool:
         """Return ``True`` if ``provider`` is currently disabled."""
@@ -415,25 +412,29 @@ class ProviderMonitor:
                         state["consecutive_passes"] = 0
                         state["cooldown"] = cooldown_default
                         logger.info(
-                            "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s",
+                            "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
                             backup,
                             primary,
                             reason or "recovered",
+                            cooldown_seconds,
                         )
                         return primary
                     logger.info(
-                        "DATA_PROVIDER_STAY | provider=%s reason=cooldown_active",
+                        "DATA_PROVIDER_STAY | provider=%s reason=cooldown_active cooldown=%ss",
                         backup,
+                        cooldown_seconds,
                     )
                     return backup
                 logger.info(
-                    "DATA_PROVIDER_STAY | provider=%s reason=insufficient_health_passes",
+                    "DATA_PROVIDER_STAY | provider=%s reason=insufficient_health_passes cooldown=%ss",
                     backup,
+                    cooldown_default,
                 )
                 return backup
             logger.info(
-                "DATA_PROVIDER_STAY | provider=%s reason=healthy",
+                "DATA_PROVIDER_STAY | provider=%s reason=healthy cooldown=%ss",
                 active,
+                cooldown_default,
             )
             return active
 
@@ -444,15 +445,17 @@ class ProviderMonitor:
             state["last_switch"] = now
             state["cooldown"] = cooldown_default
             logger.info(
-                "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s",
+                "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
                 active,
                 backup,
                 reason or "unhealthy",
+                cooldown_default,
             )
             return backup
         logger.info(
-            "DATA_PROVIDER_STAY | provider=%s reason=unhealthy",
+            "DATA_PROVIDER_STAY | provider=%s reason=unhealthy cooldown=%ss",
             backup,
+            cooldown_default,
         )
         return backup
 

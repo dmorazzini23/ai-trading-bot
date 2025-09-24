@@ -25,6 +25,13 @@ logger = get_logger(__name__)
 PRICE_EPSILON = 1e-6
 
 
+def _fmt(value: float | None) -> str:
+    try:
+        return f"{float(value):.6f}"
+    except (TypeError, ValueError):
+        return "nan"
+
+
 class TrailingStopType(Enum):
     """Types of trailing stop algorithms."""
 
@@ -287,12 +294,11 @@ class TrailingStopManager:
             reference = stop_level.max_price_since_entry or max(stop_level.entry_price, current_price)
             candidate_value = float(candidate) if candidate is not None else reference * (1 - stop_level.trail_pct)
             limit = current_price * (1 - epsilon)
-            if candidate_value >= current_price:
-                desired = candidate_value
-            else:
-                desired = min(candidate_value, limit)
-                if desired <= 0:
-                    desired = limit
+            desired = min(candidate_value, limit)
+            if candidate_value >= current_price or desired <= 0:
+                desired = limit
+            if desired >= current_price:
+                desired = limit
             if stop_price <= 0 or stop_price >= current_price or stop_price > limit + epsilon:
                 stop_level.stop_price = desired
                 corrected = True
@@ -300,25 +306,26 @@ class TrailingStopManager:
             reference = stop_level.min_price_since_entry or min(stop_level.entry_price, current_price)
             candidate_value = float(candidate) if candidate is not None else reference * (1 + stop_level.trail_pct)
             limit = current_price * (1 + epsilon)
-            if candidate_value <= current_price:
-                desired = candidate_value
-            else:
-                desired = max(candidate_value, limit)
+            desired = max(candidate_value, limit)
+            if candidate_value <= current_price or desired <= current_price:
+                desired = limit
             if stop_price <= 0 or stop_price <= current_price or stop_price < limit - epsilon:
                 stop_level.stop_price = desired
                 corrected = True
         if corrected:
-            payload = {
-                "symbol": stop_level.symbol,
-                "side": stop_level.side,
-                "trail_pct": stop_level.trail_pct,
-                "stop_price": stop_level.stop_price,
-                "current_price": current_price,
-                "max_since_entry": stop_level.max_price_since_entry,
-                "min_since_entry": stop_level.min_price_since_entry,
-                "reason": "initialization" if was_init else "state_correction",
-            }
-            self.logger.info("TRAILING_STOP_CORRECTED", extra=payload)
+            segments = [
+                f"symbol={stop_level.symbol}",
+                f"side={stop_level.side}",
+                f"trail_pct={_fmt(stop_level.trail_pct)}",
+                f"stop_price={_fmt(stop_level.stop_price)}",
+                f"current_price={_fmt(current_price)}",
+            ]
+            if stop_level.side == "long":
+                segments.append(f"max_since_entry={_fmt(stop_level.max_price_since_entry)}")
+            else:
+                segments.append(f"min_since_entry={_fmt(stop_level.min_price_since_entry)}")
+            segments.append(f"reason={'initialization' if was_init else 'state_correction'}")
+            self.logger.info("TRAILING_STOP_CORRECTED | %s", " ".join(segments))
 
     def _calculate_initial_stop_distance(self, symbol: str) -> float:
         """Calculate initial stop distance based on volatility."""
@@ -450,19 +457,19 @@ class TrailingStopManager:
             if triggered:
                 stop_level.is_triggered = True
                 stop_level.trigger_reason = "price_crossed_stop"
-                payload = {
-                    "symbol": stop_level.symbol,
-                    "side": side,
-                    "trail_pct": stop_level.trail_pct,
-                    "stop_price": stop_price_val,
-                    "current_price": current_price,
-                    "reason": "price_crossed_stop",
-                }
+                segments = [
+                    f"symbol={stop_level.symbol}",
+                    f"side={side}",
+                    f"trail_pct={_fmt(stop_level.trail_pct)}",
+                    f"stop_used={_fmt(stop_price_val)}",
+                    f"current_price={_fmt(current_price)}",
+                    "reason=price_crossed_stop",
+                ]
                 if side == "long":
-                    payload["max_since_entry"] = stop_level.max_price_since_entry
+                    segments.append(f"max_since_entry={_fmt(stop_level.max_price_since_entry)}")
                 else:
-                    payload["min_since_entry"] = stop_level.min_price_since_entry
-                self.logger.warning("TRAILING_STOP_TRIGGERED", extra=payload)
+                    segments.append(f"min_since_entry={_fmt(stop_level.min_price_since_entry)}")
+                self.logger.warning("TRAILING_STOP_TRIGGERED | %s", " ".join(segments))
                 return True
             stop_level.is_triggered = False
             stop_level.trigger_reason = ""

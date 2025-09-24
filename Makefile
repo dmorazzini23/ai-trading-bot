@@ -36,6 +36,7 @@ ci-smoke: test-collect-report
 
 # Deterministic smoke: explicit test files, plugin autoload off
 smoke: tests-self
+	@$(PYTHON) -m ai_trading.util.env_check
 	@echo "== pytest (targeted) =="
 	pytest -q \
 		tests/test_cli_dry_run.py::test_cli_dry_run_exits_zero_and_marks_indicator \

@@ -603,10 +603,8 @@ class RiskEngine:
                 adaptive = float(self.global_limit)
 
         effective_cap = min(float(self.global_limit), adaptive)
-        available = effective_cap - total_exposure
-        if available <= 0:
-            return 0.0
-        return float(min(available, effective_cap))
+        available = max(0.0, effective_cap - total_exposure)
+        return float(available)
 
     def update_portfolio_metrics(self, returns: list[float] | None = None, drawdown: float | None = None) -> None:
         if not self.enable_portfolio_features:
