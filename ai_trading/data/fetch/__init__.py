@@ -603,10 +603,44 @@ def _window_has_trading_session(start: _dt.datetime, end: _dt.datetime) -> bool:
     return False
 
 
+_ALPACA_CREDS_CACHE: tuple[bool, float] | None = None
+_ALPACA_CREDS_TTL_SECONDS = 120.0
+
+
 def _has_alpaca_keys() -> bool:
-    """Return True if Alpaca API credentials appear configured."""
+    """Return True if Alpaca API credentials appear configured.
+
+    The detection prefers cached TradingConfig-derived credentials to avoid
+    false negatives when environment aliases differ between trading and data
+    subsystems. Results are memoized briefly to avoid repeated config reloads.
+    """
+
+    global _ALPACA_CREDS_CACHE
+    now = time.monotonic()
+    if _ALPACA_CREDS_CACHE is not None:
+        cached_value, cached_ts = _ALPACA_CREDS_CACHE
+        if now - cached_ts < _ALPACA_CREDS_TTL_SECONDS:
+            return cached_value
+
     has_key, has_secret = alpaca_credential_status()
-    return has_key and has_secret
+    if has_key and has_secret:
+        _ALPACA_CREDS_CACHE = (True, now)
+        return True
+
+    resolved = False
+    try:
+        from ai_trading.config.management import TradingConfig
+
+        cfg = TradingConfig.from_env(allow_missing_drawdown=True)
+    except Exception:
+        cfg = None
+    if cfg is not None:
+        key = getattr(cfg, "alpaca_api_key", None)
+        secret = getattr(cfg, "alpaca_secret_key", None)
+        resolved = bool(key) and bool(secret)
+
+    _ALPACA_CREDS_CACHE = (resolved, now)
+    return resolved
 
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
@@ -1357,8 +1391,14 @@ def _repair_rth_minute_gaps(
                     work_df = pd_local.concat([work_df, needed])
                     work_df = work_df[~work_df.index.duplicated(keep="last")]
                     work_df.sort_index(inplace=True)
-    work_df = work_df.reset_index()
-    work_df.rename(columns={"timestamp": "timestamp"}, inplace=True)
+    if isinstance(work_df.index, pd_local.DatetimeIndex):
+        if "timestamp" in work_df.columns:
+            work_df = work_df.drop(columns=["timestamp"], errors="ignore")
+        work_df = work_df.reset_index()
+        if "index" in work_df.columns and "timestamp" not in work_df.columns:
+            work_df.rename(columns={"index": "timestamp"}, inplace=True)
+    else:
+        work_df = work_df.reset_index()
     try:
         combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
     except Exception:
@@ -3488,7 +3528,24 @@ def get_minute_df(
             _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
-    df = _post_process(original_df, symbol=symbol, timeframe="1Min")
+    try:
+        df = _post_process(original_df, symbol=symbol, timeframe="1Min")
+    except DataFetchError as exc:
+        if used_backup:
+            logger.warning(
+                "YAHOO_PRICES_MISSING",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": "1Min",
+                    "detail": str(exc),
+                },
+            )
+            err = EmptyBarsError(
+                f"empty_bars: symbol={symbol}, timeframe=1Min, provider=yahoo"
+            )
+            setattr(err, "fetch_reason", getattr(exc, "fetch_reason", "ohlcv_columns_missing"))
+            raise err from exc
+        raise
     if df is None:
         if allow_empty_return:
             if used_backup and not fallback_logged:
@@ -3565,6 +3622,11 @@ def get_minute_df(
                 return original_df if original_df is not None else df
             return df
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
+    if used_backup and (df is None or getattr(df, "empty", False)):
+        logger.warning(
+            "YAHOO_PRICES_MISSING",
+            extra={"symbol": symbol, "timeframe": "1Min", "detail": "empty_frame"},
+        )
     if not success_marked:
         mark_success(symbol, "1Min")
         success_marked = True
