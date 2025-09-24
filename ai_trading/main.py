@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import copy
 import os
 import threading
 import time
@@ -12,6 +13,7 @@ from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import importlib.util
+from typing import Any, Callable, Tuple
 from ai_trading.env import ensure_dotenv_loaded
 
 # Ensure environment variables are loaded before any logging configuration
@@ -51,6 +53,10 @@ _logging.configure_logging(log_file=LOG_FILE)
 logger = _logging.get_logger(__name__)
 
 _STARTUP_PENDING_RECONCILED = False
+_RUNTIME_CACHE_LOCK = threading.Lock()
+_STATE_CACHE: Any | None = None
+_RUNTIME_CACHE: Any | None = None
+_RUNTIME_CFG_SNAPSHOT: dict[str, Any] | None = None
 
 # Detect Alpaca SDK availability without importing heavy modules
 def _safe_find_spec(module_name: str):
@@ -84,6 +90,56 @@ from ai_trading.config.management import (
 )
 from ai_trading.metrics import get_histogram, get_counter
 from time import monotonic as _mono
+
+
+def _config_snapshot(cfg: Any) -> dict[str, Any]:
+    """Return a deep-copied snapshot of config values for cache comparison."""
+
+    try:
+        return copy.deepcopy(cfg.to_dict())
+    except Exception:  # pragma: no cover - defensive fallback
+        return {"__repr__": repr(cfg)}
+
+
+def _resolve_cached_context(
+    cfg: Any,
+    state_factory: Callable[[], Any],
+    runtime_builder: Callable[[Any], Any],
+) -> Tuple[Any, Any, bool]:
+    """Return cached bot state/runtime or rebuild them when config changes."""
+
+    global _STATE_CACHE, _RUNTIME_CACHE, _RUNTIME_CFG_SNAPSHOT
+
+    snapshot = _config_snapshot(cfg)
+
+    with _RUNTIME_CACHE_LOCK:
+        cached_state = _STATE_CACHE
+        cached_runtime = _RUNTIME_CACHE
+        if (
+            cached_state is None
+            or cached_runtime is None
+            or _RUNTIME_CFG_SNAPSHOT != snapshot
+        ):
+            state = state_factory()
+            runtime = runtime_builder(cfg)
+            try:
+                runtime.cfg = cfg
+            except Exception:  # pragma: no cover - runtime without cfg attribute
+                pass
+            _STATE_CACHE = state
+            _RUNTIME_CACHE = runtime
+            _RUNTIME_CFG_SNAPSHOT = snapshot
+            reused = False
+        else:
+            state = cached_state
+            runtime = cached_runtime
+            try:
+                runtime.cfg = cfg
+            except Exception:  # pragma: no cover - runtime without cfg attribute
+                pass
+            reused = True
+
+    return state, runtime, reused
 
 
 def preflight_import_health() -> None:
@@ -202,7 +258,6 @@ def run_cycle() -> None:
         _interruptible_sleep(5.0)
         return
 
-    state = BotState()
     cfg = TradingConfig.from_env()
 
     # Carry through a pre-resolved max position size if available on Settings.
@@ -217,10 +272,10 @@ def run_cycle() -> None:
             except Exception:  # pragma: no cover - defensive
                 pass
 
-    runtime = build_runtime(cfg)
+    state, runtime, _ = _resolve_cached_context(cfg, BotState, build_runtime)
 
     lazy_ctx = get_ctx()
-    if hasattr(state, "ctx") and state.ctx is None:
+    if hasattr(state, "ctx") and getattr(state, "ctx", None) is None:
         state.ctx = lazy_ctx
     runtime = enhance_runtime_with_context(runtime, lazy_ctx)
 
@@ -348,9 +403,6 @@ def optimize_memory():
     from ai_trading.utils import memory_optimizer
 
     return memory_optimizer.report_memory_use()
-
-
-from typing import Any
 
 
 class PortInUseError(RuntimeError):
