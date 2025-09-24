@@ -1026,21 +1026,81 @@ class ExecutionEngine:
             )
             raise
 
+        client_order_id = order_data.get("client_order_id")
+        fallback_id = client_order_id or f"alpaca-pending-{int(time.time() * 1000)}"
+
+        if not resp:
+            logger.warning(
+                "ORDER_SUBMIT_EMPTY_RESPONSE",
+                extra={
+                    "symbol": order_data.get("symbol"),
+                    "qty": order_data.get("quantity"),
+                    "side": order_data.get("side"),
+                    "type": order_data.get("type"),
+                    "client_order_id": client_order_id,
+                },
+            )
+            return {
+                "id": str(fallback_id),
+                "client_order_id": client_order_id or str(fallback_id),
+                "status": "accepted",
+                "symbol": order_data["symbol"],
+                "qty": order_data["quantity"],
+                "limit_price": order_data.get("limit_price"),
+                "raw": None,
+            }
+
         status = getattr(resp, "status", None)
+        if isinstance(resp, dict):
+            status = resp.get("status", status)
         if hasattr(status, "value"):
             status = status.value
         elif status is not None:
             status = str(status)
 
+        if isinstance(resp, dict):
+            resp_id = str(resp.get("id", ""))
+            resp_client_id = resp.get("client_order_id", client_order_id)
+            resp_symbol = resp.get("symbol", order_data["symbol"])
+            resp_qty = resp.get("qty", order_data["quantity"])
+            resp_limit = resp.get("limit_price", order_data.get("limit_price"))
+            raw_payload = resp
+        else:
+            resp_id = str(getattr(resp, "id", ""))
+            resp_client_id = getattr(resp, "client_order_id", client_order_id)
+            resp_symbol = getattr(resp, "symbol", order_data["symbol"])
+            resp_qty = getattr(resp, "qty", order_data["quantity"])
+            resp_limit = getattr(resp, "limit_price", order_data.get("limit_price"))
+            raw_payload = getattr(resp, "__dict__", None) or resp
+
         normalized = {
-            "id": str(getattr(resp, "id", "")),
-            "client_order_id": getattr(resp, "client_order_id", order_data.get("client_order_id")),
+            "id": resp_id,
+            "client_order_id": resp_client_id,
             "status": status,
-            "symbol": getattr(resp, "symbol", order_data["symbol"]),
-            "qty": getattr(resp, "qty", order_data["quantity"]),
-            "limit_price": getattr(resp, "limit_price", order_data.get("limit_price")),
-            "raw": getattr(resp, "__dict__", None) or resp,
+            "symbol": resp_symbol,
+            "qty": resp_qty,
+            "limit_price": resp_limit,
+            "raw": raw_payload,
         }
+
+        if not normalized["id"]:
+            preferred = normalized.get("client_order_id") or client_order_id
+            normalized["id"] = str(preferred or fallback_id)
+            if not normalized["client_order_id"] and preferred is None:
+                normalized["client_order_id"] = str(fallback_id)
+            if not normalized.get("status"):
+                normalized["status"] = "accepted"
+            logger.warning(
+                "ORDER_SUBMIT_MISSING_ID",
+                extra={
+                    "symbol": normalized.get("symbol"),
+                    "qty": normalized.get("qty"),
+                    "side": order_data.get("side"),
+                    "type": order_data.get("type"),
+                    "client_order_id": normalized.get("client_order_id"),
+                },
+            )
+
         logger.debug(
             "ORDER_SUBMIT_OK",
             extra={
