@@ -1039,7 +1039,12 @@ def _flatten_and_normalize_ohlcv(
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
     normalize_ohlcv_columns(df)
 
-    if "close" not in df.columns and "adj_close" in df.columns:
+    timeframe_norm = str(timeframe or "").lower()
+    is_daily = "day" in timeframe_norm or timeframe_norm.endswith("d")
+    if is_daily:
+        if "adj_close" in df.columns:
+            df["close"] = df["adj_close"]
+    elif "close" not in df.columns and "adj_close" in df.columns:
         df["close"] = df["adj_close"]
 
     required = ["open", "high", "low", "close", "volume"]
@@ -1185,12 +1190,35 @@ def _flatten_and_normalize_ohlcv(
     return df_out
 
 
+def _set_price_reliability(
+    df: pd.DataFrame,
+    *,
+    reliable: bool,
+    reason: str | None = None,
+) -> None:
+    try:
+        attrs = getattr(df, "attrs", None)
+        if not isinstance(attrs, dict):
+            return
+        attrs["price_reliable"] = bool(reliable)
+        if reason:
+            attrs["price_reliable_reason"] = str(reason)
+        else:
+            attrs.pop("price_reliable_reason", None)
+    except Exception:
+        pass
+
+
 def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Return a DataFrame with a tz-aware 'timestamp' column between start and end."""
     pd = _ensure_pandas()
     yf = _ensure_yfinance()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    if str(interval).lower() in {"1m", "1min", "1minute"}:
+        safe_end = datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
+        if end_dt > safe_end:
+            end_dt = max(start_dt, safe_end)
     window_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
     if pd is None:
         return []  # type: ignore[return-value]
@@ -1931,6 +1959,10 @@ def _fetch_bars(
     # Normalize timestamps to the minute to avoid querying empty slices
     _start = _start.replace(second=0, microsecond=0)
     _end = _end.replace(second=0, microsecond=0)
+    if _canon_tf(timeframe) == "1Min":
+        last_complete_minute = datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
+        if _end > last_complete_minute:
+            _end = max(_start, last_complete_minute)
     session = _HTTP_SESSION
     if session is None or not hasattr(session, "get"):
         raise ValueError("session_required")
@@ -3312,6 +3344,9 @@ def get_minute_df(
     pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    last_complete_minute = datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
+    if end_dt > last_complete_minute:
+        end_dt = max(start_dt, last_complete_minute)
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
@@ -3783,6 +3818,32 @@ def get_minute_df(
             healthy=gap_ratio <= max_gap_ratio,
             reason=f"gap_ratio={gap_ratio * 100:.2f}%",
         )
+    try:
+        settings_obj = get_settings()
+    except Exception:
+        settings_obj = None
+    gap_limit = None
+    if settings_obj is not None:
+        try:
+            data_settings = getattr(settings_obj, "data", None)
+            if data_settings is not None:
+                candidate = getattr(data_settings, "max_gap_ratio_intraday", None)
+                if candidate is not None:
+                    gap_limit = max(float(candidate), 0.0)
+        except Exception:
+            gap_limit = None
+    if gap_limit is None:
+        gap_limit = max_gap_ratio
+    price_reliable = True
+    unreliable_reason: str | None = None
+    try:
+        ratio_value = float(gap_ratio)
+    except (TypeError, ValueError):
+        ratio_value = 0.0
+    if ratio_value > gap_limit:
+        price_reliable = False
+        unreliable_reason = f"gap_ratio={ratio_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+    _set_price_reliability(df, reliable=price_reliable, reason=unreliable_reason)
     if df is None or getattr(df, "empty", False):
         if allow_empty_return:
             if used_backup and not fallback_logged:

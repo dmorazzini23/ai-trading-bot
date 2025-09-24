@@ -5,6 +5,7 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from types import SimpleNamespace
 import os
 import sys
 from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
@@ -446,6 +447,13 @@ class Settings(BaseSettings):
     @property
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=_to_int(getattr(self, "trade_cooldown_min", 15), 15))
+
+    @computed_field
+    @property
+    def data(self) -> SimpleNamespace:
+        ratio_bps = _to_float(getattr(self, "data_max_gap_ratio_bps", 50.0), 50.0)
+        ratio = max(float(ratio_bps) / 10000.0, 0.0)
+        return SimpleNamespace(max_gap_ratio_intraday=ratio)
 
     @property
     def data_feed(self) -> Literal["iex", "sip"]:
