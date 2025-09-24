@@ -7,6 +7,7 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 
 import inspect
 import os
+import random
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,6 +23,7 @@ from ai_trading.utils.env import (
     get_alpaca_base_url,
     get_alpaca_creds,
 )
+from ai_trading.utils.ids import stable_client_order_id
 
 try:  # pragma: no cover - optional dependency
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -445,6 +447,13 @@ def _pos_num(name: str, v) -> float:
     return x
 
 
+def _stable_order_id(symbol: str, side: str) -> str:
+    """Return a stable client order id for the current trading minute."""
+
+    epoch_min = int(datetime.now(UTC).timestamp() // 60)
+    return stable_client_order_id(str(symbol), str(side).lower(), epoch_min)
+
+
 def submit_market_order(symbol: str, side: str, quantity: int):
     symbol = str(symbol)
     if not symbol or len(symbol) > 5 or (not symbol.isalpha()):
@@ -685,7 +694,7 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
-        client_order_id = kwargs.get("client_order_id", f"order_{int(time.time())}")
+        client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
             "side": side.lower(),
@@ -832,7 +841,7 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
-        client_order_id = kwargs.get("client_order_id", f"order_{int(time.time())}")
+        client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
             "side": side.lower(),
@@ -1325,36 +1334,81 @@ class ExecutionEngine:
         return None
 
     def _execute_with_retry(self, func, *args, **kwargs):
-        """Execute function with exponential backoff retry logic."""
-        attempt = 0
-        delay = self.retry_config["base_delay"]
-        while attempt < self.retry_config["max_attempts"]:
+        """Execute a callable with bounded retries for transient failures."""
+
+        backoffs = [0.5, 1.0]
+        max_attempts = len(backoffs) + 1
+
+        for attempt_index in range(max_attempts):
             try:
                 result = func(*args, **kwargs)
+            except (APIError, TimeoutError, ConnectionError) as exc:
+                if isinstance(exc, APIError):
+                    nonretryable = self._handle_nonretryable_api_error(exc, *args, **kwargs)
+                    if nonretryable:
+                        raise nonretryable
+
+                reason = self._classify_retry_reason(exc)
+                if reason is None:
+                    raise
+
+                if attempt_index >= len(backoffs):
+                    logger.error(
+                        "ORDER_RETRY_GAVE_UP",
+                        extra={"reason": reason, "func": func.__name__},
+                    )
+                    self._handle_execution_failure(exc)
+                    raise
+
+                delay = backoffs[attempt_index]
+                jitter = random.uniform(0.0, max(delay * 0.25, 0.0))
+                sleep_for = delay + jitter
+
+                self.stats["retry_count"] += 1
+                logger.warning(
+                    "ORDER_RETRY_SCHEDULED",
+                    extra={
+                        "attempt": attempt_index + 2,
+                        "reason": reason,
+                        "delay": round(sleep_for, 3),
+                        "func": func.__name__,
+                    },
+                )
+                time.sleep(sleep_for)
+            else:
                 self.circuit_breaker["failure_count"] = 0
                 self.circuit_breaker["is_open"] = False
                 self.circuit_breaker["last_failure"] = None
                 return result
-            except (APIError, TimeoutError, ConnectionError) as e:
-                if isinstance(e, APIError):
-                    nonretryable = self._handle_nonretryable_api_error(e, *args, **kwargs)
-                    if nonretryable:
-                        raise nonretryable
-                attempt += 1
-                self.stats["retry_count"] += 1
-                if attempt >= self.retry_config["max_attempts"]:
-                    logger.error(
-                        "RETRY_MAX_ATTEMPTS",
-                        extra={"cause": e.__class__.__name__, "detail": str(e), "func": func.__name__},
-                    )
-                    self._handle_execution_failure(e)
-                    raise
-                logger.warning(
-                    "RETRY_ATTEMPT_FAILED",
-                    extra={"cause": e.__class__.__name__, "detail": str(e), "func": func.__name__, "attempt": attempt},
-                )
-                time.sleep(delay)
-                delay = min(delay * self.retry_config["exponential_base"], self.retry_config["max_delay"])
+
+        return None
+
+    def _classify_retry_reason(self, exc: Exception) -> str | None:
+        """Return a retry reason string when the error is transient."""
+
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+
+        if isinstance(exc, APIError):
+            status = getattr(exc, "status_code", None)
+            try:
+                status_int = int(status) if status is not None else None
+            except (TypeError, ValueError):
+                status_int = None
+            if status_int is not None and 500 <= status_int < 600:
+                return f"status_{status_int}"
+
+        if isinstance(exc, ConnectionResetError):
+            return "connection_reset"
+
+        if isinstance(exc, ConnectionError):
+            errno = getattr(exc, "errno", None)
+            if isinstance(errno, int) and errno in {54, 104, 10053, 10054}:
+                return "connection_reset"
+            message = str(exc).lower()
+            if "connection reset" in message or "reset by peer" in message:
+                return "connection_reset"
+
         return None
 
     def _handle_execution_failure(self, error: Exception):
