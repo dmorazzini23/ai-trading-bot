@@ -54,6 +54,35 @@ except ImportError:  # pragma: no cover - fallback when urllib3 missing
 
 
 from ai_trading.exc import TRANSIENT_HTTP_EXC, JSONDecodeError, RequestException
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Return ``value`` without trailing comments introduced with ``#``."""
+
+    for idx, ch in enumerate(value):
+        if ch == "#" and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
+    return value.rstrip()
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(_strip_inline_comment(raw))
+    except Exception:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(_strip_inline_comment(raw))
+    except Exception:
+        return default
 from ai_trading.logging import get_logger
 from ai_trading.utils.retry import retry_call
 from .timing import clamp_timeout, sleep
@@ -62,9 +91,9 @@ _log = get_logger(__name__)
 _session = None
 _session_lock = threading.Lock()
 _pool_stats = {
-    "workers": int(os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", "8"))),
-    "per_host": int(os.getenv("HTTP_MAX_PER_HOST", "6")),
-    "pool_maxsize": 32,
+    "workers": _int_env("HTTP_POOL_WORKERS", _int_env("HTTP_MAX_WORKERS", 8)),
+    "per_host": _int_env("HTTP_MAX_PER_HOST", 6),
+    "pool_maxsize": _int_env("HTTP_POOL_MAXSIZE", 32),
     "requests": 0,
     "responses": 0,
     "errors": 0,
@@ -115,9 +144,10 @@ if REQUESTS_AVAILABLE:
             if timeout is None:
                 timeout = _get_session_timeout()
             self._timeout = clamp_request_timeout(timeout)
-            _pool_stats["per_host"] = int(os.getenv("HTTP_MAX_PER_HOST", str(_pool_stats["per_host"])))
-            _pool_stats["workers"] = int(
-                os.getenv("HTTP_POOL_WORKERS", os.getenv("HTTP_MAX_WORKERS", str(_pool_stats["workers"])))
+            _pool_stats["per_host"] = _int_env("HTTP_MAX_PER_HOST", _pool_stats["per_host"])
+            _pool_stats["workers"] = _int_env(
+                "HTTP_POOL_WORKERS",
+                _int_env("HTTP_MAX_WORKERS", _pool_stats["workers"]),
             )
             retries = Retry(
                 total=3,
