@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Callable, Dict, Tuple
 
 from ai_trading.config.management import get_env
-from ai_trading.logging import get_logger
+from ai_trading.logging import LogDeduper, dedupe_ttl_s, get_logger
 from ai_trading.monitoring.alerts import AlertManager, AlertSeverity, AlertType
 from ai_trading.data.metrics import (
     provider_disabled,
@@ -279,24 +279,28 @@ class ProviderMonitor:
             and self._last_switch_ts is not None
             and now_monotonic - self._last_switch_ts < 1.0
         ):
-            logger.info(
-                "DATA_PROVIDER_SWITCHOVER",
-                extra={
-                    "from_provider": from_key,
-                    "to_provider": to_key,
-                    "count": self.switch_counts[key],
-                },
-            )
+            dedupe_key = ":".join(("DATA_PROVIDER_SWITCHOVER", from_key, to_key))
+            if LogDeduper.should_log(dedupe_key, dedupe_ttl_s):
+                logger.info(
+                    "DATA_PROVIDER_SWITCHOVER",
+                    extra={
+                        "from_provider": from_key,
+                        "to_provider": to_key,
+                        "count": self.switch_counts[key],
+                    },
+                )
             self._last_switch_logged = key
             self._last_switch_ts = now_monotonic
         disabled_since = self.disabled_since.get(from_key)
         if disabled_since:
             duration = (now - disabled_since).total_seconds()
             provider_failure_duration_seconds.labels(provider=from_key).inc(duration)
-            logger.info(
-                "DATA_PROVIDER_FAILURE_DURATION",
-                extra={"provider": from_key, "duration": duration},
-            )
+            duration_key = ":".join(("DATA_PROVIDER_FAILURE_DURATION", from_key))
+            if LogDeduper.should_log(duration_key, dedupe_ttl_s):
+                logger.info(
+                    "DATA_PROVIDER_FAILURE_DURATION",
+                    extra={"provider": from_key, "duration": duration},
+                )
         cooldown_until = self._alert_cooldown_until.get(from_key)
         if streak >= self.switchover_threshold and (cooldown_until is None or now >= cooldown_until):
             logger.warning(
@@ -457,13 +461,22 @@ class ProviderMonitor:
                         state["last_switch"] = now
                         state["consecutive_passes"] = 0
                         state["cooldown"] = cooldown_default
-                        logger.info(
-                            "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                            backup,
-                            primary,
-                            reason or "recovered",
-                            cooldown_seconds,
+                        recovery_key = ":".join(
+                            (
+                                "DATA_PROVIDER_SWITCHOVER",
+                                backup,
+                                primary,
+                                str(reason or "recovered"),
+                            )
                         )
+                        if LogDeduper.should_log(recovery_key, dedupe_ttl_s):
+                            logger.info(
+                                "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
+                                backup,
+                                primary,
+                                reason or "recovered",
+                                cooldown_seconds,
+                            )
                         return primary
                     logger.info(
                         "DATA_PROVIDER_STAY | provider=%s reason=cooldown_active cooldown=%ss",
@@ -490,13 +503,22 @@ class ProviderMonitor:
             state["active"] = backup
             state["last_switch"] = now
             state["cooldown"] = cooldown_default
-            logger.info(
-                "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                active,
-                backup,
-                reason or "unhealthy",
-                cooldown_default,
+            switchover_key = ":".join(
+                (
+                    "DATA_PROVIDER_SWITCHOVER",
+                    active,
+                    backup,
+                    str(reason or "unhealthy"),
+                )
             )
+            if LogDeduper.should_log(switchover_key, dedupe_ttl_s):
+                logger.info(
+                    "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
+                    active,
+                    backup,
+                    reason or "unhealthy",
+                    cooldown_default,
+                )
             return backup
         logger.info(
             "DATA_PROVIDER_STAY | provider=%s reason=unhealthy cooldown=%ss",

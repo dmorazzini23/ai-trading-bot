@@ -19,6 +19,8 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import (
+    LogDeduper,
+    dedupe_ttl_s,
     log_backup_provider_used,
     log_empty_retries_exhausted,
     log_fetch_attempt,
@@ -1353,9 +1355,17 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     if normalized == "yahoo":
         _, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         key = (str(symbol).upper(), str(interval))
-        if key not in bucket:
+        bucket.add(key)
+        dedupe_key = ":".join(
+            (
+                "USING_BACKUP_PROVIDER",
+                normalized or provider_str,
+                str(symbol).upper(),
+                str(interval),
+            )
+        )
+        if LogDeduper.should_log(dedupe_key, dedupe_ttl_s):
             logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
-            bucket.add(key)
         df = _yahoo_get_bars(symbol, start, end, interval)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     pd_local = _ensure_pandas()

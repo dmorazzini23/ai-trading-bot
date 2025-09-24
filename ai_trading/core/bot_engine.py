@@ -87,7 +87,7 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
-from ai_trading.logging import logger_once
+from ai_trading.logging import LogDeduper, logger_once
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
     AlpacaOrderHTTPError,
@@ -1209,6 +1209,7 @@ def _reset_cycle_cache() -> None:
     now = datetime.now(timezone.utc)
     _GLOBAL_CYCLE_ID = int(now.timestamp())
     _GLOBAL_INTRADAY_FALLBACK_FEED = None
+    LogDeduper.begin_cycle(_GLOBAL_CYCLE_ID)
 
 
 def _prefer_feed_this_cycle() -> str | None:
@@ -17587,6 +17588,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             _log_loop_heartbeat(loop_id, loop_start)
 
             _check_runtime_stops(runtime)
+
+            LogDeduper.emit_summaries(logger)
 
             # AI-AGENT-REF: Perform memory cleanup after trading cycle
             if MEMORY_OPTIMIZATION_AVAILABLE:

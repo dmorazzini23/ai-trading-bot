@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
@@ -695,6 +696,135 @@ logger = SanitizingLoggerAdapter(logging.getLogger(__name__), {})
 logger_once = EmitOnceLogger(logger)
 
 
+def _resolve_dedupe_ttl(default: float = 60.0) -> float:
+    """Return the log dedupe TTL from configuration with sensible defaults."""
+
+    raw = os.getenv("LOG_DEDUPE_TTL_SECONDS")
+    if raw is None:
+        return default
+    try:
+        ttl = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(ttl, 0.0)
+
+
+dedupe_ttl_s: float = _resolve_dedupe_ttl()
+
+
+@dataclass
+class _DeduperEntry:
+    last_emit: float
+    cycle_id: str | None
+
+
+class LogDeduper:
+    """In-memory guard to suppress noisy provider churn logs per cycle."""
+
+    _lock: threading.Lock = threading.Lock()
+    _entries: dict[str, _DeduperEntry] = {}
+    _suppressed_by_message: dict[str, int] = {}
+    _current_cycle_id: str | None = None
+    default_ttl_s: float = dedupe_ttl_s
+
+    @staticmethod
+    def _now() -> float:
+        return time.monotonic()
+
+    @staticmethod
+    def _extract_message(key: str) -> str:
+        if not key:
+            return ""
+        return key.split(":", 1)[0]
+
+    @classmethod
+    def _normalize_ttl(cls, ttl: float | int | None) -> float:
+        if ttl is None:
+            return max(cls.default_ttl_s, 0.0)
+        try:
+            value = float(ttl)
+        except (TypeError, ValueError):
+            return max(cls.default_ttl_s, 0.0)
+        return max(value, 0.0)
+
+    @classmethod
+    def reset(cls) -> None:
+        """Clear all dedupe state (primarily for tests)."""
+
+        with cls._lock:
+            cls._entries.clear()
+            cls._suppressed_by_message.clear()
+            cls._current_cycle_id = None
+
+    @classmethod
+    def begin_cycle(cls, cycle_id: int | str | None) -> None:
+        """Mark the start of a new trading cycle."""
+
+        with cls._lock:
+            cls._current_cycle_id = None if cycle_id is None else str(cycle_id)
+
+    @classmethod
+    def record_suppressed(cls, message: str, count: int = 1) -> None:
+        """Record an externally-suppressed occurrence for summary logging."""
+
+        if count <= 0 or not message:
+            return
+        with cls._lock:
+            cls._suppressed_by_message[message] = cls._suppressed_by_message.get(message, 0) + count
+
+    @classmethod
+    def should_log(cls, key: str, ttl: float | int | None) -> bool:
+        """Return ``True`` when ``key`` should emit within the TTL window."""
+
+        if not key:
+            return True
+
+        ttl_value = cls._normalize_ttl(ttl)
+        now = cls._now()
+        message = cls._extract_message(key)
+
+        with cls._lock:
+            entry = cls._entries.get(key)
+            current_cycle = cls._current_cycle_id
+
+            if entry is None:
+                cls._entries[key] = _DeduperEntry(last_emit=now, cycle_id=current_cycle)
+                return True
+
+            if current_cycle is not None and entry.cycle_id != current_cycle:
+                entry.last_emit = now
+                entry.cycle_id = current_cycle
+                return True
+
+            if ttl_value <= 0:
+                entry.last_emit = now
+                entry.cycle_id = current_cycle
+                return True
+
+            if now - entry.last_emit >= ttl_value:
+                entry.last_emit = now
+                entry.cycle_id = current_cycle
+                return True
+
+            cls._suppressed_by_message[message] = cls._suppressed_by_message.get(message, 0) + 1
+            return False
+
+    @classmethod
+    def emit_summaries(cls, logger: logging.Logger | None = None) -> None:
+        """Log throttling summaries for suppressed messages in the active cycle."""
+
+        with cls._lock:
+            items = [(msg, count) for msg, count in cls._suppressed_by_message.items() if count > 0]
+            cls._suppressed_by_message.clear()
+
+        if not items:
+            return
+
+        target = logger or logging.getLogger("ai_trading")
+        for message, count in items:
+            target.info('LOG_THROTTLE_SUMMARY | message="%s" suppressed=%d', message, count)
+
+
 def log_compact_json(*_a: Any, **_k: Any) -> None:  # pragma: no cover - stub
     """Stub to avoid ``AttributeError`` when compact JSON logging is disabled."""
     return None
@@ -1262,6 +1392,8 @@ __all__ = [
     "warn_finnhub_disabled_no_data",
     "log_compact_json",
     "log_market_fetch",
+    "LogDeduper",
+    "dedupe_ttl_s",
     "setup_enhanced_logging",
     "validate_logging_setup",
     "dedupe_stream_handlers",
