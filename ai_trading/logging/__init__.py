@@ -159,20 +159,27 @@ class MessageThrottleFilter(logging.Filter):
             try:
                 return max(float(value), 0.0)
             except (TypeError, ValueError):
-                return 0.5
+                return 5.0
+
+        raw_seconds = os.getenv("LOG_TIMING_THROTTLE_SECONDS")
+        if raw_seconds is not None:
+            try:
+                return max(float(raw_seconds), 0.0)
+            except (TypeError, ValueError):
+                return 5.0
 
         raw_ms = os.getenv("LOG_TIMING_THROTTLE_MS")
         if raw_ms is not None:
             try:
                 return max(float(raw_ms) / 1000.0, 0.0)
             except (TypeError, ValueError):
-                return 0.5
+                return 5.0
 
-        raw_seconds = os.getenv("LOG_THROTTLE_SECONDS")
+        raw_seconds_legacy = os.getenv("LOG_THROTTLE_SECONDS")
         try:
-            return max(float(raw_seconds), 0.0) if raw_seconds is not None else 0.5
+            return max(float(raw_seconds_legacy), 0.0) if raw_seconds_legacy is not None else 5.0
         except (TypeError, ValueError):
-            return 0.5
+            return 5.0
 
     def _now(self) -> float:
         return time.monotonic()

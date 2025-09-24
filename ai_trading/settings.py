@@ -170,7 +170,7 @@ class Settings(BaseSettings):
     longest_intraday_indicator_minutes: int = Field(200, alias="LONGEST_INTRADAY_INDICATOR_MINUTES")
     minute_gap_backfill: str | None = Field("auto", alias="MINUTE_GAP_BACKFILL")
     data_max_gap_ratio_bps: float = Field(
-        default=5.0,
+        default=50.0,
         env="DATA_MAX_GAP_RATIO_BPS",
         validation_alias=AliasChoices("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"),
     )
@@ -179,13 +179,26 @@ class Settings(BaseSettings):
         env="DATA_COOLDOWN_SECONDS",
     )
     price_slippage_bps: float = Field(
-        default=2.0,
+        default=10.0,
         env="PRICE_SLIPPAGE_BPS",
         validation_alias=AliasChoices("PRICE_SLIPPAGE_BPS", "SLIPPAGE_BPS"),
     )
-    log_timing_throttle_ms: int = Field(
-        default=500,
-        env="LOG_TIMING_THROTTLE_MS",
+    log_timing_throttle_seconds: float = Field(
+        default=5.0,
+        env="LOG_TIMING_THROTTLE_SECONDS",
+        validation_alias=AliasChoices(
+            "LOG_TIMING_THROTTLE_SECONDS",
+            "LOG_TIMING_THROTTLE_MS",
+            "LOG_THROTTLE_SECONDS",
+        ),
+    )
+    allocator_eps: float = Field(
+        default=1e-6,
+        env="ALLOCATOR_EPS",
+    )
+    meta_sync_from_broker: bool = Field(
+        default=True,
+        env="META_SYNC_FROM_BROKER",
     )
     env_import_guard: bool = Field(
         default=True,

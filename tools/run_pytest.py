@@ -13,6 +13,9 @@ import sys
 from pathlib import Path
 
 
+_IMPORT_SANITY_FLAG = "AI_TRADING_IMPORT_SANITY"
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create argument parser for the runner."""
     p = argparse.ArgumentParser(description="Deterministic pytest runner")
@@ -132,6 +135,7 @@ def _ensure_repo_on_path() -> None:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger("run_pytest")
+    os.environ.setdefault(_IMPORT_SANITY_FLAG, "1")
     _ensure_repo_on_path()
     # AI-AGENT-REF: disable implicit plugin autoload for deterministic xdist startup
     os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")

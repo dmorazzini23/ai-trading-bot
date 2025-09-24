@@ -3438,7 +3438,7 @@ def get_minute_df(
                     return max(float(value), 0.0)
                 except (TypeError, ValueError):
                     continue
-        return 5.0
+        return 50.0
 
     max_gap_bps = _gap_ratio_setting()
     max_gap_ratio = max(0.0, max_gap_bps / 10000.0)
