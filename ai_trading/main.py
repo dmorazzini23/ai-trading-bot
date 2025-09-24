@@ -1334,6 +1334,7 @@ def main(argv: list[str] | None = None) -> None:
                     backoff_seconds = interval
                 backoff_seconds = max(1, min(30, backoff_seconds))
                 _interruptible_sleep(backoff_seconds)
+                _logging.flush_log_throttle_summaries()
                 if should_stop():
                     logger.info("SERVICE_SHUTDOWN", extra={"reason": "signal"})
                     break
@@ -1345,6 +1346,7 @@ def main(argv: list[str] | None = None) -> None:
                 "CYCLE_TIMING",
                 extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over_budget()},
             )
+            _logging.flush_log_throttle_summaries()
             now_mono = time.monotonic()
             if now_mono - last_health >= max(30, health_tick_seconds):
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": effective_interval, "closed": closed})

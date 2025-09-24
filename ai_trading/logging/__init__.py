@@ -149,7 +149,7 @@ class MessageThrottleFilter(logging.Filter):
         super().__init__()
         self.throttle_seconds = self._resolve_throttle_seconds(throttle_seconds)
         self._lock = threading.Lock()
-        self._state: dict[str, dict[str, float | int]] = {}
+        self._state: dict[str, dict[str, float | int | str | None]] = {}
 
     @staticmethod
     def _resolve_throttle_seconds(value: float | None) -> float:
@@ -225,12 +225,14 @@ class MessageThrottleFilter(logging.Filter):
                     "last_emit": now,
                     "suppressed": 0,
                     "last_summary": now,
+                    "logger_name": record.name or _ROOT_LOGGER_NAME,
                 }
                 return True
 
             last_emit = float(state.get("last_emit", 0.0))
             suppressed = int(state.get("suppressed", 0))
             last_summary = float(state.get("last_summary", 0.0))
+            state["logger_name"] = record.name or _ROOT_LOGGER_NAME
 
             if now - last_emit < self.throttle_seconds:
                 suppressed += 1
@@ -249,8 +251,34 @@ class MessageThrottleFilter(logging.Filter):
             state["last_emit"] = now
             return True
 
+    def flush_cycle(self) -> None:
+        """Emit summaries for suppressed messages and reset counters."""
+
+        if self.throttle_seconds <= 0:
+            return
+
+        now = self._now()
+        with self._lock:
+            for message, state in self._state.items():
+                suppressed = int(state.get("suppressed", 0))
+                if suppressed > 0:
+                    logger_name = str(state.get("logger_name") or _ROOT_LOGGER_NAME)
+                    summary = (
+                        "LOG_THROTTLE_SUMMARY | suppressed="
+                        f"{suppressed} message={self._quote_message(message)}"
+                    )
+                    logging.getLogger(logger_name).info(summary)
+                state["suppressed"] = 0
+                state["last_summary"] = now
+
 
 _THROTTLE_FILTER = MessageThrottleFilter()
+
+
+def flush_log_throttle_summaries() -> None:
+    """Emit LOG_THROTTLE_SUMMARY lines for suppressed messages this cycle."""
+
+    _THROTTLE_FILTER.flush_cycle()
 
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
@@ -1265,6 +1293,7 @@ __all__ = [
     "setup_enhanced_logging",
     "validate_logging_setup",
     "dedupe_stream_handlers",
+    "flush_log_throttle_summaries",
     "EmitOnceLogger",
     "CompactJsonFormatter",
     "with_extra",
