@@ -452,7 +452,12 @@ class ExecutionEngine:
         asset_class: Optional[str] = None,
         **kwargs: Any,
     ) -> ExecutionResult:
-        """Place an order while tolerating forward-compatible keyword arguments."""
+        """Place an order.
+
+        Optional ``asset_class`` values are forwarded when supported by the
+        broker SDK. Unknown keyword arguments are logged at debug level and
+        ignored to preserve forward compatibility.
+        """
 
         mapped_side = self._map_core_side(side)
         if qty <= 0:

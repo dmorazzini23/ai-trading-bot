@@ -11,13 +11,26 @@ try:  # Local import to avoid cycles during docs builds
 except Exception:  # pragma: no cover - optional at import time
     StrategySignal = tuple()  # type: ignore[assignment]
 
-from ai_trading.config.management import TradingConfig, get_trading_config
+from ai_trading.config.management import TradingConfig, get_env, get_trading_config
 from ai_trading.core.enums import OrderSide
 
 logger = logging.getLogger(__name__)
 _missing_attr_warned: set[str] = set()
 _invalid_value_warned: set[str] = set()
-EPS = 1e-6
+def _resolve_allocator_eps() -> float:
+    try:
+        value = get_env("ALLOCATOR_EPS", None, cast=float)
+    except Exception:
+        value = None
+    try:
+        if value is None:
+            return 1e-6
+        return max(float(value), 0.0)
+    except (TypeError, ValueError):
+        return 1e-6
+
+
+EPS = _resolve_allocator_eps()
 
 
 def _resolve_conf_threshold(cfg) -> float:

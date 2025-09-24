@@ -615,6 +615,25 @@ def _get_env_str(key: str) -> str:
         raise RuntimeError(f"Missing required environment variable: {masked}") from e
 
 
+def _env_flag(key: str, default: bool = False) -> bool:
+    """Return a boolean environment toggle respecting settings aliases."""
+
+    try:
+        value = get_env(key, None)
+    except Exception:
+        value = None
+    if value is None:
+        value = os.getenv(key)
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return default
+    try:
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        return default
+
+
 class BotEngine:
     """Minimal engine exposing memoized Alpaca clients."""
 
@@ -7400,6 +7419,9 @@ def _read_trade_log(
 
     global _EMPTY_TRADE_LOG_INFO_EMITTED
     get_trade_logger()
+
+    sync_default = _env_flag("META_SYNC_FROM_BROKER", default=True)
+    sync_from_broker = bool(sync_from_broker) or sync_default
 
     try:  # AI-AGENT-REF: gate heavy import
         import pandas as pd  # type: ignore
@@ -15588,7 +15610,7 @@ def _resolve_limit_price(
                     return max(float(value), 0.0)
                 except (TypeError, ValueError):
                     continue
-        return 2.0
+        return 10.0
 
     def _reason_summary(reasons: list[str]) -> str:
         return "ok" if not reasons else ";".join(reasons)
