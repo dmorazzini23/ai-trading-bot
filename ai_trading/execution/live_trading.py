@@ -376,6 +376,8 @@ class ExecutionEngine:
             "Submitting market order",
             extra={"side": side, "quantity": quantity, "symbol": symbol, "client_order_id": client_order_id},
         )
+        failure_exc: Exception | None = None
+        failure_status: int | None = None
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
@@ -389,6 +391,15 @@ class ExecutionEngine:
                 },
             )
             return None
+        except (APIError, TimeoutError, ConnectionError) as exc:
+            failure_exc = exc
+            if isinstance(exc, TimeoutError):
+                failure_status = 504
+            elif isinstance(exc, ConnectionError):
+                failure_status = 503
+            else:
+                failure_status = getattr(exc, "status_code", None) or 500
+            result = None
         execution_time = time.time() - start_time
         self.stats["total_execution_time"] += execution_time
         self.stats["total_orders"] += 1
@@ -397,7 +408,23 @@ class ExecutionEngine:
             logger.info(f"Market order executed successfully: {result.get('id', 'unknown')}")
         else:
             self.stats["failed_orders"] += 1
-            logger.error(f"Failed to execute market order: {side} {quantity} {symbol}")
+            extra: dict[str, Any] = {
+                "side": side.lower(),
+                "quantity": quantity,
+                "symbol": symbol,
+                "client_order_id": client_order_id,
+            }
+            if failure_exc is not None:
+                extra.update(
+                    {
+                        "cause": failure_exc.__class__.__name__,
+                        "detail": str(failure_exc) or "submit_order failed",
+                        "status_code": failure_status,
+                    }
+                )
+                logger.error("ORDER_SUBMIT_RETRIES_EXHAUSTED", extra=extra)
+            else:
+                logger.error("FAILED_MARKET_ORDER", extra=extra)
         return result
 
     def submit_limit_order(self, symbol: str, side: str, quantity: int, limit_price: float, **kwargs) -> dict | None:
@@ -487,6 +514,8 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
             },
         )
+        failure_exc: Exception | None = None
+        failure_status: int | None = None
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
@@ -500,6 +529,15 @@ class ExecutionEngine:
                 },
             )
             return None
+        except (APIError, TimeoutError, ConnectionError) as exc:
+            failure_exc = exc
+            if isinstance(exc, TimeoutError):
+                failure_status = 504
+            elif isinstance(exc, ConnectionError):
+                failure_status = 503
+            else:
+                failure_status = getattr(exc, "status_code", None) or 500
+            result = None
         execution_time = time.time() - start_time
         self.stats["total_execution_time"] += execution_time
         self.stats["total_orders"] += 1
@@ -508,7 +546,24 @@ class ExecutionEngine:
             logger.info(f"Limit order executed successfully: {result.get('id', 'unknown')}")
         else:
             self.stats["failed_orders"] += 1
-            logger.error(f"Failed to execute limit order: {side} {quantity} {symbol} @ ${limit_price}")
+            extra: dict[str, Any] = {
+                "side": side.lower(),
+                "quantity": quantity,
+                "symbol": symbol,
+                "limit_price": limit_price,
+                "client_order_id": client_order_id,
+            }
+            if failure_exc is not None:
+                extra.update(
+                    {
+                        "cause": failure_exc.__class__.__name__,
+                        "detail": str(failure_exc) or "submit_order failed",
+                        "status_code": failure_status,
+                    }
+                )
+                logger.error("ORDER_SUBMIT_RETRIES_EXHAUSTED", extra=extra)
+            else:
+                logger.error("FAILED_LIMIT_ORDER", extra=extra)
         return result
 
     def execute_order(
@@ -602,8 +657,17 @@ class ExecutionEngine:
                     status_code = 503
                 else:
                     status_code = 500
-            message = str(exc) or "order execution failed"
-            raise AlpacaOrderHTTPError(status_code, message) from exc
+            logger.error(
+                "EXEC_ORDER_SUBMIT_FAILED",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "type": order_type_normalized,
+                    "status_code": status_code,
+                    "detail": str(exc) or "order execution failed",
+                },
+            )
+            return None
 
         if order is None:
             logger.warning(
@@ -630,11 +694,16 @@ class ExecutionEngine:
             order_obj = order
 
         if not order_id:
-            raise AlpacaOrderHTTPError(
-                500,
-                "order submission missing id",
-                payload={"symbol": symbol, "side": mapped_side, "type": order_type_normalized},
+            logger.error(
+                "EXEC_ORDER_RESPONSE_INVALID",
+                extra={
+                    "symbol": symbol,
+                    "side": mapped_side,
+                    "type": order_type_normalized,
+                    "status": status,
+                },
             )
+            return None
 
         execution_result = ExecutionResult(
             order_obj,

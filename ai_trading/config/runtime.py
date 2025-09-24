@@ -242,7 +242,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="alpaca_api_key",
-        env=("ALPACA_API_KEY",),
+        env=("ALPACA_API_KEY", "ALPACA_API_KEY_ID", "APCA_API_KEY_ID"),
         cast="str",
         default=None,
         description="Alpaca API key identifier.",
@@ -250,7 +250,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="alpaca_secret_key",
-        env=("ALPACA_SECRET_KEY",),
+        env=("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY"),
         cast="str",
         default=None,
         description="Alpaca API secret.",
