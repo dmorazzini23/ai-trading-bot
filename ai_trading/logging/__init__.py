@@ -275,6 +275,33 @@ class MessageThrottleFilter(logging.Filter):
 _THROTTLE_FILTER = MessageThrottleFilter()
 
 
+class LogDeduper:
+    """Lightweight TTL-based guard for suppressing repetitive log records."""
+
+    def __init__(self) -> None:
+        self._last_seen: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def should_log(self, key: str, ttl_s: int, now: float | None = None) -> bool:
+        """Return ``True`` when ``key`` should be logged under the provided TTL."""
+
+        if now is None:
+            now = time.monotonic()
+
+        ttl = float(ttl_s)
+        if ttl <= 0:
+            with self._lock:
+                self._last_seen[key] = now
+            return True
+
+        with self._lock:
+            last = self._last_seen.get(key)
+            if last is None or now - last >= ttl:
+                self._last_seen[key] = now
+                return True
+            return False
+
+
 def flush_log_throttle_summaries() -> None:
     """Emit LOG_THROTTLE_SUMMARY lines for suppressed messages this cycle."""
 
@@ -1294,6 +1321,7 @@ __all__ = [
     "validate_logging_setup",
     "dedupe_stream_handlers",
     "flush_log_throttle_summaries",
+    "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",
     "with_extra",
