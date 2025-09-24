@@ -8,7 +8,9 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 import inspect
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -78,6 +80,349 @@ if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from ai_trading.core.enums import OrderSide as CoreOrderSide
 
 logger = get_logger(__name__)
+
+try:  # pragma: no cover - defensive import guard for optional extras
+    from ai_trading.config.management import get_env as _config_get_env
+except Exception as exc:  # pragma: no cover - fallback when optional deps missing
+    logger.debug(
+        "BROKER_CAPACITY_CONFIG_IMPORT_FAILED",
+        extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
+    )
+    _config_get_env = None
+
+
+def _safe_decimal(value: Any) -> Decimal:
+    """Return Decimal conversion tolerant to broker SDK types."""
+
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return Decimal("0")
+        try:
+            return Decimal(raw)
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _extract_value(record: Any, *names: str) -> Any:
+    """Return the first matching attribute or mapping value from record."""
+
+    if record is None:
+        return None
+    for name in names:
+        if isinstance(record, dict) and name in record:
+            return record[name]
+        if hasattr(record, name):
+            return getattr(record, name)
+    return None
+
+
+def _config_int(name: str, default: int | None) -> int | None:
+    """Fetch integer configuration via get_env with os fallback."""
+
+    raw: Any = None
+    if _config_get_env is not None:
+        try:
+            raw = _config_get_env(name, default=None)
+        except Exception:
+            raw = None
+    if raw in (None, ""):
+        raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_decimal(name: str, default: Decimal) -> Decimal:
+    """Fetch decimal configuration using same semantics as _config_int."""
+
+    raw: Any = None
+    if _config_get_env is not None:
+        try:
+            raw = _config_get_env(name, default=None)
+        except Exception:
+            raw = None
+    if raw in (None, ""):
+        raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return _safe_decimal(raw)
+    except Exception:
+        return default
+
+
+def _format_money(value: Decimal | None) -> str:
+    """Return a human-readable string for Decimal money values."""
+
+    if value is None:
+        return "0.00"
+    try:
+        return f"{float(value):.2f}"
+    except (ValueError, OverflowError):  # pragma: no cover - extreme values
+        return str(value)
+
+
+def _order_consumes_capacity(side: Any) -> bool:
+    """Return True when order side should reserve buying power."""
+
+    if side is None:
+        return True
+    normalized = str(side).strip().lower()
+    if not normalized:
+        return True
+    if "sell" in normalized and "short" not in normalized:
+        return False
+    return True
+
+
+@dataclass
+class CapacityCheck:
+    can_submit: bool
+    suggested_qty: int
+    reason: str | None = None
+
+
+def preflight_capacity(symbol, side, limit_price, qty, broker) -> CapacityCheck:
+    """Best-effort broker capacity guard before submitting an order."""
+
+    try:
+        qty_int = int(qty)
+    except (TypeError, ValueError):
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty,
+            "0.00",
+            "0.00",
+            "invalid_qty",
+        )
+        return CapacityCheck(False, 0, "invalid_qty")
+
+    if qty_int <= 0:
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            "0.00",
+            "0.00",
+            "invalid_qty",
+        )
+        return CapacityCheck(False, 0, "invalid_qty")
+
+    price_decimal = _safe_decimal(limit_price) if limit_price not in (None, "") else None
+    if price_decimal is not None and price_decimal <= 0:
+        price_decimal = None
+
+    min_qty_default = 1
+    min_qty = _config_int("EXECUTION_MIN_QTY", min_qty_default) or min_qty_default
+    min_notional = _config_decimal("EXECUTION_MIN_NOTIONAL", Decimal("0"))
+    max_open_orders = _config_int("EXECUTION_MAX_OPEN_ORDERS", None)
+
+    open_orders: list[Any] = []
+    if broker is not None and hasattr(broker, "list_orders"):
+        try:
+            orders = broker.list_orders(status="open")  # type: ignore[call-arg]
+            if orders is None:
+                open_orders = []
+            else:
+                open_orders = list(orders)
+        except Exception as exc:
+            logger.debug(
+                "BROKER_CAPACITY_OPEN_ORDERS_ERROR",
+                extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
+            )
+            open_orders = []
+
+    open_notional = Decimal("0")
+    countable_orders = 0
+    for order in open_orders:
+        order_side = _extract_value(order, "side")
+        if not _order_consumes_capacity(order_side):
+            continue
+        qty_val = _safe_decimal(
+            _extract_value(order, "qty", "quantity", "remaining_qty", "remaining_quantity")
+        )
+        if qty_val <= 0:
+            continue
+        notional_val = _safe_decimal(
+            _extract_value(
+                order,
+                "notional",
+                "order_notional",
+                "remaining_notional",
+                "filled_notional",
+            )
+        )
+        if notional_val <= 0:
+            price_val = _safe_decimal(
+                _extract_value(order, "limit_price", "price", "stop_price", "average_price")
+            )
+            if price_val <= 0:
+                continue
+            notional_val = (price_val * qty_val).copy_abs()
+        open_notional += notional_val.copy_abs()
+        countable_orders += 1
+
+    if max_open_orders is not None and countable_orders >= max_open_orders:
+        available_display = _format_money(None)
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(
+                None if price_decimal is None else (price_decimal * Decimal(qty_int)).copy_abs()
+            ),
+            available_display,
+            "max_open_orders",
+        )
+        return CapacityCheck(False, 0, "max_open_orders")
+
+    account = None
+    if broker is not None and hasattr(broker, "get_account"):
+        try:
+            account = broker.get_account()
+        except Exception as exc:
+            logger.debug(
+                "BROKER_CAPACITY_ACCOUNT_ERROR",
+                extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
+            )
+            account = None
+
+    buying_power = _safe_decimal(
+        _extract_value(
+            account,
+            "buying_power",
+            "cash",
+            "portfolio_cash",
+            "available_cash",
+        )
+    )
+    day_trading_bp = _safe_decimal(
+        _extract_value(account, "daytrading_buying_power", "day_trading_buying_power")
+    )
+    non_marginable = _safe_decimal(
+        _extract_value(account, "non_marginable_buying_power", "non_marginable_cash")
+    )
+    maintenance_margin = _safe_decimal(
+        _extract_value(account, "maintenance_margin", "maint_margin")
+    )
+
+    capacity_candidates: list[Decimal] = []
+    for candidate in (buying_power, day_trading_bp, non_marginable):
+        if candidate > 0:
+            capacity_candidates.append(candidate - open_notional)
+    if buying_power > 0 and maintenance_margin > 0:
+        capacity_candidates.append(buying_power - maintenance_margin - open_notional)
+
+    available = min(capacity_candidates) if capacity_candidates else buying_power - open_notional
+    if available < 0:
+        available = Decimal("0")
+
+    if price_decimal is None:
+        logger.info(
+            "BROKER_CAPACITY_OK | symbol=%s side=%s qty=%s notional=%s",
+            symbol,
+            side,
+            qty_int,
+            "unknown",
+        )
+        return CapacityCheck(True, qty_int, None)
+
+    required_notional = (price_decimal * Decimal(qty_int)).copy_abs()
+
+    if available >= required_notional:
+        logger.info(
+            "BROKER_CAPACITY_OK | symbol=%s side=%s qty=%s notional=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(required_notional),
+        )
+        return CapacityCheck(True, qty_int, None)
+
+    if available <= 0:
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(required_notional),
+            _format_money(Decimal("0")),
+            "insufficient_buying_power",
+        )
+        return CapacityCheck(False, 0, "insufficient_buying_power")
+
+    max_qty_decimal = (available / price_decimal) if price_decimal != 0 else Decimal("0")
+    max_qty = min(
+        qty_int,
+        int(max_qty_decimal.to_integral_value(rounding=ROUND_DOWN)) if max_qty_decimal > 0 else 0,
+    )
+
+    if max_qty <= 0:
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(required_notional),
+            _format_money(available),
+            "insufficient_buying_power",
+        )
+        return CapacityCheck(False, 0, "insufficient_buying_power")
+
+    if max_qty < max(1, min_qty):
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(required_notional),
+            _format_money(available),
+            "below_min_qty",
+        )
+        return CapacityCheck(False, max_qty, "below_min_qty")
+
+    downsized_notional = (price_decimal * Decimal(max_qty)).copy_abs()
+    if downsized_notional < min_notional:
+        logger.warning(
+            "BROKER_CAPACITY_PRECHECK_FAIL | symbol=%s side=%s qty=%s required=%s available=%s reason=%s",
+            symbol,
+            side,
+            qty_int,
+            _format_money(required_notional),
+            _format_money(available),
+            "below_min_notional",
+        )
+        return CapacityCheck(False, max_qty, "below_min_notional")
+
+    logger.info(
+        "BROKER_CAPACITY_OK | symbol=%s side=%s qty=%s notional=%s",
+        symbol,
+        side,
+        max_qty,
+        _format_money(downsized_notional),
+    )
+    return CapacityCheck(True, max_qty, None)
 try:  # pragma: no cover - optional dependency
     from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
     from alpaca.trading.enums import OrderSide, TimeInForce
@@ -371,6 +716,24 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": kwargs.get("asset_class"),
             }
+        price_hint = kwargs.get("price") or kwargs.get("limit_price")
+        if price_hint in (None, ""):
+            raw_notional = kwargs.get("notional")
+            if raw_notional not in (None, "") and quantity:
+                try:
+                    price_hint = (_safe_decimal(raw_notional) / Decimal(quantity))
+                except Exception:
+                    price_hint = None
+        capacity = preflight_capacity(symbol, side.lower(), price_hint, quantity, self.trading_client)
+        if not capacity.can_submit:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            return None
+        if capacity.suggested_qty != quantity:
+            quantity = capacity.suggested_qty
+            order_data["quantity"] = quantity
         start_time = time.time()
         logger.info(
             "Submitting market order",
@@ -503,6 +866,16 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": kwargs.get("asset_class"),
             }
+        capacity = preflight_capacity(symbol, side.lower(), limit_price, quantity, self.trading_client)
+        if not capacity.can_submit:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            return None
+        if capacity.suggested_qty != quantity:
+            quantity = capacity.suggested_qty
+            order_data["quantity"] = quantity
         start_time = time.time()
         logger.info(
             "Submitting limit order",
@@ -1262,6 +1635,8 @@ AlpacaExecutionEngine = ExecutionEngine
 
 
 __all__ = [
+    "CapacityCheck",
+    "preflight_capacity",
     "submit_market_order",
     "ExecutionEngine",
     "AlpacaExecutionEngine",
