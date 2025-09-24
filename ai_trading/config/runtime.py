@@ -564,6 +564,14 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Intraday data feed preference for execution pricing.",
     ),
     ConfigSpec(
+        field="data_max_gap_ratio_intraday",
+        env=("DATA_MAX_GAP_RATIO_INTRADAY",),
+        cast="float",
+        default=0.005,
+        description="Maximum fractional gap tolerated between consecutive intraday bars before data is flagged as stale.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
         field="alpaca_feed_failover",
         env=("ALPACA_FEED_FAILOVER",),
         cast="tuple[str]",
@@ -583,6 +591,14 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         cast="tuple[str]",
         default=("alpaca_iex", "alpaca_sip", "yahoo"),
         description="Global fetch priority order for data providers.",
+    ),
+    ConfigSpec(
+        field="data_daily_fetch_min_interval_s",
+        env=("DATA_DAILY_FETCH_MIN_INTERVAL_S",),
+        cast="int",
+        default=60,
+        description="Minimum interval in seconds enforced between consecutive daily data fetches per symbol.",
+        min_value=0,
     ),
     ConfigSpec(
         field="max_data_fallbacks",
@@ -744,6 +760,14 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Comma-separated list of libraries whose logs should be silenced.",
     ),
     ConfigSpec(
+        field="logging_dedupe_ttl_s",
+        env=("LOGGING_DEDUPE_TTL_S",),
+        cast="int",
+        default=120,
+        description="Time-to-live in seconds used to suppress duplicate log events.",
+        min_value=0,
+    ),
+    ConfigSpec(
         field="max_slippage_bps",
         env=("MAX_SLIPPAGE_BPS",),
         cast="int",
@@ -783,6 +807,22 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         description="Seconds to wait before auto-canceling pending/new orders to unstick the trade loop.",
         min_value=10,
         max_value=3600,
+    ),
+    ConfigSpec(
+        field="orders_pending_new_warn_s",
+        env=("ORDERS_PENDING_NEW_WARN_S",),
+        cast="int",
+        default=60,
+        description="Seconds a pending_new order may remain before warning level alerts are emitted.",
+        min_value=0,
+    ),
+    ConfigSpec(
+        field="orders_pending_new_error_s",
+        env=("ORDERS_PENDING_NEW_ERROR_S",),
+        cast="int",
+        default=180,
+        description="Seconds a pending_new order may remain before escalating to error severity.",
+        min_value=0,
     ),
     ConfigSpec(
         field="order_fill_rate_target",
@@ -1007,6 +1047,30 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=1,
     ),
     ConfigSpec(
+        field="execution_min_qty",
+        env=("EXECUTION_MIN_QTY",),
+        cast="int",
+        default=1,
+        description="Minimum quantity permitted when generating broker orders.",
+        min_value=1,
+    ),
+    ConfigSpec(
+        field="execution_min_notional",
+        env=("EXECUTION_MIN_NOTIONAL",),
+        cast="float",
+        default=1.0,
+        description="Minimum notional value permitted when generating broker orders.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="execution_max_open_orders",
+        env=("EXECUTION_MAX_OPEN_ORDERS",),
+        cast="int",
+        default=100,
+        description="Upper bound on concurrently open broker orders managed by the engine.",
+        min_value=1,
+    ),
+    ConfigSpec(
         field="limit_order_slippage",
         env=("LIMIT_ORDER_SLIPPAGE",),
         cast="float",
@@ -1168,6 +1232,23 @@ class TradingConfig:
             },
         }
         return data
+
+    def update(self, **updates: Any) -> None:
+        """Mutate configuration values for the lifetime of this instance."""
+
+        if not updates:
+            return
+
+        unknown = [key for key in updates if key not in self._values]
+        if unknown:
+            raise AttributeError(unknown[0] if len(unknown) == 1 else ", ".join(unknown))
+
+        for key, value in updates.items():
+            spec = SPEC_BY_FIELD.get(key)
+            if spec is not None:
+                self._values[key] = _validate_bounds(spec, value)
+            else:
+                self._values[key] = value
 
     @property
     def symbol_process_budget_ms(self) -> int:

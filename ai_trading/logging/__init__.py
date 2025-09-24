@@ -253,6 +253,26 @@ class MessageThrottleFilter(logging.Filter):
 _THROTTLE_FILTER = MessageThrottleFilter()
 
 
+class LogDeduper:
+    """Simple helper that suppresses duplicate log events within a TTL window."""
+
+    def __init__(self) -> None:
+        self._last_seen: dict[str, float] = {}
+
+    def should_log(self, key: str, ttl_s: int, now: float | None = None) -> bool:
+        """Return ``True`` when a log identified by ``key`` should be emitted."""
+
+        if ttl_s < 0:
+            raise ValueError("ttl_s must be non-negative")
+
+        current_time = time.monotonic() if now is None else float(now)
+        last = self._last_seen.get(key)
+        if last is None or current_time - last >= float(ttl_s):
+            self._last_seen[key] = current_time
+            return True
+        return False
+
+
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
     """Adapter that sanitizes ``extra`` keys to avoid LogRecord collisions."""
 
@@ -1265,6 +1285,7 @@ __all__ = [
     "setup_enhanced_logging",
     "validate_logging_setup",
     "dedupe_stream_handlers",
+    "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",
     "with_extra",
