@@ -15,7 +15,8 @@ production deployments receive notifications about outages.
 import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from typing import Callable, Dict, Tuple
+from enum import Enum
+from typing import Any, Callable, Dict, Mapping, Tuple
 
 from ai_trading.config.management import get_env
 from ai_trading.logging import get_logger
@@ -29,6 +30,85 @@ from ai_trading.data.metrics import (
 
 
 logger = get_logger(__name__)
+
+
+class ProviderAction(Enum):
+    """Decision outcome for a provider health evaluation tick."""
+
+    STAY = "stay"
+    SWITCH = "switch"
+    DISABLE = "disable"
+
+
+def _policy_lookup(policy: Mapping[str, Any] | object | None, key: str, default: Any) -> Any:
+    """Helper to read ``key`` from ``policy`` regardless of mapping or attribute."""
+
+    if policy is None:
+        return default
+    if isinstance(policy, Mapping):
+        return policy.get(key, default)
+    return getattr(policy, key, default)
+
+
+def decide_provider_action(
+    health: Mapping[str, Any] | bool,
+    cooldown_ok: bool,
+    consecutive_switches: int,
+    policy: Mapping[str, Any] | object | None,
+) -> ProviderAction:
+    """Return the desired :class:`ProviderAction` for the current tick.
+
+    Parameters
+    ----------
+    health:
+        Either a mapping with contextual flags or a boolean that evaluates to
+        ``True`` when the provider is healthy. When a mapping is supplied the
+        function looks for ``is_healthy``/``healthy`` and ``using_backup``
+        entries.
+    cooldown_ok:
+        Indicates whether switching providers is allowed because cooldown and
+        debounce conditions are satisfied.
+    consecutive_switches:
+        Current streak of switchovers for the provider pair. Policies may use
+        this to decide when to disable a provider.
+    policy:
+        Optional mapping/object describing heuristics. Supported keys:
+
+        * ``prefer_primary`` (default ``True``) – when healthy, prefer the
+          primary provider if recovery conditions are met.
+        * ``allow_recovery`` (default ``False``) – whether recovery back to the
+          primary provider is permissible this tick.
+        * ``disable_after`` – when provided and the provider is unhealthy,
+          disable after ``consecutive_switches`` reaches this threshold.
+
+    Returns
+    -------
+    ProviderAction
+        The action that should be taken for this tick.
+    """
+
+    if isinstance(health, Mapping):
+        is_healthy = bool(health.get("is_healthy", health.get("healthy", False)))
+        using_backup = bool(health.get("using_backup", False))
+        allow_recovery = bool(health.get("allow_recovery", False))
+    else:
+        is_healthy = bool(health)
+        using_backup = False
+        allow_recovery = False
+
+    prefer_primary = bool(_policy_lookup(policy, "prefer_primary", True))
+    policy_allow_recovery = bool(_policy_lookup(policy, "allow_recovery", allow_recovery))
+    disable_after = _policy_lookup(policy, "disable_after", None)
+
+    if not is_healthy:
+        if disable_after is not None and consecutive_switches >= int(disable_after):
+            return ProviderAction.DISABLE
+        return ProviderAction.STAY if using_backup else ProviderAction.SWITCH
+
+    if using_backup and prefer_primary and policy_allow_recovery and cooldown_ok:
+        return ProviderAction.SWITCH
+
+    return ProviderAction.STAY
 
 
 def _normalize_provider(name: str) -> str:
@@ -444,68 +524,100 @@ class ProviderMonitor:
         last_switch = state.get("last_switch")
         consecutive = int(state.get("consecutive_passes", 0))
 
+        using_backup = active == backup
+        cooldown_seconds = max(0, int(state.get("cooldown", cooldown_default)))
+        last_switch_dt = last_switch if isinstance(last_switch, datetime) else now
+        allow_recovery = False
+        cooldown_ok = False
+        stay_reason = "healthy" if healthy else (reason or "unhealthy")
+        switch_reason = reason or ("recovered" if healthy else "unhealthy")
+
         if healthy:
             consecutive += 1
             state["consecutive_passes"] = consecutive
-            if active == backup:
-                if consecutive >= 2:
-                    cooldown_seconds = max(0, int(state.get("cooldown", cooldown_default)))
-                    last_switch_dt = last_switch if isinstance(last_switch, datetime) else now
-                    elapsed = (now - last_switch_dt).total_seconds()
-                    if elapsed >= cooldown_seconds:
-                        state["active"] = primary
-                        state["last_switch"] = now
-                        state["consecutive_passes"] = 0
-                        state["cooldown"] = cooldown_default
-                        logger.info(
-                            "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                            backup,
-                            primary,
-                            reason or "recovered",
-                            cooldown_seconds,
-                        )
-                        return primary
-                    logger.info(
-                        "DATA_PROVIDER_STAY | provider=%s reason=cooldown_active cooldown=%ss",
-                        backup,
-                        cooldown_seconds,
-                    )
-                    return backup
+            if using_backup:
+                allow_recovery = consecutive >= 2
+                elapsed = (now - last_switch_dt).total_seconds()
+                cooldown_ok = allow_recovery and elapsed >= cooldown_seconds
+                if not allow_recovery:
+                    stay_reason = "insufficient_health_passes"
+                elif not cooldown_ok:
+                    stay_reason = "cooldown_active"
+                else:
+                    switch_reason = reason or "recovered"
+        else:
+            state["consecutive_passes"] = 0
+            cooldown_ok = not using_backup
+            stay_reason = reason or "unhealthy"
+            switch_reason = reason or "unhealthy"
+
+        health_state: Mapping[str, Any] = {
+            "is_healthy": healthy,
+            "using_backup": using_backup,
+            "allow_recovery": allow_recovery,
+        }
+        policy: Mapping[str, Any] = {
+            "prefer_primary": True,
+            "allow_recovery": allow_recovery,
+        }
+        normalized_active = _normalize_provider(active)
+        consecutive_switches = int(self.consecutive_switches_by_provider.get(normalized_active, 0))
+        action = decide_provider_action(health_state, cooldown_ok, consecutive_switches, policy)
+
+        if action is ProviderAction.SWITCH:
+            if healthy and using_backup:
+                state["active"] = primary
+                state["last_switch"] = now
+                state["consecutive_passes"] = 0
+                state["cooldown"] = cooldown_default
                 logger.info(
-                    "DATA_PROVIDER_STAY | provider=%s reason=insufficient_health_passes cooldown=%ss",
+                    "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
                     backup,
+                    primary,
+                    switch_reason,
+                    cooldown_seconds,
+                )
+                return primary
+            if not healthy and not using_backup:
+                state["active"] = backup
+                state["last_switch"] = now
+                state["consecutive_passes"] = 0
+                state["cooldown"] = cooldown_default
+                logger.info(
+                    "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
+                    active,
+                    backup,
+                    switch_reason,
                     cooldown_default,
                 )
                 return backup
-            logger.info(
-                "DATA_PROVIDER_STAY | provider=%s reason=healthy cooldown=%ss",
-                active,
-                cooldown_default,
-            )
-            return active
+            action = ProviderAction.STAY
 
-        # Unhealthy path
-        state["consecutive_passes"] = 0
-        if active != backup:
-            state["active"] = backup
-            state["last_switch"] = now
-            state["cooldown"] = cooldown_default
-            logger.info(
-                "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                active,
-                backup,
-                reason or "unhealthy",
-                cooldown_default,
-            )
-            return backup
+        if action is ProviderAction.DISABLE:
+            target = backup if using_backup else active
+            try:
+                self.disable(target)
+            finally:
+                return target
+
+        state["cooldown"] = cooldown_default
+        stay_provider = active if not using_backup else backup
+        cooldown_for_log = cooldown_seconds if using_backup and healthy else cooldown_default
         logger.info(
-            "DATA_PROVIDER_STAY | provider=%s reason=unhealthy cooldown=%ss",
-            backup,
-            cooldown_default,
+            "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
+            stay_provider,
+            stay_reason,
+            cooldown_for_log,
         )
-        return backup
+        state["active"] = stay_provider
+        return stay_provider
 
 
 provider_monitor = ProviderMonitor()
 
-__all__ = ["provider_monitor", "ProviderMonitor"]
+__all__ = [
+    "provider_monitor",
+    "ProviderMonitor",
+    "ProviderAction",
+    "decide_provider_action",
+]
