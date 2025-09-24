@@ -3,55 +3,68 @@ from __future__ import annotations
 
 import os
 
-
-_ALPACA_KEY_ENV_KEYS: tuple[str, ...] = (
-    "ALPACA_API_KEY_ID",
-    "APCA_API_KEY_ID",
-    "ALPACA_API_KEY",
+from ai_trading.broker.alpaca_credentials import (
+    AlpacaCredentials,
+    resolve_alpaca_credentials,
+    reset_alpaca_credential_state,
 )
 
-_ALPACA_SECRET_ENV_KEYS: tuple[str, ...] = (
-    "ALPACA_API_SECRET_KEY",
-    "APCA_API_SECRET_KEY",
-    "ALPACA_SECRET_KEY",
-)
+_DATA_FEED_OVERRIDE_CACHE: tuple[str | None, str | None] | None = None
 
 
-def _first_env(*keys: str) -> str | None:
-    for key in keys:
-        value = os.getenv(key)
-        if value:
-            return value
-    return None
+def _resolve_data_feed_override() -> tuple[str | None, str | None]:
+    """Return cached (override, reason) tuple for Alpaca data feed."""
+
+    global _DATA_FEED_OVERRIDE_CACHE
+    if _DATA_FEED_OVERRIDE_CACHE is not None:
+        return _DATA_FEED_OVERRIDE_CACHE
+    creds = resolve_alpaca_credentials()
+    override: str | None = None
+    reason: str | None = None
+    if creds.has_execution_credentials() and not creds.has_data_credentials():
+        override = "yahoo"
+        reason = "missing_data_keys"
+    _DATA_FEED_OVERRIDE_CACHE = (override, reason)
+    return _DATA_FEED_OVERRIDE_CACHE
 
 
-def _any_env(*keys: str) -> bool:
-    return any(os.getenv(k) for k in keys)
+def refresh_alpaca_credentials_cache() -> None:
+    """Reset cached Alpaca credential-derived helpers."""
+
+    global _DATA_FEED_OVERRIDE_CACHE
+    _DATA_FEED_OVERRIDE_CACHE = None
+    reset_alpaca_credential_state()
+
+
+def get_resolved_alpaca_credentials() -> AlpacaCredentials:
+    """Return the resolved Alpaca credentials with source metadata."""
+
+    return resolve_alpaca_credentials()
 
 
 def get_alpaca_creds() -> tuple[str, str]:
-    """Return Alpaca API credentials using common environment aliases."""
+    """Return Alpaca API credentials using canonical precedence."""
 
-    key = _first_env(*_ALPACA_KEY_ENV_KEYS)
-    secret = _first_env(*_ALPACA_SECRET_ENV_KEYS)
-    if not key or not secret:
+    creds = resolve_alpaca_credentials()
+    if not creds.api_key or not creds.secret_key:
         missing: list[str] = []
-        if not key:
-            missing.append("ALPACA_API_KEY_ID (or APCA_API_KEY_ID/ALPACA_API_KEY)")
-        if not secret:
-            missing.append("ALPACA_API_SECRET_KEY (or APCA_API_SECRET_KEY/ALPACA_SECRET_KEY)")
+        if not creds.api_key:
+            missing.append(
+                "ALPACA_API_KEY (or ALPACA_DATA_API_KEY/APCA_API_KEY_ID)"
+            )
+        if not creds.secret_key:
+            missing.append(
+                "ALPACA_SECRET_KEY (or ALPACA_DATA_SECRET_KEY/APCA_API_SECRET_KEY)"
+            )
         raise RuntimeError(f"Missing Alpaca credentials: {', '.join(missing)}")
-    return key, secret
+    return creds.api_key, creds.secret_key
 
 
 def get_alpaca_base_url() -> str:
     """Return the configured Alpaca base URL with sensible defaults."""
 
-    return (
-        os.getenv("ALPACA_API_URL")
-        or os.getenv("ALPACA_BASE_URL")
-        or "https://paper-api.alpaca.markets"
-    )
+    creds = resolve_alpaca_credentials()
+    return creds.base_url
 
 
 def resolve_alpaca_feed(requested: str | None) -> str | None:
@@ -61,7 +74,10 @@ def resolve_alpaca_feed(requested: str | None) -> str | None:
     a non-Alpaca provider such as Yahoo Finance.
     """
 
-    if not requested:
+    override, _ = _resolve_data_feed_override()
+    if override:
+        requested = override
+    elif not requested:
         requested = (
             os.getenv("ALPACA_DEFAULT_FEED")
             or os.getenv("ALPACA_DATA_FEED")
@@ -78,7 +94,29 @@ def resolve_alpaca_feed(requested: str | None) -> str | None:
 def alpaca_credential_status() -> tuple[bool, bool]:
     """Return boolean flags for Alpaca credential presence."""
 
-    return _any_env(*_ALPACA_KEY_ENV_KEYS), _any_env(*_ALPACA_SECRET_ENV_KEYS)
+    creds = resolve_alpaca_credentials()
+    return bool(creds.api_key), bool(creds.secret_key)
+
+
+def is_data_feed_downgraded() -> bool:
+    """Return ``True`` when the Alpaca data feed has been downgraded."""
+
+    override, _ = _resolve_data_feed_override()
+    return bool(override)
+
+
+def get_data_feed_override() -> str | None:
+    """Return the forced data feed override if one is active."""
+
+    override, _ = _resolve_data_feed_override()
+    return override
+
+
+def get_data_feed_downgrade_reason() -> str | None:
+    """Return the downgrade reason when Alpaca data feed is forced off."""
+
+    _, reason = _resolve_data_feed_override()
+    return reason
 
 
 __all__ = [
@@ -86,4 +124,9 @@ __all__ = [
     "get_alpaca_base_url",
     "resolve_alpaca_feed",
     "alpaca_credential_status",
+    "get_resolved_alpaca_credentials",
+    "is_data_feed_downgraded",
+    "get_data_feed_override",
+    "get_data_feed_downgrade_reason",
+    "refresh_alpaca_credentials_cache",
 ]

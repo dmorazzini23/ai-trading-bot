@@ -22,9 +22,9 @@ def _missing_creds() -> list[str]:
     has_key, has_secret = alpaca_credential_status()
     missing: list[str] = []
     if not has_key:
-        missing.append("ALPACA_API_KEY_ID")
+        missing.append("ALPACA_API_KEY")
     if not has_secret:
-        missing.append("ALPACA_API_SECRET_KEY")
+        missing.append("ALPACA_SECRET_KEY")
     return missing
 
 

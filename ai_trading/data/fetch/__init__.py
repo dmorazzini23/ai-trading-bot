@@ -49,7 +49,13 @@ from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
-from ai_trading.utils.env import alpaca_credential_status, resolve_alpaca_feed
+from ai_trading.utils.env import (
+    alpaca_credential_status,
+    resolve_alpaca_feed,
+    is_data_feed_downgraded,
+    get_data_feed_override,
+    get_data_feed_downgrade_reason,
+)
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
 from .validators import validate_adjustment, validate_feed
@@ -665,6 +671,10 @@ def _has_alpaca_keys() -> bool:
 
     global _ALPACA_CREDS_CACHE
     now = time.monotonic()
+    if is_data_feed_downgraded():
+        _ALPACA_CREDS_CACHE = (False, now)
+        return False
+
     if _ALPACA_CREDS_CACHE is not None:
         cached_value, cached_ts = _ALPACA_CREDS_CACHE
         if now - cached_ts < _ALPACA_CREDS_TTL_SECONDS:
@@ -761,6 +771,17 @@ try:
     )
 except Exception:  # pragma: no cover - defensive default
     _DEFAULT_FEED = "iex"
+
+_DATA_FEED_OVERRIDE = get_data_feed_override()
+if _DATA_FEED_OVERRIDE:
+    logger.info(
+        "DATA_PROVIDER_DOWNGRADED",
+        extra={
+            "from": f"alpaca_{_DEFAULT_FEED or 'iex'}",
+            "to": _DATA_FEED_OVERRIDE,
+            "reason": get_data_feed_downgrade_reason() or "missing_data_keys",
+        },
+    )
 
 
 def _env_flag(key: str, default: bool = False) -> bool:

@@ -69,14 +69,18 @@ def _select_alpaca_base_url(env: Mapping[str, str] | None = None) -> tuple[str |
 def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True) -> str | None:
     """Reload environment variables from a dotenv file."""
 
+    from ai_trading.utils.env import refresh_alpaca_credentials_cache
+
     if path is None:
         candidate = Path.cwd() / ".env"
         path = candidate if candidate.exists() else None
     if path is None:
         reload_trading_config()
+        refresh_alpaca_credentials_cache()
         return None
     load_dotenv(dotenv_path=path, override=override)
     reload_trading_config()
+    refresh_alpaca_credentials_cache()
     return os.fspath(path)
 
 
