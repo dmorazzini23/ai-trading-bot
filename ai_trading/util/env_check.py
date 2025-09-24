@@ -1,18 +1,19 @@
-"""Environment import guards to ensure expected third-party modules are loaded."""
+"""Environment import guards to ensure :mod:`python-dotenv` resolves correctly."""
 
 from __future__ import annotations
 
 import logging
 import os
 import sys
-from importlib import import_module
+from importlib import import_module, util as importlib_util
+from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
 
 
 class DotenvImportError(ImportError):
-    """Raised when :mod:`python-dotenv` is shadowed by an unexpected module."""
+    """Raised when :mod:`python-dotenv` is missing or shadowed by a local module."""
 
 
 _FALSEY = {"0", "false", "no", "off", "disable", "disabled"}
@@ -26,37 +27,62 @@ def _guard_enabled(force: bool | None = None) -> bool:
 
 
 def guard_python_dotenv(*, force: bool | None = None) -> None:
-    """Validate that :mod:`python-dotenv` is importable and not shadowed."""
+    """Validate that :mod:`python-dotenv` resolves from site/dist-packages."""
 
     if not _guard_enabled(force):
         logger.debug("ENV_IMPORT_GUARD_DISABLED")
         return
 
+    existing = sys.modules.get("dotenv")
+    if existing is not None and getattr(existing, "__spec__", None) is None:
+        sys.modules.pop("dotenv", None)
+
+    try:
+        spec = importlib_util.find_spec("dotenv")
+    except ValueError as exc:
+        raise DotenvImportError("python-dotenv spec resolution failed") from exc
+    if spec is None or not getattr(spec, "origin", None):
+        raise DotenvImportError("python-dotenv not found; install python-dotenv>=1.1.1")
+
+    origin = Path(spec.origin).resolve()
+    parents = list(origin.parents)
+    in_site_packages = any(
+        part.name.endswith("site-packages") or part.name.endswith("dist-packages")
+        for part in parents
+    )
+
+    if not in_site_packages:
+        raise DotenvImportError(f"python-dotenv appears shadowed; origin={origin}")
+
+    repo_markers = {"ai_trading", "tests", "workspace", "src"}
+    if any(part.name in repo_markers for part in parents):
+        raise DotenvImportError(f"python-dotenv resolved from project tree: origin={origin}")
+
     sys.modules.pop("dotenv", None)
     try:
         module = import_module("dotenv")
     except ImportError as exc:  # pragma: no cover - surfaced to caller
-        raise ImportError("python-dotenv not installed; install python-dotenv>=1.1.1") from exc
+        raise DotenvImportError("python-dotenv import failed") from exc
 
-    module_file = getattr(module, "__file__", "unknown")
-    module_spec = getattr(module, "__spec__", None)
-    has_attr = hasattr(module, "dotenv_values")
-    if not has_attr:
-        logger.debug(
-            "ENV_IMPORT_GUARD_FAILURE",
-            extra={
-                "module": module_file,
-                "module_repr": repr(module),
-                "module_spec": repr(module_spec),
-            },
-        )
+    module_file = getattr(module, "__file__", None)
+    if module_file is None:
+        raise DotenvImportError("python-dotenv missing __file__ metadata")
+
+    module_path = Path(module_file).resolve()
+    if module_path != origin:
+        # Some environments may load package __init__ while spec points to compiled file;
+        # accept as long as both live under site-packages.
+        if module_path not in origin.parents and origin not in module_path.parents:
+            raise DotenvImportError(
+                f"python-dotenv mismatch: spec={origin} import={module_path}"
+            )
+
+    if not hasattr(module, "dotenv_values"):
         raise DotenvImportError(
-            "python-dotenv not available (shadowed by 'dotenv'). "
-            "Uninstall 'dotenv' package and remove any local module named 'dotenv'. "
-            f"loaded={module_file!r} module={module!r} spec={module_spec!r}"
+            "python-dotenv shadowed by another module named 'dotenv'."
         )
 
-    logger.debug("ENV_IMPORT_GUARD_OK", extra={"module": module_file})
+    logger.debug("ENV_IMPORT_GUARD_OK", extra={"module": str(module_path)})
 
 
 def main() -> None:

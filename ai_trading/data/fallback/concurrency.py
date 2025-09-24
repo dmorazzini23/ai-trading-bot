@@ -1,44 +1,33 @@
-"""Async helpers for running fallback tasks with bounded concurrency.
-
-The scheduler limits the number of in-flight tasks and aggregates their results
-into per-symbol mappings and result sets.  It avoids spawning more than
-``max_concurrency`` tasks at a time, preventing unbounded queue growth when
-processing large symbol lists.
-"""
+"""Async helpers for running fallback tasks with bounded concurrency."""
 
 from __future__ import annotations
 
 import asyncio
-import functools
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import fields, is_dataclass
 from types import ModuleType, SimpleNamespace
 from typing import TypeVar
 
 T = TypeVar("T")
 
-
 _ASYNCIO_PRIMITIVE_NAMES = {"Lock", "Semaphore", "Event", "Condition", "BoundedSemaphore"}
 _ASYNCIO_LOCK_NAMES = {"Lock", "Semaphore", "BoundedSemaphore"}
 
 
 def _collect_asyncio_primitive_types() -> tuple[type, ...]:
-    """Return concrete asyncio synchronization primitive types."""
+    """Return concrete asyncio synchronisation primitive types."""
 
     primitive_types: set[type] = set()
-
     for attr in _ASYNCIO_PRIMITIVE_NAMES:
         candidate = getattr(asyncio, attr, None)
         if isinstance(candidate, type):
             primitive_types.add(candidate)
-
     locks_module = getattr(asyncio, "locks", None)
     if locks_module is not None:
         for attr in _ASYNCIO_PRIMITIVE_NAMES:
             candidate = getattr(locks_module, attr, None)
             if isinstance(candidate, type):
                 primitive_types.add(candidate)
-
     return tuple(primitive_types)
 
 
@@ -126,44 +115,147 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
     except TypeError:
         return obj
 
-# Result sets populated after ``run_with_concurrency`` completes.
+
+def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> object:
+    obj_id = id(obj)
+    if obj_id in seen:
+        return obj
+    seen.add(obj_id)
+
+    if _is_asyncio_primitive(obj):
+        return _maybe_recreate_lock(obj, loop)
+
+    if isinstance(obj, dict):
+        for key, value in list(obj.items()):
+            new_value = _scan(value, seen, loop)
+            if new_value is not value:
+                obj[key] = new_value
+        return obj
+
+    if isinstance(obj, list):
+        for idx, value in enumerate(list(obj)):
+            new_value = _scan(value, seen, loop)
+            if new_value is not value:
+                obj[idx] = new_value
+        return obj
+
+    if isinstance(obj, tuple):
+        mutated = False
+        new_items: list[object] = []
+        for value in obj:
+            new_value = _scan(value, seen, loop)
+            mutated = mutated or new_value is not value
+            new_items.append(new_value)
+        if mutated:
+            return tuple(new_items)
+        return obj
+
+    if isinstance(obj, set):
+        mutated = False
+        new_values: list[object] = []
+        for value in list(obj):
+            new_value = _scan(value, seen, loop)
+            mutated = mutated or new_value is not value
+            new_values.append(new_value)
+        if mutated:
+            obj.clear()
+            obj.update(new_values)
+        return obj
+
+    if isinstance(obj, frozenset):
+        mutated = False
+        new_values: list[object] = []
+        for value in obj:
+            new_value = _scan(value, seen, loop)
+            mutated = mutated or new_value is not value
+            new_values.append(new_value)
+        if mutated:
+            return type(obj)(new_values)
+        return obj
+
+    if is_dataclass(obj) and not isinstance(obj, type):
+        for field in fields(obj):
+            try:
+                value = getattr(obj, field.name)
+            except AttributeError:
+                continue
+            new_value = _scan(value, seen, loop)
+            if new_value is not value:
+                try:
+                    setattr(obj, field.name, new_value)
+                except Exception:
+                    pass
+        try:
+            extra_attrs = vars(obj)
+        except TypeError:
+            extra_attrs = None
+        if extra_attrs:
+            for name, value in list(extra_attrs.items()):
+                new_value = _scan(value, seen, loop)
+                if new_value is not value:
+                    try:
+                        setattr(obj, name, new_value)
+                    except Exception:
+                        pass
+        return obj
+
+    if isinstance(obj, SimpleNamespace):
+        for name, value in list(vars(obj).items()):
+            new_value = _scan(value, seen, loop)
+            if new_value is not value:
+                setattr(obj, name, new_value)
+        return obj
+
+    slot_names = getattr(type(obj), "__slots__", ())
+    if slot_names:
+        slot_tuple = (slot_names,) if isinstance(slot_names, str) else slot_names
+        for name in slot_tuple:
+            if hasattr(obj, name):
+                value = getattr(obj, name)
+                new_value = _scan(value, seen, loop)
+                if new_value is not value:
+                    try:
+                        setattr(obj, name, new_value)
+                    except Exception:
+                        pass
+        return obj
+
+    module_name = getattr(obj.__class__, "__module__", "")
+    if hasattr(obj, "__dict__") and not isinstance(obj, ModuleType) and module_name.startswith(
+        ("ai_trading", "tests", "__main__")
+    ):
+        for name, value in list(vars(obj).items()):
+            new_value = _scan(value, seen, loop)
+            if new_value is not value:
+                try:
+                    setattr(obj, name, new_value)
+                except Exception:
+                    pass
+        return obj
+
+    return obj
+
+
+def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.AbstractEventLoop) -> None:
+    """Rebind foreign-loop locks captured in ``worker``'s closure to ``loop``."""
+
+    cells = getattr(worker, "__closure__", None)
+    if not cells:
+        return
+    seen: set[int] = set()
+    for cell in cells:
+        try:
+            original = cell.cell_contents
+        except ValueError:
+            continue
+        new_value = _scan(original, seen, loop)
+        if new_value is not original:
+            cell.cell_contents = new_value
+
+
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
-
-
-CoroutineFactory = Callable[[], Awaitable[T]]
-
-
-async def run_with_concurrency_limit(
-    coroutines: Iterable[Awaitable[T] | CoroutineFactory],
-    limit: int,
-    per_task_timeout: float = 5.0,
-) -> tuple[list[T | Exception], int, int]:
-    """Run *coroutines* with bounded concurrency.
-
-    Returns the gathered results (preserving order) and counts of succeeded and
-    failed tasks.  Exceptions are captured in the results list.
-    """
-
-    semaphore = asyncio.Semaphore(max(1, int(limit)))
-
-    async def _wrap(coro: Awaitable[T] | CoroutineFactory) -> T | Exception:
-        async with semaphore:
-            try:
-                awaitable = coro() if callable(coro) else coro
-                return await asyncio.wait_for(awaitable, timeout=per_task_timeout)
-            except Exception as exc:  # noqa: BLE001 - propagate as captured result
-                return exc
-
-    tasks = [asyncio.create_task(_wrap(coro)) for coro in coroutines]
-    if not tasks:
-        return [], 0, 0
-
-    results: list[T | Exception] = await asyncio.gather(*tasks)
-    succeeded = sum(1 for res in results if not isinstance(res, Exception))
-    failed = len(results) - succeeded
-    return results, succeeded, failed
 
 
 async def run_with_concurrency(
@@ -171,232 +263,99 @@ async def run_with_concurrency(
     worker: Callable[[str], Awaitable[T]],
     *,
     max_concurrency: int = 4,
-    timeout: float | None = None,
+    timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
-    """Execute ``worker`` for each symbol with a concurrency limit.
+    """Execute ``worker`` for each symbol with at most ``max_concurrency`` tasks in flight."""
 
-    Parameters
-    ----------
-    symbols:
-        Iterable of symbol strings to process.
-    worker:
-        Awaitable callable invoked with each symbol. Its return value becomes
-        the entry in the result mapping. Exceptions are caught and return
-        ``None`` entries.
-    max_concurrency:
-        Maximum number of tasks scheduled at any time.
-    timeout:
-        Optional per-task timeout in seconds. ``None`` disables the timeout.
+    global PEAK_SIMULTANEOUS_WORKERS
 
-    Returns
-    -------
-    tuple[dict[str, T | None], set[str], set[str]]
-        A tuple of ``(results, successful, failed)`` where ``results`` maps
-        symbols to worker return values or ``None``.
-    """
-
+    PEAK_SIMULTANEOUS_WORKERS = 0
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
 
-    global PEAK_SIMULTANEOUS_WORKERS
-    PEAK_SIMULTANEOUS_WORKERS = 0
-
-    results: dict[str, T | None] = {}
-
     loop = asyncio.get_running_loop()
+    _rebind_worker_closure(worker, loop)
 
-    def _scan(obj, seen: set[int]) -> object:
-        obj_id = id(obj)
-        if obj_id in seen:
-            return obj
-        seen.add(obj_id)
-        if _is_asyncio_primitive(obj):
-            replacement = _maybe_recreate_lock(obj, loop)
-            return replacement
-        if isinstance(obj, Mapping):
-            supports_setitem = hasattr(obj, "__setitem__")
-            items = list(obj.items())
-            mutated = False
-            replacements: list[tuple[object, object]] = []
-            for key, value in items:
-                new_value = _scan(value, seen)
-                replacements.append((key, new_value))
-                if new_value is not value:
-                    mutated = True
-                    if supports_setitem:
-                        try:
-                            obj[key] = new_value
-                        except Exception:
-                            pass
-            if mutated and not supports_setitem:
-                mapping_type = type(obj)
-                try:
-                    return mapping_type(replacements)
-                except Exception:
-                    return dict(replacements)
-            return obj
-        if isinstance(obj, (list, tuple, set, frozenset)):
-            if isinstance(obj, list):
-                for idx, value in enumerate(list(obj)):
-                    new_value = _scan(value, seen)
-                    if new_value is not value:
-                        obj[idx] = new_value
-                return obj
-            if isinstance(obj, tuple):
-                mutated = False
-                new_items = []
-                for value in obj:
-                    new_value = _scan(value, seen)
-                    mutated = mutated or new_value is not value
-                    new_items.append(new_value)
-                if mutated:
-                    return tuple(new_items)
-                return obj
-            if isinstance(obj, set):
-                mutated = False
-                new_values = []
-                for value in list(obj):
-                    new_value = _scan(value, seen)
-                    mutated = mutated or new_value is not value
-                    new_values.append(new_value)
-                if mutated:
-                    obj.clear()
-                    obj.update(new_values)
-                return obj
-            mutated = False
-            new_values = []
-            for value in obj:
-                new_value = _scan(value, seen)
-                mutated = mutated or new_value is not value
-                new_values.append(new_value)
-            if mutated:
-                return type(obj)(new_values)
-            return obj
-        if is_dataclass(obj) and not isinstance(obj, type):
-            for field in fields(obj):
-                try:
-                    value = getattr(obj, field.name)
-                except AttributeError:
-                    continue
-                new_value = _scan(value, seen)
-                if new_value is not value:
-                    try:
-                        setattr(obj, field.name, new_value)
-                    except Exception:
-                        pass
-            try:
-                extra_attrs = vars(obj)
-            except TypeError:
-                extra_attrs = None
-            if extra_attrs:
-                for name, value in list(extra_attrs.items()):
-                    new_value = _scan(value, seen)
-                    if new_value is not value:
-                        try:
-                            setattr(obj, name, new_value)
-                        except Exception:
-                            pass
-            return obj
-        if isinstance(obj, SimpleNamespace):
-            for name, value in list(vars(obj).items()):
-                new_value = _scan(value, seen)
-                if new_value is not value:
-                    setattr(obj, name, new_value)
-            return obj
-        slots = getattr(type(obj), "__slots__", ())
-        if slots:
-            slot_names = (slots,) if isinstance(slots, str) else slots
-            for name in slot_names:
-                if hasattr(obj, name):
-                    value = getattr(obj, name)
-                    new_value = _scan(value, seen)
-                    if new_value is not value:
-                        try:
-                            setattr(obj, name, new_value)
-                        except Exception:
-                            pass
-            return obj
-        module_name = getattr(obj.__class__, "__module__", "")
-        if (
-            hasattr(obj, "__dict__")
-            and not isinstance(obj, ModuleType)
-            and module_name.startswith(("ai_trading", "tests", "__main__"))
-        ):
-            for name, value in list(vars(obj).items()):
-                new_value = _scan(value, seen)
-                if new_value is not value:
-                    try:
-                        setattr(obj, name, new_value)
-                    except Exception:
-                        pass
-            return obj
-
-        return obj
-
-    cells = getattr(worker, "__closure__", None)
-    if cells:
-        seen: set[int] = set()
-        for cell in cells:
-            try:
-                original = cell.cell_contents
-                new_value = _scan(original, seen)
-                if new_value is not original:
-                    cell.cell_contents = new_value
-            except ValueError:
-                continue
-
-    concurrency_limit = max(1, max_concurrency)
+    semaphore = asyncio.Semaphore(max(1, int(max_concurrency)))
     counter_lock = asyncio.Lock()
     running = 0
-    peak_running = 0
+    results: dict[str, T | None] = {}
 
-    async def _increment() -> None:
-        nonlocal running, peak_running
-        async with counter_lock:
-            running += 1
-            peak_running = max(peak_running, running)
-
-    async def _decrement() -> None:
+    async def _execute(symbol: str) -> tuple[str, T | BaseException]:
+        global PEAK_SIMULTANEOUS_WORKERS
         nonlocal running
-        async with counter_lock:
-            running -= 1
-
-    async def _execute(sym: str) -> tuple[str, T | None]:
-        await _increment()
+        incremented = False
         try:
-            coro = worker(sym)
-            if timeout is not None:
-                coro = asyncio.wait_for(coro, timeout)
-            result = await coro
-            return sym, result
-        except Exception:  # noqa: BLE001 - treat failure as None result
-            return sym, None
-        finally:
-            await _decrement()
+            async with semaphore:
+                try:
+                    async with counter_lock:
+                        running += 1
+                        incremented = True
+                        if running > PEAK_SIMULTANEOUS_WORKERS:
+                            PEAK_SIMULTANEOUS_WORKERS = running
+                    result = await worker(symbol)
+                    return symbol, result
+                except BaseException as exc:  # noqa: BLE001 - captured for aggregation
+                    return symbol, exc
+                finally:
+                    if incremented:
+                        try:
+                            async with counter_lock:
+                                running -= 1
+                        except BaseException:
+                            running = max(0, running - 1)
+        except BaseException as exc:  # cancelled while acquiring semaphore
+            return symbol, exc
 
-    coroutines = [functools.partial(_execute, sym) for sym in symbols]
-    gathered, _, _ = await run_with_concurrency_limit(
-        coroutines,
-        concurrency_limit,
-        per_task_timeout=timeout if timeout is not None else 5.0,
-    )
+    tasks: list[asyncio.Task[tuple[str, T | BaseException]]] = [
+        asyncio.create_task(_execute(sym)) for sym in symbols
+    ]
 
-    for entry in gathered:
-        if isinstance(entry, Exception):
-            continue
-        sym, res = entry
-        results[sym] = res
-        if res is None:
-            FAILED_SYMBOLS.add(sym)
-        else:
-            SUCCESSFUL_SYMBOLS.add(sym)
+    if not tasks:
+        return results, set(), set()
 
-    PEAK_SIMULTANEOUS_WORKERS = peak_running
-
+    gather_coro = asyncio.gather(*tasks, return_exceptions=False)
     try:
-        return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
-    finally:
-        PEAK_SIMULTANEOUS_WORKERS = 0
+        task_results = (
+            await asyncio.wait_for(gather_coro, timeout_s)
+            if timeout_s is not None
+            else await gather_coro
+        )
+    except asyncio.TimeoutError:
+        for task in tasks:
+            task.cancel()
+        task_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for entry in task_results:
+        if isinstance(entry, BaseException):
+            # ``asyncio.gather`` only yields bare exceptions when our task itself failed
+            continue
+        symbol, outcome = entry
+        if isinstance(outcome, BaseException):
+            FAILED_SYMBOLS.add(symbol)
+            results[symbol] = None
+        else:
+            SUCCESSFUL_SYMBOLS.add(symbol)
+            results[symbol] = outcome
+
+    return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
+
+
+async def run_with_concurrency_limit(
+    symbols: Iterable[str],
+    worker: Callable[[str], Awaitable[T]],
+    *,
+    max_concurrency: int = 4,
+    timeout_s: float | None = None,
+) -> tuple[dict[str, T | None], set[str], set[str]]:
+    """Compatibility alias for ``run_with_concurrency``."""
+
+    return await run_with_concurrency(
+        symbols,
+        worker,
+        max_concurrency=max_concurrency,
+        timeout_s=timeout_s,
+    )
 
 
 __all__ = [
@@ -406,3 +365,4 @@ __all__ = [
     "FAILED_SYMBOLS",
     "PEAK_SIMULTANEOUS_WORKERS",
 ]
+

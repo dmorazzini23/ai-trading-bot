@@ -12,27 +12,59 @@ import json
 
 
 def resp_json(resp: Any) -> Any:
-    """Return the JSON payload from a response-like object.
+    """Return JSON from a response-like object.
 
-    The function first tries ``resp.json()``.  If the method is missing or
-    raises an exception, it falls back to parsing ``resp.data`` or ``resp.text``
-    as JSON.  If no JSON payload can be decoded an empty ``dict`` is returned.
+    Supports native ``.json()`` helpers, file-like ``.read()`` objects, and
+    common attributes such as ``.text`` or ``.data``.  Falls back to decoding the
+    string representation when it resembles JSON.  Returns ``{}`` on failure to
+    keep fallback callers defensive.
     """
+
+    # Native JSON helper
     try:
-        return resp.json()  # type: ignore[attr-defined]
+        if hasattr(resp, "json"):
+            return resp.json()
     except Exception:
         pass
 
-    raw = getattr(resp, "data", None)
-    if raw is None:
-        raw = getattr(resp, "text", None)
-    if raw is None:
-        return {}
-    if isinstance(raw, (bytes, bytearray)):
+    raw: Any = None
+
+    for attr in ("data", "text", "content"):
         try:
-            raw = raw.decode("utf-8")
+            value = getattr(resp, attr)
         except Exception:
-            return {}
+            continue
+        else:
+            if value is not None:
+                raw = value
+                break
+
+    if raw is None and hasattr(resp, "read"):
+        try:
+            raw = resp.read()
+        except Exception:
+            raw = None
+
+    if raw is None and hasattr(resp, "body"):
+        try:
+            raw = resp.body
+        except Exception:
+            raw = None
+
+    if raw is None:
+        raw = resp
+
+    try:
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="ignore")
+        elif not isinstance(raw, str):
+            raw = str(raw)
+    except Exception:
+        return {}
+
+    raw = raw.strip()
+    if not raw:
+        return {}
 
     try:
         return json.loads(raw)
