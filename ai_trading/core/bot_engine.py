@@ -5161,6 +5161,9 @@ class BotState:
     # Minute data feed cache scoped to the active trading cycle
     minute_feed_cache: dict[str, str] = field(default_factory=dict)
 
+    # Intraday price reliability metadata populated from fetch_minute_df_safe
+    price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
+
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
         default_factory=list
@@ -11922,6 +11925,27 @@ def _safe_trade(
         return False
 
 
+def _record_price_reliability(state: BotState, symbol: str, df: pd.DataFrame | None) -> None:
+    mapping = getattr(state, "price_reliability", None)
+    if not isinstance(mapping, dict):
+        return
+    if df is None or getattr(df, "empty", False):
+        mapping.pop(symbol, None)
+        return
+    attrs = getattr(df, "attrs", None)
+    reliable = True
+    reason: str | None = None
+    if isinstance(attrs, dict):
+        reliable = bool(attrs.get("price_reliable", True))
+        reason_val = attrs.get("price_reliable_reason")
+        if reason_val not in (None, ""):
+            try:
+                reason = str(reason_val)
+            except Exception:
+                reason = None
+    mapping[symbol] = (reliable, reason)
+
+
 def _fetch_feature_data(
     ctx: BotContext,
     state: BotState,
@@ -11951,7 +11975,9 @@ def _fetch_feature_data(
     if raw_df is None:
         try:
             raw_df = fetch_minute_df_safe(symbol)
+            _record_price_reliability(state, symbol, raw_df)
         except EmptyBarsError as exc:
+            _record_price_reliability(state, symbol, None)
             logger.warning(
                 "MINUTE_DATA_UNAVAILABLE",
                 extra={
@@ -11963,6 +11989,7 @@ def _fetch_feature_data(
             )
             return None, None, True
         except (TimeoutError, data_fetcher_module.Timeout) as exc:
+            _record_price_reliability(state, symbol, None)
             logger.warning(
                 "MINUTE_DATA_UNAVAILABLE",
                 extra={
@@ -11974,6 +12001,7 @@ def _fetch_feature_data(
             )
             return None, None, True
         except DataFetchError as exc:
+            _record_price_reliability(state, symbol, None)
             reason = getattr(exc, "fetch_reason", "")
             if reason == "stale_minute_data":
                 logger.info(
@@ -12000,11 +12028,15 @@ def _fetch_feature_data(
                 raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
                 if raw_df is None or raw_df.empty:
                     logger.debug(f"{symbol}: no daily data either; skipping.")
+                    _record_price_reliability(state, symbol, None)
                     _halt("daily_data_unavailable")
                     return None, None, False
             else:
                 raise
+    else:
+        _record_price_reliability(state, symbol, raw_df)
     if raw_df is None or raw_df.empty:
+        _record_price_reliability(state, symbol, raw_df)
         _halt("empty_frame")
         return None, None, False
 
@@ -12242,6 +12274,27 @@ def _should_skip_order_for_alpaca_unavailable(
     return False
 
 
+def _price_reliability(state: BotState, symbol: str) -> tuple[bool, str | None]:
+    mapping = getattr(state, "price_reliability", None)
+    if isinstance(mapping, dict):
+        info = mapping.get(symbol)
+        if isinstance(info, tuple) and len(info) >= 2:
+            reliable, reason = info[0], info[1]
+            return bool(reliable), reason
+        if isinstance(info, dict):
+            reliable = bool(info.get("price_reliable", True))
+            reason_val = info.get("reason")
+            if reason_val not in (None, ""):
+                try:
+                    reason = str(reason_val)
+                except Exception:
+                    reason = None
+                else:
+                    return reliable, reason
+            return reliable, None
+    return True, None
+
+
 def _enter_long(
     ctx: BotContext,
     state: BotState,
@@ -12350,6 +12403,15 @@ def _enter_long(
         )
         return True
     if price_source != "feature_close" and not _is_primary_price_source(price_source):
+        reliable, reason = _price_reliability(state, symbol)
+        if not reliable:
+            reason_label = reason or "unreliable_price"
+            logger.info(
+                "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+                symbol,
+                reason_label,
+            )
+            return True
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -12570,6 +12632,15 @@ def _enter_short(
         )
         return True
     if not _is_primary_price_source(price_source):
+        reliable, reason = _price_reliability(state, symbol)
+        if not reliable:
+            reason_label = reason or "unreliable_price"
+            logger.info(
+                "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+                symbol,
+                reason_label,
+            )
+            return True
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
