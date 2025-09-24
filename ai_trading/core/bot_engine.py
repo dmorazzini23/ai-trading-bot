@@ -5477,6 +5477,12 @@ sentiment_lock = Lock()
 slippage_lock = Lock()
 meta_lock = Lock()
 run_lock = Lock()
+
+_DAILY_FETCH_MEMO: dict[tuple[str, str], tuple[float, Any]] = {}
+try:
+    _DAILY_FETCH_MEMO_TTL = float(os.getenv("DAILY_FETCH_MEMO_TTL", "60"))
+except (TypeError, ValueError):
+    _DAILY_FETCH_MEMO_TTL = 60.0
 # AI-AGENT-REF: Add thread-safe locking for trade cooldown state
 trade_cooldowns_lock = Lock()
 
@@ -6082,6 +6088,32 @@ class DataFetcher:
             end_ts = datetime.combine(today, dt_time.max, tzinfo=UTC)
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
         fetch_date = end_ts.date()
+        memo_key = (symbol, fetch_date.isoformat())
+        memo_candidate: Any | None = None
+        now_monotonic = time.monotonic()
+        with cache_lock:
+            memo_entry = _DAILY_FETCH_MEMO.get(memo_key)
+            if memo_entry:
+                memo_ts, memo_df = memo_entry
+                if now_monotonic - memo_ts < _DAILY_FETCH_MEMO_TTL:
+                    memo_candidate = memo_df
+                else:
+                    _DAILY_FETCH_MEMO.pop(memo_key, None)
+        if memo_candidate is not None:
+            if not self._daily_cache_hit_logged:
+                logger.info(
+                    "DAILY_FETCH_CACHE_HIT",
+                    extra={"symbol": symbol, "memoized": True},
+                )
+                self._daily_cache_hit_logged = True
+            elif logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "DAILY_FETCH_CACHE_HIT",
+                    extra={"symbol": symbol, "memoized": True},
+                )
+            with cache_lock:
+                _DAILY_FETCH_MEMO[memo_key] = (time.monotonic(), memo_candidate)
+            return memo_candidate
         with cache_lock:
             entry = self._daily_cache.get(symbol)
             if entry and entry[0] == fetch_date:
@@ -6101,6 +6133,7 @@ class DataFetcher:
                         logger.exception("bot.py unexpected", exc_info=exc)
                         raise
                 cached_df = entry[1]
+                _DAILY_FETCH_MEMO[memo_key] = (time.monotonic(), cached_df)
                 if not self._daily_cache_hit_logged:
                     logger.info("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
                     self._daily_cache_hit_logged = True
@@ -6446,6 +6479,7 @@ class DataFetcher:
         df = self._prepare_daily_dataframe(df, symbol)
         with cache_lock:
             self._daily_cache[symbol] = (fetch_date, df)
+            _DAILY_FETCH_MEMO[memo_key] = (time.monotonic(), df)
         if daily_cache_miss:
             try:
                 daily_cache_miss.inc()
@@ -16358,8 +16392,12 @@ def _process_symbols(
     if cd_skipped:
         log_skip_cooldown(cd_skipped)
 
+    data_stats_lock = Lock()
+    data_stats = {"failed": 0, "succeeded": 0}
+
     def process_symbol(symbol: str) -> None:
         completed_stages: list[str] = []
+        local_success = False
 
         def _checkpoint(pending: str) -> bool:
             if should_stop():
@@ -16397,6 +16435,18 @@ def _process_symbols(
                     return
                 price_df = fetch_minute_df_safe(symbol)
                 completed_stages.append("fetch")
+            except EmptyBarsError as exc:
+                logger.warning(
+                    "PROCESS_SYMBOL_EMPTY_BARS",
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "detail": str(exc),
+                    },
+                )
+                with data_stats_lock:
+                    data_stats["failed"] += 1
+                return
             except DataFetchError as exc:
                 reason = getattr(exc, "fetch_reason", "")
                 if reason in {
@@ -16407,12 +16457,16 @@ def _process_symbols(
                     _halt("empty_frame")
                 else:
                     _halt("minute_data_unavailable")
+                with data_stats_lock:
+                    data_stats["failed"] += 1
                 return
             # AI-AGENT-REF: record raw row count before validation
             row_counts[symbol] = len(price_df)
             logger.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
             if price_df.empty or "close" not in price_df.columns:
                 _halt("empty_frame")
+                with data_stats_lock:
+                    data_stats["failed"] += 1
                 return
             close_series = price_df["close"] if "close" in price_df.columns else None
             if close_series is not None:
@@ -16425,6 +16479,8 @@ def _process_symbols(
                         non_null_count = 0
                 if non_null_count == 0:
                     _halt("empty_frame")
+                    with data_stats_lock:
+                        data_stats["failed"] += 1
                     return
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
@@ -16441,6 +16497,7 @@ def _process_symbols(
                 price_df=price_df,
             )
             completed_stages.append("trade")
+            local_success = True
         except (
             KeyError,
             ValueError,
@@ -16455,6 +16512,10 @@ def _process_symbols(
                 },
                 exc_info=True,
             )
+        finally:
+            if local_success:
+                with data_stats_lock:
+                    data_stats["succeeded"] += 1
 
     # Use module-level prediction_executor so tests can monkeypatch it.
     # When not monkeypatched, initialize it from the shared executors module.
@@ -16479,6 +16540,16 @@ def _process_symbols(
             f.cancel()
             continue
         f.result()
+
+    with data_stats_lock:
+        failed = int(data_stats.get("failed", 0))
+        succeeded = int(data_stats.get("succeeded", 0))
+    total_candidates = len(symbols)
+    skipped = max(total_candidates - failed - succeeded, 0)
+    logger.info(
+        "CYCLE_DATA_ERRORS",
+        extra={"failed": failed, "succeeded": succeeded, "skipped": skipped},
+    )
     return processed, row_counts
 
 

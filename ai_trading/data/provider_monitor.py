@@ -30,6 +30,13 @@ from ai_trading.data.metrics import (
 logger = get_logger(__name__)
 
 
+def _normalize_provider(name: str) -> str:
+    normalized = (name or "").strip().lower().replace("-", "_")
+    if normalized == "alpaca_yahoo":
+        return "yahoo"
+    return normalized or name
+
+
 class ProviderMonitor:
     """Simple failure counter with alerting and disable hooks."""
 
@@ -201,6 +208,23 @@ class ProviderMonitor:
         except Exception:  # pragma: no cover - defensive
             pass
 
+    def _migrate_provider_state(self, old: str, new: str) -> None:
+        if not old or old == new:
+            return
+        for mapping in (
+            self._last_switch_time,
+            self._current_switch_cooldowns,
+            self._switchover_disable_counts,
+            self.consecutive_switches_by_provider,
+            self._alert_cooldown_until,
+            self.disabled_since,
+            self.disabled_until,
+        ):
+            if old in mapping and new not in mapping:
+                mapping[new] = mapping.pop(old)
+            elif old in mapping:
+                mapping.pop(old)
+
     def record_switchover(self, from_provider: str, to_provider: str) -> None:
         """Record a switchover from one provider to another.
 
@@ -210,54 +234,65 @@ class ProviderMonitor:
         exceeded.
         """
 
+        from_key = _normalize_provider(from_provider)
+        to_key = _normalize_provider(to_provider)
+        if from_key != from_provider:
+            self._migrate_provider_state(from_provider, from_key)
+        if to_key != to_provider:
+            self._migrate_provider_state(to_provider, to_key)
         now = datetime.now(UTC)
-        last = self._last_switch_time.get(from_provider)
-        cooldown_window = self._current_switch_cooldowns.get(from_provider, float(self.cooldown))
+        last = self._last_switch_time.get(from_key)
+        cooldown_window = self._current_switch_cooldowns.get(from_key, float(self.cooldown))
         if last:
             elapsed = (now - last).total_seconds()
             if elapsed >= cooldown_window:
-                self.consecutive_switches_by_provider.pop(from_provider, None)
-                self._switchover_disable_counts.pop(from_provider, None)
-                self._current_switch_cooldowns[from_provider] = float(self.cooldown)
-                self._alert_cooldown_until.pop(from_provider, None)
+                self.consecutive_switches_by_provider.pop(from_key, None)
+                self._switchover_disable_counts.pop(from_key, None)
+                self._current_switch_cooldowns[from_key] = float(self.cooldown)
+                self._alert_cooldown_until.pop(from_key, None)
                 if not self.consecutive_switches_by_provider:
                     self.consecutive_switches = 0
-        self._last_switch_time[from_provider] = now
-        count = self._switchover_disable_counts[from_provider] + 1
-        self._switchover_disable_counts[from_provider] = count
+        self._last_switch_time[from_key] = now
+        count = self._switchover_disable_counts[from_key] + 1
+        self._switchover_disable_counts[from_key] = count
         cooldown_window = min(
             self.cooldown * (self.backoff_factor ** (count - 1)),
             self.max_cooldown,
         )
-        self._current_switch_cooldowns[from_provider] = cooldown_window
-        key = (from_provider, to_provider)
+        self._current_switch_cooldowns[from_key] = cooldown_window
+        key = (from_key, to_key)
+        if key not in self.switch_counts:
+            # migrate existing counter from raw key if present
+            raw_key = (from_provider, to_provider)
+            if raw_key in self.switch_counts:
+                self.switch_counts[key] = self.switch_counts.pop(raw_key)
         self.switch_counts[key] += 1
-        streak = self.consecutive_switches_by_provider[from_provider] + 1
-        self.consecutive_switches_by_provider[from_provider] = streak
+        streak = self.consecutive_switches_by_provider[from_key] + 1
+        self.consecutive_switches_by_provider[from_key] = streak
         self.consecutive_switches = streak
         logger.info(
             "DATA_PROVIDER_SWITCHOVER",
             extra={
-                "from_provider": from_provider,
-                "to_provider": to_provider,
+                "from_provider": from_key,
+                "to_provider": to_key,
                 "count": self.switch_counts[key],
             },
         )
-        disabled_since = self.disabled_since.get(from_provider)
+        disabled_since = self.disabled_since.get(from_key)
         if disabled_since:
             duration = (now - disabled_since).total_seconds()
-            provider_failure_duration_seconds.labels(provider=from_provider).inc(duration)
+            provider_failure_duration_seconds.labels(provider=from_key).inc(duration)
             logger.info(
                 "DATA_PROVIDER_FAILURE_DURATION",
-                extra={"provider": from_provider, "duration": duration},
+                extra={"provider": from_key, "duration": duration},
             )
-        cooldown_until = self._alert_cooldown_until.get(from_provider)
+        cooldown_until = self._alert_cooldown_until.get(from_key)
         if streak >= self.switchover_threshold and (cooldown_until is None or now >= cooldown_until):
             logger.warning(
                 "PRIMARY_DATA_FEED_UNAVAILABLE",
                 extra={
-                    "from_provider": from_provider,
-                    "to_provider": to_provider,
+                    "from_provider": from_key,
+                    "to_provider": to_key,
                     "consecutive": streak,
                 },
             )
@@ -269,15 +304,15 @@ class ProviderMonitor:
                     metadata={"count": streak},
                 )
             except Exception:  # pragma: no cover - alerting best effort
-                logger.exception("ALERT_FAILURE", extra={"provider": to_provider})
-            self._alert_cooldown_until[from_provider] = now + timedelta(seconds=cooldown_window)
+                logger.exception("ALERT_FAILURE", extra={"provider": to_key})
+            self._alert_cooldown_until[from_key] = now + timedelta(seconds=cooldown_window)
             # Back off the failing provider more aggressively to avoid thrashing
             try:
-                self.disable(from_provider, duration=self.max_cooldown)
+                self.disable(from_key, duration=self.max_cooldown)
             except Exception:  # pragma: no cover - defensive disable
                 logger.exception(
                     "PROVIDER_DISABLE_FAILED",
-                    extra={"provider": from_provider},
+                    extra={"provider": from_key},
                 )
 
     def disable(self, provider: str, *, duration: float | None = None) -> None:
