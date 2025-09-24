@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     alpaca_secret_key: SecretStr | None = Field(default=None, alias="ALPACA_SECRET_KEY")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")
     enable_finnhub: bool = Field(True, alias="ENABLE_FINNHUB")
+    alpaca_rate_limit_per_min: int = Field(200, alias="ALPACA_RATE_LIMIT_PER_MIN")
     finnhub_api_key: str | None = Field(default=None, alias="FINNHUB_API_KEY")
     backup_data_provider: Literal["yahoo", "none", "finnhub", "finnhub_low_latency"] = Field(
         "yahoo", alias="BACKUP_DATA_PROVIDER"

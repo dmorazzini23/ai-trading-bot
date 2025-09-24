@@ -354,10 +354,27 @@ _global_rate_limiter: RateLimiter | None = None
 
 
 def get_rate_limiter() -> RateLimiter:
-    """Get or create global rate limiter instance."""
+    """Get or create global rate limiter instance.
+
+    Initializes the global token bucket based on the Alpaca RPM budget from the
+    environment. Defaults to the Basic plan limit of 200 requests per minute.
+    """
+
+    import os
+
     global _global_rate_limiter
     if _global_rate_limiter is None:
-        _global_rate_limiter = RateLimiter()
+        raw_rpm = os.getenv("ALPACA_RATE_LIMIT_PER_MIN", "200")
+        try:
+            rpm = int(str(raw_rpm).strip())
+        except Exception:
+            logger.warning("Invalid ALPACA_RATE_LIMIT_PER_MIN=%r; defaulting to 200", raw_rpm)
+            rpm = 200
+        if rpm < 1:
+            logger.warning("ALPACA_RATE_LIMIT_PER_MIN=%s below 1; using minimum of 1", rpm)
+            rpm = 1
+        rate_per_second = rpm / 60.0
+        _global_rate_limiter = RateLimiter(global_capacity=rpm, global_rate=rate_per_second)
     return _global_rate_limiter
 
 
