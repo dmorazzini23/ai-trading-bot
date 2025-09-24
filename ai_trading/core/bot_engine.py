@@ -1895,6 +1895,67 @@ def _reload_env(path: str | None = None, *, override: bool = True) -> str | None
     return result
 
 
+def _resolve_orders_threshold(cfg: TradingConfig, key: str, default: float) -> float:
+    """Return float threshold from TradingConfig orders section with fallbacks."""
+
+    candidate: Any | None = None
+    orders_section = getattr(cfg, "orders", None)
+    if isinstance(orders_section, Mapping):
+        candidate = orders_section.get(key)
+    elif orders_section is not None:
+        candidate = getattr(orders_section, key, None)
+    if candidate in (None, ""):
+        candidate = getattr(cfg, f"orders_{key}", None)
+    if candidate in (None, ""):
+        candidate = getattr(cfg, key, None)
+    if candidate in (None, ""):
+        env_key = f"ORDERS_{key.upper()}"
+        raw_env = os.getenv(env_key)
+        if raw_env not in (None, ""):
+            try:
+                candidate = float(raw_env)
+            except (TypeError, ValueError):
+                candidate = None
+    if candidate in (None, ""):
+        return float(default)
+    try:
+        value = float(candidate)
+    except (TypeError, ValueError):
+        return float(default)
+    return max(0.0, value)
+
+
+def _pending_new_thresholds() -> tuple[float, float]:
+    """Return warn/error thresholds for pending_new order severity."""
+
+    cfg = _get_trading_config()
+    warn_s = _resolve_orders_threshold(cfg, "pending_new_warn_s", 90.0)
+    error_s = _resolve_orders_threshold(cfg, "pending_new_error_s", 180.0)
+    if error_s < warn_s:
+        error_s = warn_s
+    return warn_s, error_s
+
+
+def _order_pending_age_seconds(order: Any, *, now: datetime | None = None) -> float:
+    """Compute pending order age in seconds using created/submitted timestamp."""
+
+    now_dt = now or datetime.now(UTC)
+    timestamp: datetime | None = None
+    for attr in ("created_at", "submitted_at"):
+        raw_value = getattr(order, attr, None)
+        if raw_value in (None, ""):
+            continue
+        try:
+            timestamp = _ensure_utc_dt(raw_value)
+            break
+        except Exception:
+            continue
+    if timestamp is None:
+        return 0.0
+    age = (now_dt - timestamp).total_seconds()
+    return float(age) if age > 0 else 0.0
+
+
 def is_runtime_ready() -> bool:
     """Check if runtime context is fully initialized."""
     return _RUNTIME_READY
@@ -11417,6 +11478,23 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 logger.info(
                     f"Order for {order_args.get('symbol')} is NEW; awaiting fill"
                 )
+            elif status == pending_new:
+                warn_threshold_s, error_threshold_s = _pending_new_thresholds()
+                age_seconds = _order_pending_age_seconds(order)
+                symbol = order_args.get("symbol") or ""
+                log_msg = (
+                    "ORDER_PENDING | "
+                    f"symbol={symbol} "
+                    f"age_s={int(round(age_seconds))} "
+                    f"threshold_warn={int(round(warn_threshold_s))} "
+                    f"threshold_error={int(round(error_threshold_s))}"
+                )
+                if age_seconds >= error_threshold_s:
+                    logger.error(log_msg)
+                elif age_seconds >= warn_threshold_s:
+                    logger.warning(log_msg)
+                else:
+                    logger.info(log_msg)
             else:
                 logger.error(
                     f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
