@@ -3462,6 +3462,25 @@ from ai_trading.metrics import (
 
 # Prometheus metrics - lazy initialization to prevent duplicates
 _METRICS_READY = False
+
+# Initialize metric globals eagerly so test fixtures can monkeypatch them
+# without having to guard against missing attributes. These are populated with
+# real metric instances the first time ``_init_metrics`` runs.
+orders_total = None
+order_failures = None
+daily_drawdown = None
+signals_evaluated = None
+run_all_trades_duration = None
+minute_cache_hit = None
+minute_cache_miss = None
+daily_cache_hit = None
+daily_cache_miss = None
+event_cooldown_hits = None
+slippage_total = None
+slippage_count = None
+weekly_drawdown = None
+skipped_duplicates = None
+skipped_cooldown = None
 sentiment_api_failures = None
 sentiment_cb_state = None
 
