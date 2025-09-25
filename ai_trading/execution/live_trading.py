@@ -971,6 +971,7 @@ class ExecutionEngine:
         """
 
         kwargs = dict(kwargs)
+        original_kwarg_keys = set(kwargs)
         mapped_side = self._map_core_side(side)
         if qty <= 0:
             raise ValueError(f"execute_order invalid qty={qty}")
@@ -980,8 +981,7 @@ class ExecutionEngine:
         kwargs.pop("signal", None)
         signal_weight = kwargs.pop("signal_weight", None)
         price_alias = kwargs.pop("price", None)
-        raw_keys = set(kwargs)
-        ignored_keys = {key for key in raw_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
+        ignored_keys = {key for key in original_kwarg_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
         for key in list(ignored_keys):
             kwargs.pop(key, None)
         if limit_price is None and price_alias is not None:
