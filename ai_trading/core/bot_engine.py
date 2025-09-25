@@ -13679,10 +13679,16 @@ def _enter_long(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        if price_source not in {"alpaca", "alpaca_iex", "alpaca_sip"}:
-            logger.warning(
+        _PRICE_SOURCE[symbol] = price_source
+        fallback_active = (
+            prefer_backup_quote
+            or price_source == _ALPACA_DISABLED_SENTINEL
+            or not _is_primary_price_source(price_source)
+        )
+        if fallback_active:
+            logger.info(
                 "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-                extra={"symbol": symbol, "provider": "alpaca"},
+                extra={"symbol": symbol, "provider": price_source or "unknown"},
             )
         if _should_skip_order_for_alpaca_unavailable(
             state, symbol, price_source
@@ -13730,6 +13736,12 @@ def _enter_long(
             )
             return True
 
+    fallback_active = (
+        prefer_backup_quote
+        or price_source == _ALPACA_DISABLED_SENTINEL
+        or not _is_primary_price_source(price_source)
+    )
+
     if price_source == "unknown":
         logger.warning(
             "SKIP_ORDER_PRICE_SOURCE",
@@ -13771,11 +13783,7 @@ def _enter_long(
                 "prefer_backup": prefer_backup_quote,
             },
         )
-    if (
-        not _is_primary_price_source(price_source)
-        or price_source == "feature_close"
-        or prefer_backup_quote
-    ) and not gate.block:
+    if fallback_active and quote_price is not None:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -13995,15 +14003,27 @@ def _enter_short(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        if price_source not in {"alpaca", "alpaca_iex", "alpaca_sip"}:
-            logger.warning(
+        _PRICE_SOURCE[symbol] = price_source
+        fallback_active = (
+            prefer_backup_quote
+            or price_source == _ALPACA_DISABLED_SENTINEL
+            or not _is_primary_price_source(price_source)
+        )
+        if fallback_active:
+            logger.info(
                 "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
-                extra={"symbol": symbol, "provider": "alpaca"},
+                extra={"symbol": symbol, "provider": price_source or "unknown"},
             )
         if _should_skip_order_for_alpaca_unavailable(
             state, symbol, price_source
         ):
             return True
+    fallback_active = (
+        prefer_backup_quote
+        or price_source == _ALPACA_DISABLED_SENTINEL
+        or not _is_primary_price_source(price_source)
+    )
+
     if quote_price is None:
         logger.warning(
             "SKIP_ORDER_NO_PRICE",
@@ -14051,11 +14071,7 @@ def _enter_short(
                 "prefer_backup": prefer_backup_quote,
             },
         )
-    if (
-        not _is_primary_price_source(price_source)
-        or price_source == "feature_close"
-        or prefer_backup_quote
-    ) and not gate.block:
+    if fallback_active and quote_price is not None:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -14345,6 +14361,10 @@ def trade_logic(
     if not provider_enabled:
         logger.warning(
             "PRIMARY_PROVIDER_DEGRADED",
+            extra={"symbol": symbol, "provider": "alpaca"},
+        )
+        logger.info(
+            "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
             extra={"symbol": symbol, "provider": "alpaca"},
         )
         degraded = getattr(state, "degraded_providers", None)
