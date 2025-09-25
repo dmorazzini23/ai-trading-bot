@@ -120,18 +120,45 @@ def _cache_fallback(symbol: str, feed: str) -> None:
 
 
 async def run_with_concurrency(limit: int, coros):
-    """Execute *coros* concurrently while respecting *limit*."""
+    """Execute *coros* concurrently while keeping at most *limit* in flight."""
 
-    semaphore = asyncio.Semaphore(limit)
+    max_concurrency = max(1, int(limit or 1))
+    semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def _run(task):
+    async def _run(index: int, coro):
         async with semaphore:
-            return await task
+            try:
+                result = await coro
+            except BaseException as exc:  # noqa: BLE001 - surface alongside results
+                return index, exc
+            return index, result
 
-    results = await asyncio.gather(*(_run(c) for c in coros), return_exceptions=True)
-    succeeded = sum(1 for item in results if not isinstance(item, Exception))
-    failed = len(results) - succeeded
-    return results, succeeded, failed
+    pending: set[asyncio.Task[tuple[int, Any]]] = set()
+    results: dict[int, Any] = {}
+    total = 0
+    iterator = iter(coros)
+
+    while True:
+        while len(pending) < max_concurrency:
+            try:
+                coro = next(iterator)
+            except StopIteration:
+                break
+            pending.add(asyncio.create_task(_run(total, coro)))
+            total += 1
+
+        if not pending:
+            break
+
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            index, value = task.result()
+            results[index] = value
+
+    ordered_results = [results[i] for i in range(total)] if total else []
+    succeeded = sum(1 for item in ordered_results if not isinstance(item, Exception))
+    failed = total - succeeded
+    return ordered_results, succeeded, failed
 
 
 _daily_memo: Dict[Tuple[str, str], Tuple[float, Any]] = {}
