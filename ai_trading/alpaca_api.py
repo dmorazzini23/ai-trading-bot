@@ -245,7 +245,8 @@ if not ALPACA_AVAILABLE:  # pragma: no cover - exercised in tests
 
 
 def _make_client_order_id(prefix: str = "ai") -> str:
-    return f"{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+    minute_bucket = int(time.time() // 60)
+    return f"{prefix}-{minute_bucket}-{uuid.uuid4().hex[:8]}"
 
 
 generate_client_order_id = _make_client_order_id
@@ -959,12 +960,24 @@ def submit_order(
     do_shadow = cfg.shadow if shadow is None else bool(shadow)
     q_int = _as_int(qty)
     timeout = clamp_request_timeout(timeout)
-    idempotency_key = idempotency_key or generate_client_order_id()
+    symbol_part = str(symbol or "").strip().upper() or "UNKNOWN"
+    side_part = str(side or "").strip().lower() or "buy"
+    prefix = f"{symbol_part}-{side_part}"
+    idempotency_key = idempotency_key or generate_client_order_id(prefix)
 
     if client is not None and shadow is None:
         # Respect explicit shadow override but default to real execution when a
         # client is supplied (callers may choose shadow=True explicitly).
         do_shadow = False
+
+    def _ensure_client_order_id(payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            return payload
+        if idempotency_key and payload.get("client_order_id") in (None, ""):
+            enriched = dict(payload)
+            enriched["client_order_id"] = idempotency_key
+            return enriched
+        return payload
 
     _record_client_order_id(client, idempotency_key)
 
@@ -997,7 +1010,7 @@ def submit_order(
             timeout=timeout,
         )
         _record_client_order_id(client, idempotency_key)
-        return order
+        return _ensure_client_order_id(order)
 
     try:
         from alpaca.trading.client import TradingClient as _REST
@@ -1007,22 +1020,25 @@ def submit_order(
             secret_key=cfg.secret_key,
             url_override=cfg.base_url,
         )
-        return _sdk_submit(
-            rest,
-            symbol=symbol,
-            qty=q_int,
-            side=side,
-            type=type,
-            time_in_force=time_in_force,
-            limit_price=limit_price,
-            stop_price=stop_price,
-            idempotency_key=idempotency_key,
-            timeout=timeout,
+        return _ensure_client_order_id(
+            _sdk_submit(
+                rest,
+                symbol=symbol,
+                qty=q_int,
+                side=side,
+                type=type,
+                time_in_force=time_in_force,
+                limit_price=limit_price,
+                stop_price=stop_price,
+                idempotency_key=idempotency_key,
+                timeout=timeout,
+            )
         )
     except ModuleNotFoundError:
         pass
 
-    return _http_submit(
+    return _ensure_client_order_id(
+        _http_submit(
         cfg,
         symbol=symbol,
         qty=q_int,
@@ -1033,7 +1049,7 @@ def submit_order(
         stop_price=stop_price,
         idempotency_key=idempotency_key,
         timeout=timeout,
-    )
+    ))
 
 
 def alpaca_get(
