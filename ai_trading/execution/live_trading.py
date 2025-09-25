@@ -76,7 +76,11 @@ def get_cached_credential_truth() -> tuple[bool, bool, float]:
 
 from ai_trading.alpaca_api import AlpacaOrderHTTPError
 from ai_trading.config import AlpacaConfig, get_alpaca_config, get_execution_settings
-from ai_trading.execution.engine import ExecutionResult
+from ai_trading.execution.engine import (
+    ExecutionResult,
+    KNOWN_EXECUTE_ORDER_KWARGS,
+    OrderManager,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import for typing only
     from ai_trading.core.enums import OrderSide as CoreOrderSide
@@ -529,6 +533,7 @@ class ExecutionEngine:
             "capacity_skips": 0,
             "skipped_orders": 0,
         }
+        self.order_manager = OrderManager()
         self.base_url = get_alpaca_base_url()
         self._api_key: str | None = None
         self._api_secret: str | None = None
@@ -955,6 +960,7 @@ class ExecutionEngine:
         qty: int,
         order_type: Literal["market", "limit"] = "limit",
         limit_price: Optional[float] = None,
+        *,
         asset_class: Optional[str] = None,
         **kwargs: Any,
     ) -> ExecutionResult:
@@ -965,15 +971,20 @@ class ExecutionEngine:
         ignored to preserve forward compatibility.
         """
 
+        kwargs = dict(kwargs)
         mapped_side = self._map_core_side(side)
         if qty <= 0:
             raise ValueError(f"execute_order invalid qty={qty}")
 
-        time_in_force = kwargs.pop("tif", None)
-        extended_hours = kwargs.pop("extended_hours", None)
+        time_in_force_alias = kwargs.pop("tif", None)
+        extended_hours = kwargs.get("extended_hours")
         kwargs.pop("signal", None)
         signal_weight = kwargs.pop("signal_weight", None)
         price_alias = kwargs.pop("price", None)
+        raw_keys = set(kwargs)
+        ignored_keys = {key for key in raw_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
+        for key in list(ignored_keys):
+            kwargs.pop(key, None)
         if limit_price is None and price_alias is not None:
             limit_price = price_alias
 
@@ -984,26 +995,36 @@ class ExecutionEngine:
             order_type_normalized = "limit"
 
         order_kwargs: dict[str, Any] = {}
+        time_in_force = kwargs.get("time_in_force")
+        if time_in_force is None and time_in_force_alias is not None:
+            time_in_force = time_in_force_alias
+            kwargs["time_in_force"] = time_in_force
         if time_in_force:
             order_kwargs["time_in_force"] = time_in_force
         if extended_hours is not None:
             order_kwargs["extended_hours"] = extended_hours
+            kwargs.pop("extended_hours", None)
         for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price"):
             if passthrough in kwargs:
                 order_kwargs[passthrough] = kwargs.pop(passthrough)
 
         supported_asset_class = False
+        kwargs.pop("asset_class", None)
         if asset_class:
             supported_asset_class = self._supports_asset_class()
             if supported_asset_class:
                 order_kwargs["asset_class"] = asset_class
             else:
-                logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class"})
+                ignored_keys = set(ignored_keys)
+                ignored_keys.add("asset_class")
 
-        ignored_keys = list(kwargs.keys())
-        for key in ignored_keys:
-            kwargs.pop(key, None)
-            logger.debug("EXEC_IGNORED_KWARG", extra={"kw": key})
+        if ignored_keys:
+            for key in sorted(ignored_keys):
+                logger.debug("EXEC_IGNORED_KWARG", extra={"kw": key})
+            logger.debug(
+                "EXECUTE_ORDER_IGNORED_KWARGS",
+                extra={"ignored_keys": tuple(sorted(ignored_keys))},
+            )
 
         if order_type_normalized == "limit" and limit_price is None:
             raise ValueError("limit_price required for limit orders")
@@ -1106,6 +1127,7 @@ class ExecutionEngine:
                 "tif": time_in_force,
                 "extended_hours": extended_hours,
                 "order_id": str(execution_result),
+                "ignored_keys": tuple(sorted(ignored_keys)) if ignored_keys else (),
             },
         )
         return execution_result
