@@ -794,8 +794,10 @@ exits early with a clear error message when these values are invalid.
    MAX_EMPTY_RETRIES=10               # Max empty-bar retries before fallback/skip
    TZ=UTC
    # ALPACA_API_URL=https://api.alpaca.markets     # Live trading (DANGER!)
-   # ALPACA_BASE_URL is also accepted for backward compatibility
-   # APCA_* (legacy) variables are no longer supported. Use ALPACA_* exclusively.
+  # ALPACA_BASE_URL is also accepted for backward compatibility
+  # ALPACA-only: legacy APCA_* variables are not supported. If you hit a config error,
+  # run `make doctor` to locate APCA_* entries in your .env or systemd unit overrides,
+  # then restart the service (sudo systemctl daemon-reload && sudo systemctl restart ai-trading.service).
 
    # Bot Configuration
    TRADING_MODE=balanced                    # Trading mode: conservative, balanced, aggressive

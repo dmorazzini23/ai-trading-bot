@@ -297,8 +297,29 @@ def main() -> int:
 
         # Delegate to main; it starts the API server thread and the scheduler loop
         try:
-            _main.main(mapped_argv)
-            return 0
+            try:
+                _main.main(mapped_argv)
+                return 0
+            except RuntimeError as exc:
+                message = str(exc)
+                legacy_prefix = "AP" "CA_"
+                if legacy_prefix in message:
+                    import os
+
+                    remediation = (
+                        f"Legacy {legacy_prefix}* environment variables detected. Remove all {legacy_prefix}* entries "
+                        "from your runtime configuration (.env, systemd Environment/EnvironmentFile, "
+                        "shell profiles). Then run 'make doctor' to confirm the cleanup."
+                    )
+                    logger.error(
+                        "CONFIG_ERROR_LEGACY_APCA",
+                        extra={
+                            "error": message,
+                            "remediation": remediation,
+                        },
+                    )
+                    return os.EX_CONFIG
+                raise
         finally:
             if timer is not None:
                 timer.cancel()
