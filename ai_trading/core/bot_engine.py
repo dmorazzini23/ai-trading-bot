@@ -5545,8 +5545,7 @@ slippage_lock = Lock()
 meta_lock = Lock()
 run_lock = Lock()
 
-_DAILY_FETCH_MEMO: dict[tuple[str, str], tuple[float, Any]] = {}
-_DAILY_FETCH_DEBOUNCE: dict[tuple[str, str], tuple[float, bool]] = {}
+_DAILY_FETCH_MEMO: dict[tuple[str, str, str, str], tuple[Any, float]] = {}
 try:
     _DAILY_FETCH_MEMO_TTL = float(os.getenv("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
@@ -6125,6 +6124,17 @@ class DataFetcher:
             pass
         logger.warning(msg)
 
+    def _log_daily_cache_hit_once(self, symbol: str, *, reason: str | None = None) -> None:
+        """Emit the DAILY_FETCH_CACHE_HIT log at most once per fetcher instance."""
+
+        if self._daily_cache_hit_logged:
+            return
+        extra: dict[str, Any] = {"symbol": symbol}
+        if reason:
+            extra["reason"] = reason
+        logger.info("DAILY_FETCH_CACHE_HIT", extra=extra)
+        self._daily_cache_hit_logged = True
+
     def _prepare_daily_dataframe(
         self, df: "pd.DataFrame | None", _symbol: str
     ) -> "pd.DataFrame | None":
@@ -6160,11 +6170,10 @@ class DataFetcher:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
 
-        # AI-AGENT-REF: normalize daily window to previous trading day when closed
         try:  # lazy import to avoid hard dependency at import time
             from ai_trading.market.calendars import is_trading_day as _is_trading_day
-        except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import
-            _is_trading_day = None  # type: ignore
+        except ImportError:  # pragma: no cover - optional calendar helper
+            _is_trading_day = None  # type: ignore[assignment]
 
         ref_date = now_utc.date()
         if not is_market_open():
@@ -6175,7 +6184,10 @@ class DataFetcher:
                         break
                 else:
                     try:
-                        if _is_trading_day(symbol, datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC)):
+                        if _is_trading_day(
+                            symbol,
+                            datetime.combine(ref_date, dt_time(0, 0), tzinfo=UTC),
+                        ):
                             break
                     except COMMON_EXC:
                         if ref_date.weekday() < 5:
@@ -6191,388 +6203,54 @@ class DataFetcher:
             end_ts = datetime.combine(today, dt_time.max, tzinfo=UTC)
         start_ts = end_ts - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS)
         fetch_date = end_ts.date()
-        memo_key = (symbol, fetch_date.isoformat())
-        memo_candidate: Any | None = None
-        now_monotonic = time.monotonic()
-        with cache_lock:
-            memo_entry = _DAILY_FETCH_MEMO.get(memo_key)
-            if memo_entry:
-                memo_ts, memo_df = memo_entry
-                if now_monotonic - memo_ts < _DAILY_FETCH_MEMO_TTL:
-                    memo_candidate = memo_df
-                else:
-                    _DAILY_FETCH_MEMO.pop(memo_key, None)
-
+        timeframe_key = "1Day"
+        memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
+        legacy_memo_key = (symbol, fetch_date.isoformat())
         min_interval = self._daily_fetch_min_interval(ctx)
-        if min_interval > 0:
-            debounce_candidate: tuple[Any, float, bool] | None = None
-            with cache_lock:
-                debounce_entry = _DAILY_FETCH_DEBOUNCE.get(memo_key)
-                if debounce_entry:
-                    last_ts, hit_logged = debounce_entry
-                    if now_monotonic - last_ts < min_interval:
-                        cached_df = memo_candidate
-                        if cached_df is None:
-                            entry = self._daily_cache.get(symbol)
-                            if entry and entry[0] == fetch_date:
-                                cached_df = entry[1]
-                        if cached_df is not None:
-                            stamp = time.monotonic()
-                            _DAILY_FETCH_MEMO[memo_key] = (stamp, cached_df)
-                            debounce_candidate = (cached_df, last_ts, hit_logged)
-            if debounce_candidate is not None:
-                cached_df, last_ts, hit_logged = debounce_candidate
-                if not hit_logged:
-                    if not self._daily_cache_hit_logged:
-                        logger.info(
-                            "DAILY_FETCH_CACHE_HIT",
-                            extra={"symbol": symbol, "debounced": True},
-                        )
-                        self._daily_cache_hit_logged = True
-                    elif logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "DAILY_FETCH_CACHE_HIT",
-                            extra={"symbol": symbol, "debounced": True},
-                        )
-                elif logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        "DAILY_FETCH_CACHE_HIT",
-                        extra={"symbol": symbol, "debounced": True},
-                    )
-                with cache_lock:
-                    _DAILY_FETCH_DEBOUNCE[memo_key] = (last_ts, True)
-                return cached_df
-
-        if memo_candidate is not None:
-            logged = False
-            if not self._daily_cache_hit_logged:
-                logger.info(
-                    "DAILY_FETCH_CACHE_HIT",
-                    extra={"symbol": symbol, "memoized": True},
-                )
-                self._daily_cache_hit_logged = True
-                logged = True
-            elif logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "DAILY_FETCH_CACHE_HIT",
-                    extra={"symbol": symbol, "memoized": True},
-                )
-                logged = True
-            stamp = time.monotonic()
-            with cache_lock:
-                _DAILY_FETCH_MEMO[memo_key] = (stamp, memo_candidate)
-                if min_interval > 0:
-                    prev = _DAILY_FETCH_DEBOUNCE.get(memo_key)
-                    if prev:
-                        _DAILY_FETCH_DEBOUNCE[memo_key] = (prev[0], prev[1] or logged)
-                    else:
-                        _DAILY_FETCH_DEBOUNCE[memo_key] = (stamp, logged)
-            return memo_candidate
-        with cache_lock:
-            entry = self._daily_cache.get(symbol)
-            if entry and entry[0] == fetch_date:
-                if daily_cache_hit:
-                    try:
-                        daily_cache_hit.inc()
-                    except (
-                        FileNotFoundError,
-                        PermissionError,
-                        IsADirectoryError,
-                        JSONDecodeError,
-                        ValueError,
-                        KeyError,
-                        TypeError,
-                        OSError,
-                    ) as exc:  # AI-AGENT-REF: narrow exception
-                        logger.exception("bot.py unexpected", exc_info=exc)
-                        raise
-                cached_df = entry[1]
-                stamp = time.monotonic()
-                _DAILY_FETCH_MEMO[memo_key] = (stamp, cached_df)
-                hit_logged = False
-                if not self._daily_cache_hit_logged:
-                    logger.info("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
-                    self._daily_cache_hit_logged = True
-                    hit_logged = True
-                elif logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("DAILY_FETCH_CACHE_HIT", extra={"symbol": symbol})
-                    hit_logged = True
-                if min_interval > 0:
-                    prev = _DAILY_FETCH_DEBOUNCE.get(memo_key)
-                    if prev:
-                        _DAILY_FETCH_DEBOUNCE[memo_key] = (
-                            prev[0],
-                            prev[1] or hit_logged,
-                        )
-                    else:
-                        _DAILY_FETCH_DEBOUNCE[memo_key] = (stamp, hit_logged)
-                return cached_df
-            # purge stale cache entry if present
-            self._daily_cache.pop(symbol, None)
-
-        api_key = self.settings.alpaca_api_key
-        api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
-        # AI-AGENT-REF: use plain secret string
-        if not ALPACA_AVAILABLE:
-            try:
-                from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
-                df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
-            except COMMON_EXC:
-                logger.warning(
-                    "alpaca-py not installed and Yahoo fallback failed for %s",
-                    symbol,
-                )
-                return None
-            else:
-                logger.warning(
-                    "alpaca-py not installed; using Yahoo fallback for %s",
-                    symbol,
-                )
-                df = self._prepare_daily_dataframe(df, symbol)
-                with cache_lock:
-                    self._daily_cache[symbol] = (fetch_date, df)
-                return df
-
-        if not api_key or not api_secret:
-            # Fall back to Yahoo-backed daily fetch when credentials are missing
-            try:
-                from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
-                df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
-            except COMMON_EXC:
-                logger.warning(
-                    "Missing Alpaca credentials for %s; using Yahoo fallback",
-                    symbol,
-                )
-                return None
-            else:
-                df = self._prepare_daily_dataframe(df, symbol)
-                with cache_lock:
-                    self._daily_cache[symbol] = (fetch_date, df)
-                return df
-
-        logger.info(
-            "DAILY_FETCH_REQUEST",
-            extra={
-                "symbol": symbol,
-                "timeframe": str(bars.TimeFrame.Day),
-                "start": start_ts.isoformat(),
-                "end": end_ts.isoformat(),
-            },
+        now_monotonic = time.monotonic()
+        ttl_window = (
+            _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
 
-        try:
-            client = StockHistoricalDataClient(
-                api_key=api_key,
-                secret_key=api_secret,
-            )
-        except ImportError:
-            logger.warning(
-                "alpaca-py import failed at runtime; using Yahoo fallback for %s",
-                symbol,
-            )
-            try:
-                from ai_trading.data.fetch import _backup_get_bars as _yahoo_daily
-                df = _yahoo_daily(symbol, start_ts, end_ts, interval="1d")
-            except COMMON_EXC:
-                return None
-            else:
-                df = self._prepare_daily_dataframe(df, symbol)
-                with cache_lock:
-                    self._daily_cache[symbol] = (fetch_date, df)
-                return df
-
-        # In-memory cache for resampled minute→daily frames
-        # Keyed by (symbol, YYYY-MM-DD end date)
-        try:
-            _RESAMPLED_DAILY_CACHE  # type: ignore[name-defined]
-        except NameError:
-            _RESAMPLED_DAILY_CACHE = {}  # type: ignore[var-annotated]
-        try:
-            import os as _os
-            _RESAMPLED_DAILY_CACHE_TTL = float(_os.getenv("RESAMPLED_DAILY_CACHE_TTL_SECS", "21600"))
-        except (ValueError, TypeError):
-            _RESAMPLED_DAILY_CACHE_TTL = 21600.0
-
-        def _minute_resample() -> pd.DataFrame | None:  # AI-AGENT-REF: minute fallback helper
-            try:
-                # Cache check
-                _key = (symbol, end_ts.date().isoformat())
-                _rec = _RESAMPLED_DAILY_CACHE.get(_key)
-                _now = _time.time()
-                if _rec is not None:
-                    _df_cached, _ts = _rec
-                    if _now - float(_ts) <= float(_RESAMPLED_DAILY_CACHE_TTL):
-                        return _df_cached
-                m_req = bars.StockBarsRequest(
-                    symbol_or_symbols=[symbol],
-                    timeframe=bars.TimeFrame.Minute,
-                    start=start_ts,
-                    end=end_ts,
-                    feed="iex",
-                )
-                mdf = bars.safe_get_stock_bars(client, m_req, symbol, "FALLBACK MINUTE")
-                if mdf is None or mdf.empty:
-                    return None
-                if isinstance(mdf.columns, pd.MultiIndex):
-                    mdf = mdf.xs(symbol, level=0, axis=1)
-                else:
-                    mdf = mdf.drop(columns=["symbol"], errors="ignore")
-                idx_vals = mdf.index
-                try:
-                    idx = safe_to_datetime(idx_vals, context=f"minute fallback {symbol}")
-                except ValueError:
-                    return None
-                mdf.index = idx
-                mdf = mdf.rename(columns=lambda c: c.lower())
-                _rdf = bars._resample_minutes_to_daily(mdf)
-                try:
-                    _RESAMPLED_DAILY_CACHE[_key] = (_rdf, _now)
-                except (TypeError, ValueError, KeyError):
-                    pass
-                return _rdf
-            except (ValueError, TypeError):  # noqa: BLE001
-                return None
-
-        try:
-            feed = self._resolve_feed(
-                getattr(
-                    self.settings,
-                    "data_feed",
-                    getattr(self.settings, "alpaca_data_feed", None),
-                )
-                or "iex"
-            )
-            if not feed:
-                feed = "iex"
-            req = bars.StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=bars.TimeFrame.Day,
-                start=start_ts,
-                end=end_ts,
-                feed=feed,
-            )
-
-            # AI-AGENT-REF: pre-sanitize to avoid TypeError on callables
-            _today_utc = datetime.now(UTC)
-            _prev_day = _prev_bus_day(
-                _today_utc.astimezone(ZoneInfo("America/New_York")).date()
-            )
-            _default_start_u, _default_end_u = _nyse_session_utc(_prev_day)
-
-            _was_callable = False
-
-            def _sanitize_pre(x, default):
-                nonlocal _was_callable
-                if callable(x):
-                    _was_callable = True
-                try:
-                    return _ensure_utc_dt(x, allow_callables=True)
-                except (ValueError, TypeError):
-                    return default
-
-            req.start = _sanitize_pre(
-                getattr(req, "start", start_ts), _default_start_u
-            )
-            req.end = _sanitize_pre(
-                getattr(req, "end", end_ts), _default_end_u
-            )
-            if _was_callable:
-                logger.debug("DAILY_BARS_INPUT_SANITIZED", extra={"symbol": symbol})
-
-            # AI-AGENT-REF: safety net retry with downgraded log level
-            try:
-                bars_df = bars.safe_get_stock_bars(client, req, symbol, "DAILY")
-            except TypeError as te:
-                msg = str(te)
-                if "datetime argument was callable" in msg:
-                    logger.debug(
-                        f"DAILY_BARS_RETRY_SANITIZE {symbol} due to: {msg}"
-                    )
-                    req.start = _sanitize_pre(
-                        getattr(req, "start", start_ts), _default_start_u
-                    )
-                    req.end = _sanitize_pre(
-                        getattr(req, "end", end_ts), _default_end_u
-                    )
-                    bars_df = bars.safe_get_stock_bars(client, req, symbol, "DAILY")
-                else:
-                    raise
-            if bars_df is None or bars_df.empty:
-                logger.warning(
-                    "DAILY_BARS_EMPTY",
-                    extra={
-                        "symbols": req.symbol_or_symbols,
-                        "feed": req.feed,
-                        "response": None if bars_df is None else bars_df.to_dict(),
-                    },
-                )
-                bars_df = bars.safe_get_stock_bars(client, req, symbol, "DAILY_RETRY")
-                if bars_df is None or bars_df.empty:
-                    bars_df = _minute_resample()
-                    if bars_df is None or bars_df.empty:
-                        raise DataFetchError(f"no daily data for {symbol}")
-            if isinstance(bars_df.columns, pd.MultiIndex):
-                bars_df = bars_df.xs(symbol, level=0, axis=1)
-            else:
-                bars_df = bars_df.drop(columns=["symbol"], errors="ignore")
-            if bars_df.empty:
-                logger.warning(
-                    "DAILY_BARS_EMPTY",
-                    extra={
-                        "symbols": req.symbol_or_symbols,
-                        "feed": req.feed,
-                        "response": bars_df.to_dict(),
-                    },
-                )
-                bars_df = _minute_resample()
-                if bars_df is None or bars_df.empty:
-                    raise DataFetchError(f"no daily data for {symbol}")
-            if len(bars_df.index) and isinstance(bars_df.index[0], tuple):
-                idx_vals = [t[1] for t in bars_df.index]
-            else:
-                idx_vals = bars_df.index
-            try:
-                idx = safe_to_datetime(idx_vals, context=f"daily {symbol}")
-            except ValueError as e:
-                reason = "empty data" if bars_df.empty else "unparseable timestamps"
-                logger.warning(
-                    f"Invalid daily index for {symbol}; skipping. {reason} | {e}"
-                )
-                raise DataFetchError(f"invalid daily index for {symbol}")
-            bars_df.index = idx
-            df = bars_df.rename(columns=lambda c: c.lower()).drop(
-                columns=["symbol"], errors="ignore"
-            )
-        except APIError as e:
-            err_msg = str(e).lower()
-            if "subscription does not permit querying recent sip data" in err_msg:
-                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
-                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
-                try:
-                    req.feed = "iex"
-                    df_iex = bars.safe_get_stock_bars(client, req, symbol, "IEX DAILY")
-                    if df_iex is None:
-                        raise DataFetchError(f"no IEX data for {symbol}")
-                    if isinstance(df_iex.columns, pd.MultiIndex):
-                        df_iex = df_iex.xs(symbol, level=0, axis=1)
-                    else:
-                        df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
-                    if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        idx_vals = [t[1] for t in df_iex.index]
-                    else:
-                        idx_vals = df_iex.index
+        cached_df: Any | None = None
+        cached_reason: str | None = None
+        with cache_lock:
+            memo_entry = _DAILY_FETCH_MEMO.get(memo_key)
+            if memo_entry is None:
+                legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
+                if legacy_entry:
                     try:
-                        idx = safe_to_datetime(idx_vals, context=f"IEX daily {symbol}")
-                    except ValueError as e:
-                        reason = (
-                            "empty data" if df_iex.empty else "unparseable timestamps"
-                        )
-                        logger.warning(
-                            f"Invalid IEX daily index for {symbol}; skipping. {reason} | {e}"
-                        )
-                        raise DataFetchError(f"invalid IEX daily index for {symbol}")
-                    df_iex.index = idx
-                    df = df_iex.rename(columns=lambda c: c.lower())
+                        legacy_ts, legacy_df = legacy_entry  # type: ignore[misc]
+                        legacy_ts = float(legacy_ts)
+                    except (ValueError, TypeError):
+                        legacy_ts, legacy_df = None, None  # type: ignore[assignment]
+                    else:
+                        memo_entry = (legacy_df, legacy_ts)
+                        _DAILY_FETCH_MEMO[memo_key] = memo_entry
+                        _DAILY_FETCH_MEMO[legacy_memo_key] = (legacy_ts, legacy_df)
+                    _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+            if memo_entry:
+                memo_df, memo_ts = memo_entry
+                window_limit = min_interval if min_interval > 0 else ttl_window
+                if now_monotonic - memo_ts <= window_limit:
+                    cached_df = memo_df
+                    cached_reason = "memo"
+                elif now_monotonic - memo_ts > ttl_window:
+                    _DAILY_FETCH_MEMO.pop(memo_key, None)
+            if cached_df is None:
+                entry = self._daily_cache.get(symbol)
+                if entry and entry[0] == fetch_date:
+                    cached_df = entry[1]
+                    cached_reason = "cache"
+                    _DAILY_FETCH_MEMO[memo_key] = (cached_df, now_monotonic)
+                    _DAILY_FETCH_MEMO[legacy_memo_key] = (now_monotonic, cached_df)
+                else:
+                    self._daily_cache.pop(symbol, None)
+
+        if cached_df is not None and (cached_reason or min_interval <= 0):
+            if daily_cache_hit:
+                try:
+                    daily_cache_hit.inc()
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -6582,74 +6260,88 @@ class DataFetcher:
                     KeyError,
                     TypeError,
                     OSError,
-                ) as iex_err:  # AI-AGENT-REF: narrow exception
-                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    rdf = _minute_resample()
-                    if rdf is not None and not rdf.empty:
-                        df = rdf
-                    else:
-                        logger.info(
-                            f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
-                        )
-                        ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
-                        if ts is None:
-                            ts = pd.Timestamp.now(tz="UTC")
-                        dummy_date = ts
-                        df = pd.DataFrame(
-                            [
-                                {
-                                    "open": 0.0,
-                                    "high": 0.0,
-                                    "low": 0.0,
-                                    "close": 0.0,
-                                    "volume": 0,
-                                }
-                            ],
-                            index=[dummy_date],
-                        )
-            else:
-                logger.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
-                rdf = _minute_resample()
-                if rdf is not None and not rdf.empty:
-                    df = rdf
-                else:
-                    ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
-                    if ts2 is None:
-                        ts2 = pd.Timestamp.now(tz="UTC")
-                    dummy_date = ts2
-                    df = pd.DataFrame(
-                        [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
-                        index=[dummy_date],
-                    )
-        except (NameError, AttributeError) as e:
-            # Handle pandas schema errors (like missing _RealMultiIndex) gracefully
-            logger.error(
-                "DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": str(e)}
-            )
-            return bars._create_empty_bars_dataframe()
-        except (KeyError, ValueError) as e:
-            logger.error(f"DATA_VALIDATION_ERROR for {symbol}: {repr(e)}")
-            return bars._create_empty_bars_dataframe()
-        except (
-            FileNotFoundError,
-            PermissionError,
-            IsADirectoryError,
-            JSONDecodeError,
-            ValueError,
-            KeyError,
-            TypeError,
-            OSError,
-        ) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
-            raise DataFetchError(f"failed to fetch daily data for {symbol}") from e
+                ) as exc:  # AI-AGENT-REF: narrow exception
+                    logger.exception("bot.py unexpected", exc_info=exc)
+                    raise
+            self._log_daily_cache_hit_once(symbol, reason=cached_reason)
+            return cached_df
 
-        df = self._prepare_daily_dataframe(df, symbol)
+        api_key = self.settings.alpaca_api_key
+        api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
+        provider_reason: str | None = None
+        if not ALPACA_AVAILABLE:
+            provider_reason = "alpaca_unavailable"
+        elif not (api_key and api_secret):
+            provider_reason = "credentials"
+        if provider_reason:
+            logger.warning(
+                "DAILY_FETCH_PROVIDER_DISABLED",
+                extra={"symbol": symbol, "reason": provider_reason},
+            )
+
+        logger.info(
+            "DAILY_FETCH_REQUEST",
+            extra={
+                "symbol": symbol,
+                "timeframe": timeframe_key,
+                "start": start_ts.isoformat(),
+                "end": end_ts.isoformat(),
+            },
+        )
+
+        effective_feed = self._resolve_feed(
+            getattr(
+                self.settings,
+                "data_feed",
+                getattr(self.settings, "alpaca_data_feed", None),
+            )
+        )
+
+        df: pd.DataFrame | None
+        try:
+            df = data_fetcher_module.get_daily_df(
+                symbol,
+                start=start_ts,
+                end=end_ts,
+                feed=effective_feed,
+                adjustment=getattr(self.settings, "alpaca_adjustment", None),
+            )
+        except data_fetcher_module.DataFetchError as exc:
+            logger.warning(
+                "DAILY_FETCH_PROVIDER_ERROR",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            backup_get_bars = getattr(data_fetcher_module, "_backup_get_bars", None)
+            if not callable(backup_get_bars):
+                raise DataFetchError(f"failed to fetch daily data for {symbol}") from exc
+            try:
+                df = backup_get_bars(symbol, start_ts, end_ts, interval="1d")
+            except COMMON_EXC as backup_exc:
+                logger.error(
+                    "DAILY_FETCH_BACKUP_FAILED",
+                    extra={"symbol": symbol, "error": str(backup_exc)},
+                )
+                raise DataFetchError(
+                    f"failed to fetch daily data for {symbol}"
+                ) from backup_exc
+
+        if df is None:
+            return bars._create_empty_bars_dataframe(timeframe_key)
+
+        try:
+            df = self._prepare_daily_dataframe(df, symbol)
+        except Exception as exc:  # pragma: no cover - defensive normalization
+            logger.warning(
+                "DAILY_FETCH_PREPARE_FAILED",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+
         with cache_lock:
             stamp = time.monotonic()
             self._daily_cache[symbol] = (fetch_date, df)
-            _DAILY_FETCH_MEMO[memo_key] = (stamp, df)
-            if min_interval > 0:
-                _DAILY_FETCH_DEBOUNCE[memo_key] = (stamp, False)
+            _DAILY_FETCH_MEMO[memo_key] = (df, stamp)
+            _DAILY_FETCH_MEMO[legacy_memo_key] = (stamp, df)
+
         if daily_cache_miss:
             try:
                 daily_cache_miss.inc()
@@ -6665,11 +6357,12 @@ class DataFetcher:
             ) as exc:  # AI-AGENT-REF: narrow exception
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
+
         logger.info(
             "DAILY_FETCH_RESULT",
             extra={
                 "symbol": symbol,
-                "timeframe": str(bars.TimeFrame.Day),
+                "timeframe": timeframe_key,
                 "start": start_ts.isoformat(),
                 "end": end_ts.isoformat(),
                 "rows": 0 if df is None else len(df),
