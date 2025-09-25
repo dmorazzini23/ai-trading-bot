@@ -1,6 +1,7 @@
 """Helpers to emit a log record only once per UTC day per process."""
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import UTC, date, datetime
 from logging import Logger, LoggerAdapter
@@ -39,6 +40,22 @@ def emit_once(
 ) -> bool: ...
 
 
+def _coerce_level(level: str | int) -> int:
+    """Return the numeric logging level for ``level``.
+
+    ``logging.getLevelName`` returns a string when it cannot resolve the value,
+    so we normalise and validate the input before returning the numeric level.
+    """
+
+    if isinstance(level, int):
+        return level
+    if isinstance(level, str):
+        resolved = logging.getLevelName(level.strip().upper())
+        if isinstance(resolved, int):
+            return resolved
+    raise ValueError(f"Unsupported log level: {level!r}")
+
+
 def emit_once(*args: Any, **extra: Any) -> bool:
     """Emit ``msg`` at ``level`` once per UTC day keyed by ``key``.
 
@@ -60,14 +77,14 @@ def emit_once(*args: Any, **extra: Any) -> bool:
             raise TypeError(
                 "emit_once(logger, key, level, msg) requires four positional arguments"
             )
-        logger, key, level, msg = first, str(args[1]), str(args[2]), str(args[3])
+        logger, key, level, msg = first, str(args[1]), args[2], str(args[3])
         if not _should_emit(key):
             return False
-        log_fn = getattr(logger, level.lower(), logger.info)
+        numeric_level = _coerce_level(level)
         if extra:
-            log_fn(str(msg), extra=extra)
+            logger.log(numeric_level, str(msg), extra=extra)
         else:
-            log_fn(str(msg))
+            logger.log(numeric_level, str(msg))
         return True
 
     if len(args) != 1:
@@ -78,4 +95,16 @@ def emit_once(*args: Any, **extra: Any) -> bool:
     return _should_emit(key)
 
 
-__all__ = ["emit_once"]
+
+def reset_emit_once_state() -> None:
+    """Clear the per-process emit-once tracking cache.
+
+    This is intended for use in tests that need to ensure a clean slate between
+    runs without relying on internal module state.
+    """
+
+    with _lock:
+        _emitted.clear()
+
+
+__all__ = ["emit_once", "reset_emit_once_state"]
