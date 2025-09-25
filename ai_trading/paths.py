@@ -25,7 +25,7 @@ def _ensure_dir(path: Path) -> Path:
     if not path.is_absolute():
         raise RuntimeError(f"Runtime directory must be absolute: {path}")
     try:
-        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         if exc.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
             raise RuntimeError(f"Directory {path} is not writable: {exc}") from exc
@@ -40,7 +40,7 @@ def _ensure_dir(path: Path) -> Path:
 def _fallback_tmp_dir() -> Path:
     base = os.getenv("TMPDIR") or tempfile.gettempdir()
     fallback = Path(base).expanduser() / APP_NAME
-    fallback.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fallback.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(PermissionError):
         fallback.chmod(0o700)
     return fallback

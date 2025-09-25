@@ -21,6 +21,7 @@ import time
 import traceback
 from collections import Counter
 from datetime import UTC, date, datetime
+from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
 from ai_trading.exc import COMMON_EXC
@@ -37,6 +38,32 @@ def _ensure_finnhub_enabled_flag() -> None:
 
 
 _ensure_finnhub_enabled_flag()
+
+
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
+
+
+def _monotonic_time() -> float:
+    monotonic = getattr(time, "monotonic", None)
+    if monotonic is not None:
+        try:
+            return float(monotonic())
+        except RuntimeError:  # pragma: no cover - platform specific
+            pass
+    return float(time.time())
+
+
+def _ensure_pytest_logging_bridge() -> None:
+    if os.getenv("PYTEST_RUNNING") not in {"1", "true", "True"}:
+        return
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        if handler.__class__.__name__ == "QueueHandler":
+            root.removeHandler(handler)
+
+
+_ensure_pytest_logging_bridge()
 
 
 def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> None:
@@ -202,7 +229,7 @@ class MessageThrottleFilter(logging.Filter):
             return 5.0
 
     def _now(self) -> float:
-        return time.monotonic()
+        return _monotonic_time()
 
     @staticmethod
     def _quote_message(message: str) -> str:
@@ -312,7 +339,7 @@ class LogDeduper:
         """Return ``True`` when ``key`` should be logged under the provided TTL."""
 
         if now is None:
-            now = time.monotonic()
+            now = _monotonic_time()
 
         ttl = float(ttl_s)
         if ttl <= 0:
@@ -557,7 +584,7 @@ class EmitOnceLogger:
 
     def _emit_if_new(self, level: str, key: str, msg: str, *args, **kwargs) -> None:
         """Emit log message only once per key each day."""
-        today = date.today()
+        today = _utc_today()
         with self._lock:
             last_date, count = self._emitted_keys.get(key, (None, 0))
             if last_date != today:
@@ -616,7 +643,7 @@ def ensure_logging_configured(level: int | None = None) -> None:
 def get_rotating_handler(path: str, max_bytes: int = 5000000, backup_count: int = 5) -> logging.Handler:
     """Return a size-rotating file handler. Falls back to stderr on failure."""
     try:
-        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        Path(os.path.dirname(path)).mkdir(parents=True, exist_ok=True)
     except PermissionError as exc:
         logging.getLogger(__name__).warning("Cannot create log directory %s: %s", os.path.dirname(path), exc)
         return logging.StreamHandler(sys.stderr)
@@ -635,7 +662,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     level should now be controlled via settings or the ``LOG_LEVEL``
     environment variable.
     """
-    global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
+    global _configured, _log_queue, _listener, _LOGGING_CONFIGURED, _LOGGING_LISTENER
     _ensure_finnhub_enabled_flag()
     if _LOGGING_CONFIGURED and _configured:
         return logging.getLogger()
@@ -724,6 +751,8 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         if os.getenv("PYTEST_RUNNING") == "1" or os.getenv("LOG_DISABLE_QUEUE") == "1":
             logger.handlers = handlers
             _listener = None
+            _LOGGING_LISTENER = None
+            _log_queue = None
         else:
             _log_queue = queue.Queue(-1)
             queue_handler = QueueHandler(_log_queue)
@@ -734,6 +763,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             logger.handlers = [queue_handler]
             _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
             _listener.start()
+            _LOGGING_LISTENER = _listener
         atexit.register(_safe_shutdown_logging)
         atexit.register(logging.shutdown)
         _LOGGING_CONFIGURED = True
@@ -769,23 +799,31 @@ def configure_logging(debug: bool = False, log_file: str | None = None) -> Sanit
     return get_logger(_ROOT_LOGGER_NAME)
 
 
-def _safe_shutdown_logging():
+def shutdown_queue_listener(timeout: float = 1.0) -> None:
+    """Stop the background :class:`QueueListener` if it is running."""
+
+    global _listener, _LOGGING_LISTENER, _log_queue
+    listener = _listener or _LOGGING_LISTENER
+    if listener is None:
+        return
     try:
-        listener = globals().get("_LOGGING_LISTENER", None)
+        listener.stop()
+    except COMMON_EXC:
+        pass
+    thread = getattr(listener, "_thread", None)
+    if thread is not None and hasattr(thread, "join"):
         try:
-            if listener is not None:
-                try:
-                    listener.stop()
-                except COMMON_EXC:
-                    pass
-                try:
-                    t = getattr(listener, "_thread", None)
-                    if t is not None and hasattr(t, "join"):
-                        t.join(timeout=1.0)
-                except COMMON_EXC:
-                    pass
+            thread.join(timeout=timeout)
         except COMMON_EXC:
             pass
+    _listener = None
+    _LOGGING_LISTENER = None
+    _log_queue = None
+
+
+def _safe_shutdown_logging():
+    try:
+        shutdown_queue_listener()
         root = logging.getLogger()
         for h in list(root.handlers):
             try:
@@ -1052,7 +1090,7 @@ def log_performance_metrics(
 
         filename = str((LOG_DIR / "performance.csv").resolve())
     try:
-        os.makedirs(os.path.dirname(filename), mode=0o700, exist_ok=True)
+        Path(os.path.dirname(filename)).mkdir(parents=True, exist_ok=True)
     except PermissionError as exc:
         logger.warning("Failed to log performance metrics: %s", exc)
         return
@@ -1261,7 +1299,7 @@ def setup_enhanced_logging(
         root_logger.addHandler(console_handler)
         if log_file:
             try:
-                os.makedirs(os.path.dirname(log_file), mode=0o700, exist_ok=True)
+                Path(os.path.dirname(log_file)).mkdir(parents=True, exist_ok=True)
                 file_handler = RotatingFileHandler(
                     log_file,
                     maxBytes=max_file_size_mb * 1024 * 1024,
@@ -1297,7 +1335,7 @@ def _setup_performance_logging():
     perf_logger = get_logger("performance")
     perf_file = os.path.join(os.getenv("BOT_LOG_DIR", "logs"), "performance.log")
     try:
-        os.makedirs(os.path.dirname(perf_file), mode=0o700, exist_ok=True)
+        Path(os.path.dirname(perf_file)).mkdir(parents=True, exist_ok=True)
     except PermissionError as e:
         logging.warning("Could not setup performance logging: %s", e)
         return
@@ -1398,6 +1436,7 @@ __all__ = [
     "provider_log_deduper",
     "record_provider_log_suppressed",
     "reset_provider_log_dedupe",
+    "shutdown_queue_listener",
     "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",

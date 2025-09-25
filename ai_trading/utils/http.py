@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import asyncio
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -258,6 +260,23 @@ def request(method: str, url: str, **kwargs) -> requests.Response:
         raise
 
 
+async def async_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Asynchronously execute :func:`request` while honouring host limits."""
+
+    if not REQUESTS_AVAILABLE:
+        raise RuntimeError("requests library is required for HTTP operations")
+    try:
+        from ai_trading.http.pooling import AsyncHostLimiter
+    except ImportError:  # pragma: no cover - defensive fallback
+        AsyncHostLimiter = None  # type: ignore[assignment]
+
+    if AsyncHostLimiter is None:
+        return await asyncio.to_thread(request, method, url, **kwargs)
+
+    async with AsyncHostLimiter.from_url(url):
+        return await asyncio.to_thread(request, method, url, **kwargs)
+
+
 _ERROR_LOGGED: set[str] = set()
 
 
@@ -306,16 +325,32 @@ def get(url: str, **kwargs) -> requests.Response:
     return request("GET", url, **kwargs)
 
 
+async def async_get(url: str, **kwargs) -> requests.Response:
+    return await async_request("GET", url, **kwargs)
+
+
 def post(url: str, **kwargs) -> requests.Response:
     return request("POST", url, **kwargs)
+
+
+async def async_post(url: str, **kwargs) -> requests.Response:
+    return await async_request("POST", url, **kwargs)
 
 
 def put(url: str, **kwargs) -> requests.Response:
     return request("PUT", url, **kwargs)
 
 
+async def async_put(url: str, **kwargs) -> requests.Response:
+    return await async_request("PUT", url, **kwargs)
+
+
 def delete(url: str, **kwargs) -> requests.Response:
     return request("DELETE", url, **kwargs)
+
+
+async def async_delete(url: str, **kwargs) -> requests.Response:
+    return await async_request("DELETE", url, **kwargs)
 
 
 def pool_stats() -> dict:
@@ -351,11 +386,16 @@ def map_get(
 __all__ = [
     "HTTPSession",
     "request",
+    "async_request",
     "request_json",
     "get",
+    "async_get",
     "post",
+    "async_post",
     "put",
+    "async_put",
     "delete",
+    "async_delete",
     "pool_stats",
     "map_get",
     "clamp_request_timeout",

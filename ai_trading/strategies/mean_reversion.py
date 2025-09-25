@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from ai_trading.logging import logger as log
 from .base import StrategySignal
 from ai_trading.config.profiles import load_strategy_profile, lookup_overrides
+from ai_trading.utils.time import monotonic_time
 
 if TYPE_CHECKING:  # pragma: no cover - heavy import only for typing
     import pandas as pd
@@ -72,16 +73,12 @@ class MeanReversionStrategy:
             return [StrategySignal(symbol=sym, side='buy', strength=abs(z))]
         if z >= z_entry:
             return [StrategySignal(symbol=sym, side='sell', strength=abs(z))]
-        try:
-            import time as _t
-            now = _t.monotonic()
-            if self._guard_last_summary == 0.0:
-                self._guard_last_summary = now
-            elif now - self._guard_last_summary >= 60.0:
-                log.info('STRATEGY_GUARD_SUMMARY', extra={'strategy': 'mean_reversion', 'skips': self._guard_skips, 'attempts': self._guard_attempts})
-                self._guard_skips = 0
-                self._guard_attempts = 0
-                self._guard_last_summary = now
-        except (ValueError, TypeError):
-            pass
+        now = monotonic_time()
+        if self._guard_last_summary == 0.0:
+            self._guard_last_summary = now
+        elif now - self._guard_last_summary >= 60.0:
+            log.info('STRATEGY_GUARD_SUMMARY', extra={'strategy': 'mean_reversion', 'skips': self._guard_skips, 'attempts': self._guard_attempts})
+            self._guard_skips = 0
+            self._guard_attempts = 0
+            self._guard_last_summary = now
         return []

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from .base import StrategySignal
+from ai_trading.utils.time import monotonic_time
 
 if TYPE_CHECKING:  # pragma: no cover - heavy import for typing only
     import pandas as pd
@@ -110,16 +111,12 @@ class MovingAverageCrossoverStrategy:
         signals: list[StrategySignal] = []
         if action:
             signals.append(StrategySignal(symbol=sym, side=action))
-        try:
-            import time as _t
-            now = _t.monotonic()
-            if self._guard_last_summary == 0.0:
-                self._guard_last_summary = now
-            elif now - self._guard_last_summary >= 60.0:
-                logger.info('STRATEGY_GUARD_SUMMARY', extra={'strategy': 'sma_crossover', 'skips': self._guard_skips, 'attempts': self._guard_attempts})
-                self._guard_skips = 0
-                self._guard_attempts = 0
-                self._guard_last_summary = now
-        except (ValueError, TypeError):
-            pass
+        now = monotonic_time()
+        if self._guard_last_summary == 0.0:
+            self._guard_last_summary = now
+        elif now - self._guard_last_summary >= 60.0:
+            logger.info('STRATEGY_GUARD_SUMMARY', extra={'strategy': 'sma_crossover', 'skips': self._guard_skips, 'attempts': self._guard_attempts})
+            self._guard_skips = 0
+            self._guard_attempts = 0
+            self._guard_last_summary = now
         return signals

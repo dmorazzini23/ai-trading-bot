@@ -8,6 +8,19 @@ from dataclasses import fields, is_dataclass
 from types import ModuleType, SimpleNamespace
 from typing import TypeVar
 
+try:
+    from ai_trading.http.pooling import get_host_limit as _pooling_host_limit
+except Exception:  # pragma: no cover - pooling optional during stubbed tests
+    def _get_effective_host_limit() -> int | None:
+        return None
+else:
+    def _get_effective_host_limit() -> int | None:
+        try:
+            limit = int(_pooling_host_limit())
+        except Exception:
+            return None
+        return max(1, limit)
+
 T = TypeVar("T")
 
 _ASYNCIO_PRIMITIVE_NAMES = {"Lock", "Semaphore", "Event", "Condition", "BoundedSemaphore"}
@@ -276,7 +289,12 @@ async def run_with_concurrency(
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
 
-    semaphore = asyncio.Semaphore(max(1, int(max_concurrency)))
+    limit = max(1, int(max_concurrency))
+    host_limit = _get_effective_host_limit()
+    if host_limit is not None:
+        limit = min(limit, host_limit)
+
+    semaphore = asyncio.Semaphore(limit)
     counter_lock = asyncio.Lock()
     running = 0
     results: dict[str, T | None] = {}

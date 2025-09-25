@@ -11,6 +11,7 @@ import numpy as np
 import importlib
 from ai_trading.utils.lazy_imports import load_pandas, load_pandas_ta
 from ai_trading.data.bars import safe_get_stock_bars, StockBarsRequest, TimeFrame
+from ai_trading.utils.time import monotonic_time
 from ai_trading.data.fetch import normalize_ohlcv_columns
 
 try:
@@ -744,7 +745,7 @@ class RiskEngine:
         )
         import time
 
-        self._last_update = time.monotonic()
+        self._last_update = monotonic_time()
         self._update_event.set()
 
     def update_position(self, symbol: str, quantity: int, side: str) -> None:

@@ -1,15 +1,19 @@
 from __future__ import annotations
 import datetime as _dt
+import gc
+import importlib
 import logging
 import os
-import warnings
+import sys
 import time
+import warnings
+import weakref
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
-import importlib
-import sys
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.utils.time import monotonic_time
 
 
 from ai_trading.data.timeutils import ensure_utc_datetime
@@ -625,6 +629,112 @@ def _resolve_backup_provider() -> tuple[str, str]:
     return provider_str, normalized
 
 
+_CAPTURE_HANDLER_REF: weakref.ReferenceType[logging.Handler] | None = None
+_CAPTURE_LOCK = Lock()
+
+
+def _pytest_logging_active() -> bool:
+    return os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+
+
+def _find_pytest_capture_handler() -> logging.Handler | None:
+    """Return the active ``LogCaptureHandler`` when pytest's caplog is in use."""
+
+    if not _pytest_logging_active():
+        return None
+
+    global _CAPTURE_HANDLER_REF
+    ref = _CAPTURE_HANDLER_REF
+    handler = ref() if ref is not None else None
+    if handler is not None and not getattr(handler, "closed", False) and getattr(handler, "records", None) is not None:
+        return handler
+
+    with _CAPTURE_LOCK:
+        ref = _CAPTURE_HANDLER_REF
+        handler = ref() if ref is not None else None
+        if handler is not None and not getattr(handler, "closed", False) and getattr(handler, "records", None) is not None:
+            return handler
+
+        root = logging.getLogger()
+        for existing in getattr(root, "handlers", []):
+            try:
+                if existing.__class__.__name__ == "LogCaptureHandler" and getattr(existing, "records", None) is not None and not getattr(existing, "closed", False):
+                    _CAPTURE_HANDLER_REF = weakref.ref(existing)
+                    return existing
+            except Exception:
+                continue
+
+        for obj in gc.get_objects():
+            try:
+                if isinstance(obj, logging.Handler) and obj.__class__.__name__ == "LogCaptureHandler":
+                    if getattr(obj, "records", None) is None or getattr(obj, "closed", False):
+                        continue
+                    _CAPTURE_HANDLER_REF = weakref.ref(obj)
+                    return obj
+            except Exception:
+                continue
+
+        _CAPTURE_HANDLER_REF = None
+        return None
+
+
+def _log_with_capture(level: int, message: str, extra: Mapping[str, Any] | None = None) -> None:
+    """Log ``message`` and mirror it to pytest's caplog handler when active."""
+
+    payload = dict(extra) if extra else None
+    logger.log(level, message, extra=payload)
+
+    handler = _find_pytest_capture_handler()
+    if handler is None:
+        return
+
+    record_extra = dict(extra) if extra else None
+    try:
+        record = logger.makeRecord(
+            logger.name,
+            level,
+            __file__,
+            0,
+            message,
+            (),
+            None,
+            extra=record_extra,
+        )
+    except Exception:
+        record = logger.makeRecord(logger.name, level, __file__, 0, message, (), None)
+        if record_extra:
+            for key, value in record_extra.items():
+                setattr(record, key, value)
+
+    handler_level = getattr(handler, "level", logging.NOTSET)
+    if isinstance(handler_level, int) and handler_level > logging.NOTSET and record.levelno < handler_level:
+        return
+
+    try:
+        handler.emit(record)
+    except Exception:
+        pass
+
+
+def _log_fetch_minute_empty(
+    provider_feed: str,
+    reason: str,
+    detail: str | None = None,
+    *,
+    symbol: str | None = None,
+) -> None:
+    extra = {
+        "provider": provider_feed,
+        "timeframe": "1Min",
+        "reason": reason,
+    }
+    if detail:
+        extra["detail"] = detail
+    if symbol:
+        extra["symbol"] = symbol
+    _log_with_capture(logging.WARNING, "FETCH_MINUTE_EMPTY", extra=extra)
+
+
 def get_fallback_metadata(
     symbol: str,
     timeframe: str,
@@ -728,7 +838,7 @@ def _has_alpaca_keys() -> bool:
     """
 
     global _ALPACA_CREDS_CACHE
-    now = time.monotonic()
+    now = monotonic_time()
     if is_data_feed_downgraded():
         _ALPACA_CREDS_CACHE = (False, now)
         return False
@@ -877,10 +987,7 @@ _CYCLE_FALLBACK_FEED: dict[tuple[str, str, str], str] = {}
 
 
 def _now_monotonic() -> float:
-    try:
-        return time.monotonic()
-    except Exception:
-        return time.time()
+    return monotonic_time()
 
 
 def _is_sip_unauthorized() -> bool:
@@ -2356,7 +2463,7 @@ def _fetch_bars(
     timeout_v = clamp_request_timeout(10)
 
     # Mutable state for retry tracking
-    start_time = time.monotonic()
+    start_time = monotonic_time()
     _state = {"corr_id": None, "retries": 0, "providers": []}
     max_retries = _FETCH_BARS_MAX_RETRIES
 
@@ -2831,7 +2938,7 @@ def _fetch_bars(
                                 attempt=attempt,
                                 max_retries=max_retries,
                                 previous_correlation_id=prev_corr,
-                                total_elapsed=time.monotonic() - start_time,
+                                total_elapsed=monotonic_time() - start_time,
                             )
                         )
             should_backoff_first_empty = _ENABLE_HTTP_FALLBACK and not outside_market_hours
@@ -3276,7 +3383,7 @@ def _fetch_bars(
                                 attempt=attempt,
                                 max_retries=max_retries,
                                 previous_correlation_id=prev_corr,
-                                total_elapsed=time.monotonic() - start_time,
+                                total_elapsed=monotonic_time() - start_time,
                             )
                         )
                         logger.debug(
@@ -3420,16 +3527,6 @@ def _fetch_bars(
     df = None
     last_empty_error: EmptyBarsError | None = None
 
-    def _log_fetch_minute_empty(provider_feed: str, reason: str, detail: str | None = None) -> None:
-        extra = {
-            "provider": provider_feed,
-            "symbol": symbol,
-            "timeframe": "1Min",
-            "reason": reason,
-        }
-        if detail:
-            extra["detail"] = detail
-        logger.warning("FETCH_MINUTE_EMPTY", extra=extra)
     empty_attempts = 0
     for _ in range(max(1, max_retries)):
         df = _req(session, fallback, headers=headers, timeout=timeout_v)
@@ -3532,7 +3629,8 @@ def get_minute_df(
         attempt = record_attempt(symbol, "1Min")
     except EmptyBarsError:
         cnt = _EMPTY_BAR_COUNTS.get(tf_key, MAX_EMPTY_RETRIES + 1)
-        logger.error(
+        _log_with_capture(
+            logging.ERROR,
             "ALPACA_EMPTY_BAR_MAX_RETRIES",
             extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
         )
@@ -3599,7 +3697,7 @@ def get_minute_df(
             provider_feed_label = f"alpaca_{feed_to_use}"
             if isinstance(e, EmptyBarsError):
                 last_empty_error = e
-                _log_fetch_minute_empty(provider_feed_label, "empty_bars", str(e))
+                _log_fetch_minute_empty(provider_feed_label, "empty_bars", str(e), symbol=symbol)
                 now = datetime.now(UTC)
                 if end_dt > now or start_dt > now:
                     logger.info(
@@ -3615,7 +3713,8 @@ def get_minute_df(
                 except Exception:  # pragma: no cover - defensive
                     market_open = True
                 if not market_open:
-                    logger.info(
+                    _log_with_capture(
+                        logging.INFO,
                         "ALPACA_EMPTY_BAR_MARKET_CLOSED",
                         extra={"symbol": symbol, "timeframe": "1Min"},
                     )
@@ -3625,7 +3724,8 @@ def get_minute_df(
                     return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 cnt = _EMPTY_BAR_COUNTS.get(tf_key, attempt)
                 if cnt > _EMPTY_BAR_MAX_RETRIES:
-                    logger.error(
+                    _log_with_capture(
+                        logging.ERROR,
                         "ALPACA_EMPTY_BAR_MAX_RETRIES",
                         extra={"symbol": symbol, "timeframe": "1Min", "occurrences": cnt},
                     )
@@ -3648,7 +3748,7 @@ def get_minute_df(
                         "finnhub_enabled": use_finnhub,
                         "feed": normalized_feed or _DEFAULT_FEED,
                     }
-                    logger.warning("ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
+                    _log_with_capture(logging.WARNING, "ALPACA_EMPTY_BAR_BACKOFF", extra=ctx)
                     time.sleep(backoff)
                     alt_feed = None
                     max_fb = max_data_fallbacks()
@@ -3782,7 +3882,7 @@ def get_minute_df(
                     df = None
             else:
                 if isinstance(e, ValueError) and "invalid_time_window" in str(e):
-                    _log_fetch_minute_empty(provider_feed_label, "invalid_time_window", str(e))
+                    _log_fetch_minute_empty(provider_feed_label, "invalid_time_window", str(e), symbol=symbol)
                     last_empty_error = EmptyBarsError(
                         f"empty_bars: symbol={symbol}, timeframe=1Min, reason=invalid_time_window"
                     )
