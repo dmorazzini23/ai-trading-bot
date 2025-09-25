@@ -12,6 +12,7 @@ The monitor integrates with :mod:`ai_trading.monitoring.alerts` so
 production deployments receive notifications about outages.
 """
 
+import logging
 import os
 import time
 from collections import defaultdict

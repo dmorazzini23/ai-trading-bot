@@ -586,6 +586,10 @@ def _mark_fallback(
     """
 
     provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+    if from_provider:
+        current = str(from_provider).strip().lower()
+        if current and current == str(provider).strip().lower():
+            return
     key = _fallback_key(symbol, timeframe, start, end)
     fallback_order.register_fallback(provider, symbol)
     metadata: dict[str, str] = {"fallback_provider": provider}
@@ -659,6 +663,101 @@ def _annotate_df_source(
     except Exception:  # pragma: no cover - metadata best-effort only
         pass
     return df
+
+
+# --- BEGIN: universal OHLCV normalization helper ---
+try:
+    import pandas as _pd_norm_helper  # ok if already imported elsewhere; safe to repeat
+except ImportError:  # pragma: no cover - optional dependency missing
+    _pd_norm_helper = None
+
+
+def _normalize_ohlcv_df(df, _pd: Any | None = None):
+    """
+    Normalize columns from various providers (Alpaca/IEX, Yahoo, etc.)
+    into strictly ['timestamp','open','high','low','close','volume'].
+    Tolerates common variants and fills safe defaults where necessary.
+    Never raises; returns None if input is None/empty or coercion fails.
+    """
+
+    if df is None:
+        return None
+    try:
+        if len(df) == 0:
+            return None
+
+        if not hasattr(df, "columns") or not hasattr(df, "rename"):
+            return None
+
+        pd_local = _pd if _pd is not None else _pd_norm_helper
+        if pd_local is None:
+            pd_local = _ensure_pandas()
+        if pd_local is None:
+            return None
+
+        # Build a case-insensitive rename map
+        rename = {}
+        for c in list(getattr(df, "columns", [])):
+            cl = str(c).lower()
+            if cl in ("timestamp", "time", "t", "datetime", "date"):
+                rename[c] = "timestamp"
+            elif cl in ("open", "o"):
+                rename[c] = "open"
+            elif cl in ("high", "h"):
+                rename[c] = "high"
+            elif cl in ("low", "l"):
+                rename[c] = "low"
+            elif cl in ("close", "c"):
+                rename[c] = "close"
+            elif cl in ("adjclose", "adj_close", "adjusted_close"):
+                # treat adjusted close as close if close missing
+                rename[c] = "adjclose"
+            elif cl in ("volume", "v"):
+                rename[c] = "volume"
+
+        if rename:
+            df = df.rename(columns=rename)
+
+        # If we only have adjclose, promote it to close
+        if "close" not in df.columns and "adjclose" in df.columns:
+            df["close"] = df["adjclose"]
+
+        # Ensure required columns exist; fill conservative defaults
+        for req in ("open", "high", "low", "close"):
+            if req not in df.columns:
+                # If one of OHLC is missing, try to backfill from close
+                # (keeps pipeline alive but gates orders later)
+                if "close" in df.columns:
+                    df[req] = df["close"]
+                else:
+                    return None  # still unusable
+
+        if "volume" not in df.columns:
+            df["volume"] = 0
+
+        # Timestamp normalization (UTC, monotonic)
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
+            df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+        else:
+            # Some providers index by datetime; try to promote index
+            dt_index = getattr(pd_local, "DatetimeIndex", None)
+            if dt_index is not None and isinstance(getattr(df, "index", None), dt_index):
+                df = df.reset_index().rename(columns={df.columns[0]: "timestamp"})
+                df["timestamp"] = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
+                df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+            else:
+                return None
+
+        # Final strict column order
+        cols = ["timestamp", "open", "high", "low", "close", "volume"]
+        df = df[cols]
+        return df
+    except Exception:
+        return None
+
+
+# --- END: universal OHLCV normalization helper ---
 
 
 def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame | None:
@@ -3550,6 +3649,12 @@ def _fetch_bars(
         return df
 
     priority = list(provider_priority())
+    _allow_sip = (
+        str(os.getenv("ALPACA_ALLOW_SIP", "0")).strip()
+        not in ("0", "", "false", "False", "no", "No")
+    )
+    if not _allow_sip:
+        priority = [p for p in priority if p != "alpaca_sip"]
     max_fb = max_data_fallbacks()
     alt_feed = None
     fallback = None
@@ -3812,6 +3917,14 @@ def get_minute_df(
                     sip_locked_backoff = _is_sip_unauthorized()
                     if max_fb >= 1 and len(attempted_feeds) < max_fb:
                         priority_order = list(provider_priority())
+                        _allow_sip = (
+                            str(os.getenv("ALPACA_ALLOW_SIP", "0")).strip()
+                            not in ("0", "", "false", "False", "no", "No")
+                        )
+                        if not _allow_sip:
+                            priority_order = [
+                                prov for prov in priority_order if prov != "alpaca_sip"
+                            ]
                         try:
                             cur_idx = priority_order.index(f"alpaca_{current_feed}")
                         except ValueError:
@@ -4258,6 +4371,10 @@ def get_minute_df(
             )
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
+    df = _normalize_ohlcv_df(df)
+    if df is None:
+        logger.error("OHLCV_COLUMNS_MISSING")
+        return None
     return df
 
 
@@ -4331,7 +4448,10 @@ def get_daily_df(
         for col in ("timestamp", "open", "high", "low", "close", "volume"):
             if col not in df.columns:
                 df[col] = pd_mod.NA
-
+    df = _normalize_ohlcv_df(df)
+    if df is None:
+        logger.error("OHLCV_COLUMNS_MISSING")
+        return None
     return df
 
 
