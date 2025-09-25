@@ -795,8 +795,7 @@ exits early with a clear error message when these values are invalid.
    TZ=UTC
    # ALPACA_API_URL=https://api.alpaca.markets     # Live trading (DANGER!)
    # ALPACA_BASE_URL is also accepted for backward compatibility
-   # Legacy APCA_API_KEY_ID/APCA_API_SECRET_KEY exports are mapped to the
-   # ALPACA_* names at startup, but prefer updating your environment instead.
+   # APCA_* (legacy) variables are no longer supported. Use ALPACA_* exclusively.
 
    # Bot Configuration
    TRADING_MODE=balanced                    # Trading mode: conservative, balanced, aggressive
