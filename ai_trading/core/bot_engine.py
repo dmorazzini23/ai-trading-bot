@@ -12061,19 +12061,6 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         getattr(CFG, "testing", False) or pytest_running or bypass_market_check
     )
 
-    if not skip_market_check:
-        if not market_is_open():
-            logger.warning(
-                "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
-            )
-            return types.SimpleNamespace(
-                id=None,
-                status="market_closed",
-                filled_qty=0,
-                qty=0,
-                symbol=getattr(req, "symbol", ""),
-            )
-
     def _req_to_args(r):
         side = getattr(r, "side", "")
         side = getattr(side, "value", str(side)).lower()
@@ -12101,6 +12088,15 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         return args
 
     order_args = _req_to_args(req)
+
+    def _assign_attr_or_item(target: Any, name: str, value: Any) -> None:
+        if isinstance(target, dict):
+            target[name] = value
+            return
+        try:
+            setattr(target, name, value)
+        except Exception:
+            pass
 
     def _coerce_enum(enum_cls: Any, value: Any) -> Any:
         if enum_cls is None or value is None:
@@ -12177,11 +12173,18 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
 
     def _dummy_order(status: str) -> Any:
         """Return a placeholder order object with minimal attributes."""
+        client_order_id = order_args.get("client_order_id")
+        qty_val = order_args.get("qty", 0)
+        try:
+            qty_num = float(qty_val or 0)
+        except (TypeError, ValueError):
+            qty_num = 0.0
         return types.SimpleNamespace(
-            id=None,
+            id=client_order_id,
+            client_order_id=client_order_id,
             status=status,
-            filled_qty=0,
-            qty=0,
+            filled_qty=0.0,
+            qty=qty_num,
             symbol=order_args.get("symbol", ""),
         )
 
@@ -12199,8 +12202,8 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
         return f"{symbol_text}-{side_text}"
 
     def _stable_client_order_id(prefix: str) -> str:
-        minute_bucket = int(time.time() // 60)
-        return f"{prefix}-{minute_bucket}-{uuid.uuid4().hex[:8]}"
+        timestamp = datetime.now(tz=UTC).strftime("%Y%m%d%H%M%S%f")
+        return f"{prefix}-{timestamp}"
 
     # Ensure client_order_id present for idempotency across retries
     if not order_args.get("client_order_id"):
@@ -12252,6 +12255,25 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 setattr(api, "client_order_ids", ids_list)
             except Exception:
                 pass
+
+    if not skip_market_check and not market_is_open():
+        logger.warning(
+            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": order_args.get("symbol", "")}
+        )
+        client_order_id = order_args.get("client_order_id") or "market_closed"
+        qty_val = order_args.get("qty", 0)
+        try:
+            qty_num = float(qty_val or 0)
+        except (TypeError, ValueError):
+            qty_num = 0.0
+        return types.SimpleNamespace(
+            id=client_order_id,
+            client_order_id=client_order_id,
+            status="market_closed",
+            filled_qty=0.0,
+            qty=qty_num,
+            symbol=order_args.get("symbol", ""),
+        )
 
     # Deduplicate via idempotency cache before sending to broker
     try:
@@ -12353,11 +12375,12 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 else:
                     raise
 
-            if getattr(order, "client_order_id", None) in (None, "", 0):
-                try:
-                    setattr(order, "client_order_id", order_args.get("client_order_id"))
-                except Exception:
-                    pass
+            client_order_id_value = order_args.get("client_order_id")
+            if (
+                getattr(order, "client_order_id", None) in (None, "", 0)
+                and client_order_id_value
+            ):
+                _assign_attr_or_item(order, "client_order_id", client_order_id_value)
 
             start_ts = monotonic_time()
             def _normalize_order_status(value: Any) -> str:
@@ -12401,6 +12424,12 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             )
             status_raw = getattr(order, "status", "")
             status = _normalize_order_status(status_raw)
+            if (
+                client_order_id_value
+                and status in _PENDING_ORDER_STATUSES
+                and getattr(order, "id", None) not in (client_order_id_value,)
+            ):
+                _assign_attr_or_item(order, "id", str(client_order_id_value))
             filled_qty = getattr(order, "filled_qty", 0) or 0
             if status == "filled":
                 logger.info(
