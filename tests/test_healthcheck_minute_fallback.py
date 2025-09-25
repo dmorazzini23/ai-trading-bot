@@ -28,7 +28,7 @@ def test_minute_fallback_uses_http_yahoo(monkeypatch, caplog):
 
     def fake_get_minute_df(symbol, start, end, feed=None):
         called["called"] = True
-        rng = pd.date_range("2024-01-01 09:30", periods=390, freq="T", tz="UTC")
+        rng = pd.date_range("2024-01-01 09:30", periods=390, freq="min", tz="UTC")
         return pd.DataFrame({"timestamp": rng, "close": 1.0})
 
     monkeypatch.setattr(data_fetcher, "get_minute_df", fake_get_minute_df)

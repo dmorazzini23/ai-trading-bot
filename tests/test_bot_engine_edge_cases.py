@@ -52,7 +52,7 @@ def test_fetch_minute_df_nan_closes_triggers_guard(monkeypatch, caplog):
     from ai_trading.core import bot_engine
 
     now_utc = datetime.now(UTC).replace(second=0, microsecond=0)
-    index = pd.date_range(end=now_utc - timedelta(minutes=1), periods=3, freq="T", tz="UTC")
+    index = pd.date_range(end=now_utc - timedelta(minutes=1), periods=3, freq="min", tz="UTC")
     nan_df = pd.DataFrame(
         {
             'open': [100.0, 101.0, 102.0],
@@ -122,7 +122,7 @@ def test_fetch_minute_df_nan_closes_triggers_guard(monkeypatch, caplog):
 def test_fetch_feature_data_skips_when_macd_missing(monkeypatch, caplog):
     from ai_trading.core import bot_engine
 
-    timestamps = pd.date_range("2024-01-01", periods=3, freq="T", tz="UTC")
+    timestamps = pd.date_range("2024-01-01", periods=3, freq="min", tz="UTC")
     raw = pd.DataFrame(
         {
             "timestamp": timestamps,
