@@ -147,7 +147,7 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
 
 
-def test_get_latest_price_degrades_to_bid_after_fallback(monkeypatch):
+def test_get_latest_price_degrades_to_bid_after_fallback(monkeypatch, caplog):
     """Bid is accepted only after fallbacks fail when ask/last are unusable."""
 
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
@@ -176,11 +176,13 @@ def test_get_latest_price_degrades_to_bid_after_fallback(monkeypatch):
     monkeypatch.setattr(bot_engine, "get_latest_close", lambda df: float(df["close"].iloc[-1]))
     monkeypatch.setattr(bot_engine, "get_bars_df", lambda symbol: (_ for _ in ()).throw(RuntimeError))
 
-    price = bot_engine.get_latest_price("AAPL")
+    with caplog.at_level("WARNING", logger="ai_trading.core.bot_engine"):
+        price = bot_engine.get_latest_price("AAPL")
 
-    assert calls["yahoo"] == 1
+    assert calls["yahoo"] == 0
     assert price == 94.5
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid_degraded"
+    assert "DELAYED_QUOTE_SLIPPAGE_FLAGGED" in caplog.text
 
 
 def test_get_latest_price_uses_latest_close_when_providers_fail(monkeypatch):
