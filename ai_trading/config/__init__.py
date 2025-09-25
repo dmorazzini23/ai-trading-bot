@@ -10,6 +10,10 @@ import threading
 from dataclasses import dataclass
 from typing import Sequence
 
+from ai_trading.util.env_check import assert_dotenv_not_shadowed
+
+assert_dotenv_not_shadowed()
+
 from .runtime import (
     TradingConfig,
     CONFIG_SPECS,

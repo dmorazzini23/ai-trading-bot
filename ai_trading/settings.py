@@ -1,5 +1,4 @@
 """Runtime settings with env aliases and safe defaults."""
-
 from __future__ import annotations
 from datetime import timedelta
 from functools import lru_cache
@@ -11,10 +10,6 @@ import sys
 from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from ai_trading.logging import logger
-from ai_trading.util.env_check import guard_python_dotenv
-
-
-guard_python_dotenv()
 
 
 POSITION_SIZE_MIN_USD_DEFAULT = 25.0

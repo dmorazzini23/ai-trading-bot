@@ -1,31 +1,29 @@
 from __future__ import annotations
 
 import importlib
-import sys
-from types import ModuleType
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from ai_trading.util import env_check
 
 
-def test_guard_passes_with_python_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ENV_IMPORT_GUARD", "true")
-    # Ensure any cached import is cleared so guard re-imports the real module.
-    sys.modules.pop("dotenv", None)
-    env_check.guard_python_dotenv(force=True)
-
-
-class _DummyModule(ModuleType):
-    pass
+def test_guard_passes_with_python_dotenv() -> None:
+    env_check.assert_dotenv_not_shadowed()
 
 
 def test_guard_detects_shadowed_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ENV_IMPORT_GUARD", "true")
-    shadow = _DummyModule("dotenv")
-    sys.modules["dotenv"] = shadow
+    repo_root = Path(env_check.__file__).resolve().parents[2]
+    real_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name: str):
+        if name == "dotenv":
+            return SimpleNamespace(origin=str(repo_root / "dotenv/__init__.py"))
+        return real_find_spec(name)
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+
     with pytest.raises(env_check.DotenvImportError) as exc:
-        env_check.guard_python_dotenv(force=True)
-    assert "python-dotenv not available" in str(exc.value)
-    sys.modules.pop("dotenv", None)
-    importlib.invalidate_caches()
+        env_check.assert_dotenv_not_shadowed()
+
+    assert "python-dotenv is shadowed" in str(exc.value)
