@@ -540,6 +540,7 @@ def data_check(symbols: Iterable[str], *, feed: str | None = None) -> dict[str, 
     return results
 import asyncio
 import atexit
+import functools
 import hashlib  # AI-AGENT-REF: model hash helper
 import importlib
 import inspect
@@ -558,7 +559,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 import time as _time
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 try:  # AI-AGENT-REF: optional joblib import
     import joblib  # type: ignore
@@ -5566,6 +5567,7 @@ class BotState:
 
     # Intraday price reliability metadata populated from fetch_minute_df_safe
     price_reliability: dict[str, tuple[bool, str | None]] = field(default_factory=dict)
+    data_quality: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
     trade_history: list[tuple[str, datetime]] = field(
@@ -8750,6 +8752,7 @@ class BotContext:
     # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
     drawdown_circuit_breaker: DrawdownCircuitBreaker | None = None
     logger: logging.Logger = logger
+    liquidity_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # AI-AGENT-REF: Add backward compatibility property for alpaca_client
     @property
@@ -11264,6 +11267,14 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
                 except (TypeError, ValueError):
                     continue
 
+    annotations = getattr(ctx, "liquidity_annotations", None)
+    if not isinstance(annotations, dict):
+        annotations = {}
+        try:
+            setattr(ctx, "liquidity_annotations", annotations)
+        except Exception:
+            pass
+
     data_client = getattr(ctx, "data_client", None)
     spread = 0.0
     quote_available = False
@@ -11348,6 +11359,15 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
             "LIQUIDITY_FACTOR_FALLBACK",
             **extra,
         )
+        if isinstance(annotations, dict):
+            annotations[symbol] = {
+                "fallback": True,
+                "reason": fallback_reason or "unavailable",
+                "strategy": fallback_strategy,
+                "factor": float(fallback_factor),
+                "volume_threshold": float(volume_threshold),
+                "avg_vol": float(avg_vol) if avg_vol else 0.0,
+            }
         return fallback_factor
 
     vol_score = min(1.0, avg_vol / volume_threshold) if avg_vol else 0.0
@@ -11367,7 +11387,16 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         spread_score * 0.3
     )  # Weight volume more than spread
 
-    return max(0.1, min(1.0, final_score))  # Min 0.1 to avoid complete blocking
+    result = max(0.1, min(1.0, final_score))  # Min 0.1 to avoid complete blocking
+    if isinstance(annotations, dict):
+        annotations[symbol] = {
+            "fallback": False,
+            "factor": float(result),
+            "spread": float(spread),
+            "volume_threshold": float(volume_threshold),
+            "avg_vol": float(avg_vol) if avg_vol else 0.0,
+        }
+    return result
 
 
 def fractional_kelly_size(
@@ -12651,16 +12680,42 @@ def _safe_trade(
         return False
 
 
+def _ensure_data_quality_bucket(state: BotState) -> dict[str, dict[str, Any]]:
+    bucket = getattr(state, "data_quality", None)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        setattr(state, "data_quality", bucket)
+    return bucket
+
+
+def _update_data_quality(state: BotState, symbol: str, **updates: Any) -> None:
+    bucket = _ensure_data_quality_bucket(state)
+    record = bucket.get(symbol)
+    if record is None:
+        record = {}
+        bucket[symbol] = record
+    if updates:
+        record.update(updates)
+    record["updated_at"] = datetime.now(UTC)
+
+
+def _reset_data_quality(state: BotState, symbol: str) -> None:
+    bucket = _ensure_data_quality_bucket(state)
+    bucket.pop(symbol, None)
+
+
 def _record_price_reliability(state: BotState, symbol: str, df: pd.DataFrame | None) -> None:
     mapping = getattr(state, "price_reliability", None)
     if not isinstance(mapping, dict):
         return
     if df is None or getattr(df, "empty", False):
         mapping.pop(symbol, None)
+        _reset_data_quality(state, symbol)
         return
     attrs = getattr(df, "attrs", None)
     reliable = True
     reason: str | None = None
+    gap_ratio: float | None = None
     if isinstance(attrs, dict):
         reliable = bool(attrs.get("price_reliable", True))
         reason_val = attrs.get("price_reliable_reason")
@@ -12669,7 +12724,24 @@ def _record_price_reliability(state: BotState, symbol: str, df: pd.DataFrame | N
                 reason = str(reason_val)
             except Exception:
                 reason = None
+        coverage_meta = attrs.get("_coverage_meta")
+        if isinstance(coverage_meta, dict):
+            try:
+                gap_ratio_val = coverage_meta.get("gap_ratio")
+                if gap_ratio_val is not None:
+                    gap_ratio = float(gap_ratio_val)
+            except (TypeError, ValueError):
+                gap_ratio = None
     mapping[symbol] = (reliable, reason)
+    _update_data_quality(
+        state,
+        symbol,
+        price_reliable=reliable,
+        price_reliable_reason=reason,
+        gap_ratio=gap_ratio,
+        missing_ohlcv=False,
+        stale_data=False,
+    )
 
 
 def _fetch_feature_data(
@@ -12729,6 +12801,16 @@ def _fetch_feature_data(
         except DataFetchError as exc:
             _record_price_reliability(state, symbol, None)
             reason = getattr(exc, "fetch_reason", "")
+            normalized_reason = str(reason or "data_fetch_error")
+            _update_data_quality(
+                state,
+                symbol,
+                price_reliable=False,
+                price_reliable_reason=normalized_reason,
+                missing_ohlcv=normalized_reason
+                in {"close_column_all_nan", "close_column_missing", "ohlcv_columns_missing"},
+                stale_data=normalized_reason == "stale_minute_data",
+            )
             if reason == "stale_minute_data":
                 logger.info(
                     "SKIP_STALE_MINUTE_DATA",
@@ -13026,6 +13108,223 @@ def _price_reliability(state: BotState, symbol: str) -> tuple[bool, str | None]:
     return True, None
 
 
+@dataclass(slots=True)
+class DataGateDecision:
+    block: bool
+    reasons: tuple[str, ...]
+    size_cap: float | None = None
+    annotations: dict[str, Any] = field(default_factory=dict)
+
+
+@functools.lru_cache(maxsize=1)
+def _strict_data_gating_enabled() -> bool:
+    try:
+        return bool(get_env("AI_TRADING_STRICT_GATING", "1", cast=bool))
+    except Exception:
+        raw = os.getenv("AI_TRADING_STRICT_GATING", "1")
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+@functools.lru_cache(maxsize=1)
+def _gap_ratio_gate_limit() -> float:
+    try:
+        value = get_env("AI_TRADING_GAP_RATIO_LIMIT", 0.005, cast=float)
+    except Exception:
+        value = _env_float(0.005, "AI_TRADING_GAP_RATIO_LIMIT")
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.005
+
+
+@functools.lru_cache(maxsize=1)
+def _fallback_quote_max_age_seconds() -> float:
+    try:
+        value = get_env("AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC", 8.0, cast=float)
+    except Exception:
+        value = _env_float(8.0, "AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC")
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 8.0
+
+
+@functools.lru_cache(maxsize=1)
+def _liquidity_fallback_cap() -> float:
+    try:
+        value = get_env("AI_TRADING_LIQ_FALLBACK_CAP", 0.25, cast=float)
+    except Exception:
+        value = _env_float(0.25, "AI_TRADING_LIQ_FALLBACK_CAP")
+    try:
+        capped = float(value)
+    except (TypeError, ValueError):
+        capped = 0.25
+    return min(1.0, max(0.0, capped))
+
+
+def _coerce_quote_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        except (OSError, OverflowError, ValueError):
+            return None
+    try:
+        dt_val = ensure_datetime(value)
+    except Exception:
+        return None
+    if dt_val.tzinfo is None:
+        dt_val = dt_val.replace(tzinfo=UTC)
+    return dt_val.astimezone(UTC)
+
+
+def _extract_quote_timestamp(payload: Any) -> datetime | None:
+    queue: list[Any] = [payload]
+    seen: set[int] = set()
+    while queue:
+        candidate = queue.pop()
+        ident = id(candidate)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        if candidate is None:
+            continue
+        for key in ("timestamp", "time", "ts", "t", "updated_at"):
+            source = None
+            if hasattr(candidate, key):
+                source = getattr(candidate, key)
+            if source is None and isinstance(candidate, Mapping):
+                source = candidate.get(key)
+            ts = _coerce_quote_timestamp(source)
+            if ts is not None:
+                return ts
+        if isinstance(candidate, Mapping):
+            for value in candidate.values():
+                if isinstance(value, Mapping):
+                    queue.append(value)
+    return None
+
+
+def _check_fallback_quote_age(
+    ctx: Any,
+    symbol: str,
+    *,
+    max_age: float,
+) -> tuple[bool, float | None, str | None]:
+    data_client = getattr(ctx, "data_client", None)
+    if data_client is None:
+        return False, None, "quote_source_unavailable"
+    try:
+        if StockLatestQuoteRequest is None:
+            raise RuntimeError("StockLatestQuoteRequest unavailable")
+        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        quote = data_client.get_stock_latest_quote(req)
+    except Exception as exc:  # noqa: BLE001 - defensive around SDK variations
+        logger.warning(
+            "FALLBACK_QUOTE_CHECK_FAILED",
+            extra={"symbol": symbol, "cause": exc.__class__.__name__, "detail": str(exc)},
+        )
+        return False, None, "quote_fetch_error"
+    ts = _extract_quote_timestamp(quote)
+    if ts is None:
+        return False, None, "quote_timestamp_missing"
+    age = max(0.0, (datetime.now(UTC) - ts.astimezone(UTC)).total_seconds())
+    if age > max_age:
+        return False, age, f"quote_age={age:.1f}s>limit={max_age:.1f}s"
+    return True, age, None
+
+
+def _evaluate_data_gating(
+    ctx: BotContext,
+    state: BotState,
+    symbol: str,
+    price_source: str,
+    *,
+    prefer_backup_quote: bool,
+) -> DataGateDecision:
+    strict = _strict_data_gating_enabled()
+    fallback_source = prefer_backup_quote or not _is_primary_price_source(price_source or "")
+    if price_source == "feature_close":
+        fallback_source = True
+    quality = _ensure_data_quality_bucket(state).get(symbol, {})
+    reasons: list[str] = []
+    fatal_reasons: list[str] = []
+    annotations: dict[str, Any] = {}
+
+    if strict:
+        gap_ratio = quality.get("gap_ratio")
+        if isinstance(gap_ratio, (int, float, np.floating)):
+            if gap_ratio > _gap_ratio_gate_limit():
+                fatal_reasons.append(
+                    f"gap_ratio={gap_ratio * 100:.2f}%>limit={_gap_ratio_gate_limit() * 100:.2f}%"
+                )
+        reason_text = str(quality.get("price_reliable_reason") or "")
+        if quality.get("missing_ohlcv"):
+            fatal_reasons.append("ohlcv_columns_missing")
+        if quality.get("stale_data"):
+            fatal_reasons.append(reason_text or "stale_minute_data")
+        if not quality.get("price_reliable", True) and not fatal_reasons:
+            fatal_reasons.append(reason_text or "unreliable_price")
+        if "gap_ratio=" in reason_text and not any("gap_ratio" in entry for entry in fatal_reasons):
+            fatal_reasons.append(reason_text)
+        if fallback_source:
+            ok, age, reason = _check_fallback_quote_age(
+                ctx, symbol, max_age=_fallback_quote_max_age_seconds()
+            )
+            if ok:
+                annotations["fallback_quote_age"] = age
+                _update_data_quality(
+                    state,
+                    symbol,
+                    fallback_quote_age=age,
+                    fallback_quote_error=None,
+                )
+            else:
+                fatal_reasons.append(reason or "fallback_quote_invalid")
+                _update_data_quality(
+                    state,
+                    symbol,
+                    fallback_quote_age=age,
+                    fallback_quote_error=reason,
+                )
+    else:
+        if fallback_source and not quality.get("price_reliable", True):
+            fatal_reasons.append(quality.get("price_reliable_reason") or "unreliable_price")
+
+    liquidity_cap: float | None = None
+    liq_annotations = getattr(ctx, "liquidity_annotations", None)
+    liq_meta = None
+    if isinstance(liq_annotations, dict):
+        liq_meta = liq_annotations.get(symbol)
+        if isinstance(liq_meta, dict) and liq_meta.get("fallback"):
+            liquidity_cap = _liquidity_fallback_cap() if strict else None
+            reasons.append("liquidity_fallback")
+            annotations["liquidity"] = liq_meta
+            _update_data_quality(state, symbol, liquidity_fallback=True)
+        elif isinstance(liq_meta, dict):
+            _update_data_quality(state, symbol, liquidity_fallback=False)
+
+    combined_reasons = list(dict.fromkeys(fatal_reasons + reasons))
+    _update_data_quality(
+        state,
+        symbol,
+        gate_reasons=tuple(combined_reasons),
+        price_source=price_source,
+        prefer_backup_quote=prefer_backup_quote,
+    )
+
+    if fatal_reasons:
+        return DataGateDecision(True, tuple(combined_reasons), None, annotations)
+
+    if liquidity_cap is not None and liquidity_cap < 1.0:
+        return DataGateDecision(False, tuple(combined_reasons), liquidity_cap, annotations)
+
+    return DataGateDecision(False, tuple(combined_reasons), None, annotations)
+
+
 def _enter_long(
     ctx: BotContext,
     state: BotState,
@@ -13133,16 +13432,46 @@ def _enter_long(
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if price_source != "feature_close" and not _is_primary_price_source(price_source):
-        reliable, reason = _price_reliability(state, symbol)
-        if not reliable:
-            reason_label = reason or "unreliable_price"
-            logger.info(
-                "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-                symbol,
-                reason_label,
-            )
-            return True
+    gate = _evaluate_data_gating(
+        ctx,
+        state,
+        symbol,
+        price_source,
+        prefer_backup_quote=prefer_backup_quote,
+    )
+    if gate.block:
+        reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
+        logger.info(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+            symbol,
+            reason_label,
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+            },
+        )
+        return True
+    if (
+        gate.reasons
+        and not gate.block
+        and any(reason != "liquidity_fallback" for reason in gate.reasons)
+    ):
+        logger.info(
+            "DATA_GATING_PASS_THROUGH",
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+            },
+        )
+    if (
+        not _is_primary_price_source(price_source)
+        or price_source == "feature_close"
+        or prefer_backup_quote
+    ) and not gate.block:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -13195,6 +13524,22 @@ def _enter_long(
     except (APIError, RequestException, AttributeError, ValueError):
         account_equity = float(balance)
     raw_qty = int(account_equity * target_weight / current_price) if current_price > 0 else 0
+    if gate.size_cap is not None and gate.size_cap < 1.0 and raw_qty > 0:
+        capped_qty = int(math.floor(raw_qty * gate.size_cap))
+        if capped_qty <= 0:
+            capped_qty = 1
+        if capped_qty < raw_qty:
+            logger.info(
+                "ORDER_LIQUIDITY_SIZE_CAPPED",
+                extra={
+                    "symbol": symbol,
+                    "base_qty": raw_qty,
+                    "capped_qty": capped_qty,
+                    "cap": gate.size_cap,
+                    "reasons": gate.reasons,
+                },
+            )
+            raw_qty = capped_qty
 
     # AI-AGENT-REF: Position sizing integration (gated by flag)
     if hasattr(S, "sizing_enabled") and CFG.sizing_enabled:
@@ -13362,16 +13707,46 @@ def _enter_short(
             extra={"symbol": symbol, "price_source": price_source},
         )
         return True
-    if not _is_primary_price_source(price_source):
-        reliable, reason = _price_reliability(state, symbol)
-        if not reliable:
-            reason_label = reason or "unreliable_price"
-            logger.info(
-                "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
-                symbol,
-                reason_label,
-            )
-            return True
+    gate = _evaluate_data_gating(
+        ctx,
+        state,
+        symbol,
+        price_source,
+        prefer_backup_quote=prefer_backup_quote,
+    )
+    if gate.block:
+        reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
+        logger.info(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
+            symbol,
+            reason_label,
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+            },
+        )
+        return True
+    if (
+        gate.reasons
+        and not gate.block
+        and any(reason != "liquidity_fallback" for reason in gate.reasons)
+    ):
+        logger.info(
+            "DATA_GATING_PASS_THROUGH",
+            extra={
+                "symbol": symbol,
+                "reasons": gate.reasons,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+            },
+        )
+    if (
+        not _is_primary_price_source(price_source)
+        or price_source == "feature_close"
+        or prefer_backup_quote
+    ) and not gate.block:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -13379,6 +13754,22 @@ def _enter_short(
     current_price = float(quote_price)
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
+    if gate.size_cap is not None and gate.size_cap < 1.0 and qty > 0:
+        capped_qty = int(math.floor(qty * gate.size_cap))
+        if capped_qty <= 0:
+            capped_qty = 1
+        if capped_qty < qty:
+            logger.info(
+                "ORDER_LIQUIDITY_SIZE_CAPPED",
+                extra={
+                    "symbol": symbol,
+                    "base_qty": qty,
+                    "capped_qty": capped_qty,
+                    "cap": gate.size_cap,
+                    "reasons": gate.reasons,
+                },
+            )
+            qty = capped_qty
     try:
         asset = ctx.api.get_asset(symbol)
         if hasattr(asset, "shortable") and not asset.shortable:
