@@ -16,8 +16,9 @@ from ai_trading.alpaca_api import (
     get_trading_client_cls,
     get_data_client_cls,
     get_api_error_cls,
+    _set_alpaca_service_available,
 )
-from ai_trading.config.management import is_shadow_mode
+from ai_trading.config.management import get_env, is_shadow_mode
 from ai_trading.exc import COMMON_EXC
 
 logger = get_logger(__name__)
@@ -252,6 +253,16 @@ def _initialize_alpaca_clients() -> bool:
         be.trading_client = None
         be.data_client = None
         return False
+    execution_mode = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim").lower()
+    if execution_mode == "disabled":
+        be.trading_client = None
+        be.data_client = None
+        _set_alpaca_service_available(False)
+        logger.info(
+            "ALPACA_CLIENT_INIT_SKIPPED",
+            extra={"reason": "execution_mode_disabled", "execution_mode": execution_mode},
+        )
+        return False
     try:
         APIError = get_api_error_cls()
     except ImportError as e:  # pragma: no cover - defensive
@@ -286,6 +297,7 @@ def _initialize_alpaca_clients() -> bool:
             logger.info("Shadow mode or missing credentials: skipping Alpaca client initialization")
             logger_once.warning("ALPACA_INIT_SKIPPED - shadow mode or missing credentials", key="alpaca_init_skipped")
             logger.info("ALPACA_DIAG", extra=diag)
+            _set_alpaca_service_available(False)
             return False
         try:
             AlpacaREST = get_trading_client_cls()

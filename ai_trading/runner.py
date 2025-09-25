@@ -5,6 +5,7 @@ heavy imports at module import time.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from ai_trading.core import bot_engine
@@ -26,21 +27,62 @@ def start(api: Any | None = None):
             ctx._ensure_initialized()  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover - defensive
             pass
-    inner = getattr(ctx, "_context", ctx)
-    if getattr(inner, "api", None) is None:
+    try:
+        inner_ctx = object.__getattribute__(ctx, "_context")
+    except AttributeError:
+        inner_ctx = None
+    if inner_ctx is None:
+        try:
+            inner = object.__getattribute__(ctx, "_fallback_context")
+        except AttributeError:
+            inner = None
+        if inner is None:
+            inner = SimpleNamespace()
+            try:
+                object.__setattr__(ctx, "_fallback_context", inner)
+            except Exception:  # pragma: no cover - defensive
+                pass
+    else:
+        inner = inner_ctx
+
+    existing_api = None
+    if inner is not None:
+        existing_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
+        if existing_api is None:
+            try:
+                existing_api = getattr(inner, "api")
+            except Exception:  # pragma: no cover - defensive
+                existing_api = None
+
+    if existing_api is None:
         if api is not None:
             setattr(inner, "api", api)
         else:  # Defer to bot_engine to resolve the global trading client
             bot_engine.ensure_alpaca_attached(inner)
-            if getattr(inner, "api", None) is None:
+            try:
+                existing_api = getattr(inner, "api")
+            except Exception:
+                existing_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
+            if existing_api is None:
                 # Fallback to a minimal stub to satisfy tests when Alpaca
                 # clients are unavailable or intentionally absent.
                 setattr(inner, "api", object())
-    # Mirror the attribute on the lazy wrapper so external access works
-    try:
-        setattr(ctx, "api", getattr(inner, "api"))
-    except Exception:  # pragma: no cover - defensive
-        pass
+    final_api = None
+    if inner is not None:
+        final_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
+        if final_api is None:
+            try:
+                final_api = getattr(inner, "api")
+            except Exception:  # pragma: no cover - defensive
+                final_api = None
+    if final_api is not None:
+        try:
+            setattr(ctx, "api", final_api)
+        except Exception:  # pragma: no cover - defensive
+            try:
+                object.__setattr__(ctx, "api", final_api)
+            except Exception:
+                pass
     return inner
 
 
