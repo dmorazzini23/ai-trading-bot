@@ -28,8 +28,13 @@ def test_parse_local_positions_logs_info_on_empty(caplog, tmp_path, monkeypatch)
         bot_engine._parse_local_positions()
         bot_engine._parse_local_positions()
 
-    records = [r for r in caplog.records if r.levelno == logging.INFO and str(trade_log) in r.getMessage()]
+    records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO and str(trade_log) in r.getMessage()
+    ]
     assert len(records) == 1
+    assert "PARSE_LOCAL_POSITIONS_EMPTY" in records[0].getMessage()
 
 
 def test_parse_local_positions_warns_when_missing(caplog, tmp_path, monkeypatch):
@@ -43,7 +48,12 @@ def test_parse_local_positions_warns_when_missing(caplog, tmp_path, monkeypatch)
     with caplog.at_level(logging.WARNING):
         bot_engine._parse_local_positions()
 
-    assert any(r.levelno == logging.WARNING and str(trade_log) in r.getMessage() for r in caplog.records)
+    assert any(
+        r.levelno == logging.WARNING
+        and "PARSE_LOCAL_POSITIONS_MISSING" in r.getMessage()
+        and str(trade_log) in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_load_signal_weights_warning(caplog, tmp_path, monkeypatch):
@@ -81,7 +91,8 @@ def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
     warning_records = [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and r.getMessage() == "METALEARN_NO_TRADES"
+        if r.levelno == logging.WARNING
+        and r.getMessage().startswith("METALEARN_NO_TRADES")
     ]
 
     assert warning_records, "Expected METALEARN_NO_TRADES warning to be emitted"
@@ -90,6 +101,7 @@ def test_meta_learning_weight_optimizer_warning(caplog, tmp_path):
         or getattr(record, "trade_log_path", None) == str(trade_log)
         for record in warning_records
     ), "Trade log path should be referenced in warning message or extras"
+    assert any("rows=" in record.getMessage() for record in warning_records)
     assert not output_path.exists(), "Optimizer should return early without creating weights file"
 
 
