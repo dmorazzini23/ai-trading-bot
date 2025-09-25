@@ -2043,6 +2043,8 @@ _HEALTH_CHECK_FAILURES = 0
 _HEALTH_CHECK_FAIL_THRESHOLD = 3
 
 _EMPTY_TRADE_LOG_INFO_EMITTED = False
+_PARSE_LOCAL_POSITIONS_EMPTY_EMITTED = False
+_PARSE_LOCAL_POSITIONS_MISSING_EMITTED = False
 _TRADE_LOG_CACHE: Any | None = None
 _TRADE_LOG_CACHE_LOADED = False
 
@@ -7621,6 +7623,17 @@ def _load_trade_log_cache() -> Any | None:
 
 def _parse_local_positions() -> dict[str, int]:
     """Return current local open positions from the trade logger."""
+
+    global _PARSE_LOCAL_POSITIONS_EMPTY_EMITTED, _PARSE_LOCAL_POSITIONS_MISSING_EMITTED
+
+    trade_log_path = TRADE_LOG_FILE
+    if not os.path.exists(trade_log_path):
+        if not _PARSE_LOCAL_POSITIONS_MISSING_EMITTED:
+            logger.warning("PARSE_LOCAL_POSITIONS_MISSING %s", trade_log_path)
+            _PARSE_LOCAL_POSITIONS_MISSING_EMITTED = True
+    else:
+        _PARSE_LOCAL_POSITIONS_MISSING_EMITTED = False
+
     # Ensure the trade log file exists with headers before attempting to read
     # from it.  ``get_trade_logger`` will create the file and write the header
     # row on first use, which prevents later reads from failing due to a missing
@@ -7629,10 +7642,21 @@ def _parse_local_positions() -> dict[str, int]:
 
     positions: dict[str, int] = {}
     df = _read_trade_log(
-        TRADE_LOG_FILE, usecols=["symbol", "qty", "side", "exit_time"], dtype=str
+        trade_log_path, usecols=["symbol", "qty", "side", "exit_time"], dtype=str
     )
-    if df is None:
+
+    df_is_empty = df is None or (hasattr(df, "empty") and df.empty)
+    if df_is_empty:
+        if not _PARSE_LOCAL_POSITIONS_EMPTY_EMITTED:
+            row_count = 0 if df is None else len(df.index)
+            logger.info(
+                "PARSE_LOCAL_POSITIONS_EMPTY %s rows=%s", trade_log_path, row_count
+            )
+            _PARSE_LOCAL_POSITIONS_EMPTY_EMITTED = True
         return positions
+
+    _PARSE_LOCAL_POSITIONS_EMPTY_EMITTED = False
+
     for _, row in df.iterrows():
         if str(row.get("exit_time", "")) != "":
             continue
@@ -13643,8 +13667,10 @@ def run_meta_learning_weight_optimizer(
         )
         if df is None:
             logger.warning(
-                "METALEARN_NO_TRADES",
-                extra={"trade_log_path": trade_log_path},
+                "METALEARN_NO_TRADES rows=%s path=%s",
+                0,
+                trade_log_path,
+                extra={"trade_log_path": trade_log_path, "rows": 0},
             )
             return
         df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
@@ -13711,7 +13737,12 @@ def run_bayesian_meta_learning_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side"],
         )
         if df is None:
-            logger.warning("METALEARN_NO_TRADES")
+            logger.warning(
+                "METALEARN_NO_TRADES rows=%s path=%s",
+                0,
+                trade_log_path,
+                extra={"trade_log_path": trade_log_path, "rows": 0},
+            )
             return
         df = df.dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
