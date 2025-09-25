@@ -17813,7 +17813,10 @@ def _process_symbols(
         if should_stop():
             f.cancel()
             continue
-        f.result()
+        try:
+            f.result()
+        except Exception:
+            logger.exception("PROCESS_SYMBOL_ERROR | skipping failed symbol")
 
     with data_stats_lock:
         failed = int(data_stats.get("failed", 0))
