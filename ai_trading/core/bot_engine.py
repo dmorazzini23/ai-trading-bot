@@ -3839,8 +3839,10 @@ def fetch_feature_data(symbol: str, *args: Any, **kwargs: Any) -> FeatureDataRes
     if minute_df is None:
         try:
             minute_df = fetch_minute_df_safe(symbol, *args, **kwargs)
-        except DataFetchError:
-            return FeatureDataResult(df=None, data_quality="empty")
+        except DataFetchError as exc:
+            reason = getattr(exc, "fetch_reason", None)
+            quality = "stale" if reason == "stale_minute_data" else "empty"
+            return FeatureDataResult(df=None, data_quality=quality)
     if minute_df is None:
         return FeatureDataResult(df=None, data_quality="empty")
     if _is_minute_stale(minute_df, symbol=symbol):
@@ -12880,7 +12882,9 @@ def _safe_trade(
         return False
 
 
-def _ensure_data_quality_bucket(state: BotState) -> dict[str, dict[str, Any]]:
+def _ensure_data_quality_bucket(state: BotState | None) -> dict[str, dict[str, Any]]:
+    if state is None:
+        return {}
     bucket = getattr(state, "data_quality", None)
     if not isinstance(bucket, dict):
         bucket = {}
@@ -12888,7 +12892,9 @@ def _ensure_data_quality_bucket(state: BotState) -> dict[str, dict[str, Any]]:
     return bucket
 
 
-def _update_data_quality(state: BotState, symbol: str, **updates: Any) -> None:
+def _update_data_quality(state: BotState | None, symbol: str, **updates: Any) -> None:
+    if state is None:
+        return
     bucket = _ensure_data_quality_bucket(state)
     record = bucket.get(symbol)
     if record is None:
@@ -12899,12 +12905,18 @@ def _update_data_quality(state: BotState, symbol: str, **updates: Any) -> None:
     record["updated_at"] = datetime.now(UTC)
 
 
-def _reset_data_quality(state: BotState, symbol: str) -> None:
+def _reset_data_quality(state: BotState | None, symbol: str) -> None:
+    if state is None:
+        return
     bucket = _ensure_data_quality_bucket(state)
     bucket.pop(symbol, None)
 
 
-def _record_price_reliability(state: BotState, symbol: str, df: pd.DataFrame | None) -> None:
+def _record_price_reliability(
+    state: BotState | None, symbol: str, df: pd.DataFrame | None
+) -> None:
+    if state is None:
+        return
     mapping = getattr(state, "price_reliability", None)
     if not isinstance(mapping, dict):
         return
@@ -13048,9 +13060,20 @@ def _fetch_feature_data(
         _halt("empty_frame")
         return None, None, False
 
+    validation_df = raw_df
+    timestamp_added = False
+    if "timestamp" not in validation_df.columns:
+        try:
+            validation_df = validation_df.copy()
+            validation_df.insert(0, "timestamp", validation_df.index)
+            timestamp_added = True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("failed to add timestamp column: %s", exc)
+            validation_df = raw_df
+
     # Guard: validate OHLCV shape before feature engineering
     try:
-        validate_ohlcv(raw_df)
+        validate_ohlcv(validation_df)
     except (
         FileNotFoundError,
         PermissionError,
@@ -13064,7 +13087,7 @@ def _fetch_feature_data(
         logger.warning("OHLCV validation failed for %s: %s; skipping symbol", symbol, e)
         return raw_df, pd.DataFrame(), True
 
-    df = raw_df.copy()
+    df = validation_df.copy() if timestamp_added else raw_df.copy()
 
     cycle_cached = _get_cycle_feature_cache(symbol, df)
     if cycle_cached is not None:
@@ -13109,6 +13132,10 @@ def _fetch_feature_data(
     close_numeric = pd.to_numeric(df["close"], errors="coerce")
     finite_close = close_numeric.replace([np.inf, -np.inf], np.nan).dropna()
     if finite_close.empty:
+        logger.warning(
+            "MACD indicators unavailable for %s; skipping indicator preparation",
+            symbol,
+        )
         logger.debug("SKIP_FEATURES_NO_FINITE_CLOSES", extra={"symbol": symbol})
         return raw_df, None, True
 
