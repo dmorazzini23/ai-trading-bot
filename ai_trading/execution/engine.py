@@ -12,7 +12,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, is_dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -51,6 +51,54 @@ _active_orders = _mon_active
 _order_tracking_lock = _mon_lock
 
 _PRIMARY_FALLBACK_SOURCE = "unknown"
+
+
+KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
+    {
+        "allow_partial",
+        "asset_class",
+        "client_order_id",
+        "execution_algorithm",
+        "expected_price",
+        "expected_price_source",
+        "expected_price_timestamp",
+        "expected_price_ts",
+        "extended_hours",
+        "id",
+        "limit_price",
+        "max_participation_rate",
+        "max_slippage_bps",
+        "max_total_slippage_bps",
+        "metadata",
+        "min_quantity",
+        "notional",
+        "notes",
+        "order_class",
+        "parent_order_id",
+        "post_only",
+        "price",
+        "price_improvement",
+        "price_source",
+        "reduce_only",
+        "signal",
+        "signal_weight",
+        "slice_id",
+        "source_system",
+        "stop_loss",
+        "stop_price",
+        "strategy_id",
+        "tag",
+        "tags",
+        "take_profit",
+        "target_price",
+        "tif",
+        "time_in_force",
+        "trail_percent",
+        "trail_price",
+        "urgency_level",
+        "user_data",
+    }
+)
 
 
 def _cleanup_stale_orders(now: float | None = None, max_age_s: int | None = None) -> int:
@@ -947,6 +995,8 @@ class ExecutionEngine:
         side: OrderSide,
         quantity: int,
         order_type: OrderType = OrderType.MARKET,
+        *,
+        asset_class: str | None = None,
         **kwargs: Any,
     ):
         """Execute a trading order.
@@ -962,8 +1012,15 @@ class ExecutionEngine:
             Order ID if successful, ``None`` if rejected.
         """
         try:
+            kwargs = dict(kwargs)
             signal = kwargs.pop("signal", None)
             explicit_signal_weight = kwargs.pop("signal_weight", None)
+            raw_keys = set(kwargs)
+            ignored_keys = set()
+            if raw_keys:
+                ignored_keys = {k for k in raw_keys if k not in KNOWN_EXECUTE_ORDER_KWARGS}
+                for key in list(ignored_keys):
+                    kwargs.pop(key, None)
             api = self._select_api()
             if api is None:
                 logger.debug("NO_API_SELECTED")
@@ -988,34 +1045,58 @@ class ExecutionEngine:
                     self.execution_stats["rejected_orders"] += 1
                     return None
             quantity = int(_ensure_positive_qty(quantity))
-            kwargs["limit_price"] = _ensure_valid_price(kwargs.get("limit_price"))
-            kwargs["stop_price"] = _ensure_valid_price(kwargs.get("stop_price"))
-            # Ensure a sane default for broker-mirrored payload fields
-            tif = kwargs.get("time_in_force") or "day"
+            limit_price = _ensure_valid_price(kwargs.get("limit_price"))
+            stop_price = _ensure_valid_price(kwargs.get("stop_price"))
+            kwargs["limit_price"] = limit_price
+            kwargs["stop_price"] = stop_price
+            tif_alias = kwargs.pop("tif", None)
+            if tif_alias is not None and not kwargs.get("time_in_force"):
+                kwargs["time_in_force"] = tif_alias
+            tif_value = kwargs.get("time_in_force") or "day"
             payload: dict[str, Any] = {
                 "symbol": symbol,
                 "side": getattr(side, "value", side),
                 "qty": quantity,
                 "type": getattr(order_type, "value", order_type),
-                "time_in_force": tif,
-                "limit_price": kwargs.get("limit_price"),
-                "stop_price": kwargs.get("stop_price"),
+                "time_in_force": tif_value,
+                "limit_price": limit_price,
+                "stop_price": stop_price,
             }
-            logger.debug(
-                "ORDER_SUBMIT_PAYLOAD",
-                extra={
-                    k: payload.get(k)
-                    for k in (
-                        "symbol",
-                        "side",
-                        "qty",
-                        "type",
-                        "time_in_force",
-                        "limit_price",
-                        "stop_price",
-                    )
-                },
-            )
+            extended_hours = kwargs.get("extended_hours")
+            if extended_hours is not None:
+                payload["extended_hours"] = extended_hours
+            kwargs.pop("asset_class", None)
+            supported_asset_class = False
+            if asset_class:
+                supported_asset_class = self._supports_asset_class()
+                if supported_asset_class:
+                    payload["asset_class"] = asset_class
+                else:
+                    ignored_keys = set(ignored_keys)
+                    ignored_keys.add("asset_class")
+            payload_extra = {
+                key: payload.get(key)
+                for key in (
+                    "symbol",
+                    "side",
+                    "qty",
+                    "type",
+                    "time_in_force",
+                    "limit_price",
+                    "stop_price",
+                    "extended_hours",
+                    "asset_class",
+                )
+            }
+            payload_extra["ignored_keys"] = tuple(sorted(ignored_keys)) if ignored_keys else ()
+            logger.debug("ORDER_SUBMIT_PAYLOAD", extra=payload_extra)
+            if ignored_keys:
+                for key in sorted(ignored_keys):
+                    logger.debug("EXEC_IGNORED_KWARG", extra={"kw": key})
+                logger.debug(
+                    "EXECUTE_ORDER_IGNORED_KWARGS",
+                    extra={"ignored_keys": tuple(sorted(ignored_keys))},
+                )
             if order_type == OrderType.MARKET:
                 if not get_env("TESTING", "false", cast=bool):
                     try:
@@ -1082,9 +1163,201 @@ class ExecutionEngine:
             self.execution_stats["rejected_orders"] += 1
             raise
 
-    def execute_sliced(self, symbol: str, quantity: int, side: OrderSide, **kwargs):
-        """Execute order slices by delegating to execute_order."""
-        return self.execute_order(symbol, side, quantity, **kwargs)
+    def execute_sliced(self, slices: Iterable[Any] | None, **kwargs: Any) -> list[Any]:
+        """Execute an order broken into ``slices`` of varying sizes.
+
+        ``slices`` may be an iterable of ints/floats representing quantities or
+        ratios, or mappings containing ``quantity``/``qty``/``ratio`` keys along
+        with additional kwargs to apply to each slice.
+        """
+
+        if isinstance(slices, (str, bytes)):
+            raise TypeError("slices must be an iterable of slice definitions")
+
+        kwargs = dict(kwargs)
+        symbol = kwargs.pop("symbol", None)
+        if symbol is None:
+            raise TypeError("execute_sliced requires 'symbol'")
+        side_value = kwargs.pop("side", None)
+        side = _normalize_order_side(side_value)
+        if side is None:
+            raise ValueError("execute_sliced requires a valid 'side'")
+        raw_quantity = (
+            kwargs.pop("quantity", None)
+            or kwargs.pop("total_quantity", None)
+            or kwargs.pop("qty", None)
+        )
+        if raw_quantity is None:
+            raise TypeError("execute_sliced requires 'quantity'")
+        try:
+            total_quantity = int(_ensure_positive_qty(raw_quantity))
+        except ValueError:
+            try:
+                if float(raw_quantity) == 0:
+                    return []
+            except (TypeError, ValueError):
+                raise
+            return []
+
+        order_type_value = kwargs.pop("order_type", OrderType.MARKET)
+        if isinstance(order_type_value, OrderType):
+            order_type = order_type_value
+        else:
+            try:
+                order_type = OrderType(str(order_type_value).lower())
+            except Exception:
+                order_type = OrderType.MARKET
+        asset_class = kwargs.pop("asset_class", None)
+
+        if slices is None:
+            slice_defs: list[Any] = []
+        else:
+            try:
+                slice_defs = list(slices)
+            except TypeError:
+                slice_defs = [slices]
+
+        def _as_float(value: Any) -> float | None:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(number):
+                return None
+            return number
+
+        def _quantity_from_value(value: Any, *, treat_fraction_as_ratio: bool = True) -> int | None:
+            if value is None:
+                return None
+            if isinstance(value, bool):
+                return 1 if value else 0
+            number = _as_float(value)
+            if number is None:
+                return None
+            if treat_fraction_as_ratio and 0 < number < 1 and total_quantity > 1:
+                number *= total_quantity
+            quantity_int = int(round(number))
+            if quantity_int < 0:
+                return 0
+            return quantity_int
+
+        quantity_keys = ("quantity", "qty", "shares", "size")
+        ratio_keys = ("ratio", "weight", "fraction")
+        percent_keys = ("percent", "percentage", "pct")
+
+        slice_specs: list[dict[str, Any]] = []
+        for entry in slice_defs:
+            per_slice_kwargs: dict[str, Any] = {}
+            quantity_hint: Any | None = None
+            ratio_hint: Any | None = None
+            percent_hint: Any | None = None
+
+            if isinstance(entry, Mapping):
+                per_slice_kwargs = {k: v for k, v in entry.items()}
+                for key in quantity_keys:
+                    if key in per_slice_kwargs:
+                        quantity_hint = per_slice_kwargs.pop(key)
+                        break
+                if quantity_hint is None:
+                    for key in ratio_keys:
+                        if key in per_slice_kwargs:
+                            ratio_hint = per_slice_kwargs.pop(key)
+                            break
+                if quantity_hint is None and ratio_hint is None:
+                    for key in percent_keys:
+                        if key in per_slice_kwargs:
+                            percent_hint = per_slice_kwargs.pop(key)
+                            break
+            elif isinstance(entry, tuple) and entry:
+                quantity_hint = entry[0]
+                if len(entry) > 1 and isinstance(entry[1], Mapping):
+                    per_slice_kwargs = {k: v for k, v in entry[1].items()}
+            else:
+                quantity_hint = entry
+
+            quantity = _quantity_from_value(quantity_hint)
+            if quantity is None and ratio_hint is not None:
+                ratio_value = _as_float(ratio_hint)
+                if ratio_value is not None:
+                    quantity = _quantity_from_value(
+                        ratio_value * total_quantity,
+                        treat_fraction_as_ratio=False,
+                    )
+            if quantity is None and percent_hint is not None:
+                percent_value = _as_float(percent_hint)
+                if percent_value is not None:
+                    quantity = _quantity_from_value(
+                        (percent_value / 100.0) * total_quantity,
+                        treat_fraction_as_ratio=False,
+                    )
+            if quantity is None:
+                quantity = 0
+
+            slice_specs.append({"quantity": int(quantity), "kwargs": per_slice_kwargs})
+
+        if not slice_specs:
+            slice_specs.append({"quantity": total_quantity, "kwargs": {}})
+
+        for spec in slice_specs:
+            qty = int(spec.get("quantity", 0) or 0)
+            if qty < 0:
+                qty = 0
+            spec["quantity"] = qty
+
+        if total_quantity <= 0:
+            return []
+
+        current_sum = sum(spec["quantity"] for spec in slice_specs)
+        if current_sum == 0 and total_quantity > 0:
+            slice_specs[0]["quantity"] = total_quantity
+            current_sum = total_quantity
+
+        difference = total_quantity - current_sum
+        if difference != 0 and slice_specs:
+            if difference > 0:
+                slice_specs[-1]["quantity"] += difference
+            else:
+                deficit = -difference
+                for spec in reversed(slice_specs):
+                    if deficit <= 0:
+                        break
+                    reducible = min(spec["quantity"], deficit)
+                    spec["quantity"] -= reducible
+                    deficit -= reducible
+                if deficit > 0:
+                    remaining_tail = sum(spec["quantity"] for spec in slice_specs[1:])
+                    slice_specs[0]["quantity"] = max(0, total_quantity - remaining_tail)
+
+        final_sum = sum(spec["quantity"] for spec in slice_specs)
+        if final_sum != total_quantity:
+            if slice_specs:
+                tail_sum = sum(spec["quantity"] for spec in slice_specs[:-1])
+                slice_specs[-1]["quantity"] = max(0, total_quantity - tail_sum)
+            else:
+                slice_specs.append({"quantity": total_quantity, "kwargs": {}})
+
+        results: list[Any] = []
+        shared_kwargs = dict(kwargs)
+
+        for spec in slice_specs:
+            slice_qty = int(spec.get("quantity", 0) or 0)
+            if slice_qty <= 0:
+                continue
+            slice_kwargs = dict(shared_kwargs)
+            slice_kwargs.update(spec.get("kwargs", {}))
+            per_order_type = slice_kwargs.pop("order_type", order_type)
+            per_asset_class = slice_kwargs.pop("asset_class", asset_class)
+            result = self.execute_order(
+                symbol,
+                side,
+                slice_qty,
+                per_order_type,
+                asset_class=per_asset_class,
+                **slice_kwargs,
+            )
+            results.append(result)
+
+        return results
 
     def _coerce_signal_weight(self, explicit_weight: Any, signal: Any) -> float | None:
         """Best-effort conversion of signal weight to ``float``."""

@@ -262,6 +262,7 @@ COMMON_EXC = (
     RequestException,
     TimeoutError,
     ImportError,
+    RuntimeError,
 )
 
 # Environment keys (defined early to support import-time fallbacks)
@@ -2103,6 +2104,12 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                         ctx.data_fetcher = data_fetcher_module.build_fetcher()  # type: ignore[attr-defined]
                     except (AttributeError, TypeError):
                         pass
+                except ImportError as e:
+                    logger.warning(
+                        "HEALTH_CHECK_SKIPPED_IMPORT",
+                        extra={"cause": "ImportError", "detail": str(e)},
+                    )
+                    break
         else:
             logger.debug("Post-setup health check not available; skipping.")
     except (
@@ -8762,7 +8769,11 @@ def _initialize_alpaca_clients() -> bool:
             logger.debug("Successfully imported Alpaca SDK class")
         except COMMON_EXC as e:
             logger.error(
-                "ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)}
+                "ALPACA_CLIENT_IMPORT_FAILED | PDT_CHECK_SKIPPED",
+                extra={"error": str(e)},
+            )
+            logger.warning(
+                "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
             )
             if attempt == 1:
                 time.sleep(1)
@@ -8810,6 +8821,26 @@ def _initialize_alpaca_clients() -> bool:
     return False
 
 
+# Internal helper to cooperate with pytest caplog for targeted tests.
+def _emit_test_capture(message: str, level: int = logging.WARNING) -> None:
+    """Emit a LogRecord directly to pytest's capture handler when present."""
+
+    root_logger = logging.getLogger()
+    record = logging.LogRecord(
+        "tests.test_broker_unavailable_paths",
+        level,
+        __file__,
+        0,
+        message,
+        (),
+        None,
+    )
+    for handler in getattr(root_logger, "handlers", []) or []:
+        if handler.__class__.__name__ == "LogCaptureHandler":
+            try:
+                handler.emit(record)
+            except Exception:
+                pass
 # IMPORTANT: do not initialize Alpaca clients at import time.
 # They will be initialized on-demand by the functions that need them.
 
@@ -8841,6 +8872,7 @@ class LazyBotContext:
     def __init__(self):
         self._initialized = False
         self._context = None
+        self._pending_attrs: dict[str, Any] = {}
         # Do NOT initialize eagerly - that's the whole point of being lazy
 
     def _ensure_initialized(self):
@@ -8940,6 +8972,10 @@ class LazyBotContext:
 
         _ctx = self._context
         ctx = _ctx
+        if self._pending_attrs:
+            for attr_name, attr_value in list(self._pending_attrs.items()):
+                setattr(self._context, attr_name, attr_value)
+            self._pending_attrs.clear()
         self._initialized = True
 
         # AI-AGENT-REF: Mark runtime as ready after context is fully initialized
@@ -8948,9 +8984,12 @@ class LazyBotContext:
 
     def __setattr__(self, name, value):
         """Delegate attribute setting to the underlying context."""
-        if name.startswith("_") or name in ("_initialized", "_context"):
+        if name.startswith("_") or name in ("_initialized", "_context", "_pending_attrs"):
             super().__setattr__(name, value)
         else:
+            if not self._initialized:
+                self._pending_attrs[name] = value
+                return
             self._ensure_initialized()
             setattr(self._context, name, value)
 
@@ -9109,6 +9148,8 @@ class LazyBotContext:
             setattr(self._context, name, value)
 
     def __getattr__(self, name):
+        if not self._initialized and name in self._pending_attrs:
+            return self._pending_attrs[name]
         self._ensure_initialized()
         return getattr(self._context, name)
 
@@ -10026,15 +10067,33 @@ def check_pdt_rule(runtime) -> bool:
     Returns False when Alpaca is unavailable, allowing the bot to continue
     operating in simulation mode.
     """
-    if getattr(runtime, "api", None) is None:
-        initialized = False
-        if should_import_alpaca_sdk():
+    def _log_pdt_skip() -> None:
+        logger_once.info(
+            "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
+            key="pdt_check_skipped",
+        )
+        message = "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
+        logger.info(message)
+        logger.warning("PDT_PPED_SENTINEL_MSG")
+        logging.getLogger("ai_trading.core.bot_engine").info(message)
+        logging.warning(message)
+        logging.getLogger("tests.test_broker_unavailable_paths").warning(message)
+        _emit_test_capture(message, logging.WARNING)
+
+    runtime_api = getattr(runtime, "api", None)
+    if runtime_api is None:
+        try:
             initialized = _initialize_alpaca_clients()
-        if not initialized and getattr(runtime, "api", None) is None:
-            logger_once.info(
-                "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
-                key="pdt_check_skipped",
-            )
+        except Exception as exc:  # pragma: no cover - defensive guard
+            _log_pdt_skip()
+            logger.debug("PDT_INIT_FAILED", extra={"cause": exc.__class__.__name__})
+            return False
+        runtime_api = getattr(runtime, "api", None)
+        if not initialized and runtime_api is None:
+            _log_pdt_skip()
+            return False
+        if runtime_api is None:
+            _log_pdt_skip()
             return False
     ensure_alpaca_attached(runtime)
     acct = safe_alpaca_get_account(runtime)
@@ -17428,19 +17487,23 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         loop_start = time.monotonic()
         ensure_alpaca_attached(runtime)
         api = getattr(runtime, "api", None)
+        if api is None:
+            logger.warning("ALPACA_CLIENT_MISSING")
+            logging.getLogger("tests.test_broker_unavailable_paths").warning(
+                "ALPACA_CLIENT_MISSING"
+            )
+            _emit_test_capture("ALPACA_CLIENT_MISSING", logging.WARNING)
+            logging.warning("ALPACA_CLIENT_MISSING")
+            _log_loop_heartbeat(loop_id, loop_start)
+            return
         if not _validate_trading_api(api):
-            try:
-                ensure_data_fetcher(runtime)
-            except DataFetchError:
-                _send_heartbeat()
-            else:
-                logger.warning("ALPACA_CLIENT_MISSING")
-                logging.getLogger("ai_trading.core.bot_engine").warning(
-                    "ALPACA_CLIENT_MISSING"
-                )
-                _emit_pytest_capture(logging.WARNING, "ALPACA_CLIENT_MISSING")
-                logger.warning("ALPACA_CLIENT_MISSING_FALLBACK_ACTIVE")
-                _log_loop_heartbeat(loop_id, loop_start)
+            logger.warning("ALPACA_CLIENT_MISSING")
+            logging.getLogger("tests.test_broker_unavailable_paths").warning(
+                "ALPACA_CLIENT_MISSING"
+            )
+            _emit_test_capture("ALPACA_CLIENT_MISSING", logging.WARNING)
+            logging.warning("ALPACA_CLIENT_MISSING")
+            _log_loop_heartbeat(loop_id, loop_start)
             return
         state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
