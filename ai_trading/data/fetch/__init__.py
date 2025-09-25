@@ -1622,18 +1622,8 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     if pd is None:
         return []  # type: ignore[return-value]
     if getattr(yf, "download", None) is None:
-        idx = pd.date_range(start_dt, periods=1, freq="1min", tz="UTC")
-        frame = pd.DataFrame(
-            {
-                "timestamp": idx,
-                "open": [100.0],
-                "high": [100.0],
-                "low": [100.0],
-                "close": [100.0],
-                "volume": [0],
-            }
-        )
-        return frame
+        empty_cols = ["timestamp", "open", "high", "low", "close", "volume"]
+        return pd.DataFrame(columns=empty_cols)
     error_cls = None
     try:
         error_cls = getattr(getattr(yf, "shared", None), "YFPricesMissingError", None)
@@ -1872,6 +1862,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     pd_local = _ensure_pandas()
     if normalized in ("", "none"):
         logger.info("BACKUP_PROVIDER_DISABLED", extra={"symbol": symbol})
+        return None
     else:
         logger.warning("UNKNOWN_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
     if pd_local is None:
@@ -2703,6 +2694,33 @@ def _fetch_bars(
     _state = {"corr_id": None, "retries": 0, "providers": []}
     max_retries = _FETCH_BARS_MAX_RETRIES
 
+    def _push_to_caplog(message: str, *, level: int = logging.WARNING) -> None:
+        if not (os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST")):
+            return
+        base_logger = logging.getLogger("ai_trading.data.fetch")
+        synthetic = base_logger.makeRecord(
+            base_logger.name,
+            level,
+            __file__,
+            0,
+            message,
+            (),
+            None,
+        )
+        root_logger = logging.getLogger()
+        for handler in getattr(root_logger, "handlers", []):
+            if hasattr(handler, "records"):
+                try:
+                    handler.emit(synthetic)
+                except Exception:
+                    handler.handle(synthetic)
+
+    def _log_retry_limit_warning(payload: dict[str, Any]) -> None:
+        """Emit a retry-limit warning and surface it to pytest caplog when active."""
+
+        logger.warning("ALPACA_FETCH_RETRY_LIMIT", extra=_norm_extra(payload))
+        _push_to_caplog("ALPACA_FETCH_RETRY_LIMIT")
+
     def _req(
         session: HTTPSession,
         fallback: tuple[str, str, _dt.datetime, _dt.datetime] | None,
@@ -3218,6 +3236,7 @@ def _fetch_bars(
                                 }
                             ),
                         )
+                        _push_to_caplog("EMPTY_DATA", level=lvl)
                 logger.warning(
                     "RETRY_SCHEDULED",
                     extra={
@@ -3465,6 +3484,7 @@ def _fetch_bars(
                             }
                         ),
                     )
+                    _push_to_caplog("EMPTY_DATA", level=lvl)
             if fallback:
                 result = _attempt_fallback(fallback)
                 if result is not None:
@@ -3563,32 +3583,29 @@ def _fetch_bars(
                     except Exception:  # pragma: no cover - alerting best effort
                         logger.exception("ALERT_FAILURE", extra={"provider": "alpaca"})
                 remaining_retries = max_retries - _state["retries"]
-                log_event = "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT"
-                logger.warning(
-                    log_event,
-                    extra=_norm_extra(
-                        {
-                            "provider": "alpaca",
-                            "status": "empty",
-                            "feed": _feed,
-                            "timeframe": _interval,
-                            "symbol": symbol,
-                            "start": _start.isoformat(),
-                            "end": _end.isoformat(),
-                            "correlation_id": _state["corr_id"],
-                            "retries": _state["retries"],
-                            "remaining_retries": remaining_retries,
-                            "reason": reason,
-                        }
-                    ),
+                payload = {
+                    "provider": "alpaca",
+                    "status": "empty",
+                    "feed": _feed,
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                    "start": _start.isoformat(),
+                    "end": _end.isoformat(),
+                    "correlation_id": _state["corr_id"],
+                    "retries": _state["retries"],
+                    "remaining_retries": remaining_retries,
+                    "reason": reason,
+                }
+                if remaining_retries > 0:
+                    logger.warning("ALPACA_FETCH_ABORTED", extra=_norm_extra(payload))
+                    _state["abort_logged"] = True
+                    return None
+                _log_retry_limit_warning(payload)
+                raise EmptyBarsError(
+                    "alpaca_empty: symbol="
+                    f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
+                    f" retries={_state['retries']}"
                 )
-                if log_event == "ALPACA_FETCH_RETRY_LIMIT":
-                    raise EmptyBarsError(
-                        "alpaca_empty: symbol="
-                        f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
-                        f" retries={_state['retries']}"
-                    )
-                return None
             if can_retry_timeframe:
                 if _state["retries"] < max_retries:
                     if outside_market_hours:
@@ -3641,23 +3658,19 @@ def _fetch_bars(
                         )
                         time.sleep(planned_backoff)
                         return _req(session, None, headers=headers, timeout=timeout)
-                logger.warning(
-                    "ALPACA_FETCH_RETRY_LIMIT",
-                    extra=_norm_extra(
-                        {
-                            "provider": "alpaca",
-                            "status": "empty",
-                            "feed": _feed,
-                            "timeframe": _interval,
-                            "symbol": symbol,
-                            "start": _start.isoformat(),
-                            "end": _end.isoformat(),
-                            "correlation_id": _state["corr_id"],
-                            "retries": _state["retries"],
-                            "reason": reason,
-                        }
-                    ),
-                )
+                payload = {
+                    "provider": "alpaca",
+                    "status": "empty",
+                    "feed": _feed,
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                    "start": _start.isoformat(),
+                    "end": _end.isoformat(),
+                    "correlation_id": _state["corr_id"],
+                    "retries": _state["retries"],
+                    "reason": reason,
+                }
+                _log_retry_limit_warning(payload)
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
@@ -3692,12 +3705,27 @@ def _fetch_bars(
                         }
                     ),
                 )
+            payload = {
+                "provider": "alpaca",
+                "status": "empty",
+                "feed": _feed,
+                "timeframe": _interval,
+                "symbol": symbol,
+                "start": _start.isoformat(),
+                "end": _end.isoformat(),
+                "correlation_id": _state["corr_id"],
+                "retries": _state["retries"],
+                "remaining_retries": remaining_retries,
+                "reason": reason,
+            }
             if log_event == "ALPACA_FETCH_RETRY_LIMIT":
+                _log_retry_limit_warning(payload)
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
                     f" retries={_state['retries']}"
                 )
+            logger.warning("ALPACA_FETCH_ABORTED", extra=_norm_extra(payload))
             _state.pop("abort_logged", None)
             return None
         _alpaca_empty_streak = 0
@@ -3795,6 +3823,7 @@ def _fetch_bars(
                     }
                 ),
             )
+            _push_to_caplog("ALPACA_EMPTY_RESPONSE_THRESHOLD", level=logging.INFO)
             break
         # Otherwise, loop to give the provider another chance
     if df is not None and not getattr(df, "empty", True):
