@@ -35,11 +35,11 @@ def _resolve_log_file() -> str:
         path = Path(explicit).expanduser()
         if not path.is_absolute():
             raise SystemExit("BOT_LOG_FILE must be an absolute path when set")
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         return str(path)
     ensure_runtime_paths()
     log_path = (LOG_DIR / "bot.log").resolve()
-    log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     return str(log_path)
 
 
@@ -75,6 +75,7 @@ from ai_trading.settings import get_seed_int
 from ai_trading.config import get_settings
 from ai_trading.utils import get_pid_on_port
 from ai_trading.utils.prof import StageTimer, SoftBudget
+from ai_trading.utils.time import monotonic_time
 from ai_trading.logging.redact import redact as _redact
 from ai_trading.env.config_redaction import redact_config_env
 from ai_trading.net.http import build_retrying_session, set_global_session, mount_host_retry_profile
@@ -89,7 +90,6 @@ from ai_trading.config.management import (
     TradingConfig,
 )
 from ai_trading.metrics import get_histogram, get_counter
-from time import monotonic as _mono
 from ai_trading.utils.env import alpaca_credential_status
 
 
@@ -838,7 +838,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     settings = get_settings()
     port = int(settings.api_port or 9001)
     wait_seconds = max(0.0, float(getattr(settings, "api_port_wait_seconds", 0.0)))
-    deadline = time.monotonic() + wait_seconds
+    deadline = monotonic_time() + wait_seconds
     attempt = 0
 
     while not should_stop():
@@ -864,7 +864,7 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
                         )
                         raise ExistingApiDetected(port) from exc
 
-                    remaining = deadline - time.monotonic()
+                    remaining = deadline - monotonic_time()
                     if remaining <= 0:
                         logger.error(
                             "API_PORT_PRECHECK_FAILED",
@@ -1178,7 +1178,7 @@ def main(argv: list[str] | None = None) -> None:
         health_tick_seconds = int(raw_tick)
     except (ValueError, TypeError):
         health_tick_seconds = 300
-    last_health = time.monotonic()
+    last_health = monotonic_time()
     env_iter = _get_int_env("SCHEDULER_ITERATIONS")
     raw_iter = (
         args.iterations
@@ -1303,7 +1303,7 @@ def main(argv: list[str] | None = None) -> None:
                 fraction_clamped = max(0.0, min(1.0, float(fraction)))
                 budget = SoftBudget(int(interval_ms * fraction_clamped))
                 try:
-                    _t0 = _mono()
+                    _t0 = monotonic_time()
                     with StageTimer(logger, "CYCLE_FETCH"):
                         if count % memory_check_interval == 0:
                             gc_result = optimize_memory()
@@ -1316,7 +1316,7 @@ def main(argv: list[str] | None = None) -> None:
                                     },
                                 )
                     try:
-                        _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, _mono() - _t0))  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="fetch").observe(max(0.0, monotonic_time() - _t0))  # type: ignore[call-arg]
                     except Exception:
                         pass
                     if budget.over_budget():
@@ -1325,11 +1325,11 @@ def main(argv: list[str] | None = None) -> None:
                             _cycle_budget_over_total.labels(stage="fetch").inc()  # type: ignore[call-arg]
                         except Exception:
                             pass
-                    _t1 = _mono()
+                    _t1 = monotonic_time()
                     with StageTimer(logger, "CYCLE_COMPUTE"):
                         run_cycle()
                     try:
-                        _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, _mono() - _t1))  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, monotonic_time() - _t1))  # type: ignore[call-arg]
                     except Exception:
                         pass
                     if budget.over_budget():
@@ -1338,11 +1338,11 @@ def main(argv: list[str] | None = None) -> None:
                             _cycle_budget_over_total.labels(stage="compute").inc()  # type: ignore[call-arg]
                         except Exception:
                             pass
-                    _t2 = _mono()
+                    _t2 = monotonic_time()
                     with StageTimer(logger, "CYCLE_EXECUTE"):
                         pass
                     try:
-                        _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, _mono() - _t2))  # type: ignore[call-arg]
+                        _cycle_stage_seconds.labels(stage="execute").observe(max(0.0, monotonic_time() - _t2))  # type: ignore[call-arg]
                     except Exception:
                         pass
                     if budget.over_budget():
@@ -1379,7 +1379,7 @@ def main(argv: list[str] | None = None) -> None:
                 extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over_budget()},
             )
             _logging.flush_log_throttle_summaries()
-            now_mono = time.monotonic()
+            now_mono = monotonic_time()
             if now_mono - last_health >= max(30, health_tick_seconds):
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": effective_interval, "closed": closed})
                 last_health = now_mono

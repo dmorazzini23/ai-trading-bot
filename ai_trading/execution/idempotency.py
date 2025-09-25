@@ -14,7 +14,7 @@ try:
 except ImportError:  # pragma: no cover - exercised via explicit fallback tests
     import logging
     from collections import OrderedDict
-    from time import monotonic
+    from ai_trading.utils.time import monotonic_time
 
     logger = logging.getLogger(__name__)
     logger.warning(
@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
 
         def _expire(self) -> None:
             """Remove expired entries in-place."""
-            now = monotonic()
+            now = monotonic_time()
             expired_keys = [key for key, (_, exp) in self._store.items() if exp <= now]
             for key in expired_keys:
                 self._store.pop(key, None)
@@ -41,7 +41,7 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
             if key not in self._store:
                 return False
             value, exp = self._store[key]
-            if exp <= monotonic():
+            if exp <= monotonic_time():
                 self._store.pop(key, None)
                 return False
             # touch to maintain recency semantics similar to OrderedDict move-to-end
@@ -54,7 +54,7 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
                 self._store.pop(key, None)
             elif self.maxsize and len(self._store) >= self.maxsize:
                 self._store.popitem(last=False)
-            self._store[key] = (value, monotonic() + self.ttl)
+            self._store[key] = (value, monotonic_time() + self.ttl)
 
         def get(self, key: str, default: object | None=None) -> object | None:
             self._expire()
@@ -62,7 +62,7 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
             if item is None:
                 return default
             value, exp = item
-            if exp <= monotonic():
+            if exp <= monotonic_time():
                 self._store.pop(key, None)
                 return default
             self._store.move_to_end(key)

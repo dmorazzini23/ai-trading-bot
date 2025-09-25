@@ -24,6 +24,7 @@ from ai_trading.utils.env import (
     get_alpaca_creds,
 )
 from ai_trading.utils.ids import stable_client_order_id
+from ai_trading.utils.time import monotonic_time
 
 try:  # pragma: no cover - optional dependency
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -55,10 +56,7 @@ _CREDENTIAL_STATE: dict[str, Any] = {
 def _update_credential_state(has_key: bool, has_secret: bool) -> None:
     """Record the latest Alpaca credential status for downstream consumers."""
 
-    try:
-        ts = time.monotonic()
-    except Exception:
-        ts = 0.0
+    ts = monotonic_time()
     _CREDENTIAL_STATE["has_key"] = bool(has_key)
     _CREDENTIAL_STATE["has_secret"] = bool(has_secret)
     _CREDENTIAL_STATE["timestamp"] = ts

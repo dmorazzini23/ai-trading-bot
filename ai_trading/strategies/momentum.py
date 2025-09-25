@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 import numpy as np
 from ai_trading.logging import logger
+from ai_trading.utils.time import monotonic_time
 from ..core.enums import RiskLevel
 from ..core.interfaces import OrderSide
 from ai_trading.config.profiles import load_strategy_profile, lookup_overrides
@@ -89,21 +90,17 @@ class MomentumStrategy(BaseStrategy):
                 strength = float(min(max(mom, 0.0), 1.0))
                 signals.append(StrategySignal(symbol=symbol, side=OrderSide.BUY, strength=strength, confidence=float(min(1.0, 0.5 + strength)), metadata={'lookback': lookback, 'momentum': float(mom)}))
         # Periodic summary (once per ~60s)
-        try:
-            import time as _t
-            now = _t.monotonic()
-            if self._guard_last_summary == 0.0:
-                self._guard_last_summary = now
-            elif now - self._guard_last_summary >= 60.0:
-                logger.info(
-                    "STRATEGY_GUARD_SUMMARY",
-                    extra={"strategy": "momentum", "skips": self._guard_skips, "attempts": self._guard_attempts},
-                )
-                self._guard_skips = 0
-                self._guard_attempts = 0
-                self._guard_last_summary = now
-        except (ValueError, TypeError):
-            pass
+        now = monotonic_time()
+        if self._guard_last_summary == 0.0:
+            self._guard_last_summary = now
+        elif now - self._guard_last_summary >= 60.0:
+            logger.info(
+                "STRATEGY_GUARD_SUMMARY",
+                extra={"strategy": "momentum", "skips": self._guard_skips, "attempts": self._guard_attempts},
+            )
+            self._guard_skips = 0
+            self._guard_attempts = 0
+            self._guard_last_summary = now
         return signals
 
     def generate(self, ctx) -> list[StrategySignal]:

@@ -378,7 +378,7 @@ class RLTrainer:
                 from ai_trading.paths import OUTPUT_DIR
 
                 tensorboard_path = (OUTPUT_DIR / 'tensorboard').resolve()
-                tensorboard_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+                tensorboard_path.mkdir(parents=True, exist_ok=True)
             else:
                 raw_log_dir = str(model_params.get('tensorboard_log'))
                 tensorboard_path = Path(raw_log_dir).expanduser()
@@ -386,7 +386,7 @@ class RLTrainer:
                     from ai_trading.paths import OUTPUT_DIR
 
                     tensorboard_path = (OUTPUT_DIR / tensorboard_path).resolve()
-            tensorboard_path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            tensorboard_path.mkdir(parents=True, exist_ok=True)
             default_params = {'verbose': 1, 'seed': self.seed, 'tensorboard_log': str(tensorboard_path)}
             if self.algorithm == 'PPO':
                 default_params.update({'learning_rate': 0.0003, 'n_steps': 2048, 'batch_size': 64, 'n_epochs': 10, 'gamma': 0.99, 'gae_lambda': 0.95, 'clip_range': 0.2, 'ent_coef': 0.0})

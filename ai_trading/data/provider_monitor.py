@@ -32,6 +32,7 @@ from ai_trading.data.metrics import (
     provider_disable_duration_seconds,
     provider_failure_duration_seconds,
 )
+from ai_trading.utils.time import monotonic_time
 
 
 logger = get_logger(__name__)
@@ -370,7 +371,7 @@ class ProviderMonitor:
         streak = self.consecutive_switches_by_provider[from_key] + 1
         self.consecutive_switches_by_provider[from_key] = streak
         self.consecutive_switches = streak
-        now_monotonic = time.monotonic()
+        now_monotonic = monotonic_time()
         dedupe_ttl = _logging_dedupe_ttl()
         switchover_key = f"DATA_PROVIDER_SWITCHOVER:{from_key}->{to_key}"
         if not (

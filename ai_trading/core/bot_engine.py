@@ -570,6 +570,7 @@ from ai_trading.core.alpaca_client import (
 )
 from ai_trading.utils.prof import StageTimer, SoftBudget
 from ai_trading.guards import staleness
+from ai_trading.utils.time import monotonic_time
 
 # AI-AGENT-REF: optional pipeline import
 try:
@@ -887,7 +888,7 @@ def _log_price_warning(
     """Emit rate-limited warnings for price provider failures."""
 
     key = (provider, symbol)
-    now = time.monotonic()
+    now = monotonic_time()
     last = _PRICE_WARNING_TS.get(key)
     if last is not None and now - last < _PRICE_WARNING_INTERVAL:
         return
@@ -1450,7 +1451,7 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
     basename = Path(filename).name or "trades.jsonl"
     for directory in candidates:
         try:
-            directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            directory.mkdir(parents=True, exist_ok=True)
         except OSError:
             continue
         if _is_dir_writable(str(directory)):
@@ -1458,7 +1459,7 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
 
     fallback_dir = candidates[-1] if candidates else Path(BASE_DIR)
     try:
-        fallback_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        fallback_dir.mkdir(parents=True, exist_ok=True)
         if _is_dir_writable(str(fallback_dir)):
             return str((fallback_dir / basename).resolve(strict=False))
     except OSError:
@@ -3288,7 +3289,7 @@ def log_skip_cooldown(
 ) -> None:
     """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
     global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
-    now = time.monotonic()
+    now = monotonic_time()
     sym_set = frozenset([symbols]) if isinstance(symbols, str) else frozenset(symbols)
     if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
         logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
@@ -6392,7 +6393,7 @@ class DataFetcher:
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = time.monotonic()
+        now_monotonic = monotonic_time()
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
@@ -6522,7 +6523,7 @@ class DataFetcher:
             )
 
         with cache_lock:
-            stamp = time.monotonic()
+            stamp = monotonic_time()
             self._daily_cache[symbol] = (fetch_date, df)
             _DAILY_FETCH_MEMO[memo_key] = (df, stamp)
             _DAILY_FETCH_MEMO[legacy_memo_key] = (stamp, df)
@@ -7241,7 +7242,7 @@ class TradeLogger:
             resolved = default_trade_log_path()
         parent = os.path.dirname(resolved) or BASE_DIR
         try:
-            os.makedirs(parent, mode=0o700, exist_ok=True)
+            Path(parent).mkdir(parents=True, exist_ok=True)
         except PermissionError as exc:
             logger.warning(
                 "TRADE_LOG_DIR_CREATE_FAILED",
@@ -7280,7 +7281,7 @@ class TradeLogger:
                 logger.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
             try:
-                os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", mode=0o700, exist_ok=True)
+                Path(os.path.dirname(REWARD_LOG_FILE) or ".").mkdir(parents=True, exist_ok=True)
                 with open(REWARD_LOG_FILE, "w", newline="") as rf:
                     csv.writer(rf).writerow(
                         [
@@ -8356,7 +8357,7 @@ def get_trade_logger() -> TradeLogger:
         else:
             parent_dir = os.path.dirname(log_dir) or "."
             try:
-                os.makedirs(log_dir, mode=0o700, exist_ok=True)
+                Path(log_dir).mkdir(parents=True, exist_ok=True)
             except PermissionError as exc:
                 if not _is_dir_writable(parent_dir):
                     fallback_reason = "parent_dir_not_writable"
@@ -11473,7 +11474,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
                 except Exception:
                     pass
 
-            start_ts = time.monotonic()
+            start_ts = monotonic_time()
             def _normalize_order_status(value: Any) -> str:
                 """Return a lowercase status string regardless of input type."""
 
@@ -11491,7 +11492,7 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
             pending_new = _normalize_order_status(pending_new_attr)
             last_order = order
             while _normalize_order_status(getattr(last_order, "status", None)) == pending_new:
-                if time.monotonic() - start_ts > 1:
+                if monotonic_time() - start_ts > 1:
                     logger.warning(
                         f"Order stuck in PENDING_NEW: {order_args.get('symbol')}, retrying or monitoring required."
                     )
@@ -11632,12 +11633,12 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
     Uses monotonic time to avoid interference from time-freezing utilities
     (e.g., freezegun). Sleeps in short intervals so small timeouts work.
     """
-    deadline = pytime.monotonic() + float(timeout)
+    deadline = monotonic_time() + float(timeout)
     interval = 0.2 if timeout <= 1 else 1.0
     # Hard cap iterations to avoid hangs even if time is monkeypatched
     max_iters = int(max(1, float(timeout) / float(interval))) + 2
     _iter = 0
-    while pytime.monotonic() < deadline and _iter < max_iters:
+    while monotonic_time() < deadline and _iter < max_iters:
         try:
             od = ctx.api.get_order(order_id)
             status = getattr(od, "status", "")
@@ -11664,7 +11665,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
         ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
-        remaining = max(0.0, deadline - pytime.monotonic())
+        remaining = max(0.0, deadline - monotonic_time())
         if remaining <= 0:
             break
         pytime.sleep(min(interval, remaining))
@@ -16842,7 +16843,7 @@ def _process_symbols(
 
 
 def _log_loop_heartbeat(loop_id: str, start: float) -> None:
-    duration = time.monotonic() - start
+    duration = monotonic_time() - start
     logger.info(
         "HEARTBEAT",
         extra={
@@ -17032,7 +17033,7 @@ _LAST_MARKET_CLOSED_LOG = 0.0
 def _log_market_closed(msg: str) -> None:
     """Log a market-closed message with basic throttling."""
     global _LAST_MARKET_CLOSED_LOG
-    now = time.monotonic()
+    now = monotonic_time()
     if now - _LAST_MARKET_CLOSED_LOG >= 60:
         logger.info(msg)
         _LAST_MARKET_CLOSED_LOG = now
@@ -17338,7 +17339,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         if not is_market_open():
             _log_market_closed("MARKET_CLOSED_NO_FETCH")
             return  # skip work when market closed
-        loop_start = time.monotonic()
+        loop_start = monotonic_time()
         ensure_alpaca_attached(runtime)
         api = getattr(runtime, "api", None)
         if not _validate_trading_api(api):
@@ -17830,7 +17831,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             # Always reset running flag
             state.running = False
             state._strategies_loaded = False
-            state.last_loop_duration = time.monotonic() - loop_start
+            state.last_loop_duration = monotonic_time() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
             flush_log_throttle_summaries()
 

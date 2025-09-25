@@ -15,6 +15,7 @@ from ai_trading.config.management import (
 from ai_trading.strategies.base import StrategySignal as TradeSignal
 from ai_trading.logging import _get_metrics_logger
 from ai_trading.utils.base import get_phase_logger
+from ai_trading.utils.time import monotonic_time
 if TYPE_CHECKING:
     import pandas as pd
 logger = get_phase_logger(__name__, 'RISK_CHECK')
@@ -241,7 +242,7 @@ class RiskEngine:
         self.strategy_exposure[signal.strategy] = s_prev + delta
         logger.info('EXPOSURE_UPDATED', extra={'asset': signal.asset_class, 'prev': prev, 'new': self.exposure[signal.asset_class], 'side': signal.side, 'symbol': getattr(signal, 'symbol', 'UNKNOWN')})
         import time
-        self._last_update = time.monotonic()
+        self._last_update = monotonic_time()
         self._update_event.set()
 
     def update_position(self, symbol: str, quantity: int, side: str) -> None:
