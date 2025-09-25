@@ -62,10 +62,10 @@ def create_app():
                 from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client
                 key, secret, base_url = _resolve_alpaca_env()
                 paper = bool(base_url and 'paper' in base_url)
-            except (KeyError, ValueError, TypeError) as exc:
+            except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
                 trading_client, key, secret, base_url, paper = (None, None, None, '', False)
-                if not errors:
-                    errors.append(str(exc))
+                ok = False
+                errors.append(str(exc))
 
             from ai_trading.config.management import is_shadow_mode
 
