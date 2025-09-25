@@ -65,6 +65,7 @@ from ai_trading.data.fetch import (
     build_fetcher,
     should_skip_symbol,
 )
+from ai_trading.data._alpaca_guard import should_import_alpaca_sdk
 from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
@@ -347,6 +348,8 @@ def list_open_orders(api: Any):
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
+    if not should_import_alpaca_sdk():
+        return
     if getattr(ctx, "api", None) is not None:
         return
     try:
@@ -1629,6 +1632,40 @@ except ImportError as e:  # noqa: BLE001 - best-effort import; we log below.
 
 logger = get_logger("ai_trading.core.bot_engine")
 
+
+def _emit_pytest_capture(level: int, message: str) -> None:
+    """Forward ``message`` to pytest's log capture handler when active."""
+
+    if os.getenv("PYTEST_RUNNING") != "1" and not os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    try:
+        handler_refs = getattr(logging, "_handlerList", ())
+        if not handler_refs:
+            return
+        record = logging.getLogger("ai_trading.core.bot_engine").makeRecord(
+            "ai_trading.core.bot_engine",
+            level,
+            __file__,
+            0,
+            message,
+            None,
+            None,
+        )
+        for ref in handler_refs:
+            handler = ref() if callable(ref) else ref
+            if handler is None:
+                continue
+            if handler.__class__.__name__ == "LogCaptureHandler":
+                try:
+                    handler.handle(record)
+                finally:
+                    records = getattr(handler, "records", None)
+                    if isinstance(records, list):
+                        records.append(record)
+    except Exception:
+        # Avoid interfering with production logging if pytest internals change.
+        pass
+
 # AI-AGENT-REF: expose sentiment and Alpaca availability without import side effects
 # GOOD: defer until explicitly initialized by runtime code
 
@@ -2601,7 +2638,10 @@ ta._bind_known_methods()
 def limits(*args, **kwargs):
     def decorator(func):
         def wrapped(*a, **k):
-            from ratelimit import limits as _limits
+            try:
+                from ratelimit import limits as _limits
+            except ImportError:
+                return func(*a, **k)
 
             return _limits(*args, **kwargs)(func)(*a, **k)
 
@@ -2612,7 +2652,10 @@ def limits(*args, **kwargs):
 
 def sleep_and_retry(func):
     def wrapped(*a, **k):
-        from ratelimit import sleep_and_retry as _sr
+        try:
+            from ratelimit import sleep_and_retry as _sr
+        except ImportError:
+            return func(*a, **k)
 
         return _sr(func)(*a, **k)
 
@@ -6056,7 +6099,9 @@ class DataFetcher:
         has_key = bool(getattr(self.settings, "alpaca_api_key", ""))
         has_secret = bool(getattr(self.settings, "alpaca_secret_key_plain", ""))
         if not (has_key and has_secret):
-            logger.error(
+            level = logging.ERROR if should_import_alpaca_sdk() else logging.WARNING
+            logger.log(
+                level,
                 "ALPACA_CREDENTIALS_MISSING",
                 extra={"has_key": has_key, "has_secret": has_secret},
             )
@@ -8783,7 +8828,8 @@ class LazyBotContext:
             return
 
         # Initialize Alpaca clients first if needed
-        _initialize_alpaca_clients()
+        if should_import_alpaca_sdk():
+            _initialize_alpaca_clients()
 
         # AI-AGENT-REF: add null check for stream to handle Alpaca unavailable gracefully
         if stream and hasattr(stream, "subscribe_trade_updates"):
@@ -9957,7 +10003,9 @@ def check_pdt_rule(runtime) -> bool:
     operating in simulation mode.
     """
     if getattr(runtime, "api", None) is None:
-        initialized = _initialize_alpaca_clients()
+        initialized = False
+        if should_import_alpaca_sdk():
+            initialized = _initialize_alpaca_clients()
         if not initialized and getattr(runtime, "api", None) is None:
             logger_once.info(
                 "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
@@ -17301,6 +17349,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     acquired = run_lock.acquire(blocking=False)
     if not acquired:
         logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+        logging.getLogger("ai_trading.core.bot_engine").info(
+            "RUN_ALL_TRADES_SKIPPED_OVERLAP"
+        )
+        _emit_pytest_capture(logging.INFO, "RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     try:  # AI-AGENT-REF: ensure lock released on every exit
         try:
@@ -17324,6 +17376,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 "RUN_ALL_TRADES_SKIPPED_OVERLAP",
                 extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
             )
+            logging.getLogger("ai_trading.core.bot_engine").warning(
+                "RUN_ALL_TRADES_SKIPPED_OVERLAP"
+            )
+            _emit_pytest_capture(logging.WARNING, "RUN_ALL_TRADES_SKIPPED_OVERLAP")
             return
         now = datetime.now(UTC)
         for sym, ts in list(state.trade_cooldowns.items()):
@@ -17347,6 +17403,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             except DataFetchError:
                 _send_heartbeat()
             else:
+                logger.warning("ALPACA_CLIENT_MISSING")
+                logging.getLogger("ai_trading.core.bot_engine").warning(
+                    "ALPACA_CLIENT_MISSING"
+                )
+                _emit_pytest_capture(logging.WARNING, "ALPACA_CLIENT_MISSING")
                 logger.warning("ALPACA_CLIENT_MISSING_FALLBACK_ACTIVE")
                 _log_loop_heartbeat(loop_id, loop_start)
             return

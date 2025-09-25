@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import types
 import warnings
 
 try:
@@ -10,19 +9,10 @@ try:
 except Exception:  # pragma: no cover - missing util stub
     Retry = None  # type: ignore[assignment]
 
+__version__ = "2.0.0"
 
-class HTTPWarning(Warning):
-    """Base warning type for HTTP issues."""
-
-
-class SystemTimeWarning(HTTPWarning):
-    """Warning for TLS clock skew issues."""
-
-
-exceptions = types.SimpleNamespace(
-    HTTPWarning=HTTPWarning,
-    SystemTimeWarning=SystemTimeWarning,
-)
+from . import exceptions as exceptions  # re-export module for import parity
+from .exceptions import HTTPError, HTTPWarning, SystemTimeWarning
 
 
 def disable_warnings(category: type[Warning] | None = HTTPWarning) -> None:
@@ -41,4 +31,7 @@ __all__ = [
     "Retry",
     "exceptions",
     "disable_warnings",
+    "HTTPWarning",
+    "SystemTimeWarning",
+    "HTTPError",
 ]
