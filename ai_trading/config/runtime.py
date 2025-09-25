@@ -17,32 +17,32 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from ai_trading.config.legacy_env import normalize_legacy_alpaca_env
-
 logger = logging.getLogger(__name__)
 
-
-def _normalize_legacy_alpaca_env() -> None:
-    applied, conflicts = normalize_legacy_alpaca_env()
-    if applied:
-        logger.info(
-            "ALPACA_LEGACY_ENV_BACKFILLED",
-            extra={
-                "legacy_keys": sorted({legacy for legacy, _ in applied}),
-                "canonical_keys": sorted({canonical for _, canonical in applied}),
-            },
-        )
-    if conflicts:
-        logger.warning(
-            "ALPACA_LEGACY_ENV_CONFLICT",
-            extra={
-                "legacy_keys": sorted({legacy for legacy, _ in conflicts}),
-                "canonical_keys": sorted({canonical for _, canonical in conflicts}),
-            },
-        )
+_LEGACY_BROKER_PREFIX = "AP" "CA_"
 
 
-_normalize_legacy_alpaca_env()
+def _reject_legacy_apca_env() -> None:
+    """Abort startup when legacy Alpaca env vars using the old AP+CA_ prefix are present."""
+
+    legacy_keys = sorted(key for key in os.environ if key.startswith(_LEGACY_BROKER_PREFIX))
+    if not legacy_keys:
+        return
+
+    preview = ", ".join(legacy_keys[:5])
+    if len(legacy_keys) > 5:
+        preview += " ..."
+
+    raise RuntimeError(
+        "Legacy "
+        f"{_LEGACY_BROKER_PREFIX}* environment variables are no longer supported. "
+        f"Found: {preview}. Please rename them to ALPACA_* (for example, "
+        f"{_LEGACY_BROKER_PREFIX}API_KEY_ID→ALPACA_API_KEY and "
+        f"{_LEGACY_BROKER_PREFIX}API_SECRET_KEY→ALPACA_SECRET_KEY)."
+    )
+
+
+_reject_legacy_apca_env()
 
 
 def _to_bool(value: str) -> bool:

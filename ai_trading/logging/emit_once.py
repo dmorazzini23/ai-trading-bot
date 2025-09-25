@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from logging import Logger
 from typing import Any, overload
 
-_emitted: dict[str, tuple[date, int]] = {}
+_emitted: dict[str, date] = {}
 _lock = threading.Lock()
 
 
@@ -14,15 +14,14 @@ def _utc_today() -> date:
     return datetime.now(UTC).date()
 
 
-def _should_emit(token: str) -> bool:
+def _should_emit(key: str) -> bool:
     today = _utc_today()
     with _lock:
-        last_date, count = _emitted.get(token, (None, 0))
-        if last_date != today:
-            count = 0
-        count += 1
-        _emitted[token] = (today, count)
-        return count == 1
+        last = _emitted.get(key)
+        if last == today:
+            return False
+        _emitted[key] = today
+        return True
 
 
 @overload
@@ -50,14 +49,18 @@ def emit_once(*args: Any, **extra: Any) -> bool:
 
     first = args[0]
     if isinstance(first, Logger):
-        if len(args) < 4:
-            raise TypeError("emit_once(logger, key, level, msg) requires four positional arguments")
+        if len(args) != 4:
+            raise TypeError(
+                "emit_once(logger, key, level, msg) requires four positional arguments"
+            )
         logger, key, level, msg = first, str(args[1]), str(args[2]), str(args[3])
-        token = f"{logger.name}:{key}"
-        if not _should_emit(token):
+        if not _should_emit(key):
             return False
-        fn = getattr(logger, level.lower(), logger.info)
-        fn(msg, extra=extra or None)
+        log_fn = getattr(logger, level.lower(), logger.info)
+        if extra:
+            log_fn(str(msg), extra=extra)
+        else:
+            log_fn(str(msg))
         return True
 
     if len(args) != 1:
