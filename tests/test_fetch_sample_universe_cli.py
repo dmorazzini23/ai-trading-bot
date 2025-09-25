@@ -35,6 +35,7 @@ def test_run_success(monkeypatch):
         lambda: {"workers": 1, "per_host": 1, "pool_maxsize": 1},
     )
     monkeypatch.setattr("ai_trading.tools.fetch_sample_universe.logger.info", fake_info)
+    monkeypatch.setenv("AI_TRADING_LOG_TIMINGS_LEVEL", "INFO")
 
     rc = run(
         [

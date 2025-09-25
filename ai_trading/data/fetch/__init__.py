@@ -24,6 +24,7 @@ from ai_trading.logging.empty_policy import should_emit as _empty_should_emit
 from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.logging.normalize import normalize_extra as _norm_extra
 from ai_trading.logging import (
+    log_throttled_event,
     log_backup_provider_used,
     log_empty_retries_exhausted,
     log_fetch_attempt,
@@ -1740,8 +1741,10 @@ def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: st
         return df
 
     gap_count = int(len(missing))
-    logger.warning(
+    log_throttled_event(
+        logger,
         "MINUTE_GAPS_DETECTED",
+        level=logging.WARNING,
         extra=_norm_extra({"symbol": symbol, "gap_count": gap_count}),
     )
     if not backfill:

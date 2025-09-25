@@ -88,7 +88,11 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
-from ai_trading.logging import flush_log_throttle_summaries, logger_once
+from ai_trading.logging import (
+    flush_log_throttle_summaries,
+    log_throttled_event,
+    logger_once,
+)
 from ai_trading.logging.emit_once import emit_once
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
@@ -469,6 +473,10 @@ __all__ = [
     "ctx",
     "check_alpaca_available",
     "to_trade_signal",
+    "set_cycle_budget_context",
+    "get_cycle_budget_context",
+    "emit_cycle_budget_summary",
+    "clear_cycle_budget_context",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -798,6 +806,174 @@ _PRICE_PROVIDER_ORDER_CACHE: tuple[str, ...] | None = None
 _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
 _INTRADAY_FEED_CACHE: str | None = None
+
+_cycle_feature_cache: dict[tuple[int, tuple[str, object]], pd.DataFrame] = {}
+_cycle_feature_cache_cycle: int | None = None
+_cycle_feature_cache_lock = Lock()
+
+
+@dataclass
+class CycleBudgetContext:
+    budget: SoftBudget
+    interval_s: float
+    fraction: float
+    guard_s: float
+    processed: int = 0
+    requested: int = 0
+    skipped: int = 0
+    skipped_samples: list[str] = field(default_factory=list)
+    triggered: bool = False
+    cause: str | None = None
+    summary_emitted: bool = False
+    last_remaining: float = 0.0
+    lock: Lock = field(default_factory=Lock)
+
+    def register_total(self, count: int) -> None:
+        with self.lock:
+            self.requested = max(self.requested, int(max(count, 0)))
+
+    def note_processed(self) -> None:
+        with self.lock:
+            self.processed += 1
+
+    def mark_skipped(self, symbols: Sequence[str]) -> None:
+        if not symbols:
+            return
+        with self.lock:
+            self.triggered = True
+            self.skipped += len(symbols)
+            for symbol in symbols:
+                if len(self.skipped_samples) >= 8:
+                    break
+                if symbol not in self.skipped_samples:
+                    self.skipped_samples.append(symbol)
+
+    def should_throttle(self) -> bool:
+        remaining = self.budget.remaining()
+        over = self.budget.over_budget()
+        with self.lock:
+            self.last_remaining = remaining
+            if over:
+                self.triggered = True
+                self.cause = "over_budget"
+                return True
+            if remaining <= self.guard_s:
+                self.triggered = True
+                if self.cause is None:
+                    self.cause = "guard"
+                return True
+            return False
+
+    def build_summary_extra(self) -> dict[str, Any]:
+        with self.lock:
+            sample = list(self.skipped_samples)
+            return {
+                "budget_ms": self.budget.budget_ms,
+                "elapsed_ms": self.budget.elapsed_ms(),
+                "interval_s": self.interval_s,
+                "fraction": self.fraction,
+                "processed_symbols": self.processed,
+                "requested_symbols": self.requested,
+                "skipped_symbols": self.skipped,
+                "skipped_sample": sample,
+                "remaining_s": max(0.0, self.last_remaining),
+                "guard_s": self.guard_s,
+                "triggered": self.triggered,
+            }
+
+
+_cycle_budget_context: CycleBudgetContext | None = None
+
+
+def set_cycle_budget_context(
+    budget: SoftBudget | None,
+    *,
+    interval_s: float,
+    fraction: float,
+) -> None:
+    """Register the active cycle budget so symbol processing can degrade."""
+
+    global _cycle_budget_context
+    if budget is None:
+        _cycle_budget_context = None
+        return
+    guard = max(0.5, max(float(interval_s) - (budget.budget_ms / 1000.0), 0.0))
+    _cycle_budget_context = CycleBudgetContext(
+        budget=budget,
+        interval_s=float(interval_s),
+        fraction=float(fraction),
+        guard_s=float(guard),
+    )
+
+
+def get_cycle_budget_context() -> CycleBudgetContext | None:
+    return _cycle_budget_context
+
+
+def clear_cycle_budget_context() -> None:
+    global _cycle_budget_context
+    _cycle_budget_context = None
+
+
+def emit_cycle_budget_summary(logger: logging.Logger) -> None:
+    ctx = _cycle_budget_context
+    if ctx is None:
+        return
+    needs_summary = ctx.triggered or ctx.budget.over_budget()
+    if not needs_summary or ctx.summary_emitted:
+        return
+    extra = ctx.build_summary_extra()
+    cause = ctx.cause or ("over_budget" if ctx.budget.over_budget() else "guard")
+    extra["cause"] = cause
+    extra["over_budget"] = ctx.budget.over_budget()
+    logger.warning("CYCLE_BUDGET_EXCEEDED", extra=extra)
+    ctx.summary_emitted = True
+
+
+def _resolve_cycle_feature_key(symbol: str, df: pd.DataFrame | None) -> tuple[str, object] | None:
+    if df is None or getattr(df, "empty", True):
+        return None
+    index = getattr(df, "index", None)
+    if index is None:
+        return None
+    try:
+        marker = index[-1]
+    except Exception:
+        return None
+    return (symbol, marker)
+
+
+def _get_cycle_feature_cache(symbol: str, df: pd.DataFrame | None) -> pd.DataFrame | None:
+    cycle_id = _GLOBAL_CYCLE_ID
+    if cycle_id is None:
+        return None
+    key = _resolve_cycle_feature_key(symbol, df)
+    if key is None:
+        return None
+    with _cycle_feature_cache_lock:
+        global _cycle_feature_cache_cycle
+        if _cycle_feature_cache_cycle != cycle_id:
+            _cycle_feature_cache.clear()
+            _cycle_feature_cache_cycle = cycle_id
+        cached = _cycle_feature_cache.get((cycle_id, key))
+        if cached is None:
+            return None
+        return cached.copy()
+
+
+def _set_cycle_feature_cache(symbol: str, df: pd.DataFrame | None, feat_df: pd.DataFrame) -> None:
+    cycle_id = _GLOBAL_CYCLE_ID
+    if cycle_id is None:
+        return
+    key = _resolve_cycle_feature_key(symbol, df)
+    if key is None:
+        return
+    with _cycle_feature_cache_lock:
+        global _cycle_feature_cache_cycle
+        if _cycle_feature_cache_cycle != cycle_id:
+            _cycle_feature_cache.clear()
+            _cycle_feature_cache_cycle = cycle_id
+        _cycle_feature_cache[(cycle_id, key)] = feat_df.copy()
 
 
 def _is_primary_price_source(source: str) -> bool:
@@ -1301,11 +1477,14 @@ _SIP_UNAUTHORIZED_LOGGED = False
 def _reset_cycle_cache() -> None:
     """Reset module-level cycle tracking state."""
 
-    global _GLOBAL_CYCLE_ID, _GLOBAL_INTRADAY_FALLBACK_FEED
+    global _GLOBAL_CYCLE_ID, _GLOBAL_INTRADAY_FALLBACK_FEED, _cycle_feature_cache_cycle
     now = datetime.now(timezone.utc)
     _GLOBAL_CYCLE_ID = int(now.timestamp())
     _GLOBAL_INTRADAY_FALLBACK_FEED = None
     _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
+    with _cycle_feature_cache_lock:
+        _cycle_feature_cache.clear()
+        _cycle_feature_cache_cycle = _GLOBAL_CYCLE_ID
 
 
 def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
@@ -4310,8 +4489,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         if not fallback_used:
             fallback_attempted = True
-            logger.info(
+            log_throttled_event(
+                logger,
                 "BACKUP_PROVIDER_USED",
+                level=logging.WARNING,
                 extra={
                     "provider": "yahoo",
                     "symbol": symbol,
@@ -12603,6 +12784,10 @@ def _fetch_feature_data(
 
     df = raw_df.copy()
 
+    cycle_cached = _get_cycle_feature_cache(symbol, df)
+    if cycle_cached is not None:
+        return raw_df, cycle_cached, None
+
     # AI-AGENT-REF: Data sanitize integration (gated by flag)
     if hasattr(S, "data_sanitize_enabled") and CFG.data_sanitize_enabled:
         try:
@@ -12713,6 +12898,7 @@ def _fetch_feature_data(
     if feat_df.empty:
         logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
         return raw_df, None, True
+    _set_cycle_feature_cache(symbol, raw_df, feat_df)
     _FEATURE_CACHE[cache_key] = feat_df
     _FEATURE_CACHE.move_to_end(cache_key)
     if len(_FEATURE_CACHE) > _FEATURE_CACHE_LIMIT:
@@ -16917,6 +17103,8 @@ def _process_symbols(
     # AI-AGENT-REF: bind lazy context for trade helpers
     ctx = get_ctx()
 
+    cycle_budget = get_cycle_budget_context()
+
     if not hasattr(state, "trade_cooldowns"):
         state.trade_cooldowns = {}
     if not hasattr(state, "last_trade_direction"):
@@ -17041,6 +17229,19 @@ def _process_symbols(
 
     symbols = filtered  # replace with filtered list
 
+    if cycle_budget:
+        cycle_budget.register_total(len(symbols))
+        if symbols and cycle_budget.should_throttle():
+            cycle_budget.mark_skipped(symbols)
+            logger.debug(
+                "CYCLE_BUDGET_SKIP_SYMBOLS",
+                extra={
+                    "count": len(symbols),
+                    "reason": cycle_budget.cause or "guard",
+                },
+            )
+            return [], {s: 0 for s in symbols}
+
     executors._ensure_executors()  # AI-AGENT-REF: lazy executor creation
 
     if cd_skipped:
@@ -17084,6 +17285,16 @@ def _process_symbols(
 
         try:
             if _checkpoint("start"):
+                return
+            if cycle_budget and cycle_budget.should_throttle():
+                cycle_budget.mark_skipped([symbol])
+                logger.debug(
+                    "CYCLE_BUDGET_SKIP_SYMBOL",
+                    extra={
+                        "symbol": symbol,
+                        "reason": cycle_budget.cause or "guard",
+                    },
+                )
                 return
             logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
             if not is_market_open():
@@ -17155,6 +17366,8 @@ def _process_symbols(
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
+            if cycle_budget:
+                cycle_budget.note_processed()
             if _checkpoint("trade"):
                 return
             _safe_trade(
