@@ -18,10 +18,6 @@ def _reset_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "ALPACA_API_KEY",
         "ALPACA_SECRET_KEY",
-        "ALPACA_DATA_API_KEY",
-        "ALPACA_DATA_SECRET_KEY",
-        "APCA_API_KEY_ID",
-        "APCA_API_SECRET_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     env_utils.refresh_alpaca_credentials_cache()
@@ -32,18 +28,13 @@ def _reset_env(monkeypatch: pytest.MonkeyPatch) -> None:
     sys.modules.pop("ai_trading.data.fetch", None)
 
 
-def test_execution_only_creds_downgrade_data_feed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Execution credentials without data keys should downgrade the data feed."""
-
-    monkeypatch.setenv("APCA_API_KEY_ID", "exec-key")
-    monkeypatch.setenv("APCA_API_SECRET_KEY", "exec-secret")
+def test_missing_creds_downgrade_data_feed(caplog: pytest.LogCaptureFixture) -> None:
+    """Missing canonical credentials should disable Alpaca data access."""
 
     creds = env_utils.get_resolved_alpaca_credentials()
-    assert creds.api_key == "exec-key"
-    assert creds.secret_key == "exec-secret"
-    assert creds.api_source == "APCA_API_KEY_ID"
-    assert creds.secret_source == "APCA_API_SECRET_KEY"
-    assert creds.has_execution_credentials()
+    assert creds.api_key is None
+    assert creds.secret_key is None
+    assert not creds.has_execution_credentials()
     assert not creds.has_data_credentials()
 
     caplog.set_level(logging.INFO)
@@ -54,11 +45,11 @@ def test_execution_only_creds_downgrade_data_feed(monkeypatch: pytest.MonkeyPatc
     record = downgrade_logs[0]
     assert getattr(record, "from") == "alpaca_iex"
     assert getattr(record, "to") == "yahoo"
-    assert getattr(record, "reason") == "missing_data_keys"
+    assert getattr(record, "reason") == "missing_credentials"
 
     assert env_utils.is_data_feed_downgraded()
     assert env_utils.get_data_feed_override() == "yahoo"
-    assert env_utils.get_data_feed_downgrade_reason() == "missing_data_keys"
+    assert env_utils.get_data_feed_downgrade_reason() == "missing_credentials"
     assert env_utils.resolve_alpaca_feed(None) is None
 
     # The data fetcher should also treat Alpaca credentials as unavailable in this mode.
@@ -72,8 +63,6 @@ def test_canonical_creds_enable_alpaca(monkeypatch: pytest.MonkeyPatch, caplog: 
     monkeypatch.setenv("ALPACA_SECRET_KEY", "real-secret")
 
     creds = env_utils.get_resolved_alpaca_credentials()
-    assert creds.api_source == "ALPACA_API_KEY"
-    assert creds.secret_source == "ALPACA_SECRET_KEY"
     assert creds.has_data_credentials()
 
     caplog.set_level(logging.INFO)

@@ -208,7 +208,7 @@ def run_cycle() -> None:
             "ALPACA_AUTH_PREFLIGHT_FAILED",
             extra={
                 "detail": "Alpaca authentication previously marked unavailable",
-                "action": "Verify ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY",
+                "action": "Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
             },
         )
         return
@@ -220,7 +220,7 @@ def run_cycle() -> None:
             "ALPACA_AUTH_PREFLIGHT_FAILED",
             extra={
                 "detail": str(exc),
-                "action": "Verify ALPACA_API_KEY_ID/ALPACA_API_SECRET_KEY",
+                "action": "Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
             },
         )
         return

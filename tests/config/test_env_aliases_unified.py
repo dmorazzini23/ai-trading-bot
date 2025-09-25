@@ -1,3 +1,9 @@
+import importlib
+import sys
+
+import pytest
+
+from ai_trading.config.legacy_env import LEGACY_ALPACA_ENV_VARS
 from ai_trading.config.management import TradingConfig
 
 
@@ -64,3 +70,19 @@ def test_legacy_alias_does_not_override_existing_canonical(monkeypatch):
     cfg = TradingConfig.from_env({})
 
     assert cfg.dollar_risk_limit == 0.42
+
+
+def test_runtime_import_fails_with_legacy_alpaca_env(monkeypatch):
+    sys.modules.pop("ai_trading.config.runtime", None)
+    for key in LEGACY_ALPACA_ENV_VARS:
+        monkeypatch.setenv(key, "legacy")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        importlib.import_module("ai_trading.config.runtime")
+
+    assert "Legacy Alpaca env vars" in str(excinfo.value)
+
+    sys.modules.pop("ai_trading.config.runtime", None)
+    for key in LEGACY_ALPACA_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
+    importlib.import_module("ai_trading.config.runtime")

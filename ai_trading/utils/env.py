@@ -21,9 +21,9 @@ def _resolve_data_feed_override() -> tuple[str | None, str | None]:
     creds = resolve_alpaca_credentials()
     override: str | None = None
     reason: str | None = None
-    if creds.has_execution_credentials() and not creds.has_data_credentials():
+    if not creds.has_execution_credentials():
         override = "yahoo"
-        reason = "missing_data_keys"
+        reason = "missing_credentials"
     _DATA_FEED_OVERRIDE_CACHE = (override, reason)
     return _DATA_FEED_OVERRIDE_CACHE
 
@@ -49,13 +49,9 @@ def get_alpaca_creds() -> tuple[str, str]:
     if not creds.api_key or not creds.secret_key:
         missing: list[str] = []
         if not creds.api_key:
-            missing.append(
-                "ALPACA_API_KEY (or ALPACA_DATA_API_KEY/APCA_API_KEY_ID)"
-            )
+            missing.append("ALPACA_API_KEY")
         if not creds.secret_key:
-            missing.append(
-                "ALPACA_SECRET_KEY (or ALPACA_DATA_SECRET_KEY/APCA_API_SECRET_KEY)"
-            )
+            missing.append("ALPACA_SECRET_KEY")
         raise RuntimeError(f"Missing Alpaca credentials: {', '.join(missing)}")
     return creds.api_key, creds.secret_key
 

@@ -781,7 +781,7 @@ if _DATA_FEED_OVERRIDE:
         extra={
             "from": f"alpaca_{_DEFAULT_FEED or 'iex'}",
             "to": _DATA_FEED_OVERRIDE,
-            "reason": get_data_feed_downgrade_reason() or "missing_data_keys",
+            "reason": get_data_feed_downgrade_reason() or "missing_credentials",
         },
     )
 

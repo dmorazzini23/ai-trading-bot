@@ -174,8 +174,6 @@ def validate_required_env(
         env_lookup["ALPACA_API_URL"] = env_lookup["ALPACA_BASE_URL"]
     alias_sources: dict[str, tuple[str, ...]] = {
         "ALPACA_API_URL": ("ALPACA_BASE_URL",),
-        "ALPACA_API_KEY": ("APCA_API_KEY_ID",),
-        "ALPACA_SECRET_KEY": ("APCA_API_SECRET_KEY",),
     }
 
     for key, value in list(required_fields.items()):
@@ -212,8 +210,8 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     })
     for env_key, raw, message in errors:
         logger.error(message, extra={"env_key": env_key, "value": raw})
-    api_key = cfg.alpaca_api_key or os.getenv("APCA_API_KEY_ID")
-    secret = cfg.alpaca_secret_key or os.getenv("APCA_API_SECRET_KEY")
+    api_key = cfg.alpaca_api_key or os.getenv("ALPACA_API_KEY")
+    secret = cfg.alpaca_secret_key or os.getenv("ALPACA_SECRET_KEY")
     if base_url:
         resolved = base_url
     else:
