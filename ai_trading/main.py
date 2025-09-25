@@ -90,6 +90,7 @@ from ai_trading.config.management import (
 )
 from ai_trading.metrics import get_histogram, get_counter
 from time import monotonic as _mono
+from ai_trading.utils.env import alpaca_credential_status
 
 
 def _config_snapshot(cfg: Any) -> dict[str, Any]:
@@ -188,6 +189,38 @@ def run_cycle() -> None:
         logger.info("CYCLE_STOP_REQUESTED", extra={"stage": "start"})
         return
 
+    from ai_trading.alpaca_api import (
+        AlpacaAuthenticationError,
+        alpaca_get,
+        is_alpaca_service_available,
+        _set_alpaca_service_available,
+    )
+
+    execution_mode = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim").lower()
+    if execution_mode == "disabled":
+        _set_alpaca_service_available(False)
+        logger.critical(
+            "ALPACA_AUTH_PREFLIGHT_FAILED",
+            extra={
+                "detail": "Execution mode is disabled",
+                "action": "Set AI_TRADING_EXECUTION_MODE to paper or live",
+            },
+        )
+        return
+
+    if execution_mode in {"paper", "live"}:
+        has_key, has_secret = alpaca_credential_status()
+        if not (has_key and has_secret):
+            _set_alpaca_service_available(False)
+            logger.critical(
+                "ALPACA_AUTH_PREFLIGHT_FAILED",
+                extra={
+                    "detail": "Missing Alpaca API credentials",
+                    "action": "Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
+                },
+            )
+            return
+
     allow_after_hours = bool(get_env("ALLOW_AFTER_HOURS", "0", cast=bool))
     if not allow_after_hours:
         try:
@@ -196,12 +229,6 @@ def run_cycle() -> None:
                 return
         except Exception:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
-
-    from ai_trading.alpaca_api import (
-        AlpacaAuthenticationError,
-        alpaca_get,
-        is_alpaca_service_available,
-    )
 
     if not is_alpaca_service_available():
         logger.critical(

@@ -89,11 +89,14 @@ def _parse_execution_mode(raw: str) -> str:
         "simulation": "sim",
         "sim": "sim",
         "test": "sim",
+        "disabled": "disabled",
+        "off": "disabled",
+        "none": "disabled",
     }
     normalized = aliases.get(value, value)
-    if normalized not in {"sim", "paper", "live"}:
+    if normalized not in {"sim", "paper", "live", "disabled"}:
         raise ValueError(
-            "EXECUTION_MODE must be one of: sim, paper, live"
+            "EXECUTION_MODE must be one of: sim, paper, live, disabled"
         )
     return normalized
 
