@@ -1011,6 +1011,66 @@ def _extract_quote_price(
     return price, price_source, pending_bid, ask_unusable, last_unusable, values
 
 
+def _resolve_cached_quote_bid(
+    symbol: str,
+    cache: dict[str, Any],
+) -> tuple[float, str] | None:
+    """Return cached bid price when ask is unusable and bid is valid."""
+
+    pending_bid = cache.get("quote_pending_bid")
+    if not isinstance(pending_bid, tuple) or len(pending_bid) != 2:
+        return None
+    if not cache.get("quote_ask_unusable"):
+        return None
+    bid_price = _normalize_price(pending_bid[1], pending_bid[0], symbol)
+    if bid_price is None:
+        return None
+    source_label = pending_bid[0]
+    if cache.get("quote_last_unusable"):
+        source_label = f"{source_label}_degraded"
+    cache.setdefault("quote_values", {})["alpaca_bid"] = bid_price
+    cache["quote_degraded_source"] = source_label
+    cache["quote_degraded_price"] = bid_price
+    return bid_price, source_label
+
+
+def _should_flag_delayed_slippage(cache: Mapping[str, Any], price_source: str | None) -> bool:
+    """Return ``True`` when degraded Alpaca pricing should flag slippage."""
+
+    if not cache.get("quote_attempted") or not cache.get("quote_ask_unusable"):
+        return False
+    if not price_source:
+        return False
+    normalized = str(price_source)
+    return normalized.startswith("alpaca_bid") or normalized in {"alpaca_last", "alpaca_trade"}
+
+
+def _log_delayed_quote_slippage(
+    symbol: str,
+    price_source: str,
+    price: float,
+    cache: Mapping[str, Any],
+) -> None:
+    """Emit structured log indicating degraded quote usage for slippage checks."""
+
+    try:
+        logger.warning(
+            "DELAYED_QUOTE_SLIPPAGE_FLAGGED",
+            extra={
+                "symbol": symbol,
+                "fallback_source": price_source,
+                "price": round(float(price), 6),
+                "ask_unusable": bool(cache.get("quote_ask_unusable")),
+                "last_unusable": bool(cache.get("quote_last_unusable")),
+            },
+        )
+    except Exception:
+        logger.warning(
+            "DELAYED_QUOTE_SLIPPAGE_FLAGGED",
+            extra={"symbol": symbol, "fallback_source": price_source},
+        )
+
+
 logger = get_logger(__name__)
 
 
@@ -1038,7 +1098,10 @@ def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
     try:
         payload = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", params=params)
     except AlpacaAuthenticationError as exc:
-        logger.error('ALPACA_PRICE_AUTH_FAILED', extra={'symbol': symbol, 'detail': str(exc)})
+        logger.error(
+            'ALPACA_AUTH_PREFLIGHT_FAILED',
+            extra={'symbol': symbol, 'provider': 'alpaca_trade', 'detail': str(exc)},
+        )
         cache['trade_source'] = 'alpaca_auth_failed'
         cache['trade_price'] = None
         return None, cache['trade_source']
@@ -1091,7 +1154,10 @@ def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
     try:
         data = alpaca_get(f"https://data.alpaca.markets/v2/stocks/{symbol}/quotes/latest", params=params)
     except AlpacaAuthenticationError as exc:
-        logger.error('ALPACA_PRICE_AUTH_FAILED', extra={'symbol': symbol, 'detail': str(exc)})
+        logger.error(
+            'ALPACA_AUTH_PREFLIGHT_FAILED',
+            extra={'symbol': symbol, 'provider': 'alpaca_quote', 'detail': str(exc)},
+        )
         cache['quote_source'] = 'alpaca_auth_failed'
         cache['quote_price'] = None
         return None, cache['quote_source']
@@ -18996,6 +19062,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     last_source = price_source
     prev_source = price_source
     for provider in provider_order:
+        if provider in {"yahoo", "bars"} and price is None:
+            degraded = _resolve_cached_quote_bid(symbol, cache)
+            if degraded is not None:
+                price, price_source = degraded
+                last_source = price_source
+                break
         candidate, source = _attempt_provider(provider)
         if source:
             prev_source = last_source
@@ -19008,20 +19080,19 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             price = candidate
             price_source = source
             break
+        if provider in {"alpaca_trade", "alpaca_minute_close"} and price is None:
+            degraded = _resolve_cached_quote_bid(symbol, cache)
+            if degraded is not None:
+                price, price_source = degraded
+                last_source = price_source
+                break
         _record_primary_failure(source or provider)
 
-    if price is None and cache.get("quote_pending_bid"):
-        pending_bid = cache.get("quote_pending_bid")
-        ask_unusable = bool(cache.get("quote_ask_unusable"))
-        last_unusable = bool(cache.get("quote_last_unusable"))
-        if isinstance(pending_bid, tuple) and len(pending_bid) == 2:
-            bid_price = _normalize_price(pending_bid[1], pending_bid[0], symbol)
-            if bid_price is not None:
-                price = bid_price
-                if ask_unusable and last_unusable:
-                    price_source = f"{pending_bid[0]}_degraded"
-                else:
-                    price_source = pending_bid[0]
+    if price is None:
+        degraded = _resolve_cached_quote_bid(symbol, cache)
+        if degraded is not None:
+            price, price_source = degraded
+            last_source = price_source
 
     if price is None:
         if last_source != "unknown":
@@ -19036,6 +19107,9 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         price_source = "alpaca_skipped"
     elif price_source == "unknown" and primary_failure_source is not None:
         price_source = primary_failure_source
+
+    if price is not None and _should_flag_delayed_slippage(cache, price_source):
+        _log_delayed_quote_slippage(symbol, price_source, price, cache)
 
     _PRICE_SOURCE[symbol] = price_source
     return price
