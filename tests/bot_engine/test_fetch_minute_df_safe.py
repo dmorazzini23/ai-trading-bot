@@ -64,6 +64,16 @@ def _short_intraday_defaults(monkeypatch):
         ProviderMonitor(),
         raising=False,
     )
+    try:
+        bot_engine._reset_cycle_cache()
+    except Exception:
+        pass
+    try:
+        cache_override = getattr(bot_engine.data_fetcher_module, "_cycle_feed_override", None)
+        if isinstance(cache_override, dict):
+            cache_override.clear()
+    except Exception:
+        pass
 
     def _tiny_session(current_date):
         end = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)

@@ -20270,12 +20270,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     last_source = price_source
     prev_source = price_source
     for provider in provider_order:
-        if provider in {"yahoo", "bars"} and price is None:
-            degraded = _resolve_cached_quote_bid(symbol, cache)
-            if degraded is not None:
-                price, price_source = degraded
-                last_source = price_source
-                break
         candidate, source = _attempt_provider(provider)
         if source:
             prev_source = last_source
@@ -20288,12 +20282,6 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             price = candidate
             price_source = source
             break
-        if provider in {"alpaca_trade", "alpaca_minute_close"} and price is None:
-            degraded = _resolve_cached_quote_bid(symbol, cache)
-            if degraded is not None:
-                price, price_source = degraded
-                last_source = price_source
-                break
         _record_primary_failure(source or provider)
 
     if price is None:
@@ -20301,6 +20289,13 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if degraded is not None:
             price, price_source = degraded
             last_source = price_source
+            cache_source = cache.get("quote_degraded_source")
+            if isinstance(cache_source, str):
+                price_source = cache_source
+                last_source = price_source
+            cache_price = cache.get("quote_degraded_price")
+            if cache_price is not None:
+                price = cache_price
 
     if price is None:
         if last_source != "unknown":
