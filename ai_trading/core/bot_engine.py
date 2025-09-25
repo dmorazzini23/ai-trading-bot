@@ -540,7 +540,7 @@ import traceback
 import types
 import uuid
 import warnings
-from collections.abc import Callable  # AI-AGENT-REF: now_provider hooks
+from collections.abc import Callable, Sequence  # AI-AGENT-REF: now_provider hooks
 from datetime import UTC, date, datetime, timedelta, timezone
 import time as _time
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
@@ -6087,6 +6087,153 @@ class DataFetcher:
             return float(value)
         return 0.0
 
+    def _normalize_stock_bars(
+        self,
+        symbol: str,
+        raw: pd.DataFrame | None,
+        *,
+        label: str,
+        context: str | None = None,
+    ) -> pd.DataFrame | None:
+        """Normalize raw stock bars into a canonical OHLCV DataFrame."""
+
+        if raw is None:
+            return None
+
+        frame = raw
+        if isinstance(frame.columns, pd.MultiIndex):
+            try:
+                frame = frame.xs(symbol, level=0, axis=1)
+            except (KeyError, ValueError):
+                return None
+        else:
+            frame = frame.drop(columns=["symbol"], errors="ignore")
+
+        frame = frame.copy()
+        if frame.empty:
+            logger.warning(
+                f"No {label.lower()} bars returned for {symbol}. Possible market holiday or API outage"
+            )
+            return None
+
+        if len(frame.index) and isinstance(frame.index[0], tuple):
+            idx_vals = [item[1] for item in frame.index]
+        else:
+            idx_vals = frame.index
+
+        ctx_str = context or f"{label} {symbol}"
+        try:
+            idx = safe_to_datetime(idx_vals, context=ctx_str)
+        except ValueError as exc:
+            reason = "empty data" if frame.empty else "unparseable timestamps"
+            logger.warning(
+                f"Invalid {label.lower()} index for {symbol}; skipping. {reason} | {exc}"
+            )
+            return None
+
+        frame.index = idx
+        normalized = frame.rename(columns=lambda c: c.lower())
+        normalized = normalized.drop(columns=["symbol"], errors="ignore")
+
+        expected_cols = ["open", "high", "low", "close", "volume"]
+        available_cols = [col for col in expected_cols if col in normalized.columns]
+        if available_cols:
+            normalized = normalized[available_cols]
+
+        return normalized
+
+    def _get_stock_bars(
+        self,
+        provider: str | None,
+        symbol: str | Sequence[str],
+        start: Any,
+        end: Any,
+        timeframe: Any,
+        *,
+        feed: str | None = None,
+        limit: int | None = None,
+        adjustment: str | None = None,
+        context: str | None = None,
+        label: str | None = None,
+        normalize: bool = True,
+        client: Any | None = None,
+    ) -> pd.DataFrame | None:
+        """Fetch stock bars for *symbol* from the requested *provider*."""
+
+        provider_key = str(provider or "").strip().lower()
+        feed_name = feed
+        if provider_key.startswith("alpaca_"):
+            base_provider = "alpaca"
+            if not feed_name:
+                feed_name = provider_key.split("_", 1)[1]
+            provider_label = provider_key
+        elif provider_key in {"iex", "sip"}:
+            base_provider = "alpaca"
+            feed_name = provider_key
+            provider_label = f"alpaca_{feed_name}"
+        elif provider_key in {"", "alpaca"}:
+            base_provider = "alpaca"
+            provider_label = "alpaca"
+        else:
+            base_provider = provider_key
+            provider_label = provider_key
+
+        if isinstance(symbol, str):
+            symbols_list = [symbol]
+            safe_symbol = symbol
+        else:
+            symbols_list = [str(sym) for sym in symbol]
+            if not symbols_list:
+                raise ValueError("symbol list must not be empty")
+            safe_symbol = ",".join(symbols_list)
+            if normalize and len(symbols_list) > 1:
+                normalize = False
+
+        context_label = context or f"{provider_label} {timeframe}"
+        label_value = label or (str(timeframe).lower() if isinstance(timeframe, str) else str(timeframe))
+
+        if base_provider == "alpaca":
+            use_client = client
+            if use_client is None:
+                api_key = getattr(self.settings, "alpaca_api_key", "")
+                api_secret = getattr(self.settings, "alpaca_secret_key_plain", "") or get_alpaca_secret_key_plain()
+                if not api_key or not api_secret:
+                    raise RuntimeError(
+                        "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
+                    )
+                use_client = StockHistoricalDataClient(
+                    api_key=api_key,
+                    secret_key=api_secret,
+                )
+
+            req_kwargs: dict[str, Any] = {
+                "symbol_or_symbols": symbols_list,
+                "timeframe": _parse_timeframe(timeframe),
+                "start": start,
+                "end": end,
+            }
+            if feed_name:
+                req_kwargs["feed"] = feed_name
+            if limit is not None:
+                req_kwargs["limit"] = limit
+            if adjustment:
+                req_kwargs["adjustment"] = adjustment
+            request = bars.StockBarsRequest(**req_kwargs)
+            raw_df = bars.safe_get_stock_bars(use_client, request, safe_symbol, context_label)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
+
+        if raw_df is None:
+            return None
+        if not isinstance(raw_df, pd.DataFrame):
+            raw_df = pd.DataFrame(raw_df)
+
+        if normalize and len(symbols_list) == 1:
+            return self._normalize_stock_bars(
+                symbols_list[0], raw_df, label=label_value, context=context_label
+            )
+        return raw_df
+
     def get_bars(
         self,
         symbol: str,
@@ -6429,38 +6576,6 @@ class DataFetcher:
             secret_key=api_secret,
         )
 
-        def _normalize_bars(
-            raw: pd.DataFrame | None, label: str
-        ) -> pd.DataFrame | None:
-            if raw is None:
-                return None
-            frame = raw
-            if isinstance(frame.columns, pd.MultiIndex):
-                frame = frame.xs(symbol, level=0, axis=1)
-            else:
-                frame = frame.drop(columns=["symbol"], errors="ignore")
-            if frame.empty:
-                logger.warning(
-                    f"No minute bars returned for {symbol}. Possible market holiday or API outage"
-                )
-                return None
-            if len(frame.index) and isinstance(frame.index[0], tuple):
-                idx_vals = [t[1] for t in frame.index]
-            else:
-                idx_vals = frame.index
-            try:
-                idx = safe_to_datetime(idx_vals, context=f"{label} {symbol}")
-            except ValueError as e:
-                reason = "empty data" if frame.empty else "unparseable timestamps"
-                logger.warning(
-                    f"Invalid {label.lower()} index for {symbol}; skipping. {reason} | {e}"
-                )
-                return None
-            frame.index = idx
-            return frame.rename(columns=lambda c: c.lower()).drop(
-                columns=["symbol"], errors="ignore"
-            )[["open", "high", "low", "close", "volume"]]
-
         fallback_attempted = False
         fallback_feed_used: str | None = None
         df: pd.DataFrame | None = None
@@ -6476,15 +6591,18 @@ class DataFetcher:
             )
             if not feed:
                 feed = "iex"
-            req = bars.StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=bars.TimeFrame.Minute,
-                start=start_minute,
-                end=last_closed_minute,
+            provider_name = f"alpaca_{feed}" if feed else "alpaca"
+            df = self._get_stock_bars(
+                provider_name,
+                symbol,
+                start_minute,
+                last_closed_minute,
+                "1Min",
                 feed=feed,
+                context="MINUTE",
+                label="minute",
+                client=client,
             )
-            bars_df = bars.safe_get_stock_bars(client, req, symbol, "MINUTE")
-            df = _normalize_bars(bars_df, "minute")
             if df is None:
                 return None
 
@@ -6523,11 +6641,17 @@ class DataFetcher:
                     },
                 )
                 try:
-                    req.feed = fallback_feed
-                    bars_df = bars.safe_get_stock_bars(
-                        client, req, symbol, "MINUTE_REALTIME_FALLBACK"
+                    fallback_df = self._get_stock_bars(
+                        f"alpaca_{fallback_feed}",
+                        symbol,
+                        start_minute,
+                        last_closed_minute,
+                        "1Min",
+                        feed=fallback_feed,
+                        context="MINUTE_REALTIME_FALLBACK",
+                        label=fallback_feed.upper(),
+                        client=client,
                     )
-                    fallback_df = _normalize_bars(bars_df, fallback_feed.upper())
                     if fallback_df is not None:
                         df = fallback_df
                         try:
@@ -6564,13 +6688,22 @@ class DataFetcher:
                 logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
-                    req.feed = "iex"
-                    df_iex = bars.safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
+                    df_iex = self._get_stock_bars(
+                        "alpaca_iex",
+                        symbol,
+                        start_minute,
+                        last_closed_minute,
+                        "1Min",
+                        feed="iex",
+                        context="IEX MINUTE",
+                        label="IEX minute",
+                        client=client,
+                    )
                     if df_iex is None:
                         return None
                     fallback_attempted = True
                     fallback_feed_used = "iex"
-                    df = _normalize_bars(df_iex, "IEX minute") or pd.DataFrame()
+                    df = df_iex if isinstance(df_iex, pd.DataFrame) else pd.DataFrame()
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -6676,17 +6809,19 @@ class DataFetcher:
                 _, day_end = day_end
 
             try:
-                bars_req = bars.StockBarsRequest(
-                    symbol_or_symbols=[symbol],
-                    timeframe=bars.TimeFrame.Minute,
-                    start=day_start,
-                    end=day_end,
-                    limit=10000,
-                    feed=feed,
-                )
+                provider_name = f"alpaca_{feed}" if feed else "alpaca"
                 try:
-                    bars_day = bars.safe_get_stock_bars(
-                        ctx.data_client, bars_req, symbol, "INTRADAY"
+                    bars_day = self._get_stock_bars(
+                        provider_name,
+                        symbol,
+                        day_start,
+                        day_end,
+                        "1Min",
+                        feed=feed,
+                        limit=10000,
+                        context="INTRADAY",
+                        label="intraday",
+                        client=ctx.data_client,
                     )
                     if bars_day is None:
                         return []
@@ -6705,9 +6840,17 @@ class DataFetcher:
                             day_end,
                             e,
                         )
-                        bars_req.feed = "iex"
-                        bars_day = bars.safe_get_stock_bars(
-                            ctx.data_client, bars_req, symbol, "IEX INTRADAY"
+                        bars_day = self._get_stock_bars(
+                            "alpaca_iex",
+                            symbol,
+                            day_start,
+                            day_end,
+                            "1Min",
+                            feed="iex",
+                            limit=10000,
+                            context="IEX INTRADAY",
+                            label="IEX intraday",
+                            client=ctx.data_client,
                         )
                         if bars_day is None:
                             return []
