@@ -5,7 +5,7 @@ import fcntl
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from time import monotonic
+from ai_trading.utils.time import monotonic_time
 from .timing import sleep as psleep
 _LOCKS: dict[str, int] = {}
 
@@ -20,7 +20,7 @@ def acquire_lock(name: str, timeout: float=2.0) -> bool:
     """Non-blocking lock with timeout. Returns True if acquired, False on timeout."""
     path = _lock_path(name)
     fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 384)
-    start = monotonic()
+    start = monotonic_time()
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -30,7 +30,7 @@ def acquire_lock(name: str, timeout: float=2.0) -> bool:
             if e.errno not in (errno.EAGAIN, errno.EACCES):
                 os.close(fd)
                 raise
-            if monotonic() - start >= timeout:
+            if monotonic_time() - start >= timeout:
                 os.close(fd)
                 return False
             psleep(0.05)
@@ -59,4 +59,6 @@ def start_process(name: str) -> dict[str, str]:
 
 def stop_process(name: str) -> dict[str, str]:
     return {'status': 'stopped', 'name': name}
+
+
 __all__ = ['acquire_lock', 'release_lock', 'file_lock', 'start_process', 'stop_process']

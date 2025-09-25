@@ -20,6 +20,7 @@ from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
 from ai_trading.exc import COMMON_EXC
 from ai_trading.settings import get_verbose_logging
+from ai_trading.utils.time import monotonic_time
 from .locks import portfolio_lock
 from .safe_subprocess import (
     SUBPROCESS_TIMEOUT_DEFAULT,
@@ -311,7 +312,7 @@ def _log_market_hours(message: str) -> None:
 def log_health_row_check(rows: int, passed: bool) -> None:
     """Log HEALTH_ROWS status changes or once every 10 seconds."""
     global _LAST_HEALTH_ROW_LOG, _LAST_HEALTH_ROWS_COUNT, _LAST_HEALTH_STATUS
-    now = time.monotonic()
+    now = monotonic_time()
     if (
         not passed
         or rows != _LAST_HEALTH_ROWS_COUNT
@@ -329,7 +330,7 @@ def log_health_row_check(rows: int, passed: bool) -> None:
 def health_rows_passed(rows):
     """Log HEALTH_ROWS_PASSED with throttling."""
     global _last_health_log
-    now = time.monotonic()
+    now = monotonic_time()
     if _last_health_log == 0.0 or now - _last_health_log >= HEALTH_THROTTLE:
         count = len(rows) if not isinstance(rows, int | float) else rows
         logger.debug("HEALTH_ROWS_PASSED: received %d rows", count)

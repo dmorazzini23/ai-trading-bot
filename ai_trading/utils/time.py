@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time as _time_module
 from datetime import UTC, datetime, timedelta, tzinfo, date as _date
 from time import time as _time
 from dataclasses import dataclass
@@ -68,4 +69,22 @@ def last_market_session(now: pd.Timestamp) -> SessionWindow | None:
     _LAST_SESSION_CACHE[key] = None
     return None
 
-__all__ = ['safe_utcnow', 'utcnow', 'now_utc', 'SessionWindow', 'last_market_session']
+def monotonic_time() -> float:
+    """Return a monotonic timestamp with a realtime fallback.
+
+    Some minimal Python runtimes (or constrained testing environments) may lack
+    :func:`time.monotonic`.  This helper performs a best-effort lookup each
+    call, falling back to :func:`time.time` when ``monotonic`` is unavailable or
+    raises ``RuntimeError`` (possible when the underlying clock is not ready).
+    """
+
+    monotonic = getattr(_time_module, "monotonic", None)
+    if monotonic is not None:
+        try:
+            return float(monotonic())
+        except RuntimeError:  # pragma: no cover - platform specific
+            pass
+    return float(_time_module.time())
+
+
+__all__ = ['safe_utcnow', 'utcnow', 'now_utc', 'SessionWindow', 'last_market_session', 'monotonic_time']

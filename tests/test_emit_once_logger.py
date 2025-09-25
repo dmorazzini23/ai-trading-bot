@@ -132,23 +132,13 @@ def test_emit_once_logger_daily_reset(logger_with_capture, monkeypatch):
 
     import ai_trading.logging as logging_mod
 
-    class Day1(real_date):
-        @classmethod
-        def today(cls) -> real_date:
-            return real_date(2024, 1, 1)
-
-    monkeypatch.setattr(logging_mod, "date", Day1)
+    monkeypatch.setattr(logging_mod, "_utc_today", lambda: real_date(2024, 1, 1))
     emit_once.info("Daily", key="daily")
     emit_once.info("Daily", key="daily")
     assert log_capture.getvalue().count("Daily") == 1
     assert emit_once._emitted_keys["daily"][1] == 2
 
-    class Day2(real_date):
-        @classmethod
-        def today(cls) -> real_date:
-            return real_date(2024, 1, 2)
-
-    monkeypatch.setattr(logging_mod, "date", Day2)
+    monkeypatch.setattr(logging_mod, "_utc_today", lambda: real_date(2024, 1, 2))
     emit_once.info("Daily", key="daily")
     assert log_capture.getvalue().count("Daily") == 2
     assert emit_once._emitted_keys["daily"][1] == 1

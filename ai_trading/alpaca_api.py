@@ -106,7 +106,7 @@ except ImportError:  # pragma: no cover - fallback for tests stubbing config
 from ai_trading.logging.normalize import canon_symbol as _canon_symbol
 from ai_trading.metrics import get_counter, get_histogram
 from ai_trading.utils.optional_dep import missing
-from time import monotonic as _mono
+from ai_trading.utils.time import monotonic_time
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
@@ -555,7 +555,7 @@ def get_bars_df(
             adjustment=adjustment,
             feed=feed,
         )
-        _start_t = _mono()
+        _start_t = monotonic_time()
         _err: Exception | None = None
         try:
             call = rest.get_stock_bars
@@ -568,7 +568,7 @@ def get_bars_df(
         finally:
             try:
                 _alpaca_calls_total.inc()
-                _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+                _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
                 if _err is not None:
                     _alpaca_errors_total.inc()
             except Exception:
@@ -819,7 +819,7 @@ def _sdk_submit(
 
     # Optional retry wrapper for SDK submit
     call = submit if retry is None else _with_retry(submit)
-    _start_t = _mono()
+    _start_t = monotonic_time()
     _err: Exception | None = None
     try:
         if use_request_object and request_obj is not None:
@@ -832,7 +832,7 @@ def _sdk_submit(
     finally:
         try:
             _alpaca_calls_total.inc()
-            _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+            _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
             if _err is not None:
                 _alpaca_errors_total.inc()
         except Exception:
@@ -891,7 +891,7 @@ def _http_submit(
     if stop_price is not None:
         payload["stop_price"] = str(stop_price)
 
-    _start_t = _mono()
+    _start_t = monotonic_time()
     _err: Exception | None = None
     try:
         timeout_v = clamp_request_timeout(timeout or 10)
@@ -906,7 +906,7 @@ def _http_submit(
     finally:
         try:
             _alpaca_calls_total.inc()
-            _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+            _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
             if _err is not None or resp.status_code >= 400:  # type: ignore[name-defined]
                 _alpaca_errors_total.inc()
         except Exception:
@@ -1084,7 +1084,7 @@ def alpaca_get(
         "Accept": "application/json",
     }
 
-    _start_t = _mono()
+    _start_t = monotonic_time()
     _err: Exception | None = None
     resp: Any | None = None
     try:
@@ -1100,7 +1100,7 @@ def alpaca_get(
     finally:
         try:
             _alpaca_calls_total.inc()
-            _alpaca_call_latency.observe(max(0.0, _mono() - _start_t))
+            _alpaca_call_latency.observe(max(0.0, monotonic_time() - _start_t))
             status = getattr(resp, "status_code", 0) if resp is not None else 0
             if _err is not None or status >= 400:
                 _alpaca_errors_total.inc()

@@ -12,6 +12,7 @@ from ai_trading.exc import HTTPError
 from pydantic import BaseModel, ValidationError, field_validator
 
 from ai_trading.logging import get_logger
+from ai_trading.utils.time import monotonic_time
 from ai_trading.runtime.shutdown import (
     install_runtime_timer,
     register_signal_handlers,
@@ -73,9 +74,9 @@ def _run_loop(fn: Callable[[], None], args: argparse.Namespace, label: str) -> N
             interval = max(0.0, float(getattr(args, "interval", 0.0)))
             if interval <= 0:
                 continue
-            deadline = time.monotonic() + interval
-            while not should_stop() and time.monotonic() < deadline:
-                time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+            deadline = monotonic_time() + interval
+            while not should_stop() and monotonic_time() < deadline:
+                time.sleep(min(0.25, max(0.0, deadline - monotonic_time())))
     except KeyboardInterrupt:
         request_stop("keyboard-interrupt")
         logger.info("%s interrupted", label)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time as _time
+from ai_trading.utils.time import monotonic_time
 
 __all__ = ["sleep"]
 
@@ -13,7 +14,7 @@ def sleep(seconds: float | int) -> float:
 
     ``time.sleep`` is captured at import time so monkeypatching ``time.sleep``
     later will not affect this helper. The elapsed duration is measured using
-    :func:`time.monotonic` and returned to the caller. If ``seconds`` is zero or
+    :func:`ai_trading.utils.time.monotonic_time` and returned to the caller. If ``seconds`` is zero or
     negative, the function returns ``0.0`` without sleeping.
     """
     try:
@@ -22,6 +23,6 @@ def sleep(seconds: float | int) -> float:
         return 0.0
     if s <= 0:
         return 0.0
-    start = _time.monotonic()
+    start = monotonic_time()
     _real_sleep(s)
-    return _time.monotonic() - start
+    return monotonic_time() - start
