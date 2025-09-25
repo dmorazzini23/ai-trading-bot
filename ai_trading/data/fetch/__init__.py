@@ -23,6 +23,8 @@ from ai_trading.logging import (
     log_empty_retries_exhausted,
     log_fetch_attempt,
     log_finnhub_disabled,
+    provider_log_deduper,
+    record_provider_log_suppressed,
     warn_finnhub_disabled_no_data,
     get_logger,
 )
@@ -1386,7 +1388,8 @@ def _finnhub_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Da
 
 def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Route to configured backup provider or return empty DataFrame."""
-    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+    settings = get_settings()
+    provider = getattr(settings, "backup_data_provider", "yahoo")
     provider_str = str(provider).strip()
     normalized = provider_str.lower()
     if normalized in {"finnhub", "finnhub_low_latency"}:
@@ -1403,7 +1406,12 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         _, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         key = (str(symbol).upper(), str(interval))
         if key not in bucket:
-            logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+            dedupe_key = f"USING_BACKUP_PROVIDER:{normalized}:{str(symbol).upper()}"
+            ttl = getattr(settings, "logging_dedupe_ttl_s", 0)
+            if provider_log_deduper.should_log(dedupe_key, int(ttl)):
+                logger.info("USING_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
+            else:
+                record_provider_log_suppressed("USING_BACKUP_PROVIDER")
             bucket.add(key)
         df = _yahoo_get_bars(symbol, start, end, interval)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
