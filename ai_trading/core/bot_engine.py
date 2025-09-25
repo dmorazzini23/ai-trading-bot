@@ -5708,6 +5708,16 @@ try:
     _DAILY_FETCH_MEMO_TTL = float(os.getenv("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
     _DAILY_FETCH_MEMO_TTL = 60.0
+try:
+    _PROVIDER_DECISION_WINDOW = float(get_env("AI_TRADING_PROVIDER_DECISION_SECS", "120", cast=float))
+except Exception:
+    try:
+        _PROVIDER_DECISION_WINDOW = float(os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", "120") or 120.0)
+    except (TypeError, ValueError):
+        _PROVIDER_DECISION_WINDOW = 120.0
+_DAILY_FETCH_MEMO_TTL = max(_DAILY_FETCH_MEMO_TTL, _PROVIDER_DECISION_WINDOW)
+_DAILY_PROVIDER_SESSION_CACHE: dict[tuple[str, str, str], tuple[Any, float]] = {}
+_DAILY_PROVIDER_REQUEST_LOG: dict[tuple[str, str], float] = {}
 # AI-AGENT-REF: Add thread-safe locking for trade cooldown state
 trade_cooldowns_lock = Lock()
 
@@ -6160,6 +6170,9 @@ class DataFetcher:
     prefer: str | None = None
     force_feed: str | None = None
     cache_minutes: int = 15
+    _daily_error_state: dict[tuple[str, str], tuple[BaseException, float]] = field(
+        init=False, default_factory=dict
+    )
 
     def __post_init__(self):
         self.prefer = self._normalize_feed_value(self.prefer)
@@ -6431,6 +6444,55 @@ class DataFetcher:
             pass
         logger.warning(msg)
 
+    def _planned_daily_provider(self, feed: str | None) -> str:
+        candidate = feed or getattr(self.settings, "alpaca_data_feed", None)
+        if candidate is None:
+            candidate = getattr(self.settings, "data_feed", "iex")
+        try:
+            normalized = str(candidate).strip().lower()
+        except Exception:  # pragma: no cover - defensive normalization
+            normalized = "iex"
+        if normalized.startswith("alpaca_"):
+            normalized = normalized.split("_", 1)[1]
+        if normalized in {"sip", "iex"}:
+            return f"alpaca_{normalized}"
+        if normalized == "yahoo":
+            return "yahoo"
+        return f"alpaca_{normalized or 'iex'}"
+
+    @staticmethod
+    def _infer_provider_label(df: Any, default: str) -> str:
+        try:
+            attrs = getattr(df, "attrs", None)
+            if isinstance(attrs, dict):
+                provider_attr = attrs.get("data_provider") or attrs.get("fallback_provider")
+                if provider_attr:
+                    normalized = str(provider_attr).strip().lower().replace("-", "_")
+                    if normalized == "alpaca_yahoo":
+                        return "yahoo"
+                    return normalized
+        except Exception:  # pragma: no cover - defensive metadata parse
+            return default
+        return default
+
+    @staticmethod
+    def _clone_fetch_error(error: BaseException) -> BaseException:
+        if isinstance(error, data_fetcher_module.MissingOHLCVColumnsError):
+            clone = data_fetcher_module.MissingOHLCVColumnsError(*getattr(error, "args", ()))
+            for attr in ("fetch_reason", "missing_columns", "symbol", "timeframe"):
+                if hasattr(error, attr):
+                    setattr(clone, attr, getattr(error, attr))
+            return clone
+        return error
+
+    def _record_daily_error(
+        self,
+        key: tuple[str, str],
+        error: BaseException,
+        stamp: float,
+    ) -> None:
+        self._daily_error_state[key] = (self._clone_fetch_error(error), stamp)
+
     def _log_daily_cache_hit_once(self, symbol: str, *, reason: str | None = None) -> None:
         """Emit the DAILY_FETCH_CACHE_HIT log at most once per fetcher instance."""
 
@@ -6519,6 +6581,16 @@ class DataFetcher:
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
 
+        effective_feed = self._resolve_feed(
+            getattr(
+                self.settings,
+                "data_feed",
+                getattr(self.settings, "alpaca_data_feed", None),
+            )
+        )
+        planned_provider = self._planned_daily_provider(effective_feed)
+        error_key = (symbol, fetch_date.isoformat())
+
         cached_df: Any | None = None
         cached_reason: str | None = None
         with cache_lock:
@@ -6553,6 +6625,22 @@ class DataFetcher:
                     _DAILY_FETCH_MEMO[legacy_memo_key] = (now_monotonic, cached_df)
                 else:
                     self._daily_cache.pop(symbol, None)
+            error_entry = self._daily_error_state.get(error_key)
+            if error_entry is not None:
+                cached_error, error_ts = error_entry
+                if now_monotonic - error_ts <= ttl_window:
+                    raise self._clone_fetch_error(cached_error)
+                self._daily_error_state.pop(error_key, None)
+            if cached_df is None:
+                provider_key = (planned_provider, fetch_date.isoformat(), symbol)
+                session_entry = _DAILY_PROVIDER_SESSION_CACHE.get(provider_key)
+                if session_entry:
+                    session_df, session_ts = session_entry
+                    if now_monotonic - session_ts <= ttl_window:
+                        cached_df = session_df
+                        cached_reason = f"provider_session:{planned_provider}"
+                    else:
+                        _DAILY_PROVIDER_SESSION_CACHE.pop(provider_key, None)
 
         if cached_df is not None and (cached_reason or min_interval <= 0):
             if daily_cache_hit:
@@ -6586,23 +6674,24 @@ class DataFetcher:
                 extra={"symbol": symbol, "reason": provider_reason},
             )
 
-        logger.info(
-            "DAILY_FETCH_REQUEST",
-            extra={
-                "symbol": symbol,
-                "timeframe": timeframe_key,
-                "start": start_ts.isoformat(),
-                "end": end_ts.isoformat(),
-            },
-        )
-
-        effective_feed = self._resolve_feed(
-            getattr(
-                self.settings,
-                "data_feed",
-                getattr(self.settings, "alpaca_data_feed", None),
+        log_key = (planned_provider, fetch_date.isoformat())
+        log_request = True
+        with cache_lock:
+            last_logged = _DAILY_PROVIDER_REQUEST_LOG.get(log_key)
+            if last_logged is not None and now_monotonic - last_logged <= ttl_window:
+                log_request = False
+            else:
+                _DAILY_PROVIDER_REQUEST_LOG[log_key] = now_monotonic
+        if log_request:
+            logger.info(
+                "DAILY_FETCH_REQUEST",
+                extra={
+                    "symbol": symbol,
+                    "timeframe": timeframe_key,
+                    "start": start_ts.isoformat(),
+                    "end": end_ts.isoformat(),
+                },
             )
-        )
 
         df: pd.DataFrame | None
         try:
@@ -6613,6 +6702,17 @@ class DataFetcher:
                 feed=effective_feed,
                 adjustment=getattr(self.settings, "alpaca_adjustment", None),
             )
+        except data_fetcher_module.MissingOHLCVColumnsError as exc:
+            self._record_daily_error(error_key, exc, now_monotonic)
+            if planned_provider != "yahoo":
+                provider_monitor.update_data_health(
+                    planned_provider,
+                    "yahoo",
+                    healthy=False,
+                    reason="ohlcv_columns_missing",
+                    severity="hard_fail",
+                )
+            raise self._clone_fetch_error(exc)
         except data_fetcher_module.DataFetchError as exc:
             logger.warning(
                 "DAILY_FETCH_PROVIDER_ERROR",
@@ -6645,9 +6745,14 @@ class DataFetcher:
 
         with cache_lock:
             stamp = monotonic_time()
+            actual_provider = self._infer_provider_label(df, planned_provider)
+            provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
             _DAILY_FETCH_MEMO[memo_key] = (df, stamp)
             _DAILY_FETCH_MEMO[legacy_memo_key] = (stamp, df)
+            _DAILY_PROVIDER_SESSION_CACHE[provider_session_key] = (df, stamp)
+            _DAILY_PROVIDER_REQUEST_LOG[(actual_provider, fetch_date.isoformat())] = stamp
+            self._daily_error_state.pop(error_key, None)
 
         if daily_cache_miss:
             try:

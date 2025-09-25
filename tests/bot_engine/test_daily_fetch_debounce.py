@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 import sys
 import types
 
+import pytest
+
 if "ai_trading.indicators" not in sys.modules:
     indicators_stub = types.ModuleType("ai_trading.indicators")
 
@@ -149,3 +151,48 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     assert second is cached_df
     assert memo_key in be._DAILY_FETCH_MEMO
     assert be._DAILY_FETCH_MEMO[memo_key][1] is cached_df
+
+
+def test_daily_missing_columns_error_sticky(monkeypatch):
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    be._DAILY_FETCH_MEMO.clear()
+    fetcher._daily_cache.clear()
+    fetcher._daily_error_state.clear()
+
+    monotonic_values = iter([10.0, 11.0, 12.0, 130.0])
+    monkeypatch.setattr(be, "monotonic_time", lambda: next(monotonic_values))
+
+    error_calls = []
+
+    def _raise_missing(*_args, **_kwargs):
+        error_calls.append(1)
+        err = be.data_fetcher_module.MissingOHLCVColumnsError("ohlcv_columns_missing")
+        setattr(err, "fetch_reason", "ohlcv_columns_missing")
+        setattr(err, "missing_columns", ("close",))
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", "1Day")
+        raise err
+
+    provider_updates: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def _capture_update(*args, **kwargs):
+        provider_updates.append((args, kwargs))
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", _raise_missing)
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", _capture_update)
+
+    with pytest.raises(be.data_fetcher_module.MissingOHLCVColumnsError):
+        fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    assert len(error_calls) == 1
+    assert provider_updates
+    assert provider_updates[0][1].get("severity") == "hard_fail"
+
+    with pytest.raises(be.data_fetcher_module.MissingOHLCVColumnsError):
+        fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+    assert len(error_calls) == 1

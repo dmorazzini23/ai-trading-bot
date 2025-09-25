@@ -235,6 +235,10 @@ class DataFetchError(Exception):
     """Error raised when market data retrieval fails."""  # AI-AGENT-REF: stable public symbol
 
 
+class MissingOHLCVColumnsError(DataFetchError):
+    """Raised when a provider omits required OHLCV columns."""
+
+
 # Backwards compat alias
 DataFetchException = DataFetchError
 
@@ -1271,7 +1275,7 @@ def _flatten_and_normalize_ohlcv(
         extra = {k: v for k, v in extra.items() if v is not None}
         logger.error("OHLCV_COLUMNS_MISSING", extra=extra)
         reason = "close_column_missing" if "close" in missing else "ohlcv_columns_missing"
-        err = DataFetchError(reason)
+        err = MissingOHLCVColumnsError(reason)
         setattr(err, "fetch_reason", reason)
         setattr(err, "missing_columns", tuple(missing))
         setattr(err, "symbol", symbol)
@@ -2850,7 +2854,8 @@ def _fetch_bars(
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             if _feed == "sip":
                 _mark_sip_unauthorized()
-                _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
+                if _ALLOW_SIP:
+                    _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
                 is_fallback_request = any(p != "sip" for p in _state.get("providers", [])[:-1])
                 if is_fallback_request:
                     raise ValueError("rate_limited")
@@ -3190,7 +3195,8 @@ def _fetch_bars(
                     )
                     return result if result is not None else pd.DataFrame()
                 reason = "UNAUTHORIZED_SIP" if sip_locked else "SIP_UNAVAILABLE"
-                _log_sip_unavailable(symbol, _interval, reason)
+                if reason != "UNAUTHORIZED_SIP" or _ALLOW_SIP:
+                    _log_sip_unavailable(symbol, _interval, reason)
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
@@ -4145,6 +4151,15 @@ def get_minute_df(
         pass
 
     def _gap_ratio_setting() -> float:
+        try:
+            env_ratio = get_env("AI_TRADING_GAP_RATIO_LIMIT", None, cast=float)
+        except Exception:
+            env_ratio = None
+        if env_ratio is not None:
+            try:
+                return max(float(env_ratio) * 10000.0, 0.0)
+            except (TypeError, ValueError):
+                pass
         for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
             try:
                 value = get_env(key, None, cast=float)
@@ -4160,12 +4175,16 @@ def get_minute_df(
     max_gap_bps = _gap_ratio_setting()
     max_gap_ratio = max(0.0, max_gap_bps / 10000.0)
     gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
+    healthy_gap = gap_ratio <= max_gap_ratio
+    severity = "good" if healthy_gap else "degraded"
+    gap_reason = f"gap_ratio={gap_ratio * 100:.2f}%"
     if backup_label:
         provider_monitor.update_data_health(
             primary_label,
             backup_label,
-            healthy=gap_ratio <= max_gap_ratio,
-            reason=f"gap_ratio={gap_ratio * 100:.2f}%",
+            healthy=healthy_gap,
+            reason=gap_reason,
+            severity=severity,
         )
     try:
         settings_obj = get_settings()
@@ -4181,6 +4200,12 @@ def get_minute_df(
                     gap_limit = max(float(candidate), 0.0)
         except Exception:
             gap_limit = None
+    if not healthy_gap:
+        try:
+            coverage_meta["status"] = "degraded"
+            coverage_meta["gap_reason"] = gap_reason
+        except Exception:
+            pass
     if gap_limit is None:
         gap_limit = max_gap_ratio
     price_reliable = True
@@ -4456,6 +4481,7 @@ __all__ = [
     "metrics",
     "build_fetcher",
     "DataFetchError",
+    "MissingOHLCVColumnsError",
     "DataFetchException",
     "FinnhubAPIException",
     "get_cached_minute_timestamp",

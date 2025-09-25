@@ -28,23 +28,42 @@ def _extract_tokens(records: list[logging.LogRecord]) -> list[str]:
 
 def test_provider_decision_single_outcome(caplog):
     monitor = ProviderMonitor(threshold=1, cooldown=120)
+    monitor.decision_window_seconds = 0
     primary = "alpaca_iex"
     backup = "yahoo"
 
     caplog.set_level(logging.INFO)
 
     caplog.clear()
-    active = monitor.update_data_health(primary, backup, healthy=False, reason="gap_ratio=2.5%")
+    active = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=False,
+        reason="gap_ratio=2.5%",
+        severity="degraded",
+    )
     assert active == backup
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_SWITCHOVER"]
 
     caplog.clear()
-    active = monitor.update_data_health(primary, backup, healthy=False, reason="gap_ratio=2.7%")
+    active = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=False,
+        reason="gap_ratio=2.7%",
+        severity="degraded",
+    )
     assert active == backup
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_STAY"]
 
     caplog.clear()
-    active = monitor.update_data_health(primary, backup, healthy=True, reason="gap_ratio=0.4%")
+    active = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=True,
+        reason="gap_ratio=0.4%",
+        severity="good",
+    )
     assert active == backup
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_STAY"]
 
@@ -53,7 +72,13 @@ def test_provider_decision_single_outcome(caplog):
     state["cooldown"] = 120
 
     caplog.clear()
-    active = monitor.update_data_health(primary, backup, healthy=True, reason="gap_ratio=0.2%")
+    active = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=True,
+        reason="gap_ratio=0.2%",
+        severity="good",
+    )
     assert active == primary
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_SWITCHOVER"]
 
@@ -66,3 +91,52 @@ def test_decide_provider_action_disable():
         policy={"disable_after": 5},
     )
     assert action is ProviderAction.DISABLE
+
+
+def test_provider_decision_window_prevents_thrashing():
+    monitor = ProviderMonitor(threshold=1, cooldown=30)
+    monitor.decision_window_seconds = 90
+    primary = "alpaca_iex"
+    backup = "yahoo"
+
+    first = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=False,
+        reason="gap_ratio=5.0%",
+        severity="degraded",
+    )
+    assert first == backup
+
+    second = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=False,
+        reason="gap_ratio=8.0%",
+        severity="degraded",
+    )
+    assert second == backup
+
+    third = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=True,
+        reason="gap_ratio=0.4%",
+        severity="good",
+    )
+    assert third == backup
+
+    state = monitor._pair_states[(primary, backup)]
+    state["decision_until"] = datetime.now(UTC) - timedelta(seconds=1)
+    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=monitor.decision_window_seconds + 5)
+    state["consecutive_passes"] = 2
+    state["cooldown"] = 0
+
+    recovered = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=True,
+        reason="gap_ratio=0.3%",
+        severity="good",
+    )
+    assert recovered == primary
