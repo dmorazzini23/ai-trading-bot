@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import sys
+import time
+import uuid
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from types import ModuleType
+from typing import Any, Iterable, TYPE_CHECKING
 
 from ai_trading.logging import get_logger
 
@@ -14,6 +18,13 @@ logger = get_logger(__name__)
 # Exposed for tests to monkeypatch
 PPO: Any | None = None
 DummyVecEnv: Any | None = None
+
+_TRAIN_MODULE_STATE: dict[str, Any] = {
+    "loader_id": uuid.uuid4().hex,
+    "load_count": 0,
+    "last_loaded_at": None,
+    "last_load_duration": None,
+}
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from ai_trading.strategies.base import StrategySignal  # noqa: F401
@@ -87,7 +98,7 @@ class RLAgent:
             logger.error("RL model not found at %s", self.model_path)
 
     def predict(
-        self, state, symbols: list[str] | None = None
+        self, state: Iterable[Any] | Any, symbols: list[str] | None = None
     ) -> "StrategySignal" | list["StrategySignal"] | None:
         """
         Predict one or more trade signals from the current model.
@@ -143,11 +154,18 @@ __all__ = [
 ]
 
 
-def _load_train_module() -> Any:
+def _load_train_module() -> ModuleType:
     """Dynamically import :mod:`ai_trading.rl_trading.train` when requested."""
 
+    start = time.perf_counter()
     module_name = f"{__name__}.train"
     module = sys.modules.get(module_name)
+    if module is not None and not inspect.ismodule(module):
+        logger.warning(
+            "Non-module entry for %s detected in sys.modules; re-importing", module_name
+        )
+        module = None
+        sys.modules.pop(module_name, None)
     if module is None:
         try:
             module = importlib.import_module(module_name)
@@ -155,8 +173,11 @@ def _load_train_module() -> Any:
             raise AttributeError(
                 f"module {__name__!r} has no attribute 'train'"
             ) from exc
-    module = sys.modules.setdefault(module_name, module)
+    sys.modules[module_name] = module
     globals()["train"] = module
+    _TRAIN_MODULE_STATE["load_count"] += 1
+    _TRAIN_MODULE_STATE["last_loaded_at"] = time.time()
+    _TRAIN_MODULE_STATE["last_load_duration"] = time.perf_counter() - start
     return module
 
 
