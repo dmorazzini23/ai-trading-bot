@@ -134,7 +134,21 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     val = _cfg_coalesce(cfg, "MAX_POSITION_SIZE", None)
     sizing_meta: dict[str, Any] = {}
     if mode == "AUTO":
-        resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
+        try:
+            resolved, sizing_meta = resolve_max_position_size(cfg, cfg, force_refresh=True)
+        except RuntimeError as exc:
+            fallback_value = _cfg_coalesce(
+                cfg, "MAX_POSITION_SIZE", REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"]
+            )
+            if fallback_value in (None, 0):
+                fallback_value = REQUIRED_PARAM_DEFAULTS["MAX_POSITION_SIZE"]
+            resolved = float(fallback_value)
+            sizing_meta = {
+                "mode": mode,
+                "source": "fallback",
+                "reason": str(exc),
+                "capital_cap": getattr(cfg, "capital_cap", 0.0),
+            }
     else:
         if val is None and not explicit_none:
             try:
