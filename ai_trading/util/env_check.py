@@ -1,18 +1,28 @@
-import importlib, sys, pathlib
+import importlib
+import pathlib
+import sys
+
+from ai_trading.env import PYTHON_DOTENV_RESOLVED
 
 
 class DotenvImportError(ImportError): ...
 
 
 def assert_dotenv_not_shadowed():
+    if not PYTHON_DOTENV_RESOLVED:
+        return
     existing = sys.modules.get("dotenv")
     if existing is not None and getattr(existing, "__spec__", None) is None:
         sys.modules.pop("dotenv", None)
     try:
         spec = importlib.util.find_spec("dotenv")
     except ValueError as exc:
+        if not PYTHON_DOTENV_RESOLVED:
+            return
         raise DotenvImportError("python-dotenv not importable") from exc
     if spec is None or not spec.origin:
+        if not PYTHON_DOTENV_RESOLVED:
+            return
         raise DotenvImportError("python-dotenv not importable")
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     origin_path = pathlib.Path(spec.origin).resolve()

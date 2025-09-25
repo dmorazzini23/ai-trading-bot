@@ -536,6 +536,7 @@ class ExecutionEngine:
         self._api_key: str | None = None
         self._api_secret: str | None = None
         self._cred_error: Exception | None = None
+        self._pending_orders: dict[str, dict[str, Any]] = {}
         try:
             key, secret = get_alpaca_creds()
         except RuntimeError as exc:
@@ -1129,6 +1130,33 @@ class ExecutionEngine:
             },
         )
         return execution_result
+
+    def execute_sliced(self, *args: Any, **kwargs: Any) -> ExecutionResult | None:
+        """Execute an order using slicing-compatible signature."""
+
+        return self.execute_order(*args, **kwargs)
+
+    def safe_submit_order(self, *args: Any, **kwargs: Any) -> str:
+        """Submit an order and always return a string identifier."""
+
+        submit = getattr(self.trading_client, "submit_order", None)
+        if not callable(submit):
+            raise AttributeError("trading_client missing submit_order")
+        order = submit(*args, **kwargs)
+        order_id = None
+        if isinstance(order, dict):
+            order_id = order.get("id") or order.get("client_order_id")
+        else:
+            order_id = getattr(order, "id", None) or getattr(order, "client_order_id", None)
+        if not order_id:
+            order_id = f"mock_order_{int(time.time())}"
+            logger.warning(
+                "SYNTHETIC_ORDER_ID_ASSIGNED",
+                extra={"reason": "missing_order_id", "generated_id": order_id},
+            )
+        pending = self._pending_orders.setdefault(str(order_id), {})
+        pending.setdefault("status", "pending_new")
+        return str(order_id)
 
     def _supports_asset_class(self) -> bool:
         """Detect once whether Alpaca request models accept ``asset_class``."""

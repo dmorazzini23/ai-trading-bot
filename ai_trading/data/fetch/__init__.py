@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import datetime as _dt
 import gc
 import importlib
@@ -10,7 +11,7 @@ import warnings
 import weakref
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any, Mapping
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time
@@ -71,6 +72,84 @@ from .validators import validate_adjustment, validate_feed
 from .._alpaca_guard import should_import_alpaca_sdk
 
 logger = get_logger(__name__)
+
+
+def _sip_allowed() -> bool:
+    """Return ``True`` when SIP access is permitted for the current process."""
+
+    override = globals().get("_ALLOW_SIP")
+    if override is not None:
+        return bool(override)
+    value = str(os.getenv("ALPACA_ALLOW_SIP", "1")).strip().lower()
+    return value not in {"0", "false", "no", ""}
+
+
+def _ordered_fallbacks(primary_feed: str) -> List[str]:
+    """Return fallback feeds ordered by preference for *primary_feed*."""
+
+    normalized = (primary_feed or "").strip().lower()
+    if normalized == "iex":
+        return ["sip", "yahoo"] if _sip_allowed() else ["yahoo"]
+    if normalized == "sip":
+        return ["yahoo"]
+    return ["yahoo"]
+
+
+_cycle_feed_override: Dict[str, str] = {}
+_ALLOW_SIP: Optional[bool] | None = None
+
+
+def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
+    """Return cached fallback feed for *symbol* or the provided primary feed."""
+
+    cached = _cycle_feed_override.get(symbol)
+    if cached:
+        return cached
+    normalized_primary = str(primary_feed or "iex").strip().lower() or "iex"
+    return normalized_primary
+
+
+def _cache_fallback(symbol: str, feed: str) -> None:
+    """Remember *feed* for the active process cycle."""
+
+    if not feed:
+        return
+    normalized = str(feed).strip().lower()
+    _cycle_feed_override[symbol] = normalized
+    _remember_fallback_for_cycle(_get_cycle_id(), symbol, "1Min", normalized)
+
+
+async def run_with_concurrency(limit: int, coros):
+    """Execute *coros* concurrently while respecting *limit*."""
+
+    semaphore = asyncio.Semaphore(limit)
+
+    async def _run(task):
+        async with semaphore:
+            return await task
+
+    results = await asyncio.gather(*(_run(c) for c in coros), return_exceptions=True)
+    succeeded = sum(1 for item in results if not isinstance(item, Exception))
+    failed = len(results) - succeeded
+    return results, succeeded, failed
+
+
+_daily_memo: Dict[Tuple[str, str], Tuple[float, Any]] = {}
+_DAILY_TTL_S = 60.0
+
+
+def daily_fetch_memo(key: Tuple[str, str], value_factory):
+    """Memoize intraday daily fetch results for a short TTL."""
+
+    now = time.time()
+    cached = _daily_memo.get(key)
+    if cached is not None:
+        ts, value = cached
+        if (now - ts) < _DAILY_TTL_S:
+            return value
+    value = value_factory()
+    _daily_memo[key] = (now, value)
+    return value
 
 
 def _emit_capture_record(
@@ -238,6 +317,11 @@ class DataFetchError(Exception):
 
 class MissingOHLCVColumnsError(DataFetchError):
     """Raised when a provider omits required OHLCV columns."""
+
+
+# Dedicated error for SIP authorization failures so callers can branch.
+class UnauthorizedSIPError(DataFetchError):
+    """Raised when Alpaca SIP requests fail due to authorization issues."""
 
 
 # Backwards compat alias
@@ -1128,7 +1212,6 @@ def _prefers_sip() -> bool:
 
 _SIP_UNAUTHORIZED = _env_flag("ALPACA_SIP_UNAUTHORIZED")
 _HAS_SIP = _env_flag("ALPACA_HAS_SIP")
-_ALLOW_SIP = _env_flag("ALPACA_ALLOW_SIP", default=_HAS_SIP or _prefers_sip())
 _SIP_DISALLOWED_WARNED = False
 _SIP_PRECHECK_DONE = False
 _SIP_UNAVAILABLE_LOGGED: set[tuple[str, str]] = set()
@@ -1191,20 +1274,21 @@ def _remember_fallback_for_cycle(cycle_id: str, symbol: str, timeframe: str, fee
 
 
 def _reset_provider_auth_state_for_tests() -> None:
-    global _SIP_UNAUTHORIZED, _SIP_UNAUTHORIZED_UNTIL
+    global _SIP_UNAUTHORIZED, _SIP_UNAUTHORIZED_UNTIL, _ALLOW_SIP
     _SIP_UNAUTHORIZED = False
     _SIP_UNAUTHORIZED_UNTIL = None
     os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
     _SIP_UNAVAILABLE_LOGGED.clear()
     _CYCLE_FALLBACK_FEED.clear()
+    _ALLOW_SIP = None
 
 
 def _sip_configured() -> bool:
     if os.getenv("PYTEST_RUNNING"):
-        return bool(_ALLOW_SIP)
-    if not _ALLOW_SIP:
+        return _sip_allowed()
+    if not _sip_allowed():
         return False
-    if _ALLOW_SIP and _HAS_SIP:
+    if _sip_allowed() and _HAS_SIP:
         return True
     try:
         feeds = alpaca_feed_failover()
@@ -1234,11 +1318,11 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
-        return bool(_ALLOW_SIP)
-    if not _ALLOW_SIP:
+        return _sip_allowed()
+    if not _sip_allowed():
         return False
     if not _sip_configured():
-        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
+        if not _sip_allowed() and not _SIP_DISALLOWED_WARNED:
             logger.warning(
                 "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": "sip", "timeframe": timeframe}),
@@ -2551,7 +2635,7 @@ def _fetch_bars(
             )
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
-        if not _ALLOW_SIP and not _SIP_DISALLOWED_WARNED:
+        if not _sip_allowed() and not _SIP_DISALLOWED_WARNED:
             logger.warning(
                 "SIP_FEED_DISABLED",
                 extra=_norm_extra({"provider": "alpaca", "feed": _feed, "timeframe": _interval}),
@@ -2956,7 +3040,7 @@ def _fetch_bars(
             log_fetch_attempt("alpaca", status=status, error="unauthorized", **log_extra_with_remaining)
             if _feed == "sip":
                 _mark_sip_unauthorized()
-                if _ALLOW_SIP:
+                if _sip_allowed():
                     _log_sip_unavailable(symbol, _interval, "UNAUTHORIZED_SIP")
                 is_fallback_request = any(p != "sip" for p in _state.get("providers", [])[:-1])
                 if is_fallback_request:
@@ -3297,7 +3381,7 @@ def _fetch_bars(
                     )
                     return result if result is not None else pd.DataFrame()
                 reason = "UNAUTHORIZED_SIP" if sip_locked else "SIP_UNAVAILABLE"
-                if reason != "UNAUTHORIZED_SIP" or _ALLOW_SIP:
+                if reason != "UNAUTHORIZED_SIP" or _sip_allowed():
                     _log_sip_unavailable(symbol, _interval, reason)
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
@@ -3649,11 +3733,8 @@ def _fetch_bars(
         return df
 
     priority = list(provider_priority())
-    _allow_sip = (
-        str(os.getenv("ALPACA_ALLOW_SIP", "0")).strip()
-        not in ("0", "", "false", "False", "no", "No")
-    )
-    if not _allow_sip:
+    allow_sip = _sip_allowed()
+    if not allow_sip:
         priority = [p for p in priority if p != "alpaca_sip"]
     max_fb = max_data_fallbacks()
     alt_feed = None
@@ -3669,7 +3750,7 @@ def _fetch_bars(
             scan = list(priority[idx + 1 :]) + list(reversed(priority[: max(0, idx)]))
             for prov in scan:
                 if prov == "alpaca_sip":
-                    if _sip_configured() and not sip_locked_initial and _feed != "sip":
+                    if allow_sip and _sip_configured() and not sip_locked_initial and _feed != "sip":
                         alt_feed = "sip"
                         break
                     continue
@@ -3678,7 +3759,7 @@ def _fetch_bars(
                     break
         if alt_feed is not None:
             fallback = (_interval, alt_feed, _start, _end)
-        elif _feed == "iex" and _sip_configured() and not sip_locked_initial:
+        elif _feed == "iex" and allow_sip and _sip_configured() and not sip_locked_initial:
             # Ensure a SIP fallback candidate exists for tests even when
             # provider priority is customized or empty.
             fallback = (_interval, "sip", _start, _end)
@@ -3750,6 +3831,26 @@ def _fetch_bars(
     if df is None or getattr(df, "empty", True):
         return None
     return df
+
+
+def _fetch_minute_from_provider(
+    symbol: str,
+    feed: str,
+    provider: str,
+    start: Any,
+    end: Any,
+    **kwargs: Any,
+):
+    """Fetch minute bars from a specific provider/feed combination."""
+
+    fetch_kwargs = dict(kwargs)
+    normalized_feed = str(feed or "").strip().lower() or None
+    provider_lower = provider.lower()
+    if provider_lower == "yahoo":
+        fetch_kwargs["feed"] = "yahoo"
+    elif normalized_feed:
+        fetch_kwargs["feed"] = normalized_feed
+    return get_minute_df(symbol, start, end, **fetch_kwargs)
 
 
 def get_minute_df(
@@ -3917,11 +4018,7 @@ def get_minute_df(
                     sip_locked_backoff = _is_sip_unauthorized()
                     if max_fb >= 1 and len(attempted_feeds) < max_fb:
                         priority_order = list(provider_priority())
-                        _allow_sip = (
-                            str(os.getenv("ALPACA_ALLOW_SIP", "0")).strip()
-                            not in ("0", "", "false", "False", "no", "No")
-                        )
-                        if not _allow_sip:
+                        if not _sip_allowed():
                             priority_order = [
                                 prov for prov in priority_order if prov != "alpaca_sip"
                             ]
@@ -4579,6 +4676,8 @@ __all__ = [
     "_ALLOW_SIP",
     "_HAS_SIP",
     "_SIP_UNAUTHORIZED",
+    "_sip_allowed",
+    "_ordered_fallbacks",
     "_is_sip_unauthorized",
     "_mark_sip_unauthorized",
     "_reset_provider_auth_state_for_tests",
@@ -4599,12 +4698,18 @@ __all__ = [
     "is_market_open",
     "get_last_available_bar",
     "fh_fetcher",
+    "_get_cached_or_primary",
+    "_cache_fallback",
+    "_fetch_minute_from_provider",
     "get_minute_df",
     "get_daily_df",
+    "run_with_concurrency",
+    "daily_fetch_memo",
     "metrics",
     "build_fetcher",
     "DataFetchError",
     "MissingOHLCVColumnsError",
+    "UnauthorizedSIPError",
     "DataFetchException",
     "FinnhubAPIException",
     "get_cached_minute_timestamp",
