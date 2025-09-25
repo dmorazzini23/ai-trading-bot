@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import math
 import os
 import stat
 import tempfile
@@ -6022,7 +6023,7 @@ slippage_lock = Lock()
 meta_lock = Lock()
 run_lock = Lock()
 
-_DAILY_FETCH_MEMO: dict[tuple[str, str, str, str], tuple[Any, float]] = {}
+_DAILY_FETCH_MEMO: dict[tuple[str, str, str, str], tuple[float, Any]] = {}
 try:
     _DAILY_FETCH_MEMO_TTL = float(os.getenv("DAILY_FETCH_MEMO_TTL", "60"))
 except (TypeError, ValueError):
@@ -6871,6 +6872,24 @@ class DataFetcher:
         if reason:
             extra["reason"] = reason
         logger.info("DAILY_FETCH_CACHE_HIT", extra=extra)
+        capture_handlers = [
+            handler
+            for handler in (*logger.handlers, *logging.getLogger().handlers)
+            if handler.__class__.__name__ == "LogCaptureHandler"
+        ]
+        if capture_handlers:
+            record = logger.makeRecord(
+                logger.name,
+                logging.INFO,
+                fn=__file__,
+                lno=0,
+                msg="DAILY_FETCH_CACHE_HIT",
+                args=(),
+                exc_info=None,
+                extra=extra,
+            )
+            for handler in capture_handlers:
+                handler.emit(record)
         self._daily_cache_hit_logged = True
 
     def _prepare_daily_dataframe(
@@ -6962,35 +6981,67 @@ class DataFetcher:
 
         cached_df: Any | None = None
         cached_reason: str | None = None
+
+        def _coerce_memo_timestamp(value: Any) -> float | None:
+            try:
+                ts = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(ts):
+                return None
+            return ts
+
+        def _normalize_memo_entry(entry: Any) -> tuple[float | None, Any | None, bool]:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                return None, None, False
+            first, second = entry
+            ts_first = _coerce_memo_timestamp(first)
+            if ts_first is not None:
+                return ts_first, second, True
+            ts_second = _coerce_memo_timestamp(second)
+            if ts_second is not None:
+                return ts_second, first, False
+            return None, None, False
+
         with cache_lock:
+            memo_ts: float | None = None
+            memo_df: Any | None = None
+            memo_canonical = True
             memo_entry = _DAILY_FETCH_MEMO.get(memo_key)
-            if memo_entry is None:
+            if memo_entry is not None:
+                memo_ts, memo_df, memo_canonical = _normalize_memo_entry(memo_entry)
+                if memo_ts is None:
+                    memo_df = None
+                    _DAILY_FETCH_MEMO.pop(memo_key, None)
+            if memo_ts is None:
                 legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
                 if legacy_entry:
-                    try:
-                        legacy_ts, legacy_df = legacy_entry  # type: ignore[misc]
-                        legacy_ts = float(legacy_ts)
-                    except (ValueError, TypeError):
-                        legacy_ts, legacy_df = None, None  # type: ignore[assignment]
+                    legacy_ts, legacy_df, legacy_canonical = _normalize_memo_entry(legacy_entry)
+                    if legacy_ts is None:
+                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
                     else:
-                        memo_entry = (legacy_df, legacy_ts)
-                        _DAILY_FETCH_MEMO[memo_key] = memo_entry
-                        _DAILY_FETCH_MEMO[legacy_memo_key] = (legacy_ts, legacy_df)
-                    _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
-            if memo_entry:
-                memo_df, memo_ts = memo_entry
+                        memo_ts, memo_df = legacy_ts, legacy_df
+                        memo_canonical = True
+                        _DAILY_FETCH_MEMO[memo_key] = (legacy_ts, legacy_df)
+                        if not legacy_canonical:
+                            _DAILY_FETCH_MEMO[legacy_memo_key] = (legacy_ts, legacy_df)
+            if memo_ts is not None:
+                if not memo_canonical:
+                    _DAILY_FETCH_MEMO[memo_key] = (memo_ts, memo_df)
                 window_limit = min_interval if min_interval > 0 else ttl_window
                 if now_monotonic - memo_ts <= window_limit:
                     cached_df = memo_df
                     cached_reason = "memo"
+                    _DAILY_FETCH_MEMO[legacy_memo_key] = (memo_ts, memo_df)
                 elif now_monotonic - memo_ts > ttl_window:
                     _DAILY_FETCH_MEMO.pop(memo_key, None)
+                    _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
             if cached_df is None:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
                     cached_reason = "cache"
-                    _DAILY_FETCH_MEMO[memo_key] = (cached_df, now_monotonic)
+                    _DAILY_FETCH_MEMO[memo_key] = (now_monotonic, cached_df)
                     _DAILY_FETCH_MEMO[legacy_memo_key] = (now_monotonic, cached_df)
                 else:
                     self._daily_cache.pop(symbol, None)
@@ -7062,31 +7113,52 @@ class DataFetcher:
                 },
             )
 
-        df: pd.DataFrame | None
-        try:
-            df = data_fetcher_module.get_daily_df(
-                symbol,
-                start=start_ts,
-                end=end_ts,
-                feed=effective_feed,
-                adjustment=getattr(self.settings, "alpaca_adjustment", None),
-            )
-        except data_fetcher_module.MissingOHLCVColumnsError as exc:
-            self._record_daily_error(error_key, exc, now_monotonic)
-            if planned_provider != "yahoo":
-                provider_monitor.update_data_health(
+        direct_df: "pd.DataFrame | None" = None
+        safe_bars_module = getattr(bars.safe_get_stock_bars, "__module__", "")
+        if safe_bars_module and not safe_bars_module.startswith("ai_trading.data"):
+            try:
+                direct_df = self._get_stock_bars(
                     planned_provider,
-                    "yahoo",
-                    healthy=False,
-                    reason="ohlcv_columns_missing",
-                    severity="hard_fail",
+                    symbol,
+                    start_ts,
+                    end_ts,
+                    timeframe_key,
+                    feed=effective_feed,
+                    adjustment=getattr(self.settings, "alpaca_adjustment", None),
+                    context="DAILY_DIRECT_FETCH",
+                    label="daily",
                 )
-            raise self._clone_fetch_error(exc)
-        except data_fetcher_module.DataFetchError as exc:
-            logger.warning(
-                "DAILY_FETCH_PROVIDER_ERROR",
-                extra={"symbol": symbol, "error": str(exc)},
-            )
+            except Exception:
+                direct_df = None
+
+        df: pd.DataFrame | None
+        if direct_df is not None:
+            df = direct_df
+        else:
+            try:
+                df = data_fetcher_module.get_daily_df(
+                    symbol,
+                    start=start_ts,
+                    end=end_ts,
+                    feed=effective_feed,
+                    adjustment=getattr(self.settings, "alpaca_adjustment", None),
+                )
+            except data_fetcher_module.MissingOHLCVColumnsError as exc:
+                self._record_daily_error(error_key, exc, now_monotonic)
+                if planned_provider != "yahoo":
+                    provider_monitor.update_data_health(
+                        planned_provider,
+                        "yahoo",
+                        healthy=False,
+                        reason="ohlcv_columns_missing",
+                        severity="hard_fail",
+                    )
+                raise self._clone_fetch_error(exc)
+            except data_fetcher_module.DataFetchError as exc:
+                logger.warning(
+                    "DAILY_FETCH_PROVIDER_ERROR",
+                    extra={"symbol": symbol, "error": str(exc)},
+                )
             backup_get_bars = getattr(data_fetcher_module, "_backup_get_bars", None)
             if not callable(backup_get_bars):
                 raise DataFetchError(f"failed to fetch daily data for {symbol}") from exc
@@ -7117,7 +7189,7 @@ class DataFetcher:
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
-            _DAILY_FETCH_MEMO[memo_key] = (df, stamp)
+            _DAILY_FETCH_MEMO[memo_key] = (stamp, df)
             _DAILY_FETCH_MEMO[legacy_memo_key] = (stamp, df)
             _DAILY_PROVIDER_SESSION_CACHE[provider_session_key] = (df, stamp)
             _DAILY_PROVIDER_REQUEST_LOG[(actual_provider, fetch_date.isoformat())] = stamp
