@@ -17,6 +17,7 @@ assert_dotenv_not_shadowed()
 from .runtime import (
     TradingConfig,
     CONFIG_SPECS,
+    MODE_PARAMETERS,
     get_trading_config,
     reload_trading_config,
     generate_config_schema,
@@ -132,31 +133,13 @@ def _env_value(*names: str) -> str | None:
     return None
 
 
-MODE_PARAMETERS = {
-    "conservative": {
-        "kelly_fraction": 0.25,
-        "conf_threshold": 0.85,
-        "daily_loss_limit": 0.03,
-        "max_position_size": 5000.0,
-        "capital_cap": 0.20,
-    },
-    "balanced": {
-        "kelly_fraction": 0.6,
-        "conf_threshold": 0.75,
-        "daily_loss_limit": 0.05,
-        "max_position_size": 8000.0,
-        "capital_cap": 0.25,
-    },
-    "aggressive": {
-        "kelly_fraction": 0.75,
-        "conf_threshold": 0.65,
-        "daily_loss_limit": 0.08,
-        "max_position_size": 12000.0,
-        "capital_cap": 0.30,
-    },
-}
-
-TRADING_MODE = (os.getenv("TRADING_MODE") or os.getenv("AI_TRADING_TRADING_MODE") or "balanced").lower()
+TRADING_MODE = (
+    os.getenv("TRADING_MODE")
+    or os.getenv("AI_TRADING_TRADING_MODE")
+    or "balanced"
+).lower()
+if TRADING_MODE not in MODE_PARAMETERS:
+    TRADING_MODE = "balanced"
 
 
 def _cfg_float(field: str, fallback: float) -> float:
@@ -169,9 +152,14 @@ def _cfg_float(field: str, fallback: float) -> float:
         return float(fallback)
 
 
-CONF_THRESHOLD = _cfg_float("conf_threshold", MODE_PARAMETERS["balanced"]["conf_threshold"])
-MAX_POSITION_SIZE = _cfg_float("max_position_size", MODE_PARAMETERS["balanced"]["max_position_size"])
-CAPITAL_CAP = _cfg_float("capital_cap", MODE_PARAMETERS["balanced"]["capital_cap"])
+def _mode_default(field: str, fallback: float) -> float:
+    defaults = MODE_PARAMETERS.get(TRADING_MODE, MODE_PARAMETERS["balanced"])
+    return float(defaults.get(field, fallback))
+
+
+CONF_THRESHOLD = _cfg_float("conf_threshold", _mode_default("conf_threshold", 0.75))
+MAX_POSITION_SIZE = _cfg_float("max_position_size", _mode_default("max_position_size", 8000.0))
+CAPITAL_CAP = _cfg_float("capital_cap", _mode_default("capital_cap", 0.25))
 DOLLAR_RISK_LIMIT = _cfg_float("dollar_risk_limit", 0.05)
 
 ALPACA_API_KEY = _env_value("ALPACA_API_KEY") or ""

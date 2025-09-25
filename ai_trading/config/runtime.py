@@ -1190,6 +1190,56 @@ MODE_PARAMETERS: dict[str, dict[str, float]] = {
     },
 }
 
+
+def _selected_mode(env_map: Mapping[str, Any] | None = None) -> str:
+    """Return the trading mode name derived from an env snapshot."""
+
+    candidates = ("TRADING_MODE", "AI_TRADING_TRADING_MODE")
+    if env_map:
+        for key in candidates:
+            raw = env_map.get(key)
+            if raw not in (None, ""):
+                return str(raw).strip().lower()
+    for key in candidates:
+        raw = os.environ.get(key)
+        if raw not in (None, ""):
+            return str(raw).strip().lower()
+    return "balanced"
+
+
+def _apply_mode_overlays(
+    values: dict[str, Any],
+    env_map: Mapping[str, Any] | None,
+    *,
+    explicit_fields: Iterable[str] | None = None,
+) -> None:
+    """Overlay mode defaults onto ``values`` when env does not supply them."""
+
+    mode_name = _selected_mode(env_map)
+    mode_defaults = MODE_PARAMETERS.get(mode_name)
+    if not mode_defaults:
+        return
+
+    protected = {field for field in (explicit_fields or ())}
+    for field, preset_value in mode_defaults.items():
+        if field in protected:
+            continue
+        spec = SPEC_BY_FIELD.get(field)
+        if spec is None:
+            continue
+
+        provided = False
+        if env_map:
+            provided = any(env_map.get(env_key) not in (None, "") for env_key in spec.env)
+            if not provided and spec.deprecated_env:
+                provided = any(
+                    env_map.get(alias) not in (None, "") for alias in spec.deprecated_env
+                )
+        if provided:
+            continue
+
+        values[field] = _validate_bounds(spec, preset_value)
+
 _CACHE_LOCK = threading.Lock()
 _CACHED_CONFIG: TradingConfig | None = None
 _CACHED_SIGNATURE: tuple[tuple[str, str | None], ...] | None = None
@@ -1246,13 +1296,15 @@ class TradingConfig:
 
     def __init__(self, **values: Any) -> None:
         normalized: dict[str, Any] = {}
-        if not values:
-            for spec in CONFIG_SPECS:
-                normalized[spec.field] = spec.default
-        else:
-            normalized.update(values)
-            for spec in CONFIG_SPECS:
-                normalized.setdefault(spec.field, spec.default)
+        explicit_fields = set(values.keys())
+        env_snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+
+        normalized.update(values)
+        for spec in CONFIG_SPECS:
+            normalized.setdefault(spec.field, spec.default)
+
+        _apply_mode_overlays(normalized, env_snapshot, explicit_fields=explicit_fields)
+
         object.__setattr__(self, "_values", normalized)
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover - attribute passthrough
@@ -1339,29 +1391,7 @@ class TradingConfig:
                     values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
                     break
 
-        mode_candidates = ("TRADING_MODE", "AI_TRADING_TRADING_MODE")
-        selected_mode: str | None = None
-        for candidate in mode_candidates:
-            raw_mode = env_map.get(candidate)
-            if raw_mode not in (None, ""):
-                selected_mode = str(raw_mode)
-                break
-        mode_name = (selected_mode or "balanced").lower()
-        mode_defaults = MODE_PARAMETERS.get(mode_name)
-        if mode_defaults:
-            for field, preset_value in mode_defaults.items():
-                spec = SPEC_BY_FIELD.get(field)
-                if spec is None:
-                    continue
-                provided = any(env_map.get(env_key) not in (None, "") for env_key in spec.env)
-                if not provided and spec.deprecated_env:
-                    provided = any(
-                        env_map.get(alias) not in (None, "")
-                        for alias in spec.deprecated_env
-                    )
-                if provided:
-                    continue
-                values[field] = _validate_bounds(spec, preset_value)
+        _apply_mode_overlays(values, env_map)
 
         if (
             values.get("data_feed_intraday") == "sip"
