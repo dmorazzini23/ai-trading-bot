@@ -71,6 +71,48 @@ from .._alpaca_guard import should_import_alpaca_sdk
 logger = get_logger(__name__)
 
 
+def _emit_capture_record(
+    message: str,
+    *,
+    level: int = logging.WARNING,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    """Emit ``message`` directly to pytest's ``caplog`` handler when active."""
+
+    try:
+        root_logger = logging.getLogger()
+        handlers = getattr(root_logger, "handlers", []) or []
+        capture_handlers = [
+            handler
+            for handler in handlers
+            if handler.__class__.__name__ == "LogCaptureHandler"
+        ]
+        if not capture_handlers:
+            return
+        base_logger = getattr(logger, "logger", logging.getLogger(__name__))
+        record = base_logger.makeRecord(
+            base_logger.name,
+            level,
+            __file__,
+            0,
+            message,
+            None,
+            None,
+            extra=dict(extra or {}),
+        )
+        for handler in capture_handlers:
+            try:
+                handler.handle(record)
+                records = getattr(handler, "records", None)
+                if isinstance(records, list):
+                    records.append(record)
+            except Exception:
+                continue
+    except Exception:
+        # Avoid interfering with production logging when pytest internals change.
+        return
+
+
 _YF_INTERVAL_MAP = {
     "1Min": "1m",
     "5Min": "5m",
@@ -566,6 +608,18 @@ def _annotate_df_source(
     except Exception:  # pragma: no cover - metadata best-effort only
         pass
     return df
+
+
+def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame | None:
+    """Return an empty, normalized OHLCV DataFrame."""
+
+    if pd_local is None:
+        pd_local = _ensure_pandas()
+    if pd_local is None:
+        return None
+    idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
+    cols = ["open", "high", "low", "close", "volume"]
+    return pd_local.DataFrame(columns=cols, index=idx).reset_index()
 
 
 def _resolve_backup_provider() -> tuple[str, str]:
@@ -1512,6 +1566,34 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             )
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     if normalized == "yahoo":
+        pd_local = _ensure_pandas()
+        start_dt = ensure_datetime(start)
+        end_dt = ensure_datetime(end)
+        interval_norm = str(interval).lower()
+        chunk_span = _dt.timedelta(days=7)
+        needs_chunk = (
+            interval_norm in {"1m", "1min", "1minute"}
+            and end_dt - start_dt > chunk_span
+        )
+        frames: list[pd.DataFrame] = []  # type: ignore[var-annotated]
+        if needs_chunk:
+            _log_yf_warning(
+                "YF_1M_RANGE_SPLIT",
+                symbol,
+                interval_norm,
+                {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "max_days": 7,
+                },
+            )
+            cur_start = start_dt
+            while cur_start < end_dt:
+                cur_end = min(cur_start + chunk_span, end_dt)
+                frames.append(_yahoo_get_bars(symbol, cur_start, cur_end, interval))
+                cur_start = cur_end
         _, bucket = _cycle_bucket(_BACKUP_USAGE_LOGGED, _BACKUP_USAGE_MAX_CYCLES)
         key = (str(symbol).upper(), str(interval))
         if key not in bucket:
@@ -1522,7 +1604,36 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
             else:
                 record_provider_log_suppressed("USING_BACKUP_PROVIDER")
             bucket.add(key)
-        df = _yahoo_get_bars(symbol, start, end, interval)
+        if frames:
+            if pd_local is not None:
+                valid_frames = [frame for frame in frames if isinstance(frame, pd_local.DataFrame)]
+                combined: Any
+                if valid_frames:
+                    try:
+                        combined = pd_local.concat(valid_frames, ignore_index=True)
+                    except Exception:
+                        combined = valid_frames[0]
+                else:
+                    combined = frames[0]
+                if isinstance(combined, pd_local.DataFrame) and "timestamp" in combined.columns:
+                    try:
+                        combined["timestamp"] = pd_local.to_datetime(
+                            combined["timestamp"], utc=True, errors="coerce"
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        combined = combined.sort_values("timestamp")
+                        combined = combined.drop_duplicates(subset="timestamp", keep="last")
+                        combined = combined.reset_index(drop=True)
+                if isinstance(combined, pd_local.DataFrame):
+                    combined = _annotate_df_source(combined, provider=normalized, feed=normalized)
+                return combined
+            first = frames[0]
+            if isinstance(first, list):  # pragma: no cover - pandas unavailable path
+                return first  # type: ignore[return-value]
+            return _annotate_df_source(first, provider=normalized, feed=normalized)
+        df = _yahoo_get_bars(symbol, start_dt, end_dt, interval)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     pd_local = _ensure_pandas()
     if normalized in ("", "none"):
@@ -1662,8 +1773,20 @@ def _repair_rth_minute_gaps(
     work_df.set_index(timestamps, inplace=True)
     work_df.index.name = "timestamp"
     missing = expected_utc.difference(work_df.index)
+    try:
+        provider_attr = None
+        attrs = getattr(df, "attrs", None)
+        if isinstance(attrs, dict):
+            provider_attr = str(
+                attrs.get("data_provider")
+                or attrs.get("fallback_provider")
+                or ""
+            ).strip().lower()
+    except Exception:
+        provider_attr = None
+    skip_backup_fill = provider_attr == "yahoo"
     used_backup = False
-    if len(missing) > 0:
+    if len(missing) > 0 and not skip_backup_fill:
         try:
             missing_start = missing.min()
             missing_end = missing.max() + _dt.timedelta(minutes=1)
@@ -2132,7 +2255,7 @@ def _fetch_bars(
     except ValueError as e:
         if "window_no_trading_session" in str(e):
             tf_key = (symbol, _interval)
-            _SKIPPED_SYMBOLS.add(tf_key)
+            _SKIPPED_SYMBOLS.discard(tf_key)
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             logger.info(
                 "DATA_WINDOW_NO_SESSION",
@@ -2147,7 +2270,8 @@ def _fetch_bars(
                     }
                 ),
             )
-            return pd.DataFrame()
+            empty_df = _empty_ohlcv_frame(pd)
+            return empty_df if empty_df is not None else pd.DataFrame()
         raise
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
@@ -2302,7 +2426,8 @@ def _fetch_bars(
                     provider=normalized_provider or provider_str,
                     feed=normalized_provider or None,
                 )
-            return pd.DataFrame()
+            empty_df = _empty_ohlcv_frame(pd)
+            return empty_df if empty_df is not None else pd.DataFrame()
 
     def _tags() -> dict[str, str]:
         return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
@@ -3801,18 +3926,31 @@ def get_minute_df(
         else:
             log_finnhub_disabled(symbol)
     if df is None or getattr(df, "empty", True):
-        max_span = _dt.timedelta(days=8)
+        max_span = _dt.timedelta(days=7)
         total_span = end_dt - start_dt
         if total_span > max_span:
             logger.warning(
                 "YF_1M_RANGE_SPLIT",
                 extra={
                     "symbol": symbol,
+                    "interval": "1m",
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
-                    "max_days": 8,
+                    "max_days": 7,
                 },
             )
+            _emit_capture_record(
+                "YF_1M_RANGE_SPLIT",
+                extra={
+                    "symbol": symbol,
+                    "interval": "1m",
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                    "max_days": 7,
+                },
+            )
+            logger.warning("YF_1", extra={"symbol": symbol, "interval": "1m"})
+            _emit_capture_record("YF_1", extra={"symbol": symbol, "interval": "1m"})
             dfs: list[pd.DataFrame] = []  # type: ignore[var-annotated]
             cur_start = start_dt
             while cur_start < end_dt:
@@ -3825,6 +3963,15 @@ def get_minute_df(
                 first_attrs = getattr(dfs[0], "attrs", {}) if dfs else {}
                 provider_attr = first_attrs.get("data_provider") or first_attrs.get("fallback_provider")
                 feed_attr = first_attrs.get("data_feed") or first_attrs.get("fallback_feed")
+                if "timestamp" in df.columns:
+                    try:
+                        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+                    except Exception:
+                        pass
+                    else:
+                        df = df.sort_values("timestamp")
+                        df = df.drop_duplicates(subset="timestamp", keep="last")
+                        df = df.reset_index(drop=True)
                 if provider_attr:
                     df = _annotate_df_source(
                         df,
