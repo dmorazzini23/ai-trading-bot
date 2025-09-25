@@ -17,18 +17,32 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from ai_trading.config.legacy_env import LEGACY_ALPACA_ENV_VARS
+from ai_trading.config.legacy_env import normalize_legacy_alpaca_env
 
 logger = logging.getLogger(__name__)
 
 
-def _fail_on_legacy_alpaca_env() -> None:
-    legacy = [key for key in os.environ if key in LEGACY_ALPACA_ENV_VARS]
-    if legacy:
-        raise RuntimeError(f"Legacy Alpaca env vars not supported: {sorted(set(legacy))}")
+def _normalize_legacy_alpaca_env() -> None:
+    applied, conflicts = normalize_legacy_alpaca_env()
+    if applied:
+        logger.info(
+            "ALPACA_LEGACY_ENV_BACKFILLED",
+            extra={
+                "legacy_keys": sorted({legacy for legacy, _ in applied}),
+                "canonical_keys": sorted({canonical for _, canonical in applied}),
+            },
+        )
+    if conflicts:
+        logger.warning(
+            "ALPACA_LEGACY_ENV_CONFLICT",
+            extra={
+                "legacy_keys": sorted({legacy for legacy, _ in conflicts}),
+                "canonical_keys": sorted({canonical for _, canonical in conflicts}),
+            },
+        )
 
 
-_fail_on_legacy_alpaca_env()
+_normalize_legacy_alpaca_env()
 
 
 def _to_bool(value: str) -> bool:

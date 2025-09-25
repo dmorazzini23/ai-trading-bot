@@ -1,9 +1,11 @@
 import importlib
+import logging
+import os
 import sys
 
 import pytest
 
-from ai_trading.config.legacy_env import LEGACY_ALPACA_ENV_VARS
+from ai_trading.config.legacy_env import LEGACY_ALPACA_ENV_MAPPING
 from ai_trading.config.management import TradingConfig
 
 
@@ -72,17 +74,26 @@ def test_legacy_alias_does_not_override_existing_canonical(monkeypatch):
     assert cfg.dollar_risk_limit == 0.42
 
 
-def test_runtime_import_fails_with_legacy_alpaca_env(monkeypatch):
+def test_runtime_import_backfills_legacy_alpaca_env(monkeypatch, caplog):
     sys.modules.pop("ai_trading.config.runtime", None)
-    for key in LEGACY_ALPACA_ENV_VARS:
-        monkeypatch.setenv(key, "legacy")
+    for key, canonical in LEGACY_ALPACA_ENV_MAPPING.items():
+        monkeypatch.setenv(key, f"legacy-{key.lower()}")
+        monkeypatch.delenv(canonical, raising=False)
 
-    with pytest.raises(RuntimeError) as excinfo:
+    with caplog.at_level(logging.INFO):
         importlib.import_module("ai_trading.config.runtime")
 
-    assert "Legacy Alpaca env vars" in str(excinfo.value)
+    assert os.getenv("ALPACA_API_KEY") == "legacy-apca_api_key_id"
+    assert os.getenv("ALPACA_SECRET_KEY") == "legacy-apca_api_secret_key"
+    assert any(record.message == "ALPACA_LEGACY_ENV_BACKFILLED" for record in caplog.records)
+    assert any(record.message == "ALPACA_LEGACY_ENV_CONFLICT" for record in caplog.records)
 
+    # Subsequent imports should not duplicate logs or alter values.
     sys.modules.pop("ai_trading.config.runtime", None)
-    for key in LEGACY_ALPACA_ENV_VARS:
-        monkeypatch.delenv(key, raising=False)
-    importlib.import_module("ai_trading.config.runtime")
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        importlib.import_module("ai_trading.config.runtime")
+
+    assert os.getenv("ALPACA_API_KEY") == "legacy-apca_api_key_id"
+    assert os.getenv("ALPACA_SECRET_KEY") == "legacy-apca_api_secret_key"
+    assert all(record.message != "ALPACA_LEGACY_ENV_BACKFILLED" for record in caplog.records)
