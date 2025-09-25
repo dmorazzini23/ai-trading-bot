@@ -21,7 +21,14 @@ class _Cache:
     equity: float | None = None
     equity_error: str | None = None
     equity_missing_logged: bool = False
+    equity_ts: datetime | None = None
+    equity_source: str | None = None
+    equity_recovered_logged: bool = False
+
+
 _CACHE = _Cache()
+
+_EQUITY_CACHE_TTL_SECONDS = 300.0
 
 def _now_utc() -> datetime:
     return datetime.now(tz=UTC)
@@ -30,6 +37,12 @@ def _should_refresh(ttl_seconds: float) -> bool:
     if _CACHE.ts is None:
         return True
     return _now_utc() - _CACHE.ts >= timedelta(seconds=ttl_seconds)
+
+
+def _equity_cache_valid(ttl_seconds: float = _EQUITY_CACHE_TTL_SECONDS) -> bool:
+    if _CACHE.equity is None or _CACHE.equity_ts is None:
+        return False
+    return _now_utc() - _CACHE.equity_ts < timedelta(seconds=ttl_seconds)
 
 def _coerce_float(val: Any, default: float=0.0) -> float:
     try:
@@ -43,6 +56,27 @@ def _clamp(val: float, vmin: float | None, vmax: float | None) -> float:
     if vmax is not None:
         val = min(val, vmax)
     return val
+
+
+def _parse_env_max_position_size(*, strict: bool) -> float | None:
+    env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
+    if env_val is None:
+        return None
+    try:
+        value = float(env_val)
+    except ValueError as exc:  # noqa: BLE001
+        if strict:
+            raise ValueError(
+                f"AI_TRADING_MAX_POSITION_SIZE must be numeric, got {env_val!r}"
+            ) from exc
+        _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
+        return None
+    if value <= 0:
+        if strict:
+            raise ValueError("AI_TRADING_MAX_POSITION_SIZE must be positive")
+        _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
+        return None
+    return value
 
 def _resolve_max_position_size(
     provided: float,
@@ -58,17 +92,9 @@ def _resolve_max_position_size(
     as the basis for the derived position size.
     """
 
-    env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-        except ValueError as e:  # noqa: BLE001
-            raise ValueError(
-                f"AI_TRADING_MAX_POSITION_SIZE must be numeric, got {env_val!r}"
-            ) from e
-        if v <= 0:
-            raise ValueError("AI_TRADING_MAX_POSITION_SIZE must be positive")
-        return (v, "env_override")
+    env_override = _parse_env_max_position_size(strict=True)
+    if env_override is not None:
+        return (env_override, "env_override")
 
     if provided < 0:
         raise ValueError("max_position_size must be positive")
@@ -121,14 +147,9 @@ def _resolve_max_position_size(
     return (resolved, "autofix")
 
 def _fallback_max_size(cfg, tcfg) -> float:
-    env_val = os.getenv("AI_TRADING_MAX_POSITION_SIZE")
-    if env_val is not None:
-        try:
-            v = float(env_val)
-            if v > 0:
-                return v
-        except ValueError:
-            _log.warning("INVALID_MAX_POSITION_SIZE", extra={"value": env_val})
+    env_override = _parse_env_max_position_size(strict=False)
+    if env_override is not None:
+        return env_override
     for name in ('max_position_size_fallback', 'max_position_size_default'):
         v = getattr(tcfg, name, None)
         if v is not None:
@@ -137,6 +158,21 @@ def _fallback_max_size(cfg, tcfg) -> float:
     if v is not None:
         return _coerce_float(v, 8000.0)
     return 8000.0
+
+
+def _handle_equity_failure(reason: str) -> float:
+    cached = _CACHE.equity
+    if cached is not None:
+        if not _CACHE.equity_recovered_logged:
+            _log.info(
+                "EQUITY_RECOVERED",
+                extra={"reason": reason, "equity": cached},
+            )
+            _CACHE.equity_recovered_logged = True
+        _CACHE.equity_source = "cached_equity"
+        return cached
+    _CACHE.equity_source = None
+    return 0.0
 
 
 def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
@@ -157,7 +193,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
         errors, ``None`` is returned when credentials are missing, and the
         failure reason is recorded in the log payload.
     """
-    if not force_refresh and _CACHE.equity is not None:
+    if not force_refresh and _equity_cache_valid():
         return _CACHE.equity
 
     base = str(getattr(cfg, "alpaca_base_url", "")).rstrip("/")
@@ -166,6 +202,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
     if not key or not secret or not base:
         reason = "missing_credentials"
         _CACHE.equity_error = reason
+        _CACHE.equity_source = None
         _log.warning(
             "ALPACA_EQUITY_UNAVAILABLE",
             extra={
@@ -192,6 +229,9 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
                 eq = _coerce_float(getattr(acct, "equity", None), 0.0)
                 _CACHE.equity = eq
                 _CACHE.equity_error = None
+                _CACHE.equity_ts = _now_utc()
+                _CACHE.equity_source = "alpaca"
+                _CACHE.equity_recovered_logged = False
                 return eq
             reason = "missing_get_account"
             _log.warning(
@@ -222,12 +262,14 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
         eq = _coerce_float(data.get("equity"), 0.0)
         _CACHE.equity = eq
         _CACHE.equity_error = None
+        _CACHE.equity_ts = _now_utc()
+        _CACHE.equity_source = "alpaca"
+        _CACHE.equity_recovered_logged = False
         return eq
     except HTTPError as e:
         resp_obj = getattr(e, "response", None)
         status = getattr(resp_obj, "status_code", None)
         reason = f"http_error:{status}" if status is not None else "http_error"
-        _CACHE.equity = 0.0
         _CACHE.equity_error = reason
         if status in {401, 403}:
             _log.warning(
@@ -239,28 +281,27 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
                 "ALPACA_HTTP_ERROR",
                 extra={"url": url, "status": status, "reason": reason},
             )
-        return 0.0
+        return _handle_equity_failure(reason)
     except RequestException as e:
         reason = f"request_error:{type(e).__name__}"
-        _CACHE.equity = 0.0
         _CACHE.equity_error = reason
         _log.warning(
             "ALPACA_REQUEST_FAILED",
             extra={"url": url, "error": str(e), "reason": reason},
         )
-        return 0.0
+        return _handle_equity_failure(reason)
     except JSONDecodeError as e:
         reason = "invalid_json"
-        _CACHE.equity = 0.0
         _CACHE.equity_error = reason
         _log.warning(
             "ALPACA_INVALID_RESPONSE",
             extra={"url": url, "error": str(e), "reason": reason},
         )
-        return 0.0
+        return _handle_equity_failure(reason)
     except Exception as exc:  # log and propagate unexpected errors
         _CACHE.equity = None
         _CACHE.equity_error = f"unexpected_error:{type(exc).__name__}"
+        _CACHE.equity_source = None
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
 
@@ -274,6 +315,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
 
     Set ``force_refresh`` to ``True`` to bypass cached values.
     """
+    env_override = _parse_env_max_position_size(strict=True)
     mode = str(getattr(tcfg, 'max_position_mode', getattr(cfg, 'max_position_mode', 'STATIC'))).upper()
     ttl = float(getattr(tcfg, 'dynamic_size_refresh_secs', getattr(cfg, 'dynamic_size_refresh_secs', 3600.0)))
     cap = _coerce_float(getattr(tcfg, 'capital_cap', 0.0), 0.0)
@@ -284,6 +326,18 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         200000.0,
     )
     if mode != 'AUTO':
+        if env_override is not None:
+            now = _now_utc()
+            _CACHE.value, _CACHE.ts = (env_override, now)
+            return (
+                env_override,
+                {
+                    'mode': mode,
+                    'source': 'env_override',
+                    'capital_cap': cap,
+                    'refreshed_at': now.isoformat(),
+                },
+            )
         if not force_refresh and _CACHE.value is not None:
             return (
                 _CACHE.value,
@@ -339,7 +393,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
     # Use public alias so callers/tests can patch equity retrieval.
     eq = _get_equity_from_alpaca(cfg, force_refresh=force_refresh)
     failure_reason = getattr(_CACHE, 'equity_error', None)
-    source = 'alpaca'
+    source = _CACHE.equity_source or 'alpaca'
     numeric_eq: float | None = None
     if eq is not None:
         try:
@@ -362,6 +416,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             if candidate_val > 0.0:
                 numeric_eq = candidate_val
                 source = 'cached_equity'
+                _CACHE.equity_source = 'cached_equity'
                 break
         if numeric_eq is None or numeric_eq <= 0.0:
             reason = failure_reason or 'equity_unavailable'
@@ -376,10 +431,16 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         )
         _CACHE.equity = numeric_eq
         _CACHE.equity_error = failure_reason
+        _CACHE.equity_source = 'cached_equity'
     else:
         numeric_eq = float(numeric_eq)
         _CACHE.equity = numeric_eq
-        _CACHE.equity_error = None
+        if failure_reason:
+            _CACHE.equity_error = failure_reason
+        else:
+            _CACHE.equity_error = None
+        if _CACHE.equity_source != 'cached_equity':
+            _CACHE.equity_source = 'alpaca'
     if cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
         _log.info(
@@ -428,6 +489,9 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
         )
         val = _clamp(fb, vmin, vmax)
         source = 'fallback'
+    if env_override is not None:
+        val = env_override
+        source = 'env_override'
     _CACHE.value, _CACHE.ts = (val, _now_utc())
     return (
         val,

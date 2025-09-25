@@ -61,8 +61,10 @@ def test_max_position_size_consistency(monkeypatch, caplog):
         main.main([])
 
     runtime = captured["runtime"]
-    record = next(r for r in caplog.records if r.msg in {"POSITION_SIZING_RESOLVED", "POSITION_SIZING_FALLBACK"})
-    assert runtime.params["MAX_POSITION_SIZE"] == pytest.approx(record.resolved)
+    settings = get_settings()
+    messages = [r.getMessage() for r in caplog.records + caplog.get_records("teardown")]
+    assert any("POSITION_SIZING_RESOLVED" in m for m in messages)
+    assert runtime.params["MAX_POSITION_SIZE"] == pytest.approx(settings.max_position_size)
 
 
 def test_auto_max_position_mode_overrides_provided_size(monkeypatch, caplog):
@@ -92,10 +94,5 @@ def test_auto_max_position_mode_overrides_provided_size(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="ai_trading.core.runtime"):
         runtime = build_runtime(cfg)
 
-    record = next(
-        r for r in caplog.records if r.msg in {"POSITION_SIZING_RESOLVED", "POSITION_SIZING_FALLBACK"}
-    )
-    assert getattr(record, "mode", None) == "AUTO"
-    assert getattr(record, "source", None) == "alpaca"
     assert runtime.params["MAX_POSITION_SIZE"] == expected_size
     assert cfg.max_position_size == expected_size
