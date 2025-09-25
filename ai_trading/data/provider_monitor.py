@@ -12,6 +12,7 @@ The monitor integrates with :mod:`ai_trading.monitoring.alerts` so
 production deployments receive notifications about outages.
 """
 
+import os
 import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -136,6 +137,26 @@ def _normalize_provider(name: str) -> str:
     return normalized or name
 
 
+_DEFAULT_DECISION_SECS = 120
+
+
+def _decision_window_seconds() -> int:
+    try:
+        value = get_env("AI_TRADING_PROVIDER_DECISION_SECS", None, cast=int)
+    except Exception:
+        value = None
+    if value is None:
+        try:
+            value = int(os.getenv("AI_TRADING_PROVIDER_DECISION_SECS", ""))
+        except Exception:  # pragma: no cover - defensive env parsing fallback
+            value = None
+    try:
+        seconds = int(value) if value is not None else _DEFAULT_DECISION_SECS
+    except Exception:  # pragma: no cover - defensive conversion
+        seconds = _DEFAULT_DECISION_SECS
+    return max(seconds, 0)
+
+
 class ProviderMonitor:
     """Simple failure counter with alerting and disable hooks."""
 
@@ -178,6 +199,7 @@ class ProviderMonitor:
         self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
         self._last_switch_logged: tuple[str, str] | None = None
         self._last_switch_ts: float | None = None
+        self.decision_window_seconds = _decision_window_seconds()
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -534,6 +556,7 @@ class ProviderMonitor:
         *,
         healthy: bool,
         reason: str,
+        severity: str | None = None,
     ) -> str:
         """Update health state and potentially switch providers.
 
@@ -544,12 +567,33 @@ class ProviderMonitor:
         key = (primary, backup)
         state = self._pair_states.setdefault(
             key,
-            {"active": primary, "last_switch": None, "consecutive_passes": 0},
+            {
+                "active": primary,
+                "last_switch": None,
+                "consecutive_passes": 0,
+                "decision_until": None,
+                "decision_provider": primary,
+                "decision_severity": "good",
+            },
         )
         now = datetime.now(UTC)
         active = str(state.get("active", primary))
         last_switch = state.get("last_switch")
         consecutive = int(state.get("consecutive_passes", 0))
+        decision_until = state.get("decision_until")
+        decision_provider = str(state.get("decision_provider", active))
+        decision_severity = str(state.get("decision_severity", "good"))
+        window_seconds = max(int(self.decision_window_seconds), 0)
+        window_active = False
+        if isinstance(decision_until, datetime) and window_seconds > 0:
+            if now < decision_until:
+                window_active = True
+            else:
+                state["decision_until"] = None
+                decision_until = None
+        normalized_severity = (severity or ("good" if healthy else "degraded")).strip().lower()
+        if normalized_severity not in {"good", "degraded", "hard_fail"}:
+            normalized_severity = "good" if healthy else "degraded"
 
         using_backup = active == backup
         cooldown_seconds = max(0, int(state.get("cooldown", cooldown_default)))
@@ -558,6 +602,14 @@ class ProviderMonitor:
         cooldown_ok = False
         stay_reason = "healthy" if healthy else (reason or "unhealthy")
         switch_reason = reason or ("recovered" if healthy else "unhealthy")
+        window_locked = window_active and decision_provider == active
+        hard_fail = normalized_severity == "hard_fail" and not healthy
+        if window_locked and not hard_fail:
+            state["decision_provider"] = decision_provider
+            state["decision_severity"] = decision_severity or normalized_severity
+            stay_reason = "decision_window_active"
+            cooldown_ok = False
+            allow_recovery = allow_recovery or False
 
         if healthy:
             consecutive += 1
@@ -566,6 +618,8 @@ class ProviderMonitor:
                 allow_recovery = consecutive >= 2
                 elapsed = (now - last_switch_dt).total_seconds()
                 cooldown_ok = allow_recovery and elapsed >= cooldown_seconds
+                if window_locked and not hard_fail:
+                    cooldown_ok = False
                 if not allow_recovery:
                     stay_reason = "insufficient_health_passes"
                 elif not cooldown_ok:
@@ -574,7 +628,7 @@ class ProviderMonitor:
                     switch_reason = reason or "recovered"
         else:
             state["consecutive_passes"] = 0
-            cooldown_ok = not using_backup
+            cooldown_ok = not using_backup and (not window_locked or hard_fail)
             stay_reason = reason or "unhealthy"
             switch_reason = reason or "unhealthy"
 
@@ -597,10 +651,14 @@ class ProviderMonitor:
                 state["last_switch"] = now
                 state["consecutive_passes"] = 0
                 state["cooldown"] = cooldown_default
+                if window_seconds > 0:
+                    state["decision_until"] = now + timedelta(seconds=window_seconds)
+                    state["decision_provider"] = primary
+                    state["decision_severity"] = "good"
                 logger.info(
                     "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                    backup,
-                    primary,
+                    _normalize_provider(backup),
+                    _normalize_provider(primary),
                     switch_reason,
                     cooldown_seconds,
                 )
@@ -610,10 +668,14 @@ class ProviderMonitor:
                 state["last_switch"] = now
                 state["consecutive_passes"] = 0
                 state["cooldown"] = cooldown_default
+                if window_seconds > 0:
+                    state["decision_until"] = now + timedelta(seconds=window_seconds)
+                    state["decision_provider"] = backup
+                    state["decision_severity"] = normalized_severity
                 logger.info(
                     "DATA_PROVIDER_SWITCHOVER | from=%s to=%s reason=%s cooldown=%ss",
-                    active,
-                    backup,
+                    _normalize_provider(active),
+                    _normalize_provider(backup),
                     switch_reason,
                     cooldown_default,
                 )
@@ -632,11 +694,15 @@ class ProviderMonitor:
         cooldown_for_log = cooldown_seconds if using_backup and healthy else cooldown_default
         logger.info(
             "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
-            stay_provider,
+            _normalize_provider(stay_provider),
             stay_reason,
             cooldown_for_log,
         )
         state["active"] = stay_provider
+        if window_seconds > 0 and (hard_fail or not window_locked):
+            state["decision_until"] = now + timedelta(seconds=window_seconds)
+            state["decision_provider"] = stay_provider
+            state["decision_severity"] = normalized_severity
         return stay_provider
 
 
