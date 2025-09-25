@@ -19,7 +19,12 @@ from enum import Enum
 from typing import Any, Callable, Dict, Mapping, Tuple
 
 from ai_trading.config.management import get_env
-from ai_trading.logging import get_logger
+from ai_trading.config.settings import get_settings
+from ai_trading.logging import (
+    get_logger,
+    provider_log_deduper,
+    record_provider_log_suppressed,
+)
 from ai_trading.monitoring.alerts import AlertManager, AlertSeverity, AlertType
 from ai_trading.data.metrics import (
     provider_disabled,
@@ -30,6 +35,18 @@ from ai_trading.data.metrics import (
 
 
 logger = get_logger(__name__)
+
+
+def _logging_dedupe_ttl() -> int:
+    try:
+        settings = get_settings()
+    except Exception:
+        return 0
+    ttl = getattr(settings, "logging_dedupe_ttl_s", 0)
+    try:
+        return int(ttl)
+    except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+        return 0
 
 
 class ProviderAction(Enum):
@@ -354,29 +371,38 @@ class ProviderMonitor:
         self.consecutive_switches_by_provider[from_key] = streak
         self.consecutive_switches = streak
         now_monotonic = time.monotonic()
+        dedupe_ttl = _logging_dedupe_ttl()
+        switchover_key = f"DATA_PROVIDER_SWITCHOVER:{from_key}->{to_key}"
         if not (
             self._last_switch_logged == key
             and self._last_switch_ts is not None
             and now_monotonic - self._last_switch_ts < 1.0
         ):
-            logger.info(
-                "DATA_PROVIDER_SWITCHOVER",
-                extra={
-                    "from_provider": from_key,
-                    "to_provider": to_key,
-                    "count": self.switch_counts[key],
-                },
-            )
+            if provider_log_deduper.should_log(switchover_key, dedupe_ttl):
+                logger.info(
+                    "DATA_PROVIDER_SWITCHOVER",
+                    extra={
+                        "from_provider": from_key,
+                        "to_provider": to_key,
+                        "count": self.switch_counts[key],
+                    },
+                )
+            else:
+                record_provider_log_suppressed("DATA_PROVIDER_SWITCHOVER")
             self._last_switch_logged = key
             self._last_switch_ts = now_monotonic
         disabled_since = self.disabled_since.get(from_key)
         if disabled_since:
             duration = (now - disabled_since).total_seconds()
             provider_failure_duration_seconds.labels(provider=from_key).inc(duration)
-            logger.info(
-                "DATA_PROVIDER_FAILURE_DURATION",
-                extra={"provider": from_key, "duration": duration},
-            )
+            failure_key = f"DATA_PROVIDER_FAILURE_DURATION:{from_key}"
+            if provider_log_deduper.should_log(failure_key, dedupe_ttl):
+                logger.info(
+                    "DATA_PROVIDER_FAILURE_DURATION",
+                    extra={"provider": from_key, "duration": duration},
+                )
+            else:
+                record_provider_log_suppressed("DATA_PROVIDER_FAILURE_DURATION")
         cooldown_until = self._alert_cooldown_until.get(from_key)
         if streak >= self.switchover_threshold and (cooldown_until is None or now >= cooldown_until):
             logger.warning(

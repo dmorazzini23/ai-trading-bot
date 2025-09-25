@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+from collections import Counter
 from datetime import UTC, date, datetime
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Any
@@ -301,11 +302,58 @@ class LogDeduper:
                 return True
             return False
 
+    def reset(self) -> None:
+        """Clear tracked keys, primarily used by tests."""
+
+        with self._lock:
+            self._last_seen.clear()
+
+
+provider_log_deduper = LogDeduper()
+_provider_log_suppressed: Counter[str] = Counter()
+_provider_log_lock = threading.Lock()
+
+
+def record_provider_log_suppressed(message: str) -> None:
+    """Track suppressed occurrences for provider churn log messages."""
+
+    with _provider_log_lock:
+        _provider_log_suppressed[message] += 1
+
+
+def _drain_provider_log_summaries() -> list[tuple[str, int]]:
+    with _provider_log_lock:
+        if not _provider_log_suppressed:
+            return []
+        items = list(_provider_log_suppressed.items())
+        _provider_log_suppressed.clear()
+        return items
+
+
+def _flush_provider_log_summaries() -> None:
+    entries = _drain_provider_log_summaries()
+    if not entries:
+        return
+    summary_logger = logging.getLogger(_ROOT_LOGGER_NAME)
+    for message, suppressed in sorted(entries):
+        summary_logger.info(
+            f'LOG_THROTTLE_SUMMARY | message="{message}" suppressed={suppressed}'
+        )
+
+
+def reset_provider_log_dedupe() -> None:
+    """Reset provider dedupe state; primarily for tests."""
+
+    provider_log_deduper.reset()
+    with _provider_log_lock:
+        _provider_log_suppressed.clear()
+
 
 def flush_log_throttle_summaries() -> None:
     """Emit LOG_THROTTLE_SUMMARY lines for suppressed messages this cycle."""
 
     _THROTTLE_FILTER.flush_cycle()
+    _flush_provider_log_summaries()
 
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
@@ -1321,6 +1369,9 @@ __all__ = [
     "validate_logging_setup",
     "dedupe_stream_handlers",
     "flush_log_throttle_summaries",
+    "provider_log_deduper",
+    "record_provider_log_suppressed",
+    "reset_provider_log_dedupe",
     "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",
