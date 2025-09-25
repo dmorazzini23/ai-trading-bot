@@ -6709,7 +6709,7 @@ class DataFetcher:
             if adjustment:
                 req_kwargs["adjustment"] = adjustment
             request = bars.StockBarsRequest(**req_kwargs)
-            raw_df = bars.safe_get_stock_bars(use_client, request, safe_symbol, context_label)
+            raw_df = self._call_stock_bars(use_client, request, safe_symbol, context_label)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -6760,6 +6760,56 @@ class DataFetcher:
         except (ImportError, OSError, ValueError):  # AI-AGENT-REF: narrow warn_once
             pass
         logger.warning(msg)
+
+    @staticmethod
+    def _is_signature_mismatch(exc: TypeError) -> bool:
+        """Return ``True`` when ``exc`` indicates a call signature mismatch."""
+
+        message = str(exc)
+        return "argument" in message or "positional" in message or "keyword" in message
+
+    @staticmethod
+    def _call_stock_bars(
+        client: Any,
+        request: Any,
+        symbol: str,
+        context: str,
+    ) -> Any:
+        """Dispatch to ``safe_get_stock_bars`` or gracefully fallback."""
+
+        safe_fetch = getattr(bars, "safe_get_stock_bars", None)
+        if callable(safe_fetch):
+            return safe_fetch(client, request, symbol, context)
+
+        fallback_fetch = getattr(bars, "get_stock_bars", None)
+        if not callable(fallback_fetch):
+            raise AttributeError(
+                "ai_trading.data.bars.safe_get_stock_bars unavailable and no get_stock_bars fallback",
+            )
+
+        attempts: tuple[tuple[tuple[Any, ...], dict[str, Any]], ...] = (
+            ((client, request), {"symbol": symbol, "context": context}),
+            ((client, request, symbol), {"context": context}),
+            ((client, request, symbol, context), {}),
+            ((client, request, symbol), {}),
+            ((client, request), {"context": context}),
+            ((client, request), {}),
+        )
+        last_exc: TypeError | None = None
+        for args, kwargs in attempts:
+            try:
+                return fallback_fetch(*args, **kwargs)
+            except TypeError as exc:
+                if not DataFetcher._is_signature_mismatch(exc):
+                    raise
+                last_exc = exc
+        if last_exc is not None:
+            raise AttributeError(
+                "ai_trading.data.bars.get_stock_bars fallback incompatible with expected signature",
+            ) from last_exc
+        raise AttributeError(
+            "ai_trading.data.bars.get_stock_bars fallback invocation failed",
+        )
 
     def _planned_daily_provider(self, feed: str | None) -> str:
         candidate = feed or getattr(self.settings, "alpaca_data_feed", None)
@@ -7199,19 +7249,34 @@ class DataFetcher:
 
             age_seconds = int((current_minute - last_bar_ts).total_seconds())
             if age_seconds > 600 and feed == "iex":
-                fallback_candidates = getattr(
+                configured_candidates = getattr(
                     self.settings, "alpaca_feed_failover", ("sip",)
                 )
-                fallback_feed = None
-                for candidate in fallback_candidates:
+                normalized_candidates: list[str] = []
+                for candidate in configured_candidates:
                     if not candidate:
                         continue
-                    candidate_lc = str(candidate).lower()
-                    if candidate_lc != feed:
-                        fallback_feed = candidate_lc
-                        break
+                    try:
+                        candidate_lc = str(candidate).strip().lower()
+                    except Exception:
+                        continue
+                    if not candidate_lc or candidate_lc in normalized_candidates:
+                        continue
+                    normalized_candidates.append(candidate_lc)
+
+                prioritized_candidates: list[str] = []
+                if feed != "sip":
+                    prioritized_candidates.append("sip")
+                prioritized_candidates.extend(
+                    cand for cand in normalized_candidates if cand != "sip"
+                )
+
+                fallback_feed = next(
+                    (cand for cand in prioritized_candidates if cand != feed),
+                    None,
+                )
                 if fallback_feed is None:
-                    fallback_feed = "sip"
+                    fallback_feed = "sip" if feed != "sip" else "yahoo"
                 fallback_attempted = True
                 fallback_feed_used = fallback_feed
                 logger.warning(
