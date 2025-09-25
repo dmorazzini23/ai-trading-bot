@@ -61,8 +61,8 @@ def test_preflight_capacity_rejects_when_below_minimums(monkeypatch):
 
 
 def test_submit_limit_order_skips_when_capacity_fails(monkeypatch):
-    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
-    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setenv("EXECUTION_MIN_QTY", "1")
     monkeypatch.setenv("EXECUTION_MIN_NOTIONAL", "0")

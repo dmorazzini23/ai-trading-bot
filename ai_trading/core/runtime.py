@@ -89,7 +89,7 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     if impl in {"live", "broker", "alpaca"}:
         missing = [
             key
-            for key in ("ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY", "ALPACA_BASE_URL")
+            for key in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
             if not os.getenv(key)
         ]
         if missing:

@@ -17,7 +17,18 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from ai_trading.config.legacy_env import LEGACY_ALPACA_ENV_VARS
+
 logger = logging.getLogger(__name__)
+
+
+def _fail_on_legacy_alpaca_env() -> None:
+    legacy = [key for key in os.environ if key in LEGACY_ALPACA_ENV_VARS]
+    if legacy:
+        raise RuntimeError(f"Legacy Alpaca env vars not supported: {sorted(set(legacy))}")
+
+
+_fail_on_legacy_alpaca_env()
 
 
 def _to_bool(value: str) -> bool:
@@ -242,7 +253,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="alpaca_api_key",
-        env=("ALPACA_API_KEY", "ALPACA_API_KEY_ID", "APCA_API_KEY_ID"),
+        env=("ALPACA_API_KEY",),
         cast="str",
         default=None,
         description="Alpaca API key identifier.",
@@ -250,7 +261,7 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
     ),
     ConfigSpec(
         field="alpaca_secret_key",
-        env=("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY"),
+        env=("ALPACA_SECRET_KEY",),
         cast="str",
         default=None,
         description="Alpaca API secret.",
