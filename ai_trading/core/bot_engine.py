@@ -669,6 +669,7 @@ class BotEngine:
         # Cycle-scoped feed preference cache populated during minute fetches
         self._cycle_id: int | None = None
         self._intraday_fallback_feed: str | None = None
+        self._cycle_minute_feed_override: dict[str, str] = {}
 
     @property
     def ctx(self):
@@ -705,22 +706,41 @@ class BotEngine:
         _reset_cycle_cache()
         self._cycle_id = _GLOBAL_CYCLE_ID
         self._intraday_fallback_feed = None
+        self._cycle_minute_feed_override.clear()
         manager = getattr(self._ctx, "signal_manager", None)
         if hasattr(manager, "begin_cycle"):
             manager.begin_cycle()
 
-    def _prefer_feed_this_cycle(self) -> str | None:
+    def _prefer_feed_this_cycle(self, symbol: str | None = None) -> str | None:
         """Return cached intraday fallback feed for the current cycle."""
 
+        if symbol:
+            override = self._cycle_minute_feed_override.get(symbol)
+            if override:
+                return override
         return self._intraday_fallback_feed
 
-    def _cache_cycle_fallback_feed(self, feed: str | None) -> None:
+    def _cache_cycle_fallback_feed(
+        self, feed: str | None, *, symbol: str | None = None
+    ) -> None:
         """Remember *feed* for subsequent minute fetches within the cycle."""
 
         sanitized = _normalize_cycle_feed(feed)
+        normalized_raw: str | None = None
+        if feed is not None:
+            try:
+                normalized_raw = str(feed).strip().lower() or None
+            except Exception:  # pragma: no cover - defensive
+                normalized_raw = None
+
+        if symbol and normalized_raw and symbol not in self._cycle_minute_feed_override:
+            self._cycle_minute_feed_override[symbol] = sanitized or normalized_raw
+
         if sanitized:
             self._intraday_fallback_feed = sanitized
-            _cache_cycle_fallback_feed(sanitized)
+            _cache_cycle_fallback_feed(sanitized, symbol=symbol)
+        elif normalized_raw:
+            _cache_cycle_fallback_feed(normalized_raw, symbol=symbol)
 
     @cached_property
     def data_client(self):
@@ -1202,6 +1222,7 @@ def _attempt_bars_price(symbol: str) -> tuple[float | None, str]:
 # Cycle-scoped fallback cache shared across helpers/tests
 _GLOBAL_CYCLE_ID: int | None = None
 _GLOBAL_INTRADAY_FALLBACK_FEED: str | None = None
+_GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE: dict[str, str] = {}
 _SIP_UNAUTHORIZED_LOGGED = False
 
 
@@ -1212,19 +1233,36 @@ def _reset_cycle_cache() -> None:
     now = datetime.now(timezone.utc)
     _GLOBAL_CYCLE_ID = int(now.timestamp())
     _GLOBAL_INTRADAY_FALLBACK_FEED = None
+    _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
 
 
-def _prefer_feed_this_cycle() -> str | None:
+def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
     """Return cached intraday fallback feed for the active cycle."""
 
+    if symbol:
+        override = _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol)
+        if override:
+            return override
     return _GLOBAL_INTRADAY_FALLBACK_FEED
 
 
-def _cache_cycle_fallback_feed(feed: str | None) -> None:
+def _cache_cycle_fallback_feed(
+    feed: str | None, *, symbol: str | None = None
+) -> None:
     """Remember *feed* for reuse later in the same trading cycle."""
 
     global _GLOBAL_INTRADAY_FALLBACK_FEED
     sanitized = _normalize_cycle_feed(feed)
+    normalized_raw: str | None = None
+    if feed is not None:
+        try:
+            normalized_raw = str(feed).strip().lower() or None
+        except Exception:  # pragma: no cover - defensive
+            normalized_raw = None
+
+    if symbol and normalized_raw and symbol not in _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE:
+        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = sanitized or normalized_raw
+
     if sanitized:
         _GLOBAL_INTRADAY_FALLBACK_FEED = sanitized
 
@@ -3790,10 +3828,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if not cache:
             setattr(state, "minute_feed_cache", {})
             _GLOBAL_INTRADAY_FALLBACK_FEED = None
+            _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
     else:
         _GLOBAL_INTRADAY_FALLBACK_FEED = None
+        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
 
-    cycle_pref = _prefer_feed_this_cycle()
+    cycle_pref = _prefer_feed_this_cycle(symbol)
     current_feed = cycle_pref or configured_feed
     try:
         cached_feeds = getattr(state, "minute_feed_cache", None)
@@ -3993,12 +4033,24 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     fallback_provider: str | None = None
     coverage_warning_logged = False
 
-    planned_fallback_feed = _prefer_feed_this_cycle() or "yahoo"
-    planned_fallback_provider = (
-        "alpaca_sip" if planned_fallback_feed == "sip" else "yahoo"
-    )
-
     if actual_bars < coverage_threshold:
+        global _SIP_UNAUTHORIZED_LOGGED
+
+        planned_override = _prefer_feed_this_cycle(symbol)
+
+        sip_allowed = (
+            current_feed != "sip"
+            and _sip_authorized()
+            and data_fetcher_module._sip_configured()
+            and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            and not provider_monitor.is_disabled("alpaca_sip")
+        )
+
+        planned_fallback_feed = planned_override or ("sip" if sip_allowed else "yahoo")
+        planned_fallback_provider = (
+            "alpaca_sip" if planned_fallback_feed == "sip" else "yahoo"
+        )
+
         warning_extra = {
             "symbol": symbol,
             "expected_bars": expected_bars,
@@ -4029,23 +4081,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             int((end_dt - fallback_start_dt).total_seconds() // 60), 1
         )
 
-        global _SIP_UNAUTHORIZED_LOGGED
-
-        sip_allowed = (
-            current_feed != "sip"
-            and _sip_authorized()
-            and data_fetcher_module._sip_configured()
-            and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-            and not provider_monitor.is_disabled("alpaca_sip")
-        )
-
-        sip_attempted = False
+        sip_bars = 0
 
         if sip_allowed:
             fallback_attempted = True
-            sip_attempted = True
             sip_df = None
-            sip_bars = 0
             try:
                 sip_df = get_minute_df(
                     symbol,
@@ -4117,7 +4157,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed_used = resolved_feed
                 fallback_provider = resolved_provider
                 active_feed = resolved_feed
-                _cache_cycle_fallback_feed(resolved_feed)
+                _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4128,8 +4168,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         "new_bars": sip_bars,
                     },
                 )
-                sip_df = None
-                sip_bars = 0
                 fallback_feed = "sip"
                 fallback_provider = "alpaca_sip"
         else:
@@ -4150,7 +4188,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed = "sip"
             fallback_provider = "alpaca_sip"
 
-        if not fallback_used and not sip_attempted:
+        if not fallback_used:
             fallback_attempted = True
             logger.info(
                 "BACKUP_PROVIDER_USED",
@@ -4209,7 +4247,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed_used = "yahoo"
                 fallback_provider = "yahoo"
                 active_feed = "yahoo"
-                _cache_cycle_fallback_feed("yahoo")
+                _cache_cycle_fallback_feed("yahoo", symbol=symbol)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4309,7 +4347,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed = resolved_feed
             fallback_feed_used = resolved_feed
             fallback_provider = resolved_provider
-            _cache_cycle_fallback_feed(resolved_feed)
+            _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
@@ -18688,7 +18726,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     cache: dict[str, Any] = {}
 
-    cycle_feed = _prefer_feed_this_cycle()
+    cycle_feed = _prefer_feed_this_cycle(symbol)
     configured_feed = cycle_feed or _get_intraday_feed()
     sanitized_feed = _normalize_cycle_feed(configured_feed)
     feed = sanitized_feed or configured_feed
@@ -18714,9 +18752,9 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 )
             sanitized_feed = fallback_feed
             feed = fallback_feed
-            _cache_cycle_fallback_feed(fallback_feed)
+            _cache_cycle_fallback_feed(fallback_feed, symbol=symbol)
     elif cycle_feed is None and sanitized_feed:
-        _cache_cycle_fallback_feed(sanitized_feed)
+        _cache_cycle_fallback_feed(sanitized_feed, symbol=symbol)
 
     if feed and _sanitize_alpaca_feed(feed) is None:
         filtered_order = tuple(

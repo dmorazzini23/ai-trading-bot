@@ -51,7 +51,19 @@ def _short_intraday_defaults(monkeypatch):
         pass
 
     from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
 
     def _tiny_session(current_date):
         end = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
@@ -461,7 +473,19 @@ def test_fetch_minute_df_safe_sparse_minute_data_triggers_sip_fallback(
         )
 
     from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
     monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
@@ -529,7 +553,19 @@ def test_fetch_minute_df_safe_aborts_when_fallback_remains_sparse(monkeypatch, c
         )
 
     from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
+
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
     monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
@@ -563,8 +599,9 @@ def test_fetch_minute_df_safe_aborts_when_fallback_remains_sparse(monkeypatch, c
         with pytest.raises(bot_engine.DataFetchError) as excinfo:
             bot_engine.fetch_minute_df_safe("AAPL")
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert calls[1][3] == "sip"
+    assert calls[2][3] == "yahoo"
     assert getattr(excinfo.value, "fetch_reason", None) == "minute_data_low_coverage"
     assert getattr(excinfo.value, "symbol", None) == "AAPL"
     assert any(rec.message == "MINUTE_DATA_COVERAGE_ABORT" for rec in caplog.records)
@@ -615,9 +652,16 @@ def test_fetch_minute_df_safe_early_session_sparse_data_triggers_sip_fallback(
         )
 
     from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
     monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
     monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
     monkeypatch.setattr(
@@ -707,9 +751,16 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
     )
 
     from ai_trading.data import market_calendar
+    from ai_trading.data.provider_monitor import ProviderMonitor
     from ai_trading.utils import base as base_utils
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "provider_monitor",
+        ProviderMonitor(),
+        raising=False,
+    )
     monkeypatch.setattr(base_utils, "is_market_open", lambda: True)
     monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
     monkeypatch.setattr(
