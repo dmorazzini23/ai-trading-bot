@@ -635,7 +635,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     level should now be controlled via settings or the ``LOG_LEVEL``
     environment variable.
     """
-    global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
+    global _configured, _log_queue, _listener, _LOGGING_CONFIGURED, _LOGGING_LISTENER
     _ensure_finnhub_enabled_flag()
     if _LOGGING_CONFIGURED and _configured:
         return logging.getLogger()
@@ -724,6 +724,8 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         if os.getenv("PYTEST_RUNNING") == "1" or os.getenv("LOG_DISABLE_QUEUE") == "1":
             logger.handlers = handlers
             _listener = None
+            _LOGGING_LISTENER = None
+            _log_queue = None
         else:
             _log_queue = queue.Queue(-1)
             queue_handler = QueueHandler(_log_queue)
@@ -734,6 +736,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             logger.handlers = [queue_handler]
             _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
             _listener.start()
+            _LOGGING_LISTENER = _listener
         atexit.register(_safe_shutdown_logging)
         atexit.register(logging.shutdown)
         _LOGGING_CONFIGURED = True
@@ -769,23 +772,31 @@ def configure_logging(debug: bool = False, log_file: str | None = None) -> Sanit
     return get_logger(_ROOT_LOGGER_NAME)
 
 
-def _safe_shutdown_logging():
+def shutdown_queue_listener(timeout: float = 1.0) -> None:
+    """Stop the background :class:`QueueListener` if it is running."""
+
+    global _listener, _LOGGING_LISTENER, _log_queue
+    listener = _listener or _LOGGING_LISTENER
+    if listener is None:
+        return
     try:
-        listener = globals().get("_LOGGING_LISTENER", None)
+        listener.stop()
+    except COMMON_EXC:
+        pass
+    thread = getattr(listener, "_thread", None)
+    if thread is not None and hasattr(thread, "join"):
         try:
-            if listener is not None:
-                try:
-                    listener.stop()
-                except COMMON_EXC:
-                    pass
-                try:
-                    t = getattr(listener, "_thread", None)
-                    if t is not None and hasattr(t, "join"):
-                        t.join(timeout=1.0)
-                except COMMON_EXC:
-                    pass
+            thread.join(timeout=timeout)
         except COMMON_EXC:
             pass
+    _listener = None
+    _LOGGING_LISTENER = None
+    _log_queue = None
+
+
+def _safe_shutdown_logging():
+    try:
+        shutdown_queue_listener()
         root = logging.getLogger()
         for h in list(root.handlers):
             try:
@@ -1398,6 +1409,7 @@ __all__ = [
     "provider_log_deduper",
     "record_provider_log_suppressed",
     "reset_provider_log_dedupe",
+    "shutdown_queue_listener",
     "LogDeduper",
     "EmitOnceLogger",
     "CompactJsonFormatter",
