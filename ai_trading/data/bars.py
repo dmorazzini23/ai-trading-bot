@@ -18,15 +18,23 @@ from ai_trading.logging.normalize import canon_timeframe as _canon_tf
 from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
 from .models import StockBarsRequest, TimeFrame
+from ._alpaca_guard import should_import_alpaca_sdk
 import time
 
-# Alpaca SDK APIError (optional during tests)
-try:  # pragma: no cover - alpaca may be missing
-    from alpaca.common.exceptions import APIError
-except (ImportError, AttributeError):  # pragma: no cover - define fallback
-    class APIError(Exception):
-        """Fallback APIError when Alpaca SDK is unavailable."""
+
+class _FallbackAPIError(Exception):
+    """Fallback APIError when Alpaca SDK is unavailable."""
+
+
+APIError = _FallbackAPIError
+
+if should_import_alpaca_sdk():  # pragma: no cover - alpaca optional
+    try:
+        from alpaca.common.exceptions import APIError as _RealAPIError
+    except (ImportError, AttributeError):
         pass
+    else:
+        APIError = _RealAPIError
 
 __all__ = ["TimeFrame", "StockBarsRequest"]
 

@@ -61,6 +61,7 @@ from ai_trading.utils.env import (
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
 from .validators import validate_adjustment, validate_feed
+from .._alpaca_guard import should_import_alpaca_sdk
 
 logger = get_logger(__name__)
 
@@ -3947,10 +3948,28 @@ def get_daily_df(
     adjustment: str | None = None,
 ) -> pd.DataFrame:
     """Fetch daily bars and ensure canonical OHLCV columns."""
-    try:
-        from ai_trading.alpaca_api import get_bars_df as _get_bars_df
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise DataFetchError("Alpaca API unavailable") from exc
+
+    rename_map = {
+        "t": "timestamp",
+        "time": "timestamp",
+        "o": "open",
+        "h": "high",
+        "l": "low",
+        "c": "close",
+        "v": "volume",
+    }
+
+    use_alpaca = should_import_alpaca_sdk()
+
+    if not use_alpaca:
+        start_dt = ensure_datetime(start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10))
+        end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
+        df = _backup_get_bars(symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"))
+    else:
+        try:
+            from ai_trading.alpaca_api import get_bars_df as _get_bars_df
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise DataFetchError("Alpaca API unavailable") from exc
 
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
 
@@ -3965,29 +3984,19 @@ def get_daily_df(
         adjustment = adjustment.lower()
     validate_adjustment(adjustment)
 
-    df = _get_bars_df(
-        symbol,
-        timeframe="1Day",
-        start=start,
-        end=end,
-        feed=normalized_feed,
-        adjustment=adjustment,
-    )
+    if use_alpaca:
+        df = _get_bars_df(
+            symbol,
+            timeframe="1Day",
+            start=start,
+            end=end,
+            feed=normalized_feed,
+            adjustment=adjustment,
+        )
 
     pd_mod = _ensure_pandas()
     if pd_mod is None:
         return df
-
-    # Normalize potential short names from providers
-    rename_map = {
-        "t": "timestamp",
-        "time": "timestamp",
-        "o": "open",
-        "h": "high",
-        "l": "low",
-        "c": "close",
-        "v": "volume",
-    }
 
     if isinstance(df, pd_mod.DataFrame):
         if "timestamp" not in df.columns and getattr(df.index, "name", None) in {
