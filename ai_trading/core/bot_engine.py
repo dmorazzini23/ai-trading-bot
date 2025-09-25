@@ -14,7 +14,7 @@ import os
 import stat
 import tempfile
 import sys
-from typing import Any, Dict, Iterable, Mapping, Sequence, TYPE_CHECKING, cast
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, cast
 from collections import deque
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
@@ -71,6 +71,7 @@ from ai_trading.runtime.shutdown import should_stop
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     from ai_trading.risk.engine import RiskEngine, TradeSignal
     from ai_trading.data.bars import TimeFrame
+    import pandas as pd
 from ai_trading.utils.time import last_market_session
 try:
     from ai_trading.capital_scaling import capital_scale, update_if_present
@@ -241,6 +242,21 @@ def _get_data_client_cls_cached():
     except ImportError:
         _ALPACA_DATA_CLIENT_AVAILABLE = False
         raise
+
+
+class _DataClientAdapter:
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+    def safe_get_stock_bars(self, *args: Any, **kwargs: Any):
+        get = getattr(self._client, "get_stock_bars", None)
+        if get is None:
+            raise AttributeError("get_stock_bars not available")
+        return get(*args, **kwargs)
+
 
 def _parse_timeframe(tf: Any) -> bars.TimeFrame:
     """Map configuration values to :class:`bars.TimeFrame` enums."""
@@ -478,6 +494,8 @@ __all__ = [
     "get_cycle_budget_context",
     "emit_cycle_budget_summary",
     "clear_cycle_budget_context",
+    "FeatureDataResult",
+    "fetch_feature_data",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -762,12 +780,19 @@ class BotEngine:
     def data_client(self):
         """Alpaca StockHistoricalDataClient for historical/market data."""
         cls = self._data_client_cls
+        client = None
         if callable(cls):
-            return cls(
+            client = cls(
                 api_key=_get_env_str("ALPACA_API_KEY"),
                 secret_key=_get_env_str("ALPACA_SECRET_KEY"),
             )
-        return cls
+        else:
+            client = cls
+        if client is None:
+            return None
+        if isinstance(client, _DataClientAdapter):
+            return client
+        return _DataClientAdapter(client)
 
     @property
     def tickers(self) -> list[str]:
@@ -1670,6 +1695,19 @@ def _is_dir_writable(str_path: str) -> bool:
     return bool(mode & stat.S_IWOTH)
 
 
+def _nearest_writable_ancestor(path: Path) -> Path:
+    """Return the closest existing writable ancestor for ``path``."""
+
+    current = path
+    while not current.exists():
+        current = current.parent
+    while current != current.parent:
+        if os.access(current, os.W_OK | os.X_OK):
+            return current
+        current = current.parent
+    return Path("/tmp")
+
+
 def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
     """Return a user-writable trade log path under the state directory."""
 
@@ -1731,8 +1769,19 @@ def _emit_trade_log_fallback(
 ) -> str:
     """Log a once-per-process warning and return the state-directory fallback path."""
 
-    basename = Path(preferred_path).name if preferred_path else "trades.jsonl"
-    fallback_path = _compute_user_state_trade_log_path(basename)
+    preferred = Path(preferred_path or "trades.jsonl").expanduser()
+    basename = preferred.name or "trades.jsonl"
+    parent = preferred.parent if preferred.parent != Path("") else Path.cwd()
+    base = _nearest_writable_ancestor(parent)
+    child = parent.name or "ai-trading-bot"
+    fallback_dir = base / child
+    try:
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        fallback_path = str((fallback_dir / basename).resolve(strict=False))
+    except PermissionError:
+        fallback_path = str((base / basename).resolve(strict=False))
+    except OSError:
+        fallback_path = _compute_user_state_trade_log_path(basename)
     payload: dict[str, object] = {
         "preferred_path": preferred_path,
         "fallback_path": fallback_path,
@@ -3745,6 +3794,55 @@ def get_latest_close(df: pd.DataFrame) -> float:
         return 0.0
 
 
+@dataclass
+class FeatureDataResult:
+    df: Optional["pd.DataFrame"]
+    data_quality: str
+
+
+def _is_minute_stale(frame: Any, *, symbol: Optional[str] = None) -> bool:
+    try:
+        staleness._ensure_data_fresh(
+            frame,
+            _minute_data_freshness_limit(),
+            symbol=symbol,
+            now=datetime.now(UTC),
+        )
+        return False
+    except RuntimeError:
+        return True
+    except Exception:
+        return False
+
+
+def fetch_feature_data(symbol: str, *args: Any, **kwargs: Any) -> FeatureDataResult:
+    minute_df = kwargs.pop("minute_df", None)
+    if minute_df is None:
+        try:
+            minute_df = fetch_minute_df_safe(symbol, *args, **kwargs)
+        except DataFetchError:
+            return FeatureDataResult(df=None, data_quality="empty")
+    if minute_df is None:
+        return FeatureDataResult(df=None, data_quality="empty")
+    if _is_minute_stale(minute_df, symbol=symbol):
+        logger.warning(
+            "FETCH_MINUTE_STALE_DATA",
+            extra={"symbol": symbol, "detail": "age>threshold"},
+        )
+        return FeatureDataResult(df=None, data_quality="stale")
+    return FeatureDataResult(df=minute_df, data_quality="ok")
+
+
+def _call_provider_factory(factory: Any, symbol: str):
+    try:
+        sig = inspect.signature(factory)
+        if len(sig.parameters) == 0:
+            return factory()
+        return factory(symbol)
+    except Exception:
+        return factory() if callable(factory) else factory
+
+
 def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
     """Return a UTC datetime range spanning the past ``minutes`` minutes."""
     # AI-AGENT-REF: provide timezone-aware datetimes
@@ -4133,8 +4231,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         _GLOBAL_INTRADAY_FALLBACK_FEED = None
         _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
 
+    primary_feed = configured_feed or data_fetcher_module._DEFAULT_FEED
+    current_feed = primary_feed
     cycle_pref = _prefer_feed_this_cycle(symbol)
-    current_feed = cycle_pref or configured_feed
+    if cycle_pref:
+        current_feed = cycle_pref
+    cached_cycle_feed = data_fetcher_module._get_cached_or_primary(
+        symbol, primary_feed=primary_feed
+    )
+    if cached_cycle_feed and not cycle_pref:
+        current_feed = cached_cycle_feed
     try:
         cached_feeds = getattr(state, "minute_feed_cache", None)
     except Exception:
@@ -4346,9 +4452,17 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             and not provider_monitor.is_disabled("alpaca_sip")
         )
 
+        provider_factory = getattr(CFG, "coverage_recovery_provider_factory", None)
+        provider_override = (
+            _call_provider_factory(provider_factory, symbol)
+            if provider_factory
+            else None
+        )
         planned_fallback_feed = planned_override or ("sip" if sip_allowed else "yahoo")
         planned_fallback_provider = (
-            "alpaca_sip" if planned_fallback_feed == "sip" else "yahoo"
+            provider_override
+            if provider_override is not None
+            else ("alpaca_sip" if planned_fallback_feed == "sip" else "yahoo")
         )
 
         warning_extra = {
@@ -4458,6 +4572,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_provider = resolved_provider
                 active_feed = resolved_feed
                 _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
+                data_fetcher_module._cache_fallback(symbol, resolved_feed)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4490,10 +4605,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         if not fallback_used:
             fallback_attempted = True
-            log_throttled_event(
-                logger,
+            logger.warning(
                 "BACKUP_PROVIDER_USED",
-                level=logging.WARNING,
                 extra={
                     "provider": "yahoo",
                     "symbol": symbol,
@@ -4550,6 +4663,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_provider = "yahoo"
                 active_feed = "yahoo"
                 _cache_cycle_fallback_feed("yahoo", symbol=symbol)
+                data_fetcher_module._cache_fallback(symbol, "yahoo")
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4650,6 +4764,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed_used = resolved_feed
             fallback_provider = resolved_provider
             _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
+            data_fetcher_module._cache_fallback(symbol, resolved_feed)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
@@ -9148,10 +9263,11 @@ def _initialize_alpaca_clients() -> bool:
                 paper="paper" in str(base_url).lower(),
                 url_override=base_url,
             )
-            data_client = stock_client_cls(
+            raw_data_client = stock_client_cls(
                 api_key=key,
                 secret_key=secret,
             )
+            data_client = _DataClientAdapter(raw_data_client)
             try:
                 from ai_trading.execution.reconcile import get_reconciler
 
@@ -13380,6 +13496,11 @@ def _enter_long(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
+        if price_source not in {"alpaca", "alpaca_iex", "alpaca_sip"}:
+            logger.warning(
+                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
+                extra={"symbol": symbol, "provider": "alpaca"},
+            )
         if _should_skip_order_for_alpaca_unavailable(
             state, symbol, price_source
         ):
@@ -13691,6 +13812,11 @@ def _enter_short(
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
+        if price_source not in {"alpaca", "alpaca_iex", "alpaca_sip"}:
+            logger.warning(
+                "PRIMARY_PROVIDER_FALLBACK_ACTIVE",
+                extra={"symbol": symbol, "provider": "alpaca"},
+            )
         if _should_skip_order_for_alpaca_unavailable(
             state, symbol, price_source
         ):
