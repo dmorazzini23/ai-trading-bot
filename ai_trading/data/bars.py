@@ -75,8 +75,12 @@ def empty_bars_dataframe() -> pd.DataFrame:
     cols = ['open', 'high', 'low', 'close', 'volume', 'trade_count', 'vwap']
     return pd.DataFrame(columns=cols)
 
-def _create_empty_bars_dataframe() -> pd.DataFrame:
-    return empty_bars_dataframe()
+def _create_empty_bars_dataframe(timeframe: str | None = None) -> pd.DataFrame:
+    """Return an empty OHLCV DataFrame including a timestamp column."""
+
+    cols = ["timestamp", "open", "high", "low", "close", "volume"]
+    df = pd.DataFrame({col: [] for col in cols})
+    return df
 
 def _is_minute_timeframe(tf) -> bool:
     try:
