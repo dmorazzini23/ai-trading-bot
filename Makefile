@@ -52,10 +52,13 @@ lint-core:
 	@echo "== ruff (core) =="
 	@ruff check ai_trading/main.py ai_trading/core/bot_engine.py ai_trading/process_manager.py
 
-.PHONY: scan-extras
+.PHONY: scan-extras doctor
 scan-extras:
 	@echo "[make] strict scan for raw install hints"
 	@$(PYTHON) tools/scan_extras_hints.py --strict
+
+doctor:
+	@$(PYTHON) tools/env_doctor.py
 
 .PHONY: audit-exceptions legacy-scan
 audit-exceptions:
@@ -66,6 +69,7 @@ legacy-scan:
 	@echo "== legacy import scan =="
 	@ci/scripts/forbid_alpaca_trade_api.sh
 	@ci/scripts/forbid_legacy_imports.sh
+	@$(PYTHON) tools/ci_guard_no_apca.py
 
 
 # Alias for developer convenience

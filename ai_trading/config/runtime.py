@@ -36,9 +36,10 @@ def _reject_legacy_apca_env() -> None:
     raise RuntimeError(
         "Legacy "
         f"{_LEGACY_BROKER_PREFIX}* environment variables are no longer supported. "
-        f"Found: {preview}. Please rename them to ALPACA_* (for example, "
+        f"Found: {preview}. Rename them to ALPACA_* (for example, "
         f"{_LEGACY_BROKER_PREFIX}API_KEY_ID→ALPACA_API_KEY and "
-        f"{_LEGACY_BROKER_PREFIX}API_SECRET_KEY→ALPACA_SECRET_KEY)."
+        f"{_LEGACY_BROKER_PREFIX}API_SECRET_KEY→ALPACA_SECRET_KEY). "
+        "After updating your environment (.env/systemd), run 'make doctor' to verify."
     )
 
 
