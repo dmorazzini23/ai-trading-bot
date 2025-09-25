@@ -15209,13 +15209,18 @@ def screen_universe(
                 f"Selected: {selected}. "
                 f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
             )
+            total_failed = failed + empty
+            summary_message = (
+                f"SCREEN_SUMMARY | symbols={tried} passed={valid} failed={total_failed}"
+            )
             logger.info(
-                "SCREEN_SUMMARY",
+                summary_message,
                 extra={
                     "tried": tried,
                     "valid": valid,
                     "empty": empty,
                     "failed": failed,
+                    "failed_total": total_failed,
                 },
             )
 

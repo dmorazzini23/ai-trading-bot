@@ -145,7 +145,9 @@ def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest
     assert selected == ["VALID"]
 
     summary_records = [
-        record for record in caplog.records if record.getMessage() == "SCREEN_SUMMARY"
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("SCREEN_SUMMARY |")
     ]
     assert summary_records, "Expected SCREEN_SUMMARY log entry"
     summary = summary_records[-1]
@@ -154,6 +156,11 @@ def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest
     assert summary.valid == 1
     assert summary.empty == 1
     assert summary.failed == 1
+
+    assert (
+        summary.getMessage()
+        == "SCREEN_SUMMARY | symbols=3 passed=1 failed=2"
+    ), "Summary log message did not match expected format"
 
     assert "[SCREEN_UNIVERSE] Starting screening" in caplog.text
     assert "Selected 1 of" in caplog.text
