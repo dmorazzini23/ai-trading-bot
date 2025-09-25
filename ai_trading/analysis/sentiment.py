@@ -9,7 +9,6 @@ import time as pytime
 from datetime import datetime
 from threading import Lock
 
-import requests
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.retry import (
@@ -440,12 +439,12 @@ def analyze_text(text: str, logger=logger) -> dict:
     global _SENTIMENT_STUB_LOGGED
     try:
         deps = _load_transformers(logger)
-    except requests.exceptions.SSLError as exc:
+    except HTTPError as exc:
         raise RuntimeError(
             "SSL error loading FinBERT; download the model and set "
             "TRANSFORMERS_OFFLINE=1 to run without internet"
         ) from exc
-    except (requests.exceptions.RequestException, OSError) as exc:
+    except (RequestException, OSError) as exc:
         if not _SENTIMENT_STUB_LOGGED:
             logger.warning('SENTIMENT_FALLBACK_STUB', extra={'error': type(exc).__name__})
             _SENTIMENT_STUB_LOGGED = True
