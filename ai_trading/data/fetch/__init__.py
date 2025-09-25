@@ -1218,7 +1218,7 @@ def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Data
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
     if str(interval).lower() in {"1m", "1min", "1minute"}:
-        safe_end = datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
+        safe_end = _last_complete_minute(pd)
         if end_dt > safe_end:
             end_dt = max(start_dt, safe_end)
     window_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
@@ -1517,7 +1517,7 @@ def _normalize_window_bounds(
     expected = pd_local.date_range(
         start_local,
         end_local,
-        freq="T",
+        freq="min",
         tz=tz,
         inclusive="left",
     )
@@ -1720,6 +1720,24 @@ def _ensure_pandas():
         except Exception:  # pragma: no cover - optional dependency
             pd = None
     return pd
+
+
+def _last_complete_minute(pd_local: Any | None = None) -> _dt.datetime:
+    """Return the most recent fully closed UTC minute."""
+
+    pd_mod = pd_local if pd_local is not None else _ensure_pandas()
+    if pd_mod is not None:
+        try:
+            ts = pd_mod.Timestamp.utcnow().floor("min") - pd_mod.Timedelta(minutes=1)
+            tzinfo = getattr(ts, "tzinfo", None)
+            if tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+            return ts.to_pydatetime()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
 
 
 def _ensure_yfinance():
@@ -1968,7 +1986,7 @@ def _fetch_bars(
     _start = _start.replace(second=0, microsecond=0)
     _end = _end.replace(second=0, microsecond=0)
     if _canon_tf(timeframe) == "1Min":
-        last_complete_minute = datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
+        last_complete_minute = _last_complete_minute(pd)
         if _end > last_complete_minute:
             _end = max(_start, last_complete_minute)
     session = _HTTP_SESSION
@@ -3273,6 +3291,18 @@ def _fetch_bars(
     # Attempt request with bounded retries when empty or transient issues occur
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     df = None
+    last_empty_error: EmptyBarsError | None = None
+
+    def _log_fetch_minute_empty(provider_feed: str, reason: str, detail: str | None = None) -> None:
+        extra = {
+            "provider": provider_feed,
+            "symbol": symbol,
+            "timeframe": "1Min",
+            "reason": reason,
+        }
+        if detail:
+            extra["detail"] = detail
+        logger.warning("FETCH_MINUTE_EMPTY", extra=extra)
     empty_attempts = 0
     for _ in range(max(1, max_retries)):
         df = _req(session, fallback, headers=headers, timeout=timeout_v)
@@ -3352,7 +3382,7 @@ def get_minute_df(
     pd = _ensure_pandas()
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    last_complete_minute = datetime.now(UTC).replace(second=0, microsecond=0) - _dt.timedelta(minutes=1)
+    last_complete_minute = _last_complete_minute(pd)
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
     window_has_session = _window_has_trading_session(start_dt, end_dt)
@@ -3439,7 +3469,10 @@ def get_minute_df(
             if proactive_switch and feed_to_use != initial_feed and df is not None and not getattr(df, "empty", True):
                 _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
         except (EmptyBarsError, ValueError, RuntimeError, AttributeError) as e:
+            provider_feed_label = f"alpaca_{feed_to_use}"
             if isinstance(e, EmptyBarsError):
+                last_empty_error = e
+                _log_fetch_minute_empty(provider_feed_label, "empty_bars", str(e))
                 now = datetime.now(UTC)
                 if end_dt > now or start_dt > now:
                     logger.info(
@@ -3621,7 +3654,14 @@ def get_minute_df(
                     )
                     df = None
             else:
-                logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+                if isinstance(e, ValueError) and "invalid_time_window" in str(e):
+                    _log_fetch_minute_empty(provider_feed_label, "invalid_time_window", str(e))
+                    last_empty_error = EmptyBarsError(
+                        f"empty_bars: symbol={symbol}, timeframe=1Min, reason=invalid_time_window"
+                    )
+                    last_empty_error.__cause__ = e  # type: ignore[attr-defined]
+                else:
+                    logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
                 df = None
     else:
         _warn_missing_alpaca(symbol, "1Min")
@@ -3733,6 +3773,8 @@ def get_minute_df(
             _SKIPPED_SYMBOLS.discard(tf_key)
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+        if last_empty_error is not None:
+            raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     if getattr(original_df, "empty", False):
         if allow_empty_return:
@@ -3748,6 +3790,8 @@ def get_minute_df(
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df
+        if last_empty_error is not None:
+            raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     try:
         df = _post_process(original_df, symbol=symbol, timeframe="1Min")
@@ -3781,6 +3825,8 @@ def get_minute_df(
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
             return original_df if original_df is not None else df
+        if last_empty_error is not None:
+            raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     df = _verify_minute_continuity(df, symbol, backfill=backfill)
     coverage_meta: dict[str, object] = {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}
@@ -3868,6 +3914,8 @@ def get_minute_df(
             if df is None:
                 return original_df if original_df is not None else df
             return df
+        if last_empty_error is not None:
+            raise last_empty_error
         raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min")
     if used_backup and (df is None or getattr(df, "empty", False)):
         logger.warning(

@@ -7,7 +7,7 @@ from ai_trading.core import bot_engine
 
 
 def _sample_df():
-    idx = pd.date_range("2024-01-01", periods=250, freq="T")
+    idx = pd.date_range("2024-01-01", periods=250, freq="min")
     data = {
         "open": pd.Series(range(1, 251), index=idx, dtype=float),
         "high": pd.Series(range(2, 252), index=idx, dtype=float),

@@ -28,7 +28,7 @@ def test_compute_macd_skips_all_nan_close(monkeypatch, caplog):
 
 
 def test_fetch_feature_data_skips_without_finite_closes(monkeypatch, caplog):
-    index = pd.date_range("2024-01-01", periods=5, freq="T", tz="UTC")
+    index = pd.date_range("2024-01-01", periods=5, freq="min", tz="UTC")
     inf_df = pd.DataFrame(
         {
             "open": [100.0] * len(index),

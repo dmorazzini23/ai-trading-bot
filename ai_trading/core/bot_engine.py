@@ -2693,7 +2693,7 @@ _FULL_DATETIME_RANGE = None
 def get_full_datetime_range():
     global _FULL_DATETIME_RANGE
     if _FULL_DATETIME_RANGE is None:
-        _FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1T")
+        _FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1min")
     return _FULL_DATETIME_RANGE
 
 

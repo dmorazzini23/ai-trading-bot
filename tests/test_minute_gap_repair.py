@@ -11,7 +11,7 @@ import ai_trading.data.fetch as fetch_module
 
 def _build_base_frame(start_local: datetime, end_local: datetime, missing: set[pd.Timestamp]) -> pd.DataFrame:
     tz = ZoneInfo("America/New_York")
-    index_local = pd.date_range(start_local, end_local, freq="T", tz=tz, inclusive="left")
+    index_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
     index_utc = index_local.tz_convert("UTC")
     rows: list[dict[str, object]] = []
     for ts in index_utc:
@@ -36,7 +36,7 @@ def test_repair_rth_gap_uses_backup(monkeypatch: pytest.MonkeyPatch) -> None:
     tz = ZoneInfo("America/New_York")
     start_local = datetime(2024, 1, 2, 9, 30, tzinfo=tz)
     end_local = datetime(2024, 1, 2, 16, 0, tzinfo=tz)
-    expected_local = pd.date_range(start_local, end_local, freq="T", tz=tz, inclusive="left")
+    expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
     missing = {expected_local[5].tz_convert("UTC"), expected_local[25].tz_convert("UTC")}
     base_df = _build_base_frame(start_local, end_local, missing)
 
@@ -81,7 +81,7 @@ def test_should_skip_symbol_logs_on_excessive_gap(monkeypatch: pytest.MonkeyPatc
     tz = ZoneInfo("America/New_York")
     start_local = datetime(2024, 1, 3, 9, 30, tzinfo=tz)
     end_local = datetime(2024, 1, 3, 16, 0, tzinfo=tz)
-    expected_local = pd.date_range(start_local, end_local, freq="T", tz=tz, inclusive="left")
+    expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
     missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
     df = _build_base_frame(start_local, end_local, missing)
     df.attrs["symbol"] = "SKIPX"
