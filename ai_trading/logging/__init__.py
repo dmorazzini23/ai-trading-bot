@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
@@ -328,6 +329,193 @@ class MessageThrottleFilter(logging.Filter):
 _THROTTLE_FILTER = MessageThrottleFilter()
 
 
+@dataclass
+class RateLimitedSummary:
+    """Snapshot describing suppressed events within a throttle window."""
+
+    key: str
+    suppressed: int
+    logger_name: str
+    window_s: float
+    sample_symbol: str | None = None
+    sample_feed: str | None = None
+
+
+class RateLimitedEventTracker:
+    """Track repeated log events and emit periodic summaries."""
+
+    def __init__(self, window_seconds: float) -> None:
+        self.window_seconds = max(float(window_seconds), 0.0)
+        self._state: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+
+    def update_window(self, window_seconds: float) -> None:
+        with self._lock:
+            self.window_seconds = max(float(window_seconds), 0.0)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._state.clear()
+
+    def _build_summary(self, key: str, state: dict[str, Any]) -> RateLimitedSummary:
+        return RateLimitedSummary(
+            key=_sanitize_summary_key(key),
+            suppressed=int(state.get("suppressed", 0) or 0),
+            logger_name=str(state.get("logger_name") or _ROOT_LOGGER_NAME),
+            window_s=self.window_seconds,
+            sample_symbol=state.get("sample_symbol"),
+            sample_feed=state.get("sample_feed"),
+        )
+
+    def record(
+        self,
+        key: str,
+        *,
+        logger_name: str,
+        extra: dict[str, Any] | None = None,
+    ) -> tuple[bool, list[RateLimitedSummary]]:
+        """Record an event and return whether to emit immediately."""
+
+        if self.window_seconds <= 0:
+            return True, []
+
+        now = _monotonic_time()
+        summaries: list[RateLimitedSummary] = []
+        sample_symbol = None
+        sample_feed = None
+        if extra:
+            sample_symbol = (
+                extra.get("symbol")
+                or extra.get("provider")
+                or extra.get("from_provider")
+            )
+            sample_feed = extra.get("feed") or extra.get("timeframe")
+
+        with self._lock:
+            state = self._state.get(key)
+            if state is None:
+                self._state[key] = {
+                    "window_start": now,
+                    "suppressed": 0,
+                    "logger_name": logger_name,
+                    "sample_symbol": sample_symbol,
+                    "sample_feed": sample_feed,
+                    "summary_emitted": False,
+                }
+                return True, summaries
+
+            window_start = float(state.get("window_start", 0.0))
+            if now - window_start >= self.window_seconds:
+                suppressed = int(state.get("suppressed", 0) or 0)
+                if suppressed and not state.get("summary_emitted", False):
+                    summaries.append(self._build_summary(key, state))
+                self._state[key] = {
+                    "window_start": now,
+                    "suppressed": 0,
+                    "logger_name": logger_name,
+                    "sample_symbol": sample_symbol or state.get("sample_symbol"),
+                    "sample_feed": sample_feed or state.get("sample_feed"),
+                    "summary_emitted": False,
+                }
+                return True, summaries
+
+            state["logger_name"] = logger_name
+            if sample_symbol:
+                state["sample_symbol"] = sample_symbol
+            if sample_feed:
+                state["sample_feed"] = sample_feed
+            state["suppressed"] = int(state.get("suppressed", 0) or 0) + 1
+            state["summary_emitted"] = False
+            return False, summaries
+
+    def flush(self, force: bool = False) -> list[RateLimitedSummary]:
+        if self.window_seconds <= 0:
+            return []
+
+        now = _monotonic_time()
+        summaries: list[RateLimitedSummary] = []
+        with self._lock:
+            for key, state in self._state.items():
+                suppressed = int(state.get("suppressed", 0) or 0)
+                if suppressed <= 0:
+                    continue
+                window_start = float(state.get("window_start", 0.0))
+                expired = now - window_start >= self.window_seconds
+                if not force and not expired:
+                    continue
+                summaries.append(self._build_summary(key, state))
+                state["suppressed"] = 0
+                state["summary_emitted"] = True
+        return summaries
+
+
+def _resolve_rate_limit_window() -> float:
+    raw = os.getenv("AI_TRADING_LOG_RATE_LIMIT_WINDOW_SEC")
+    if raw is None:
+        return 120.0
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return 120.0
+
+
+_RATE_LIMIT_TRACKER = RateLimitedEventTracker(_resolve_rate_limit_window())
+
+
+def _get_rate_limit_tracker() -> RateLimitedEventTracker:
+    window = _resolve_rate_limit_window()
+    if abs(_RATE_LIMIT_TRACKER.window_seconds - window) > 1e-6:
+        _RATE_LIMIT_TRACKER.update_window(window)
+    return _RATE_LIMIT_TRACKER
+
+
+def _emit_rate_limit_summaries(summaries: list[RateLimitedSummary]) -> None:
+    for summary in summaries:
+        if summary.suppressed <= 0:
+            continue
+        parts = [
+            f'LOG_THROTTLE_SUMMARY | key="{summary.key}" suppressed={summary.suppressed}',
+            f"window_s={summary.window_s:.1f}",
+        ]
+        if summary.sample_symbol:
+            parts.append(f'sample_symbol="{summary.sample_symbol}"')
+        if summary.sample_feed:
+            parts.append(f'sample_feed="{summary.sample_feed}"')
+        logging.getLogger(summary.logger_name).info(" ".join(parts))
+
+
+def log_throttled_event(
+    logger: logging.Logger,
+    key: str,
+    *,
+    level: int = logging.WARNING,
+    extra: dict[str, Any] | None = None,
+    message: str | None = None,
+) -> None:
+    """Log *key* while coalescing repeats into periodic summaries."""
+
+    tracker = _get_rate_limit_tracker()
+    if tracker.window_seconds <= 0:
+        if logger.isEnabledFor(level):
+            logger.log(level, message or key, extra=extra)
+        return
+
+    should_log, summaries = tracker.record(
+        key,
+        logger_name=logger.name or _ROOT_LOGGER_NAME,
+        extra=extra,
+    )
+    _emit_rate_limit_summaries(summaries)
+    if should_log and logger.isEnabledFor(level):
+        logger.log(level, message or key, extra=extra)
+
+
+def reset_rate_limit_tracker() -> None:
+    """Reset rate-limit tracking state (primarily for tests)."""
+
+    _get_rate_limit_tracker().reset()
+
+
 class LogDeduper:
     """Lightweight TTL-based guard for suppressing repetitive log records."""
 
@@ -400,6 +588,7 @@ def reset_provider_log_dedupe() -> None:
     provider_log_deduper.reset()
     with _provider_log_lock:
         _provider_log_suppressed.clear()
+    reset_rate_limit_tracker()
 
 
 def flush_log_throttle_summaries() -> None:
@@ -407,6 +596,7 @@ def flush_log_throttle_summaries() -> None:
 
     _THROTTLE_FILTER.flush_cycle()
     _flush_provider_log_summaries()
+    _emit_rate_limit_summaries(_get_rate_limit_tracker().flush(force=True))
 
 
 class SanitizingLoggerAdapter(logging.LoggerAdapter):
@@ -986,7 +1176,12 @@ def log_backup_provider_used(
             "METRIC_BACKUP_PROVIDER_FAILED",
             extra={"provider": provider, "symbol": symbol},
         )
-    logger.info("BACKUP_PROVIDER_USED", extra=payload)
+    log_throttled_event(
+        logger,
+        "BACKUP_PROVIDER_USED",
+        level=logging.WARNING,
+        extra=payload,
+    )
 
 
 def log_empty_retries_exhausted(
@@ -1436,6 +1631,8 @@ __all__ = [
     "provider_log_deduper",
     "record_provider_log_suppressed",
     "reset_provider_log_dedupe",
+    "log_throttled_event",
+    "reset_rate_limit_tracker",
     "shutdown_queue_listener",
     "LogDeduper",
     "EmitOnceLogger",

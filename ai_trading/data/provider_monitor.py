@@ -22,6 +22,7 @@ from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
 from ai_trading.logging import (
     get_logger,
+    log_throttled_event,
     provider_log_deduper,
     record_provider_log_suppressed,
 )
@@ -380,8 +381,10 @@ class ProviderMonitor:
             and now_monotonic - self._last_switch_ts < 1.0
         ):
             if provider_log_deduper.should_log(switchover_key, dedupe_ttl):
-                logger.info(
+                log_throttled_event(
+                    logger,
                     "DATA_PROVIDER_SWITCHOVER",
+                    level=logging.WARNING,
                     extra={
                         "from_provider": from_key,
                         "to_provider": to_key,

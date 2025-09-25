@@ -265,6 +265,9 @@ def run_cycle() -> None:
         ensure_alpaca_attached,
         list_open_orders,
         cancel_all_open_orders,
+        set_cycle_budget_context,
+        emit_cycle_budget_summary,
+        clear_cycle_budget_context,
     )
     from ai_trading.core.runtime import (
         build_runtime,
@@ -1326,8 +1329,19 @@ def main(argv: list[str] | None = None) -> None:
                         except Exception:
                             pass
                     _t1 = monotonic_time()
-                    with StageTimer(logger, "CYCLE_COMPUTE"):
-                        run_cycle()
+                    if budget is not None:
+                        set_cycle_budget_context(
+                            budget,
+                            interval_s=float(effective_interval),
+                            fraction=fraction_clamped,
+                        )
+                    try:
+                        with StageTimer(logger, "CYCLE_COMPUTE"):
+                            run_cycle()
+                    finally:
+                        if budget is not None:
+                            emit_cycle_budget_summary(logger)
+                            clear_cycle_budget_context()
                     try:
                         _cycle_stage_seconds.labels(stage="compute").observe(max(0.0, monotonic_time() - _t1))  # type: ignore[call-arg]
                     except Exception:
