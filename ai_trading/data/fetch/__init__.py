@@ -33,6 +33,7 @@ from ai_trading.logging import (
     warn_finnhub_disabled_no_data,
     get_logger,
 )
+from ai_trading.logging.emit_once import emit_once
 from ai_trading.config.management import MAX_EMPTY_RETRIES, get_env
 from ai_trading.config.settings import (
     provider_priority,
@@ -334,11 +335,6 @@ _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 _BACKUP_USAGE_LOGGED: dict[str, set[tuple[str, str]]] = {}
 _BACKUP_USAGE_MAX_CYCLES = 6
 
-# Track repeated missing-credential warnings per cycle so noisy environments
-# don't emit the same warning every few seconds.
-_ALPACA_MISSING_WARNED: dict[str, set[tuple[str, str]]] = {}
-_MISSING_WARN_MAX_CYCLES = 6
-
 # Throttled Yahoo Finance warnings per event -> cycle -> symbols
 _YF_WARNING_CACHE: dict[str, dict[str, set[tuple[str, str]]]] = {}
 _YF_WARNING_MAX_CYCLES = 6
@@ -359,15 +355,65 @@ def _cycle_bucket(store: dict[str, set[tuple[str, str]]], max_cycles: int) -> tu
     return cycle_id, bucket
 
 
-def _warn_missing_alpaca(symbol: str, timeframe: str) -> None:
-    """Emit an Alpaca credential warning at most once per cycle and symbol."""
+def _missing_alpaca_warning_context() -> tuple[bool, dict[str, object]]:
+    extra: dict[str, object] = {}
 
-    _, bucket = _cycle_bucket(_ALPACA_MISSING_WARNED, _MISSING_WARN_MAX_CYCLES)
-    key = (str(symbol).upper(), str(timeframe).upper())
-    if key in bucket:
+    if os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1" or _is_sip_unauthorized():
+        extra["sip_locked"] = True
+        return False, extra
+
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+
+    provider = str(getattr(settings, "data_provider", "alpaca") or "").strip()
+    if provider:
+        extra["provider"] = provider
+    provider_normalized = provider.lower()
+    if provider_normalized and "alpaca" not in provider_normalized:
+        return False, extra
+
+    override = None
+    try:
+        override = get_data_feed_override()
+    except Exception:
+        override = None
+    if override:
+        extra["override"] = override
+        override_norm = override.strip().lower()
+        if override_norm and override_norm not in {"iex", "sip"} and not override_norm.startswith("alpaca"):
+            # When feed is forced to a non-Alpaca provider (e.g. yahoo), skip warning.
+            return False, extra
+
+    try:
+        resolved_feed = resolve_alpaca_feed(None)
+    except Exception:
+        resolved_feed = "iex"
+
+    if resolved_feed is None:
+        extra["feed"] = "disabled"
+        return False, extra
+
+    extra["feed"] = resolved_feed
+    return True, extra
+
+
+def _warn_missing_alpaca(symbol: str, timeframe: str) -> None:
+    """Emit an Alpaca credential warning at most once per UTC day per symbol."""
+
+    should_warn, extra = _missing_alpaca_warning_context()
+    if not should_warn:
         return
-    logger.warning("ALPACA_API_KEY_MISSING", extra={"symbol": symbol, "timeframe": timeframe})
-    bucket.add(key)
+
+    extra.update({"symbol": symbol, "timeframe": timeframe})
+    emit_once(
+        logger,
+        f"ALPACA_API_KEY_MISSING:{symbol}:{timeframe}",
+        "warning",
+        "ALPACA_API_KEY_MISSING",
+        **extra,
+    )
 
 
 def _log_yf_warning(event: str, symbol: str, timeframe: str, extra: dict[str, object]) -> None:

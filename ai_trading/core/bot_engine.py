@@ -89,6 +89,7 @@ from ai_trading.data.timeutils import (
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
 from ai_trading.logging import flush_log_throttle_summaries, logger_once
+from ai_trading.logging.emit_once import emit_once
 from ai_trading.alpaca_api import (
     AlpacaAuthenticationError,
     AlpacaOrderHTTPError,
@@ -10910,9 +10911,23 @@ def scaled_atr_stop(
 
 
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
+    try:
+        default_factor = float(getattr(get_settings(), "default_liquidity_factor", 1.0))
+    except Exception:
+        default_factor = 1.0
+    if default_factor <= 0:
+        default_factor = 0.1
+
+    volume_threshold = float(getattr(ctx, "volume_threshold", 100_000) or 100_000)
+    if volume_threshold <= 0:
+        volume_threshold = 100_000.0
+
+    avg_vol = 0.0
+    last_snapshot: dict[str, float] = {}
+
     # During tests, avoid network fetches; use a reasonable default volume.
     if os.getenv("PYTEST_RUNNING"):
-        avg_vol = float(getattr(ctx, "volume_threshold", 100_000)) * 10
+        avg_vol = volume_threshold * 10.0
     else:
         try:
             df = fetch_minute_df_safe(symbol)
@@ -10923,49 +10938,133 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
             return 0.0
         if "volume" not in df.columns:
             return 0.0
-        avg_vol = df["volume"].tail(30).mean()
-    try:
-        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-        quote = ctx.data_client.get_stock_latest_quote(req)
-        # Support both Quote model instances and mapping/dict payloads
-        ask = None
-        bid = None
-        # Model attributes
-        ask = getattr(quote, "ask_price", None)
-        bid = getattr(quote, "bid_price", None)
-        if ask is None or bid is None:
-            # Mapping-style keys from some clients
-            if isinstance(quote, dict):
-                # Direct fields
-                ask = quote.get("ask_price", quote.get("ap", ask))
-                bid = quote.get("bid_price", quote.get("bp", bid))
-                # Sometimes responses are keyed by symbol
-                if (ask is None or bid is None) and symbol in quote:
-                    q2 = quote.get(symbol) or {}
-                    if isinstance(q2, dict):
-                        ask = q2.get("ask_price", q2.get("ap", ask))
-                        bid = q2.get("bid_price", q2.get("bp", bid))
+        avg_vol = float(df["volume"].tail(30).mean())
+        if math.isnan(avg_vol):
+            avg_vol = 0.0
         try:
-            ask_f = float(ask) if ask is not None else 0.0
-            bid_f = float(bid) if bid is not None else 0.0
-        except (TypeError, ValueError):
-            ask_f = bid_f = 0.0
-        spread = (ask_f - bid_f) if (ask_f > 0 and bid_f > 0) else 0.0
-    except APIError as e:
-        logger.warning(f"[liquidity_factor] Alpaca quote failed for {symbol}: {e}")
-        spread = 0.0
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
-        spread = 0.0
-    vol_score = min(1.0, avg_vol / ctx.volume_threshold) if avg_vol else 0.0
+            last_row = df.iloc[-1]
+        except Exception:
+            last_row = None
+        if last_row is not None:
+            for field in ("high", "low", "close", "volume"):
+                value = getattr(last_row, field, None)
+                if value is None and isinstance(last_row, dict):
+                    value = last_row.get(field)
+                if value is None:
+                    try:
+                        value = last_row[field]
+                    except Exception:
+                        value = None
+                try:
+                    if value is not None:
+                        last_snapshot[field] = float(value)
+                except (TypeError, ValueError):
+                    continue
+
+    if not last_snapshot and hasattr(ctx, "last_bar_by_symbol"):
+        try:
+            ctx_bars = getattr(ctx, "last_bar_by_symbol", {})
+            last_bar = ctx_bars.get(symbol) if isinstance(ctx_bars, dict) else None
+        except Exception:
+            last_bar = None
+        if last_bar is not None:
+            for field in ("high", "low", "close", "volume"):
+                raw_val = getattr(last_bar, field, None)
+                if raw_val is None and isinstance(last_bar, dict):
+                    raw_val = last_bar.get(field)
+                try:
+                    if raw_val is not None and field not in last_snapshot:
+                        last_snapshot[field] = float(raw_val)
+                except (TypeError, ValueError):
+                    continue
+
+    data_client = getattr(ctx, "data_client", None)
+    spread = 0.0
+    quote_available = False
+    fallback_reason: str | None = None
+    fallback_error: str | None = None
+
+    if data_client is not None:
+        try:
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            quote = data_client.get_stock_latest_quote(req)
+        except APIError as exc:
+            fallback_reason = "api_error"
+            fallback_error = str(exc)
+        except Exception as exc:
+            fallback_reason = exc.__class__.__name__
+            fallback_error = str(exc)
+        else:
+            try:
+                ask = getattr(quote, "ask_price", None)
+                bid = getattr(quote, "bid_price", None)
+                if ask is None or bid is None:
+                    if isinstance(quote, dict):
+                        ask = quote.get("ask_price", quote.get("ap", ask))
+                        bid = quote.get("bid_price", quote.get("bp", bid))
+                        if (ask is None or bid is None) and symbol in quote:
+                            nested = quote.get(symbol) or {}
+                            if isinstance(nested, dict):
+                                ask = nested.get("ask_price", nested.get("ap", ask))
+                                bid = nested.get("bid_price", nested.get("bp", bid))
+                try:
+                    ask_f = float(ask) if ask is not None else 0.0
+                    bid_f = float(bid) if bid is not None else 0.0
+                except (TypeError, ValueError):
+                    ask_f = bid_f = 0.0
+                spread = (ask_f - bid_f) if (ask_f > 0 and bid_f > 0) else 0.0
+            except (
+                FileNotFoundError,
+                PermissionError,
+                IsADirectoryError,
+                JSONDecodeError,
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+            ) as exc:
+                fallback_reason = "quote_parse_error"
+                fallback_error = str(exc)
+            else:
+                quote_available = True
+    else:
+        fallback_reason = "missing_client"
+
+    if not quote_available:
+        fallback_strategy = "default"
+        spread_score = 0.2
+        close_val = last_snapshot.get("close")
+        high_val = last_snapshot.get("high")
+        low_val = last_snapshot.get("low")
+        if close_val and high_val and low_val and close_val > 0:
+            range_ratio = max(0.0, high_val - low_val) / close_val if close_val else 0.0
+            spread_score = max(0.2, min(1.0, 1.0 - min(range_ratio * 10.0, 0.8)))
+            fallback_strategy = "last_bar"
+        vol_score = min(1.0, avg_vol / volume_threshold) if avg_vol else 0.0
+        fallback_score = (vol_score * 0.7) + (spread_score * 0.3)
+        fallback_default = default_factor if default_factor > 0 else 0.1
+        fallback_factor = max(0.1, min(fallback_default, fallback_score))
+        extra = {
+            "symbol": symbol,
+            "reason": fallback_reason or "unavailable",
+            "strategy": fallback_strategy,
+            "factor": float(fallback_factor),
+            "default": float(fallback_default),
+            "avg_vol": float(avg_vol) if avg_vol else 0.0,
+            "volume_threshold": float(volume_threshold),
+        }
+        if fallback_error:
+            extra["error"] = fallback_error
+        emit_once(
+            logger,
+            f"LIQUIDITY_FACTOR_FALLBACK:{symbol}",
+            "warning",
+            "LIQUIDITY_FACTOR_FALLBACK",
+            **extra,
+        )
+        return fallback_factor
+
+    vol_score = min(1.0, avg_vol / volume_threshold) if avg_vol else 0.0
 
     # AI-AGENT-REF: More reasonable spread scoring to reduce excessive retries
     # Dynamic spread threshold based on volume - high volume stocks can handle wider spreads

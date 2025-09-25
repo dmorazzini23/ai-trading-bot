@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     score_size_gamma: float = Field(
         1.0, alias="SCORE_SIZE_GAMMA", description="Shape parameter: 1.0 linear, <1 concave, >1 convex"
     )
+    default_liquidity_factor: float = Field(
+        1.0,
+        alias="DEFAULT_LIQUIDITY_FACTOR",
+        ge=0.0,
+        description="Fallback liquidity multiplier when live quotes are unavailable.",
+    )
     buy_threshold: float = Field(default=0.4, env="AI_TRADING_BUY_THRESHOLD")
     sector_exposure_cap: float = Field(default=0.33, env="AI_TRADING_SECTOR_EXPOSURE_CAP")
     max_portfolio_positions: int = Field(default=20, env="AI_TRADING_MAX_PORTFOLIO_POSITIONS")
