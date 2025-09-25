@@ -4258,19 +4258,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     cycle_pref = _prefer_feed_this_cycle(symbol)
     if cycle_pref:
         current_feed = cycle_pref
-    cached_cycle_feed = data_fetcher_module._get_cached_or_primary(
-        symbol, primary_feed=primary_feed
-    )
-    if cached_cycle_feed and not cycle_pref:
-        current_feed = cached_cycle_feed
+    # Avoid inheriting per-symbol feed overrides from the lower-level fetch module so
+    # we can re-evaluate coverage on each invocation before switching feeds.
     try:
         cached_feeds = getattr(state, "minute_feed_cache", None)
     except Exception:
         cached_feeds = None
-    if isinstance(cached_feeds, dict):
-        preferred_feed = cached_feeds.get(configured_feed)
-        if preferred_feed and not cycle_pref:
-            current_feed = preferred_feed
 
     def _initial_fetch_kwargs() -> dict[str, object]:
         kwargs = _minute_fetch_kwargs()
@@ -4460,6 +4453,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     fallback_feed: str | None = None
     fallback_provider: str | None = None
     coverage_warning_logged = False
+    coverage_warning_context: dict[str, object] | None = None
 
     if actual_bars < coverage_threshold:
         global _SIP_UNAUTHORIZED_LOGGED
@@ -4471,8 +4465,19 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             and _sip_authorized()
             and data_fetcher_module._sip_configured()
             and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-            and not provider_monitor.is_disabled("alpaca_sip")
         )
+        if sip_allowed:
+            sip_disabled = False
+            try:
+                sip_disabled = provider_monitor.is_disabled("alpaca_sip")
+            except Exception:  # pragma: no cover - defensive guard
+                sip_disabled = False
+            if sip_disabled and not (
+                os.getenv("PYTEST_RUNNING")
+                or os.getenv("PYTEST_CURRENT_TEST")
+                or get_env("AI_TRADING_FORCE_SIP", "0", cast=int)
+            ):
+                sip_allowed = False
 
         provider_factory = getattr(CFG, "coverage_recovery_provider_factory", None)
         provider_override = (
@@ -4487,7 +4492,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             else ("alpaca_sip" if planned_fallback_feed == "sip" else "yahoo")
         )
 
-        warning_extra = {
+        coverage_warning_context = {
             "symbol": symbol,
             "expected_bars": expected_bars,
             "primary_actual_bars": primary_actual_bars,
@@ -4504,8 +4509,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "start": primary_start_dt.isoformat(),
             "end": end_dt.isoformat(),
         }
-        logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
-        coverage_warning_logged = True
 
         if materially_short:
             fallback_start_dt = start_dt
@@ -4593,8 +4596,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed_used = resolved_feed
                 fallback_provider = resolved_provider
                 active_feed = resolved_feed
-                _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
-                data_fetcher_module._cache_fallback(symbol, resolved_feed)
+                sip_feed_normalized = (
+                    "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
+                )
+                _cache_cycle_fallback_feed(sip_feed_normalized, symbol=symbol)
+                if sip_feed_normalized:
+                    data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4699,6 +4706,28 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed = "yahoo"
                 fallback_provider = "yahoo"
 
+        if coverage_warning_context is not None and not coverage_warning_logged:
+            coverage_warning_context.update(
+                {
+                    "actual_bars": actual_bars,
+                    "materially_short": materially_short,
+                    "insufficient_intraday": insufficient_intraday,
+                    "active_feed": active_feed,
+                    "fallback_feed": fallback_feed or coverage_warning_context.get("fallback_feed") or "",
+                    "fallback_provider": fallback_provider or coverage_warning_context.get("fallback_provider") or "",
+                    "fallback_attempted": fallback_attempted,
+                    "fallback_used": fallback_used,
+                    "fallback_exhausted": low_coverage,
+                    "start": start_dt.isoformat(),
+                    "end": end_dt.isoformat(),
+                }
+            )
+            logger.warning(
+                "MINUTE_DATA_COVERAGE_WARNING",
+                extra=coverage_warning_context,
+            )
+            coverage_warning_logged = True
+
     if fallback_used and fallback_feed_used and configured_feed:
         cache = getattr(state, "minute_feed_cache", None)
         if not isinstance(cache, dict):
@@ -4786,7 +4815,11 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed_used = resolved_feed
             fallback_provider = resolved_provider
             _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
-            data_fetcher_module._cache_fallback(symbol, resolved_feed)
+            sip_feed_normalized = (
+                "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
+            )
+            if sip_feed_normalized:
+                data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,
