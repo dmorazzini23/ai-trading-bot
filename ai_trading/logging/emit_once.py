@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, date, datetime
-from logging import Logger
+from logging import Logger, LoggerAdapter
 from typing import Any, overload
 
 _emitted: dict[str, date] = {}
@@ -29,7 +29,14 @@ def emit_once(key: str, /) -> bool: ...
 
 
 @overload
-def emit_once(logger: Logger, key: str, level: str, msg: str, /, **extra: Any) -> bool: ...
+def emit_once(
+    logger: Logger | LoggerAdapter,
+    key: str,
+    level: str,
+    msg: str,
+    /,
+    **extra: Any,
+) -> bool: ...
 
 
 def emit_once(*args: Any, **extra: Any) -> bool:
@@ -48,7 +55,7 @@ def emit_once(*args: Any, **extra: Any) -> bool:
         raise TypeError("emit_once expects at least one positional argument")
 
     first = args[0]
-    if isinstance(first, Logger):
+    if isinstance(first, (Logger, LoggerAdapter)):
         if len(args) != 4:
             raise TypeError(
                 "emit_once(logger, key, level, msg) requires four positional arguments"
