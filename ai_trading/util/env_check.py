@@ -15,5 +15,23 @@ def assert_dotenv_not_shadowed():
     if spec is None or not spec.origin:
         raise DotenvImportError("python-dotenv not importable")
     repo_root = pathlib.Path(__file__).resolve().parents[2]
-    if pathlib.Path(spec.origin).resolve().is_relative_to(repo_root):
-        raise DotenvImportError(f"python-dotenv is shadowed by {spec.origin}")
+    origin_path = pathlib.Path(spec.origin).resolve()
+    try:
+        relative_origin = origin_path.relative_to(repo_root)
+    except ValueError:
+        # Installed outside of the repository – definitely safe.
+        return
+
+    # Virtual environments that live inside the repository (e.g. "venv" or
+    # ".venv") install third-party packages under ``site-packages``. When
+    # python-dotenv is loaded from there we do not want to treat it as a
+    # shadowing module.
+    parts = set(relative_origin.parts)
+    if "site-packages" in parts:
+        return
+
+    # Allow common in-repo virtual environment directory prefixes as well.
+    if relative_origin.parts and relative_origin.parts[0] in {"venv", ".venv", "env", ".env"}:
+        return
+
+    raise DotenvImportError(f"python-dotenv is shadowed by {spec.origin}")
