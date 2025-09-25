@@ -16,6 +16,7 @@ import tempfile
 import sys
 from typing import Any, Dict, Iterable, Mapping, Sequence, TYPE_CHECKING, cast
 from collections import deque
+from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
 
@@ -2691,7 +2692,6 @@ import time as pytime
 from argparse import ArgumentParser
 from collections.abc import Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from datetime import UTC
 from datetime import datetime as dt_
 from datetime import time as dt_time
