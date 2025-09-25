@@ -138,18 +138,21 @@ MODE_PARAMETERS = {
         "conf_threshold": 0.85,
         "daily_loss_limit": 0.03,
         "max_position_size": 5000.0,
+        "capital_cap": 0.20,
     },
     "balanced": {
         "kelly_fraction": 0.6,
         "conf_threshold": 0.75,
         "daily_loss_limit": 0.05,
         "max_position_size": 8000.0,
+        "capital_cap": 0.25,
     },
     "aggressive": {
         "kelly_fraction": 0.75,
         "conf_threshold": 0.65,
         "daily_loss_limit": 0.08,
         "max_position_size": 12000.0,
+        "capital_cap": 0.30,
     },
 }
 
@@ -168,7 +171,7 @@ def _cfg_float(field: str, fallback: float) -> float:
 
 CONF_THRESHOLD = _cfg_float("conf_threshold", MODE_PARAMETERS["balanced"]["conf_threshold"])
 MAX_POSITION_SIZE = _cfg_float("max_position_size", MODE_PARAMETERS["balanced"]["max_position_size"])
-CAPITAL_CAP = _cfg_float("capital_cap", 0.25)
+CAPITAL_CAP = _cfg_float("capital_cap", MODE_PARAMETERS["balanced"]["capital_cap"])
 DOLLAR_RISK_LIMIT = _cfg_float("dollar_risk_limit", 0.05)
 
 ALPACA_API_KEY = _env_value("ALPACA_API_KEY") or ""
@@ -233,9 +236,9 @@ def validate_environment() -> None:
         snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
         try:
             validate_required_env(env=snapshot)
-        except Exception:
+        except Exception as exc:
             logger.exception("CONFIG_ENV_VALIDATION_FAILED")
-            raise
+            raise RuntimeError(f"Configuration validation failed: {exc}") from exc
         logger.debug("CONFIG_ENV_VALIDATION_SUCCESS")
 
 

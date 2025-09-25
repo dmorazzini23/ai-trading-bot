@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -110,6 +111,24 @@ def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
 
 _SENSITIVE_EXTRA_KEYS = ("api_key", "secret")
 
+_SUMMARY_SANITIZE_PATTERN = re.compile(r"[^A-Z0-9]+")
+
+
+def _sanitize_summary_key(message: str) -> str:
+    """Derive a stable uppercase key for throttle summaries."""
+
+    if not isinstance(message, str):
+        return "UNKNOWN"
+
+    base = message.split("|", 1)[0]
+    base = base.split(",", 1)[0]
+    candidate = base.strip() or message.strip()
+    if not candidate:
+        return "UNKNOWN"
+
+    normalized = _SUMMARY_SANITIZE_PATTERN.sub("_", candidate.upper()).strip("_")
+    return normalized or "UNKNOWN"
+
 
 def sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
     """Sanitize ``extra`` mapping.
@@ -190,6 +209,10 @@ class MessageThrottleFilter(logging.Filter):
         escaped = message.replace('"', '\\"')
         return f'"{escaped}"'
 
+    @staticmethod
+    def _summary_key_from_message(message: str) -> str:
+        return _sanitize_summary_key(message)
+
     def _normalize_stage_timing(self, record: logging.LogRecord) -> None:
         if record.msg == "STAGE_TIMING":
             stage = getattr(record, "stage", None)
@@ -203,7 +226,8 @@ class MessageThrottleFilter(logging.Filter):
                 record.args = ()
 
     def _emit_summary(self, record: logging.LogRecord, message: str, suppressed: int) -> None:
-        summary = f"LOG_THROTTLE_SUMMARY | suppressed={suppressed} message={self._quote_message(message)}"
+        key = self._summary_key_from_message(message)
+        summary = f"LOG_THROTTLE_SUMMARY | suppressed={suppressed} key={self._quote_message(key)}"
         logging.getLogger(record.name or _ROOT_LOGGER_NAME).info(summary)
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -264,9 +288,10 @@ class MessageThrottleFilter(logging.Filter):
                 suppressed = int(state.get("suppressed", 0))
                 if suppressed > 0:
                     logger_name = str(state.get("logger_name") or _ROOT_LOGGER_NAME)
+                    key = self._summary_key_from_message(message)
                     summary = (
                         "LOG_THROTTLE_SUMMARY | suppressed="
-                        f"{suppressed} message={self._quote_message(message)}"
+                        f"{suppressed} key={self._quote_message(key)}"
                     )
                     logging.getLogger(logger_name).info(summary)
                 state["suppressed"] = 0
@@ -336,8 +361,9 @@ def _flush_provider_log_summaries() -> None:
         return
     summary_logger = logging.getLogger(_ROOT_LOGGER_NAME)
     for message, suppressed in sorted(entries):
+        key = _sanitize_summary_key(message)
         summary_logger.info(
-            f'LOG_THROTTLE_SUMMARY | message="{message}" suppressed={suppressed}'
+            f'LOG_THROTTLE_SUMMARY | key="{key}" suppressed={suppressed}'
         )
 
 
