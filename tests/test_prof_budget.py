@@ -39,12 +39,15 @@ def test_soft_budget_context_manager_resets_start():
     assert budget.over_budget() is True
 
 
-def test_elapsed_ms_rounds_to_nearest_monotonic(monkeypatch):
+def test_elapsed_ms_accumulates_fractional_nanoseconds(monkeypatch):
     sequence = iter(
         [
-            0,  # __init__
-            499_999,  # first elapsed -> < 0.5ms, rounds to 0
-            500_000,  # second elapsed -> == 0.5ms, rounds up to 1
+            0,  # __init__ / reset
+            400_000,  # < 1ms, stays at 0
+            700_000,  # cumulative < 1ms, still 0
+            1_100_000,  # crosses 1ms boundary -> 1
+            1_350_000,  # remainder retained -> stays 1
+            2_200_000,  # cumulative crosses 2ms -> 2
         ]
     )
 
@@ -52,7 +55,10 @@ def test_elapsed_ms_rounds_to_nearest_monotonic(monkeypatch):
 
     budget = SoftBudget(10)
     assert budget.elapsed_ms() == 0
+    assert budget.elapsed_ms() == 0
     assert budget.elapsed_ms() == 1
+    assert budget.elapsed_ms() == 1
+    assert budget.elapsed_ms() == 2
 
 
 def test_over_budget_and_remaining_use_existing_start(monkeypatch):
