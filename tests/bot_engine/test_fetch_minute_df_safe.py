@@ -807,7 +807,8 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
     assert isinstance(first, pd.DataFrame)
     assert isinstance(second, pd.DataFrame)
     assert [feed for _, feed in calls] == ["iex", "sip", "sip"]
-    assert bot_engine.state.minute_feed_cache.get("iex") == "sip"
+    assert bot_engine.state.minute_feed_cache == {"iex": "sip", "sip": "sip"}
+    assert set(bot_engine.state.minute_feed_cache_ts) == {"iex", "sip"}
     warning_messages = [rec.message for rec in caplog.records]
     assert warning_messages.count("MINUTE_DATA_COVERAGE_WARNING") == 1
     assert not budget.over_budget()
@@ -983,9 +984,10 @@ def test_fetch_minute_df_safe_sip_success_skips_yahoo_and_caches_feed(monkeypatc
     assert isinstance(result, pd.DataFrame)
     assert len(result) == expected
     assert calls == ["iex", "sip"]
-    assert cached_feeds[-1] == "sip"
-    assert cached_pairs[-1] == ("MSFT", "sip")
-    assert bot_engine.state.minute_feed_cache.get("iex") == "sip"
+    assert cached_feeds == ["sip"]
+    assert cached_pairs == [("MSFT", "sip")]
+    assert bot_engine.state.minute_feed_cache == {"iex": "sip", "sip": "sip"}
+    assert set(bot_engine.state.minute_feed_cache_ts) == {"iex", "sip"}
 
 
 def test_fetch_minute_df_safe_sip_and_yahoo_sparse_abort(monkeypatch):
@@ -1060,6 +1062,8 @@ def test_fetch_minute_df_safe_sip_and_yahoo_sparse_abort(monkeypatch):
 
     assert getattr(excinfo.value, "fetch_reason", None) == "minute_data_low_coverage"
     assert calls == ["iex", "sip", "yahoo"]
+    assert bot_engine.state.minute_feed_cache == {}
+    assert bot_engine.state.minute_feed_cache_ts == {}
 
 
 def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(

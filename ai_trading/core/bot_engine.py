@@ -4748,10 +4748,18 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed_used = normalized_sip_feed or resolved_feed
                 fallback_provider = resolved_provider
                 active_feed = resolved_feed
-                cache_feed = normalized_sip_feed or resolved_feed
-                if cache_feed:
-                    _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
-                    data_fetcher_module._cache_fallback(symbol, cache_feed)
+                if fallback_feed_used:
+                    sanitized_feed, normalized_raw_feed, canonical_feed = (
+                        _cache_cycle_fallback_feed_helper(
+                            fallback_feed_used, symbol=symbol
+                        )
+                    )
+                    canonical_value = (
+                        canonical_feed or sanitized_feed or normalized_raw_feed
+                    )
+                    fallback_feed_used = canonical_value or fallback_feed_used
+                    if fallback_feed_used:
+                        data_fetcher_module._cache_fallback(symbol, fallback_feed_used)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4838,8 +4846,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed_used = "yahoo"
                 fallback_provider = "yahoo"
                 active_feed = "yahoo"
-                _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
-                data_fetcher_module._cache_fallback(symbol, "yahoo")
+                sanitized_feed, normalized_raw_feed, canonical_feed = (
+                    _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
+                )
+                canonical_value = canonical_feed or sanitized_feed or normalized_raw_feed
+                fallback_feed_used = canonical_value or fallback_feed_used
+                if fallback_feed_used:
+                    data_fetcher_module._cache_fallback(symbol, fallback_feed_used)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4875,17 +4888,48 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
             coverage_warning_logged = True
 
-    if fallback_used and fallback_feed_used and configured_feed:
+    if fallback_used and fallback_feed_used:
         cache = getattr(state, "minute_feed_cache", None)
         if not isinstance(cache, dict):
             cache = {}
             setattr(state, "minute_feed_cache", cache)
-        cache[configured_feed] = fallback_feed_used
         ts_cache = getattr(state, "minute_feed_cache_ts", None)
         if not isinstance(ts_cache, dict):
             ts_cache = {}
             setattr(state, "minute_feed_cache_ts", ts_cache)
-        ts_cache[configured_feed] = now_utc
+
+        def _record_cache_entry(key: str | None) -> None:
+            if not key:
+                return
+            cache[key] = fallback_feed_used
+            ts_cache[key] = now_utc
+
+        _record_cache_entry(configured_feed)
+        _record_cache_entry(fallback_feed_used)
+    elif fallback_attempted and not fallback_used:
+        cache = getattr(state, "minute_feed_cache", None)
+        ts_cache = getattr(state, "minute_feed_cache_ts", None)
+        keys_to_clear: set[str] = set()
+        for candidate in (configured_feed, fallback_feed, fallback_feed_used):
+            if not candidate:
+                continue
+            sanitized_candidate, normalized_raw_candidate, canonical_candidate = (
+                _cycle_fallback_feed_values(candidate)
+            )
+            for value in (
+                candidate,
+                sanitized_candidate,
+                normalized_raw_candidate,
+                canonical_candidate,
+            ):
+                if isinstance(value, str) and value:
+                    keys_to_clear.add(value)
+        if isinstance(cache, dict):
+            for key in keys_to_clear:
+                cache.pop(key, None)
+        if isinstance(ts_cache, dict):
+            for key in keys_to_clear:
+                ts_cache.pop(key, None)
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
@@ -4961,12 +5005,13 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed = resolved_feed
             fallback_feed_used = resolved_feed
             fallback_provider = resolved_provider
-            _cache_cycle_fallback_feed_helper(resolved_feed, symbol=symbol)
-            sip_feed_normalized = (
-                "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
+            sanitized_feed, normalized_raw_feed, canonical_feed = (
+                _cache_cycle_fallback_feed_helper(resolved_feed, symbol=symbol)
             )
-            if sip_feed_normalized:
-                data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
+            canonical_value = canonical_feed or sanitized_feed or normalized_raw_feed
+            fallback_feed_used = canonical_value or fallback_feed_used
+            if fallback_feed_used:
+                data_fetcher_module._cache_fallback(symbol, fallback_feed_used)
             coverage = _coverage_metrics(
                 df,
                 expected=expected_bars,

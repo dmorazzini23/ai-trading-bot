@@ -132,4 +132,5 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
         for record in caplog.records
     )
     assert cached_feeds == ["yahoo"]
-    assert bot_engine.state.minute_feed_cache.get("iex") == "yahoo"
+    assert bot_engine.state.minute_feed_cache == {"iex": "yahoo", "yahoo": "yahoo"}
+    assert set(bot_engine.state.minute_feed_cache_ts) == {"iex", "yahoo"}
