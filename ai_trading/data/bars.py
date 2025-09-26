@@ -19,6 +19,7 @@ from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
 from .models import StockBarsRequest, TimeFrame
 from ._alpaca_guard import should_import_alpaca_sdk
+from .fetch.sip_disallowed import sip_disallowed
 import time
 
 
@@ -125,15 +126,19 @@ def _get_entitled_feeds(client: Any) -> set[str]:
 def _ensure_entitled_feed(client: Any, requested: str) -> str:
     """Return a feed we are entitled to, falling back when necessary."""
     feeds = _get_entitled_feeds(client)
-    req = str(requested or '').lower()
-    if req in feeds:
-        return req
+    req_raw = str(requested or '').lower()
+    normalized_req = req_raw.replace("alpaca_", "")
+    if normalized_req == "sip" and sip_disallowed():
+        return "iex"
+    if normalized_req in feeds:
+        return normalized_req
     alt = next(iter(feeds), None)
     if alt:
-        _log.warning('ALPACA_FEED_UNENTITLED_SWITCH', extra={'requested': req, 'using': alt})
+        if normalized_req != alt:
+            _log.warning('ALPACA_FEED_UNENTITLED_SWITCH', extra={'requested': normalized_req, 'using': alt})
         return alt
-    emit_once(_log, f'no_feed:{req}', 'error', 'ALPACA_FEED_UNENTITLED', requested=req)
-    return req
+    emit_once(_log, f'no_feed:{normalized_req}', 'error', 'ALPACA_FEED_UNENTITLED', requested=normalized_req)
+    return normalized_req
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""

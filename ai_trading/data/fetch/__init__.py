@@ -59,6 +59,7 @@ from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
+from ai_trading.utils import safe_to_datetime
 from ai_trading.utils.env import (
     alpaca_credential_status,
     resolve_alpaca_feed,
@@ -80,8 +81,19 @@ def _sip_allowed() -> bool:
     override = globals().get("_ALLOW_SIP")
     if override is not None:
         return bool(override)
-    value = str(os.getenv("ALPACA_ALLOW_SIP", "1")).strip().lower()
-    return value not in {"0", "false", "no", ""}
+    try:
+        explicit = get_env("ALPACA_ALLOW_SIP", None, cast=bool)
+    except Exception:
+        explicit = None
+    if explicit is not None:
+        return bool(explicit)
+    raw_allow = os.getenv("ALPACA_ALLOW_SIP")
+    if raw_allow is not None:
+        return raw_allow.strip().lower() in {"1", "true", "yes", "on"}
+    raw_entitlement = os.getenv("ALPACA_HAS_SIP")
+    if raw_entitlement is not None:
+        return raw_entitlement.strip().lower() in {"1", "true", "yes", "on"}
+    return False
 
 
 def _ordered_fallbacks(primary_feed: str) -> List[str]:
@@ -1692,6 +1704,39 @@ def _flatten_and_normalize_ohlcv(
         except AttributeError:  # e.g. DatetimeIndex with single name attribute
             if getattr(df_out.index, "name", None) == "timestamp":
                 df_out.index = df_out.index.rename(None)
+
+    context_label = "ohlcv" if symbol is None else f"ohlcv {symbol}"
+    tf_label = str(timeframe or "").strip() or "unknown"
+    if "timestamp" in getattr(df_out, "columns", []):
+        try:
+            ts_index = safe_to_datetime(
+                df_out["timestamp"],
+                context=f"{context_label} {tf_label}",
+            )
+            df_out = df_out.assign(timestamp=pd.Series(ts_index, index=df_out.index))
+        except Exception:
+            pass
+    if "timestamp" in getattr(df_out, "columns", []):
+        try:
+            df_out = df_out[df_out["timestamp"].notna()]
+        except Exception:
+            pass
+    required_cols = ["open", "high", "low", "close", "volume"]
+    try:
+        df_out = df_out.dropna(subset=required_cols, how="any")
+    except Exception:
+        for col in required_cols:
+            if col in getattr(df_out, "columns", []):
+                try:
+                    df_out = df_out[df_out[col].notna()]
+                except Exception:
+                    continue
+    if "timestamp" in getattr(df_out, "columns", []):
+        try:
+            df_out = df_out.sort_values("timestamp")
+            df_out = df_out.drop_duplicates(subset=["timestamp"], keep="last")
+        except Exception:
+            pass
 
     return df_out
 

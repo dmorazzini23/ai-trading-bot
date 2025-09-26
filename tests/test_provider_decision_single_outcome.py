@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
+from ai_trading.data import provider_monitor as monitor_mod
 from ai_trading.data.provider_monitor import (
     ProviderAction,
     ProviderMonitor,
@@ -67,9 +68,18 @@ def test_provider_decision_single_outcome(caplog):
     assert active == backup
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_STAY"]
 
+    active = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=True,
+        reason="gap_ratio=0.3%",
+        severity="good",
+    )
+    assert active == backup
+
     state = monitor._pair_states[(primary, backup)]
-    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=300)
-    state["cooldown"] = 120
+    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=monitor_mod._MIN_RECOVERY_SECONDS + 5)
+    state["cooldown"] = 0
 
     caplog.clear()
     active = monitor.update_data_health(
@@ -128,8 +138,9 @@ def test_provider_decision_window_prevents_thrashing():
 
     state = monitor._pair_states[(primary, backup)]
     state["decision_until"] = datetime.now(UTC) - timedelta(seconds=1)
-    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=monitor.decision_window_seconds + 5)
-    state["consecutive_passes"] = 2
+    dwell = max(monitor.decision_window_seconds, monitor_mod._MIN_RECOVERY_SECONDS)
+    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=dwell + 5)
+    state["consecutive_passes"] = monitor_mod._MIN_RECOVERY_PASSES - 1
     state["cooldown"] = 0
 
     recovered = monitor.update_data_health(

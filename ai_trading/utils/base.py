@@ -682,30 +682,94 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
 
 
 def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str = ""):
-    """Safely convert an iterable of date strings to ``DatetimeIndex``."""
+    """Safely convert values to a timezone-aware :class:`~pandas.DatetimeIndex`.
+
+    Handles common data quality issues encountered in external provider data:
+
+    * Tuples of ``(label, timestamp)`` by extracting the timestamp element.
+    * Mixed string/integer inputs (with heuristic detection of epoch seconds vs
+      milliseconds for numeric payloads).
+    * Placeholder values such as ``"0"``, ``0``, ``""`` and ``None`` which are
+      coerced to ``NaT`` instead of triggering noisy warnings.
+    * Rate-limited warnings when coercion is required so log volume remains
+      manageable in production.
+    """
+
     try:
         import pandas as pd  # pylint: disable=import-error
     except ImportError as exc:  # pragma: no cover - pandas missing
         raise ImportError(
             "pandas is required for safe_to_datetime. Install with `pip install ai-trading-bot[pandas]`."
         ) from exc
+
     if arr is None:
-        return pd.DatetimeIndex([], tz="UTC")
-    if isinstance(arr, tuple) and (len(arr) == 2) and isinstance(arr[1], pd.Timestamp):
+        return pd.DatetimeIndex([], tz="UTC") if utc else pd.DatetimeIndex([])
+
+    if isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
         arr = arr[1]
-    elif isinstance(arr, list | pd.Index | pd.Series) and len(arr) > 0 and isinstance(arr[0], tuple):
+    elif isinstance(arr, (list, pd.Index, pd.Series)) and len(arr) > 0 and isinstance(arr[0], tuple):
         arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
+
     try:
-        return pd.to_datetime(arr, format=format, utc=utc)
-    except (TypeError, ValueError) as exc:
-        ctx = f" ({context})" if context else ""
-        logger.warning("safe_to_datetime coercing invalid values%s – %s", ctx, exc)
+        series = pd.Series(arr)
+    except Exception:
         try:
-            return pd.to_datetime(arr, errors="coerce", utc=utc)
-        except COMMON_EXC as exc2:
-            logger.error("safe_to_datetime failed%s: %s", ctx, exc2)
-            length = len(arr) if hasattr(arr, "__len__") else 1
-            return pd.DatetimeIndex([pd.NaT] * length, tz="UTC")
+            series = pd.Series(list(arr))  # type: ignore[arg-type]
+        except Exception:
+            series = pd.Series([arr])
+
+    if series.empty:
+        return pd.DatetimeIndex([], tz="UTC") if utc else pd.DatetimeIndex([])
+
+    replacements = {"0": pd.NaT, 0: pd.NaT, "": pd.NaT, None: pd.NaT}
+    placeholders = {"0", 0, "", None}
+    try:
+        series = series.replace(replacements)
+    except Exception:
+        series = series.apply(lambda value: pd.NaT if value in placeholders else value)
+
+    numeric_values = series.dropna()
+    is_numeric = False
+    try:
+        from pandas.api.types import infer_dtype  # pylint: disable=import-error
+
+        inferred = infer_dtype(numeric_values, skipna=True)
+        is_numeric = inferred in {"integer", "floating", "mixed-integer", "mixed-integer-float"}
+    except Exception:
+        try:
+            is_numeric = bool(numeric_values.apply(lambda value: isinstance(value, (int, float))).all())
+        except Exception:
+            is_numeric = False
+
+    if is_numeric:
+        numeric_series = pd.to_numeric(series, errors="coerce")
+        if not numeric_series.dropna().empty and (numeric_series.dropna() > 1_000_000_000_000).any():
+            numeric_series = numeric_series / 1000.0
+        result = pd.to_datetime(numeric_series, unit="s", errors="coerce", utc=utc)
+    else:
+        result = pd.to_datetime(series, format=format, errors="coerce", utc=utc)
+
+    ctx = f" ({context})" if context else ""
+    invalid = getattr(result, "isna", lambda: pd.Series([]))()
+    try:
+        invalid_count = int(invalid.sum()) if hasattr(invalid, "sum") else 0
+    except Exception:
+        invalid_count = 0
+    if invalid_count:
+        total = len(result)
+        key = f"safe_to_datetime:{context}" if context else "safe_to_datetime"
+        _warn_limited(
+            key,
+            "safe_to_datetime coerced %s/%s values to NaT%s",
+            invalid_count,
+            total,
+            ctx,
+        )
+
+    try:
+        return pd.DatetimeIndex(result)
+    except Exception:
+        return pd.DatetimeIndex(result.to_numpy())  # type: ignore[arg-type]
 
 
 def validate_ohlcv(df: DataFrame, required: list[str] | None = None, require_monotonic: bool = True) -> None:

@@ -13912,14 +13912,25 @@ def _strict_data_gating_enabled() -> bool:
 
 @functools.lru_cache(maxsize=1)
 def _gap_ratio_gate_limit() -> float:
-    try:
-        value = get_env("AI_TRADING_GAP_RATIO_LIMIT", 0.005, cast=float)
-    except Exception:
-        value = _env_float(0.005, "AI_TRADING_GAP_RATIO_LIMIT")
-    try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
-        return 0.005
+    default_limit = 0.03
+    for key in ("DATA_GAP_RATIO_TRADE_LIMIT", "AI_TRADING_GAP_RATIO_LIMIT"):
+        try:
+            configured = get_env(key, None, cast=float)
+        except Exception:
+            configured = None
+        if configured is not None:
+            try:
+                return max(0.0, float(configured))
+            except (TypeError, ValueError):
+                logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": key, "value": configured})
+                continue
+        raw = os.getenv(key)
+        if raw not in (None, ""):
+            try:
+                return max(0.0, float(raw))
+            except (TypeError, ValueError):
+                logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": key, "value": raw})
+    return default_limit
 
 
 @functools.lru_cache(maxsize=1)
@@ -18154,8 +18165,11 @@ def run_multi_strategy(ctx) -> None:
 
     # At the end of the strategy cycle, trigger trailing-stop checks if an ExecutionEngine is present.
     try:
-        if hasattr(ctx, "execution_engine"):
-            ctx.execution_engine.end_cycle()
+        engine = getattr(ctx, "execution_engine", None)
+        if engine is not None:
+            end_hook = getattr(engine, "end_cycle", None)
+            if callable(end_hook):
+                end_hook()
     except (
         FileNotFoundError,
         PermissionError,
