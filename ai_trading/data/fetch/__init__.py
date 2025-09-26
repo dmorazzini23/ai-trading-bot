@@ -3230,13 +3230,14 @@ def _fetch_bars(
                                 total_elapsed=monotonic_time() - start_time,
                             )
                         )
-            should_backoff_first_empty = _ENABLE_HTTP_FALLBACK and not outside_market_hours
-            if should_backoff_first_empty:
+            should_backoff_first_empty = True
+            if _ENABLE_HTTP_FALLBACK and not outside_market_hours:
                 try:
-                    if max_data_fallbacks() > 0:
-                        should_backoff_first_empty = False
+                    remaining_fallbacks = max_data_fallbacks()
                 except Exception:
                     should_backoff_first_empty = True
+                else:
+                    should_backoff_first_empty = remaining_fallbacks <= 0
             logged_attempt = False
             if empty_attempts == 1 and should_backoff_first_empty:
                 retry_delay = _state.get("delay", 0.25)
