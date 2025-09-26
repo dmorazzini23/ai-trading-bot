@@ -102,3 +102,25 @@ def test_host_semaphore_is_scoped_per_event_loop(monkeypatch):
 
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
     _reload_pooling(pooling)
+
+
+def test_invalidating_limit_cache_refreshes_semaphore(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
+    pooling = _reload_pooling()
+
+    loop = asyncio.new_event_loop()
+    try:
+        first_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=4)) == 2
+
+        monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "5")
+        pooling.invalidate_host_limit_cache()
+
+        second_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert second_id != first_id
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=8)) == 5
+    finally:
+        loop.close()
+
+    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+    _reload_pooling(pooling)

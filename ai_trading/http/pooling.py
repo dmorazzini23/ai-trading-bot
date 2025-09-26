@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import Final
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
@@ -11,11 +12,27 @@ from ai_trading.config import management as config
 
 _DEFAULT_LIMIT: Final[int] = 8
 
-_SemaphoreRecord = tuple[asyncio.Semaphore, int]
+@dataclass(slots=True)
+class _SemaphoreRecord:
+    semaphore: asyncio.Semaphore
+    limit: int
+    version: int
+
+
+@dataclass(slots=True)
+class _ResolvedLimitCache:
+    raw_env: str | None
+    limit: int
+    version: int
+
+
 _HostSemaphoreMap = dict[str, _SemaphoreRecord]
 _HOST_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, _HostSemaphoreMap] = (
     WeakKeyDictionary()
 )
+
+_LIMIT_CACHE: _ResolvedLimitCache | None = None
+_LIMIT_VERSION: int = 0
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
 
@@ -32,10 +49,12 @@ def reset_host_semaphores() -> None:
     """
 
     _HOST_SEMAPHORES.clear()
+    invalidate_host_limit_cache()
 
 
-def _resolve_limit() -> int:
-    raw = os.getenv("AI_TRADING_HOST_LIMIT")
+def _compute_limit(raw: str | None = None) -> int:
+    if raw is None:
+        raw = os.getenv("AI_TRADING_HOST_LIMIT")
     if raw not in (None, ""):
         try:
             return max(1, int(raw))
@@ -54,10 +73,38 @@ def _resolve_limit() -> int:
         return _DEFAULT_LIMIT
 
 
+def _resolve_limit() -> tuple[int, int]:
+    """Return the current host limit and cache version."""
+
+    global _LIMIT_CACHE, _LIMIT_VERSION
+
+    raw_env = os.getenv("AI_TRADING_HOST_LIMIT")
+    cache = _LIMIT_CACHE
+    if cache is not None and cache.raw_env == raw_env:
+        return cache.limit, cache.version
+
+    limit = _compute_limit(raw_env)
+    _LIMIT_VERSION += 1
+    version = _LIMIT_VERSION
+    _LIMIT_CACHE = _ResolvedLimitCache(raw_env=raw_env, limit=limit, version=version)
+    return limit, version
+
+
 def get_host_limit() -> int:
     """Return the configured maximum concurrency per host."""
 
-    return _resolve_limit()
+    limit, _ = _resolve_limit()
+    return limit
+
+
+def invalidate_host_limit_cache() -> None:
+    """Invalidate cached host limit values.
+
+    The next access will recompute the limit and refresh semaphore records as needed.
+    """
+
+    global _LIMIT_CACHE
+    _LIMIT_CACHE = None
 
 
 def _get_host_map(loop: asyncio.AbstractEventLoop) -> _HostSemaphoreMap:
@@ -72,16 +119,15 @@ def _get_or_create_loop_semaphore(
     loop: asyncio.AbstractEventLoop,
     hostname: str,
 ) -> asyncio.Semaphore:
-    resolved_limit = _resolve_limit()
+    resolved_limit, version = _resolve_limit()
     host_map = _get_host_map(loop)
     record = host_map.get(hostname)
     if record is not None:
-        semaphore, cached_limit = record
-        if cached_limit == resolved_limit:
-            return semaphore
+        if record.limit == resolved_limit and record.version == version:
+            return record.semaphore
 
     semaphore = asyncio.Semaphore(resolved_limit)
-    host_map[hostname] = (semaphore, resolved_limit)
+    host_map[hostname] = _SemaphoreRecord(semaphore, resolved_limit, version)
     return semaphore
 
 
@@ -97,11 +143,11 @@ def refresh_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
     """Force the cached semaphore for the current loop to refresh using the latest limit."""
 
     loop = asyncio.get_running_loop()
-    limit = _resolve_limit()
+    limit, version = _resolve_limit()
     host = _normalize_host(hostname)
     semaphore = asyncio.Semaphore(limit)
     host_map = _get_host_map(loop)
-    host_map[host] = (semaphore, limit)
+    host_map[host] = _SemaphoreRecord(semaphore, limit, version)
     return semaphore
 
 
@@ -148,6 +194,7 @@ __all__ = [
     "AsyncHostLimiter",
     "get_host_limit",
     "get_host_semaphore",
+    "invalidate_host_limit_cache",
     "limit_host",
     "limit_url",
     "refresh_host_semaphore",
