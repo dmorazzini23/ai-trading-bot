@@ -806,6 +806,11 @@ class EmitOnceLogger:
         emit_key = key or msg
         self._emit_if_new("error", emit_key, msg, *args, **kwargs)
 
+    def critical(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
+        """Log critical message once per key (defaults to message text as key)."""
+        emit_key = key or msg
+        self._emit_if_new("critical", emit_key, msg, *args, **kwargs)
+
 
 _configured = False
 _loggers: dict[str, SanitizingLoggerAdapter] = {}

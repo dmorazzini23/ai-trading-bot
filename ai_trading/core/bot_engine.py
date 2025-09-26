@@ -91,6 +91,7 @@ from ai_trading.data.timeutils import (
 )
 from ai_trading.data_validation import is_valid_ohlcv
 from ai_trading.utils import health_check as _health_check
+from ai_trading.utils.env import alpaca_credential_status
 from ai_trading.logging import (
     flush_log_throttle_summaries,
     log_throttled_event,
@@ -6281,10 +6282,38 @@ def get_circuit_breaker_health() -> dict:
 
 
 # Prometheus-safe account fetch with circuit breaker protection
+def _has_alpaca_credentials() -> bool:
+    """Return ``True`` when Alpaca API credentials are present."""
+
+    try:
+        key_present, secret_present = alpaca_credential_status()
+    except Exception:  # pragma: no cover - defensive guard around env access
+        return False
+    return bool(key_present and secret_present)
+
+
 @alpaca_breaker
 def safe_alpaca_get_account(ctx: BotContext) -> object | None:
     """Safely get Alpaca account; returns None when unavailable or on failure."""
-    ensure_alpaca_attached(ctx)
+
+    runtime_api = getattr(ctx, "api", None)
+    if runtime_api is None and not _has_alpaca_credentials():
+        logger_once.error(
+            "ctx.api is None - Alpaca trading client unavailable",
+            key="alpaca_unavailable",
+        )
+        return None
+
+    try:
+        ensure_alpaca_attached(ctx)
+    except Exception as exc:  # pragma: no cover - defensive against shim failures
+        logger_once.error(
+            "FAILED_TO_ATTACH_ALPACA_CLIENT",
+            key="alpaca_attach_failed",
+            extra={"cause": exc.__class__.__name__},
+        )
+        return None
+
     if ctx.api is None:
         # Log once per process to avoid per-cycle noise when creds are missing
         logger_once.error(
@@ -10745,6 +10774,9 @@ def check_pdt_rule(runtime) -> bool:
         _emit_test_capture(message, logging.WARNING)
 
     runtime_api = getattr(runtime, "api", None)
+    if runtime_api is None and not _has_alpaca_credentials():
+        _log_pdt_skip()
+        return False
     if runtime_api is None:
         try:
             initialized = _initialize_alpaca_clients()

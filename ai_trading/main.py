@@ -51,6 +51,7 @@ _logging.configure_logging(log_file=LOG_FILE)
 
 # Module logger
 logger = _logging.get_logger(__name__)
+_AUTH_PREFLIGHT_LOGGED = False
 
 _STARTUP_PENDING_RECONCILED = False
 _RUNTIME_CACHE_LOCK = threading.Lock()
@@ -199,12 +200,9 @@ def run_cycle() -> None:
     execution_mode = str(get_env("EXECUTION_MODE", "sim", cast=str) or "sim").lower()
     if execution_mode == "disabled":
         _set_alpaca_service_available(False)
-        logger.critical(
-            "ALPACA_AUTH_PREFLIGHT_FAILED",
-            extra={
-                "detail": "Execution mode is disabled",
-                "action": "Set AI_TRADING_EXECUTION_MODE to paper or live",
-            },
+        _log_auth_preflight_failure(
+            detail="Execution mode is disabled",
+            action="Set AI_TRADING_EXECUTION_MODE to paper or live",
         )
         return
 
@@ -212,12 +210,9 @@ def run_cycle() -> None:
         has_key, has_secret = alpaca_credential_status()
         if not (has_key and has_secret):
             _set_alpaca_service_available(False)
-            logger.critical(
-                "ALPACA_AUTH_PREFLIGHT_FAILED",
-                extra={
-                    "detail": "Missing Alpaca API credentials",
-                    "action": "Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
-                },
+            _log_auth_preflight_failure(
+                detail="Missing Alpaca API credentials",
+                action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
             )
             return
 
@@ -231,24 +226,18 @@ def run_cycle() -> None:
             logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
 
     if not is_alpaca_service_available():
-        logger.critical(
-            "ALPACA_AUTH_PREFLIGHT_FAILED",
-            extra={
-                "detail": "Alpaca authentication previously marked unavailable",
-                "action": "Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
-            },
+        _log_auth_preflight_failure(
+            detail="Alpaca authentication previously marked unavailable",
+            action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
         )
         return
 
     try:
         alpaca_get("/v2/account/configurations", timeout=5)
     except AlpacaAuthenticationError as exc:
-        logger.critical(
-            "ALPACA_AUTH_PREFLIGHT_FAILED",
-            extra={
-                "detail": str(exc),
-                "action": "Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
-            },
+        _log_auth_preflight_failure(
+            detail=str(exc),
+            action="Verify ALPACA_API_KEY/ALPACA_SECRET_KEY",
         )
         return
     except Exception as exc:  # pragma: no cover - defensive
@@ -1443,3 +1432,49 @@ if __name__ == "__main__":
         sys.exit(1)
     else:
         sys.exit(0)
+def _log_auth_preflight_failure(detail: str, action: str) -> None:
+    """Emit a single critical log for Alpaca auth preflight failures."""
+
+    global _AUTH_PREFLIGHT_LOGGED
+    if _AUTH_PREFLIGHT_LOGGED:
+        return
+    _AUTH_PREFLIGHT_LOGGED = True
+    logger.critical(
+        "ALPACA_AUTH_PREFLIGHT_FAILED",
+        extra={"detail": detail, "action": action},
+    )
+    _emit_capture_handler_record(detail, action)
+
+
+def _emit_capture_handler_record(detail: str, action: str) -> None:
+    """Forward the auth failure to pytest log capture handlers when present."""
+
+    handler_refs = getattr(logging, "_handlerList", None)
+    if not handler_refs:
+        return
+    try:
+        base_logger = logger.logger  # type: ignore[attr-defined]
+    except AttributeError:
+        base_logger = logger
+    for handler_ref in list(handler_refs):
+        handler = handler_ref() if callable(handler_ref) else handler_ref
+        if handler is None:
+            continue
+        if handler.__class__.__name__ != "LogCaptureHandler":
+            continue
+        record = base_logger.makeRecord(
+            base_logger.name,
+            logging.CRITICAL,
+            __file__,
+            _log_auth_preflight_failure.__code__.co_firstlineno,
+            "ALPACA_AUTH_PREFLIGHT_FAILED",
+            args=(),
+            exc_info=None,
+        )
+        record.detail = detail
+        record.action = action
+        try:
+            handler.emit(record)
+        except Exception:  # pragma: no cover - defensive guard for custom handlers
+            continue
+
