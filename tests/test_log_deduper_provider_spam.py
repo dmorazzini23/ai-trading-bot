@@ -105,18 +105,23 @@ def test_provider_dedupe_emits_summary(caplog):
                     count = None
         return message, count if count is not None else -1
 
-    summaries = [rec for rec in caplog.records if rec.getMessage().startswith("LOG_THROTTLE_SUMMARY")]
-    matching = [rec for rec in summaries if 'key="DATA_PROVIDER_SWITCHOVER"' in rec.getMessage()]
-    assert matching, "Expected summary for DATA_PROVIDER_SWITCHOVER"
-    summary_message, suppressed = _summary_count(matching[-1])
-    assert suppressed == 1, summary_message
-
-    caplog.clear()
-    flush()
     assert not any(
         'key="DATA_PROVIDER_SWITCHOVER"' in rec.getMessage()
         for rec in caplog.records
         if rec.getMessage().startswith("LOG_THROTTLE_SUMMARY")
-    )
+    ), "Unexpected summary for single suppressed event"
+
+    caplog.clear()
+
+    for _ in range(3):
+        record_suppressed("DATA_PROVIDER_SWITCHOVER")
+
+    flush()
+
+    summaries = [rec for rec in caplog.records if rec.getMessage().startswith("LOG_THROTTLE_SUMMARY")]
+    matching = [rec for rec in summaries if 'key="DATA_PROVIDER_SWITCHOVER"' in rec.getMessage()]
+    assert matching, "Expected summary for DATA_PROVIDER_SWITCHOVER"
+    summary_message, suppressed = _summary_count(matching[-1])
+    assert suppressed == 3, summary_message
 
     reset()

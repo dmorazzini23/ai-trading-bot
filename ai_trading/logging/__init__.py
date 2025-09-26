@@ -263,6 +263,8 @@ class MessageThrottleFilter(logging.Filter):
                 record.args = ()
 
     def _emit_summary(self, record: logging.LogRecord, message: str, suppressed: int) -> None:
+        if suppressed < 3:
+            return
         key = self._summary_key_from_message(message)
         summary = f"LOG_THROTTLE_SUMMARY | suppressed={suppressed} key={self._quote_message(key)}"
         logging.getLogger(record.name or _ROOT_LOGGER_NAME).info(summary)
@@ -299,13 +301,13 @@ class MessageThrottleFilter(logging.Filter):
             if now - last_emit < self.throttle_seconds:
                 suppressed += 1
                 state["suppressed"] = suppressed
-                if now - last_summary >= self.SUMMARY_INTERVAL and suppressed:
+                if suppressed >= 3 and now - last_summary >= self.SUMMARY_INTERVAL:
                     self._emit_summary(record, message, suppressed)
                     state["suppressed"] = 0
                     state["last_summary"] = now
                 return False
 
-            if suppressed and now - last_summary >= self.SUMMARY_INTERVAL:
+            if suppressed >= 3 and now - last_summary >= self.SUMMARY_INTERVAL:
                 self._emit_summary(record, message, suppressed)
                 state["suppressed"] = 0
                 state["last_summary"] = now
@@ -323,7 +325,7 @@ class MessageThrottleFilter(logging.Filter):
         with self._lock:
             for message, state in self._state.items():
                 suppressed = int(state.get("suppressed", 0))
-                if suppressed > 0:
+                if suppressed >= 3:
                     logger_name = str(state.get("logger_name") or _ROOT_LOGGER_NAME)
                     key = self._summary_key_from_message(message)
                     summary = (
@@ -480,7 +482,7 @@ def _get_rate_limit_tracker() -> RateLimitedEventTracker:
 
 def _emit_rate_limit_summaries(summaries: list[RateLimitedSummary]) -> None:
     for summary in summaries:
-        if summary.suppressed <= 0:
+        if summary.suppressed < 3:
             continue
         parts = [
             f'LOG_THROTTLE_SUMMARY | key="{summary.key}" suppressed={summary.suppressed}',
@@ -585,6 +587,8 @@ def _flush_provider_log_summaries() -> None:
         return
     summary_logger = logging.getLogger(_ROOT_LOGGER_NAME)
     for message, suppressed in sorted(entries):
+        if suppressed < 3:
+            continue
         key = _sanitize_summary_key(message)
         summary_logger.info(
             f'LOG_THROTTLE_SUMMARY | key="{key}" suppressed={suppressed}'
