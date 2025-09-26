@@ -6781,6 +6781,10 @@ class DataFetcher:
         context_label = context or f"{provider_label} {timeframe}"
         label_value = label or (str(timeframe).lower() if isinstance(timeframe, str) else str(timeframe))
 
+        has_safe_fetch = callable(getattr(bars, "safe_get_stock_bars", None))
+        fallback_fetch = getattr(bars, "get_stock_bars", None)
+        use_legacy_fetch = (not has_safe_fetch) and callable(fallback_fetch)
+
         if base_provider == "alpaca":
             use_client = client
             if use_client is None:
@@ -6808,7 +6812,17 @@ class DataFetcher:
             if adjustment:
                 req_kwargs["adjustment"] = adjustment
             request = bars.StockBarsRequest(**req_kwargs)
-            raw_df = self._call_stock_bars(use_client, request, safe_symbol, context_label)
+            if use_legacy_fetch:
+                raw_df = self._legacy_fetch_stock_bars(
+                    fallback_fetch,
+                    use_client,
+                    request,
+                    safe_symbol,
+                    context_label,
+                )
+                raw_df = self._sanitize_legacy_stock_bars(raw_df, context=context_label)
+            else:
+                raw_df = self._call_stock_bars(use_client, request, safe_symbol, context_label)
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
@@ -6822,6 +6836,81 @@ class DataFetcher:
                 symbols_list[0], raw_df, label=label_value, context=context_label
             )
         return raw_df
+
+    @staticmethod
+    def _legacy_fetch_stock_bars(
+        fetch_fn: Any,
+        client: Any,
+        request: Any,
+        symbol: str,
+        context: str,
+    ) -> Any:
+        """Invoke ``bars.get_stock_bars`` using best-effort signature detection."""
+
+        if not callable(fetch_fn):
+            raise AttributeError(
+                "ai_trading.data.bars.get_stock_bars fallback unavailable",
+            )
+
+        attempts: tuple[tuple[tuple[Any, ...], dict[str, Any]], ...] = (
+            ((client, request), {"symbol": symbol, "context": context}),
+            ((client, request, symbol), {"context": context}),
+            ((client, request, symbol, context), {}),
+            ((client, request, symbol), {}),
+            ((client, request), {"context": context}),
+            ((client, request), {}),
+        )
+        last_exc: TypeError | None = None
+        for args, kwargs in attempts:
+            try:
+                return fetch_fn(*args, **kwargs)
+            except TypeError as exc:
+                if not DataFetcher._is_signature_mismatch(exc):
+                    raise
+                last_exc = exc
+        if last_exc is not None:
+            raise AttributeError(
+                "ai_trading.data.bars.get_stock_bars fallback incompatible with expected signature",
+            ) from last_exc
+        raise AttributeError(
+            "ai_trading.data.bars.get_stock_bars fallback invocation failed",
+        )
+
+    @staticmethod
+    def _sanitize_legacy_stock_bars(raw: Any, *, context: str) -> pd.DataFrame | None:
+        """Coerce legacy Alpaca bars into a UTC-indexed DataFrame."""
+
+        if raw is None:
+            return None
+
+        frame = getattr(raw, "df", raw)
+        if not isinstance(frame, pd.DataFrame):
+            frame = pd.DataFrame(frame)
+        if frame.empty:
+            return frame
+
+        working = frame.copy()
+        if "timestamp" in working.columns:
+            ts_values = working.pop("timestamp")
+        else:
+            reset = working.reset_index()
+            ts_values = reset.pop(reset.columns[0])
+            working = reset
+
+        idx = safe_to_datetime(ts_values, context=f"{context} legacy")
+        idx = pd.DatetimeIndex(idx)
+        try:
+            if idx.tz is None:
+                idx = idx.tz_localize("UTC")
+            else:
+                idx = idx.tz_convert("UTC")
+        except (TypeError, ValueError):
+            idx = pd.DatetimeIndex(idx).tz_localize("UTC")
+
+        idx.name = "timestamp"
+        working.index = idx
+        working = working.sort_index()
+        return working
 
     def get_bars(
         self,
