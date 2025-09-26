@@ -54,19 +54,19 @@ def start(api: Any | None = None):
             except Exception:  # pragma: no cover - defensive
                 existing_api = None
 
-    if existing_api is None:
-        if api is not None:
-            setattr(inner, "api", api)
-        else:  # Defer to bot_engine to resolve the global trading client
-            bot_engine.ensure_alpaca_attached(inner)
-            try:
-                existing_api = getattr(inner, "api")
-            except Exception:
-                existing_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
-            if existing_api is None:
-                # Fallback to a minimal stub to satisfy tests when Alpaca
-                # clients are unavailable or intentionally absent.
-                setattr(inner, "api", object())
+    if api is not None:
+        setattr(inner, "api", api)
+    elif existing_api is None:
+        # Defer to bot_engine to resolve the global trading client
+        bot_engine.ensure_alpaca_attached(inner)
+        try:
+            existing_api = getattr(inner, "api")
+        except Exception:
+            existing_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
+        if existing_api is None:
+            # Fallback to a minimal stub to satisfy tests when Alpaca
+            # clients are unavailable or intentionally absent.
+            setattr(inner, "api", object())
     final_api = None
     if inner is not None:
         final_api = getattr(getattr(inner, "__dict__", {}), "get", lambda *_a, **_k: None)("api")
