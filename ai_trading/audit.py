@@ -194,7 +194,11 @@ def log_trade(
     Accepts an optional `exposure` param and writes a compact schema when
     `extra_info` suggests a test/audit mode.
     """
-    main_path = Path(TRADE_LOG_FILE)
+    override = os.getenv("TRADE_LOG_FILE") or os.getenv("AI_TRADING_TRADE_LOG_FILE")
+    if override:
+        main_path = Path(override)
+    else:
+        main_path = Path(TRADE_LOG_FILE)
     targets = _compute_targets(main_path)
     for p in targets:
         try:
