@@ -10,9 +10,9 @@ with those structures.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import fields, is_dataclass
-from types import ModuleType, SimpleNamespace
+from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping
+from dataclasses import fields, is_dataclass, replace
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import TypeVar
 
 try:
@@ -150,6 +150,28 @@ def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
         return True
 
 
+def _recreate_dataclass_if_needed(
+    obj: object, mutated_fields: dict[str, object]
+) -> object:
+    """Return a dataclass instance reflecting ``mutated_fields``.
+
+    ``dataclasses.replace`` handles frozen/slots dataclasses while preserving
+    ``eq``/``hash`` semantics. When ``replace`` is not viable (``init=False``
+    fields, custom ``__init__``), we fall back to in-place assignment using
+    :func:`_assign_dataclass_attr`.
+    """
+
+    if not mutated_fields:
+        return obj
+
+    try:
+        return replace(obj, **mutated_fields)
+    except Exception:
+        for name, value in mutated_fields.items():
+            _assign_dataclass_attr(obj, name, value)
+        return obj
+
+
 def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> object:
     obj_id = id(obj)
     if obj_id in seen:
@@ -159,12 +181,28 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
     if _is_asyncio_primitive(obj):
         return _maybe_recreate_lock(obj, loop)
 
-    if isinstance(obj, dict):
+    if isinstance(obj, Mapping):
+        mutated = False
+        updates: list[tuple[object, object]] = []
         for key, value in list(obj.items()):
             new_value = _scan(value, seen, loop)
-            if new_value is not value:
-                obj[key] = new_value
-        return obj
+            mutated = mutated or new_value is not value
+            updates.append((key, new_value))
+        if not mutated:
+            return obj
+
+        if isinstance(obj, MutableMapping):
+            for key, value in updates:
+                obj[key] = value
+            return obj
+
+        if isinstance(obj, MappingProxyType):
+            return MappingProxyType(dict(updates))
+
+        try:
+            return type(obj)(updates)
+        except Exception:
+            return dict(updates)
 
     if isinstance(obj, list):
         for idx, value in enumerate(list(obj)):
@@ -208,6 +246,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         return obj
 
     if is_dataclass(obj) and not isinstance(obj, type):
+        replacements: dict[str, object] = {}
         for field in fields(obj):
             try:
                 value = getattr(obj, field.name)
@@ -215,7 +254,11 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
                 continue
             new_value = _scan(value, seen, loop)
             if new_value is not value:
-                _assign_dataclass_attr(obj, field.name, new_value)
+                replacements[field.name] = new_value
+
+        if replacements:
+            obj = _recreate_dataclass_if_needed(obj, replacements)
+
         try:
             extra_attrs = vars(obj)
         except TypeError:
@@ -309,67 +352,78 @@ async def run_with_concurrency(
     if host_limit is not None:
         limit = min(limit, host_limit)
 
-    semaphore = asyncio.Semaphore(limit)
-    counter_lock = asyncio.Lock()
-    running = 0
     results: dict[str, T | None] = {}
+    pending_tasks: set[asyncio.Task[tuple[str, T | BaseException]]] = set()
+    symbol_iter = iter(symbols)
 
     async def _execute(symbol: str) -> tuple[str, T | BaseException]:
-        global PEAK_SIMULTANEOUS_WORKERS
-        nonlocal running
-        incremented = False
         try:
-            async with semaphore:
-                try:
-                    async with counter_lock:
-                        running += 1
-                        incremented = True
-                        if running > PEAK_SIMULTANEOUS_WORKERS:
-                            PEAK_SIMULTANEOUS_WORKERS = running
-                    result = await worker(symbol)
-                    return symbol, result
-                except BaseException as exc:  # noqa: BLE001 - captured for aggregation
-                    return symbol, exc
-                finally:
-                    if incremented:
-                        try:
-                            async with counter_lock:
-                                running -= 1
-                        except BaseException:
-                            running = max(0, running - 1)
-        except BaseException as exc:  # cancelled while acquiring semaphore
+            result = await worker(symbol)
+        except BaseException as exc:  # noqa: BLE001 - captured for aggregation
             return symbol, exc
+        return symbol, result
 
-    tasks: list[asyncio.Task[tuple[str, T | BaseException]]] = [
-        asyncio.create_task(_execute(sym)) for sym in symbols
-    ]
+    async def _drive() -> None:
+        nonlocal pending_tasks
+        global PEAK_SIMULTANEOUS_WORKERS
 
-    if not tasks:
-        return results, set(), set()
+        symbols_exhausted = False
 
-    gather_coro = asyncio.gather(*tasks, return_exceptions=False)
+        while True:
+            while len(pending_tasks) < limit and not symbols_exhausted:
+                try:
+                    symbol = next(symbol_iter)
+                except StopIteration:
+                    symbols_exhausted = True
+                    break
+                task = asyncio.create_task(_execute(symbol))
+                pending_tasks.add(task)
+                current = len(pending_tasks)
+                if current > PEAK_SIMULTANEOUS_WORKERS:
+                    PEAK_SIMULTANEOUS_WORKERS = current
+
+            if not pending_tasks:
+                if symbols_exhausted:
+                    break
+                continue
+
+            done, still_pending = await asyncio.wait(
+                pending_tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            pending_tasks = set(still_pending)
+
+            for task in done:
+                try:
+                    symbol, outcome = task.result()
+                except BaseException:
+                    continue
+                if isinstance(outcome, BaseException):
+                    FAILED_SYMBOLS.add(symbol)
+                    results[symbol] = None
+                else:
+                    SUCCESSFUL_SYMBOLS.add(symbol)
+                    results[symbol] = outcome
+
+            if pending_tasks:
+                continue
+
+    driver = _drive()
+
     try:
-        task_results = (
-            await asyncio.wait_for(gather_coro, timeout_s)
-            if timeout_s is not None
-            else await gather_coro
-        )
+        await asyncio.wait_for(driver, timeout_s) if timeout_s is not None else await driver
     except asyncio.TimeoutError:
-        for task in tasks:
+        for task in list(pending_tasks):
             task.cancel()
-        task_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    for entry in task_results:
-        if isinstance(entry, BaseException):
-            # ``asyncio.gather`` only yields bare exceptions when our task itself failed
-            continue
-        symbol, outcome = entry
-        if isinstance(outcome, BaseException):
-            FAILED_SYMBOLS.add(symbol)
-            results[symbol] = None
-        else:
-            SUCCESSFUL_SYMBOLS.add(symbol)
-            results[symbol] = outcome
+        gathered = await asyncio.gather(*pending_tasks, return_exceptions=True)
+        for entry in gathered:
+            if isinstance(entry, tuple) and len(entry) == 2:
+                symbol, outcome = entry
+                if isinstance(outcome, BaseException):
+                    FAILED_SYMBOLS.add(symbol)
+                    results.setdefault(symbol, None)
+                else:
+                    SUCCESSFUL_SYMBOLS.add(symbol)
+                    results.setdefault(symbol, outcome)
 
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 

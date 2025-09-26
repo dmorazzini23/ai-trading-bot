@@ -188,6 +188,42 @@ def test_run_with_concurrency_rebinds_frozen_nested_dataclass_lock_from_namespac
     assert wrapped.namespace.holder.lock is not original_lock
 
 
+def test_run_with_concurrency_rebinds_lock_inside_frozenset_slots_dataclass():
+    @dataclass(frozen=True, slots=True, eq=False)
+    class FrozenSlotsHolder:
+        lock: asyncio.Lock
+
+    def build_lock_in_fresh_loop() -> asyncio.Lock:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _factory() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            return loop.run_until_complete(_factory())
+        finally:
+            loop.close()
+
+    original_lock = build_lock_in_fresh_loop()
+    namespace = SimpleNamespace(payload=frozenset({FrozenSlotsHolder(lock=original_lock)}))
+    async def worker(sym: str) -> str:
+        holder = next(iter(namespace.payload))
+        async with holder.lock:
+            await asyncio.sleep(0)
+            return sym
+
+    symbols = ["A", "B", "C"]
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+
+    holder_after = next(iter(namespace.payload))
+    assert holder_after.lock is not original_lock
+
+
 def test_run_with_concurrency_rebinds_foreign_loop_lock():
     def build_lock_in_fresh_loop() -> asyncio.Lock:
         loop = asyncio.new_event_loop()
