@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import importlib.machinery
 import inspect
 import sys
 import time
@@ -169,15 +171,47 @@ def _load_train_module() -> ModuleType:
     if module is None:
         try:
             module = importlib.import_module(module_name)
-        except ModuleNotFoundError as exc:  # pragma: no cover - defensive guard
-            raise AttributeError(
-                f"module {__name__!r} has no attribute 'train'"
-            ) from exc
+        except ModuleNotFoundError as exc:
+            module = _load_train_stub(module_name, exc)
+        except ImportError as exc:  # pragma: no cover - defensive guard
+            module = _load_train_stub(module_name, exc)
+    if module is None or not inspect.ismodule(module):
+        raise AttributeError(f"module {__name__!r} has no attribute 'train'")
     sys.modules[module_name] = module
     globals()["train"] = module
     _TRAIN_MODULE_STATE["load_count"] += 1
     _TRAIN_MODULE_STATE["last_loaded_at"] = time.time()
     _TRAIN_MODULE_STATE["last_load_duration"] = time.perf_counter() - start
+    return module
+
+
+def _load_train_stub(module_name: str, original_exc: Exception) -> ModuleType:
+    """Load the lightweight stub implementation for the train module."""
+
+    stub_name = f"{__name__}._train_stub"
+    spec = importlib.util.find_spec(stub_name)
+    if spec is None or spec.origin is None:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute 'train'"
+        ) from original_exc
+    loader = importlib.machinery.SourceFileLoader(module_name, spec.origin)
+    stub_spec = importlib.util.spec_from_loader(module_name, loader, origin=spec.origin)
+    if stub_spec is None or stub_spec.loader is None:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute 'train'"
+        ) from original_exc
+    module = importlib.util.module_from_spec(stub_spec)
+    try:
+        stub_spec.loader.exec_module(module)
+    except Exception as stub_exc:  # pragma: no cover - defensive guard
+        raise AttributeError(
+            f"module {__name__!r} has no attribute 'train'"
+        ) from stub_exc
+    module.__dict__.setdefault("__fallback_exception__", original_exc)
+    module.__dict__.setdefault("USING_RL_TRAIN_STUB", True)
+    logger.warning(
+        "Using RL training stub due to import failure: %s", original_exc
+    )
     return module
 
 
