@@ -70,3 +70,51 @@ def test_abort_when_market_closed(monkeypatch):
     assert delays == [0, 1]
     assert 'sleep' not in called
     assert (symbol, timeframe) not in _RETRY_COUNTS
+
+
+def test_raise_when_window_has_no_trading_session(monkeypatch):
+    symbol = 'TSLA'
+    timeframe = '5Min'
+    raiser = _Raiser(fail_times=3)
+    retry_delays = [0.25, 0.5]
+    monkeypatch.setattr('ai_trading.data.fetch.empty_handling.is_market_open', lambda: True)
+    sleep_called = {'count': 0}
+
+    def _sleep(_s: float) -> None:
+        sleep_called['count'] += 1
+
+    monkeypatch.setattr(
+        'ai_trading.data.fetch.empty_handling.time',
+        types.SimpleNamespace(sleep=_sleep),
+    )
+
+    calls = {'check': 0}
+
+    def _has_session() -> bool:
+        calls['check'] += 1
+        return False
+
+    with pytest.raises(EmptyBarsError):
+        fetch_with_retries(
+            symbol,
+            timeframe,
+            raiser,
+            retry_delays.copy(),
+            window_has_trading_session=_has_session,
+        )
+
+    assert raiser.calls == 1
+    assert calls['check'] == 1
+    assert (symbol, timeframe) not in _RETRY_COUNTS
+    assert retry_delays == [0.25, 0.5]
+    assert sleep_called['count'] == 0
+
+    success = fetch_with_retries(
+        symbol,
+        timeframe,
+        _Raiser(fail_times=0),
+        [0.1],
+        window_has_trading_session=lambda: True,
+    )
+    assert not success.empty
+    assert (symbol, timeframe) not in _RETRY_COUNTS
