@@ -1327,6 +1327,35 @@ class TradingConfig:
     def to_dict(self) -> dict[str, Any]:
         return dict(self._values)
 
+    def update(self, **updates: Any) -> "TradingConfig":
+        """Merge ``updates`` into the configuration and return ``self``.
+
+        The configuration container is conceptually immutable to callers, but
+        internally it keeps a mutable mapping for efficiency.  The update
+        helper mirrors the historical behaviour expected by existing call
+        sites: validate requested fields, merge the supplied values, refresh
+        derived properties, and return the instance so calls may be chained.
+        """
+
+        if not updates:
+            return self
+
+        unknown = [key for key in updates if key not in self._values]
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise AttributeError(f"TradingConfig has no fields: {names}")
+
+        for key, value in updates.items():
+            spec = SPEC_BY_FIELD.get(key)
+            if spec is not None:
+                value = _validate_bounds(spec, value)
+            self._values[key] = value
+
+        if {"alpaca_base_url", "app_env"} & updates.keys():
+            self._values["paper"] = _infer_paper_mode(self._values)
+
+        return self
+
     def snapshot_sanitized(self) -> dict[str, Any]:
         data = {
             "risk": {
