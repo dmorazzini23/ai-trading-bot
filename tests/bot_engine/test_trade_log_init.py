@@ -204,6 +204,7 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     log_path = parent / "child" / "trades.jsonl"
     log_dir = log_path.parent
     original_makedirs = bot_engine.os.makedirs
+    original_path_mkdir = bot_engine.Path.mkdir
 
     def fake_makedirs(path: str, mode: int = 0o777, exist_ok: bool = False) -> None:
         if bot_engine.os.path.abspath(path) == bot_engine.os.path.abspath(str(log_dir)):
@@ -211,6 +212,13 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
         return original_makedirs(path, mode=mode, exist_ok=exist_ok)
 
     monkeypatch.setattr(bot_engine.os, "makedirs", fake_makedirs)
+
+    def fake_path_mkdir(self, *args, **kwargs):  # noqa: D401, ANN001
+        if Path(self) == log_dir:
+            raise PermissionError("mocked permission error")
+        return original_path_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(bot_engine.Path, "mkdir", fake_path_mkdir)
 
     class _StubTradeLogger:
         def __init__(self, path: str | Path | None = None, *args, **kwargs) -> None:  # noqa: D401, ARG002
@@ -290,3 +298,79 @@ def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monke
     assert bot_engine.TRADE_LOG_FILE == str(expected_path)
     assert expected_path.exists()
     assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
+
+
+def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_path, monkeypatch):
+    """Fallback path resolution should defer to XDG state home when ancestors are blocked."""
+
+    state_home = tmp_path / "state-home"
+    state_home.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    blocked_root = tmp_path / "blocked"
+    blocked_root.mkdir()
+    log_path = blocked_root / "child" / "trades.jsonl"
+    log_dir = log_path.parent
+
+    original_path_mkdir = bot_engine.Path.mkdir
+
+    def fake_mkdir(self, *args, **kwargs):  # noqa: D401, ANN001
+        if Path(self) == log_dir:
+            raise PermissionError("mocked permission error")
+        return original_path_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(bot_engine.Path, "mkdir", fake_mkdir)
+
+    def fake_is_dir_writable(path: str) -> bool:
+        resolved = Path(path).resolve(strict=False)
+        try:
+            if resolved == state_home or resolved.is_relative_to(state_home):
+                return True
+        except AttributeError:
+            pass
+        return False
+
+    monkeypatch.setattr(bot_engine, "_is_dir_writable", fake_is_dir_writable)
+
+    class _StubTradeLogger:
+        def __init__(self, path: str | Path | None = None, *args, **kwargs) -> None:  # noqa: D401, ARG002
+            self.path = bot_engine.abspath_safe(path)
+
+        def log_entry(self, *args, **kwargs) -> None:  # noqa: D401, ARG002
+            return None
+
+    class _LoggerOnceStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+            self._emitted: set[str] = set()
+
+        def warning(self, msg: str, *args, **kwargs) -> None:  # noqa: D401, ANN001
+            key = kwargs.get("key") or msg
+            if key in self._emitted:
+                return
+            self._emitted.add(key)
+            payload = kwargs.get("extra") or {}
+            self.calls.append((msg, dict(payload)))
+
+    logger_once_stub = _LoggerOnceStub()
+
+    monkeypatch.setattr(bot_engine, "TradeLogger", _StubTradeLogger)
+    monkeypatch.setattr(bot_engine, "logger_once", logger_once_stub)
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(log_path))
+
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+    bot_engine._TRADE_LOG_FALLBACK_PATH = None
+
+    logger_instance = bot_engine.get_trade_logger()
+
+    fallback_path = state_home / "ai-trading-bot" / log_path.name
+    assert logger_instance.path == str(fallback_path)
+    assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
+    assert fallback_path.exists()
+
+    # Ensure once-per-process warning semantics remain intact.
+    assert logger_once_stub.calls and logger_once_stub.calls[0][0] == "TRADE_LOG_FALLBACK_USER_STATE"
+
+    bot_engine.get_trade_logger()
+
+    assert len(logger_once_stub.calls) == 1
