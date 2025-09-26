@@ -6160,7 +6160,18 @@ CONF_THRESHOLD = float(
 CONFIRMATION_COUNT = int(params.get("CONFIRMATION_COUNT", 2))
 
 
-def _env_float(default: float, *keys: str) -> float:
+def _env_float(default: float | str, *keys: str) -> float:
+    if isinstance(default, str):
+        name = default
+        fallback = float(keys[0]) if keys else 0.0
+        raw = os.getenv(name)
+        if raw in (None, ""):
+            return fallback
+        try:
+            return float(raw)
+        except COMMON_EXC:
+            logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": name, "value": raw})
+            return fallback
     for k in keys:
         v = os.getenv(k)
         if v is None or v == "":
@@ -6169,7 +6180,10 @@ def _env_float(default: float, *keys: str) -> float:
             return float(v)
         except COMMON_EXC:
             logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": k, "value": v})
-    return default
+    try:
+        return float(default)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _minute_data_freshness_limit() -> int:
@@ -14061,8 +14075,11 @@ def _evaluate_data_gating(
         gap_ratio_val = quality.get("gap_ratio")
         if isinstance(gap_ratio_val, (int, float, np.floating)):
             ratio = float(gap_ratio_val)
+            annotations["gap_ratio"] = ratio
+            annotations["gap_limit"] = gap_limit
             if ratio >= 0.999:
-                fatal_reasons.append(f"gap_ratio={ratio * 100:.2f}%>=100.00%")
+                annotations["coverage_block"] = True
+                fatal_reasons.append("insufficient_intraday_coverage")
             elif ratio > gap_limit:
                 gap_ratio_reason = f"gap_ratio={ratio * 100:.2f}%>limit={gap_limit * 100:.2f}%"
                 fallback_required = True
@@ -14082,6 +14099,7 @@ def _evaluate_data_gating(
             ok, age, reason = _check_fallback_quote_age(
                 ctx, symbol, max_age=_fallback_quote_max_age_seconds()
             )
+            annotations["fallback_quote_ok"] = bool(ok)
             if ok:
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = None
@@ -14096,6 +14114,7 @@ def _evaluate_data_gating(
                 reason_label = reason or "fallback_quote_invalid"
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = reason_label
+                annotations["fallback_quote_ok"] = False
                 if reason_label in _TRANSIENT_FALLBACK_REASONS:
                     reasons.append(reason_label)
                 else:
@@ -14283,6 +14302,18 @@ def _enter_long(
         price_source,
         prefer_backup_quote=prefer_backup_quote,
     )
+    annotations = gate.annotations or {}
+    gap_ratio = annotations.get("gap_ratio")
+    gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
+    fallback_ok = annotations.get("fallback_quote_ok")
+    fallback_quote_available = bool(fallback_ok)
+    if isinstance(gap_ratio, (int, float)) and gap_ratio >= 0.999:
+        logger.warning(
+            "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s gap_ratio=%.2f%%",
+            symbol,
+            gap_ratio * 100.0,
+        )
+        return True
     if gate.block:
         reason_label = ";".join(gate.reasons) if gate.reasons else "unreliable_price"
         logger.info(
@@ -14297,13 +14328,17 @@ def _enter_long(
             },
         )
         return True
+
     if (
-        gate.reasons
-        and not gate.block
-        and any(reason != "liquidity_fallback" for reason in gate.reasons)
+        isinstance(gap_ratio, (int, float))
+        and gap_ratio > gap_limit
+        and not fallback_quote_available
     ):
         logger.info(
-            "DATA_GATING_PASS_THROUGH",
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio=%.2f%%>limit=%.2f%%;quote_source_unavailable",
+            symbol,
+            gap_ratio * 100.0,
+            gap_limit * 100.0,
             extra={
                 "symbol": symbol,
                 "reasons": gate.reasons,
@@ -14311,7 +14346,36 @@ def _enter_long(
                 "prefer_backup": prefer_backup_quote,
             },
         )
-    if fallback_active and quote_price is not None:
+        return True
+
+    reasons_to_log: tuple[str, ...] | None = None
+    if gate.reasons:
+        filtered = [r for r in gate.reasons if r != "liquidity_fallback"]
+        if filtered:
+            reasons_to_log = tuple(filtered)
+    if (
+        isinstance(gap_ratio, (int, float))
+        and gap_ratio > gap_limit
+        and fallback_quote_available
+    ):
+        reason = f"gap_ratio={gap_ratio * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+        if reasons_to_log is None:
+            reasons_to_log = (reason,)
+        elif reason not in reasons_to_log:
+            reasons_to_log = tuple(list(reasons_to_log) + [reason])
+
+    if reasons_to_log:
+        logger.info(
+            "DATA_GATING_PASS_THROUGH",
+            extra={
+                "symbol": symbol,
+                "reasons": reasons_to_log,
+                "price_source": price_source,
+                "prefer_backup": prefer_backup_quote,
+            },
+        )
+
+    if (fallback_active or fallback_quote_available) and quote_price is not None:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
@@ -18898,18 +18962,17 @@ def _check_runtime_stops(runtime) -> None:
         logger.warning(
             "Execution engine missing check_stops; risk-stop checks skipped",
         )
-    trailing_hook = getattr(exec_engine, "check_trailing_stops", None)
-    if callable(trailing_hook):
-        try:
-            trailing_hook()
-        except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
-            logger.info(
-                "check_trailing_stops raised but was suppressed: %s", e
-            )
-    else:
-        logger.debug(
-            "Execution engine missing check_trailing_stops; trailing-stop checks skipped"
+    try:
+        getattr(exec_engine, "check_trailing_stops", lambda: None)()
+    except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
+        logger.info(
+            "check_trailing_stops raised but was suppressed: %s", e
         )
+    else:
+        if not hasattr(exec_engine, "check_trailing_stops"):
+            logger.debug(
+                "Execution engine missing check_trailing_stops; trailing-stop checks skipped"
+            )
 
 _LAST_MARKET_CLOSED_LOG = 0.0
 

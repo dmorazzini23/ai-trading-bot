@@ -20,7 +20,6 @@ from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
 from ai_trading.exc import COMMON_EXC
 from ai_trading.logging import get_logger
-from ai_trading.logging.emit_once import emit_once
 from ai_trading.settings import get_verbose_logging
 from ai_trading.utils.time import monotonic_time
 
@@ -682,25 +681,14 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
 
 
 def safe_to_datetime(
-    arr,
+    values,
     format: str | None = None,
     utc: bool = True,
     *,
     context: str = "",
     _warn_key: str | None = None,
 ):
-    """Safely convert values to a timezone-aware :class:`~pandas.DatetimeIndex`.
-
-    Handles common data quality issues encountered in external provider data:
-
-    * Tuples of ``(label, timestamp)`` by extracting the timestamp element.
-    * Mixed string/integer inputs (with heuristic detection of epoch seconds vs
-      milliseconds for numeric payloads).
-    * Placeholder values such as ``"0"``, ``0``, ``""`` and ``None`` which are
-      coerced to ``NaT`` instead of triggering noisy warnings.
-    * Rate-limited warnings when coercion is required so log volume remains
-      manageable in production.
-    """
+    """Safely convert ``values`` to a timezone-aware :class:`~pandas.DatetimeIndex`."""
 
     try:
         import pandas as pd  # pylint: disable=import-error
@@ -709,71 +697,69 @@ def safe_to_datetime(
             "pandas is required for safe_to_datetime. Install with `pip install ai-trading-bot[pandas]`."
         ) from exc
 
-    if arr is None:
+    if values is None:
         return pd.DatetimeIndex([], tz="UTC") if utc else pd.DatetimeIndex([])
 
-    if isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
-        arr = arr[1]
-    elif isinstance(arr, (list, pd.Index, pd.Series)) and len(arr) > 0 and isinstance(arr[0], tuple):
-        arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
-
     try:
-        series = pd.Series(arr)
+        series = pd.Series(values)
     except Exception:
         try:
-            series = pd.Series(list(arr))  # type: ignore[arg-type]
+            series = pd.Series(list(values))  # type: ignore[arg-type]
         except Exception:
-            series = pd.Series([arr])
+            series = pd.Series([values])
 
     if series.empty:
         return pd.DatetimeIndex([], tz="UTC") if utc else pd.DatetimeIndex([])
 
-    replacements = {"0": pd.NaT, 0: pd.NaT, "": pd.NaT, None: pd.NaT}
-    placeholders = {"0", 0, "", None}
-    try:
-        series = series.replace(replacements)
-    except Exception:
-        series = series.apply(lambda value: pd.NaT if value in placeholders else value)
+    series = series.replace({"": None, "0": None, 0: None})
 
-    numeric_values = series.dropna()
+    numeric = series.dropna()
     is_numeric = False
     try:
-        from pandas.api.types import infer_dtype  # pylint: disable=import-error
+        from pandas.api import types as pd_types  # pylint: disable=import-error
 
-        inferred = infer_dtype(numeric_values, skipna=True)
-        is_numeric = inferred in {"integer", "floating", "mixed-integer", "mixed-integer-float"}
+        is_numeric = pd_types.is_numeric_dtype(numeric)
     except Exception:
         try:
-            is_numeric = bool(numeric_values.apply(lambda value: isinstance(value, (int, float))).all())
+            is_numeric = bool(numeric.apply(lambda value: isinstance(value, (int, float))).all())
         except Exception:
             is_numeric = False
 
     if is_numeric:
-        numeric_series = pd.to_numeric(series, errors="coerce")
-        dropna = numeric_series.dropna()
-        if not dropna.empty and (dropna > 1_000_000_000_000).any():
-            numeric_series = numeric_series / 1000.0
-        result = pd.to_datetime(numeric_series, unit="s", errors="coerce", utc=utc)
+        coerced = pd.to_numeric(series, errors="coerce")
+        finite = coerced.dropna()
+        if not finite.empty and (finite > 1_000_000_000_000).any():
+            coerced = coerced / 1000.0
+        converted = pd.to_datetime(coerced, unit="s", errors="coerce", utc=utc)
     else:
-        fmt = "%Y-%m-%d %H:%M:%S" if format is None else format
-        result = pd.to_datetime(series, format=fmt, errors="coerce", utc=utc)
+        converted = pd.to_datetime(series, format=format, errors="coerce", utc=utc)
 
-    ctx = f" ({context})" if context else ""
-    invalid = getattr(result, "isna", lambda: pd.Series([]))()
     try:
-        invalid_count = int(invalid.sum()) if hasattr(invalid, "sum") else 0
+        coerced = int(((converted.isna()) & series.notna()).sum())
     except Exception:
-        invalid_count = 0
-    if invalid_count:
-        total = len(result)
+        coerced = 0
+    if coerced:
         warn_key = _warn_key or (f"SAFE_TO_DATETIME:{context}" if context else "SAFE_TO_DATETIME")
-        message = f"safe_to_datetime coerced {invalid_count}/{total} values to NaT{ctx}"
-        emit_once(logger, warn_key, "warning", message)
+        try:
+            from ai_trading.logging import log_once
+
+            log_once(warn_key, f"safe_to_datetime coerced {coerced} values to NaT")
+        except Exception:  # pragma: no cover - warning best effort
+            pass
 
     try:
-        return pd.DatetimeIndex(result)
+        index = pd.DatetimeIndex(converted)
     except Exception:
-        return pd.DatetimeIndex(result.to_numpy())  # type: ignore[arg-type]
+        index = pd.DatetimeIndex(converted.to_numpy())  # type: ignore[arg-type]
+
+    if utc:
+        if getattr(index, "tz", None) is None:
+            index = index.tz_localize("UTC")
+        return index
+
+    if getattr(index, "tz", None) is not None:
+        return index.tz_convert("UTC").tz_localize(None)
+    return index
 
 
 def validate_ohlcv(df: DataFrame, required: list[str] | None = None, require_monotonic: bool = True) -> None:

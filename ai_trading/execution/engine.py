@@ -766,20 +766,8 @@ class ExecutionEngine:
             # Never allow lifecycle hooks to raise
             pass
 
-    def end_cycle(self) -> None:
-        """Hook called at the end of a trading cycle (no-op)."""
-        try:
-            # Run simple post-cycle safety checks
-            self.check_stops()
-        except Exception:
-            # Never allow lifecycle hooks to raise
-            pass
-        try:
-            # Trailing-stop checks are best-effort
-            self.check_trailing_stops()
-        except Exception:
-            # Never allow lifecycle hooks to raise
-            pass
+    def end_cycle(self) -> None:  # optional hook
+        return None
 
     def _track_order(self, order: Order) -> None:
         """Track an order in the shared monitoring structure."""
@@ -865,24 +853,8 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.info("check_stops: suppressed exception: %s", e)
 
-    def check_trailing_stops(self) -> None:
-        """Evaluate any active trailing-stop handlers.
-
-        This is a best-effort hook used by the trading loop to ensure any
-        attached trailing-stop logic runs after a cycle. If no trailing-stop
-        handler is configured, this method simply returns. Any exceptions from
-        the handler are suppressed so callers may invoke this method
-        unconditionally.
-        """
-        try:
-            handler = getattr(self, "trailing_stop_handler", None)
-            if handler is None:
-                return
-            check_fn = getattr(handler, "check", None)
-            if callable(check_fn):
-                check_fn()
-        except Exception as e:  # pragma: no cover - defensive
-            logger.debug("check_trailing_stops: suppressed exception: %s", e)
+    def check_trailing_stops(self) -> None:  # optional hook
+        return None
 
     def _validate_short_selling(self, _api, symbol: str, qty: float, price: float | None = None) -> bool:
         """Run short selling validation and return True on success."""
