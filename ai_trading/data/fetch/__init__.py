@@ -701,22 +701,28 @@ def _mark_fallback(
     key = _fallback_key(symbol, timeframe, start, end)
     fallback_order.register_fallback(provider, symbol)
     metadata: dict[str, str] = {"fallback_provider": provider}
+    log_extra: dict[str, str] = dict(metadata)
     if from_provider:
         metadata["from_provider"] = from_provider
+        log_extra["from_provider"] = from_provider
     if fallback_feed:
         metadata["fallback_feed"] = fallback_feed
+        log_extra["fallback_feed"] = fallback_feed
     elif provider and not provider.startswith("alpaca_"):
         metadata["fallback_feed"] = provider
+        log_extra["fallback_feed"] = provider
     _FALLBACK_METADATA[key] = metadata
     # Emit once per unique (symbol, timeframe, window)
     if key not in _FALLBACK_WINDOWS:
-        log_backup_provider_used(
+        payload = log_backup_provider_used(
             provider,
             symbol=symbol,
             timeframe=timeframe,
             start=start,
             end=end,
+            extra=log_extra,
         )
+        logger.warning("BACKUP_PROVIDER_USED", extra=payload)
         provider_monitor.record_switchover(from_provider or "alpaca", provider)
     _FALLBACK_WINDOWS.add(key)
     fallback_name: str | None = None
@@ -4578,16 +4584,6 @@ def get_daily_df(
 
     use_alpaca = should_import_alpaca_sdk()
 
-    if not use_alpaca:
-        start_dt = ensure_datetime(start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10))
-        end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
-        df = _backup_get_bars(symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"))
-    else:
-        try:
-            from ai_trading.alpaca_api import get_bars_df as _get_bars_df
-        except Exception as exc:  # pragma: no cover - optional dependency
-            raise DataFetchError("Alpaca API unavailable") from exc
-
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
 
     if feed is None:
@@ -4595,6 +4591,33 @@ def get_daily_df(
         override = _FEED_OVERRIDE_BY_TF.get(tf_key)
         if override:
             normalized_feed = _normalize_feed_value(override)
+
+    df: Any = None
+    if not use_alpaca:
+        start_dt = ensure_datetime(start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10))
+        end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
+        df = _backup_get_bars(symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"))
+        if df is None or getattr(df, "empty", False):
+            try:
+                from ai_trading import alpaca_api as _bars_mod
+
+                fallback_df = _bars_mod.get_bars_df(
+                    symbol,
+                    timeframe="1Day",
+                    start=start,
+                    end=end,
+                    feed=normalized_feed,
+                    adjustment=adjustment,
+                )
+            except Exception:  # pragma: no cover - optional dependency
+                fallback_df = None
+            if fallback_df is not None:
+                df = fallback_df
+    else:
+        try:
+            from ai_trading.alpaca_api import get_bars_df as _get_bars_df
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise DataFetchError("Alpaca API unavailable") from exc
 
     adjustment = adjustment or "raw"
     if isinstance(adjustment, str):
