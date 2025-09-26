@@ -60,3 +60,71 @@ def test_balanced_mode_max_position_alias(monkeypatch):
 
     cfg = TradingConfig.from_env()
     assert cfg.max_position_size == pytest.approx(float(alias_value))
+
+
+def test_trading_mode_overrides_restore_documented_defaults(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "aggressive")
+    monkeypatch.setenv("MAX_DRAWDOWN_THRESHOLD", "0.2")
+    for key in (
+        "KELLY_FRACTION",
+        "AI_TRADING_KELLY_FRACTION",
+        "CONF_THRESHOLD",
+        "AI_TRADING_CONF_THRESHOLD",
+        "DAILY_LOSS_LIMIT",
+        "AI_TRADING_DAILY_LOSS_LIMIT",
+        "MAX_POSITION_SIZE",
+        "AI_TRADING_MAX_POSITION_SIZE",
+        "CAPITAL_CAP",
+        "AI_TRADING_CAPITAL_CAP",
+        "CONFIRMATION_COUNT",
+        "TAKE_PROFIT_FACTOR",
+        "AI_TRADING_TRADING_MODE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    from ai_trading.config.management import TradingConfig
+
+    expected = {
+        "conservative": {
+            "kelly_fraction": 0.25,
+            "conf_threshold": 0.85,
+            "daily_loss_limit": 0.03,
+            "max_position_size": 5000.0,
+            "capital_cap": 0.20,
+            "confirmation_count": 3,
+            "take_profit_factor": 1.5,
+        },
+        "balanced": {
+            "kelly_fraction": 0.6,
+            "conf_threshold": 0.75,
+            "daily_loss_limit": 0.05,
+            "max_position_size": 8000.0,
+            "capital_cap": 0.25,
+            "confirmation_count": 2,
+            "take_profit_factor": 1.8,
+        },
+        "aggressive": {
+            "kelly_fraction": 0.75,
+            "conf_threshold": 0.65,
+            "daily_loss_limit": 0.08,
+            "max_position_size": 12000.0,
+            "capital_cap": 0.30,
+            "confirmation_count": 1,
+            "take_profit_factor": 2.5,
+        },
+    }
+
+    for mode, values in expected.items():
+        cfg = TradingConfig.from_env(
+            {
+                "TRADING_MODE": mode,
+                "MAX_DRAWDOWN_THRESHOLD": 0.2,
+            }
+        )
+        assert cfg.kelly_fraction == pytest.approx(values["kelly_fraction"])
+        assert cfg.conf_threshold == pytest.approx(values["conf_threshold"])
+        assert cfg.daily_loss_limit == pytest.approx(values["daily_loss_limit"])
+        assert cfg.max_position_size == pytest.approx(values["max_position_size"])
+        assert cfg.capital_cap == pytest.approx(values["capital_cap"])
+        assert cfg.confirmation_count == values["confirmation_count"]
+        assert cfg.take_profit_factor == pytest.approx(values["take_profit_factor"])
