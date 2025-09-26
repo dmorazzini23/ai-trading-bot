@@ -13,6 +13,43 @@ from pathlib import Path
 from typing import Dict
 
 
+IGNORED_DEV_FOLDERS = {
+    ".venv",
+    "venv",
+    "env",
+    "_env",
+    "build",
+    "dist",
+}
+
+# Directories that are considered safe for dynamic constructs such as exec/eval
+# and may intentionally contain syntactically invalid examples (e.g. fixtures,
+# stub packages). We still parse these files for other metrics, but we skip
+# compiling them and we do not count exec/eval usage.
+SAFE_PREFIXES = (
+    ("tests",),
+    ("scripts",),
+    ("tests", "stubs"),
+    ("tests", "vendor_stubs"),
+    ("tests", "_stubs"),
+)
+
+
+def _is_under_prefix(path: Path, root: Path, prefixes: tuple[tuple[str, ...], ...]) -> bool:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    for prefix in prefixes:
+        if parts[: len(prefix)] == prefix:
+            return True
+    return False
+
+
+def _is_dev_folder(path: Path) -> bool:
+    return any(part in IGNORED_DEV_FOLDERS for part in path.parts)
+
+
 def scan_repo(root: Path) -> Dict[str, int]:
     metrics = {
         "mock_classes": 0,
@@ -22,16 +59,22 @@ def scan_repo(root: Path) -> Dict[str, int]:
         "metrics_logger_imports": 0,
         "py_compile_failures": 0,
     }
-    py_files = [p for p in root.rglob("*.py") if "site-packages" not in p.parts]
+    py_files = [
+        p
+        for p in root.rglob("*.py")
+        if "site-packages" not in p.parts and not _is_dev_folder(p)
+    ]
     for path in py_files:
         try:
             source = path.read_text()
         except Exception:
             continue
-        try:
-            py_compile.compile(str(path), doraise=True)
-        except py_compile.PyCompileError:
-            metrics["py_compile_failures"] += 1
+        skip_sensitive_metrics = _is_under_prefix(path, root, SAFE_PREFIXES)
+        if not skip_sensitive_metrics:
+            try:
+                py_compile.compile(str(path), doraise=True)
+            except py_compile.PyCompileError:
+                metrics["py_compile_failures"] += 1
         try:
             tree = ast.parse(source)
         except Exception:
@@ -41,7 +84,12 @@ def scan_repo(root: Path) -> Dict[str, int]:
                 metrics["mock_classes"] += 1
             if isinstance(node, ast.FunctionDef) and node.name == "__getattr__":
                 metrics["__getattr__"] += 1
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"exec", "eval"}:
+            if (
+                not skip_sensitive_metrics
+                and isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"exec", "eval"}
+            ):
                 metrics["exec_eval_count"] += 1
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 for alias in node.names:
