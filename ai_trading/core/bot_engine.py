@@ -828,6 +828,15 @@ _PRIMARY_PRICE_SOURCES = frozenset(
         "alpaca_midpoint",
     }
 )
+_ALPACA_TERMINAL_PRICE_SOURCES = frozenset(
+    {
+        "alpaca_trade",
+        "alpaca_last",
+        "alpaca_ask",
+        "alpaca_bid",
+        "alpaca_minute_close",
+    }
+)
 _PRICE_PROVIDER_ORDER_CACHE: tuple[str, ...] | None = None
 _PRICE_WARNING_TS: dict[tuple[str, str], float] = {}
 _PRICE_WARNING_INTERVAL = 60.0
@@ -1564,13 +1573,17 @@ def _cache_cycle_fallback_feed_internal(
 
     sanitized, normalized_raw, cached_value = _cycle_fallback_feed_values(feed)
 
-    if symbol and cached_value:
-        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = cached_value
+    canonical_value = sanitized
+    if canonical_value is None and cached_value:
+        canonical_value = _sanitize_alpaca_feed(cached_value) or cached_value
 
-    if cached_value:
-        _GLOBAL_INTRADAY_FALLBACK_FEED = cached_value
+    if symbol and canonical_value:
+        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = canonical_value
 
-    return sanitized, normalized_raw, cached_value
+    if canonical_value:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = canonical_value
+
+    return sanitized, normalized_raw, canonical_value
 
 
 def _reset_cycle_cache() -> None:
@@ -20500,6 +20513,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     cache: dict[str, Any] = {}
 
+    def _finalize_return() -> float | None:
+        if price is not None and _should_flag_delayed_slippage(cache, price_source):
+            _log_delayed_quote_slippage(symbol, price_source, price, cache)
+        _PRICE_SOURCE[symbol] = price_source
+        return price
+
     cycle_feed = _prefer_feed_this_cycle_helper(symbol)
     configured_feed = cycle_feed or _get_intraday_feed()
     sanitized_feed = _normalize_cycle_feed(configured_feed)
@@ -20589,7 +20608,9 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             return None
         if candidate is not None:
             price = candidate
-            price_source = source
+            price_source = source or provider
+            if source in _ALPACA_TERMINAL_PRICE_SOURCES:
+                return _finalize_return()
             break
         _record_primary_failure(source or provider)
 
@@ -20620,11 +20641,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     elif price_source == "unknown" and primary_failure_source is not None:
         price_source = primary_failure_source
 
-    if price is not None and _should_flag_delayed_slippage(cache, price_source):
-        _log_delayed_quote_slippage(symbol, price_source, price, cache)
-
-    _PRICE_SOURCE[symbol] = price_source
-    return price
+    return _finalize_return()
 
 
 
