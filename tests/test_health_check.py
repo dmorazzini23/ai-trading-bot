@@ -17,4 +17,4 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data.get("ok") is False
-    assert "boom" in data.get("error", "")
+    assert data.get("error") == "boom"
