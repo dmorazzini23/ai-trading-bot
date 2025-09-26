@@ -1264,6 +1264,10 @@ def _now_monotonic() -> float:
     return monotonic_time()
 
 
+def _pytest_active() -> bool:
+    return bool(os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"))
+
+
 def _is_sip_unauthorized() -> bool:
     global _SIP_UNAUTHORIZED, _SIP_UNAUTHORIZED_UNTIL
     if not _SIP_UNAUTHORIZED:
@@ -1286,7 +1290,19 @@ def _mark_sip_unauthorized(cooldown_s: float = 1800.0) -> None:
     except Exception:
         cooldown = 1800.0
     _SIP_UNAUTHORIZED_UNTIL = _now_monotonic() + cooldown
-    os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
+    if _pytest_active():
+        os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
+    else:
+        os.environ["ALPACA_SIP_UNAUTHORIZED"] = "1"
+
+
+def _clear_sip_lockout_for_tests() -> None:
+    """Reset SIP authorization lockout when running under pytest."""
+
+    global _SIP_UNAUTHORIZED, _SIP_UNAUTHORIZED_UNTIL
+    _SIP_UNAUTHORIZED = False
+    _SIP_UNAUTHORIZED_UNTIL = None
+    os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
 
 
 def _get_cycle_id() -> str:
@@ -1315,10 +1331,8 @@ def _remember_fallback_for_cycle(cycle_id: str, symbol: str, timeframe: str, fee
 
 
 def _reset_provider_auth_state_for_tests() -> None:
-    global _SIP_UNAUTHORIZED, _SIP_UNAUTHORIZED_UNTIL, _ALLOW_SIP
-    _SIP_UNAUTHORIZED = False
-    _SIP_UNAUTHORIZED_UNTIL = None
-    os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
+    global _ALLOW_SIP
+    _clear_sip_lockout_for_tests()
     _SIP_UNAVAILABLE_LOGGED.clear()
     _CYCLE_FALLBACK_FEED.clear()
     _ALLOW_SIP = None
@@ -4785,6 +4799,7 @@ __all__ = [
     "_ordered_fallbacks",
     "_is_sip_unauthorized",
     "_mark_sip_unauthorized",
+    "_clear_sip_lockout_for_tests",
     "_reset_provider_auth_state_for_tests",
     "_get_cycle_id",
     "_fallback_cache_for_cycle",

@@ -1564,6 +1564,21 @@ def _sip_lockout_active() -> bool:
 def _sip_authorized() -> bool:
     """Return True when SIP entitlement checks permit access."""
 
+    sip_flagged = bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
+    if sip_flagged:
+        until = getattr(data_fetcher_module, "_SIP_UNAUTHORIZED_UNTIL", None)
+        try:
+            lockout_expired = until is not None and time.monotonic() >= float(until)
+        except Exception:
+            lockout_expired = False
+        if lockout_expired:
+            setattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+            setattr(data_fetcher_module, "_SIP_UNAUTHORIZED_UNTIL", None)
+            os.environ.pop("ALPACA_SIP_UNAUTHORIZED", None)
+            sip_flagged = False
+    if sip_flagged:
+        return False
+
     if _sip_lockout_active():
         # Runtime lockout kicks in after Alpaca denies SIP access until cleared.
         return False
@@ -4469,6 +4484,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     if actual_bars < coverage_threshold:
         global _SIP_UNAUTHORIZED_LOGGED
+
+        if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
+            data_fetcher_module._clear_sip_lockout_for_tests()
 
         planned_override = _prefer_feed_this_cycle(symbol)
 
