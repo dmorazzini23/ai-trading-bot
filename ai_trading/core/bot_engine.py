@@ -13632,6 +13632,9 @@ def _extract_quote_timestamp(payload: Any) -> datetime | None:
     return None
 
 
+_TRANSIENT_FALLBACK_REASONS = frozenset({"quote_source_unavailable", "quote_fetch_error"})
+
+
 def _check_fallback_quote_age(
     ctx: Any,
     symbol: str,
@@ -13700,6 +13703,7 @@ def _evaluate_data_gating(
             )
             if ok:
                 annotations["fallback_quote_age"] = age
+                annotations["fallback_quote_error"] = None
                 _update_data_quality(
                     state,
                     symbol,
@@ -13707,12 +13711,18 @@ def _evaluate_data_gating(
                     fallback_quote_error=None,
                 )
             else:
-                fatal_reasons.append(reason or "fallback_quote_invalid")
+                reason_label = reason or "fallback_quote_invalid"
+                annotations["fallback_quote_age"] = age
+                annotations["fallback_quote_error"] = reason_label
+                if reason_label in _TRANSIENT_FALLBACK_REASONS:
+                    reasons.append(reason_label)
+                else:
+                    fatal_reasons.append(reason_label)
                 _update_data_quality(
                     state,
                     symbol,
                     fallback_quote_age=age,
-                    fallback_quote_error=reason,
+                    fallback_quote_error=reason_label,
                 )
     else:
         if fallback_source and not quality.get("price_reliable", True):
