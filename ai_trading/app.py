@@ -53,11 +53,16 @@ def create_app():
         base_url = ""
         paper = False
         shadow = False
+        last_error: str | None = None
 
-        def record_error(exc: Exception) -> None:
-            message = str(exc)
+        def record_error(exc: Exception) -> str:
+            nonlocal last_error
+            message = str(exc) or exc.__class__.__name__
             if message and message not in errors:
                 errors.append(message)
+            if message:
+                last_error = message
+            return message
 
         try:
             from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
@@ -104,11 +109,25 @@ def create_app():
         if errors:
             payload["error"] = "; ".join(errors)
 
-        try:
-            return jsonify(payload)
-        except Exception as e:  # /health must not raise
-            _log.exception("HEALTH_CHECK_FAILED")
-            return jsonify(ok=False, error=str(e))
+        def _render_response(data: dict):
+            func = globals().get("jsonify")
+            fallback_error = data.get("error") or last_error
+            fallback_payload = dict(data)
+            fallback_payload["ok"] = False
+            fallback_payload["error"] = fallback_error or "jsonify unavailable"
+
+            if callable(func):
+                try:
+                    return func(data)
+                except Exception as exc:  # /health must not raise
+                    _log.exception("HEALTH_CHECK_FAILED")
+                    error_message = fallback_error or str(exc) or exc.__class__.__name__
+                    fallback_payload["error"] = error_message
+                    return fallback_payload
+
+            return fallback_payload
+
+        return _render_response(payload)
 
     @app.route('/healthz')
     def healthz():
