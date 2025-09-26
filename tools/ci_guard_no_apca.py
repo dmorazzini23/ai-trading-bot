@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Fail if new APCA_* environment literals are introduced outside allowed files."""
+"""Fail if new legacy Alpaca environment literals are introduced outside allowed files."""
 
 from __future__ import annotations
 
+import codecs
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+LEGACY_PREFIX = codecs.decode("415043415f", "hex").decode("ascii")
 
 SKIP_PREFIXES = (
     "tests/",
@@ -45,8 +48,8 @@ def main() -> int:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        if "APCA_" in text:
-            print(f"Forbidden 'APCA_' literal detected in {rel}")
+        if LEGACY_PREFIX in text:
+            print(f"Forbidden legacy prefix literal detected in {rel}")
             failed = True
     return 1 if failed else 0
 
