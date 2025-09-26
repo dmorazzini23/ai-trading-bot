@@ -1294,10 +1294,18 @@ class TradingConfig:
 
     __slots__ = ("_values",)
 
-    def __init__(self, **values: Any) -> None:
+    def __init__(
+        self,
+        _explicit_fields: Iterable[str] | None = None,
+        _env_map: Mapping[str, Any] | None = None,
+        **values: Any,
+    ) -> None:
         normalized: dict[str, Any] = {}
-        explicit_fields = set(values.keys())
-        env_snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
+        explicit_fields = set(_explicit_fields if _explicit_fields is not None else values.keys())
+        if _env_map is not None:
+            env_snapshot: Mapping[str, Any] | None = _env_map
+        else:
+            env_snapshot = {k: v for k, v in os.environ.items() if isinstance(v, str)}
 
         normalized.update(values)
         for spec in CONFIG_SPECS:
@@ -1377,7 +1385,15 @@ class TradingConfig:
             if not has_drawdown:
                 raise RuntimeError("MAX_DRAWDOWN_THRESHOLD must be set")
         values: dict[str, Any] = {}
+        provided_fields: set[str] = set()
         for spec in CONFIG_SPECS:
+            provided = any(env_map.get(key) not in (None, "") for key in spec.env)
+            if not provided and spec.deprecated_env:
+                provided = any(
+                    env_map.get(alias) not in (None, "") for alias in spec.deprecated_env
+                )
+            if provided:
+                provided_fields.add(spec.field)
             values[spec.field] = _build_value(spec, env_map)
 
         if values["cycle_compute_budget_factor"] is None:
@@ -1391,7 +1407,7 @@ class TradingConfig:
                     values["dollar_risk_limit"] = _validate_bounds(spec, _cast_value(spec, raw_alias))
                     break
 
-        _apply_mode_overlays(values, env_map)
+        _apply_mode_overlays(values, env_map, explicit_fields=provided_fields)
 
         if (
             values.get("data_feed_intraday") == "sip"
@@ -1407,7 +1423,7 @@ class TradingConfig:
         values.setdefault("paper", _infer_paper_mode(values))
         values.setdefault("max_position_mode", values.get("max_position_mode", "STATIC"))
 
-        return cls(**values)
+        return cls(_explicit_fields=provided_fields, _env_map=env_map, **values)
 
 
 def _build_value(spec: ConfigSpec, env_map: Mapping[str, str]) -> Any:
