@@ -757,19 +757,12 @@ class BotEngine:
         return self._intraday_fallback_feed
 
     def _cache_cycle_fallback_feed(
-        self, feed: str | None, *, symbol: str | None = None
+        self, *args: object, **kwargs: object
     ) -> None:
         """Remember *feed* for subsequent minute fetches within the cycle."""
 
-        sanitized = _normalize_cycle_feed(feed)
-        normalized_raw: str | None = None
-        if feed is not None:
-            try:
-                normalized_raw = str(feed).strip().lower() or None
-            except Exception:  # pragma: no cover - defensive
-                normalized_raw = None
-
-        cached_value = sanitized or normalized_raw
+        feed, symbol = _unwrap_cycle_cache_args(*args, **kwargs)
+        sanitized, normalized_raw, cached_value = _cycle_fallback_feed_values(feed)
 
         if symbol and cached_value:
             self._cycle_minute_feed_override[symbol] = cached_value
@@ -778,9 +771,9 @@ class BotEngine:
             self._intraday_fallback_feed = cached_value
 
         if sanitized:
-            _cache_cycle_fallback_feed(sanitized, symbol=symbol)
+            _cache_cycle_fallback_feed_helper(sanitized, symbol=symbol)
         elif normalized_raw:
-            _cache_cycle_fallback_feed(normalized_raw, symbol=symbol)
+            _cache_cycle_fallback_feed_helper(normalized_raw, symbol=symbol)
 
     @cached_property
     def data_client(self):
@@ -1507,6 +1500,79 @@ _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE: dict[str, str] = {}
 _SIP_UNAUTHORIZED_LOGGED = False
 
 
+def _unwrap_cycle_cache_args(
+    *args: object, **kwargs: object
+) -> tuple[str | None, str | None]:
+    """Return ``(feed, symbol)`` extracted from ``args``/``kwargs``."""
+
+    if not args:
+        raise TypeError("cycle fallback cache requires a feed argument")
+
+    feed = cast(str | None, args[0])
+
+    extra_kwargs = dict(kwargs)
+    symbol_kw = cast(str | None, extra_kwargs.pop("symbol", None))
+    if extra_kwargs:
+        unexpected = ", ".join(sorted(extra_kwargs))
+        raise TypeError(f"unexpected keyword arguments: {unexpected}")
+
+    symbol_pos: str | None = None
+    if len(args) > 1:
+        if len(args) > 2:
+            raise TypeError("too many positional arguments for cycle fallback cache")
+        symbol_pos = cast(str | None, args[1])
+
+    if symbol_kw is not None and symbol_pos is not None:
+        raise TypeError("symbol provided both positionally and via keyword")
+
+    symbol = symbol_kw if symbol_kw is not None else symbol_pos
+    return feed, symbol
+
+
+def _cycle_fallback_feed_values(
+    feed: object | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Return normalized representations used for caching."""
+
+    base_feed: str | None
+    if feed is None or isinstance(feed, str):
+        base_feed = cast(str | None, feed)
+    else:
+        try:
+            base_feed = str(feed)
+        except Exception:  # pragma: no cover - defensive
+            base_feed = None
+
+    sanitized = _normalize_cycle_feed(base_feed)
+    normalized_raw: str | None = None
+    if base_feed is not None:
+        try:
+            normalized_raw = base_feed.strip().lower() or None
+        except Exception:  # pragma: no cover - defensive
+            normalized_raw = None
+
+    cached_value = sanitized or normalized_raw
+    return sanitized, normalized_raw, cached_value
+
+
+def _cache_cycle_fallback_feed_internal(
+    feed: object | None, *, symbol: str | None = None
+) -> tuple[str | None, str | None, str | None]:
+    """Update module-level caches for the provided *feed*."""
+
+    global _GLOBAL_INTRADAY_FALLBACK_FEED
+
+    sanitized, normalized_raw, cached_value = _cycle_fallback_feed_values(feed)
+
+    if symbol and cached_value:
+        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = cached_value
+
+    if cached_value:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = cached_value
+
+    return sanitized, normalized_raw, cached_value
+
+
 def _reset_cycle_cache() -> None:
     """Reset module-level cycle tracking state."""
 
@@ -1530,27 +1596,59 @@ def _prefer_feed_this_cycle(symbol: str | None = None) -> str | None:
     return _GLOBAL_INTRADAY_FALLBACK_FEED
 
 
+def _prefer_feed_this_cycle_helper(symbol: str | None = None) -> str | None:
+    """Call :func:`_prefer_feed_this_cycle` while tolerating patched callables."""
+
+    func = globals().get("_prefer_feed_this_cycle")
+    if not callable(func):
+        return None
+    try:
+        return func(symbol)
+    except TypeError as exc:
+        try:
+            return func()
+        except TypeError:
+            raise exc
+
+
 def _cache_cycle_fallback_feed(
-    feed: str | None, *, symbol: str | None = None
+    *args: object, **kwargs: object
 ) -> None:
     """Remember *feed* for reuse later in the same trading cycle."""
 
-    global _GLOBAL_INTRADAY_FALLBACK_FEED
-    sanitized = _normalize_cycle_feed(feed)
-    normalized_raw: str | None = None
-    if feed is not None:
+    feed, symbol = _unwrap_cycle_cache_args(*args, **kwargs)
+    _cache_cycle_fallback_feed_internal(feed, symbol=symbol)
+
+
+_CACHE_CYCLE_FALLBACK_FEED_CANONICAL = _cache_cycle_fallback_feed
+
+
+def _cache_cycle_fallback_feed_helper(
+    feed: object | None, *, symbol: str | None = None
+) -> tuple[str | None, str | None, str | None]:
+    """Apply caching and notify patched fallbacks if present."""
+
+    sanitized, normalized_raw, cached_value = _cache_cycle_fallback_feed_internal(
+        feed, symbol=symbol
+    )
+
+    func = globals().get("_cache_cycle_fallback_feed")
+    if callable(func) and func is not _CACHE_CYCLE_FALLBACK_FEED_CANONICAL:
         try:
-            normalized_raw = str(feed).strip().lower() or None
-        except Exception:  # pragma: no cover - defensive
-            normalized_raw = None
+            func(feed, symbol=symbol)
+        except TypeError as exc:
+            if symbol is not None:
+                try:
+                    func(feed, symbol)
+                    return sanitized, normalized_raw, cached_value
+                except TypeError:
+                    pass
+            try:
+                func(feed)
+            except TypeError:
+                raise exc
 
-    cached_value = sanitized or normalized_raw
-
-    if symbol and cached_value:
-        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = cached_value
-
-    if cached_value:
-        _GLOBAL_INTRADAY_FALLBACK_FEED = cached_value
+    return sanitized, normalized_raw, cached_value
 
 
 def _sip_lockout_active() -> bool:
@@ -4282,7 +4380,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     primary_feed = configured_feed or data_fetcher_module._DEFAULT_FEED
     current_feed = primary_feed
-    cycle_pref = _prefer_feed_this_cycle(symbol)
+    cycle_pref = _prefer_feed_this_cycle_helper(symbol)
     if cycle_pref:
         current_feed = cycle_pref
     # Avoid inheriting per-symbol feed overrides from the lower-level fetch module so
@@ -4488,7 +4586,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
             data_fetcher_module._clear_sip_lockout_for_tests()
 
-        planned_override = _prefer_feed_this_cycle(symbol)
+        planned_override = _prefer_feed_this_cycle_helper(symbol)
 
         sip_authorized = _sip_authorized()
         try:
@@ -4638,7 +4736,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 active_feed = resolved_feed
                 cache_feed = normalized_sip_feed or resolved_feed
                 if cache_feed:
-                    _cache_cycle_fallback_feed(cache_feed, symbol=symbol)
+                    _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
                     data_fetcher_module._cache_fallback(symbol, cache_feed)
             else:
                 logger.warning(
@@ -4726,7 +4824,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed_used = "yahoo"
                 fallback_provider = "yahoo"
                 active_feed = "yahoo"
-                _cache_cycle_fallback_feed("yahoo", symbol=symbol)
+                _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
                 data_fetcher_module._cache_fallback(symbol, "yahoo")
             else:
                 logger.warning(
@@ -4849,7 +4947,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_feed = resolved_feed
             fallback_feed_used = resolved_feed
             fallback_provider = resolved_provider
-            _cache_cycle_fallback_feed(resolved_feed, symbol=symbol)
+            _cache_cycle_fallback_feed_helper(resolved_feed, symbol=symbol)
             sip_feed_normalized = (
                 "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
             )
@@ -20402,7 +20500,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     cache: dict[str, Any] = {}
 
-    cycle_feed = _prefer_feed_this_cycle(symbol)
+    cycle_feed = _prefer_feed_this_cycle_helper(symbol)
     configured_feed = cycle_feed or _get_intraday_feed()
     sanitized_feed = _normalize_cycle_feed(configured_feed)
     feed = sanitized_feed or configured_feed
@@ -20428,9 +20526,9 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 )
             sanitized_feed = fallback_feed
             feed = fallback_feed
-            _cache_cycle_fallback_feed(fallback_feed, symbol=symbol)
+            _cache_cycle_fallback_feed_helper(fallback_feed, symbol=symbol)
     elif cycle_feed is None and sanitized_feed:
-        _cache_cycle_fallback_feed(sanitized_feed, symbol=symbol)
+        _cache_cycle_fallback_feed_helper(sanitized_feed, symbol=symbol)
 
     if feed and _sanitize_alpaca_feed(feed) is None:
         filtered_order = tuple(
