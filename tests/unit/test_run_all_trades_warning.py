@@ -154,6 +154,10 @@ def test_run_all_trades_no_warning_with_valid_api(monkeypatch):
             self.called_with = kwargs
             return []
 
+        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+            """Provide minimal cancel capability for validation."""
+            return None
+
     class DummyRiskEngine:
         def wait_for_exposure_update(self, timeout: float) -> None:  # noqa: D401
             """No-op risk update."""
@@ -230,6 +234,10 @@ def test_run_all_trades_creates_trade_log(tmp_path, monkeypatch):
     class DummyAPI:
         def get_orders(self, *args, **kwargs):
             return []
+
+        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+            """Provide minimal cancel capability for validation."""
+            return None
 
     class DummyRiskEngine:
         def wait_for_exposure_update(self, timeout: float) -> None:
@@ -364,6 +372,10 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             """Return a cash-only account."""
 
             return types.SimpleNamespace(cash=10_000)
+
+        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+            """Provide minimal cancel capability for validation."""
+            return None
 
     class DummyDataClient:
         def __init__(self):

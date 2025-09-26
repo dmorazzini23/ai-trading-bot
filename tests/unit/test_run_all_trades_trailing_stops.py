@@ -47,6 +47,10 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch):
         def get_orders(self, *args, **kwargs):
             return []
 
+        def cancel_order(self, *args, **kwargs):  # noqa: D401 - stub
+            """Provide minimal cancel capability for validation."""
+            return None
+
     class DummyRiskEngine:
         def wait_for_exposure_update(self, timeout: float) -> None:
             pass

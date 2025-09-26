@@ -423,7 +423,8 @@ def ensure_alpaca_attached(ctx) -> None:
         if not is_shadow_mode():
             raise RuntimeError("Failed to attach Alpaca client to context")
         return
-    _validate_trading_api(api)
+    if not _validate_trading_api(api):
+        return
 
 # Rebind canonical Alpaca helpers to modular implementations (post-definition override)
 from ai_trading.core.alpaca_client import (  # noqa: E402
@@ -19357,6 +19358,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
 
             if not symbols:
                 logger.info("SKIP_MINUTE_FETCH", extra={"reason": "no_symbols"})
+                time.sleep(1.0)
                 return
 
             retries = 3

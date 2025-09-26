@@ -120,22 +120,27 @@ def _validate_trading_api(api: Any) -> bool:
                 "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
             )
         elif callable(cancel_orders):
-            def _cancel_order_via_batch(order_id: Any):
-                requests_mod = None
-                try:
-                    requests_mod = __import__(
-                        "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
-                    )
-                except Exception as exc:  # pragma: no cover - defensive fallback
-                    raise RuntimeError(
-                        "Alpaca client cancel_orders shim requires CancelOrdersRequest"
-                    ) from exc
+            try:
+                requests_mod = __import__(
+                    "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
+                )
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger_once.error(
+                    "ALPACA_CANCEL_ORDERS_REQUEST_IMPORT_FAILED",
+                    key="alpaca_cancel_orders_request_import_failed",
+                    extra={"error": str(exc)},
+                )
+                return False
 
-                CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
-                if CancelOrdersRequest is None:
-                    raise RuntimeError(
-                        "Alpaca client cancel_orders shim requires CancelOrdersRequest"
-                    )
+            CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
+            if CancelOrdersRequest is None:
+                logger_once.error(
+                    "ALPACA_CANCEL_ORDERS_REQUEST_MISSING",
+                    key="alpaca_cancel_orders_request_missing",
+                )
+                return False
+
+            def _cancel_order_via_batch(order_id: Any):
 
                 last_error: Exception | None = None
                 init_variants = (
@@ -176,7 +181,7 @@ def _validate_trading_api(api: Any) -> bool:
             logger_once.error(
                 "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"
             )
-            raise RuntimeError("Alpaca client missing cancel order capability")
+            return False
     try:
         TradingClient = get_trading_client_cls()
     except RuntimeError:
@@ -238,7 +243,8 @@ def ensure_alpaca_attached(ctx) -> None:
         if not is_shadow_mode():
             raise RuntimeError("Failed to attach Alpaca client to context")
         return
-    _validate_trading_api(api)
+    if not _validate_trading_api(api):
+        return
 
 
 def _initialize_alpaca_clients() -> bool:
