@@ -61,3 +61,5 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
     assert not df.empty
     assert after == before + 1
     assert fo.FALLBACK_ORDER.get("yahoo")
+    assert fo.FALLBACK_PROVIDERS and fo.FALLBACK_PROVIDERS[-1] == "yahoo"
+    assert fo.FALLBACK_SYMBOLS and fo.FALLBACK_SYMBOLS[-1] == symbol

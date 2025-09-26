@@ -17,3 +17,4 @@ def test_fallback_called_when_primary_fails():
     assert primary.called
     assert fallback.called
     assert fo.FALLBACK_ORDER.get("yahoo")
+    assert fo.FALLBACK_PROVIDERS and fo.FALLBACK_PROVIDERS[-1] == "yahoo"

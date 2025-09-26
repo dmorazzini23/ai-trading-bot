@@ -25,6 +25,7 @@ from . import (
     _canon_tf,
     _fetch_bars,
     _mark_fallback,
+    _resolve_backup_provider,
 )
 _fetch_module = sys.modules.get(__package__)
 if _fetch_module is None:  # pragma: no cover - defensive import path
@@ -82,13 +83,26 @@ def _http_fallback(
     df = _backup_get_bars(symbol, start, end, interval=interval)
     if df is None or getattr(df, "empty", True):
         return df
-    provider_fallback.labels(from_provider=f"alpaca_{from_feed}", to_provider="yahoo").inc()
-    provider_monitor.record_switchover(f"alpaca_{from_feed}", "yahoo")
+    provider_str, normalized_provider = _resolve_backup_provider()
+    resolved_provider = normalized_provider or provider_str
+    provider_fallback.labels(
+        from_provider=f"alpaca_{from_feed}", to_provider=resolved_provider
+    ).inc()
+    provider_monitor.record_switchover(f"alpaca_{from_feed}", resolved_provider)
     logger.info(
         "DATA_SOURCE_FALLBACK_ATTEMPT",
         extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": interval}}),
     )
-    _mark_fallback(symbol, tf_norm, start, end)
+    _mark_fallback(
+        symbol,
+        tf_norm,
+        start,
+        end,
+        from_provider=f"alpaca_{from_feed}",
+        fallback_df=df,
+        resolved_provider=resolved_provider,
+        resolved_feed=normalized_provider or None,
+    )
     return df
 
 
