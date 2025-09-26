@@ -1415,7 +1415,8 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
     # In tests, allow SIP fallback without performing precheck to avoid
     # consuming mocked responses intended for the actual fallback request.
     if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
-        return _sip_allowed()
+        if _SIP_PRECHECK_DONE:
+            return _sip_allowed()
     if not _sip_allowed():
         return False
     if not _sip_configured():
@@ -1442,14 +1443,18 @@ def _sip_fallback_allowed(session: HTTPSession | None, headers: dict[str, str], 
         )
         return True
     if getattr(resp, "status_code", None) in (401, 403):
-        _incr("data.fetch.unauthorized", value=1.0, tags={"provider": "alpaca", "feed": "sip", "timeframe": timeframe})
+        _incr(
+            "data.fetch.unauthorized",
+            value=1.0,
+            tags={"provider": "alpaca", "feed": "sip", "timeframe": timeframe},
+        )
         metrics.unauthorized += 1
         provider_monitor.record_failure("alpaca", "unauthorized")
-        _mark_sip_unauthorized()
         logger.warning(
             "UNAUTHORIZED_SIP",
             extra=_norm_extra({"provider": "alpaca", "status": "precheck", "feed": "sip", "timeframe": timeframe}),
         )
+        _mark_sip_unauthorized()
         return False
     return True
 
@@ -2551,6 +2556,37 @@ def _fetch_bars(
     _interval = _canon_tf(timeframe)
     explicit_feed_request = isinstance(feed, str)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
+
+    def _tags(*, provider: str | None = None, feed: str | None = None) -> dict[str, str]:
+        tag_provider = provider if provider is not None else "alpaca"
+        tag_feed = _feed if feed is None else feed
+        return {"provider": tag_provider, "symbol": symbol, "feed": tag_feed, "timeframe": _interval}
+
+    def _run_backup_fetch(interval_code: str, *, from_provider: str | None = None) -> pd.DataFrame:
+        provider_str, normalized_provider = _resolve_backup_provider()
+        resolved_provider = normalized_provider or provider_str
+        feed_tag = normalized_provider or provider_str
+        tags = _tags(provider=resolved_provider, feed=feed_tag)
+        _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
+        fallback_df = _backup_get_bars(symbol, _start, _end, interval=interval_code)
+        annotated_df = _annotate_df_source(
+            fallback_df,
+            provider=resolved_provider,
+            feed=normalized_provider or None,
+        )
+        _mark_fallback(
+            symbol,
+            _interval,
+            _start,
+            _end,
+            from_provider=from_provider or f"alpaca_{_feed}",
+            fallback_df=annotated_df,
+            resolved_provider=resolved_provider,
+            resolved_feed=normalized_provider or None,
+        )
+        if annotated_df is not None and not getattr(annotated_df, "empty", True):
+            _incr("data.fetch.success", value=1.0, tags=tags)
+        return annotated_df
     resolved_feed = resolve_alpaca_feed(_feed)
     if resolved_feed is None:
         provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
@@ -2568,7 +2604,7 @@ def _fetch_bars(
             ),
         )
         yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
-        return _backup_get_bars(symbol, _start, _end, interval=yf_interval)
+        return _run_backup_fetch(yf_interval)
     _feed = resolved_feed
     adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
     validate_adjustment(adjustment_norm)
@@ -2620,7 +2656,7 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            return _run_backup_fetch(fb_int)
         return pd.DataFrame()
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
@@ -2654,27 +2690,12 @@ def _fetch_bars(
                 )
             except Exception:
                 pass
+            if explicit_feed_request and _SIP_UNAUTHORIZED and _feed == "iex":
+                raise ValueError("rate_limited")
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                provider_str, normalized_provider = _resolve_backup_provider()
-                annotated_df = _annotate_df_source(
-                    fallback_df,
-                    provider=normalized_provider or provider_str,
-                    feed=normalized_provider or None,
-                )
-                _mark_fallback(
-                    symbol,
-                    _interval,
-                    _start,
-                    _end,
-                    from_provider=f"alpaca_{_feed}",
-                    fallback_df=annotated_df,
-                    resolved_provider=normalized_provider or provider_str,
-                    resolved_feed=normalized_provider or None,
-                )
-                return annotated_df
+                return _run_backup_fetch(fb_int)
         else:
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
@@ -2701,13 +2722,7 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-            provider_str, normalized_provider = _resolve_backup_provider()
-            return _annotate_df_source(
-                fallback_df,
-                provider=normalized_provider or provider_str,
-                feed=normalized_provider or None,
-            )
+            return _run_backup_fetch(fb_int)
     # Respect recent fallback TTL at coarse granularity
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
@@ -2718,13 +2733,7 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-            provider_str, normalized_provider = _resolve_backup_provider()
-            return _annotate_df_source(
-                fallback_df,
-                provider=normalized_provider or provider_str,
-                feed=normalized_provider or None,
-            )
+            return _run_backup_fetch(fb_int)
     global _SIP_DISALLOWED_WARNED
     if _feed == "sip" and not _sip_configured():
         if not _sip_allowed() and not _SIP_DISALLOWED_WARNED:
@@ -2740,29 +2749,9 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                provider_str, normalized_provider = _resolve_backup_provider()
-                annotated_df = _annotate_df_source(
-                    fallback_df,
-                    provider=normalized_provider or provider_str,
-                    feed=normalized_provider or None,
-                )
-                _mark_fallback(
-                    symbol,
-                    _interval,
-                    _start,
-                    _end,
-                    from_provider=f"alpaca_{_feed}",
-                    fallback_df=annotated_df,
-                    resolved_provider=normalized_provider or provider_str,
-                    resolved_feed=normalized_provider or None,
-                )
-                return annotated_df
+                return _run_backup_fetch(fb_int)
             empty_df = _empty_ohlcv_frame(pd)
             return empty_df if empty_df is not None else pd.DataFrame()
-
-    def _tags() -> dict[str, str]:
-        return {"provider": "alpaca", "symbol": symbol, "feed": _feed, "timeframe": _interval}
 
     if _feed == "sip" and _is_sip_unauthorized():
         _log_sip_unavailable(symbol, _interval)
@@ -2772,24 +2761,7 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-            provider_str, normalized_provider = _resolve_backup_provider()
-            annotated_df = _annotate_df_source(
-                fallback_df,
-                provider=normalized_provider or provider_str,
-                feed=normalized_provider or None,
-            )
-            _mark_fallback(
-                symbol,
-                _interval,
-                _start,
-                _end,
-                from_provider=f"alpaca_{_feed}",
-                fallback_df=annotated_df,
-                resolved_provider=normalized_provider or provider_str,
-                resolved_feed=normalized_provider or None,
-            )
-            return annotated_df
+            return _run_backup_fetch(fb_int)
         return pd.DataFrame()
 
     headers = {
@@ -2851,8 +2823,10 @@ def _fetch_bars(
 
             nonlocal _interval, _feed, _start, _end
             fb_interval, fb_feed, fb_start, fb_end = fb
-            if fb_feed == "sip" and (not skip_check) and not _sip_fallback_allowed(session, headers, fb_interval):
-                return None
+            if fb_feed == "sip" and (not skip_check):
+                if not _sip_fallback_allowed(session, headers, fb_interval):
+                    _log_sip_unavailable(symbol, fb_interval, "UNAUTHORIZED_SIP")
+                    return None
             from_feed = _feed
             _interval, _feed, _start, _end = fb
             provider_fallback.labels(
@@ -3147,7 +3121,7 @@ def _fetch_bars(
                     ),
                 )
                 yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
-                return _backup_get_bars(symbol, _start, _end, interval=yf_interval)
+                return _run_backup_fetch(yf_interval)
             raise ValueError("Invalid feed or bad request")
         if status in (401, 403):
             _incr("data.fetch.unauthorized", value=1.0, tags=_tags())
@@ -3168,7 +3142,17 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    try:
+                        fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    except Exception:
+                        fallback_df = pd.DataFrame()
+                    provider_str, normalized_provider = _resolve_backup_provider()
+                    resolved_provider = normalized_provider or provider_str
+                    return _annotate_df_source(
+                        fallback_df,
+                        provider=resolved_provider,
+                        feed=normalized_provider or None,
+                    )
                 return pd.DataFrame()
             if _feed != "sip":
                 logger.warning(
@@ -3183,7 +3167,11 @@ def _fetch_bars(
                     return result
             raise ValueError("unauthorized")
         if status == 429:
+            requested_feed = _feed
             _incr("data.fetch.rate_limited", value=1.0, tags=_tags())
+            sip_locked = _is_sip_unauthorized()
+            if requested_feed == "iex" and (sip_locked or _SIP_UNAUTHORIZED):
+                raise ValueError("rate_limited")
             metrics.rate_limit += 1
             provider_id = "alpaca"
             if _feed in {"sip", "iex"}:
@@ -3202,7 +3190,16 @@ def _fetch_bars(
                 retry_after = int(float(resp.headers.get("Retry-After", "0")))
             except Exception:
                 retry_after = 0
+
             if retry_after > 0:
+                already_disabled = provider_monitor.is_disabled("alpaca")
+                if not already_disabled and _alpaca_disabled_until:
+                    try:
+                        already_disabled = datetime.now(UTC) < _alpaca_disabled_until
+                    except Exception:
+                        already_disabled = False
+                if not already_disabled:
+                    _incr("data.fetch.provider_disabled", value=1.0, tags=_tags())
                 provider_monitor.disable("alpaca", duration=retry_after)
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
@@ -3215,33 +3212,16 @@ def _fetch_bars(
                     provider_monitor.record_switchover(
                         f"alpaca_{_feed}", resolved_provider
                     )
-                    fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                    annotated_df = _annotate_df_source(
-                        fallback_df,
-                        provider=normalized_provider or provider_str,
-                        feed=normalized_provider or None,
-                    )
-                    _mark_fallback(
-                        symbol,
-                        _interval,
-                        _start,
-                        _end,
-                        from_provider=f"alpaca_{_feed}",
-                        fallback_df=annotated_df,
-                        resolved_provider=resolved_provider,
-                        resolved_feed=normalized_provider or None,
-                    )
-                    return annotated_df
+                    return _run_backup_fetch(fb_int)
                 return pd.DataFrame()
             fallback_target = fallback
             if fallback_target:
                 result = _attempt_fallback(fallback_target)
                 if result is not None:
                     return result
-                fallback = None
+                raise ValueError("rate_limited")
             attempt = _state["retries"] + 1
-            sip_locked = _is_sip_unauthorized()
-            if _feed == "iex" and sip_locked:
+            if requested_feed == "iex" and sip_locked:
                 fallback_viable = False
                 if fallback_target:
                     _, fb_feed, _, _ = fallback_target
@@ -3290,6 +3270,7 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
+            _incr("data.fetch.empty", value=1.0, tags=_tags())
             attempt = _state["retries"] + 1
             remaining_retries = max(0, max_retries - attempt)
             can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}
@@ -3432,7 +3413,6 @@ def _fetch_bars(
                 cnt = _ALPACA_EMPTY_ERROR_COUNTS.get(tf_key, 0) + 1
                 _ALPACA_EMPTY_ERROR_COUNTS[tf_key] = cnt
                 provider_monitor.record_failure("alpaca", "empty")
-                _incr("data.fetch.empty", value=1.0, tags=_tags())
                 if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
                     provider_str, normalized_provider = _resolve_backup_provider()
                     resolved_provider = normalized_provider or provider_str
@@ -3454,23 +3434,7 @@ def _fetch_bars(
                     }
                     fb_int = interval_map.get(_interval)
                     if fb_int:
-                        fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                        annotated_df = _annotate_df_source(
-                            fallback_df,
-                            provider=normalized_provider or provider_str,
-                            feed=normalized_provider or None,
-                        )
-                        _mark_fallback(
-                            symbol,
-                            _interval,
-                            _start,
-                            _end,
-                            from_provider=f"alpaca_{_feed}",
-                            fallback_df=annotated_df,
-                            resolved_provider=resolved_provider,
-                            resolved_feed=normalized_provider or None,
-                        )
-                        return annotated_df
+                        return _run_backup_fetch(fb_int)
                     return pd.DataFrame()
             else:
                 _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
@@ -3479,8 +3443,6 @@ def _fetch_bars(
                 if fb_feed in _FEED_FAILOVER_ATTEMPTS.get(tf_key, set()):
                     fallback = None
             if fallback:
-                if not is_empty_error:
-                    _incr("data.fetch.empty", value=1.0, tags=_tags())
                 fb_interval, fb_feed, fb_start, fb_end = fallback
                 _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fb_feed)
                 from_feed = base_feed
@@ -3536,25 +3498,7 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    provider_str, normalized_provider = _resolve_backup_provider()
-                    resolved_provider = normalized_provider or provider_str
-                    fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                    annotated_df = _annotate_df_source(
-                        fallback_df,
-                        provider=normalized_provider or provider_str,
-                        feed=normalized_provider or None,
-                    )
-                    _mark_fallback(
-                        symbol,
-                        _interval,
-                        _start,
-                        _end,
-                        from_provider=f"alpaca_{_feed}",
-                        fallback_df=annotated_df,
-                        resolved_provider=resolved_provider,
-                        resolved_feed=normalized_provider or None,
-                    )
-                    return annotated_df
+                    return _run_backup_fetch(fb_int)
                 logger.error(
                     "IEX_EMPTY_NO_SIP",
                     extra=_norm_extra(
@@ -3573,25 +3517,7 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(base_interval)
                 if fb_int:
-                    provider_str, normalized_provider = _resolve_backup_provider()
-                    resolved_provider = normalized_provider or provider_str
-                    fallback_df = _backup_get_bars(symbol, base_start, base_end, interval=fb_int)
-                    annotated_df = _annotate_df_source(
-                        fallback_df,
-                        provider=normalized_provider or provider_str,
-                        feed=normalized_provider or None,
-                    )
-                    _mark_fallback(
-                        symbol,
-                        base_interval,
-                        base_start,
-                        base_end,
-                        from_provider=f"alpaca_{base_feed}",
-                        fallback_df=annotated_df,
-                        resolved_provider=resolved_provider,
-                        resolved_feed=normalized_provider or None,
-                    )
-                    return annotated_df
+                    return _run_backup_fetch(fb_int)
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
                     mdf = _fetch_bars(symbol, _start, _end, "1Min", feed=_feed, adjustment=adjustment)
@@ -3719,7 +3645,16 @@ def _fetch_bars(
                     ),
                 )
                 _alpaca_empty_streak += 1
+
                 if _alpaca_empty_streak > _ALPACA_DISABLE_THRESHOLD:
+                    already_disabled = provider_monitor.is_disabled("alpaca")
+                    if not already_disabled and _alpaca_disabled_until:
+                        try:
+                            already_disabled = datetime.now(UTC) < _alpaca_disabled_until
+                        except Exception:
+                            already_disabled = False
+                    if not already_disabled:
+                        _incr("data.fetch.provider_disabled", value=1.0, tags=_tags())
                     provider_monitor.disable("alpaca", duration=300)
                     _ALPACA_DISABLED_ALERTED = True
                     try:
