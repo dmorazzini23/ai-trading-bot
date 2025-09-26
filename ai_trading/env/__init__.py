@@ -9,7 +9,10 @@ try:  # pragma: no cover - import resolution validated by tests
     import dotenv as _dotenv  # type: ignore
 
     _DOTENV_SPEC = importlib.util.find_spec("dotenv")
-    PYTHON_DOTENV_RESOLVED = bool(_DOTENV_SPEC and getattr(_DOTENV_SPEC, "origin", None))
+    if _DOTENV_SPEC and getattr(_DOTENV_SPEC, "origin", None):
+        PYTHON_DOTENV_RESOLVED = True
+    else:
+        PYTHON_DOTENV_RESOLVED = bool(getattr(_dotenv, "dotenv_values", None))
 except Exception:  # pragma: no cover - fallback path when python-dotenv missing
     _dotenv = None  # type: ignore[assignment]
     PYTHON_DOTENV_RESOLVED = False
