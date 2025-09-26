@@ -136,6 +136,10 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
     )
     assert cached_feeds == ["yahoo"]
     assert bot_engine.state.minute_feed_cache.get("iex") == "yahoo"
+    assert bot_engine.state.minute_feed_cache.get("yahoo") == "yahoo"
+    cache_ts = getattr(bot_engine.state, "minute_feed_cache_ts", {})
+    assert "iex" in cache_ts
+    assert "yahoo" in cache_ts
     yahoo_start, _ = call_ranges["yahoo"]
     warning_records = [
         rec for rec in caplog.records if rec.message == "MINUTE_DATA_COVERAGE_WARNING"

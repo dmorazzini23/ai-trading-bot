@@ -35,6 +35,7 @@ def _reset_state():
     fetch._FEED_OVERRIDE_BY_TF.clear()
     fetch._FEED_FAILOVER_ATTEMPTS.clear()
     fetch._FEED_SWITCH_LOGGED.clear()
+    fetch._FEED_SWITCH_HISTORY.clear()
     fetch._IEX_EMPTY_COUNTS.clear()
     fetch._ALPACA_EMPTY_ERROR_COUNTS.clear()
 
@@ -74,6 +75,7 @@ def test_empty_payload_switches_to_preferred_feed(monkeypatch):
     assert session.calls[1]["feed"] == "sip"
     assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
     assert ("AAPL", "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
+    assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
 
 
 def test_feed_override_used_on_subsequent_requests(monkeypatch):
@@ -129,6 +131,7 @@ def test_feed_override_used_on_subsequent_requests(monkeypatch):
     assert not getattr(df_second, "empty", True)
     assert len(second_session.calls) == 1
     assert second_session.calls[0]["feed"] == "sip"
+    assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
 
 
 def test_alt_feed_switch_records_override(monkeypatch):
@@ -178,3 +181,4 @@ def test_alt_feed_switch_records_override(monkeypatch):
     assert not getattr(df, "empty", True)
     assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
     assert (symbol, "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
+    assert fetch._FEED_SWITCH_HISTORY == [(symbol, "1Min", "sip")]

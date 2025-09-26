@@ -986,6 +986,10 @@ def test_fetch_minute_df_safe_sip_success_skips_yahoo_and_caches_feed(monkeypatc
     assert cached_feeds[-1] == "sip"
     assert cached_pairs[-1] == ("MSFT", "sip")
     assert bot_engine.state.minute_feed_cache.get("iex") == "sip"
+    assert bot_engine.state.minute_feed_cache.get("sip") == "sip"
+    cache_ts = getattr(bot_engine.state, "minute_feed_cache_ts", {})
+    assert "iex" in cache_ts
+    assert "sip" in cache_ts
 
 
 def test_fetch_minute_df_safe_sip_and_yahoo_sparse_abort(monkeypatch):
@@ -1060,6 +1064,13 @@ def test_fetch_minute_df_safe_sip_and_yahoo_sparse_abort(monkeypatch):
 
     assert getattr(excinfo.value, "fetch_reason", None) == "minute_data_low_coverage"
     assert calls == ["iex", "sip", "yahoo"]
+    assert "iex" not in bot_engine.state.minute_feed_cache
+    assert "sip" not in bot_engine.state.minute_feed_cache
+    assert "yahoo" not in bot_engine.state.minute_feed_cache
+    cache_ts = getattr(bot_engine.state, "minute_feed_cache_ts", {})
+    assert cache_ts.get("iex") is None
+    assert cache_ts.get("sip") is None
+    assert cache_ts.get("yahoo") is None
 
 
 def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
