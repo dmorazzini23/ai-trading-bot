@@ -813,6 +813,255 @@ def test_fetch_minute_df_safe_reuses_cached_fallback_feed_within_cycle(
     assert not budget.over_budget()
 
 
+def test_fetch_minute_df_safe_attempts_sip_before_yahoo_when_authorized(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 17, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=60)
+    expected = int((base_now - session_start).total_seconds() // 60)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    calls: list[str] = []
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        feed_name = str(feed or "iex")
+        calls.append(feed_name)
+        if feed_name == "iex":
+            idx = pd.date_range(
+                end=end - timedelta(minutes=2), periods=10, freq="min", tz="UTC"
+            )
+        elif feed_name == "sip":
+            idx = pd.date_range(
+                end=end - timedelta(minutes=1), periods=10, freq="min", tz="UTC"
+            )
+        else:
+            idx = pd.date_range(
+                end=end - timedelta(minutes=1), periods=expected, freq="min", tz="UTC"
+            )
+        return pd.DataFrame(
+            {"close": list(range(len(idx))), "volume": [100] * len(idx)},
+            index=idx,
+        )
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        data_feed="iex",
+        intraday_lookback_minutes=60,
+        alpaca_feed_failover=(),
+        minute_gap_backfill=None,
+    )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+        raising=False,
+    )
+
+    result = bot_engine.fetch_minute_df_safe("AAPL")
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == expected
+    assert calls == ["iex", "sip", "yahoo"]
+
+
+def test_fetch_minute_df_safe_sip_success_skips_yahoo_and_caches_feed(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 16, 30, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=45)
+    expected = int((base_now - session_start).total_seconds() // 60)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    calls: list[str] = []
+    cached_feeds: list[str | None] = []
+    cached_pairs: list[tuple[str, str]] = []
+
+    def fake_cache_cycle(feed: str | None, *, symbol: str | None = None):
+        cached_feeds.append(feed)
+
+    def fake_cache_fallback(symbol: str, feed: str):
+        cached_pairs.append((symbol, feed))
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        feed_name = str(feed or "iex")
+        calls.append(feed_name)
+        periods = 5 if feed_name == "iex" else expected
+        idx = pd.date_range(
+            end=end - timedelta(minutes=1), periods=periods, freq="min", tz="UTC"
+        )
+        return pd.DataFrame(
+            {"close": list(range(len(idx))), "volume": [100] * len(idx)},
+            index=idx,
+        )
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        data_feed="iex",
+        intraday_lookback_minutes=45,
+        alpaca_feed_failover=(),
+        minute_gap_backfill=None,
+    )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(bot_engine, "_cache_cycle_fallback_feed", fake_cache_cycle)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_cache_fallback",
+        fake_cache_fallback,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+        raising=False,
+    )
+
+    result = bot_engine.fetch_minute_df_safe("MSFT")
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == expected
+    assert calls == ["iex", "sip"]
+    assert cached_feeds[-1] == "sip"
+    assert cached_pairs[-1] == ("MSFT", "sip")
+    assert bot_engine.state.minute_feed_cache.get("iex") == "sip"
+
+
+def test_fetch_minute_df_safe_sip_and_yahoo_sparse_abort(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 3, 18, 0, tzinfo=UTC)
+    session_start = base_now - timedelta(minutes=60)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    calls: list[str] = []
+
+    def fake_get_minute_df(symbol: str, start, end, feed=None, **_):
+        feed_name = str(feed or "iex")
+        calls.append(feed_name)
+        periods = 5 if feed_name == "iex" else 10
+        idx = pd.date_range(
+            end=end - timedelta(minutes=2), periods=periods, freq="min", tz="UTC"
+        )
+        return pd.DataFrame(
+            {"close": [1.0] * len(idx), "volume": [100] * len(idx)},
+            index=idx,
+        )
+
+    config = types.SimpleNamespace(
+        market_cache_enabled=False,
+        data_feed="iex",
+        intraday_lookback_minutes=60,
+        alpaca_feed_failover=(),
+        minute_gap_backfill=None,
+    )
+
+    from ai_trading.data import market_calendar
+    from ai_trading.utils import base as base_utils
+
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(base_utils, "is_market_open", lambda: True, raising=False)
+    monkeypatch.setattr(bot_engine, "get_minute_df", fake_get_minute_df)
+    monkeypatch.setattr(
+        staleness,
+        "_ensure_data_fresh",
+        lambda df, max_age_seconds, *, symbol=None, now=None, tz=None: None,
+    )
+    monkeypatch.setattr(bot_engine, "CFG", config, raising=False)
+    monkeypatch.setattr(bot_engine, "S", config, raising=False)
+    monkeypatch.setattr(bot_engine, "state", bot_engine.BotState(), raising=False)
+    monkeypatch.setattr(
+        bot_engine.data_fetcher_module,
+        "_sip_configured",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "rth_session_utc",
+        lambda *_: (session_start, base_now + timedelta(hours=4)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        market_calendar,
+        "previous_trading_session",
+        lambda current_date: current_date,
+        raising=False,
+    )
+
+    with pytest.raises(bot_engine.DataFetchError) as excinfo:
+        bot_engine.fetch_minute_df_safe("SPY")
+
+    assert getattr(excinfo.value, "fetch_reason", None) == "minute_data_low_coverage"
+    assert calls == ["iex", "sip", "yahoo"]
+
+
 def test_fetch_minute_df_safe_logs_backup_provider_when_sip_unauthorized(
     monkeypatch, caplog
 ):
