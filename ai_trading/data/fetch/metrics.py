@@ -16,7 +16,18 @@ _PROVIDER_DISABLE_TOTALS: dict[str, int] = {}
 
 
 def register_provider_disable(provider: str) -> None:
-    _PROVIDER_DISABLE_TOTALS[provider] = _PROVIDER_DISABLE_TOTALS.get(provider, 0) + 1
+    """Record the latest disable count for ``provider``."""
+
+    try:
+        from ai_trading.data.provider_monitor import provider_monitor as _pm
+
+        count = int(getattr(_pm, "disable_counts", {}).get(provider, 0))
+    except Exception:  # pragma: no cover - defensive fallback
+        count = _PROVIDER_DISABLE_TOTALS.get(provider, 0)
+    if count > 0:
+        _PROVIDER_DISABLE_TOTALS[provider] = count
+    else:
+        _PROVIDER_DISABLE_TOTALS.pop(provider, None)
 
 
 # In-memory counters.  We use ``Counter`` for automatic zero initialization and
@@ -154,18 +165,27 @@ def inc_backup_provider_used(provider: str, symbol: str) -> int:
 
 def inc_provider_disable_total(provider: str) -> int:
     """Increment provider-disable counter and return the current value."""
+
     metric = _provider_disable_total_counter.labels(provider=provider)
+    current_value = _current_value(metric)
+    if current_value > 0:
+        # Metrics backend already tracks the disable count; keep our local cache in sync
+        _PROVIDER_DISABLE_TOTALS[provider] = max(
+            _PROVIDER_DISABLE_TOTALS.get(provider, 0), current_value
+        )
+        return current_value
+
     metric.inc()
     value = _current_value(metric)
-    if value == 0 and not hasattr(metric, '_value'):
-        try:
-            from ai_trading.data.provider_monitor import provider_monitor as _pm
-            if not _pm.disable_counts:
-                _PROVIDER_DISABLE_TOTALS.pop(provider, None)
-            return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
-        except Exception:  # pragma: no cover - defensive fallback
-            return _PROVIDER_DISABLE_TOTALS.get(provider, 0)
-    return value
+    if value > 0:
+        _PROVIDER_DISABLE_TOTALS[provider] = max(
+            _PROVIDER_DISABLE_TOTALS.get(provider, 0), value
+        )
+        return value
+
+    total = _PROVIDER_DISABLE_TOTALS.get(provider, 0) + 1
+    _PROVIDER_DISABLE_TOTALS[provider] = total
+    return total
 
 
 def provider_disabled(provider: str) -> int:
