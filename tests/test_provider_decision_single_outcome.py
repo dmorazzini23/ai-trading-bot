@@ -93,6 +93,29 @@ def test_provider_decision_single_outcome(caplog):
     assert _extract_tokens(caplog.records) == ["DATA_PROVIDER_SWITCHOVER"]
 
 
+def test_provider_decision_same_provider_logs_stay(caplog):
+    monitor = ProviderMonitor(threshold=1, cooldown=60)
+    monitor.decision_window_seconds = 0
+    primary = "alpaca_yahoo"
+    backup = "yahoo"
+
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+
+    active = monitor.update_data_health(
+        primary,
+        backup,
+        healthy=False,
+        reason="gap_ratio=4.2%",
+        severity="degraded",
+    )
+
+    assert active == primary
+    tokens = _extract_tokens(caplog.records)
+    assert tokens == ["DATA_PROVIDER_STAY"]
+    assert any("redundant_request" in record.getMessage() for record in caplog.records)
+
+
 def test_decide_provider_action_disable():
     action = decide_provider_action(
         {"is_healthy": False, "using_backup": True},
