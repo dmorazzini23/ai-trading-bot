@@ -256,15 +256,26 @@ def get_trading_client_cls():
     """Return the Alpaca TradingClient class if available."""
 
     if not ALPACA_AVAILABLE or TradingClient is None:
-        raise RuntimeError("alpaca-py TradingClient not available")
+        class _UnavailableTradingClient:
+            def __init__(self, *_a, **_k):
+                raise RuntimeError("alpaca-py TradingClient not available")
+
+        return _UnavailableTradingClient
     return TradingClient
 
 
 def get_data_client_cls():
     """Return the Alpaca StockHistoricalDataClient class via lazy import."""
-    from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
+    try:
+        from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
 
-    return StockHistoricalDataClient
+        return StockHistoricalDataClient
+    except Exception as exc:
+        class _UnavailableDataClient:
+            def __init__(self, *_a, **_k):
+                raise RuntimeError("alpaca-py StockHistoricalDataClient not available") from exc
+
+        return _UnavailableDataClient
 
 
 def get_api_error_cls():

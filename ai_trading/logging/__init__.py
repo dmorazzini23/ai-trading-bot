@@ -70,7 +70,6 @@ _ensure_pytest_logging_bridge()
 def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> None:
     """Ensure no duplicate handler types and attach default if none exist."""
 
-    seen_types: set[type[logging.Handler]] = set()
     handlers = getattr(log, "handlers", [])
 
     try:
@@ -79,7 +78,17 @@ def _ensure_single_handler(log: logging.Logger, level: int | None = None) -> Non
         unique = []
 
     filtered: list[logging.Handler] = []
+    seen_types: set[type[logging.Handler]] = set()
+
+    # Preserve pytest's LogCaptureHandler instances to keep ``caplog`` functional
+    for existing in unique:
+        if existing.__class__.__name__ == "LogCaptureHandler":
+            filtered.append(existing)
+            seen_types.add(type(existing))
+
     for h in unique:
+        if h in filtered:
+            continue
         h_type = type(h)
         if h_type in seen_types:
             continue

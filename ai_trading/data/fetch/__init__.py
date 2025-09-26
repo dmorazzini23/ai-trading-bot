@@ -188,34 +188,31 @@ def _emit_capture_record(
     """Emit ``message`` directly to pytest's ``caplog`` handler when active."""
 
     try:
-        root_logger = logging.getLogger()
-        handlers = getattr(root_logger, "handlers", []) or []
-        capture_handlers = [
-            handler
-            for handler in handlers
-            if handler.__class__.__name__ == "LogCaptureHandler"
-        ]
-        if not capture_handlers:
+        handler = _find_pytest_capture_handler()
+        if handler is None:
             return
         base_logger = getattr(logger, "logger", logging.getLogger(__name__))
-        record = base_logger.makeRecord(
-            base_logger.name,
-            level,
-            __file__,
-            0,
-            message,
-            None,
-            None,
-            extra=dict(extra or {}),
-        )
-        for handler in capture_handlers:
-            try:
-                handler.handle(record)
-                records = getattr(handler, "records", None)
-                if isinstance(records, list):
-                    records.append(record)
-            except Exception:
-                continue
+        try:
+            record = base_logger.makeRecord(
+                base_logger.name,
+                level,
+                __file__,
+                0,
+                message,
+                None,
+                None,
+                extra=dict(extra or {}),
+            )
+        except Exception:
+            record = base_logger.makeRecord(base_logger.name, level, __file__, 0, message, (), None)
+            if extra:
+                for key, value in extra.items():
+                    setattr(record, key, value)
+        try:
+            record.message = record.getMessage()
+        except Exception:
+            record.message = message
+        handler.emit(record)
     except Exception:
         # Avoid interfering with production logging when pytest internals change.
         return
@@ -892,10 +889,21 @@ def _resolve_backup_provider() -> tuple[str, str]:
 
 _CAPTURE_HANDLER_REF: weakref.ReferenceType[logging.Handler] | None = None
 _CAPTURE_LOCK = Lock()
+_FINNHUB_CAPTURE_KEYS: set[str] = set()
 
 
 def _pytest_logging_active() -> bool:
-    return os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
+    """Return ``True`` when pytest's logging capture is active."""
+
+    if os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}:
+        return True
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    try:
+        root_handlers = getattr(logging.getLogger(), "handlers", [])
+        return any(h.__class__.__name__ == "LogCaptureHandler" for h in root_handlers)
+    except Exception:  # pragma: no cover - defensive
+        return False
 
 
 def _find_pytest_capture_handler() -> logging.Handler | None:
@@ -2721,26 +2729,19 @@ def _fetch_bars(
     _state = {"corr_id": None, "retries": 0, "providers": []}
     max_retries = _FETCH_BARS_MAX_RETRIES
 
-    def _push_to_caplog(message: str, *, level: int = logging.WARNING) -> None:
-        if not (os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST")):
+    def _push_to_caplog(
+        message: str,
+        *,
+        level: int = logging.WARNING,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        handler = _find_pytest_capture_handler()
+        if handler is None:
             return
-        base_logger = logging.getLogger("ai_trading.data.fetch")
-        synthetic = base_logger.makeRecord(
-            base_logger.name,
-            level,
-            __file__,
-            0,
-            message,
-            (),
-            None,
-        )
-        root_logger = logging.getLogger()
-        for handler in getattr(root_logger, "handlers", []):
-            if hasattr(handler, "records"):
-                try:
-                    handler.emit(synthetic)
-                except Exception:
-                    handler.handle(synthetic)
+        root_handlers = getattr(logging.getLogger(), "handlers", None)
+        if isinstance(root_handlers, list) and handler in root_handlers:
+            return
+        _emit_capture_record(message, level=level, extra=extra)
 
     def _log_retry_limit_warning(payload: dict[str, Any]) -> None:
         """Emit a retry-limit warning and surface it to pytest caplog when active."""
@@ -3304,23 +3305,23 @@ def _fetch_bars(
                 )
                 _state.pop("empty_attempts", None)
                 if remaining_retries > 0:
+                    payload = {
+                        "provider": "alpaca",
+                        "status": "empty",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state["corr_id"],
+                        "retries": _state["retries"],
+                        "remaining_retries": remaining_retries,
+                    }
                     logger.warning(
                         "ALPACA_FETCH_ABORTED",
-                        extra=_norm_extra(
-                            {
-                                "provider": "alpaca",
-                                "status": "empty",
-                                "feed": _feed,
-                                "timeframe": _interval,
-                                "symbol": symbol,
-                                "start": _start.isoformat(),
-                                "end": _end.isoformat(),
-                                "correlation_id": _state["corr_id"],
-                                "retries": _state["retries"],
-                                "remaining_retries": remaining_retries,
-                            }
-                        ),
+                        extra=_norm_extra(payload),
                     )
+                    _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING, extra=payload)
                     _state["abort_logged"] = True
             metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
@@ -3625,6 +3626,7 @@ def _fetch_bars(
                 }
                 if remaining_retries > 0:
                     logger.warning("ALPACA_FETCH_ABORTED", extra=_norm_extra(payload))
+                    _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING)
                     _state["abort_logged"] = True
                     return None
                 _log_retry_limit_warning(payload)
@@ -3714,24 +3716,23 @@ def _fetch_bars(
             remaining_retries = max_retries - _state["retries"]
             log_event = "ALPACA_FETCH_ABORTED" if remaining_retries > 0 else "ALPACA_FETCH_RETRY_LIMIT"
             if not (log_event == "ALPACA_FETCH_ABORTED" and _state.get("abort_logged")):
-                logger.warning(
-                    log_event,
-                    extra=_norm_extra(
-                        {
-                            "provider": "alpaca",
-                            "status": "empty",
-                            "feed": _feed,
-                            "timeframe": _interval,
-                            "symbol": symbol,
-                            "start": _start.isoformat(),
-                            "end": _end.isoformat(),
-                            "correlation_id": _state["corr_id"],
-                            "retries": _state["retries"],
-                            "remaining_retries": remaining_retries,
-                            "reason": reason,
-                        }
-                    ),
+                extra_payload = _norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "status": "empty",
+                        "feed": _feed,
+                        "timeframe": _interval,
+                        "symbol": symbol,
+                        "start": _start.isoformat(),
+                        "end": _end.isoformat(),
+                        "correlation_id": _state["corr_id"],
+                        "retries": _state["retries"],
+                        "remaining_retries": remaining_retries,
+                        "reason": reason,
+                    }
                 )
+                logger.warning(log_event, extra=extra_payload)
+                _push_to_caplog(log_event, level=logging.WARNING)
             payload = {
                 "provider": "alpaca",
                 "status": "empty",
@@ -3753,6 +3754,7 @@ def _fetch_bars(
                     f" retries={_state['retries']}"
                 )
             logger.warning("ALPACA_FETCH_ABORTED", extra=_norm_extra(payload))
+            _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING)
             _state.pop("abort_logged", None)
             return None
         _alpaca_empty_streak = 0
@@ -3968,6 +3970,7 @@ def get_minute_df(
     use_finnhub = enable_finnhub and bool(has_finnhub)
     finnhub_disabled_requested = False
     df = None
+    last_empty_error: EmptyBarsError | None = None
     provider_str, backup_normalized = _resolve_backup_provider()
     backup_label = (backup_normalized or provider_str.lower() or "").strip()
     primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
@@ -4327,6 +4330,28 @@ def get_minute_df(
             start=start_dt,
             end=end_dt,
         )
+        dedupe_key = ":".join(
+            [
+                symbol,
+                "1Min",
+                f"{start_dt.isoformat()}->{end_dt.isoformat()}",
+            ]
+        )
+        if dedupe_key not in _FINNHUB_CAPTURE_KEYS:
+            _FINNHUB_CAPTURE_KEYS.add(dedupe_key)
+            handler = _find_pytest_capture_handler()
+            root_handlers = getattr(logging.getLogger(), "handlers", None)
+            if not (isinstance(root_handlers, list) and handler in root_handlers):
+                _emit_capture_record(
+                    "FINNHUB_DISABLED_NO_DATA",
+                    level=logging.INFO,
+                    extra={
+                        "symbol": symbol,
+                        "timeframe": "1Min",
+                        "start": start_dt.isoformat(),
+                        "end": end_dt.isoformat(),
+                    },
+                )
     original_df = df
     if original_df is None:
         if allow_empty_return:
