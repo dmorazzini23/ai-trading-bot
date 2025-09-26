@@ -1703,17 +1703,30 @@ def _is_dir_writable(str_path: str) -> bool:
     return bool(mode & stat.S_IWOTH)
 
 
-def _nearest_writable_ancestor(path: Path) -> Path:
+def _nearest_writable_ancestor(path: Path) -> Path | None:
     """Return the closest existing writable ancestor for ``path``."""
 
     current = path
-    while not current.exists():
-        current = current.parent
-    while current != current.parent:
-        if os.access(current, os.W_OK | os.X_OK):
+
+    while True:
+        try:
+            if current.exists():
+                break
+        except OSError:
+            # Permission errors while probing existence should advance upward.
+            pass
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+    while True:
+        if _is_dir_writable(str(current)):
             return current
-        current = current.parent
-    return Path("/tmp")
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
 
 
 def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
@@ -1781,15 +1794,7 @@ def _emit_trade_log_fallback(
     basename = preferred.name or "trades.jsonl"
     parent = preferred.parent if preferred.parent != Path("") else Path.cwd()
     base = _nearest_writable_ancestor(parent)
-    child = parent.name or "ai-trading-bot"
-    fallback_dir = base / child
-    try:
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        fallback_path = str((fallback_dir / basename).resolve(strict=False))
-    except PermissionError:
-        fallback_path = str((base / basename).resolve(strict=False))
-    except OSError:
-        fallback_path = _compute_user_state_trade_log_path(basename)
+    fallback_path = _compute_user_state_trade_log_path(basename)
     payload: dict[str, object] = {
         "preferred_path": preferred_path,
         "fallback_path": fallback_path,
