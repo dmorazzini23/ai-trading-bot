@@ -40,6 +40,9 @@ from ai_trading.utils.time import monotonic_time
 
 logger = get_logger(__name__)
 
+_MIN_RECOVERY_SECONDS = 600
+_MIN_RECOVERY_PASSES = 3
+
 
 def _logging_dedupe_ttl() -> int:
     try:
@@ -365,6 +368,15 @@ class ProviderMonitor:
             self._migrate_provider_state(from_provider, from_key)
         if to_key != to_provider:
             self._migrate_provider_state(to_provider, to_key)
+        if not from_key or from_key == to_key:
+            stay_provider = to_key or from_key
+            logger.info(
+                "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
+                stay_provider,
+                "redundant_request",
+                self.cooldown,
+            )
+            return
         now = datetime.now(UTC)
         last = self._last_switch_time.get(from_key)
         cooldown_window = self._current_switch_cooldowns.get(from_key, float(self.cooldown))
@@ -619,9 +631,10 @@ class ProviderMonitor:
             consecutive += 1
             state["consecutive_passes"] = consecutive
             if using_backup:
-                allow_recovery = consecutive >= 2
+                allow_recovery = consecutive >= _MIN_RECOVERY_PASSES
                 elapsed = (now - last_switch_dt).total_seconds()
-                cooldown_ok = allow_recovery and elapsed >= cooldown_seconds
+                required_stay = max(cooldown_seconds, _MIN_RECOVERY_SECONDS)
+                cooldown_ok = allow_recovery and elapsed >= required_stay
                 if window_locked and not hard_fail:
                     cooldown_ok = False
                 if not allow_recovery:
@@ -695,7 +708,11 @@ class ProviderMonitor:
 
         state["cooldown"] = cooldown_default
         stay_provider = active if not using_backup else backup
-        cooldown_for_log = cooldown_seconds if using_backup and healthy else cooldown_default
+        cooldown_for_log = (
+            max(cooldown_seconds, _MIN_RECOVERY_SECONDS)
+            if using_backup and healthy
+            else cooldown_default
+        )
         logger.info(
             "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
             _normalize_provider(stay_provider),

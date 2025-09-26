@@ -36,15 +36,19 @@ def test_update_data_health_tracks_single_active_provider(monkeypatch, caplog):
         mon.update_data_health(primary, backup, healthy=False, reason="empty", severity="degraded")
         == backup
     )
-    # First healthy pass keeps backup active
+    # First two healthy passes keep backup active while accumulating health
     assert (
         mon.update_data_health(primary, backup, healthy=True, reason="recovering", severity="good")
         == backup
     )
+    assert (
+        mon.update_data_health(primary, backup, healthy=True, reason="stabilizing", severity="good")
+        == backup
+    )
 
-    # Second healthy pass with elapsed cooldown switches back
+    # Third healthy pass after dwell & cooldown switches back
     state = mon._pair_states[(primary, backup)]
-    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=15)
+    state["last_switch"] = datetime.now(UTC) - timedelta(seconds=monitor_mod._MIN_RECOVERY_SECONDS + 5)
     state["cooldown"] = 0
     caplog.set_level(logging.INFO)
     decision = mon.update_data_health(primary, backup, healthy=True, reason="stable", severity="good")

@@ -170,3 +170,13 @@ def test_failure_duration_metric(monkeypatch, caplog):
         assert metric._value.get() == 30
     assert any(r.message == "DATA_PROVIDER_FAILURE_DURATION" for r in caplog.records)
 
+
+def test_record_switchover_same_provider_logs_stay(caplog):
+    monitor = pm.ProviderMonitor(cooldown=15)
+
+    with caplog.at_level(logging.INFO):
+        monitor.record_switchover("yahoo", "yahoo")
+
+    assert monitor.consecutive_switches == 0
+    assert any("DATA_PROVIDER_STAY" in rec.message for rec in caplog.records)
+

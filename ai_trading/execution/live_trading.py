@@ -573,6 +573,19 @@ class ExecutionEngine:
             },
         )
 
+    def end_cycle(self) -> None:
+        """Best-effort end-of-cycle hook aligned with core engine expectations."""
+
+        order_mgr = getattr(self, "order_manager", None)
+        if order_mgr is None:
+            return
+        flush = getattr(order_mgr, "flush", None)
+        if callable(flush):
+            try:
+                flush()
+            except Exception:  # pragma: no cover - diagnostics only
+                logger.debug("ORDER_MANAGER_FLUSH_FAILED", exc_info=True)
+
     def _refresh_settings(self) -> None:
         """Refresh cached execution settings from configuration."""
 
