@@ -499,7 +499,7 @@ class ExecutionEngine:
         ctx: Any | None = None,
         execution_mode: str | None = None,
         shadow_mode: bool = False,
-        **_: Any,
+        **extras: Any,
     ) -> None:
         """Initialize Alpaca execution engine."""
 
@@ -551,6 +551,9 @@ class ExecutionEngine:
         self._api_secret: str | None = None
         self._cred_error: Exception | None = None
         self._pending_orders: dict[str, dict[str, Any]] = {}
+        self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
+        if self._trailing_stop_manager is None and ctx is not None:
+            self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
         try:
             key, secret = get_alpaca_creds()
         except RuntimeError as exc:
@@ -572,6 +575,27 @@ class ExecutionEngine:
                 "slippage_limit_bps": self.slippage_limit_bps,
             },
         )
+
+    def check_trailing_stops(self) -> None:
+        """Best-effort invocation of any configured trailing-stop manager."""
+
+        manager = getattr(self, "_trailing_stop_manager", None)
+        if manager is None and getattr(self, "ctx", None) is not None:
+            manager = getattr(self.ctx, "trailing_stop_manager", None)
+        if manager is None:
+            return
+        for attr in ("recalc_all", "check", "run_once", "run"):
+            hook = getattr(manager, attr, None)
+            if callable(hook):
+                try:
+                    hook()
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    logger.debug(
+                        "TRAILING_STOP_CHECK_SUPPRESSED",
+                        extra={"handler": attr, "error": str(exc)},
+                    )
+                finally:
+                    break
 
     def end_cycle(self) -> None:
         """Best-effort end-of-cycle hook aligned with core engine expectations."""

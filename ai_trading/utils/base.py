@@ -2,30 +2,30 @@
 
 import datetime as dt
 import logging
-from ai_trading.logging import get_logger
 import os
 import random
-import subprocess
 import socket
+import subprocess
 import threading
 import time
 import warnings
 from datetime import date, datetime
 from datetime import time as dt_time
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
+
 from ai_trading.config import get_settings
 from ai_trading.config.management import get_env
 from ai_trading.exc import COMMON_EXC
+from ai_trading.logging import get_logger
+from ai_trading.logging.emit_once import emit_once
 from ai_trading.settings import get_verbose_logging
 from ai_trading.utils.time import monotonic_time
+
 from .locks import portfolio_lock
-from .safe_subprocess import (
-    SUBPROCESS_TIMEOUT_DEFAULT,
-    safe_subprocess_run,
-)
+from .safe_subprocess import SUBPROCESS_TIMEOUT_DEFAULT, safe_subprocess_run
 
 try:  # pragma: no cover - import guard mirrors runtime behaviour
     from ai_trading.alpaca_api import (  # type: ignore
@@ -681,7 +681,14 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
             logger.warning("Further '%s' warnings suppressed", key)
 
 
-def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str = ""):
+def safe_to_datetime(
+    arr,
+    format: str | None = None,
+    utc: bool = True,
+    *,
+    context: str = "",
+    _warn_key: str | None = None,
+):
     """Safely convert values to a timezone-aware :class:`~pandas.DatetimeIndex`.
 
     Handles common data quality issues encountered in external provider data:
@@ -743,11 +750,13 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
     if is_numeric:
         numeric_series = pd.to_numeric(series, errors="coerce")
-        if not numeric_series.dropna().empty and (numeric_series.dropna() > 1_000_000_000_000).any():
+        dropna = numeric_series.dropna()
+        if not dropna.empty and (dropna > 1_000_000_000_000).any():
             numeric_series = numeric_series / 1000.0
         result = pd.to_datetime(numeric_series, unit="s", errors="coerce", utc=utc)
     else:
-        result = pd.to_datetime(series, format=format, errors="coerce", utc=utc)
+        fmt = "%Y-%m-%d %H:%M:%S" if format is None else format
+        result = pd.to_datetime(series, format=fmt, errors="coerce", utc=utc)
 
     ctx = f" ({context})" if context else ""
     invalid = getattr(result, "isna", lambda: pd.Series([]))()
@@ -757,14 +766,9 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
         invalid_count = 0
     if invalid_count:
         total = len(result)
-        key = f"safe_to_datetime:{context}" if context else "safe_to_datetime"
-        _warn_limited(
-            key,
-            "safe_to_datetime coerced %s/%s values to NaT%s",
-            invalid_count,
-            total,
-            ctx,
-        )
+        warn_key = _warn_key or (f"SAFE_TO_DATETIME:{context}" if context else "SAFE_TO_DATETIME")
+        message = f"safe_to_datetime coerced {invalid_count}/{total} values to NaT{ctx}"
+        emit_once(logger, warn_key, "warning", message)
 
     try:
         return pd.DatetimeIndex(result)

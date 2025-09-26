@@ -205,6 +205,9 @@ class ProviderMonitor:
         self._last_switch_logged: tuple[str, str] | None = None
         self._last_switch_ts: float | None = None
         self.decision_window_seconds = _decision_window_seconds()
+        self._last_switchover_provider: str | None = None
+        self._last_switchover_ts: float = 0.0
+        self._last_switchover_passes: int = 0
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -377,6 +380,23 @@ class ProviderMonitor:
                 self.cooldown,
             )
             return
+        now_wall = time.time()
+        if self._last_switchover_provider == from_key:
+            elapsed = (
+                now_wall - self._last_switchover_ts
+                if self._last_switchover_ts
+                else float("inf")
+            )
+            passes = self._last_switchover_passes
+            if passes < _MIN_RECOVERY_PASSES or elapsed < _MIN_RECOVERY_SECONDS:
+                reason = "insufficient_health_passes" if passes < _MIN_RECOVERY_PASSES else "cooldown_active"
+                logger.info(
+                    "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
+                    from_key,
+                    reason,
+                    max(self.cooldown, _MIN_RECOVERY_SECONDS),
+                )
+                return
         now = datetime.now(UTC)
         last = self._last_switch_time.get(from_key)
         cooldown_window = self._current_switch_cooldowns.get(from_key, float(self.cooldown))
@@ -470,6 +490,30 @@ class ProviderMonitor:
                     "PROVIDER_DISABLE_FAILED",
                     extra={"provider": from_key},
                 )
+        if self._last_switchover_provider == from_key:
+            self._last_switchover_provider = None
+            self._last_switchover_passes = 0
+            self._last_switchover_ts = 0.0
+        else:
+            self._last_switchover_provider = to_key
+            self._last_switchover_passes = 0
+            self._last_switchover_ts = now_wall
+
+    def record_health_pass(self, success: bool, provider: str | None = None) -> None:
+        """Record the outcome of a provider health probe for switchover dwell."""
+
+        target = provider or self._last_switchover_provider
+        if not target:
+            return
+        normalized = _normalize_provider(target)
+        if normalized != self._last_switchover_provider:
+            if not success and self._last_switchover_provider == normalized:
+                self._last_switchover_passes = 0
+            return
+        if success:
+            self._last_switchover_passes = min(self._last_switchover_passes + 1, 10_000)
+        else:
+            self._last_switchover_passes = 0
 
     def disable(self, provider: str, *, duration: float | None = None) -> None:
         """Disable ``provider`` for ``duration`` seconds with exponential backoff.
@@ -594,6 +638,7 @@ class ProviderMonitor:
         )
         now = datetime.now(UTC)
         active = str(state.get("active", primary))
+        self.record_health_pass(bool(healthy), provider=active)
         last_switch = state.get("last_switch")
         consecutive = int(state.get("consecutive_passes", 0))
         decision_until = state.get("decision_until")

@@ -842,92 +842,141 @@ except ImportError:  # pragma: no cover - optional dependency missing
     _pd_norm_helper = None
 
 
+def ensure_ohlcv_schema(
+    df: Any,
+    *,
+    source: str,
+    frequency: str,
+    _pd: Any | None = None,
+) -> "pd.DataFrame":
+    """Return a DataFrame with canonical OHLCV columns and UTC timestamp index."""
+
+    pd_local = _pd if _pd is not None else _ensure_pandas()
+    if pd_local is None:
+        raise DataFetchError("pandas_unavailable")
+
+    if df is None:
+        raise DataFetchError("DATA_FETCH_EMPTY")
+
+    if not isinstance(df, pd_local.DataFrame):
+        try:
+            df = pd_local.DataFrame(df)
+        except Exception as exc:  # pragma: no cover - defensive conversion
+            raise DataFetchError("DATA_FETCH_EMPTY") from exc
+
+    if df.empty:
+        raise DataFetchError("DATA_FETCH_EMPTY")
+
+    work_df = df.copy()
+
+    rename_map: dict[Any, str] = {}
+    ts_candidates: dict[str, Any] = {}
+    for col in list(work_df.columns):
+        key = str(col).strip().lower()
+        if key in {"timestamp", "time", "datetime", "date", "t"}:
+            ts_candidates.setdefault("timestamp", col)
+            rename_map[col] = "timestamp"
+        elif key in {"open", "o"}:
+            rename_map[col] = "open"
+        elif key in {"high", "h"}:
+            rename_map[col] = "high"
+        elif key in {"low", "l"}:
+            rename_map[col] = "low"
+        elif key in {"close", "c"}:
+            rename_map[col] = "close"
+        elif key in {"adj close", "adj_close", "adjclose", "adjusted_close"}:
+            rename_map[col] = "adj_close"
+        elif key in {"volume", "v"}:
+            rename_map[col] = "volume"
+
+    if rename_map:
+        work_df = work_df.rename(columns=rename_map)
+
+    timestamp_col = None
+    if "timestamp" in work_df.columns:
+        timestamp_col = "timestamp"
+    elif ts_candidates:
+        # Prefer whichever candidate was recorded first
+        timestamp_col = next(iter(ts_candidates.values()))
+        work_df = work_df.rename(columns={timestamp_col: "timestamp"})
+        timestamp_col = "timestamp"
+
+    if timestamp_col is None:
+        if isinstance(work_df.index, pd_local.DatetimeIndex):
+            timestamp_col = "timestamp"
+            work_df = work_df.reset_index().rename(columns={work_df.columns[0]: "timestamp"})
+        else:
+            raise MissingOHLCVColumnsError(
+                f"missing timestamp column | source={source} frequency={frequency}"
+            )
+
+    warn_prefix = f"{str(source or 'unknown')}:{str(frequency or 'unknown')}"
+    timestamps = safe_to_datetime(
+        work_df[timestamp_col],
+        utc=True,
+        context=warn_prefix,
+        _warn_key=f"SAFE_TO_DATETIME:{warn_prefix.upper()}",
+    )
+    work_df["timestamp"] = timestamps
+    work_df = work_df.dropna(subset=["timestamp"])
+
+    if work_df.empty:
+        raise DataFetchError("DATA_FETCH_EMPTY")
+
+    if "close" not in work_df.columns and "adj_close" in work_df.columns:
+        work_df["close"] = work_df["adj_close"]
+
+    required = ["open", "high", "low", "close"]
+    missing = [col for col in required if col not in work_df.columns]
+    if missing:
+        raise MissingOHLCVColumnsError(
+            f"OHLCV_COLUMNS_MISSING | missing={missing} source={source} frequency={frequency}"
+        )
+
+    if "volume" not in work_df.columns:
+        work_df["volume"] = 0
+
+    work_df = work_df.set_index("timestamp", drop=False)
+    work_df = work_df.sort_index()
+    if getattr(work_df.index, "has_duplicates", False):
+        work_df = work_df[~work_df.index.duplicated(keep="last")]
+
+    work_df = work_df.dropna(subset=["open", "high", "low", "close", "volume"], how="any")
+
+    if work_df.empty:
+        raise DataFetchError("DATA_FETCH_EMPTY")
+
+    desired_order = ["timestamp", "open", "high", "low", "close", "volume"]
+    other_cols = [col for col in work_df.columns if col not in desired_order]
+    ordered_cols = desired_order + other_cols
+    work_df = work_df.reindex(columns=ordered_cols)
+
+    if hasattr(work_df.index, "tz"):
+        if work_df.index.tz is None:
+            work_df.index = work_df.index.tz_localize("UTC")
+        else:
+            work_df.index = work_df.index.tz_convert("UTC")
+    work_df.index.name = "timestamp"
+    return work_df
+
+
 def _normalize_ohlcv_df(df, _pd: Any | None = None):
-    """
-    Normalize columns from various providers (Alpaca/IEX, Yahoo, etc.)
-    into strictly ['timestamp','open','high','low','close','volume'].
-    Tolerates common variants and fills safe defaults where necessary.
-    Never raises; returns None if input is None/empty or coercion fails.
-    """
+    """Backwards-compatible shim that delegates to :func:`ensure_ohlcv_schema`."""
 
     if df is None:
         return None
     try:
-        if len(df) == 0:
-            return None
-
-        if not hasattr(df, "columns") or not hasattr(df, "rename"):
-            return None
-
-        pd_local = _pd if _pd is not None else _pd_norm_helper
-        if pd_local is None:
-            pd_local = _ensure_pandas()
-        if pd_local is None:
-            return None
-
-        if _is_normalized_ohlcv_frame(df, pd_local):
-            return df
-
-        # Build a case-insensitive rename map
-        rename = {}
-        for c in list(getattr(df, "columns", [])):
-            cl = str(c).lower()
-            if cl in ("timestamp", "time", "t", "datetime", "date"):
-                rename[c] = "timestamp"
-            elif cl in ("open", "o"):
-                rename[c] = "open"
-            elif cl in ("high", "h"):
-                rename[c] = "high"
-            elif cl in ("low", "l"):
-                rename[c] = "low"
-            elif cl in ("close", "c"):
-                rename[c] = "close"
-            elif cl in ("adjclose", "adj_close", "adjusted_close"):
-                # treat adjusted close as close if close missing
-                rename[c] = "adjclose"
-            elif cl in ("volume", "v"):
-                rename[c] = "volume"
-
-        if rename:
-            df = df.rename(columns=rename)
-
-        # If we only have adjclose, promote it to close
-        if "close" not in df.columns and "adjclose" in df.columns:
-            df["close"] = df["adjclose"]
-
-        # Ensure required columns exist; fill conservative defaults
-        for req in ("open", "high", "low", "close"):
-            if req not in df.columns:
-                # If one of OHLC is missing, try to backfill from close
-                # (keeps pipeline alive but gates orders later)
-                if "close" in df.columns:
-                    df[req] = df["close"]
-                else:
-                    return None  # still unusable
-
-        if "volume" not in df.columns:
-            df["volume"] = 0
-
-        # Timestamp normalization (UTC, monotonic)
-        if "timestamp" in df.columns:
-            df["timestamp"] = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
-            df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-        else:
-            # Some providers index by datetime; try to promote index
-            dt_index = getattr(pd_local, "DatetimeIndex", None)
-            if dt_index is not None and isinstance(getattr(df, "index", None), dt_index):
-                df = df.reset_index().rename(columns={df.columns[0]: "timestamp"})
-                df["timestamp"] = pd_local.to_datetime(df["timestamp"], utc=True, errors="coerce")
-                df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
-            else:
-                return None
-
-        # Final strict column order
-        cols = ["timestamp", "open", "high", "low", "close", "volume"]
-        df = df[cols]
-        return df
+        normalized = ensure_ohlcv_schema(
+            df,
+            source="unknown",
+            frequency="unknown",
+            _pd=_pd if _pd is not None else _pd_norm_helper,
+        )
+    except (DataFetchError, MissingOHLCVColumnsError):
+        return None
     except Exception:
         return None
+    return normalized
 
 
 # --- END: universal OHLCV normalization helper ---
@@ -2345,7 +2394,8 @@ def should_skip_symbol(
     if callable(symbol):
         symbol = df.attrs.get("symbol")  # type: ignore[assignment]
     symbol_str = str(symbol) if symbol else "UNKNOWN"
-    skip = gap_ratio > max_gap_ratio
+    catastrophic_gap = gap_ratio >= 0.999
+    skip = catastrophic_gap
     if skip:
         try:
             coverage_meta = df.attrs.setdefault("_coverage_meta", {})  # type: ignore[attr-defined]
@@ -2366,6 +2416,15 @@ def should_skip_symbol(
                 f"{gap_ratio:.4%}",
             )
             _SKIP_LOGGED.add(key)
+    elif gap_ratio > max_gap_ratio:
+        try:
+            coverage_meta = df.attrs.setdefault("_coverage_meta", {})  # type: ignore[attr-defined]
+        except Exception:
+            coverage_meta = {}
+        if isinstance(coverage_meta, dict):
+            coverage_meta["gap_ratio"] = gap_ratio
+            coverage_meta["missing_after"] = missing_after
+            coverage_meta["expected"] = expected_count
     return skip
 
 
@@ -4720,9 +4779,28 @@ def get_minute_df(
             _record_minute_fallback(frame=df)
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
-    df = _normalize_ohlcv_df(df)
-    if df is None:
-        logger.error("OHLCV_COLUMNS_MISSING")
+    source_label = (
+        resolved_backup_provider
+        if used_backup
+        else primary_label
+    )
+    try:
+        df = ensure_ohlcv_schema(
+            df,
+            source=source_label or "alpaca",
+            frequency="1Min",
+        )
+    except MissingOHLCVColumnsError as exc:
+        logger.error(
+            "OHLCV_COLUMNS_MISSING",
+            extra={"source": source_label, "frequency": "1Min", "detail": str(exc)},
+        )
+        return None
+    except DataFetchError as exc:
+        logger.error(
+            "DATA_FETCH_EMPTY",
+            extra={"source": source_label, "frequency": "1Min", "detail": str(exc)},
+        )
         return None
     return df
 
@@ -4811,12 +4889,23 @@ def get_daily_df(
         }:
             df = df.reset_index().rename(columns={df.index.name: "timestamp"})
         df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-        for col in ("timestamp", "open", "high", "low", "close", "volume"):
-            if col not in df.columns:
-                df[col] = pd_mod.NA
-    df = _normalize_ohlcv_df(df)
-    if df is None:
-        logger.error("OHLCV_COLUMNS_MISSING")
+    try:
+        df = ensure_ohlcv_schema(
+            df,
+            source=normalized_feed or "alpaca",
+            frequency="1Day",
+        )
+    except MissingOHLCVColumnsError as exc:
+        logger.error(
+            "OHLCV_COLUMNS_MISSING",
+            extra={"source": normalized_feed or "alpaca", "frequency": "1Day", "detail": str(exc)},
+        )
+        return None
+    except DataFetchError as exc:
+        logger.error(
+            "DATA_FETCH_EMPTY",
+            extra={"source": normalized_feed or "alpaca", "frequency": "1Day", "detail": str(exc)},
+        )
         return None
     return df
 

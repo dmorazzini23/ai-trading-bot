@@ -82,8 +82,9 @@ def test_should_skip_symbol_logs_on_excessive_gap(monkeypatch: pytest.MonkeyPatc
     start_local = datetime(2024, 1, 3, 9, 30, tzinfo=tz)
     end_local = datetime(2024, 1, 3, 16, 0, tzinfo=tz)
     expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
-    missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
-    df = _build_base_frame(start_local, end_local, missing)
+    full_df = _build_base_frame(start_local, end_local, set())
+    df = full_df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"]) - pd.Timedelta(days=1)
     df.attrs["symbol"] = "SKIPX"
     fetch_module._SKIP_LOGGED.clear()  # type: ignore[attr-defined]
     caplog.set_level("WARNING")
@@ -97,4 +98,17 @@ def test_should_skip_symbol_logs_on_excessive_gap(monkeypatch: pytest.MonkeyPatc
     assert any(
         "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE" in record.message
         for record in caplog.records
+    )
+    # Partial gaps should no longer trigger auto-skip
+    partial_missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
+    partial_df = _build_base_frame(start_local, end_local, partial_missing)
+    partial_df.attrs["symbol"] = "KEEPX"
+    assert (
+        fetch_module.should_skip_symbol(
+            partial_df,
+            window=(start_local.astimezone(UTC), end_local.astimezone(UTC)),
+            tz=tz,
+            max_gap_ratio=0.0,
+        )
+        is False
     )

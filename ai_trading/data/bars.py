@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
+import os
 from typing import Any
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
@@ -44,6 +45,34 @@ pd = load_pandas()
 
 _log = get_logger(__name__)
 'AI-AGENT-REF: canonicalizers moved to ai_trading.logging.normalize'
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_bool(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() in _TRUTHY
+
+
+def _default_sip_entitled() -> bool:
+    explicit = _env_bool("ALPACA_SIP_ENTITLED")
+    if explicit is not None:
+        return explicit
+    legacy = _env_bool("ALPACA_HAS_SIP")
+    if legacy is not None:
+        return legacy
+    return False
+
+
+def get_alpaca_feed(prefer_sip: bool, *, sip_entitled: bool | None = None) -> str:
+    """Return the Alpaca feed name to use given SIP entitlement state."""
+
+    entitled = sip_entitled
+    if entitled is None:
+        entitled = _default_sip_entitled()
+    return "sip" if prefer_sip and entitled else "iex"
 
 def _format_fallback_payload(tf_str: str, feed_str: str, start_utc: datetime, end_utc: datetime) -> list[str]:
     s = start_utc.astimezone(UTC).isoformat()
@@ -128,17 +157,38 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     feeds = _get_entitled_feeds(client)
     req_raw = str(requested or '').lower()
     normalized_req = req_raw.replace("alpaca_", "")
-    if normalized_req == "sip" and sip_disallowed():
-        return "iex"
-    if normalized_req in feeds:
-        return normalized_req
-    alt = next(iter(feeds), None)
-    if alt:
-        if normalized_req != alt:
-            _log.warning('ALPACA_FEED_UNENTITLED_SWITCH', extra={'requested': normalized_req, 'using': alt})
+    sip_allowed = not sip_disallowed()
+    env_flag = _env_bool("ALPACA_SIP_ENTITLED")
+    if env_flag is None:
+        env_flag = _env_bool("ALPACA_HAS_SIP")
+    sip_capability = "sip" in feeds
+    sip_entitled_flag = False
+    if sip_allowed and sip_capability:
+        if env_flag is False:
+            sip_entitled_flag = False
+        else:
+            sip_entitled_flag = True
+    prefer_sip = normalized_req == "sip"
+    resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_entitled_flag)
+    if resolved in feeds:
+        return resolved
+    eligible_feeds = [feed for feed in feeds if feed != "sip" or sip_entitled_flag]
+    if eligible_feeds:
+        alt = eligible_feeds[0]
+        if resolved != alt:
+            _log.warning(
+                'ALPACA_FEED_UNENTITLED_SWITCH',
+                extra={'requested': normalized_req, 'using': alt},
+            )
         return alt
-    emit_once(_log, f'no_feed:{normalized_req}', 'error', 'ALPACA_FEED_UNENTITLED', requested=normalized_req)
-    return normalized_req
+    emit_once(
+        _log,
+        f'no_feed:{normalized_req}',
+        'error',
+        'ALPACA_FEED_UNENTITLED',
+        requested=normalized_req,
+    )
+    return resolved
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""
