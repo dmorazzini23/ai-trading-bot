@@ -1,4 +1,11 @@
-"""Async helpers for running fallback tasks with bounded concurrency."""
+"""Async helpers for running fallback tasks with bounded concurrency.
+
+The closure-rebinding logic below walks dataclasses, ``SimpleNamespace``
+instances, standard containers, and slot-based objects to recreate any
+foreign-loop asyncio locks on the currently running loop. If additional
+container types start capturing asyncio primitives, keep ``_scan`` in sync
+with those structures.
+"""
 
 from __future__ import annotations
 
@@ -129,6 +136,20 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return obj
 
 
+def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
+    """Assign ``value`` to ``target.name`` bypassing frozen guards when possible."""
+
+    try:
+        setattr(target, name, value)
+        return True
+    except Exception:
+        try:
+            object.__setattr__(target, name, value)
+        except Exception:
+            return False
+        return True
+
+
 def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> object:
     obj_id = id(obj)
     if obj_id in seen:
@@ -194,10 +215,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
                 continue
             new_value = _scan(value, seen, loop)
             if new_value is not value:
-                try:
-                    setattr(obj, field.name, new_value)
-                except Exception:
-                    pass
+                _assign_dataclass_attr(obj, field.name, new_value)
         try:
             extra_attrs = vars(obj)
         except TypeError:
@@ -206,10 +224,7 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
             for name, value in list(extra_attrs.items()):
                 new_value = _scan(value, seen, loop)
                 if new_value is not value:
-                    try:
-                        setattr(obj, name, new_value)
-                    except Exception:
-                        pass
+                    _assign_dataclass_attr(obj, name, new_value)
         return obj
 
     if isinstance(obj, SimpleNamespace):
