@@ -682,6 +682,9 @@ def _mark_fallback(
     *,
     from_provider: str | None = None,
     fallback_feed: str | None = None,
+    fallback_df: Any | None = None,
+    resolved_provider: str | None = None,
+    resolved_feed: str | None = None,
 ) -> None:
     """Record usage of the configured backup provider.
 
@@ -693,29 +696,65 @@ def _mark_fallback(
       :mod:`ai_trading.data.fetch.fallback_order` for test introspection.
     """
 
-    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
+    configured_provider, configured_normalized = _resolve_backup_provider()
+
+    def _normalize(value: Any | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            normalized_value = str(value).strip()
+        except Exception:
+            return None
+        return normalized_value or None
+
+    provider_from_df: str | None = None
+    feed_from_df: str | None = None
+    if fallback_df is not None:
+        try:
+            attrs = getattr(fallback_df, "attrs", None)
+        except Exception:  # pragma: no cover - attrs access best-effort
+            attrs = None
+        if isinstance(attrs, Mapping):
+            provider_from_df = _normalize(
+                attrs.get("data_provider") or attrs.get("fallback_provider")
+            )
+            feed_from_df = _normalize(attrs.get("data_feed") or attrs.get("fallback_feed"))
+
+    provider_hint = _normalize(resolved_provider) or provider_from_df
+    if provider_hint is None:
+        provider_hint = _normalize(configured_normalized) or _normalize(configured_provider)
+
+    feed_hint = (
+        feed_from_df
+        or _normalize(resolved_feed)
+        or _normalize(fallback_feed)
+    )
+    if feed_hint is None and provider_hint and provider_hint.startswith("alpaca_"):
+        feed_hint = provider_hint.split("_", 1)[1]
+
     if from_provider:
         current = str(from_provider).strip().lower()
-        if current and current == str(provider).strip().lower():
+        if current and provider_hint and current == provider_hint.strip().lower():
             return
+
     key = _fallback_key(symbol, timeframe, start, end)
-    fallback_order.register_fallback(provider, symbol)
-    metadata: dict[str, str] = {"fallback_provider": provider}
+    provider_for_register = provider_hint or _normalize(configured_provider) or "yahoo"
+    fallback_order.register_fallback(provider_for_register, symbol)
+    metadata: dict[str, str] = {"fallback_provider": provider_for_register}
     log_extra: dict[str, str] = dict(metadata)
+    if configured_provider and _normalize(configured_provider) != provider_for_register:
+        metadata["configured_fallback_provider"] = _normalize(configured_provider) or configured_provider
     if from_provider:
         metadata["from_provider"] = from_provider
         log_extra["from_provider"] = from_provider
-    if fallback_feed:
-        metadata["fallback_feed"] = fallback_feed
-        log_extra["fallback_feed"] = fallback_feed
-    elif provider and not provider.startswith("alpaca_"):
-        metadata["fallback_feed"] = provider
-        log_extra["fallback_feed"] = provider
+    if feed_hint:
+        metadata["fallback_feed"] = feed_hint
+        log_extra["fallback_feed"] = feed_hint
     _FALLBACK_METADATA[key] = metadata
     # Emit once per unique (symbol, timeframe, window)
     if key not in _FALLBACK_WINDOWS:
         payload = log_backup_provider_used(
-            provider,
+            provider_for_register,
             symbol=symbol,
             timeframe=timeframe,
             start=start,
@@ -723,18 +762,21 @@ def _mark_fallback(
             extra=log_extra,
         )
         logger.warning("BACKUP_PROVIDER_USED", extra=payload)
-        provider_monitor.record_switchover(from_provider or "alpaca", provider)
+        provider_monitor.record_switchover(
+            from_provider or "alpaca",
+            provider_for_register,
+        )
     _FALLBACK_WINDOWS.add(key)
     fallback_name: str | None = None
-    if fallback_feed:
+    if feed_hint:
         try:
-            fallback_name = _normalize_feed_value(fallback_feed)
+            fallback_name = _normalize_feed_value(feed_hint)
         except Exception:
-            fallback_name = str(fallback_feed)
-    elif provider and provider.startswith("alpaca_"):
-        fallback_name = provider.split("_", 1)[1]
-    elif provider:
-        fallback_name = str(provider)
+            fallback_name = str(feed_hint)
+    elif provider_for_register and provider_for_register.startswith("alpaca_"):
+        fallback_name = provider_for_register.split("_", 1)[1]
+    elif provider_for_register:
+        fallback_name = str(provider_for_register)
     if fallback_name:
         fallback_clean = str(fallback_name).strip().lower()
         if fallback_clean:
@@ -2615,20 +2657,24 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
+                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                provider_str, normalized_provider = _resolve_backup_provider()
+                annotated_df = _annotate_df_source(
+                    fallback_df,
+                    provider=normalized_provider or provider_str,
+                    feed=normalized_provider or None,
+                )
                 _mark_fallback(
                     symbol,
                     _interval,
                     _start,
                     _end,
                     from_provider=f"alpaca_{_feed}",
+                    fallback_df=annotated_df,
+                    resolved_provider=normalized_provider or provider_str,
+                    resolved_feed=normalized_provider or None,
                 )
-                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                provider_str, normalized_provider = _resolve_backup_provider()
-                return _annotate_df_source(
-                    fallback_df,
-                    provider=normalized_provider or provider_str,
-                    feed=normalized_provider or None,
-                )
+                return annotated_df
         else:
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
@@ -2694,20 +2740,24 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
+                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                provider_str, normalized_provider = _resolve_backup_provider()
+                annotated_df = _annotate_df_source(
+                    fallback_df,
+                    provider=normalized_provider or provider_str,
+                    feed=normalized_provider or None,
+                )
                 _mark_fallback(
                     symbol,
                     _interval,
                     _start,
                     _end,
                     from_provider=f"alpaca_{_feed}",
+                    fallback_df=annotated_df,
+                    resolved_provider=normalized_provider or provider_str,
+                    resolved_feed=normalized_provider or None,
                 )
-                fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-                provider_str, normalized_provider = _resolve_backup_provider()
-                return _annotate_df_source(
-                    fallback_df,
-                    provider=normalized_provider or provider_str,
-                    feed=normalized_provider or None,
-                )
+                return annotated_df
             empty_df = _empty_ohlcv_frame(pd)
             return empty_df if empty_df is not None else pd.DataFrame()
 
@@ -2722,20 +2772,24 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
+            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+            provider_str, normalized_provider = _resolve_backup_provider()
+            annotated_df = _annotate_df_source(
+                fallback_df,
+                provider=normalized_provider or provider_str,
+                feed=normalized_provider or None,
+            )
             _mark_fallback(
                 symbol,
                 _interval,
                 _start,
                 _end,
                 from_provider=f"alpaca_{_feed}",
+                fallback_df=annotated_df,
+                resolved_provider=normalized_provider or provider_str,
+                resolved_feed=normalized_provider or None,
             )
-            fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
-            provider_str, normalized_provider = _resolve_backup_provider()
-            return _annotate_df_source(
-                fallback_df,
-                provider=normalized_provider or provider_str,
-                feed=normalized_provider or None,
-            )
+            return annotated_df
         return pd.DataFrame()
 
     headers = {
@@ -3153,17 +3207,31 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
-                    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-                    provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
-                    provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
+                    provider_str, normalized_provider = _resolve_backup_provider()
+                    resolved_provider = normalized_provider or provider_str
+                    provider_fallback.labels(
+                        from_provider=f"alpaca_{_feed}", to_provider=resolved_provider
+                    ).inc()
+                    provider_monitor.record_switchover(
+                        f"alpaca_{_feed}", resolved_provider
+                    )
+                    fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    annotated_df = _annotate_df_source(
+                        fallback_df,
+                        provider=normalized_provider or provider_str,
+                        feed=normalized_provider or None,
+                    )
                     _mark_fallback(
                         symbol,
                         _interval,
                         _start,
                         _end,
                         from_provider=f"alpaca_{_feed}",
+                        fallback_df=annotated_df,
+                        resolved_provider=resolved_provider,
+                        resolved_feed=normalized_provider or None,
                     )
-                    return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    return annotated_df
                 return pd.DataFrame()
             fallback_target = fallback
             if fallback_target:
@@ -3366,17 +3434,15 @@ def _fetch_bars(
                 provider_monitor.record_failure("alpaca", "empty")
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
                 if cnt >= _ALPACA_EMPTY_ERROR_THRESHOLD:
-                    provider = getattr(get_settings(), "backup_data_provider", "yahoo")
-                    provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider=provider).inc()
-                    provider_monitor.record_switchover(f"alpaca_{_feed}", provider)
-                    metrics.empty_fallback += 1
-                    _mark_fallback(
-                        symbol,
-                        _interval,
-                        _start,
-                        _end,
-                        from_provider=f"alpaca_{_feed}",
+                    provider_str, normalized_provider = _resolve_backup_provider()
+                    resolved_provider = normalized_provider or provider_str
+                    provider_fallback.labels(
+                        from_provider=f"alpaca_{_feed}", to_provider=resolved_provider
+                    ).inc()
+                    provider_monitor.record_switchover(
+                        f"alpaca_{_feed}", resolved_provider
                     )
+                    metrics.empty_fallback += 1
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
                     _state["stop"] = True
                     interval_map = {
@@ -3388,7 +3454,23 @@ def _fetch_bars(
                     }
                     fb_int = interval_map.get(_interval)
                     if fb_int:
-                        return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                        fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                        annotated_df = _annotate_df_source(
+                            fallback_df,
+                            provider=normalized_provider or provider_str,
+                            feed=normalized_provider or None,
+                        )
+                        _mark_fallback(
+                            symbol,
+                            _interval,
+                            _start,
+                            _end,
+                            from_provider=f"alpaca_{_feed}",
+                            fallback_df=annotated_df,
+                            resolved_provider=resolved_provider,
+                            resolved_feed=normalized_provider or None,
+                        )
+                        return annotated_df
                     return pd.DataFrame()
             else:
                 _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
@@ -3454,14 +3536,25 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(_interval)
                 if fb_int:
+                    provider_str, normalized_provider = _resolve_backup_provider()
+                    resolved_provider = normalized_provider or provider_str
+                    fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    annotated_df = _annotate_df_source(
+                        fallback_df,
+                        provider=normalized_provider or provider_str,
+                        feed=normalized_provider or None,
+                    )
                     _mark_fallback(
                         symbol,
                         _interval,
                         _start,
                         _end,
                         from_provider=f"alpaca_{_feed}",
+                        fallback_df=annotated_df,
+                        resolved_provider=resolved_provider,
+                        resolved_feed=normalized_provider or None,
                     )
-                    return _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                    return annotated_df
                 logger.error(
                     "IEX_EMPTY_NO_SIP",
                     extra=_norm_extra(
@@ -3480,14 +3573,25 @@ def _fetch_bars(
                 interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
                 fb_int = interval_map.get(base_interval)
                 if fb_int:
+                    provider_str, normalized_provider = _resolve_backup_provider()
+                    resolved_provider = normalized_provider or provider_str
+                    fallback_df = _backup_get_bars(symbol, base_start, base_end, interval=fb_int)
+                    annotated_df = _annotate_df_source(
+                        fallback_df,
+                        provider=normalized_provider or provider_str,
+                        feed=normalized_provider or None,
+                    )
                     _mark_fallback(
                         symbol,
                         base_interval,
                         base_start,
                         base_end,
                         from_provider=f"alpaca_{base_feed}",
+                        fallback_df=annotated_df,
+                        resolved_provider=resolved_provider,
+                        resolved_feed=normalized_provider or None,
                     )
-                    return _backup_get_bars(symbol, base_start, base_end, interval=fb_int)
+                    return annotated_df
             if _interval.lower() in {"1day", "day", "1d"}:
                 try:
                     mdf = _fetch_bars(symbol, _start, _end, "1Min", feed=_feed, adjustment=adjustment)
@@ -3899,14 +4003,22 @@ def _fetch_bars(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
                 )
+                annotated_df = _annotate_df_source(
+                    alt_df,
+                    provider="yahoo",
+                    feed="yahoo",
+                )
                 _mark_fallback(
                     symbol,
                     _interval,
                     _start,
                     _end,
                     from_provider=f"alpaca_{_feed}",
+                    fallback_df=annotated_df,
+                    resolved_provider="yahoo",
+                    resolved_feed="yahoo",
                 )
-                return alt_df
+                return annotated_df
     if df is None or getattr(df, "empty", True):
         return None
     return df
@@ -3952,6 +4064,31 @@ def get_minute_df(
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
+    backup_provider_str, backup_provider_normalized = _resolve_backup_provider()
+    resolved_backup_provider = backup_provider_normalized or backup_provider_str
+    resolved_backup_feed = backup_provider_normalized or None
+
+    def _record_minute_fallback(
+        *,
+        frame: Any | None = None,
+        timeframe: str = "1Min",
+        window_start: _dt.datetime | None = None,
+        window_end: _dt.datetime | None = None,
+        from_feed: str | None = None,
+    ) -> None:
+        start_window = window_start or start_dt
+        end_window = window_end or end_dt
+        source_feed = from_feed or normalized_feed or _DEFAULT_FEED
+        _mark_fallback(
+            symbol,
+            timeframe,
+            start_window,
+            end_window,
+            from_provider=f"alpaca_{source_feed}",
+            fallback_df=frame,
+            resolved_provider=resolved_backup_provider,
+            resolved_feed=resolved_backup_feed,
+        )
     if normalized_feed is None:
         cached_cycle_feed = _fallback_cache_for_cycle(_get_cycle_id(), symbol, "1Min")
         if cached_cycle_feed:
@@ -4377,13 +4514,7 @@ def get_minute_df(
     if original_df is None:
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(
-                    symbol,
-                    "1Min",
-                    start_dt,
-                    end_dt,
-                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
-                )
+                _record_minute_fallback()
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -4395,13 +4526,7 @@ def get_minute_df(
     if getattr(original_df, "empty", False):
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(
-                    symbol,
-                    "1Min",
-                    start_dt,
-                    end_dt,
-                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
-                )
+                _record_minute_fallback(frame=original_df)
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -4430,13 +4555,7 @@ def get_minute_df(
     if df is None:
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(
-                    symbol,
-                    "1Min",
-                    start_dt,
-                    end_dt,
-                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
-                )
+                _record_minute_fallback(frame=original_df)
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -4536,13 +4655,7 @@ def get_minute_df(
     if df is None or getattr(df, "empty", False):
         if allow_empty_return:
             if used_backup and not fallback_logged:
-                _mark_fallback(
-                    symbol,
-                    "1Min",
-                    start_dt,
-                    end_dt,
-                    from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
-                )
+                _record_minute_fallback(frame=df)
                 fallback_logged = True
             _IEX_EMPTY_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
@@ -4561,13 +4674,7 @@ def get_minute_df(
         mark_success(symbol, "1Min")
         success_marked = True
         if used_backup and not fallback_logged:
-            _mark_fallback(
-                symbol,
-                "1Min",
-                start_dt,
-                end_dt,
-                from_provider=f"alpaca_{normalized_feed or _DEFAULT_FEED}",
-            )
+            _record_minute_fallback(frame=df)
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
     df = _normalize_ohlcv_df(df)
