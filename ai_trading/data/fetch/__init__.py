@@ -543,6 +543,7 @@ def _log_yf_warning(event: str, symbol: str, timeframe: str, extra: dict[str, ob
 # Track feed failovers so we avoid redundant retries for the same symbol/timeframe.
 _FEED_OVERRIDE_BY_TF: dict[tuple[str, str], str] = {}
 _FEED_SWITCH_LOGGED: set[tuple[str, str, str]] = set()
+_FEED_SWITCH_HISTORY: list[tuple[str, str, str]] = []
 _FEED_FAILOVER_ATTEMPTS: dict[tuple[str, str], set[str]] = {}
 
 
@@ -589,6 +590,7 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     _FEED_OVERRIDE_BY_TF[key] = to_feed
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
     attempted.add(to_feed)
+    _FEED_SWITCH_HISTORY.append((symbol, timeframe, to_feed))
     if from_feed == "iex":
         _IEX_EMPTY_COUNTS.pop(key, None)
     log_key = (symbol, timeframe, to_feed)

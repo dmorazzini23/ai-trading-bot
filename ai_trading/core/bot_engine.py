@@ -576,7 +576,7 @@ import traceback
 import types
 import uuid
 import warnings
-from collections.abc import Callable, Sequence  # AI-AGENT-REF: now_provider hooks
+from collections.abc import Callable, Iterable, Sequence  # AI-AGENT-REF: now_provider hooks
 from datetime import UTC, date, datetime, timedelta, timezone
 import time as _time
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
@@ -4444,6 +4444,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
     primary_feed = configured_feed or data_fetcher_module._DEFAULT_FEED
     current_feed = primary_feed
+    cache_key_candidates: list[str] = []
     cycle_pref = _prefer_feed_this_cycle_helper(symbol)
     if cycle_pref:
         current_feed = cycle_pref
@@ -4892,10 +4893,21 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 low_coverage = bool(coverage["low_coverage"])
                 fallback_used = True
                 fallback_feed = "yahoo"
-                fallback_feed_used = "yahoo"
                 fallback_provider = "yahoo"
                 active_feed = "yahoo"
-                _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
+                (
+                    _fallback_sanitized,
+                    _fallback_normalized,
+                    _fallback_cached,
+                ) = _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
+                fallback_feed_used = (
+                    _fallback_cached
+                    or _fallback_sanitized
+                    or _fallback_normalized
+                    or "yahoo"
+                )
+                if fallback_feed_used and fallback_feed_used not in cache_key_candidates:
+                    cache_key_candidates.append(fallback_feed_used)
                 data_fetcher_module._cache_fallback(symbol, "yahoo")
                 coverage_window_start = fallback_start_dt
             else:
@@ -4933,17 +4945,50 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             )
             coverage_warning_logged = True
 
-    if fallback_used and fallback_feed_used and configured_feed:
-        cache = getattr(state, "minute_feed_cache", None)
-        if not isinstance(cache, dict):
-            cache = {}
-            setattr(state, "minute_feed_cache", cache)
-        cache[configured_feed] = fallback_feed_used
-        ts_cache = getattr(state, "minute_feed_cache_ts", None)
-        if not isinstance(ts_cache, dict):
-            ts_cache = {}
-            setattr(state, "minute_feed_cache_ts", ts_cache)
-        ts_cache[configured_feed] = now_utc
+    def _set_minute_feed_cache(feeds: Iterable[str], value: str) -> None:
+        if not value:
+            return
+        cache_obj = getattr(state, "minute_feed_cache", None)
+        if not isinstance(cache_obj, dict):
+            cache_obj = {}
+            setattr(state, "minute_feed_cache", cache_obj)
+        ts_obj = getattr(state, "minute_feed_cache_ts", None)
+        if not isinstance(ts_obj, dict):
+            ts_obj = {}
+            setattr(state, "minute_feed_cache_ts", ts_obj)
+        for feed_name in feeds:
+            if not feed_name:
+                continue
+            cache_obj[feed_name] = value
+            ts_obj[feed_name] = now_utc
+
+    def _purge_minute_feed_cache(feeds: Iterable[str]) -> None:
+        cache_obj = getattr(state, "minute_feed_cache", None)
+        ts_obj = getattr(state, "minute_feed_cache_ts", None)
+        for feed_name in feeds:
+            if not feed_name:
+                continue
+            if isinstance(cache_obj, dict):
+                cache_obj.pop(feed_name, None)
+            if isinstance(ts_obj, dict):
+                ts_obj.pop(feed_name, None)
+
+    if fallback_used and fallback_feed_used:
+        fallback_cache_key = fallback_feed_used
+        feeds_to_cache: list[str] = []
+        if configured_feed:
+            feeds_to_cache.append(configured_feed)
+        if cache_key_candidates:
+            feeds_to_cache.extend(cache_key_candidates)
+        else:
+            feeds_to_cache.append(fallback_cache_key)
+        _set_minute_feed_cache(feeds_to_cache, fallback_cache_key)
+    elif fallback_attempted and not fallback_used and configured_feed:
+        failed_fallback_key = _normalize_feed_name(fallback_feed) if fallback_feed else None
+        feeds_to_clear = [configured_feed]
+        if failed_fallback_key:
+            feeds_to_clear.append(failed_fallback_key)
+        _purge_minute_feed_cache(feeds_to_clear)
 
     if df is None:
         raise DataFetchError("minute_data_unavailable")
@@ -5017,9 +5062,20 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_attempted = True
             fallback_used = True
             fallback_feed = resolved_feed
-            fallback_feed_used = resolved_feed
             fallback_provider = resolved_provider
-            _cache_cycle_fallback_feed_helper(resolved_feed, symbol=symbol)
+            (
+                _fallback_sanitized,
+                _fallback_normalized,
+                _fallback_cached,
+            ) = _cache_cycle_fallback_feed_helper(resolved_feed, symbol=symbol)
+            fallback_feed_used = (
+                _fallback_cached
+                or _fallback_sanitized
+                or _fallback_normalized
+                or resolved_feed
+            )
+            if fallback_feed_used and fallback_feed_used not in cache_key_candidates:
+                cache_key_candidates.append(fallback_feed_used)
             sip_feed_normalized = (
                 "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
             )
