@@ -47,48 +47,64 @@ def create_app():
         """Lightweight liveness probe with Alpaca diagnostics."""
         ok = True
         errors: list[str] = []
+        sdk_ok = False
+        trading_client = None
+        key = secret = None
+        base_url = ""
+        paper = False
+        shadow = False
+
+        def record_error(exc: Exception) -> None:
+            message = str(exc)
+            if message and message not in errors:
+                errors.append(message)
+
         try:
-            try:
-                from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
-            except ImportError as exc:
-                sdk_ok = False
-                ok = False
-                errors.append(str(exc))
-            except (KeyError, ValueError, TypeError) as exc:
-                sdk_ok = False
-                errors.append(str(exc))
+            from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok
+        except ImportError as exc:
+            ok = False
+            record_error(exc)
+        except (KeyError, ValueError, TypeError) as exc:
+            record_error(exc)
 
-            try:
-                from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client
-                key, secret, base_url = _resolve_alpaca_env()
-                paper = bool(base_url and 'paper' in base_url)
-            except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
-                trading_client, key, secret, base_url, paper = (None, None, None, '', False)
-                ok = False
-                errors.append(str(exc))
+        try:
+            from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client as _trading_client
+            trading_client = _trading_client
+            key, secret, base_url = _resolve_alpaca_env()
+            paper = bool(base_url and 'paper' in base_url)
+        except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
+            ok = False
+            record_error(exc)
+            trading_client, key, secret, base_url, paper = (None, None, None, '', False)
 
+        try:
             from ai_trading.config.management import is_shadow_mode
-
             shadow = is_shadow_mode()
+        except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
+            ok = False
+            record_error(exc)
+            shadow = False
 
-            if errors:
-                ok = False
+        if errors:
+            ok = False
 
-            payload = dict(
-                ok=ok,
-                alpaca=dict(
-                    sdk_ok=bool(sdk_ok),
-                    initialized=bool(trading_client),
-                    client_attached=bool(trading_client),
-                    has_key=bool(key),
-                    has_secret=bool(secret),
-                    base_url=base_url,
-                    paper=paper,
-                    shadow_mode=shadow,
-                ),
-            )
-            if errors:
-                payload["error"] = "; ".join(errors)
+        payload = dict(
+            ok=ok,
+            alpaca=dict(
+                sdk_ok=bool(sdk_ok),
+                initialized=bool(trading_client),
+                client_attached=bool(trading_client),
+                has_key=bool(key),
+                has_secret=bool(secret),
+                base_url=base_url,
+                paper=paper,
+                shadow_mode=shadow,
+            ),
+        )
+        if errors:
+            payload["error"] = "; ".join(errors)
+
+        try:
             return jsonify(payload)
         except Exception as e:  # /health must not raise
             _log.exception("HEALTH_CHECK_FAILED")
