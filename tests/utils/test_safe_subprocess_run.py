@@ -21,6 +21,16 @@ def test_safe_subprocess_run_timeout(caplog):
     assert any("timed out" in rec.message for rec in caplog.records)
 
 
+def test_safe_subprocess_run_immediate_timeout(caplog):
+    cmd = [sys.executable, "-c", "print('never runs')"]
+    with caplog.at_level("WARNING"):
+        res = safe_subprocess_run(cmd, timeout=0)
+    assert res.stdout == ""
+    assert res.timeout
+    assert res.returncode == -1
+    assert any("timed out" in rec.message for rec in caplog.records)
+
+
 def test_safe_subprocess_run_nonzero_exit(caplog):
     cmd = [sys.executable, "-c", "import sys; sys.exit(2)"]
     with caplog.at_level("WARNING"):
