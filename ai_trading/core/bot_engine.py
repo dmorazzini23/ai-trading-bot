@@ -819,6 +819,7 @@ pd = load_pandas()
 _FEATURE_CACHE: "OrderedDict[tuple[str, pd.Timestamp], pd.DataFrame]" = OrderedDict()
 _FEATURE_CACHE_LIMIT = 128
 _PRICE_SOURCE: dict[str, str] = {}
+_CANONICAL_FALLBACK_FEEDS = frozenset({"iex", "sip", "yahoo"})
 _ALPACA_DISABLED_SENTINEL = "alpaca_disabled"
 _PRIMARY_PRICE_SOURCES = frozenset(
     {
@@ -1048,6 +1049,53 @@ def _sanitize_alpaca_feed(feed: str | None) -> str | None:
         return None
     normalized = str(feed).strip().lower()
     return normalized if normalized in {"iex", "sip"} else None
+
+
+def _canonicalize_fallback_feed(feed: object | None) -> str | None:
+    """Return canonical fallback feed name when *feed* is recognized."""
+
+    sanitized = _sanitize_alpaca_feed(feed) if feed is not None else None
+    if sanitized in _CANONICAL_FALLBACK_FEEDS:
+        return sanitized
+    if feed is None:
+        return None
+    try:
+        normalized = str(feed).strip().lower()
+    except Exception:
+        return None
+    if normalized in _CANONICAL_FALLBACK_FEEDS:
+        return normalized
+    if normalized.startswith("alpaca_"):
+        suffix = normalized.split("_", 1)[1]
+        if suffix in _CANONICAL_FALLBACK_FEEDS:
+            return suffix
+    try:
+        normalized_fetch = data_fetcher_module._normalize_feed_value(normalized)
+    except Exception:
+        normalized_fetch = None
+    if normalized_fetch:
+        sanitized_fetch = _sanitize_alpaca_feed(normalized_fetch) or normalized_fetch
+        if sanitized_fetch in _CANONICAL_FALLBACK_FEEDS:
+            return sanitized_fetch
+    return None
+
+
+def _set_price_source(symbol: str, source: object | None) -> None:
+    """Store *source* for *symbol* while normalizing known fallback feeds."""
+
+    if not symbol:
+        return
+    canonical = _canonicalize_fallback_feed(source)
+    if canonical:
+        _PRICE_SOURCE[symbol] = canonical
+        return
+    if source is None:
+        _PRICE_SOURCE[symbol] = "unknown"
+        return
+    try:
+        _PRICE_SOURCE[symbol] = str(source)
+    except Exception:
+        _PRICE_SOURCE[symbol] = "unknown"
 
 
 def _normalize_cycle_feed(feed: str | None) -> str | None:
@@ -1562,7 +1610,8 @@ def _cycle_fallback_feed_values(
             normalized_raw = None
 
     cached_value = sanitized or normalized_raw
-    return sanitized, normalized_raw, cached_value
+    canonical_value = _canonicalize_fallback_feed(cached_value)
+    return sanitized, normalized_raw, canonical_value
 
 
 def _cache_cycle_fallback_feed_internal(
@@ -1572,11 +1621,7 @@ def _cache_cycle_fallback_feed_internal(
 
     global _GLOBAL_INTRADAY_FALLBACK_FEED
 
-    sanitized, normalized_raw, cached_value = _cycle_fallback_feed_values(feed)
-
-    canonical_value = sanitized
-    if canonical_value is None and cached_value:
-        canonical_value = _sanitize_alpaca_feed(cached_value) or cached_value
+    sanitized, normalized_raw, canonical_value = _cycle_fallback_feed_values(feed)
 
     if symbol and canonical_value:
         _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = canonical_value
@@ -14056,12 +14101,12 @@ def _enter_long(
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca_ask"
-        _PRICE_SOURCE[symbol] = price_source
+        _set_price_source(symbol, price_source)
     else:
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        _PRICE_SOURCE[symbol] = price_source
+        _set_price_source(symbol, price_source)
         fallback_active = (
             prefer_backup_quote
             or price_source == _ALPACA_DISABLED_SENTINEL
@@ -14106,7 +14151,7 @@ def _enter_long(
             )
             quote_price = float(fallback_price)
             price_source = "feature_close"
-            _PRICE_SOURCE[symbol] = price_source
+            _set_price_source(symbol, price_source)
         else:
             logger.warning(
                 "SKIP_ORDER_INVALID_QUOTE",
@@ -14380,12 +14425,12 @@ def _enter_short(
     if testing_mode:
         quote_price = current_price
         price_source = "alpaca_ask"
-        _PRICE_SOURCE[symbol] = price_source
+        _set_price_source(symbol, price_source)
     else:
         quote_price, price_source = _resolve_order_quote(
             symbol, prefer_backup=prefer_backup_quote
         )
-        _PRICE_SOURCE[symbol] = price_source
+        _set_price_source(symbol, price_source)
         fallback_active = (
             prefer_backup_quote
             or price_source == _ALPACA_DISABLED_SENTINEL
@@ -20488,7 +20533,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             provider_disabled = True
             price_source = _ALPACA_DISABLED_SENTINEL
             primary_failure_source = price_source
-            _PRICE_SOURCE[symbol] = price_source
+            _set_price_source(symbol, price_source)
             if not prefer_backup:
                 return None
 
@@ -20518,7 +20563,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     def _finalize_return() -> float | None:
         if price is not None and _should_flag_delayed_slippage(cache, price_source):
             _log_delayed_quote_slippage(symbol, price_source, price, cache)
-        _PRICE_SOURCE[symbol] = price_source
+        _set_price_source(symbol, price_source)
         return price
 
     cycle_feed = _prefer_feed_this_cycle_helper(symbol)
@@ -20606,7 +20651,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             last_source = source
         if source == "alpaca_auth_failed":
             price_source = source
-            _PRICE_SOURCE[symbol] = price_source
+            _set_price_source(symbol, price_source)
             return None
         if candidate is not None:
             price = candidate
