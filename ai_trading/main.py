@@ -83,6 +83,14 @@ from ai_trading.net.http import build_retrying_session, set_global_session, moun
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils.base import is_market_open as _is_market_open_base, next_market_open
 from ai_trading.position_sizing import resolve_max_position_size, _get_equity_from_alpaca, _CACHE
+
+try:  # prefer modern budget context
+    from ai_trading.core.budget import set_cycle_budget_context
+except Exception:  # pragma: no cover - fallback when budget module unavailable
+    from contextlib import nullcontext
+
+    def set_cycle_budget_context(*args, **kwargs):  # type: ignore[override]
+        return nullcontext()
 from ai_trading.config.management import (
     get_env,
     validate_required_env,

@@ -1798,6 +1798,22 @@ class ExecutionEngine:
             ]
 
 
+class LiveTradingExecutionEngine(ExecutionEngine):
+    """Execution engine variant with optional trailing-stop manager."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._ts_mgr = kwargs.get("trailing_stop_manager")
+
+    def check_trailing_stops(self) -> None:
+        mgr = getattr(self, "_ts_mgr", None)
+        if hasattr(mgr, "recalc_all"):
+            try:
+                mgr.recalc_all()
+            except Exception:  # pragma: no cover - defensive best effort
+                pass
+
+
 AlpacaExecutionEngine = ExecutionEngine
 
 
@@ -1806,5 +1822,6 @@ __all__ = [
     "preflight_capacity",
     "submit_market_order",
     "ExecutionEngine",
+    "LiveTradingExecutionEngine",
     "AlpacaExecutionEngine",
 ]
