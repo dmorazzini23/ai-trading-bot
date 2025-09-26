@@ -4467,14 +4467,21 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         planned_override = _prefer_feed_this_cycle(symbol)
 
-        sip_allowed = (
-            current_feed != "sip"
-            and _sip_authorized()
-            and data_fetcher_module._sip_configured()
-            and not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
+        sip_authorized = _sip_authorized()
+        try:
+            sip_configured = bool(data_fetcher_module._sip_configured())
+        except Exception:  # pragma: no cover - defensive guard
+            sip_configured = False
+        sip_flagged = bool(getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False))
+        sip_available = (
+            sip_authorized
+            and current_feed != "sip"
+            and sip_configured
+            and not sip_flagged
         )
-        if sip_allowed:
-            sip_disabled = False
+
+        sip_disabled = False
+        if sip_available:
             try:
                 sip_disabled = provider_monitor.is_disabled("alpaca_sip")
             except Exception:  # pragma: no cover - defensive guard
@@ -4484,7 +4491,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 or os.getenv("PYTEST_CURRENT_TEST")
                 or get_env("AI_TRADING_FORCE_SIP", "0", cast=int)
             ):
-                sip_allowed = False
+                sip_available = False
 
         provider_factory = getattr(CFG, "coverage_recovery_provider_factory", None)
         provider_override = (
@@ -4492,7 +4499,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             if provider_factory
             else None
         )
-        planned_fallback_feed = planned_override or ("sip" if sip_allowed else "yahoo")
+        planned_fallback_feed = planned_override or ("sip" if sip_authorized else "yahoo")
         planned_fallback_provider = (
             provider_override
             if provider_override is not None
@@ -4529,7 +4536,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 
         sip_bars = 0
 
-        if sip_allowed:
+        if sip_available:
             fallback_attempted = True
             sip_df = None
             try:
@@ -4600,15 +4607,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 low_coverage = bool(coverage["low_coverage"])
                 fallback_used = True
                 fallback_feed = resolved_feed
-                fallback_feed_used = resolved_feed
-                fallback_provider = resolved_provider
-                active_feed = resolved_feed
-                sip_feed_normalized = (
+                normalized_sip_feed = (
                     "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
                 )
-                _cache_cycle_fallback_feed(sip_feed_normalized, symbol=symbol)
-                if sip_feed_normalized:
-                    data_fetcher_module._cache_fallback(symbol, sip_feed_normalized)
+                fallback_feed_used = normalized_sip_feed or resolved_feed
+                fallback_provider = resolved_provider
+                active_feed = resolved_feed
+                cache_feed = normalized_sip_feed or resolved_feed
+                if cache_feed:
+                    _cache_cycle_fallback_feed(cache_feed, symbol=symbol)
+                    data_fetcher_module._cache_fallback(symbol, cache_feed)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4622,10 +4630,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 fallback_feed = "sip"
                 fallback_provider = "alpaca_sip"
         else:
-            if (
-                (not _sip_authorized())
-                or getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
-            ) and not _SIP_UNAUTHORIZED_LOGGED:
+            if (not sip_authorized or sip_flagged) and not _SIP_UNAUTHORIZED_LOGGED:
                 logger.warning(
                     "UNAUTHORIZED_SIP",
                     extra={
