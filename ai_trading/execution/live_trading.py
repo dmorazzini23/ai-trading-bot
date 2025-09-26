@@ -232,6 +232,18 @@ def preflight_capacity(symbol, side, limit_price, qty, broker) -> CapacityCheck:
         )
         return CapacityCheck(False, 0, "invalid_qty")
 
+    if broker is None:
+        logger.debug(
+            "BROKER_CAPACITY_SKIP",  # pragma: no cover - diagnostic only
+            extra={
+                "symbol": symbol,
+                "side": side,
+                "qty": qty_int,
+                "reason": "broker_unavailable",
+            },
+        )
+        return CapacityCheck(True, qty_int, None)
+
     price_decimal = _safe_decimal(limit_price) if limit_price not in (None, "") else None
     if price_decimal is not None and price_decimal <= 0:
         price_decimal = None
@@ -479,6 +491,8 @@ class ExecutionEngine:
     - Order status monitoring and reconciliation
     - Performance tracking and reporting
     """
+
+    trading_client: Any | None = None
 
     def __init__(
         self,
@@ -980,17 +994,28 @@ class ExecutionEngine:
         extended_hours = kwargs.get("extended_hours")
         kwargs.pop("signal", None)
         signal_weight = kwargs.pop("signal_weight", None)
-        price_alias = kwargs.pop("price", None)
+        price_alias = kwargs.get("price")
+        limit_price_kwarg = kwargs.pop("limit_price", None)
         ignored_keys = {key for key in original_kwarg_keys if key not in KNOWN_EXECUTE_ORDER_KWARGS}
         for key in list(ignored_keys):
             kwargs.pop(key, None)
-        if limit_price is None and price_alias is not None:
-            limit_price = price_alias
+
+        resolved_limit_price = limit_price
+        if resolved_limit_price is None:
+            if limit_price_kwarg is not None:
+                resolved_limit_price = limit_price_kwarg
+            elif price_alias is not None:
+                resolved_limit_price = price_alias
+
+        price_for_limit = price_alias
+        if price_for_limit is None and resolved_limit_price is not None:
+            price_for_limit = resolved_limit_price
+            kwargs["price"] = price_for_limit
 
         order_type_normalized = str(order_type or "limit").lower()
-        if limit_price is None and order_type_normalized == "limit":
+        if resolved_limit_price is None and order_type_normalized == "limit":
             order_type_normalized = "market"
-        elif limit_price is not None:
+        elif resolved_limit_price is not None:
             order_type_normalized = "limit"
 
         order_kwargs: dict[str, Any] = {}
@@ -1025,18 +1050,21 @@ class ExecutionEngine:
                 extra={"ignored_keys": tuple(sorted(ignored_keys))},
             )
 
-        if order_type_normalized == "limit" and limit_price is None:
+        if order_type_normalized == "limit" and resolved_limit_price is None:
             raise ValueError("limit_price required for limit orders")
 
         try:
             if order_type_normalized == "market":
+                order_kwargs.pop("price", None)
                 order = self.submit_market_order(symbol, mapped_side, qty, **order_kwargs)
             else:
+                if price_for_limit is not None:
+                    order_kwargs.setdefault("price", price_for_limit)
                 order = self.submit_limit_order(
                     symbol,
                     mapped_side,
                     qty,
-                    limit_price=limit_price,
+                    limit_price=resolved_limit_price,
                     **order_kwargs,
                 )
         except NonRetryableBrokerError as exc:
