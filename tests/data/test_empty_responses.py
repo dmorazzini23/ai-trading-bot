@@ -19,20 +19,42 @@ def _make_df():
 
 class _Resp:
     status_code = 200
-    text = "{\"bars\":[]}"
+    text = "{\"bars\":[]}" 
     headers = {"Content-Type": "application/json"}
 
     def json(self):
         return {"bars": []}
 
 
+class _RespNonEmpty(_Resp):
+    text = "{\"bars\":[{\"t\":\"2024-01-02T15:30:00Z\",\"o\":1.0,\"h\":1.0,\"l\":1.0,\"c\":1.0,\"v\":1}]}"
+
+    def json(self):
+        return {
+            "bars": [
+                {
+                    "t": "2024-01-02T15:30:00Z",
+                    "o": 1.0,
+                    "h": 1.0,
+                    "l": 1.0,
+                    "c": 1.0,
+                    "v": 1,
+                }
+            ]
+        }
+
+
 def test_alpaca_empty_responses_trigger_backup(monkeypatch):
     monkeypatch.setenv("PYTEST_RUNNING", "1")
-    calls = {"count": 0}
+    calls = {"count": 0, "feeds": []}
 
     def fake_get(*args, **kwargs):
         calls["count"] += 1
-        return _Resp()
+        params = kwargs.get("params") or {}
+        calls["feeds"].append(params.get("feed"))
+        if params.get("feed") == "iex":
+            return _Resp()
+        return _RespNonEmpty()
 
     monkeypatch.setattr(fetch._HTTP_SESSION, "get", fake_get)
     monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True)
@@ -49,4 +71,5 @@ def test_alpaca_empty_responses_trigger_backup(monkeypatch):
     df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
 
     assert calls["count"] == 2
+    assert calls["feeds"] == ["iex", "sip"]
     assert not df.empty
