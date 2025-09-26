@@ -96,7 +96,8 @@ def test_record_switchover_backoff(monkeypatch):
     FakeDT.current = base + timedelta(seconds=5)
     monitor.record_switchover("b", "a")
     assert monitor.consecutive_switches == 1
-    assert monitor.consecutive_switches_by_provider["b"] == 1
+    # No immediate return to ``a`` because recovery dwell requirements are unmet.
+    assert monitor.consecutive_switches_by_provider.get("b", 0) == 0
     assert monitor._current_switch_cooldowns["b"] == 10
     assert not alerts.calls
 
@@ -109,8 +110,41 @@ def test_record_switchover_backoff(monkeypatch):
 
     FakeDT.current = base + timedelta(seconds=60)
     monitor.record_switchover("b", "a")
-    assert monitor.consecutive_switches == 1
+    # Recovery still withheld, so the streak remains unchanged.
+    assert monitor.consecutive_switches == 2
     assert monitor._current_switch_cooldowns["b"] == 10
+
+
+def test_record_switchover_thrashing_disables(monkeypatch, caplog):
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+
+    class FakeDT(datetime):
+        current = base
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return cls.current
+
+    monotonic_values = iter([0.0, 30.0, 60.0])
+
+    def fake_monotonic_time() -> float:
+        return next(monotonic_values)
+
+    monkeypatch.setattr(pm, "datetime", FakeDT)
+    monkeypatch.setattr(pm, "monotonic_time", fake_monotonic_time)
+
+    monitor = pm.ProviderMonitor(cooldown=10, max_cooldown=40)
+
+    with caplog.at_level(logging.INFO):
+        monitor.record_switchover("alpaca", "yahoo")
+        monitor.record_switchover("alpaca", "yahoo")
+        action = monitor.record_switchover("alpaca", "yahoo")
+
+    assert action is pm.ProviderAction.DISABLE
+    disable_until = monitor.disabled_until.get("alpaca")
+    assert disable_until == base + timedelta(seconds=monitor.max_cooldown)
+    assert any("repeated_switchovers" in rec.getMessage() for rec in caplog.records)
+    assert monitor.consecutive_switches_by_provider.get("alpaca") is None
 
 
 def test_partial_coverage_reset_prevents_disable(monkeypatch):

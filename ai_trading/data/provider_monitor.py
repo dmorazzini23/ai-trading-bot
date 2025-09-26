@@ -15,10 +15,10 @@ production deployments receive notifications about outages.
 import logging
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Dict, Mapping, MutableMapping, Tuple
+from typing import Any, Callable, Deque, Dict, Mapping, MutableMapping, Tuple
 
 from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
@@ -42,6 +42,26 @@ logger = get_logger(__name__)
 
 _MIN_RECOVERY_SECONDS = 600
 _MIN_RECOVERY_PASSES = 3
+_ANTI_THRASH_WINDOW_SECONDS = 120
+
+
+def _resolve_max_cooldown() -> int:
+    try:
+        value = get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int)
+    except Exception:
+        value = None
+    if value is None:
+        try:
+            value = int(os.getenv("DATA_PROVIDER_MAX_COOLDOWN", "3600"))
+        except Exception:  # pragma: no cover - defensive env parsing fallback
+            value = 3600
+    try:
+        return max(int(value), 0)
+    except Exception:  # pragma: no cover - defensive conversion
+        return 3600
+
+
+_MAX_COOLDOWN = _resolve_max_cooldown()
 
 
 def _logging_dedupe_ttl() -> int:
@@ -238,9 +258,7 @@ class ProviderMonitor:
             if backoff_factor is not None
             else float(get_env("DATA_PROVIDER_BACKOFF_FACTOR", "2", cast=float))
         )
-        self.max_cooldown = (
-            max_cooldown if max_cooldown is not None else int(get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int))
-        )
+        self.max_cooldown = max_cooldown if max_cooldown is not None else _MAX_COOLDOWN
         self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
         self._last_switch_logged: tuple[str, str] | None = None
         self._last_switch_ts: float | None = None
@@ -249,6 +267,7 @@ class ProviderMonitor:
         self._last_switchover_ts: float = 0.0
         self._last_switchover_passes: int = 0
         self._last_sip_warn_ts: float = 0.0
+        self._pair_switch_history: Dict[Tuple[str, str], Deque[float]] = defaultdict(deque)
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -397,13 +416,66 @@ class ProviderMonitor:
             elif old in mapping:
                 mapping.pop(old)
 
-    def record_switchover(self, from_provider: str, to_provider: str) -> None:
+    def _enforce_switchover_quiet_period(
+        self,
+        from_key: str,
+        to_key: str,
+        *,
+        now_monotonic: float,
+        now_wall: datetime,
+    ) -> bool:
+        window = max(int(_ANTI_THRASH_WINDOW_SECONDS), 0)
+        if window <= 0:
+            return False
+        history = self._pair_switch_history[(from_key, to_key)]
+        history.append(now_monotonic)
+        cutoff = now_monotonic - float(window)
+        while history and history[0] < cutoff:
+            history.popleft()
+        if len(history) < 3:
+            return False
+        history.clear()
+        logger.warning(
+            "DATA_PROVIDER_SWITCHOVER_BLOCKED",
+            extra={
+                "from_provider": from_key,
+                "to_provider": to_key,
+                "reason": "repeated_switchovers",
+                "window_seconds": window,
+            },
+        )
+        try:
+            self.disable(from_key, duration=_MAX_COOLDOWN)
+        except Exception:  # pragma: no cover - defensive disable
+            logger.exception(
+                "PROVIDER_DISABLE_FAILED",
+                extra={"provider": from_key},
+            )
+        cooldown_for_log = int(min(float(_MAX_COOLDOWN), float(self.max_cooldown)))
+        record_stay(
+            provider=to_key,
+            reason="repeated_switchovers",
+            cooldown=cooldown_for_log,
+        )
+        self.consecutive_switches_by_provider.pop(from_key, None)
+        if not self.consecutive_switches_by_provider:
+            self.consecutive_switches = 0
+        self._alert_cooldown_until[from_key] = now_wall + timedelta(seconds=self.cooldown)
+        self._last_switchover_provider = None
+        self._last_switchover_passes = 0
+        self._last_switchover_ts = 0.0
+        return True
+
+    def record_switchover(self, from_provider: str, to_provider: str) -> ProviderAction | None:
         """Record a switchover from one provider to another.
 
         The call increments an in-memory counter and emits an INFO log with the
         running count so operators can diagnose frequent provider churn. It also
         tracks consecutive switchovers and raises an alert when a threshold is
-        exceeded.
+        exceeded. When a pair thrashes (three switches within
+        :data:`_ANTI_THRASH_WINDOW_SECONDS`) the switchover is blocked, the
+        provider is disabled for :data:`_MAX_COOLDOWN` seconds, and
+        :class:`ProviderAction.DISABLE` is returned.
         """
 
         from_key = _normalize_provider(from_provider)
@@ -451,6 +523,14 @@ class ProviderMonitor:
                 if not self.consecutive_switches_by_provider:
                     self.consecutive_switches = 0
         self._last_switch_time[from_key] = now
+        now_monotonic = monotonic_time()
+        if self._enforce_switchover_quiet_period(
+            from_key,
+            to_key,
+            now_monotonic=now_monotonic,
+            now_wall=now,
+        ):
+            return ProviderAction.DISABLE
         count = self._switchover_disable_counts[from_key] + 1
         self._switchover_disable_counts[from_key] = count
         cooldown_window = min(
@@ -468,7 +548,6 @@ class ProviderMonitor:
         streak = self.consecutive_switches_by_provider[from_key] + 1
         self.consecutive_switches_by_provider[from_key] = streak
         self.consecutive_switches = streak
-        now_monotonic = monotonic_time()
         dedupe_ttl = _logging_dedupe_ttl()
         switchover_key = f"DATA_PROVIDER_SWITCHOVER:{from_key}->{to_key}"
         if not (
