@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
-from typing import Any
+from typing import Any, Mapping
 from ai_trading.exc import COMMON_EXC
 from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
@@ -1172,7 +1172,8 @@ def log_backup_provider_used(
     timeframe: str,
     start: datetime,
     end: datetime,
-) -> None:
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Log and record when the backup data provider serves a window."""
     payload: dict[str, Any] = {
         "provider": provider,
@@ -1181,6 +1182,12 @@ def log_backup_provider_used(
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
+    if extra:
+        for key, value in extra.items():
+            if value is None:
+                continue
+            payload[str(key)] = value
+
     try:
         from ai_trading.data.metrics import backup_provider_used as _backup_counter
 
@@ -1196,6 +1203,8 @@ def log_backup_provider_used(
         level=logging.WARNING,
         extra=payload,
     )
+
+    return payload
 
 
 def log_empty_retries_exhausted(

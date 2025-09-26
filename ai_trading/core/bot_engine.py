@@ -769,11 +769,15 @@ class BotEngine:
             except Exception:  # pragma: no cover - defensive
                 normalized_raw = None
 
-        if symbol and normalized_raw and symbol not in self._cycle_minute_feed_override:
-            self._cycle_minute_feed_override[symbol] = sanitized or normalized_raw
+        cached_value = sanitized or normalized_raw
+
+        if symbol and cached_value:
+            self._cycle_minute_feed_override[symbol] = cached_value
+
+        if cached_value:
+            self._intraday_fallback_feed = cached_value
 
         if sanitized:
-            self._intraday_fallback_feed = sanitized
             _cache_cycle_fallback_feed(sanitized, symbol=symbol)
         elif normalized_raw:
             _cache_cycle_fallback_feed(normalized_raw, symbol=symbol)
@@ -1540,11 +1544,13 @@ def _cache_cycle_fallback_feed(
         except Exception:  # pragma: no cover - defensive
             normalized_raw = None
 
-    if symbol and normalized_raw and symbol not in _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE:
-        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = sanitized or normalized_raw
+    cached_value = sanitized or normalized_raw
 
-    if sanitized:
-        _GLOBAL_INTRADAY_FALLBACK_FEED = sanitized
+    if symbol and cached_value:
+        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = cached_value
+
+    if cached_value:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = cached_value
 
 
 def _sip_lockout_active() -> bool:
