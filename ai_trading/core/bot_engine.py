@@ -12371,14 +12371,11 @@ def submit_order(
                 price = get_latest_close(md) if md is not None else 0.0
         # Pass through computed price so the execution engine can simulate
         # fills around the actual market price rather than a generic fallback.
-        order_type = 'market' if price is None else 'limit'
-        limit_price = None if price is None else price
         return _exec_engine.execute_order(
             symbol,
             core_side,
             qty,
-            order_type=order_type,
-            limit_price=limit_price,
+            price=price,
         )
     except (APIError, TimeoutError, ConnectionError, AlpacaOrderHTTPError) as e:
         logger.error(
