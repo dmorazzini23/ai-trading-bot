@@ -12,6 +12,11 @@ def sip_disallowed() -> bool:
         return True
 
     has_creds = bool(env.ALPACA_KEY) and bool(env.ALPACA_SECRET)
+    explicit_entitlement = getattr(env, "ALPACA_SIP_ENTITLED", None)
+    if explicit_entitlement is not None:
+        if not bool(explicit_entitlement):
+            return True
+        return not has_creds
     if hasattr(env, "ALPACA_HAS_SIP") and (env.ALPACA_HAS_SIP is not None):
         return not (has_creds and bool(env.ALPACA_HAS_SIP))
     return not has_creds

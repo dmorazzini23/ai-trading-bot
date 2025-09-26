@@ -14052,14 +14052,22 @@ def _evaluate_data_gating(
     reasons: list[str] = []
     fatal_reasons: list[str] = []
     annotations: dict[str, Any] = {}
+    gap_ratio_reason: str | None = None
+    fallback_required = False
+    fallback_ok: bool | None = None
 
     if strict:
-        gap_ratio = quality.get("gap_ratio")
-        if isinstance(gap_ratio, (int, float, np.floating)):
-            if gap_ratio > _gap_ratio_gate_limit():
-                fatal_reasons.append(
-                    f"gap_ratio={gap_ratio * 100:.2f}%>limit={_gap_ratio_gate_limit() * 100:.2f}%"
-                )
+        gap_limit = _gap_ratio_gate_limit()
+        gap_ratio_val = quality.get("gap_ratio")
+        if isinstance(gap_ratio_val, (int, float, np.floating)):
+            ratio = float(gap_ratio_val)
+            if ratio >= 0.999:
+                fatal_reasons.append(f"gap_ratio={ratio * 100:.2f}%>=100.00%")
+            elif ratio > gap_limit:
+                gap_ratio_reason = f"gap_ratio={ratio * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+                fallback_required = True
+            elif ratio > 0:
+                gap_ratio_reason = f"gap_ratio={ratio * 100:.2f}%"
         reason_text = str(quality.get("price_reliable_reason") or "")
         if quality.get("missing_ohlcv"):
             fatal_reasons.append("ohlcv_columns_missing")
@@ -14069,6 +14077,7 @@ def _evaluate_data_gating(
             fatal_reasons.append(reason_text or "unreliable_price")
         if "gap_ratio=" in reason_text and not any("gap_ratio" in entry for entry in fatal_reasons):
             fatal_reasons.append(reason_text)
+        fallback_source = fallback_source or fallback_required
         if fallback_source:
             ok, age, reason = _check_fallback_quote_age(
                 ctx, symbol, max_age=_fallback_quote_max_age_seconds()
@@ -14082,6 +14091,7 @@ def _evaluate_data_gating(
                     fallback_quote_age=age,
                     fallback_quote_error=None,
                 )
+                fallback_ok = True
             else:
                 reason_label = reason or "fallback_quote_invalid"
                 annotations["fallback_quote_age"] = age
@@ -14090,6 +14100,7 @@ def _evaluate_data_gating(
                     reasons.append(reason_label)
                 else:
                     fatal_reasons.append(reason_label)
+                fallback_ok = False
                 _update_data_quality(
                     state,
                     symbol,
@@ -14099,6 +14110,16 @@ def _evaluate_data_gating(
     else:
         if fallback_source and not quality.get("price_reliable", True):
             fatal_reasons.append(quality.get("price_reliable_reason") or "unreliable_price")
+
+    if fallback_required and gap_ratio_reason:
+        if fallback_ok is True:
+            reasons.append(gap_ratio_reason)
+        elif fallback_ok is False:
+            fatal_reasons.append(gap_ratio_reason)
+        else:
+            fatal_reasons.append(gap_ratio_reason)
+    elif gap_ratio_reason and gap_ratio_reason not in fatal_reasons and gap_ratio_reason not in reasons:
+        reasons.append(gap_ratio_reason)
 
     liquidity_cap: float | None = None
     liq_annotations = getattr(ctx, "liquidity_annotations", None)
@@ -18877,9 +18898,10 @@ def _check_runtime_stops(runtime) -> None:
         logger.warning(
             "Execution engine missing check_stops; risk-stop checks skipped",
         )
-    if hasattr(exec_engine, "check_trailing_stops"):
+    trailing_hook = getattr(exec_engine, "check_trailing_stops", None)
+    if callable(trailing_hook):
         try:
-            exec_engine.check_trailing_stops()
+            trailing_hook()
         except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
             logger.info(
                 "check_trailing_stops raised but was suppressed: %s", e
@@ -19568,7 +19590,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     s for s, q in state.position_cache.items() if q < 0
                 }
                 if runtime.execution_engine:
-                    runtime.execution_engine.check_trailing_stops()
+                    trailing_hook = getattr(runtime.execution_engine, "check_trailing_stops", None)
+                    if callable(trailing_hook):
+                        trailing_hook()
             except (
                 APIError,
                 TimeoutError,
