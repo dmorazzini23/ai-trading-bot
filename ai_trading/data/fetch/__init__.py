@@ -851,6 +851,9 @@ def _normalize_ohlcv_df(df, _pd: Any | None = None):
         if pd_local is None:
             return None
 
+        if _is_normalized_ohlcv_frame(df, pd_local):
+            return df
+
         # Build a case-insensitive rename map
         rename = {}
         for c in list(getattr(df, "columns", [])):
@@ -1975,6 +1978,61 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
     return _annotate_df_source(empty_df, provider=normalized or "none", feed=normalized or None)
 
 
+def _is_normalized_ohlcv_frame(
+    df: Any,
+    pd_module: Any | None = None,
+) -> bool:
+    """Return ``True`` when *df* already satisfies normalization requirements."""
+
+    if df is None:
+        return False
+
+    pd_local = pd_module if pd_module is not None else _ensure_pandas()
+    if pd_local is None:
+        return False
+
+    dataframe_type = getattr(pd_local, "DataFrame", None)
+    if dataframe_type is None or not isinstance(df, dataframe_type):
+        return False
+
+    expected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    try:
+        if list(df.columns) != expected_columns:
+            return False
+    except Exception:
+        return False
+
+    try:
+        ts_series = df["timestamp"]
+    except Exception:
+        return False
+
+    try:
+        if ts_series.isna().any():
+            return False
+    except Exception:
+        return False
+
+    try:
+        tz = getattr(getattr(ts_series, "dt", None), "tz", None)
+    except Exception:
+        tz = None
+    if tz is None or str(tz) != "UTC":
+        return False
+
+    try:
+        monotonic_attr = getattr(ts_series, "is_monotonic_increasing", True)
+        is_monotonic = (
+            bool(monotonic_attr()) if callable(monotonic_attr) else bool(monotonic_attr)
+        )
+    except Exception:
+        is_monotonic = True
+    if not is_monotonic:
+        return False
+
+    return True
+
+
 def _post_process(
     df: pd.DataFrame | None,
     *,
@@ -1987,6 +2045,8 @@ def _post_process(
         return df
     if df is None or getattr(df, "empty", True):
         return None
+    if _is_normalized_ohlcv_frame(df, pd):
+        return df
     return _flatten_and_normalize_ohlcv(df, symbol, timeframe)
 
 
@@ -2093,15 +2153,15 @@ def _repair_rth_minute_gaps(
     if expected_count == 0:
         return df, {"expected": 0, "missing_after": 0, "gap_ratio": 0.0}, False
 
-    work_df = df.copy()
+    work_df = df
+    mutated = False
     filled_backup = False
     try:
-        timestamps = pd_local.to_datetime(work_df["timestamp"], utc=True)
+        timestamps = pd_local.to_datetime(df["timestamp"], utc=True)
     except Exception:
         return df, {"expected": expected_count, "missing_after": expected_count, "gap_ratio": 1.0}, False
-    work_df.set_index(timestamps, inplace=True)
-    work_df.index.name = "timestamp"
-    missing = expected_utc.difference(work_df.index)
+    existing_index = pd_local.DatetimeIndex(timestamps)
+    missing = expected_utc.difference(existing_index)
     try:
         provider_attr = None
         attrs = getattr(df, "attrs", None)
@@ -2148,26 +2208,26 @@ def _repair_rth_minute_gaps(
                 if not needed.empty:
                     used_backup = True
                     filled_backup = True
-                    work_df = pd_local.concat([work_df, needed])
-                    work_df = work_df[~work_df.index.duplicated(keep="last")]
-                    work_df.sort_index(inplace=True)
+                    base_df = df.set_index(existing_index)
+                    combined = pd_local.concat([base_df, needed])
+                    combined = combined[~combined.index.duplicated(keep="last")]
+                    combined.sort_index(inplace=True)
+                    work_df = combined.reset_index()
+                    if "index" in work_df.columns and "timestamp" not in work_df.columns:
+                        work_df.rename(columns={"index": "timestamp"}, inplace=True)
+                    mutated = True
     if filled_backup:
         logger.info(
             "MINUTE_GAPS_BACKFILLED",
             extra={"symbol": symbol, "window_start": start.isoformat(), "window_end": end.isoformat()},
         )
-    if isinstance(work_df.index, pd_local.DatetimeIndex):
-        if "timestamp" in work_df.columns:
-            work_df = work_df.drop(columns=["timestamp"], errors="ignore")
-        work_df = work_df.reset_index()
-        if "index" in work_df.columns and "timestamp" not in work_df.columns:
-            work_df.rename(columns={"index": "timestamp"}, inplace=True)
+    if mutated:
+        try:
+            combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
+        except Exception:
+            combined_idx = pd_local.DatetimeIndex([])
     else:
-        work_df = work_df.reset_index()
-    try:
-        combined_idx = pd_local.to_datetime(work_df["timestamp"], utc=True)
-    except Exception:
-        combined_idx = pd_local.DatetimeIndex([])
+        combined_idx = existing_index
     missing_after = int(expected_utc.difference(combined_idx).size)
     gap_ratio = (missing_after / expected_count) if expected_count else 0.0
     tolerated = False
@@ -2188,13 +2248,14 @@ def _repair_rth_minute_gaps(
             "MINUTE_GAPS_TOLERATED",
             extra={"symbol": symbol, "gap_ratio": 0.0, "window_start": start.isoformat(), "window_end": end.isoformat()},
         )
+    target_df = work_df if mutated else df
     try:
-        attrs = work_df.attrs  # type: ignore[attr-defined]
+        attrs = target_df.attrs  # type: ignore[attr-defined]
         attrs.setdefault("symbol", symbol)
         attrs["_coverage_meta"] = metadata
     except Exception:
         pass
-    return work_df, metadata, used_backup
+    return (work_df if mutated else df), metadata, used_backup
 
 
 _SKIP_LOGGED: set[tuple[str, _dt.date]] = set()
