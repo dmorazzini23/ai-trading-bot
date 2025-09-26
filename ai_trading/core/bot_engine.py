@@ -7182,8 +7182,15 @@ class DataFetcher:
             )
 
         direct_df: "pd.DataFrame | None" = None
-        safe_bars_module = getattr(bars.safe_get_stock_bars, "__module__", "")
-        if safe_bars_module and not safe_bars_module.startswith("ai_trading.data"):
+        safe_fetch = getattr(bars, "safe_get_stock_bars", None)
+        safe_bars_module = (
+            getattr(safe_fetch, "__module__", "") if callable(safe_fetch) else ""
+        )
+        if (
+            callable(safe_fetch)
+            and safe_bars_module
+            and not safe_bars_module.startswith("ai_trading.data")
+        ):
             try:
                 direct_df = self._get_stock_bars(
                     planned_provider,
@@ -7816,7 +7823,13 @@ def prefetch_daily_data(
             end=end_date,
             feed=_DEFAULT_FEED,
         )
-        bars_df = bars.safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
+        safe_fetch = getattr(bars, "safe_get_stock_bars", None)
+        if callable(safe_fetch):
+            bars_df = safe_fetch(client, req, str(symbols), "BULK DAILY")
+        else:
+            bars_df = DataFetcher._call_stock_bars(
+                client, req, str(symbols), "BULK DAILY"
+            )
         if bars_df is None:
             return {}
         if isinstance(bars_df.columns, pd.MultiIndex):
@@ -7846,9 +7859,15 @@ def prefetch_daily_data(
             logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
-                bars_iex = bars.safe_get_stock_bars(
-                    client, req, str(symbols), "IEX BULK DAILY"
-                )
+                safe_fetch = getattr(bars, "safe_get_stock_bars", None)
+                if callable(safe_fetch):
+                    bars_iex = safe_fetch(
+                        client, req, str(symbols), "IEX BULK DAILY"
+                    )
+                else:
+                    bars_iex = DataFetcher._call_stock_bars(
+                        client, req, str(symbols), "IEX BULK DAILY"
+                    )
                 if bars_iex is None:
                     return {}
                 if isinstance(bars_iex.columns, pd.MultiIndex):
@@ -7894,9 +7913,15 @@ def prefetch_daily_data(
                             end=end_date,
                             feed=_DEFAULT_FEED,
                         )
-                        df_sym = bars.safe_get_stock_bars(
-                            client, req_sym, sym, "FALLBACK DAILY"
-                        )
+                        safe_fetch = getattr(bars, "safe_get_stock_bars", None)
+                        if callable(safe_fetch):
+                            df_sym = safe_fetch(
+                                client, req_sym, sym, "FALLBACK DAILY"
+                            )
+                        else:
+                            df_sym = DataFetcher._call_stock_bars(
+                                client, req_sym, sym, "FALLBACK DAILY"
+                            )
                         if df_sym is None:
                             continue
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")

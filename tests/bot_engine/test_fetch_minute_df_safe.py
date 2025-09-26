@@ -1105,6 +1105,80 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     assert fetcher._minute_timestamps["AAPL"] == base_now
 
 
+def test_get_minute_df_handles_missing_safe_get(monkeypatch):
+    pd = load_pandas()
+
+    base_now = datetime(2024, 1, 2, 15, 31, tzinfo=UTC)
+    idx = pd.date_range(end=base_now - timedelta(minutes=1), periods=3, freq="min", tz="UTC")
+
+    settings = types.SimpleNamespace(
+        alpaca_api_key="key",
+        alpaca_secret_key_plain="secret",
+        data_feed="iex",
+        alpaca_data_feed=None,
+        alpaca_feed_failover=("sip",),
+        alpaca_adjustment=None,
+    )
+
+    class DummyClient:  # noqa: D401 - minimal stub
+        def __init__(self, *args, **kwargs):
+            pass
+
+    calls: list[str] = []
+
+    def fake_get_stock_bars(client, req, symbol, context=None):
+        calls.append(context or "")
+        return pd.DataFrame(
+            {
+                "open": [1.0, 1.01, 1.02],
+                "high": [1.1, 1.11, 1.12],
+                "low": [0.9, 0.91, 0.92],
+                "close": [1.0, 1.01, 1.02],
+                "volume": [100, 110, 120],
+                "symbol": [symbol] * len(idx),
+            },
+            index=idx,
+        )
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return base_now.replace(tzinfo=None)
+            return base_now.astimezone(tz)
+
+    bars_stub = types.SimpleNamespace(
+        TimeFrame=types.SimpleNamespace(Minute="Minute", Day="Day"),
+        StockBarsRequest=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        _create_empty_bars_dataframe=lambda _tf: pd.DataFrame(),
+        get_stock_bars=fake_get_stock_bars,
+    )
+
+    monkeypatch.setattr(bot_engine, "bars", bars_stub, raising=False)
+    monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
+    monkeypatch.setattr(bot_engine, "get_settings", lambda: settings)
+    monkeypatch.setattr(bot_engine, "StockHistoricalDataClient", DummyClient)
+    monkeypatch.setattr(staleness, "_ensure_data_fresh", lambda *a, **k: None)
+    monkeypatch.setattr(
+        bot_engine,
+        "_minute_data_freshness_limit",
+        lambda: 900,
+        raising=False,
+    )
+    monkeypatch.setattr(bot_engine, "minute_cache_hit", None, raising=False)
+    monkeypatch.setattr(bot_engine, "minute_cache_miss", None, raising=False)
+
+    fetcher = bot_engine.DataFetcher()
+    ctx = types.SimpleNamespace()
+
+    result = fetcher.get_minute_df(ctx, "AAPL", lookback_minutes=2)
+
+    assert isinstance(result, pd.DataFrame)
+    pd.testing.assert_index_equal(result.index, idx)
+    assert calls and calls[0] == "MINUTE"
+    assert not hasattr(bot_engine.bars, "safe_get_stock_bars")
+
+
 def test_process_symbol_reuses_prefetched_minute_data(monkeypatch):
     pd = load_pandas()
     sample = _sample_df()
