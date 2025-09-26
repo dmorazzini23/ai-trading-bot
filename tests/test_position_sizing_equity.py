@@ -11,6 +11,8 @@ def _reset_cache():
     ps._CACHE.value = None
     ps._CACHE.ts = None
     ps._CACHE.equity = None
+    ps._CACHE.last_equity = None
+    ps._CACHE.last_equity_ts = None
     ps._CACHE.equity_error = None
     ps._CACHE.equity_missing_logged = False
     ps._CACHE.equity_ts = None

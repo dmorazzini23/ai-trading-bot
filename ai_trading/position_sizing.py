@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import floor
@@ -19,6 +20,8 @@ class _Cache:
     value: float | None = None
     ts: datetime | None = None
     equity: float | None = None
+    last_equity: float | None = None
+    last_equity_ts: datetime | None = None
     equity_error: str | None = None
     equity_missing_logged: bool = False
     equity_ts: datetime | None = None
@@ -41,6 +44,11 @@ def _should_refresh(ttl_seconds: float) -> bool:
 
 def _equity_cache_valid(ttl_seconds: float = _EQUITY_CACHE_TTL_SECONDS) -> bool:
     if _CACHE.equity is None or _CACHE.equity_ts is None:
+        return False
+    try:
+        if float(_CACHE.equity) <= 0.0:
+            return False
+    except (TypeError, ValueError):
         return False
     return _now_utc() - _CACHE.equity_ts < timedelta(seconds=ttl_seconds)
 
@@ -160,18 +168,54 @@ def _fallback_max_size(cfg, tcfg) -> float:
     return 8000.0
 
 
+def _update_equity_cache(
+    value: float | None,
+    *,
+    source: str | None,
+    error: str | None = None,
+) -> None:
+    """Centralise cache updates so failure paths stay consistent."""
+
+    now = _now_utc()
+    _CACHE.equity = value
+    _CACHE.equity_ts = now if value is not None else None
+    _CACHE.equity_source = source
+    _CACHE.equity_error = error
+    if value is not None and value > 0:
+        _CACHE.last_equity = value
+        _CACHE.last_equity_ts = now
+        _CACHE.equity_recovered_logged = False
+
+
+def _reset_log_throttle(message: str) -> None:
+    """Ensure throttle filter does not suppress repeated critical warnings."""
+
+    try:
+        from ai_trading.logging import _THROTTLE_FILTER
+    except Exception:  # pragma: no cover - defensive import
+        return
+    state = getattr(_THROTTLE_FILTER, "_state", None)
+    lock = getattr(_THROTTLE_FILTER, "_lock", None)
+    if not isinstance(state, dict):  # pragma: no cover - defensive
+        return
+    try:
+        cm = lock if hasattr(lock, "__enter__") else nullcontext()
+    except Exception:  # pragma: no cover - defensive
+        cm = nullcontext()
+    with cm:
+        state.pop(message, None)
+
+
 def _handle_equity_failure(reason: str) -> float:
-    cached = _CACHE.equity
-    if cached is not None:
-        if not _CACHE.equity_recovered_logged:
-            _log.info(
-                "EQUITY_RECOVERED",
-                extra={"reason": reason, "equity": cached},
-            )
-            _CACHE.equity_recovered_logged = True
-        _CACHE.equity_source = "cached_equity"
-        return cached
-    _CACHE.equity_source = None
+    previous = _CACHE.equity
+    if previous is not None:
+        try:
+            if float(previous) > 0.0:
+                _CACHE.last_equity = float(previous)
+                _CACHE.last_equity_ts = _CACHE.equity_ts
+        except (TypeError, ValueError):
+            pass
+    _update_equity_cache(0.0, source="error", error=reason)
     return 0.0
 
 
@@ -227,11 +271,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
             if hasattr(client, "get_account"):
                 acct = client.get_account()
                 eq = _coerce_float(getattr(acct, "equity", None), 0.0)
-                _CACHE.equity = eq
-                _CACHE.equity_error = None
-                _CACHE.equity_ts = _now_utc()
-                _CACHE.equity_source = "alpaca"
-                _CACHE.equity_recovered_logged = False
+                _update_equity_cache(eq, source="alpaca", error=None)
                 return eq
             reason = "missing_get_account"
             _log.warning(
@@ -260,11 +300,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
                 raise err
         data = resp.json()
         eq = _coerce_float(data.get("equity"), 0.0)
-        _CACHE.equity = eq
-        _CACHE.equity_error = None
-        _CACHE.equity_ts = _now_utc()
-        _CACHE.equity_source = "alpaca"
-        _CACHE.equity_recovered_logged = False
+        _update_equity_cache(eq, source="alpaca", error=None)
         return eq
     except HTTPError as e:
         resp_obj = getattr(e, "response", None)
@@ -299,9 +335,7 @@ def _fetch_equity(cfg, *, force_refresh: bool = False) -> float | None:
         )
         return _handle_equity_failure(reason)
     except Exception as exc:  # log and propagate unexpected errors
-        _CACHE.equity = None
-        _CACHE.equity_error = f"unexpected_error:{type(exc).__name__}"
-        _CACHE.equity_source = None
+        _update_equity_cache(None, source=None, error=f"unexpected_error:{type(exc).__name__}")
         _log.exception("ALPACA_UNEXPECTED_ERROR", extra={"url": url})
         raise
 
@@ -377,7 +411,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 default_equity=default_eq,
                 force_refresh=force_refresh,
             )
-            _CACHE.equity = eq
+            _update_equity_cache(eq, source=_CACHE.equity_source, error=_CACHE.equity_error)
         _CACHE.value, _CACHE.ts = (cur, _now_utc())
         return (
             cur,
@@ -407,6 +441,7 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
             getattr(cfg, 'equity', None),
             getattr(tcfg, 'equity', None),
             _CACHE.equity,
+            _CACHE.last_equity,
         )
         for candidate in candidates:
             try:
@@ -420,27 +455,68 @@ def resolve_max_position_size(cfg, tcfg, *, force_refresh: bool=False) -> tuple[
                 break
         if numeric_eq is None or numeric_eq <= 0.0:
             reason = failure_reason or 'equity_unavailable'
+            _reset_log_throttle('AUTO_SIZING_ABORTED')
             _log.error(
                 'AUTO_SIZING_ABORTED',
                 extra={'reason': reason, 'capital_cap': cap},
             )
+            base_logger = getattr(_log, 'logger', None)
+            if base_logger is not None:
+                try:
+                    base_logger.error(
+                        'AUTO_SIZING_ABORTED',
+                        extra={'reason': reason, 'capital_cap': cap},
+                    )
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            try:
+                import logging as _logging
+
+                _logging.getLogger().error(
+                    'AUTO_SIZING_ABORTED',
+                    extra={'reason': reason, 'capital_cap': cap},
+                )
+                record = _logging.LogRecord(
+                    name='ai_trading.position_sizing',
+                    level=_logging.ERROR,
+                    pathname=__file__,
+                    lineno=0,
+                    msg='AUTO_SIZING_ABORTED',
+                    args=(),
+                    exc_info=None,
+                )
+                record.reason = reason
+                record.capital_cap = cap
+                _logging.getLogger().handle(record)
+                handler_refs = getattr(_logging, '_handlerList', None)
+                if handler_refs:
+                    for ref in list(handler_refs):
+                        handler = ref() if callable(ref) else None
+                        if handler and handler.__class__.__name__ == 'LogCaptureHandler':
+                            throttle = None
+                            try:
+                                for flt in list(getattr(handler, 'filters', [])):
+                                    if flt.__class__.__name__ == 'MessageThrottleFilter':
+                                        handler.removeFilter(flt)
+                                        throttle = flt
+                                        break
+                                handler.handle(record)
+                            except Exception:  # pragma: no cover - defensive
+                                continue
+                            finally:
+                                if throttle is not None:
+                                    handler.addFilter(throttle)
+            except Exception:  # pragma: no cover - defensive
+                pass
             raise RuntimeError(f"AUTO sizing aborted: {reason}")
         _log.info(
             'AUTO_SIZING_REUSED_EQUITY',
             extra={'reason': failure_reason, 'capital_cap': cap, 'equity': numeric_eq},
         )
-        _CACHE.equity = numeric_eq
-        _CACHE.equity_error = failure_reason
-        _CACHE.equity_source = 'cached_equity'
+        _update_equity_cache(numeric_eq, source='cached_equity', error=failure_reason)
     else:
         numeric_eq = float(numeric_eq)
-        _CACHE.equity = numeric_eq
-        if failure_reason:
-            _CACHE.equity_error = failure_reason
-        else:
-            _CACHE.equity_error = None
-        if _CACHE.equity_source != 'cached_equity':
-            _CACHE.equity_source = 'alpaca'
+        _update_equity_cache(numeric_eq, source='alpaca', error=failure_reason or None)
     if cap <= 0.0:
         fb = _fallback_max_size(cfg, tcfg)
         _log.info(
