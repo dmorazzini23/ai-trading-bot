@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, Callable, Dict, Mapping, Tuple
+from typing import Any, Callable, Dict, Mapping, MutableMapping, Tuple
 
 from ai_trading.config.management import get_env
 from ai_trading.config.settings import get_settings
@@ -79,6 +79,11 @@ def decide_provider_action(
     cooldown_ok: bool,
     consecutive_switches: int,
     policy: Mapping[str, Any] | object | None,
+    *,
+    from_provider: str | None = None,
+    to_provider: str | None = None,
+    cooldown: int | None = None,
+    context: MutableMapping[str, Any] | None = None,
 ) -> ProviderAction:
     """Return the desired :class:`ProviderAction` for the current tick.
 
@@ -124,15 +129,38 @@ def decide_provider_action(
     policy_allow_recovery = bool(_policy_lookup(policy, "allow_recovery", allow_recovery))
     disable_after = _policy_lookup(policy, "disable_after", None)
 
+    if context is not None and "stay_logged" not in context:
+        context["stay_logged"] = False
+
     if not is_healthy:
         if disable_after is not None and consecutive_switches >= int(disable_after):
             return ProviderAction.DISABLE
-        return ProviderAction.STAY if using_backup else ProviderAction.SWITCH
+        action = ProviderAction.STAY if using_backup else ProviderAction.SWITCH
+    elif using_backup and prefer_primary and policy_allow_recovery and cooldown_ok:
+        action = ProviderAction.SWITCH
+    else:
+        action = ProviderAction.STAY
 
-    if using_backup and prefer_primary and policy_allow_recovery and cooldown_ok:
-        return ProviderAction.SWITCH
+    if (
+        action is ProviderAction.SWITCH
+        and from_provider is not None
+        and to_provider is not None
+    ):
+        from_key = _normalize_provider(from_provider)
+        to_key = _normalize_provider(to_provider)
+        if from_key == to_key:
+            provider_for_log = from_key or to_key or to_provider or from_provider
+            record_stay(
+                provider=provider_for_log,
+                reason="redundant_request",
+                cooldown=cooldown if cooldown is not None else _DEFAULT_DECISION_SECS,
+            )
+            if context is not None:
+                context["stay_reason"] = "redundant_request"
+                context["stay_logged"] = True
+            return ProviderAction.STAY
 
-    return ProviderAction.STAY
+    return action
 
 
 def _normalize_provider(name: str) -> str:
@@ -140,6 +168,18 @@ def _normalize_provider(name: str) -> str:
     if normalized == "alpaca_yahoo":
         return "yahoo"
     return normalized or name
+
+
+def record_stay(*, provider: str, reason: str, cooldown: int) -> None:
+    """Log a stay decision for ``provider`` with the supplied ``reason``."""
+
+    normalized = _normalize_provider(provider)
+    logger.info(
+        "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
+        normalized,
+        reason,
+        cooldown,
+    )
 
 
 _DEFAULT_DECISION_SECS = 120
@@ -705,7 +745,20 @@ class ProviderMonitor:
         }
         normalized_active = _normalize_provider(active)
         consecutive_switches = int(self.consecutive_switches_by_provider.get(normalized_active, 0))
-        action = decide_provider_action(health_state, cooldown_ok, consecutive_switches, policy)
+        decision_context: dict[str, Any] = {}
+        target_provider = primary if using_backup else backup
+        action = decide_provider_action(
+            health_state,
+            cooldown_ok,
+            consecutive_switches,
+            policy,
+            from_provider=active,
+            to_provider=target_provider,
+            cooldown=cooldown_default,
+            context=decision_context,
+        )
+        stay_reason = decision_context.get("stay_reason", stay_reason)
+        stay_logged = bool(decision_context.get("stay_logged"))
 
         if action is ProviderAction.SWITCH:
             if healthy and using_backup:
@@ -758,12 +811,12 @@ class ProviderMonitor:
             if using_backup and healthy
             else cooldown_default
         )
-        logger.info(
-            "DATA_PROVIDER_STAY | provider=%s reason=%s cooldown=%ss",
-            _normalize_provider(stay_provider),
-            stay_reason,
-            cooldown_for_log,
-        )
+        if not stay_logged:
+            record_stay(
+                provider=stay_provider,
+                reason=stay_reason,
+                cooldown=cooldown_for_log,
+            )
         state["active"] = stay_provider
         if window_seconds > 0 and (hard_fail or not window_locked):
             state["decision_until"] = now + timedelta(seconds=window_seconds)
