@@ -36,6 +36,7 @@ def _load_canonical_dotenv() -> ModuleType:
 
     module = importlib.import_module("dotenv")
     if hasattr(module, "dotenv_values"):
+        sys.modules["dotenv"] = module
         return module
 
     for base in _iter_site_package_paths():
@@ -47,6 +48,7 @@ def _load_canonical_dotenv() -> ModuleType:
             canonical = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(canonical)  # type: ignore[misc]
             if hasattr(canonical, "dotenv_values"):
+                sys.modules["dotenv"] = canonical
                 return canonical
 
     path_hint = getattr(module, "__file__", "unknown")
