@@ -36,7 +36,7 @@ def sample_df():
 
 def test_prepare_indicators_requires_ohlcv():
     df = pd.DataFrame({"open": [1], "high": [2], "low": [1], "close": [1]})
-    with pytest.raises(ValueError, match="missing required column"):
+    with pytest.raises(KeyError, match="missing required column"):
         prepare_indicators(df)
 
 

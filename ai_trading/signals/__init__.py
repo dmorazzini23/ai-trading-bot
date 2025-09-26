@@ -328,7 +328,7 @@ def _validate_input_df(data) -> None:
     if hasattr(data, "columns"):
         missing = [col for col in required if col not in data.columns]
         if missing:
-            raise ValueError(f"Input data missing required column(s): {missing}")
+            raise KeyError(f"missing required column(s): {missing}")
 
 
 def _apply_macd(data) -> Any | None:
@@ -374,8 +374,10 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
 
     Raises
     ------
+    KeyError
+        If required OHLCV columns are missing from ``data``.
     ValueError
-        If the MACD indicator fails to calculate or required columns are missing.
+        If the MACD indicator fails to calculate.
     """
     pd = _get_pandas()
     _validate_input_df(data)

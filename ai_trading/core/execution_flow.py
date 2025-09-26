@@ -544,7 +544,7 @@ def execute_entry(ctx: Any, symbol: str, qty: int, side: str) -> None:
         if df_ind is None or getattr(df_ind, "empty", True):
             logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
             return
-    except ValueError as exc:
+    except (ValueError, KeyError) as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return
     entry_price = get_latest_close(df_ind)

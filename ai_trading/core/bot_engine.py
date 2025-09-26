@@ -13634,7 +13634,7 @@ def _fetch_feature_data(
         if feat_df.empty:
             logger.warning("Parsed feature DataFrame is empty; falling back to raw data")
             feat_df = raw_df.copy()
-    except ValueError as exc:
+    except (ValueError, KeyError) as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return raw_df, None, True
     if feat_df.empty:
