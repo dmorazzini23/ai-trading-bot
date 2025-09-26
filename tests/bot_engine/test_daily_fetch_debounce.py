@@ -7,6 +7,9 @@ import sys
 import types
 
 import pytest
+from ai_trading.utils.lazy_imports import load_pandas
+
+pytest.importorskip("pandas")
 
 if "ai_trading.indicators" not in sys.modules:
     indicators_stub = types.ModuleType("ai_trading.indicators")
@@ -196,3 +199,50 @@ def test_daily_missing_columns_error_sticky(monkeypatch):
     with pytest.raises(be.data_fetcher_module.MissingOHLCVColumnsError):
         fetcher.get_daily_df(types.SimpleNamespace(), symbol)
     assert len(error_calls) == 1
+
+
+def test_daily_fetch_skips_direct_when_safe_missing(monkeypatch):
+    pd = load_pandas()
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "MSFT"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    be._DAILY_FETCH_MEMO.clear()
+    fetcher._daily_cache.clear()
+    fetcher._daily_error_state.clear()
+
+    bars_stub = types.SimpleNamespace(
+        TimeFrame=types.SimpleNamespace(Day="Day"),
+        _create_empty_bars_dataframe=lambda _tf: pd.DataFrame(),
+    )
+    monkeypatch.setattr(be, "bars", bars_stub)
+
+    captured: dict[str, object] = {}
+
+    def fake_get_daily_df(symbol_arg, start, end, *, feed=None, adjustment=None):
+        captured["symbol"] = symbol_arg
+        captured["start"] = start
+        captured["feed"] = feed
+        idx = pd.to_datetime([start, end])
+        return pd.DataFrame(
+            {
+                "open": [1.0, 1.1],
+                "high": [1.2, 1.3],
+                "low": [0.9, 1.0],
+                "close": [1.05, 1.15],
+                "volume": [100, 110],
+            },
+            index=idx,
+        )
+
+    monkeypatch.setattr(be.data_fetcher_module, "get_daily_df", fake_get_daily_df)
+    monkeypatch.setattr(be.provider_monitor, "update_data_health", lambda *a, **k: None)
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+
+    assert isinstance(result, pd.DataFrame)
+    assert captured["symbol"] == symbol
+    assert not hasattr(be.bars, "safe_get_stock_bars")
