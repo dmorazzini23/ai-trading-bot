@@ -1,9 +1,10 @@
 from tests.optdeps import require
+
 require("numpy")
 import ai_trading.rl_trading.inference as inf
-import ai_trading.rl_trading.train as train_mod
 import numpy as np
 import ai_trading.rl.module as rl_mod
+import ai_trading.rl_trading.train as train_mod
 
 
 def test_rl_train_and_infer(monkeypatch, tmp_path):
@@ -27,12 +28,38 @@ def test_rl_train_and_infer(monkeypatch, tmp_path):
     assert sig and sig.side == "buy"
 
 
-def test_rl_train_module_reload_preserves_train_attr():
+def test_rl_train_module_reload_preserves_train_attr(monkeypatch):
     import importlib
+    import sys
 
-    reloaded = importlib.reload(train_mod)
+    import ai_trading.rl_trading as rl_pkg
+
+    module_name = "ai_trading.rl_trading.train"
+    original_import_module = importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name == module_name:
+            raise ModuleNotFoundError("simulated missing RL training module")
+        return original_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+    sys.modules.pop(module_name, None)
+    rl_pkg.__dict__.pop("train", None)
+
+    stub_module = rl_pkg._load_train_module()
+    assert stub_module.__spec__ is not None
+    assert sys.modules[module_name] is stub_module
+
+    reloaded = importlib.reload(stub_module)
     assert hasattr(reloaded, "train")
     assert callable(reloaded.train)
+    assert getattr(reloaded, "USING_RL_TRAIN_STUB", False)
+
+    # Restore the real module so subsequent tests see the canonical implementation.
+    monkeypatch.setattr(importlib, "import_module", original_import_module)
+    sys.modules.pop(module_name, None)
+    restored = rl_pkg._load_train_module()
+    globals()["train_mod"] = restored
 
 def test_rl_wrapper_without_c(monkeypatch, tmp_path):
     data = np.random.rand(20, 4)
