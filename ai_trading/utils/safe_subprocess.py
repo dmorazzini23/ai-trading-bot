@@ -35,11 +35,27 @@ def safe_subprocess_run(
     gracefully. When a timeout occurs a dedicated warning message is emitted
     before returning an empty string and marking the result as timed out.
     """
-    t = float(timeout) if timeout is not None else SUBPROCESS_TIMEOUT_DEFAULT
+    if timeout is None:
+        timeout_for_run: float | int = SUBPROCESS_TIMEOUT_DEFAULT
+        timeout_for_log = float(SUBPROCESS_TIMEOUT_DEFAULT)
+    else:
+        timeout_for_run = timeout
+        timeout_for_log = float(timeout)
+        if timeout_for_log <= 0:
+            logger.warning(
+                "safe_subprocess_run(%s) timed out immediately (timeout=%.2f seconds)",
+                cmd,
+                timeout_for_log,
+            )
+            return SafeSubprocessResult(stdout="", returncode=-1, timeout=True)
     try:
-        res = subprocess.run(list(cmd), timeout=t, check=False, capture_output=True)
+        res = subprocess.run(
+            list(cmd), timeout=timeout_for_run, check=False, capture_output=True
+        )
     except subprocess.TimeoutExpired:
-        logger.warning("safe_subprocess_run(%s) timed out after %.2f seconds", cmd, t)
+        logger.warning(
+            "safe_subprocess_run(%s) timed out after %.2f seconds", cmd, timeout_for_log
+        )
         return SafeSubprocessResult(stdout="", returncode=-1, timeout=True)
     except (subprocess.SubprocessError, OSError) as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
