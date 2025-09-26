@@ -7,11 +7,21 @@ DEFAULT_MAX_POSITION_FALLBACK = 8000.0
 
 def derive_cap_from_settings(
     equity: Optional[float],
-    capital_cap: float = DEFAULT_CAPITAL_CAP,
+    capital_cap: float | None = DEFAULT_CAPITAL_CAP,
     fallback: float = DEFAULT_MAX_POSITION_FALLBACK,
 ) -> float:
-    if equity and equity > 0:
-        return float(equity) * float(capital_cap)
+    try:
+        cap = float(capital_cap) if capital_cap is not None else DEFAULT_CAPITAL_CAP
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        cap = DEFAULT_CAPITAL_CAP
+    if cap <= 0:
+        return float(fallback)
+    try:
+        eq = float(equity) if equity is not None else None
+    except (TypeError, ValueError):
+        eq = None
+    if eq is not None and eq > 0:
+        return eq * cap
     return float(fallback)
 
 

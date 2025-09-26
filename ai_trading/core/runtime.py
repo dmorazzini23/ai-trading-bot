@@ -12,6 +12,8 @@ from .protocols import AllocatorProtocol
 from ai_trading.position_sizing import (
     resolve_max_position_size,
     _get_equity_from_alpaca,
+    _CACHE as _POSITION_SIZING_CACHE,
+    _now_utc as _position_sizing_now,
 )
 from ai_trading.logging import get_logger
 logger = get_logger(__name__)
@@ -196,6 +198,8 @@ def build_runtime(cfg: TradingConfig, **kwargs: Any) -> BotRuntime:
     if resolved <= 0:
         raise ValueError("MAX_POSITION_SIZE must be positive")
     params["MAX_POSITION_SIZE"] = float(resolved)
+    _POSITION_SIZING_CACHE.value = float(resolved)
+    _POSITION_SIZING_CACHE.ts = _position_sizing_now()
     try:
         import ai_trading.core.bot_engine as be
 

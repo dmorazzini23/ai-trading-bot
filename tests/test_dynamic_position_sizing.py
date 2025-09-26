@@ -29,6 +29,8 @@ def _stub_session(monkeypatch, status: int, payload: dict, *, calls: dict | None
 
 def test_auto_mode_resolves_from_equity_and_capital_cap(monkeypatch, caplog):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
+    ps._CACHE.last_equity = None
+    ps._CACHE.last_equity_ts = None
     cfg = SimpleNamespace(
         alpaca_base_url="https://paper-api.alpaca.markets",
         alpaca_api_key="k",
@@ -52,6 +54,8 @@ def test_auto_mode_resolves_from_equity_and_capital_cap(monkeypatch, caplog):
 
 def test_auto_mode_raises_on_error_without_cached_equity(monkeypatch, caplog):
     ps._CACHE.value, ps._CACHE.ts, ps._CACHE.equity, ps._CACHE.equity_error = (None, None, None, None)
+    ps._CACHE.last_equity = None
+    ps._CACHE.last_equity_ts = None
     cfg = SimpleNamespace(
         alpaca_base_url="https://paper-api.alpaca.markets",
         alpaca_api_key="k",
