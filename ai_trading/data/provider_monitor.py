@@ -248,6 +248,7 @@ class ProviderMonitor:
         self._last_switchover_provider: str | None = None
         self._last_switchover_ts: float = 0.0
         self._last_switchover_passes: int = 0
+        self._last_sip_warn_ts: float = 0.0
 
     def register_disable_callback(self, provider: str, cb: Callable[[timedelta], None]) -> None:
         """Register ``cb`` to disable ``provider`` for a duration.
@@ -649,6 +650,46 @@ class ProviderMonitor:
             self._pair_states[key] = state
         return str(state.get("active", primary))
 
+    def _sip_switch_allowed(self, provider: str) -> bool:
+        """Return ``True`` if switching to ``provider`` is permitted."""
+
+        normalized = _normalize_provider(provider or "")
+        if not normalized.endswith("_sip"):
+            return True
+
+        strict_enabled = False
+        try:
+            from ai_trading.data import fetch
+        except Exception:  # pragma: no cover - defensive import guard
+            fetch = None
+        if fetch is not None:
+            strict_checker = getattr(fetch, "_strict_data_gating_enabled", None)
+            if callable(strict_checker):
+                try:
+                    strict_enabled = bool(strict_checker())
+                except Exception:  # pragma: no cover - defensive gating check
+                    strict_enabled = False
+        env_allowed = os.getenv("ALPACA_SIP_ENABLED", "0") in {"1", "true", "True"}
+        allowed = strict_enabled and env_allowed
+        if not allowed:
+            now_monotonic = time.monotonic()
+            cooldown_window = max(float(self.cooldown), 1.0)
+            if (
+                self._last_sip_warn_ts <= 0.0
+                or now_monotonic - self._last_sip_warn_ts >= cooldown_window
+            ):
+                logger.warning(
+                    "UNAUTHORIZED_SIP",
+                    extra={
+                        "provider": normalized,
+                        "feed": "sip",
+                        "status": "sip_disabled",
+                        "reason": "sip_disabled",
+                    },
+                )
+                self._last_sip_warn_ts = now_monotonic
+        return allowed
+
     def update_data_health(
         self,
         primary: str,
@@ -759,6 +800,11 @@ class ProviderMonitor:
         )
         stay_reason = decision_context.get("stay_reason", stay_reason)
         stay_logged = bool(decision_context.get("stay_logged"))
+
+        if action is ProviderAction.SWITCH and not self._sip_switch_allowed(target_provider):
+            action = ProviderAction.STAY
+            stay_reason = "sip_disabled"
+            stay_logged = False
 
         if action is ProviderAction.SWITCH:
             if healthy and using_backup:
