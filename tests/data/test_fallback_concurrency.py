@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from ai_trading.data.fallback import concurrency
 
@@ -76,6 +77,37 @@ def test_run_with_concurrency_respects_limit():
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS <= 2
 
 
+def test_run_with_concurrency_peak_counter_respects_limit():
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    symbols = [f"PEAK{i}" for i in range(6)]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=3)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen <= 3
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS <= 3
+
+
 def test_run_with_concurrency_rebinds_nested_dataclass_lock():
     @dataclass
     class InnerLockHolder:
@@ -115,6 +147,45 @@ def test_run_with_concurrency_rebinds_nested_dataclass_lock():
     assert results == {symbol: symbol for symbol in symbols}
     assert succeeded == set(symbols)
     assert not failed
+
+
+def test_run_with_concurrency_rebinds_frozen_nested_dataclass_lock_from_namespace():
+    @dataclass(frozen=True)
+    class FrozenInnerHolder:
+        lock: asyncio.Lock
+
+    @dataclass
+    class Wrapper:
+        namespace: SimpleNamespace
+
+    def build_lock_in_fresh_loop() -> asyncio.Lock:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _factory() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            return loop.run_until_complete(_factory())
+        finally:
+            loop.close()
+
+    original_lock = build_lock_in_fresh_loop()
+    wrapped = Wrapper(namespace=SimpleNamespace(holder=FrozenInnerHolder(lock=original_lock)))
+
+    async def worker(sym: str) -> str:
+        async with wrapped.namespace.holder.lock:
+            await asyncio.sleep(0)
+            return sym
+
+    symbols = ["A", "B", "C"]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert wrapped.namespace.holder.lock is not original_lock
 
 
 def test_run_with_concurrency_rebinds_foreign_loop_lock():
