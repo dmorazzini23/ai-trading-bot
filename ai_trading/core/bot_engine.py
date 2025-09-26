@@ -17975,16 +17975,19 @@ def run_multi_strategy(ctx) -> None:
 
         try:
             order_type = 'market' if price is None else 'limit'
-            limit_price = None if price is None else price
+            order_kwargs = {
+                'order_type': order_type,
+                'asset_class': sig.asset_class,
+                'signal': sig,
+                'signal_weight': getattr(sig, "weight", None),
+            }
+            if price is not None:
+                order_kwargs['price'] = price
             result = ctx.execution_engine.execute_order(
                 sig.symbol,
                 sig.side,
                 qty,
-                order_type=order_type,
-                limit_price=limit_price,
-                asset_class=sig.asset_class,
-                signal=sig,
-                signal_weight=getattr(sig, "weight", None),
+                **order_kwargs,
             )
         except AssertionError as exc:
             logger.warning(

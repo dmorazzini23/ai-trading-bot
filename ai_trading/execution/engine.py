@@ -1045,7 +1045,15 @@ class ExecutionEngine:
                     self.execution_stats["rejected_orders"] += 1
                     return None
             quantity = int(_ensure_positive_qty(quantity))
+            raw_price = kwargs.get("price")
+            price_alias = _ensure_valid_price(raw_price)
+            if price_alias is None:
+                kwargs.pop("price", None)
+            else:
+                kwargs["price"] = price_alias
             limit_price = _ensure_valid_price(kwargs.get("limit_price"))
+            if limit_price is None and price_alias is not None:
+                limit_price = price_alias
             stop_price = _ensure_valid_price(kwargs.get("stop_price"))
             kwargs["limit_price"] = limit_price
             kwargs["stop_price"] = stop_price
