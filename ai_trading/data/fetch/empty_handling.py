@@ -24,6 +24,8 @@ def fetch_with_retries(
     timeframe: str,
     fetch_fn: Callable[[], Any],
     retry_delays: list[float],
+    *,
+    window_has_trading_session: Callable[[], bool] | None = None,
 ) -> Any:
     """Fetch data with retry handling for empty bar responses.
 
@@ -40,15 +42,36 @@ def fetch_with_retries(
         Sequence of delays between retries. The list is mutated in place as
         delays are consumed. When the list is empty the function will return
         an empty DataFrame without retrying.
+    window_has_trading_session: Callable[[], bool] | None, optional
+        Callback returning ``True`` when the requested window contains a
+        trading session. When provided and it returns ``False`` after the
+        initial failed attempt, the most recent :class:`EmptyBarsError` is
+        re-raised to match historical retry behavior.
     """
     key = (symbol, timeframe)
     attempts = 0
     while True:
         try:
             data = fetch_fn()
-        except EmptyBarsError:
+        except EmptyBarsError as exc:
             attempts += 1
             _RETRY_COUNTS[key] = attempts
+            if window_has_trading_session is not None and attempts >= 1:
+                try:
+                    has_session = window_has_trading_session()
+                except Exception:  # pragma: no cover - defensive safeguard
+                    has_session = True
+                if not has_session:
+                    logger.debug(
+                        "EMPTY_FETCH_NO_SESSION",
+                        extra={
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "attempts": attempts,
+                        },
+                    )
+                    _RETRY_COUNTS.pop(key, None)
+                    raise
             if not is_market_open():
                 logger.info(
                     "EMPTY_FETCH_MARKET_CLOSED",
