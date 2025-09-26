@@ -11,6 +11,8 @@ AI-AGENT-REF: Advanced trailing stop management with multiple algorithms
 """
 
 from __future__ import annotations
+import math
+
 from ai_trading.logging import get_logger
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +32,16 @@ def _fmt(value: float | None) -> str:
         return f"{float(value):.6f}"
     except (TypeError, ValueError):
         return "nan"
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(result):
+        return None
+    return result
 
 
 class TrailingStopType(Enum):
@@ -148,8 +160,9 @@ class TrailingStopManager:
             else:
                 candidate = stop_level.min_price_since_entry * (1 + trail_pct)
                 stop_level.stop_price = self._merge_stop_prices(existing_stop, candidate, "short")
+            prior_stop_price = stop_level.stop_price
             self._ensure_directional_stop(stop_level, current_price, candidate=candidate)
-            self._check_stop_trigger(stop_level, qty)
+            self._check_stop_trigger(stop_level, qty, prior_stop_price=prior_stop_price)
             try:
                 stop_level.trail_distance = abs((current_price - stop_level.stop_price) / current_price) * 100
             except (TypeError, ZeroDivisionError):
@@ -313,19 +326,37 @@ class TrailingStopManager:
                 stop_level.stop_price = desired
                 corrected = True
         if corrected:
-            segments = [
-                f"symbol={stop_level.symbol}",
-                f"side={stop_level.side}",
-                f"trail_pct={_fmt(stop_level.trail_pct)}",
-                f"stop_price={_fmt(stop_level.stop_price)}",
-                f"current_price={_fmt(current_price)}",
-            ]
-            if stop_level.side == "long":
-                segments.append(f"max_since_entry={_fmt(stop_level.max_price_since_entry)}")
+            is_long = stop_level.side == "long"
+            log_extra = {
+                "symbol": stop_level.symbol,
+                "side": stop_level.side,
+                "trail_pct": _to_float(stop_level.trail_pct),
+                "stop_price": _to_float(stop_level.stop_price),
+                "current_price": _to_float(current_price),
+                "reason": "initialization" if was_init else "state_correction",
+            }
+            if is_long:
+                log_extra["max_since_entry"] = _to_float(stop_level.max_price_since_entry)
             else:
-                segments.append(f"min_since_entry={_fmt(stop_level.min_price_since_entry)}")
-            segments.append(f"reason={'initialization' if was_init else 'state_correction'}")
-            self.logger.info("TRAILING_STOP_CORRECTED | %s", " ".join(segments))
+                log_extra["min_since_entry"] = _to_float(stop_level.min_price_since_entry)
+            log_extra["details"] = " ".join(
+                segment
+                for segment in [
+                    f"symbol={stop_level.symbol}",
+                    f"side={stop_level.side}",
+                    f"trail_pct={_fmt(stop_level.trail_pct)}",
+                    f"stop_price={_fmt(stop_level.stop_price)}",
+                    f"current_price={_fmt(current_price)}",
+                    (
+                        f"max_since_entry={_fmt(stop_level.max_price_since_entry)}"
+                        if is_long
+                        else f"min_since_entry={_fmt(stop_level.min_price_since_entry)}"
+                    ),
+                    f"reason={log_extra['reason']}",
+                ]
+            )
+            self.logger.info("TRAILING_STOP_CORRECTED", extra=log_extra)
+        return corrected
 
     def _calculate_initial_stop_distance(self, symbol: str) -> float:
         """Calculate initial stop distance based on volatility."""
@@ -439,37 +470,74 @@ class TrailingStopManager:
         except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return self.base_trail_percent
 
-    def _check_stop_trigger(self, stop_level: TrailingStopLevel, qty: int) -> bool:
+    def _check_stop_trigger(
+        self,
+        stop_level: TrailingStopLevel,
+        qty: int,
+        *,
+        prior_stop_price: float | None = None,
+    ) -> bool:
         """Check if trailing stop has been triggered."""
 
         try:
             current_price = stop_level.current_price
             stop_price = stop_level.stop_price
-            try:
-                stop_price_val = float(stop_price)
-            except (TypeError, ValueError):
-                stop_price_val = float("nan")
+            stop_price_val = _to_float(stop_price)
             side = stop_level.side
+            if stop_price_val is None:
+                return False
             if side == "long":
                 triggered = current_price <= stop_price_val
             else:
                 triggered = current_price >= stop_price_val
+            trigger_reference = stop_price_val
+            prior_stop_val = _to_float(prior_stop_price)
+            if not triggered and prior_stop_val is not None:
+                if side == "long":
+                    triggered = current_price <= prior_stop_val
+                else:
+                    triggered = current_price >= prior_stop_val
+                if triggered:
+                    trigger_reference = prior_stop_val
             if triggered:
                 stop_level.is_triggered = True
                 stop_level.trigger_reason = "price_crossed_stop"
-                segments = [
-                    f"symbol={stop_level.symbol}",
-                    f"side={side}",
-                    f"trail_pct={_fmt(stop_level.trail_pct)}",
-                    f"stop_used={_fmt(stop_price_val)}",
-                    f"current_price={_fmt(current_price)}",
-                    "reason=price_crossed_stop",
-                ]
-                if side == "long":
-                    segments.append(f"max_since_entry={_fmt(stop_level.max_price_since_entry)}")
+                is_long = side == "long"
+                log_extra = {
+                    "symbol": stop_level.symbol,
+                    "side": side,
+                    "trail_pct": _to_float(stop_level.trail_pct),
+                    "stop_used": trigger_reference,
+                    "current_price": _to_float(current_price),
+                    "reason": "price_crossed_stop",
+                }
+                log_extra["stop_price"] = stop_price_val
+                log_extra["prior_stop_price"] = prior_stop_val
+                if is_long:
+                    log_extra["max_since_entry"] = (
+                        _to_float(stop_level.max_price_since_entry)
+                    )
                 else:
-                    segments.append(f"min_since_entry={_fmt(stop_level.min_price_since_entry)}")
-                self.logger.warning("TRAILING_STOP_TRIGGERED | %s", " ".join(segments))
+                    log_extra["min_since_entry"] = (
+                        _to_float(stop_level.min_price_since_entry)
+                    )
+                log_extra["details"] = " ".join(
+                    segment
+                    for segment in [
+                        f"symbol={stop_level.symbol}",
+                        f"side={side}",
+                        f"trail_pct={_fmt(stop_level.trail_pct)}",
+                        f"stop_used={_fmt(stop_price_val)}",
+                        f"current_price={_fmt(current_price)}",
+                        (
+                            f"max_since_entry={_fmt(stop_level.max_price_since_entry)}"
+                            if is_long
+                            else f"min_since_entry={_fmt(stop_level.min_price_since_entry)}"
+                        ),
+                        "reason=price_crossed_stop",
+                    ]
+                )
+                self.logger.warning("TRAILING_STOP_TRIGGERED", extra=log_extra)
                 return True
             stop_level.is_triggered = False
             stop_level.trigger_reason = ""
