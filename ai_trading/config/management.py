@@ -203,21 +203,59 @@ def validate_required_env(
 
 
 def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
-    cfg = get_trading_config()
-    base_url, errors = _select_alpaca_base_url({
-        "ALPACA_BASE_URL": cfg.alpaca_base_url or "",
-        "ALPACA_API_URL": cfg.alpaca_base_url or "",
-    })
+    """Best-effort resolution of Alpaca credentials without hard failures."""
+
+    default_base_url = "https://paper-api.alpaca.markets"
+
+    cfg: TradingConfig | None
+    try:
+        cfg = get_trading_config()
+    except (RuntimeError, ValueError) as exc:
+        logger.debug(
+            "TRADING_CONFIG_RESOLVE_SKIPPED",
+            extra={"error": str(exc)},
+        )
+        cfg = None
+
+    base_url: str | None
+    if cfg is not None:
+        base_url, errors = _select_alpaca_base_url(
+            {
+                "ALPACA_BASE_URL": cfg.alpaca_base_url or "",
+                "ALPACA_API_URL": cfg.alpaca_base_url or "",
+            }
+        )
+    else:
+        base_url, errors = _select_alpaca_base_url()
+
     for env_key, raw, message in errors:
         logger.error(message, extra={"env_key": env_key, "value": raw})
-    api_key = cfg.alpaca_api_key or os.getenv("ALPACA_API_KEY")
-    secret = cfg.alpaca_secret_key or os.getenv("ALPACA_SECRET_KEY")
-    if base_url:
-        resolved = base_url
-    else:
-        normalized_cfg, _ = _normalize_alpaca_base_url(cfg.alpaca_base_url, source_key="ALPACA_API_URL")
-        resolved = normalized_cfg or "https://paper-api.alpaca.markets"
-    return api_key, secret, resolved
+
+    if not base_url and cfg is not None:
+        normalized_cfg, cfg_error = _normalize_alpaca_base_url(
+            cfg.alpaca_base_url, source_key="ALPACA_API_URL"
+        )
+        if normalized_cfg:
+            base_url = normalized_cfg
+        elif cfg_error:
+            logger.error(cfg_error, extra={"env_key": "ALPACA_API_URL", "value": cfg.alpaca_base_url})
+
+    resolved_base_url = base_url or default_base_url
+
+    api_key = (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None) or os.getenv(
+        "ALPACA_API_KEY"
+    )
+    secret = (getattr(cfg, "alpaca_secret_key", None) if cfg is not None else None) or os.getenv(
+        "ALPACA_SECRET_KEY"
+    )
+
+    sanitized_key = api_key or None
+    sanitized_secret = secret or None
+
+    if sanitized_key is None and sanitized_secret is None:
+        return None, None, resolved_base_url
+
+    return sanitized_key, sanitized_secret, resolved_base_url
 
 
 def validate_alpaca_credentials() -> None:
