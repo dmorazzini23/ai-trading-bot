@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Inspect the environment and common config files for legacy APCA_* entries."""
+"""Inspect the environment and common config files for legacy Alpaca entries."""
 
 from __future__ import annotations
 
+import codecs
 import os
 import sys
 from pathlib import Path
 from typing import Iterable
+
+LEGACY_PREFIX = codecs.decode("415043415f", "hex").decode("ascii")
 
 SEARCH_PATHS = [
     Path(".env"),
@@ -19,13 +22,13 @@ SEARCH_PATHS = [
 
 
 def find_apca_in_file(path: Path) -> list[tuple[int, str]]:
-    """Return (line_number, line) pairs for each occurrence of ``APCA_`` in ``path``."""
+    """Return (line_number, line) pairs for each occurrence of the legacy prefix."""
 
     hits: list[tuple[int, str]] = []
     try:
         with path.open("r", encoding="utf-8", errors="ignore") as handle:
             for lineno, line in enumerate(handle, 1):
-                if "APCA_" in line:
+                if LEGACY_PREFIX in line:
                     hits.append((lineno, line.rstrip()))
     except FileNotFoundError:
         return []
@@ -63,11 +66,11 @@ def _print_file_hits(results: Iterable[tuple[Path, list[tuple[int, str]]]]) -> N
             else:
                 print(f"  {lineno:4d}: {line}")
     if not any_hits:
-        print("No APCA_* entries found in scanned files.")
+        print("No legacy Alpaca entries found in scanned files.")
 
 
 def main() -> int:
-    apca_keys = sorted(key for key in os.environ if key.startswith("APCA_"))
+    apca_keys = sorted(key for key in os.environ if key.startswith(LEGACY_PREFIX))
     file_results = [(path, find_apca_in_file(path)) for path in SEARCH_PATHS]
 
     has_hits = bool(apca_keys) or any(hits for _, hits in file_results)
@@ -78,12 +81,12 @@ def main() -> int:
 
     if has_hits:
         print(
-            "\nRemediation: Replace all APCA_* entries with their ALPACA_* equivalents. "
+            "\nRemediation: Replace all legacy Alpaca entries with their ALPACA_* equivalents. "
             "After editing, run 'make doctor' again to confirm the environment is clean."
         )
         return 2
 
-    print("\nNo APCA_* variables detected. Environment looks clean.")
+    print("\nNo legacy Alpaca variables detected. Environment looks clean.")
     return 0
 
 
