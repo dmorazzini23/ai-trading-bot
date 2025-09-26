@@ -1423,7 +1423,11 @@ def test_get_minute_df_handles_missing_safe_get(monkeypatch):
     result = fetcher.get_minute_df(ctx, "AAPL", lookback_minutes=2)
 
     assert isinstance(result, pd.DataFrame)
-    pd.testing.assert_index_equal(result.index, idx)
+    expected_idx = idx.rename("timestamp")
+    pd.testing.assert_index_equal(result.index, expected_idx)
+    assert result.index.tz is not None
+    assert result.index.tz.tzname(None) == UTC.tzname(None)
+    assert list(result.columns[:5]) == ["open", "high", "low", "close", "volume"]
     assert calls and calls[0] == "MINUTE"
     assert not hasattr(bot_engine.bars, "safe_get_stock_bars")
 
