@@ -76,9 +76,12 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
         return _annotate(frame)
 
     call_history: list = []
+    call_ranges: dict[str, tuple[datetime, datetime]] = {}
 
     def _fake_get_minute_df(symbol, start_dt, end_dt, feed=None, **_):
         call_history.append(feed)
+        feed_key = feed or "iex"
+        call_ranges[feed_key] = (start_dt, end_dt)
         if feed == "sip":
             bot_engine.data_fetcher_module._SIP_UNAUTHORIZED = True
             return _fallback_copy()
@@ -133,3 +136,9 @@ def test_coverage_recovery_uses_backup_provider_annotation(monkeypatch, caplog):
     )
     assert cached_feeds == ["yahoo"]
     assert bot_engine.state.minute_feed_cache.get("iex") == "yahoo"
+    yahoo_start, _ = call_ranges["yahoo"]
+    warning_records = [
+        rec for rec in caplog.records if rec.message == "MINUTE_DATA_COVERAGE_WARNING"
+    ]
+    assert warning_records, "expected coverage warning log"
+    assert warning_records[0].start == yahoo_start.isoformat()

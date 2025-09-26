@@ -4128,16 +4128,20 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     today_et = now_utc.astimezone(EASTERN_TZ).date()
     session_date: date = today_et
     market_open_now = True
+    session_start_dt: datetime | None = None
+
     try:
         market_open_now = is_market_open()
         if market_open_now:
             session_start, _ = rth_session_utc(today_et)
             start_dt = session_start
+            session_start_dt = session_start
             end_dt = now_utc
         else:
             session_date = previous_trading_session(today_et)
             session_start, session_end = rth_session_utc(session_date)
             start_dt = session_start
+            session_start_dt = session_start
             end_dt = session_end
     except COMMON_EXC:
         # Fallback: retain previous 1-day window behavior
@@ -4145,6 +4149,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         end_dt = now_utc
         market_open_now = True
         session_date = today_et
+        session_start_dt = start_dt
 
     def _coerce_int(value: object, default: int = 0) -> int:
         try:
@@ -4630,6 +4635,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     primary_actual_bars = actual_bars
 
     primary_start_dt = start_dt
+    coverage_window_start = start_dt
 
     fallback_used = False
     fallback_feed_used: str | None = None
@@ -4710,6 +4716,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             fallback_start_dt = max(
                 end_dt - timedelta(minutes=intraday_lookback), start_dt
             )
+
+        if session_start_dt is not None:
+            if fallback_start_dt < session_start_dt:
+                fallback_start_dt = session_start_dt
+
+        coverage_window_start = fallback_start_dt
         fallback_expected_bars = max(
             int((end_dt - fallback_start_dt).total_seconds() // 60), 1
         )
@@ -4885,6 +4897,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 active_feed = "yahoo"
                 _cache_cycle_fallback_feed_helper("yahoo", symbol=symbol)
                 data_fetcher_module._cache_fallback(symbol, "yahoo")
+                coverage_window_start = fallback_start_dt
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -4910,7 +4923,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     "fallback_attempted": fallback_attempted,
                     "fallback_used": fallback_used,
                     "fallback_exhausted": low_coverage,
-                    "start": start_dt.isoformat(),
+                    "start": coverage_window_start.isoformat(),
                     "end": end_dt.isoformat(),
                 }
             )
@@ -5038,7 +5051,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "fallback_attempted": fallback_attempted,
             "fallback_used": fallback_used,
             "fallback_exhausted": low_coverage,
-            "start": start_dt.isoformat(),
+            "start": coverage_window_start.isoformat(),
             "end": end_dt.isoformat(),
         }
         logger.warning("MINUTE_DATA_COVERAGE_WARNING", extra=warning_extra)
@@ -5069,7 +5082,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "fallback_used": fallback_used,
             "fallback_exhausted": True,
             "primary_actual_bars": primary_actual_bars,
-            "start": start_dt.isoformat(),
+            "start": coverage_window_start.isoformat(),
             "end": end_dt.isoformat(),
         }
         logger.warning("MINUTE_DATA_COVERAGE_ABORT", extra=abort_extra)
