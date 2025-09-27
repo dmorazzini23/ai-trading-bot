@@ -699,6 +699,9 @@ class ExecutionEngine:
     def _get_account_snapshot(self) -> Any | None:
         """Return the cached account snapshot, refreshing once per cycle."""
 
+        if not hasattr(self, "_cycle_account_fetched"):
+            self._cycle_account_fetched = False
+            self._cycle_account = None
         if self._cycle_account_fetched:
             return self._cycle_account
         return self._refresh_cycle_account()
@@ -894,6 +897,9 @@ class ExecutionEngine:
             or kwargs.get("close_position")
             or kwargs.get("reduce_only")
         )
+        kwargs.pop("closing_position", None)
+        kwargs.pop("close_position", None)
+        kwargs.pop("reduce_only", None)
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
@@ -1296,7 +1302,8 @@ class ExecutionEngine:
         if extended_hours is not None:
             order_kwargs["extended_hours"] = extended_hours
             kwargs.pop("extended_hours", None)
-        order_kwargs["closing_position"] = closing_position
+        if closing_position:
+            order_kwargs["closing_position"] = True
         for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price"):
             if passthrough in kwargs:
                 order_kwargs[passthrough] = kwargs.pop(passthrough)

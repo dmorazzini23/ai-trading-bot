@@ -166,6 +166,13 @@ def _default_env(_env_defaults):  # reuse existing autouse env defaults
     """Alias fixture: provides default env via autouse `_env_defaults`."""
     yield
 
+
+@pytest.fixture(name="_monkeypatch")
+def _monkeypatch_fixture(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """Provide legacy `_monkeypatch` alias used by older tests."""
+
+    return monkeypatch
+
 @pytest.fixture
 def dummy_data_fetcher():
     """Provide a minimal data_fetcher interface for unit tests.

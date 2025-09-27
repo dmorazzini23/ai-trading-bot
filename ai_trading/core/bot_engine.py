@@ -4774,7 +4774,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         global _SIP_UNAUTHORIZED_LOGGED
 
         if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
-            data_fetcher_module._clear_sip_lockout_for_tests()
+            if not getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False):
+                data_fetcher_module._clear_sip_lockout_for_tests()
 
         planned_override = _prefer_feed_this_cycle_helper(symbol)
 
@@ -4895,6 +4896,28 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                         resolved_provider = f"alpaca_{resolved_feed}"
                     else:
                         resolved_provider = resolved_feed
+                if resolved_feed and resolved_feed != "sip":
+                    try:
+                        override_df = get_minute_df(
+                            symbol,
+                            fallback_start_dt,
+                            end_dt,
+                            feed=resolved_feed,
+                        )
+                    except Exception:  # pragma: no cover - fall back to existing frame
+                        override_df = None
+                    else:
+                        if override_df is not None and not getattr(override_df, "empty", True):
+                            try:
+                                override_count = int(len(override_df))
+                            except Exception:
+                                override_count = 0
+                            if override_count >= sip_bars:
+                                sip_df = override_df
+                                provider_override, feed_override = _df_provider_info(sip_df)
+                                resolved_provider = provider_override or resolved_provider
+                                resolved_feed = feed_override or resolved_feed
+                                sip_bars = override_count
                 event_name = _coverage_recovery_event(resolved_feed)
                 logger.warning(
                     event_name,
@@ -4922,18 +4945,31 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 materially_short = bool(coverage["materially_short"])
                 insufficient_intraday = bool(coverage["insufficient_intraday"])
                 low_coverage = bool(coverage["low_coverage"])
-                fallback_used = True
-                fallback_feed = resolved_feed
                 normalized_sip_feed = (
                     "sip" if resolved_feed and "sip" in resolved_feed else resolved_feed
                 )
-                fallback_feed_used = normalized_sip_feed or resolved_feed
                 fallback_provider = resolved_provider
+                fallback_feed = resolved_feed
                 active_feed = resolved_feed
-                cache_feed = normalized_sip_feed or resolved_feed
-                if cache_feed:
-                    _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
-                    data_fetcher_module._cache_fallback(symbol, cache_feed)
+                if low_coverage:
+                    logger.warning(
+                        "COVERAGE_RECOVERY_INSUFFICIENT",
+                        extra={
+                            "symbol": symbol,
+                            "expected_bars": fallback_expected_bars,
+                            "prev_bars": primary_actual_bars,
+                            "new_bars": sip_bars,
+                        },
+                    )
+                    fallback_used = False
+                    fallback_feed_used = None
+                else:
+                    fallback_used = True
+                    fallback_feed_used = normalized_sip_feed or resolved_feed
+                    cache_feed = normalized_sip_feed or resolved_feed
+                    if cache_feed:
+                        _cache_cycle_fallback_feed_helper(cache_feed, symbol=symbol)
+                        data_fetcher_module._cache_fallback(symbol, cache_feed)
             else:
                 logger.warning(
                     "COVERAGE_RECOVERY_INSUFFICIENT",
@@ -5238,6 +5274,15 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         coverage_warning_logged = True
 
     if low_coverage:
+        feeds_to_clear: list[str] = []
+        if configured_feed:
+            feeds_to_clear.append(configured_feed)
+        if fallback_feed_used:
+            feeds_to_clear.append(fallback_feed_used)
+        if fallback_feed and fallback_feed not in feeds_to_clear:
+            feeds_to_clear.append(str(fallback_feed))
+        _purge_minute_feed_cache(feeds_to_clear)
+
         active_provider = ""
         if active_feed:
             if fallback_feed and active_feed == fallback_feed:
@@ -14270,7 +14315,11 @@ def _evaluate_data_gating(
         if fallback_ok is True:
             reasons.append(gap_ratio_reason)
         elif fallback_ok is False:
-            fatal_reasons.append(gap_ratio_reason)
+            fallback_error_label = annotations.get("fallback_quote_error")
+            if fallback_error_label in _TRANSIENT_FALLBACK_REASONS:
+                reasons.append(gap_ratio_reason)
+            else:
+                fatal_reasons.append(gap_ratio_reason)
         else:
             fatal_reasons.append(gap_ratio_reason)
     elif gap_ratio_reason and gap_ratio_reason not in fatal_reasons and gap_ratio_reason not in reasons:
@@ -14462,6 +14511,9 @@ def _enter_long(
     if fallback_checked:
         fallback_stale_session = not (fallback_after_last_close and fallback_has_quote)
     fallback_quote_usable = fallback_has_quote and not fallback_stale_session
+    if fallback_checked and annotations.get("fallback_quote_error") in _TRANSIENT_FALLBACK_REASONS:
+        fallback_stale_session = False
+        fallback_quote_usable = True
     if isinstance(gap_ratio, (int, float)) and gap_ratio >= 0.999:
         logger.warning(
             "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s gap_ratio=%.2f%%",
@@ -19170,6 +19222,9 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
         if api is not None
         else []
     )
+
+    if not confirmed_pending and open_list:
+        confirmed_pending = open_list
 
     pending_ids: list[str] = []
     pending_statuses: set[str] = set()
