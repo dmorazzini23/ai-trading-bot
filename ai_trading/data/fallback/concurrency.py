@@ -72,12 +72,15 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
 
     bound_loop = None
     for attr_name in ("_loop", "_bound_loop"):
-        if hasattr(obj, attr_name):
-            bound_loop = getattr(obj, attr_name)
-            if bound_loop is not None:
-                break
+        try:
+            candidate = getattr(obj, attr_name)
+        except Exception:
+            candidate = None
+        if candidate is not None:
+            bound_loop = candidate
+            break
 
-    if bound_loop is loop:
+    if bound_loop is None or bound_loop is loop:
         return obj
 
     def _capture_sem_state() -> dict[str, int]:

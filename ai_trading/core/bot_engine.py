@@ -1894,7 +1894,7 @@ def _sip_authorized() -> bool:
     if sip_flagged:
         until = getattr(data_fetcher_module, "_SIP_UNAUTHORIZED_UNTIL", None)
         try:
-            lockout_expired = until is not None and time.monotonic() >= float(until)
+            lockout_expired = until is not None and monotonic_time() >= float(until)
         except Exception:
             lockout_expired = False
         if lockout_expired:
@@ -4549,6 +4549,12 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             setattr(err, "timeframe", "1Min")
             raise err
 
+        if getattr(df.index, "name", None) is not None:
+            try:
+                df = df.copy()
+                df.index.name = None
+            except Exception:  # pragma: no cover - defensive
+                pass
         return df
 
     def _df_provider_info(
@@ -7603,7 +7609,7 @@ class DataFetcher:
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = monotonic_time()
+        now_monotonic = time.monotonic()
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
@@ -7668,7 +7674,7 @@ class DataFetcher:
                 if age <= window_limit:
                     cached_df = entry_df
                     cached_reason = "memo"
-                    refresh_stamp = monotonic_time()
+                    refresh_stamp = time.monotonic()
                     refresh_df = cached_df
                     refresh_source = "memo"
                     break
@@ -7680,7 +7686,7 @@ class DataFetcher:
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
                     cached_reason = "cache"
-                    refresh_stamp = monotonic_time()
+                    refresh_stamp = time.monotonic()
                     refresh_df = cached_df
                     refresh_source = "cache"
                 else:
@@ -7699,7 +7705,7 @@ class DataFetcher:
                     if now_monotonic - session_ts <= ttl_window:
                         cached_df = session_df
                         cached_reason = f"provider_session:{planned_provider}"
-                        refresh_stamp = monotonic_time()
+                        refresh_stamp = time.monotonic()
                         refresh_df = cached_df
                         refresh_source = "provider_session"
                         refresh_provider_key = provider_key
@@ -7846,7 +7852,7 @@ class DataFetcher:
             )
 
         with cache_lock:
-            stamp = monotonic_time()
+            stamp = time.monotonic()
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
@@ -8223,6 +8229,12 @@ class DataFetcher:
             else:
                 self._minute_cache.pop(symbol, None)
                 self._minute_timestamps.pop(symbol, None)
+        if isinstance(df, pd.DataFrame) and getattr(df.index, "name", None) is not None:
+            try:
+                df = df.copy()
+                df.index.name = None
+            except Exception:  # pragma: no cover - defensive normalization
+                pass
         return df
 
 
