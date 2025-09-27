@@ -262,6 +262,7 @@ def run_cycle() -> None:
         ensure_alpaca_attached,
         list_open_orders,
         cancel_all_open_orders,
+        get_confirmed_pending_orders,
         set_cycle_budget_context,
         emit_cycle_budget_summary,
         clear_cycle_budget_context,
@@ -320,13 +321,18 @@ def run_cycle() -> None:
             if api is None:
                 raise RuntimeError("runtime.api missing")
             open_orders = list_open_orders(api)
+            pending_orders = get_confirmed_pending_orders(
+                api,
+                open_orders,
+                require_confirmation=True,
+            )
         except Exception:
             logger.debug("STARTUP_PENDING_RECONCILE_SKIPPED", exc_info=True)
         else:
             now_dt = datetime.now(UTC)
             pending_ids: list[str] = []
             pending_ages: list[int | None] = []
-            for order in open_orders:
+            for order in pending_orders:
                 status_raw = getattr(order, "status", "")
                 status_val = getattr(status_raw, "value", status_raw)
                 try:
