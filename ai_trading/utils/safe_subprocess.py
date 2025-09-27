@@ -60,11 +60,13 @@ def safe_subprocess_run(
             capture_output=True,
             text=True,
         )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        return SafeSubprocessResult(stdout, stderr, 124, True)
-    except (subprocess.SubprocessError, OSError) as exc:
+    except subprocess.TimeoutExpired:
+        return SafeSubprocessResult("", "", 124, True)
+    except OSError as exc:
+        logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
+        return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
+    except subprocess.SubprocessError as exc:
+        # ``TimeoutExpired`` is handled above; this branch captures other subprocess failures.
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
 
