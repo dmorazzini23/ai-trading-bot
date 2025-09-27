@@ -7674,7 +7674,7 @@ class DataFetcher:
                 if age <= window_limit:
                     cached_df = entry_df
                     cached_reason = "memo"
-                    refresh_stamp = time.monotonic()
+                    refresh_stamp = now_monotonic
                     refresh_df = cached_df
                     refresh_source = "memo"
                     break
@@ -7686,7 +7686,7 @@ class DataFetcher:
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
                     cached_reason = "cache"
-                    refresh_stamp = time.monotonic()
+                    refresh_stamp = now_monotonic
                     refresh_df = cached_df
                     refresh_source = "cache"
                 else:
@@ -7705,7 +7705,7 @@ class DataFetcher:
                     if now_monotonic - session_ts <= ttl_window:
                         cached_df = session_df
                         cached_reason = f"provider_session:{planned_provider}"
-                        refresh_stamp = time.monotonic()
+                        refresh_stamp = now_monotonic
                         refresh_df = cached_df
                         refresh_source = "provider_session"
                         refresh_provider_key = provider_key
