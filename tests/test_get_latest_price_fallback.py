@@ -147,8 +147,8 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
 
 
-def test_get_latest_price_degrades_to_bid_after_fallback(monkeypatch, caplog):
-    """Bid is accepted only after fallbacks fail when ask/last are unusable."""
+def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
+    """Bid should be accepted without invoking Yahoo/bars when ask/last unusable."""
 
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
     monkeypatch.setattr(
@@ -168,18 +168,18 @@ def test_get_latest_price_degrades_to_bid_after_fallback(monkeypatch, caplog):
 
     calls = {"yahoo": 0}
 
-    def yahoo_zero(symbol, start, end, interval):  # noqa: ARG001
+    def yahoo_fail(symbol, start, end, interval):  # noqa: ARG001
         calls["yahoo"] += 1
-        return _df(0.0)
+        raise AssertionError("Yahoo fallback should not be invoked when degrading to bid")
 
-    monkeypatch.setattr(data_fetcher, "_backup_get_bars", yahoo_zero)
+    monkeypatch.setattr(data_fetcher, "_backup_get_bars", yahoo_fail)
     monkeypatch.setattr(bot_engine, "get_latest_close", lambda df: float(df["close"].iloc[-1]))
     monkeypatch.setattr(bot_engine, "get_bars_df", lambda symbol: (_ for _ in ()).throw(RuntimeError))
 
     with caplog.at_level("WARNING", logger="ai_trading.core.bot_engine"):
         price = bot_engine.get_latest_price("AAPL")
 
-    assert calls["yahoo"] == 1
+    assert calls["yahoo"] == 0
     assert price == 94.5
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid_degraded"
     assert "DELAYED_QUOTE_SLIPPAGE_FLAGGED" in caplog.text
