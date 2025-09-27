@@ -124,3 +124,44 @@ def test_invalidating_limit_cache_refreshes_semaphore(monkeypatch):
 
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
     _reload_pooling(pooling)
+
+
+def test_http_host_limit_controller_legacy_env(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "5")
+
+    http = reload_module("ai_trading.net.http")
+
+    class _StubAdapter:
+        def __init__(self, *, max_retries, pool_connections, pool_maxsize):
+            self.max_retries = max_retries
+            self.pool_connections = pool_connections
+            self.pool_maxsize = pool_maxsize
+
+    monkeypatch.setattr(http, "HTTPAdapter", _StubAdapter, raising=False)
+
+    import types
+
+    class _StubSession:
+        def __init__(self):
+            self.adapters = {"https://": types.SimpleNamespace(max_retries="sentinel")}
+
+        def mount(self, prefix, adapter):
+            self.adapters[prefix] = adapter
+
+    session = _StubSession()
+
+    http._HOST_LIMIT_CONTROLLER.apply(session)
+
+    adapter = session.adapters["https://"]
+    assert adapter.pool_connections == 5
+    assert adapter.pool_maxsize == 5
+
+    monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "3")
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "6")
+
+    http._HOST_LIMIT_CONTROLLER.reload_if_changed(session)
+
+    adapter = session.adapters["https://"]
+    assert adapter.pool_connections == 3
+    assert adapter.pool_maxsize == 3
