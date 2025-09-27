@@ -969,7 +969,9 @@ def ensure_ohlcv_schema(
     if timestamp_col is None:
         if isinstance(work_df.index, pd_local.DatetimeIndex):
             timestamp_col = "timestamp"
-            work_df = work_df.reset_index().rename(columns={work_df.columns[0]: "timestamp"})
+            work_df = work_df.reset_index()
+            first_column = work_df.columns[0]
+            work_df = work_df.rename(columns={first_column: "timestamp"})
         else:
             raise MissingOHLCVColumnsError(
                 f"missing timestamp column | source={source} frequency={frequency}"
