@@ -1465,6 +1465,22 @@ def _resolve_cached_quote_bid(
     return bid_price, source_label
 
 
+def _is_usable_alpaca_source(source: str | None) -> bool:
+    """Return ``True`` when *source* represents a usable Alpaca quote/trade."""
+
+    if not isinstance(source, str):
+        return False
+    if not source.startswith("alpaca"):
+        return False
+    if source in {"alpaca_auth_failed", "alpaca_skipped"}:
+        return False
+    if "invalid" in source:
+        return False
+    if "_error" in source:
+        return False
+    return True
+
+
 def _should_flag_delayed_slippage(cache: Mapping[str, Any], price_source: str | None) -> bool:
     """Return ``True`` when degraded Alpaca pricing should flag slippage."""
 
@@ -1507,7 +1523,12 @@ logger = get_logger(__name__)
 
 def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
     if cache.get('trade_attempted'):
-        return cache.get('trade_price'), cache.get('trade_source', 'alpaca_trade_error')
+        cached_price = cache.get('trade_price')
+        cached_source = cache.get('trade_source')
+        if cached_price is not None and not cached_source:
+            cached_source = 'alpaca_trade'
+            cache['trade_source'] = cached_source
+        return cached_price, cached_source or 'alpaca_trade_error'
     cache['trade_attempted'] = True
     sanitized_feed = _sanitize_alpaca_feed(feed)
     if feed and sanitized_feed is None:
@@ -1563,7 +1584,12 @@ def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
 
 def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
     if cache.get('quote_attempted'):
-        return cache.get('quote_price'), cache.get('quote_source', 'alpaca_invalid')
+        cached_price = cache.get('quote_price')
+        cached_source = cache.get('quote_source')
+        if cached_price is not None and not cached_source:
+            cached_source = 'alpaca_ask'
+            cache['quote_source'] = cached_source
+        return cached_price, cached_source or 'alpaca_invalid'
     cache['quote_attempted'] = True
     sanitized_feed = _sanitize_alpaca_feed(feed)
     if feed and sanitized_feed is None:
@@ -21110,6 +21136,22 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         _set_price_source(symbol, price_source)
         return price
 
+    def _use_cached_primary_success() -> bool:
+        nonlocal price, price_source, last_source, prev_source
+        for prefix in ("trade", "quote"):
+            cached_price = cache.get(f"{prefix}_price")
+            cached_source = cache.get(f"{prefix}_source")
+            if cached_price is None:
+                continue
+            if not _is_usable_alpaca_source(cached_source):
+                continue
+            price = cached_price
+            price_source = str(cached_source)
+            prev_source = last_source
+            last_source = price_source
+            return True
+        return False
+
     cycle_feed = _prefer_feed_this_cycle_helper(symbol)
     configured_feed = cycle_feed or _get_intraday_feed()
     sanitized_feed = _normalize_cycle_feed(configured_feed)
@@ -21189,6 +21231,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     last_source = price_source
     prev_source = price_source
     for provider in provider_order:
+        if provider in {"alpaca_minute_close", "yahoo"} and _use_cached_primary_success():
+            return _finalize_return()
         candidate, source = _attempt_provider(provider)
         if source:
             prev_source = last_source
