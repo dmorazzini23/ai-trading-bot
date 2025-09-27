@@ -91,6 +91,19 @@ except Exception:  # pragma: no cover - fallback when budget module unavailable
 
     def set_cycle_budget_context(*args, **kwargs):  # type: ignore[override]
         return nullcontext()
+
+try:
+    from ai_trading.core.bot_engine import (
+        emit_cycle_budget_summary,
+        clear_cycle_budget_context,
+    )
+except Exception:  # pragma: no cover - fallback when bot engine unavailable
+
+    def emit_cycle_budget_summary(*args, **kwargs):
+        return None
+
+    def clear_cycle_budget_context(*args, **kwargs):
+        return None
 from ai_trading.config.management import (
     get_env,
     validate_required_env,
