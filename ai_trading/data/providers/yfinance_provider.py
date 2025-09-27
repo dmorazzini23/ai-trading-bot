@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import types
 
+from ai_trading.data.fetch.normalize import normalize_ohlcv_df
+
 
 def get_yfinance():
     """Return the ``yfinance`` module if installed, else ``None``."""
@@ -35,7 +37,11 @@ class Provider:
     def fetch_ohlcv(self, symbol: str, interval: str = "1d", **kwargs):
         yf = self._yf()
         t = yf.Ticker(symbol)
-        return t.history(period=kwargs.get("period", "1y"), interval=interval)
+        df = t.history(period=kwargs.get("period", "1y"), interval=interval)
+        df = normalize_ohlcv_df(df)
+        if len(df) == 0:
+            return []
+        return df
 
     def get_bars(self, symbol: str, limit: int):
         """Return recent OHLCV bars for ``symbol``.
@@ -50,17 +56,21 @@ class Provider:
         yf = self._yf()
         t = yf.Ticker(symbol)
         try:
-            df = t.history(period=f"{int(limit)}d", interval="1d").tail(limit)
+            df_raw = t.history(period=f"{int(limit)}d", interval="1d")
         except Exception:  # pragma: no cover - network/third-party errors
             return []
+        df = normalize_ohlcv_df(df_raw)
+        if len(df) == 0:
+            return []
+        df = df.tail(limit)
         bars = []
         for _, row in df.iterrows():
             bar = types.SimpleNamespace(
-                o=float(row.get("Open", 0.0)),
-                h=float(row.get("High", 0.0)),
-                l=float(row.get("Low", 0.0)),
-                c=float(row.get("Close", 0.0)),
-                v=float(row.get("Volume", 0.0)),
+                o=float(row.get("open", row.get("Open", 0.0)) or 0.0),
+                h=float(row.get("high", row.get("High", 0.0)) or 0.0),
+                l=float(row.get("low", row.get("Low", 0.0)) or 0.0),
+                c=float(row.get("close", row.get("Close", 0.0)) or 0.0),
+                v=float(row.get("volume", row.get("Volume", 0.0)) or 0.0),
             )
             bars.append(bar)
         return bars
