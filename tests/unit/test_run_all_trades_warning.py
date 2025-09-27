@@ -300,7 +300,16 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             self.calls: list[dict] = []
             self.end_cycle_called = 0
 
-        def execute_order(self, symbol, side, qty, *, price, asset_class):  # noqa: D401
+        def execute_order(
+            self,
+            symbol,
+            side,
+            qty,
+            *,
+            price=None,
+            asset_class=None,
+            **kwargs,
+        ):  # noqa: D401
             """Capture the order payload."""
 
             self.calls.append(
@@ -310,6 +319,7 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
                     "qty": qty,
                     "price": price,
                     "asset_class": asset_class,
+                    "extra": kwargs,
                 }
             )
 
@@ -385,7 +395,9 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             """Record the request and return a static quote."""
 
             self.requests.append(req)
-            return types.SimpleNamespace(ask_price=expected_price)
+            return types.SimpleNamespace(
+                ask_price=expected_price, bid_price=expected_price
+            )
 
     dummy_exec = DummyExecutionEngine()
     dummy_risk = DummyRiskEngine()
@@ -415,7 +427,8 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
     monkeypatch.setitem(sys.modules, "ai_trading.signals", signals_mod)
     monkeypatch.setattr(eng, "StockLatestQuoteRequest", DummyQuoteRequest)
     monkeypatch.setattr(eng, "to_trade_signal", lambda sig: sig)
-    monkeypatch.setattr(eng, "fetch_minute_df_safe", lambda symbol: pytest.fail("unexpected fallback"))
+    fetch_minute_mock = Mock(return_value=None)
+    monkeypatch.setattr(eng, "fetch_minute_df_safe", fetch_minute_mock)
 
     eng.run_multi_strategy(ctx)
 

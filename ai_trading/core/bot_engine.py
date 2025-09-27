@@ -19970,6 +19970,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 return
 
             if not symbols:
+                logger_once.warning(
+                    "RUN_ALL_TRADES_NO_SYMBOLS",
+                    key="run_all_trades_no_symbols_cycle",
+                )
                 logger.info("SKIP_MINUTE_FETCH", extra={"reason": "no_symbols"})
                 time.sleep(1.0)
                 return
