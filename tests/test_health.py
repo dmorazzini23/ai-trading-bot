@@ -209,3 +209,23 @@ def test_get_daily_df_normalizes_columns(monkeypatch):
     out = data_fetch.get_daily_df("AAA")
     for col in ["timestamp", "open", "high", "low", "close", "volume"]:
         assert col in out.columns
+
+
+def test_ensure_schema_then_normalize_restores_timestamp_column():
+    df = pd.DataFrame(
+        {
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.2, 1.2, 1.25],
+            "low": [0.9, 1.0, 1.1],
+            "close": [1.05, 1.15, 1.2],
+            "volume": [100, 120, 110],
+        },
+        index=pd.date_range("2024-01-01", periods=3, tz="UTC"),
+    )
+
+    ensured = data_fetch.ensure_ohlcv_schema(df, source="test", frequency="1Day")
+    normalized = data_fetch.normalize_ohlcv_df(ensured)
+
+    assert "timestamp" in normalized.columns
+    expected = pd.Series(normalized.index, index=normalized.index, name="timestamp")
+    pd.testing.assert_series_equal(normalized["timestamp"], expected)

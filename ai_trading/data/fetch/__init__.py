@@ -866,6 +866,40 @@ def _normalize_with_attrs(df: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _restore_timestamp_column(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Ensure ``df`` exposes a ``timestamp`` column aligned with its index."""
+
+    if df is None:
+        return None
+
+    pd_local = _ensure_pandas()
+    if pd_local is None or not isinstance(df, pd_local.DataFrame):
+        return df
+
+    if "timestamp" in df.columns:
+        return df
+
+    try:
+        index_values = df.index
+    except AttributeError:
+        return df
+
+    try:
+        # Copy to avoid mutating shared references downstream.
+        frame = df.copy()
+    except Exception:  # pragma: no cover - defensive fallback
+        frame = df
+
+    try:
+        frame.insert(0, "timestamp", index_values)
+    except Exception:
+        try:
+            frame["timestamp"] = index_values
+        except Exception:  # pragma: no cover - last-resort guard
+            return frame
+    return frame
+
+
 # --- BEGIN: universal OHLCV normalization helper ---
 try:
     import pandas as _pd_norm_helper  # ok if already imported elsewhere; safe to repeat
@@ -1008,9 +1042,11 @@ def _normalize_ohlcv_df(df, _pd: Any | None = None):
     except Exception:
         return None
     try:
-        return normalize_ohlcv_df(normalized)
+        normalized = normalize_ohlcv_df(normalized)
     except Exception:
         return normalized
+    restored = _restore_timestamp_column(normalized)
+    return restored if restored is not None else normalized
 
 
 # --- END: universal OHLCV normalization helper ---
@@ -4864,6 +4900,7 @@ def get_minute_df(
             frequency="1Min",
         )
         df = normalize_ohlcv_df(df)
+        df = _restore_timestamp_column(df)
     except MissingOHLCVColumnsError as exc:
         logger.error(
             "OHLCV_COLUMNS_MISSING",
@@ -4970,6 +5007,7 @@ def get_daily_df(
             frequency="1Day",
         )
         df = normalize_ohlcv_df(df)
+        df = _restore_timestamp_column(df)
     except MissingOHLCVColumnsError as exc:
         logger.error(
             "OHLCV_COLUMNS_MISSING",
