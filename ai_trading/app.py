@@ -94,41 +94,51 @@ def create_app():
         if errors:
             ok = False
 
+        alpaca_payload = dict(
+            sdk_ok=bool(sdk_ok),
+            initialized=bool(trading_client),
+            client_attached=bool(trading_client),
+            has_key=bool(key),
+            has_secret=bool(secret),
+            base_url=base_url,
+            paper=paper,
+            shadow_mode=shadow,
+        )
+
         payload = dict(
             ok=ok,
-            alpaca=dict(
-                sdk_ok=bool(sdk_ok),
-                initialized=bool(trading_client),
-                client_attached=bool(trading_client),
-                has_key=bool(key),
-                has_secret=bool(secret),
-                base_url=base_url,
-                paper=paper,
-                shadow_mode=shadow,
-            ),
+            alpaca=alpaca_payload,
         )
         if errors:
             payload["error"] = "; ".join(errors)
+            payload["ok"] = False
 
         def _render_response(data: dict):
             func = globals().get("jsonify")
-            fallback_error = data.get("error") or last_error
-            fallback_payload = dict(data)
             if data.get("error"):
                 data["ok"] = False
-            fallback_payload["ok"] = False
-            fallback_payload["error"] = fallback_error or "jsonify unavailable"
 
             if callable(func):
                 try:
                     return func(data)
                 except Exception as exc:  # /health must not raise
                     _log.exception("HEALTH_CHECK_FAILED")
-                    error_message = fallback_error or str(exc) or exc.__class__.__name__
-                    fallback_payload["error"] = error_message
-                    return fallback_payload
+                    if not data.get("error"):
+                        message = last_error or str(exc) or exc.__class__.__name__
+                        data = dict(data)
+                        data["error"] = message
+                        data["ok"] = False
+                        return data
+                    return dict(data)
 
-            return fallback_payload
+            if not data.get("error"):
+                message = last_error or "jsonify unavailable"
+                data = dict(data)
+                data["error"] = message
+                data["ok"] = False
+                return data
+
+            return dict(data)
 
         return _render_response(payload)
 
