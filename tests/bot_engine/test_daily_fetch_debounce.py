@@ -130,7 +130,12 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     monkeypatch.setattr(be, "is_market_open", lambda: True)
     be.daily_cache_hit = None
     be.daily_cache_miss = None
-    be.bars = types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day"))
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
 
     monotonic_values = iter([10.0, 11.0, 120.0, 121.0, 130.0, 140.0, 150.0])
     monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
@@ -218,7 +223,7 @@ def test_daily_fetch_skips_direct_when_safe_missing(monkeypatch):
         TimeFrame=types.SimpleNamespace(Day="Day"),
         _create_empty_bars_dataframe=lambda _tf: pd.DataFrame(),
     )
-    monkeypatch.setattr(be, "bars", bars_stub)
+    monkeypatch.setattr(be, "bars", bars_stub, raising=False)
 
     captured: dict[str, object] = {}
 
