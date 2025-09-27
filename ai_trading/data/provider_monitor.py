@@ -751,7 +751,7 @@ class ProviderMonitor:
         env_allowed = os.getenv("ALPACA_SIP_ENABLED", "0") in {"1", "true", "True"}
         allowed = strict_enabled and env_allowed
         if not allowed:
-            now_monotonic = time.monotonic()
+            now_monotonic = monotonic_time()
             cooldown_window = max(float(self.cooldown), 1.0)
             if (
                 self._last_sip_warn_ts <= 0.0
