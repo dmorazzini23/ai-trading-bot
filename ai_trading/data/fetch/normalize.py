@@ -14,7 +14,9 @@ REQUIRED = ("open", "high", "low", "close", "volume")
 
 def _empty_frame() -> "_pd.DataFrame":
     idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-    return pd.DataFrame(columns=REQUIRED, index=idx)
+    base = pd.DataFrame(columns=REQUIRED, index=idx)
+    base.insert(0, "timestamp", idx)
+    return base
 
 
 def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
@@ -38,6 +40,7 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
         frame.columns = [str(col).lower().strip() for col in frame.columns]
         frame = frame.loc[:, ~frame.columns.duplicated()]
 
+    had_timestamp_column = "timestamp" in frame.columns
     if "adj close" in frame.columns and "close" not in frame.columns:
         frame["close"] = frame["adj close"]
     if "close" not in frame.columns and "value" in frame.columns:
@@ -87,6 +90,10 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     if normalized.index.tz is None:
         normalized.index = normalized.index.tz_localize("UTC")
     normalized.index.rename("timestamp", inplace=True)
+    if had_timestamp_column or getattr(df.index, "name", None) == "timestamp":
+        if "timestamp" in normalized.columns:
+            normalized = normalized.drop(columns=["timestamp"])
+        normalized.insert(0, "timestamp", normalized.index)
     if attrs:
         try:
             normalized.attrs.update(attrs)
