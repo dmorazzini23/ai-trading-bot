@@ -204,46 +204,43 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         except Exception:
             return dict(updates)
 
-    if isinstance(obj, list):
-        for idx, value in enumerate(list(obj)):
-            new_value = _scan(value, seen, loop)
-            if new_value is not value:
-                obj[idx] = new_value
-        return obj
-
-    if isinstance(obj, tuple):
+    if isinstance(obj, (list, tuple, set, frozenset)):
         mutated = False
         new_items: list[object] = []
         for value in obj:
             new_value = _scan(value, seen, loop)
             mutated = mutated or new_value is not value
             new_items.append(new_value)
-        if mutated:
-            return tuple(new_items)
-        return obj
 
-    if isinstance(obj, set):
-        mutated = False
-        new_values: list[object] = []
-        for value in list(obj):
-            new_value = _scan(value, seen, loop)
-            mutated = mutated or new_value is not value
-            new_values.append(new_value)
-        if mutated:
+        if not mutated:
+            return obj
+
+        if isinstance(obj, list):
+            obj[:] = new_items
+            return obj
+
+        if isinstance(obj, set):
             obj.clear()
-            obj.update(new_values)
-        return obj
+            obj.update(new_items)
+            return obj
 
-    if isinstance(obj, frozenset):
-        mutated = False
-        new_values: list[object] = []
-        for value in obj:
-            new_value = _scan(value, seen, loop)
-            mutated = mutated or new_value is not value
-            new_values.append(new_value)
-        if mutated:
-            return type(obj)(new_values)
-        return obj
+        if isinstance(obj, frozenset):
+            try:
+                return type(obj)(new_items)
+            except Exception:
+                return frozenset(new_items)
+
+        # Tuple (and tuple-like) containers should preserve their concrete type
+        tuple_type = type(obj)
+        if tuple_type is tuple:
+            return tuple(new_items)
+        try:
+            return tuple_type(*new_items)
+        except TypeError:
+            try:
+                return tuple_type(new_items)
+            except TypeError:
+                return tuple(new_items)
 
     if is_dataclass(obj) and not isinstance(obj, type):
         replacements: dict[str, object] = {}
