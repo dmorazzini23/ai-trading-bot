@@ -1315,6 +1315,50 @@ def _normalize_price(raw_value: Any, provider: str, symbol: str) -> float | None
     return value
 
 
+def _sanitize_provider_price(
+    symbol: str,
+    provider: str,
+    price: float | None,
+    cache: Mapping[str, Any],
+) -> tuple[float | None, str | None]:
+    """Return ``price`` when it is usable else ``(None, reason)``."""
+
+    if price is None:
+        return None, "price_missing"
+    if not math.isfinite(price):
+        return None, "non_finite"
+    if price <= 0:
+        return None, "non_positive"
+
+    normalized_provider = str(provider or "").lower()
+    if normalized_provider.startswith("alpaca") and normalized_provider != "alpaca_trade":
+        trade_price = cache.get("trade_price")
+        if isinstance(trade_price, (int, float)) and trade_price > 0:
+            deviation = abs(price - float(trade_price)) / float(trade_price)
+            if deviation > _MAX_PRICE_DEVIATION:
+                reason = f"price_deviation={deviation:.3f}>limit={_MAX_PRICE_DEVIATION:.3f}"
+                return None, reason
+
+    return float(price), None
+
+
+def _log_skipped_unreliable_price(
+    symbol: str,
+    provider: str,
+    price: float | None,
+    reason: str | None,
+) -> None:
+    try:
+        logger.warning(
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | provider=%s price=%s reason=%s",
+            provider,
+            None if price is None else f"{float(price):.6f}",
+            reason or "unspecified",
+        )
+    except Exception:  # pragma: no cover - defensive logging guard
+        logger.warning("ORDER_SKIPPED_UNRELIABLE_PRICE", extra={"symbol": symbol})
+
+
 def _extract_trade_price(payload: Any, symbol: str) -> float | None:
     """Extract trade price from Alpaca trade payload variants."""
 
@@ -14200,6 +14244,17 @@ def _extract_quote_timestamp(payload: Any) -> datetime | None:
 
 
 _TRANSIENT_FALLBACK_REASONS = frozenset({"quote_source_unavailable", "quote_fetch_error"})
+_FALLBACK_PRICE_PROVIDERS = frozenset({"yahoo", "bars"})
+_PRIMARY_PRICE_PROVIDERS = frozenset(
+    {
+        "alpaca_trade",
+        "alpaca_quote",
+        "alpaca_ask",
+        "alpaca_bid",
+        "alpaca_minute_close",
+    }
+)
+_MAX_PRICE_DEVIATION = 0.15
 
 
 def _check_fallback_quote_age(

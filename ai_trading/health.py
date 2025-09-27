@@ -71,10 +71,30 @@ class HealthCheck:
 
         @self.app.route("/healthz")
         def _healthz() -> Any:  # pragma: no cover - simple glue
+            errors: list[dict[str, str]] = []
+            ok = True
+            try:
+                service_name = self._get_ctx_attr("service", "ai-trading")
+            except ImportError as exc:  # pragma: no cover - defensive
+                ok = False
+                service_name = "ai-trading"
+                errors.append({
+                    "type": "ImportError",
+                    "detail": str(exc),
+                })
+            except Exception as exc:  # pragma: no cover - defensive
+                ok = False
+                service_name = "ai-trading"
+                errors.append({
+                    "type": exc.__class__.__name__,
+                    "detail": str(exc),
+                })
+
             payload = {
-                "ok": True,
+                "ok": ok,
+                "errors": errors,
                 "ts": datetime.now(UTC).isoformat(),
-                "service": self._get_ctx_attr("service", "ai-trading"),
+                "service": service_name,
             }
             return jsonify(payload)
 

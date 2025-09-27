@@ -182,7 +182,9 @@ def http_get_bars(
             status=status,
             error=error_message if isinstance(error_message, str) else None,
         )
-    return response
+    if isinstance(response, BarsFetchFailed):
+        return response
+    return _normalize_bars_frame(response)
 
 
 def _env_bool(name: str) -> bool | None:
@@ -256,16 +258,35 @@ def _create_empty_bars_dataframe(timeframe: str | None = None) -> pd.DataFrame:
     return empty_bars_dataframe()
 
 
+def _normalize_bars_frame(df: Any) -> pd.DataFrame:
+    """Return ``df`` normalized to the canonical OHLCV schema."""
+
+    if isinstance(df, BarsFetchFailed):
+        return empty_bars_dataframe()
+    ensured = _ensure_df(df)
+    if ensured.empty:
+        return empty_bars_dataframe()
+    try:
+        attrs = dict(getattr(ensured, "attrs", {}) or {})
+    except (AttributeError, TypeError):  # pragma: no cover - metadata best effort
+        attrs = {}
+    normalized = normalize_ohlcv_df(ensured)
+    if normalized.empty:
+        return empty_bars_dataframe()
+    if attrs:
+        try:
+            normalized.attrs.update(attrs)
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover - metadata best effort
+            pass
+    return normalized
+
+
 def _coerce_http_bars(obj: Any) -> pd.DataFrame:
     """Normalize HTTP bar results, returning an empty frame on sentinel."""
 
     if isinstance(obj, BarsFetchFailed):
         return _create_empty_bars_dataframe()
-    ensured = _ensure_df(obj)
-    normalized = normalize_ohlcv_df(ensured)
-    if normalized.empty:
-        return empty_bars_dataframe()
-    return normalized
+    return _normalize_bars_frame(obj)
 
 def _is_minute_timeframe(tf) -> bool:
     try:
@@ -339,6 +360,9 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
 
 def _client_fetch_stock_bars(client: Any, request: "StockBarsRequest"):
     """Call the appropriate Alpaca SDK method to fetch bars."""
+    safe_get_fn = getattr(client, "safe_get_stock_bars", None)
+    if callable(safe_get_fn):
+        return safe_get_fn(request)
     get_stock_bars_fn = getattr(client, "get_stock_bars", None)
     if callable(get_stock_bars_fn):
         return get_stock_bars_fn(request)
@@ -440,9 +464,9 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                     "ALPACA_BARS_APIERROR",
                     extra={"symbol": symbol, "context": context, "error": str(e)},
                 )
-                df = pd.DataFrame()
+                df = empty_bars_dataframe()
             except COMMON_EXC:
-                df = pd.DataFrame()
+                df = empty_bars_dataframe()
             if df.empty:
                 tf_str = _canon_tf(getattr(request, 'timeframe', ''))
                 feed_str = _canon_feed(getattr(request, 'feed', None))
@@ -453,9 +477,9 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                         if rdf is not None and (not rdf.empty):
                             df = rdf
                         else:
-                            df = pd.DataFrame()
+                            df = empty_bars_dataframe()
                     else:
-                        df = pd.DataFrame()
+                        df = empty_bars_dataframe()
                     if df.empty:
                         try:
                             alt_req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=2, feed=feed_str)
@@ -493,18 +517,18 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
             except (KeyError, ValueError):
                 return _create_empty_bars_dataframe()
         if not df.empty:
-            return df
+            return _normalize_bars_frame(df)
         _now = datetime.now(UTC)
         _key = (symbol, str(context), _canon_feed(getattr(request, 'feed', None)), _canon_tf(getattr(request, 'timeframe', '')), _now.date().isoformat())
         if _empty_should_emit(_key, _now):
             lvl = _empty_classify(is_market_open=False)
             cnt = _empty_record(_key, _now)
             _log.log(lvl, 'ALPACA_PARSE_EMPTY', extra={'symbol': symbol, 'context': context, 'feed': _canon_feed(getattr(request, 'feed', None)), 'timeframe': _canon_tf(getattr(request, 'timeframe', '')), 'occurrences': cnt})
-        return pd.DataFrame()
+        return empty_bars_dataframe()
     except COMMON_EXC as e:
         _log.error('ALPACA_BARS_FETCH_FAILED', extra={'symbol': symbol, 'context': context, 'error': str(e)})
         if _is_minute_timeframe(getattr(request, 'timeframe', '')):
-            return _ensure_df(
+            return _normalize_bars_frame(
                 get_minute_df(symbol, iso_start, iso_end, feed=_canon_feed(getattr(request, 'feed', None)))
             )
         tf_str = _canon_tf(getattr(request, 'timeframe', ''))
@@ -546,7 +570,7 @@ def _get_minute_bars(
         df = None
     if df is None or not hasattr(df, 'empty') or getattr(df, 'empty', True):
         return empty_bars_dataframe()
-    return df
+    return _normalize_bars_frame(df)
 
 def _resample_minutes_to_daily(df, tz='America/New_York'):
     """Resample minute bars to daily OHLCV over regular trading hours."""
@@ -582,11 +606,11 @@ def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: st
     end = ensure_utc_datetime(end)
     df = _fetch_daily_bars(client, symbol, start, end, feed=feed, adjustment=adjustment)
     if df is not None and (not df.empty):
-        return df
+        return _normalize_bars_frame(df)
     alt = 'iex' if feed == 'sip' else 'sip'
     df = _fetch_daily_bars(client, symbol, start, end, feed=alt, adjustment=adjustment)
     if df is not None and (not df.empty):
-        return df
+        return _normalize_bars_frame(df)
     try:
         minutes_start = end - timedelta(days=5)
         mdf = _get_minute_bars(symbol, minutes_start, end, feed=feed, adjustment=adjustment)
@@ -594,7 +618,7 @@ def get_daily_bars(symbol: str, client, start: datetime, end: datetime, feed: st
             rdf = _resample_minutes_to_daily(mdf)
             if rdf is not None and (not rdf.empty):
                 _log.info('DAILY_FALLBACK_RESAMPLED', extra={'symbol': symbol, 'rows': len(rdf)})
-                return rdf
+                return _normalize_bars_frame(rdf)
     except (ValueError, TypeError) as e:
         _log.warning('DAILY_MINUTE_RESAMPLE_FAILED', extra={'symbol': symbol, 'error': str(e)})
     raise ValueError('empty_bars')
@@ -634,7 +658,7 @@ def fetch_minute_fallback(client, symbol, now_utc: datetime) -> pd.DataFrame:
     _log.info('DATA_FALLBACK_ATTEMPT', extra={'provider': 'alpaca', 'fallback': payload})
     if rows >= 300:
         _log.info('DATA_HEALTH: minute fallback ok', extra={'rows': rows})
-    return df
+    return _normalize_bars_frame(df)
 
 def _parse_bars(payload: Any, symbol: str, tz: str) -> pd.DataFrame:
     if not payload:
@@ -644,9 +668,10 @@ def _parse_bars(payload: Any, symbol: str, tz: str) -> pd.DataFrame:
         if not bars:
             return empty_bars_dataframe()
         try:
-            return _ensure_df(pd.DataFrame(bars))
+            frame = pd.DataFrame(bars)
         except (ValueError, TypeError):
             return empty_bars_dataframe()
+        return _normalize_bars_frame(frame)
     if isinstance(payload, pd.DataFrame):
-        return payload
+        return _normalize_bars_frame(payload)
     return empty_bars_dataframe()

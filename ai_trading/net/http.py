@@ -103,7 +103,52 @@ class TimeoutSession(_SessionBase):
 # Public alias used throughout the codebase
 HTTPSession = TimeoutSession
 
+
+class HostLimitController:
+    """Manage HTTPAdapter pool sizing based on environment overrides."""
+
+    def __init__(self) -> None:
+        self._last_limit: int | None = None
+
+    @staticmethod
+    def _parse_limit(value: str | None) -> int | None:
+        if value is None or value.strip() == "":
+            return None
+        try:
+            limit = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(limit, 1)
+
+    def current_limit(self) -> int | None:
+        raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
+        return self._parse_limit(raw)
+
+    def apply(self, session: TimeoutSession) -> None:
+        limit = self.current_limit()
+        if limit is None or HTTPAdapter is object:  # pragma: no cover - requests missing
+            return
+        existing_https = session.adapters.get("https://") if hasattr(session, "adapters") else None
+        max_retries = getattr(existing_https, "max_retries", Retry(total=0))
+        adapter = HTTPAdapter(
+            max_retries=max_retries,
+            pool_connections=limit,
+            pool_maxsize=limit,
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
+    def reload_if_changed(self, session: TimeoutSession) -> None:
+        limit = self.current_limit()
+        if limit == self._last_limit:
+            return
+        self._last_limit = limit
+        if session is not None:
+            self.apply(session)
+
+
 _GLOBAL_SESSION: TimeoutSession | None = None
+_HOST_LIMIT_CONTROLLER = HostLimitController()
 
 
 def build_retrying_session(
@@ -140,6 +185,7 @@ def build_retrying_session(
     )
     s.mount("http://", adapter)
     s.mount("https://", adapter)
+    _HOST_LIMIT_CONTROLLER.reload_if_changed(s)
     return s
 
 
@@ -193,6 +239,7 @@ def get_global_session() -> TimeoutSession:
     ensure_urllib3_disable_warnings()
     if _GLOBAL_SESSION is None:
         set_global_session(build_retrying_session())
+    reload_host_limit_if_env_changed(_GLOBAL_SESSION)
     return _GLOBAL_SESSION
 
 
@@ -201,6 +248,15 @@ def get_http_session() -> HTTPSession:
 
     ensure_urllib3_disable_warnings()
     return get_global_session()
+
+
+def reload_host_limit_if_env_changed(session: TimeoutSession | None = None) -> None:
+    """Reapply host connection limits when the environment override changes."""
+
+    target = session or _GLOBAL_SESSION
+    if target is None:
+        return
+    _HOST_LIMIT_CONTROLLER.reload_if_changed(target)
 
 
 __all__ = [
@@ -212,4 +268,5 @@ __all__ = [
     "get_http_session",
     "mount_host_retry_profile",
     "ensure_urllib3_disable_warnings",
+    "reload_host_limit_if_env_changed",
 ]

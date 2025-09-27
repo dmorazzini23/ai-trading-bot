@@ -23,6 +23,12 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     if df is None or len(df) == 0:
         return _empty_frame()
 
+    attrs: dict[str, object] = {}
+    try:
+        attrs = dict(getattr(df, "attrs", {}) or {})
+    except (AttributeError, TypeError):  # pragma: no cover - metadata optional
+        attrs = {}
+
     if isinstance(df.columns, pd.MultiIndex):
         frame = df.copy()
         frame.columns = [str(levels[0]).lower().strip() for levels in frame.columns]
@@ -49,7 +55,7 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     if not isinstance(frame.index, pd.DatetimeIndex):
         try:
             frame.index = pd.to_datetime(frame.index, utc=True, errors="coerce")
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             return _empty_frame()
 
     if frame.index.tz is None:
@@ -77,8 +83,13 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     cols = [column for column in REQUIRED if column in frame.columns]
     if not cols:
         return _empty_frame()
-    normalized = frame[cols]
+    normalized = frame[cols].copy()
     if normalized.index.tz is None:
         normalized.index = normalized.index.tz_localize("UTC")
     normalized.index.rename("timestamp", inplace=True)
+    if attrs:
+        try:
+            normalized.attrs.update(attrs)
+        except (AttributeError, TypeError, ValueError):  # pragma: no cover - metadata optional
+            pass
     return normalized

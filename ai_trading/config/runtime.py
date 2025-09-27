@@ -1285,6 +1285,12 @@ def _infer_paper_mode(values: Mapping[str, Any]) -> bool:
     base_url = str(values.get("alpaca_base_url") or "").lower()
     if "paper" in base_url:
         return True
+    execution_mode = str(values.get("execution_mode") or "").lower()
+    if execution_mode in {"live", "live_prod", "prod"}:
+        return False
+    trading_mode_env = os.getenv("TRADING_MODE") or os.getenv("AI_TRADING_TRADING_MODE")
+    if trading_mode_env and str(trading_mode_env).strip().lower() in {"live", "live_prod", "prod"}:
+        return False
     app_env = str(values.get("app_env") or "test").lower()
     return app_env != "prod"
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from typing import Sequence
+import shlex
 
 from ai_trading.logging import get_logger
 
@@ -22,48 +23,54 @@ class SafeSubprocessResult:
     """Lightweight result container for ``safe_subprocess_run``."""
 
     stdout: str
+    stderr: str
     returncode: int
-    timeout: bool = False
+    timeout: bool
+
+
+def _coerce_cmd(cmd: Sequence[str] | str) -> list[str]:
+    if isinstance(cmd, (list, tuple)):
+        return [str(part) for part in cmd]
+    if isinstance(cmd, str):
+        return shlex.split(cmd)
+    raise TypeError("cmd must be a sequence or string")
 
 
 def safe_subprocess_run(
-    cmd: Sequence[str], timeout: float | int | None = None
+    cmd: Sequence[str] | str,
+    timeout: float | int | None = None,
 ) -> SafeSubprocessResult:
-    """Run ``cmd`` with ``subprocess.run`` and capture stdout text.
+    """Run ``cmd`` safely with timeout handling."""
 
-    Any errors are swallowed and emitted as warnings so callers can degrade
-    gracefully. When a timeout occurs a dedicated warning message is emitted
-    before returning an empty string and marking the result as timed out.
-    """
-    if timeout is None:
-        timeout_for_run: float | int = SUBPROCESS_TIMEOUT_DEFAULT
-        timeout_for_log = float(SUBPROCESS_TIMEOUT_DEFAULT)
-    else:
-        timeout_for_run = timeout
-        timeout_for_log = float(timeout)
-        if timeout_for_log <= 0:
-            logger.warning(
-                "safe_subprocess_run(%s) timed out immediately (timeout=%.2f seconds)",
-                cmd,
-                timeout_for_log,
-            )
-            return SafeSubprocessResult(stdout="", returncode=-1, timeout=True)
+    run_timeout = SUBPROCESS_TIMEOUT_DEFAULT if timeout is None else float(timeout)
+    if run_timeout <= 0:
+        logger.warning(
+            "safe_subprocess_run(%s) timed out immediately (timeout=%.2f seconds)",
+            cmd,
+            run_timeout,
+        )
+        return SafeSubprocessResult("", "", -1, True)
+
+    argv = _coerce_cmd(cmd)
     try:
-        res = subprocess.run(
-            list(cmd), timeout=timeout_for_run, check=False, capture_output=True
+        completed = subprocess.run(
+            argv,
+            timeout=run_timeout,
+            check=False,
+            capture_output=True,
+            text=True,
         )
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "safe_subprocess_run(%s) timed out after %.2f seconds", cmd, timeout_for_log
-        )
-        return SafeSubprocessResult(stdout="", returncode=-1, timeout=True)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        return SafeSubprocessResult(stdout, stderr, 124, True)
     except (subprocess.SubprocessError, OSError) as exc:
-        logger.warning("safe_subprocess_run(%s) failed: %s", cmd, exc)
-        return SafeSubprocessResult(stdout="", returncode=getattr(exc, "returncode", -1))
-    if res.returncode != 0:
-        logger.warning(
-            "safe_subprocess_run(%s) failed: return code %s", cmd, res.returncode
-        )
-        return SafeSubprocessResult(stdout="", returncode=res.returncode, timeout=False)
-    stdout = (res.stdout or b"").decode(errors="ignore").strip()
-    return SafeSubprocessResult(stdout=stdout, returncode=res.returncode)
+        logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
+        return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
+
+    return SafeSubprocessResult(
+        completed.stdout or "",
+        completed.stderr or "",
+        completed.returncode,
+        False,
+    )

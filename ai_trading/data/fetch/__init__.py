@@ -56,9 +56,10 @@ from ai_trading.data.metrics import (
     provider_disable_total,
 )
 from ai_trading.data.provider_monitor import provider_monitor
+from ai_trading.core.daily_fetch_memo import get_daily_df_memoized
 from .normalize import normalize_ohlcv_df
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
-from ai_trading.net.http import HTTPSession, get_http_session
+from ai_trading.net.http import HTTPSession, get_http_session, reload_host_limit_if_env_changed
 from ai_trading.utils.http import clamp_request_timeout
 from ai_trading.utils import safe_to_datetime
 from ai_trading.utils.env import (
@@ -848,6 +849,23 @@ def _annotate_df_source(
     return df
 
 
+def _normalize_with_attrs(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize OHLCV frame while preserving existing attributes."""
+
+    attrs: dict[str, Any] = {}
+    try:
+        attrs = dict(getattr(df, "attrs", {}) or {})
+    except (AttributeError, TypeError):
+        attrs = {}
+    normalized = normalize_ohlcv_df(df)
+    if attrs:
+        try:
+            normalized.attrs.update(attrs)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return normalized
+
+
 # --- BEGIN: universal OHLCV normalization helper ---
 try:
     import pandas as _pd_norm_helper  # ok if already imported elsewhere; safe to repeat
@@ -1005,9 +1023,9 @@ def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame | None:
         pd_local = _ensure_pandas()
     if pd_local is None:
         return None
-    idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
-    cols = ["open", "high", "low", "close", "volume"]
-    return pd_local.DataFrame(columns=cols, index=idx).reset_index()
+    cols = ["timestamp", "open", "high", "low", "close", "volume"]
+    base = pd_local.DataFrame({col: [] for col in cols})
+    return normalize_ohlcv_df(base)
 
 
 def _resolve_backup_provider() -> tuple[str, str]:
@@ -2009,6 +2027,8 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                 "BACKUP_PROVIDER_EMPTY",
                 extra={"provider": provider, "symbol": symbol, "interval": interval},
             )
+        if isinstance(df, pd.DataFrame):
+            df = _normalize_with_attrs(df)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     if normalized == "yahoo":
         pd_local = _ensure_pandas()
@@ -2072,13 +2092,18 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
                         combined = combined.drop_duplicates(subset="timestamp", keep="last")
                         combined = combined.reset_index(drop=True)
                 if isinstance(combined, pd_local.DataFrame):
+                    combined = _normalize_with_attrs(combined)
                     combined = _annotate_df_source(combined, provider=normalized, feed=normalized)
                 return combined
             first = frames[0]
             if isinstance(first, list):  # pragma: no cover - pandas unavailable path
                 return first  # type: ignore[return-value]
+            if isinstance(first, pd_local.DataFrame):
+                first = _normalize_with_attrs(first)
             return _annotate_df_source(first, provider=normalized, feed=normalized)
         df = _yahoo_get_bars(symbol, start_dt, end_dt, interval)
+        if isinstance(df, pd_local.DataFrame):
+            df = _normalize_with_attrs(df)
         return _annotate_df_source(df, provider=normalized, feed=normalized)
     pd_local = _ensure_pandas()
     if normalized in ("", "none"):
@@ -2088,10 +2113,10 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         logger.warning("UNKNOWN_BACKUP_PROVIDER", extra={"provider": provider, "symbol": symbol})
     if pd_local is None:
         return []  # type: ignore[return-value]
-    idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
-    cols = ["open", "high", "low", "close", "volume"]
-    empty_df = pd_local.DataFrame(columns=cols, index=idx).reset_index()
-    return _annotate_df_source(empty_df, provider=normalized or "none", feed=normalized or None)
+    cols = ["timestamp", "open", "high", "low", "close", "volume"]
+    empty_df = pd_local.DataFrame({col: [] for col in cols})
+    normalized_df = normalize_ohlcv_df(empty_df)
+    return _annotate_df_source(normalized_df, provider=normalized or "none", feed=normalized or None)
 
 
 def _is_normalized_ohlcv_frame(
@@ -2161,9 +2186,11 @@ def _post_process(
         return df
     if df is None or getattr(df, "empty", True):
         return None
-    if _is_normalized_ohlcv_frame(df, pd):
-        return df
-    return _flatten_and_normalize_ohlcv(df, symbol, timeframe)
+    candidate = df if _is_normalized_ohlcv_frame(df, pd) else _flatten_and_normalize_ohlcv(df, symbol, timeframe)
+    try:
+        return normalize_ohlcv_df(candidate)
+    except Exception:
+        return candidate
 
 
 def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: str | None = None) -> pd.DataFrame | None:
@@ -2997,6 +3024,8 @@ def _fetch_bars(
         if session is None or not hasattr(session, "get"):
             raise ValueError("session_required")
 
+        reload_host_limit_if_env_changed(session)
+
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False
         ) -> pd.DataFrame | None:
@@ -3018,16 +3047,19 @@ def _fetch_bars(
             from_feed = _feed
             _interval, _feed, _start, _end = fb
             provider_fallback.labels(
-            from_provider=f"alpaca_{from_feed}",
-            to_provider=f"alpaca_{fb_feed}",
-        ).inc()
-        provider_monitor.record_switchover(f"alpaca_{from_feed}", f"alpaca_{fb_feed}")
-        fallback_order.register_fallback(f"alpaca_{fb_feed}", symbol)
-        _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
-        _state["last_fallback_feed"] = fb_feed
-        payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
-        logger.info("DATA_SOURCE_FALLBACK_ATTEMPT", extra={"provider": "alpaca", "fallback": payload})
-        return _req(session, None, headers=headers, timeout=timeout)
+                from_provider=f"alpaca_{from_feed}",
+                to_provider=f"alpaca_{fb_feed}",
+            ).inc()
+            provider_monitor.record_switchover(f"alpaca_{from_feed}", f"alpaca_{fb_feed}")
+            fallback_order.register_fallback(f"alpaca_{fb_feed}", symbol)
+            _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
+            _state["last_fallback_feed"] = fb_feed
+            payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
+            logger.info(
+                "DATA_SOURCE_FALLBACK_ATTEMPT",
+                extra={"provider": "alpaca", "fallback": payload},
+            )
+            return _req(session, None, headers=headers, timeout=timeout)
 
         params = {
             "symbols": symbol,

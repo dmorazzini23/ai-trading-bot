@@ -6,8 +6,9 @@ from ai_trading.utils.safe_subprocess import safe_subprocess_run
 
 def test_safe_subprocess_run_success():
     res = safe_subprocess_run([sys.executable, "-c", "print('ok')"])
-    assert res.stdout == "ok"
+    assert res.stdout.strip() == "ok"
     assert res.returncode == 0
+    assert res.stderr == ""
     assert not res.timeout
 
 
@@ -16,9 +17,10 @@ def test_safe_subprocess_run_timeout(caplog):
     with caplog.at_level("WARNING"):
         res = safe_subprocess_run(cmd, timeout=0.1)
     assert res.stdout == ""
+    assert res.stderr == ""
     assert res.timeout
-    assert res.returncode == -1
-    assert any("timed out" in rec.message for rec in caplog.records)
+    assert res.returncode == 124
+    assert not caplog.records  # timeout should not emit warnings
 
 
 def test_safe_subprocess_run_immediate_timeout(caplog):
@@ -26,6 +28,7 @@ def test_safe_subprocess_run_immediate_timeout(caplog):
     with caplog.at_level("WARNING"):
         res = safe_subprocess_run(cmd, timeout=0)
     assert res.stdout == ""
+    assert res.stderr == ""
     assert res.timeout
     assert res.returncode == -1
     assert any("timed out" in rec.message for rec in caplog.records)
@@ -36,6 +39,7 @@ def test_safe_subprocess_run_nonzero_exit(caplog):
     with caplog.at_level("WARNING"):
         res = safe_subprocess_run(cmd)
     assert res.stdout == ""
+    assert res.stderr == ""
     assert res.returncode == 2
     assert not res.timeout
-    assert any(str(cmd) in rec.message for rec in caplog.records)
+    assert not caplog.records
