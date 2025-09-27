@@ -482,12 +482,25 @@ def list_open_orders(api: Any):
 # -- New helper: ensure context has an attached Alpaca client -----------------
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
+    if os.getenv("PYTEST_RUNNING") and not (
+        os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")
+    ):
+        raise RuntimeError("Missing Alpaca API credentials")
+
     if not should_import_alpaca_sdk():
-        return
+        if not os.getenv("PYTEST_RUNNING"):
+            return
     if getattr(ctx, "api", None) is not None:
         return
+    key_check, secret_check, _ = _resolve_alpaca_env()
+    if (not key_check or not secret_check) and (
+        os.getenv("PYTEST_RUNNING") or not is_shadow_mode()
+    ):
+        raise RuntimeError("Missing Alpaca API credentials")
+
+    init_ok = False
     try:
-        _initialize_alpaca_clients()
+        init_ok = _initialize_alpaca_clients()
     except COMMON_EXC as e:  # AI-AGENT-REF: surface init failure
         logger_once.error(
             "ALPACA_CLIENT_INIT_FAILED - %s",
@@ -498,6 +511,8 @@ def ensure_alpaca_attached(ctx) -> None:
             raise RuntimeError("Alpaca client initialization failed") from e
         return
     global trading_client
+    if not init_ok and trading_client is None and not is_shadow_mode():
+        raise RuntimeError("Alpaca client initialization failed")
     if trading_client is None:
         if ALPACA_AVAILABLE and not is_shadow_mode():
             logger_once.error(

@@ -252,16 +252,30 @@ def _make_client_order_id(prefix: str = "ai") -> str:
 generate_client_order_id = _make_client_order_id
 
 
+def _ensure_trading_client_cls():
+    global TradingClient, ALPACA_AVAILABLE
+    try:
+        from alpaca.trading.client import TradingClient as _TradingClient
+    except Exception:
+        TradingClient = None  # type: ignore[assignment]
+        ALPACA_AVAILABLE = False
+        return None
+    TradingClient = _TradingClient  # type: ignore[assignment]
+    ALPACA_AVAILABLE = True
+    return TradingClient
+
+
 def get_trading_client_cls():
     """Return the Alpaca TradingClient class if available."""
 
-    if not ALPACA_AVAILABLE or TradingClient is None:
+    client_cls = _ensure_trading_client_cls()
+    if client_cls is None:
         class _UnavailableTradingClient:
             def __init__(self, *_a, **_k):
                 raise RuntimeError("alpaca-py TradingClient not available")
 
         return _UnavailableTradingClient
-    return TradingClient
+    return client_cls
 
 
 def get_data_client_cls():
@@ -270,17 +284,26 @@ def get_data_client_cls():
         from alpaca.data.historical.stock import StockHistoricalDataClient  # type: ignore
 
         return StockHistoricalDataClient
-    except Exception as exc:
+    except Exception:
         class _UnavailableDataClient:
             def __init__(self, *_a, **_k):
-                raise RuntimeError("alpaca-py StockHistoricalDataClient not available") from exc
+                self._reason = "alpaca-py StockHistoricalDataClient not available"
+
+            def get_stock_bars(self, *_a, **_k):
+                raise RuntimeError(self._reason)
 
         return _UnavailableDataClient
 
 
 def get_api_error_cls():
     """Return the Alpaca APIError class via lazy import."""
-    from alpaca.common.exceptions import APIError  # type: ignore
+    try:
+        from alpaca.common.exceptions import APIError  # type: ignore
+    except Exception:
+        class APIError(Exception):
+            """Fallback APIError when alpaca-py is unavailable."""
+
+            pass
 
     return APIError
 
@@ -328,9 +351,12 @@ def list_orders_wrapper(api: Any, *args: Any, **kwargs: Any):
 
 def _data_classes():
     """Return Alpaca data request classes lazily."""
-    from alpaca.data import StockBarsRequest, TimeFrame, TimeFrameUnit  # type: ignore
+    try:
+        from alpaca.data import StockBarsRequest as _StockBarsRequest, TimeFrame as _TimeFrame, TimeFrameUnit as _TimeFrameUnit  # type: ignore
 
-    return StockBarsRequest, TimeFrame, TimeFrameUnit
+        return _StockBarsRequest, _TimeFrame, _TimeFrameUnit
+    except Exception:
+        return StockBarsRequest, TimeFrame, TimeFrameUnit
 
 
 def get_stock_bars_request_cls():
@@ -534,7 +560,8 @@ def get_bars_df(
     StockBarsRequest = get_stock_bars_request_cls()
 
     _pd = _require_pandas("get_bars_df")
-    rest = _get_rest(bars=True)
+    module_self = importlib.import_module("ai_trading.alpaca_api")
+    rest = module_self._get_rest(bars=True)
     feed = feed or os.getenv("ALPACA_DATA_FEED", "iex")
     adjustment = adjustment or os.getenv("ALPACA_ADJUSTMENT", "all")
     tf_raw = timeframe

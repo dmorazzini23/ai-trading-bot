@@ -24,6 +24,11 @@ from ._alpaca_guard import should_import_alpaca_sdk
 from .fetch.sip_disallowed import sip_disallowed
 import time
 
+try:  # pragma: no cover - requests optional
+    from requests import exceptions as _requests_exceptions
+except ImportError:  # pragma: no cover - dependency optional
+    _requests_exceptions = None
+
 
 class _FallbackAPIError(Exception):
     """Fallback APIError when Alpaca SDK is unavailable."""
@@ -38,6 +43,20 @@ if should_import_alpaca_sdk():  # pragma: no cover - alpaca optional
         pass
     else:
         APIError = _RealAPIError
+
+_BAR_FETCH_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    APIError,
+    RuntimeError,
+    ConnectionError,
+    TimeoutError,
+    OSError,
+    ValueError,
+)
+
+if _requests_exceptions is not None:  # pragma: no cover - requests optional
+    request_exc = getattr(_requests_exceptions, "RequestException", None)
+    if isinstance(request_exc, type):
+        _BAR_FETCH_EXCEPTIONS = _BAR_FETCH_EXCEPTIONS + (request_exc,)
 
 __all__ = ["TimeFrame", "StockBarsRequest", "BarsFetchFailed", "http_get_bars"]
 
@@ -123,7 +142,7 @@ def http_get_bars(
     feed_norm = _canon_feed(feed)
     try:
         response = _raw_http_get_bars(symbol, timeframe, start, end, feed=feed, **kwargs)
-    except Exception as exc:  # noqa: BLE001 - propagate sentinel with details
+    except _BAR_FETCH_EXCEPTIONS as exc:
         status = _extract_status_code(exc)
         error_message = str(exc)
         _log_bars_failure_once(
@@ -146,7 +165,7 @@ def http_get_bars(
         if isinstance(error_message, bytes):
             try:
                 error_message = error_message.decode("utf-8", "ignore")
-            except Exception:  # pragma: no cover - defensive guard
+            except UnicodeDecodeError:  # pragma: no cover - defensive guard
                 error_message = None
         _log_bars_failure_once(
             symbol=symbol,
@@ -350,7 +369,12 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
     except (TypeError, AttributeError, ValueError):
         pass
     now = now_utc()
-    prev_open, _ = rth_session_utc(previous_trading_session(now.date()))
+    try:
+        session_day = previous_trading_session(now.date())
+        prev_open, _ = rth_session_utc(session_day)
+    except RuntimeError:
+        fallback_open = now.astimezone(UTC) - timedelta(days=1)
+        prev_open = fallback_open.replace(hour=9, minute=30, second=0, microsecond=0)
     end_dt = ensure_utc_datetime(getattr(request, 'end', None) or now, default=now, clamp_to='eod', allow_callables=False)
     start_dt = ensure_utc_datetime(getattr(request, 'start', None) or prev_open, default=prev_open, clamp_to='bod', allow_callables=False)
     iso_start = start_dt.isoformat()

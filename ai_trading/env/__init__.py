@@ -5,17 +5,29 @@ import importlib.util
 import logging
 import os
 
-try:  # pragma: no cover - import resolution validated by tests
-    import dotenv as _dotenv  # type: ignore
+def _ensure_dotenv_module() -> tuple[object | None, bool]:
+    """Return (module, resolved) ensuring ``dotenv_values`` availability."""
 
-    _DOTENV_SPEC = importlib.util.find_spec("dotenv")
-    if _DOTENV_SPEC and getattr(_DOTENV_SPEC, "origin", None):
-        PYTHON_DOTENV_RESOLVED = True
-    else:
-        PYTHON_DOTENV_RESOLVED = bool(getattr(_dotenv, "dotenv_values", None))
-except Exception:  # pragma: no cover - fallback path when python-dotenv missing
-    _dotenv = None  # type: ignore[assignment]
-    PYTHON_DOTENV_RESOLVED = False
+    try:  # pragma: no cover - import resolution validated by tests
+        module = importlib.import_module("dotenv")
+    except Exception:  # pragma: no cover - fallback path when python-dotenv missing
+        return None, False
+
+    if not hasattr(module, "dotenv_values"):
+        def _stub_dotenv_values(*_args, **_kwargs):
+            return {}
+
+        setattr(module, "dotenv_values", _stub_dotenv_values)
+        return module, False
+
+    spec = importlib.util.find_spec("dotenv")
+    resolved = bool(spec and getattr(spec, "origin", None))
+    if not resolved:
+        resolved = bool(getattr(module, "__file__", None))
+    return module, resolved
+
+
+_dotenv, PYTHON_DOTENV_RESOLVED = _ensure_dotenv_module()
 
 
 _ENV_LOADED = False

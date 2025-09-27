@@ -702,10 +702,10 @@ def safe_to_datetime(
 
     try:
         series = pd.Series(values)
-    except Exception:
+    except (TypeError, ValueError):
         try:
             series = pd.Series(list(values))  # type: ignore[arg-type]
-        except Exception:
+        except (TypeError, ValueError):
             series = pd.Series([values])
 
     if series.empty:
@@ -719,10 +719,10 @@ def safe_to_datetime(
         from pandas.api import types as pd_types  # pylint: disable=import-error
 
         is_numeric = pd_types.is_numeric_dtype(numeric)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         try:
             is_numeric = bool(numeric.apply(lambda value: isinstance(value, (int, float))).all())
-        except Exception:
+        except (TypeError, AttributeError, ValueError):
             is_numeric = False
 
     if is_numeric:
@@ -736,7 +736,7 @@ def safe_to_datetime(
 
     try:
         coerced = int(((converted.isna()) & series.notna()).sum())
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         coerced = 0
     if coerced:
         warn_key = _warn_key or (f"SAFE_TO_DATETIME:{context}" if context else "SAFE_TO_DATETIME")
@@ -744,12 +744,12 @@ def safe_to_datetime(
             from ai_trading.logging import log_once
 
             log_once(warn_key, f"safe_to_datetime coerced {coerced} values to NaT")
-        except Exception:  # pragma: no cover - warning best effort
+        except (ImportError, AttributeError, RuntimeError):  # pragma: no cover - warning best effort
             pass
 
     try:
         index = pd.DatetimeIndex(converted)
-    except Exception:
+    except (TypeError, ValueError):
         index = pd.DatetimeIndex(converted.to_numpy())  # type: ignore[arg-type]
 
     if utc:

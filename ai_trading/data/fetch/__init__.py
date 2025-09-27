@@ -3469,7 +3469,7 @@ def _fetch_bars(
                 else:
                     should_backoff_first_empty = remaining_fallbacks <= 0
             logged_attempt = False
-            if empty_attempts == 1 and should_backoff_first_empty:
+            if empty_attempts == 1 and should_backoff_first_empty and remaining_retries > 0:
                 retry_delay = _state.get("delay", 0.25)
                 _state["delay"] = retry_delay
                 log_extra["delay"] = retry_delay

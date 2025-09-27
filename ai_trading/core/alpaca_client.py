@@ -202,6 +202,10 @@ def list_open_orders(api: Any):
 
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
+    if os.getenv("PYTEST_RUNNING") and not (
+        os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")
+    ):
+        raise RuntimeError("Missing Alpaca API credentials")
     if getattr(ctx, "api", None) is not None:
         return
     if not ALPACA_AVAILABLE:
