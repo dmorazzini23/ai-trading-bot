@@ -24,7 +24,7 @@ def _engine() -> lt.ExecutionEngine:
 
 def test_nonretryable_capacity_error(monkeypatch, caplog):
     engine = _engine()
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.DEBUG)
 
     err = DummyAPIError()
     result = engine._handle_nonretryable_api_error(err, {"symbol": "AAPL"})
@@ -32,8 +32,14 @@ def test_nonretryable_capacity_error(monkeypatch, caplog):
     assert isinstance(result, lt.NonRetryableBrokerError)
     assert engine.stats["capacity_skips"] == 1
     assert engine.stats["skipped_orders"] == 1
-    messages = [rec.message for rec in caplog.records]
+    assert result.args[0] == "insufficient_day_trading_buying_power"
+    assert result.detail == "insufficient day trading buying power"
+    messages = [rec.getMessage() for rec in caplog.records]
     assert "BROKER_CAPACITY_EXCEEDED" in messages
+    assert "BROKER_CAPACITY_EXCEEDED_DETAIL" in messages
+    info_records = [rec for rec in caplog.records if rec.getMessage() == "BROKER_CAPACITY_EXCEEDED"]
+    assert info_records and info_records[0].levelno == logging.INFO
+    assert getattr(info_records[0], "reason", None) == "insufficient_day_trading_buying_power"
 
 
 def test_capacity_error_passthrough_for_other_codes():
@@ -65,7 +71,7 @@ def test_skip_shorting_when_asset_not_shortable(monkeypatch, caplog):
 
     called = {"preflight": False}
 
-    def fake_preflight(symbol, side, price_hint, quantity, trading_client):
+    def fake_preflight(symbol, side, price_hint, quantity, trading_client, account=None):
         called["preflight"] = True
         return lt.CapacityCheck(True, quantity, None)
 
@@ -81,3 +87,38 @@ def test_skip_shorting_when_asset_not_shortable(monkeypatch, caplog):
     messages = [record.getMessage() for record in caplog.records]
     assert any("ORDER_SKIPPED_NONRETRYABLE" in msg for msg in messages)
     assert any("shorting_disabled" in msg for msg in messages)
+
+
+def test_skip_when_pdt_limit_reached(monkeypatch, caplog):
+    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {}
+    monkeypatch.setenv("EXECUTION_DAYTRADE_LIMIT", "3")
+
+    account_snapshot = {"pattern_day_trader": True, "daytrade_count": 3}
+    engine._get_account_snapshot = lambda: account_snapshot
+
+    called = {"preflight": False}
+
+    def forbidden_preflight(*args, **kwargs):
+        called["preflight"] = True
+        raise AssertionError("preflight should not be called when PDT blocks")
+
+    monkeypatch.setattr(lt, "preflight_capacity", forbidden_preflight)
+
+    caplog.set_level(logging.INFO)
+
+    result = engine.submit_market_order("AAPL", "buy", 1)
+
+    assert result is None
+    assert not called["preflight"]
+    assert engine.stats["capacity_skips"] == 1
+    assert engine.stats["skipped_orders"] == 1
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("ORDER_SKIPPED_NONRETRYABLE" == msg for msg in messages)
+    reasons = [getattr(record, "reason", None) for record in caplog.records]
+    assert "pdt_limit_reached" in reasons

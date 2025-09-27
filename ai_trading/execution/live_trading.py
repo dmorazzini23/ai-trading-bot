@@ -39,11 +39,20 @@ except Exception:  # pragma: no cover - fallback when SDK missing
 class NonRetryableBrokerError(Exception):
     """Raised when the broker reports a non-retriable execution condition."""
 
-    def __init__(self, message: str, *, code: Any | None = None, status: int | None = None, symbol: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: Any | None = None,
+        status: int | None = None,
+        symbol: str | None = None,
+        detail: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.status = status
         self.symbol = symbol
+        self.detail = detail
 
 
 _CREDENTIAL_STATE: dict[str, Any] = {
@@ -119,6 +128,52 @@ def _safe_decimal(value: Any) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return Decimal("0")
+
+
+def _safe_bool(value: Any) -> bool:
+    """Best-effort boolean normalization."""
+
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    return False
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Return an integer from broker payloads with graceful fallback."""
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, Decimal)):
+        return int(value)
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return default
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _extract_value(record: Any, *names: str) -> Any:
@@ -203,7 +258,7 @@ class CapacityCheck:
     reason: str | None = None
 
 
-def preflight_capacity(symbol, side, limit_price, qty, broker) -> CapacityCheck:
+def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | None = None) -> CapacityCheck:
     """Best-effort broker capacity guard before submitting an order."""
 
     try:
@@ -313,8 +368,7 @@ def preflight_capacity(symbol, side, limit_price, qty, broker) -> CapacityCheck:
         )
         return CapacityCheck(False, 0, "max_open_orders")
 
-    account = None
-    if broker is not None and hasattr(broker, "get_account"):
+    if account is None and broker is not None and hasattr(broker, "get_account"):
         try:
             account = broker.get_account()
         except Exception as exc:
@@ -554,6 +608,8 @@ class ExecutionEngine:
         self._trailing_stop_manager = extras.get("trailing_stop_manager") if extras else None
         if self._trailing_stop_manager is None and ctx is not None:
             self._trailing_stop_manager = getattr(ctx, "trailing_stop_manager", None)
+        self._cycle_account: Any | None = None
+        self._cycle_account_fetched: bool = False
         try:
             key, secret = get_alpaca_creds()
         except RuntimeError as exc:
@@ -597,9 +653,18 @@ class ExecutionEngine:
                 finally:
                     break
 
+    def start_cycle(self) -> None:
+        """Cache the Alpaca account snapshot for this trading cycle."""
+
+        self._cycle_account = None
+        self._cycle_account_fetched = False
+        self._refresh_cycle_account()
+
     def end_cycle(self) -> None:
         """Best-effort end-of-cycle hook aligned with core engine expectations."""
 
+        self._cycle_account = None
+        self._cycle_account_fetched = False
         order_mgr = getattr(self, "order_manager", None)
         if order_mgr is None:
             return
@@ -609,6 +674,81 @@ class ExecutionEngine:
                 flush()
             except Exception:  # pragma: no cover - diagnostics only
                 logger.debug("ORDER_MANAGER_FLUSH_FAILED", exc_info=True)
+
+    def _refresh_cycle_account(self) -> Any | None:
+        """Fetch and cache the current Alpaca account if available."""
+
+        client = getattr(self, "trading_client", None)
+        get_account = getattr(client, "get_account", None) if client is not None else None
+        if not callable(get_account):
+            self._cycle_account_fetched = True
+            self._cycle_account = None
+            return None
+        try:
+            account = get_account()
+        except Exception as exc:  # pragma: no cover - network variability
+            logger.debug(
+                "BROKER_ACCOUNT_SNAPSHOT_FAILED",
+                extra={"error": getattr(exc, "__class__", type(exc)).__name__, "detail": str(exc)},
+            )
+            account = None
+        self._cycle_account = account
+        self._cycle_account_fetched = True
+        return account
+
+    def _get_account_snapshot(self) -> Any | None:
+        """Return the cached account snapshot, refreshing once per cycle."""
+
+        if self._cycle_account_fetched:
+            return self._cycle_account
+        return self._refresh_cycle_account()
+
+    def _should_skip_for_pdt(
+        self, account: Any, closing_position: bool
+    ) -> tuple[bool, str | None, dict[str, Any]]:
+        """Return (skip, reason, context) if PDT limits should block the order."""
+
+        context: dict[str, Any] = {}
+        if closing_position or account is None:
+            return (False, None, context)
+
+        pattern_flag = _safe_bool(
+            _extract_value(account, "pattern_day_trader", "is_pattern_day_trader", "pdt")
+        )
+        context["pattern_day_trader"] = pattern_flag
+        if not pattern_flag:
+            return (False, None, context)
+
+        daytrade_limit = _config_int("EXECUTION_DAYTRADE_LIMIT", 3)
+        account_limit = _extract_value(account, "daytrade_limit", "day_trade_limit", "pattern_day_trade_limit")
+        if account_limit not in (None, ""):
+            account_limit_int = _safe_int(account_limit, daytrade_limit or 0)
+            if account_limit_int > 0:
+                daytrade_limit = account_limit_int
+        context["daytrade_limit"] = daytrade_limit
+
+        daytrade_count = _safe_int(
+            _extract_value(
+                account,
+                "daytrade_count",
+                "day_trade_count",
+                "pattern_day_trades",
+                "pattern_day_trades_count",
+            ),
+            0,
+        )
+        context["daytrade_count"] = daytrade_count
+
+        if daytrade_limit is None or daytrade_limit <= 0:
+            return (False, None, context)
+
+        if daytrade_count >= daytrade_limit:
+            return (True, "pdt_limit_reached", context)
+
+        if daytrade_count >= max(daytrade_limit - 1, 0):
+            return (True, "pdt_limit_imminent", context)
+
+        return (False, None, context)
 
     def _refresh_settings(self) -> None:
         """Refresh cached execution settings from configuration."""
@@ -780,6 +920,20 @@ class ExecutionEngine:
                             symbol,
                         )
                         return None
+        account_snapshot = self._get_account_snapshot()
+        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
+        if skip_pdt:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            base_extra = {"symbol": symbol, "side": side.lower(), "reason": pdt_reason}
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            logger.debug(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                extra=base_extra | {"context": pdt_context},
+            )
+            return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -808,7 +962,14 @@ class ExecutionEngine:
                     price_hint = (_safe_decimal(raw_notional) / Decimal(quantity))
                 except Exception:
                     price_hint = None
-        capacity = preflight_capacity(symbol, side.lower(), price_hint, quantity, self.trading_client)
+        capacity = preflight_capacity(
+            symbol,
+            side.lower(),
+            price_hint,
+            quantity,
+            self.trading_client,
+            account_snapshot,
+        )
         if not capacity.can_submit:
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
@@ -828,14 +989,16 @@ class ExecutionEngine:
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
-            logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE",
-                extra={
-                    "symbol": symbol,
-                    "side": side.lower(),
-                    "reason": str(exc),
-                    "code": getattr(exc, "code", None),
-                },
+            base_extra = {
+                "symbol": symbol,
+                "side": side.lower(),
+                "reason": str(exc),
+                "code": getattr(exc, "code", None),
+            }
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            logger.debug(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                extra=base_extra | {"detail": getattr(exc, "detail", None)},
             )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
@@ -948,6 +1111,20 @@ class ExecutionEngine:
                             symbol,
                         )
                         return None
+        account_snapshot = self._get_account_snapshot()
+        skip_pdt, pdt_reason, pdt_context = self._should_skip_for_pdt(account_snapshot, closing_position)
+        if skip_pdt:
+            self.stats.setdefault("capacity_skips", 0)
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["capacity_skips"] += 1
+            self.stats["skipped_orders"] += 1
+            base_extra = {"symbol": symbol, "side": side.lower(), "reason": pdt_reason}
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            logger.debug(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                extra=base_extra | {"context": pdt_context},
+            )
+            return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -970,7 +1147,14 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": kwargs.get("asset_class"),
             }
-        capacity = preflight_capacity(symbol, side.lower(), limit_price, quantity, self.trading_client)
+        capacity = preflight_capacity(
+            symbol,
+            side.lower(),
+            limit_price,
+            quantity,
+            self.trading_client,
+            account_snapshot,
+        )
         if not capacity.can_submit:
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
@@ -996,14 +1180,16 @@ class ExecutionEngine:
         try:
             result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
         except NonRetryableBrokerError as exc:
-            logger.warning(
-                "ORDER_SKIPPED_NONRETRYABLE",
-                extra={
-                    "symbol": symbol,
-                    "side": side.lower(),
-                    "reason": str(exc),
-                    "code": getattr(exc, "code", None),
-                },
+            base_extra = {
+                "symbol": symbol,
+                "side": side.lower(),
+                "reason": str(exc),
+                "code": getattr(exc, "code", None),
+            }
+            logger.info("ORDER_SKIPPED_NONRETRYABLE", extra=base_extra)
+            logger.debug(
+                "ORDER_SKIPPED_NONRETRYABLE_DETAIL",
+                extra=base_extra | {"detail": getattr(exc, "detail", None)},
             )
             return None
         except (APIError, TimeoutError, ConnectionError) as exc:
@@ -1462,34 +1648,86 @@ class ExecutionEngine:
         message_str = str(message or exc)
         normalized_message = message_str.lower()
         code_str = str(code) if code is not None else ""
-        is_day_trading_power = "insufficient day trading buying power" in normalized_message
-        if code_str == "40310000" or is_day_trading_power:
-            status_val = int(status) if isinstance(status, (int, float)) else 403
-        else:
-            status_val = int(status) if isinstance(status, (int, float)) else None
-        if status_val == 403 and (code_str == "40310000" or is_day_trading_power):
-            symbol: str | None = None
-            if call_args:
-                candidate = call_args[0]
-                if isinstance(candidate, dict):
-                    symbol_val = candidate.get("symbol")
-                    if isinstance(symbol_val, str):
-                        symbol = symbol_val
-                elif isinstance(candidate, str):
-                    symbol = candidate
-            extra = {
-                "code": code,
-                "status": status_val,
-                "message": message_str,
-            }
+        status_val = int(status) if isinstance(status, (int, float)) else None
+
+        symbol: str | None = None
+        if call_args:
+            candidate = call_args[0]
+            if isinstance(candidate, dict):
+                symbol_val = candidate.get("symbol")
+                if isinstance(symbol_val, str):
+                    symbol = symbol_val
+            elif isinstance(candidate, str):
+                symbol = candidate
+
+        capacity_tokens: dict[str, str] = {
+            "insufficient day trading buying power": "insufficient_day_trading_buying_power",
+            "insufficient buying power": "insufficient_buying_power",
+            "not enough equity": "not_enough_equity",
+        }
+        short_tokens: dict[str, str] = {
+            "shorting is not permitted": "shorting_not_permitted",
+            "no shares available to short": "no_shares_available",
+            "cannot open short": "short_open_blocked",
+        }
+
+        capacity_reason: str | None = None
+        for phrase, token in capacity_tokens.items():
+            if phrase in normalized_message:
+                capacity_reason = token
+                break
+        if capacity_reason is None and code_str == "40310000":
+            capacity_reason = "insufficient_day_trading_buying_power"
+        if capacity_reason and status_val is None:
+            status_val = 403
+
+        short_reason: str | None = None
+        for phrase, token in short_tokens.items():
+            if phrase in normalized_message:
+                short_reason = token
+                break
+        if short_reason and status_val is None:
+            status_val = 403
+
+        if status_val == 403 and capacity_reason:
+            event_extra = {"code": code, "status": status_val, "reason": capacity_reason}
             if symbol:
-                extra["symbol"] = symbol
-            logger.warning("BROKER_CAPACITY_EXCEEDED", extra=extra)
+                event_extra["symbol"] = symbol
+            logger.info("BROKER_CAPACITY_EXCEEDED", extra=event_extra)
+            logger.debug(
+                "BROKER_CAPACITY_EXCEEDED_DETAIL",
+                extra=event_extra | {"detail": message_str},
+            )
             self.stats.setdefault("capacity_skips", 0)
             self.stats.setdefault("skipped_orders", 0)
             self.stats["capacity_skips"] += 1
             self.stats["skipped_orders"] += 1
-            return NonRetryableBrokerError(message_str, code=code, status=status_val, symbol=symbol)
+            return NonRetryableBrokerError(
+                capacity_reason,
+                code=code,
+                status=status_val,
+                symbol=symbol,
+                detail=message_str,
+            )
+
+        if status_val == 403 and short_reason:
+            event_extra = {"code": code, "status": status_val, "reason": short_reason}
+            if symbol:
+                event_extra["symbol"] = symbol
+            logger.info("ORDER_REJECTED_SHORT_RESTRICTION", extra=event_extra)
+            logger.debug(
+                "ORDER_REJECTED_SHORT_RESTRICTION_DETAIL",
+                extra=event_extra | {"detail": message_str},
+            )
+            self.stats.setdefault("skipped_orders", 0)
+            self.stats["skipped_orders"] += 1
+            return NonRetryableBrokerError(
+                short_reason,
+                code=code,
+                status=status_val,
+                symbol=symbol,
+                detail=message_str,
+            )
         return None
 
     def _execute_with_retry(self, func, *args, **kwargs):
