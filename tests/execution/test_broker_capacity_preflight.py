@@ -41,3 +41,43 @@ def test_capacity_error_passthrough_for_other_codes():
     err = DummyAPIError(status_code=500, code="other", message="different")
     assert engine._handle_nonretryable_api_error(err, {"symbol": "AAPL"}) is None
     assert engine.stats["capacity_skips"] == 0
+
+
+def test_skip_shorting_when_asset_not_shortable(monkeypatch, caplog):
+    engine = lt.ExecutionEngine.__new__(lt.ExecutionEngine)
+    engine._refresh_settings = lambda: None
+    engine._ensure_initialized = lambda: True
+    engine._pre_execution_checks = lambda: True
+    engine.is_initialized = True
+    engine.shadow_mode = False
+    engine.stats = {}
+
+    class DummyClient:
+        def __init__(self):
+            self.symbols = []
+
+        def get_asset(self, symbol):
+            self.symbols.append(symbol)
+            return type("Asset", (), {"shortable": False})()
+
+    client = DummyClient()
+    engine.trading_client = client
+
+    called = {"preflight": False}
+
+    def fake_preflight(symbol, side, price_hint, quantity, trading_client):
+        called["preflight"] = True
+        return lt.CapacityCheck(True, quantity, None)
+
+    monkeypatch.setattr(lt, "preflight_capacity", fake_preflight)
+
+    caplog.set_level(logging.WARNING)
+
+    result = engine.submit_market_order("AAPL", "sell", 1)
+
+    assert result is None
+    assert called["preflight"] is False
+    assert client.symbols == ["AAPL"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("ORDER_SKIPPED_NONRETRYABLE" in msg for msg in messages)
+    assert any("shorting_disabled" in msg for msg in messages)

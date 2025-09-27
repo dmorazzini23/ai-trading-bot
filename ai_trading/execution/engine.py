@@ -58,6 +58,7 @@ KNOWN_EXECUTE_ORDER_KWARGS: frozenset[str] = frozenset(
         "allow_partial",
         "asset_class",
         "client_order_id",
+        "closing_position",
         "execution_algorithm",
         "expected_price",
         "expected_price_source",
