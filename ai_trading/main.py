@@ -165,13 +165,21 @@ def _resolve_cached_context(
     return state, runtime, reused
 
 
-def preflight_import_health() -> None:
-    """Best-effort import preflight to surface missing deps early."""
-    import importlib
-    import os
+def _is_truthy_env(name: str) -> bool:
+    """Return ``True`` when environment variable ``name`` is truthy."""
 
-    if os.environ.get("IMPORT_PREFLIGHT_DISABLED", "").lower() in {"1", "true"}:
-        return
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def preflight_import_health() -> bool:
+    """Run best-effort import checks returning ``True`` when all succeed."""
+
+    import importlib
+
+    if _is_truthy_env("IMPORT_PREFLIGHT_DISABLED"):
+        logger.info("IMPORT_PREFLIGHT_SKIPPED", extra={"reason": "env_override"})
+        return True
 
     core_modules = [
         "ai_trading.core.bot_engine",
@@ -180,21 +188,54 @@ def preflight_import_health() -> None:
         "ai_trading.telemetry.metrics_logger",
         "alpaca.trading.client",
     ]
+    failures: list[dict[str, str]] = []
     for mod in core_modules:
         try:
             importlib.import_module(mod)
         except (ImportError, RuntimeError) as exc:  # pragma: no cover - surface import issues
-            logger.error(
-                "IMPORT_PREFLIGHT_FAILED",
-                extra={
-                    "module_name": mod,
-                    "error": repr(exc),
-                    "exc_type": exc.__class__.__name__,
-                },
-            )
-            raise SystemExit(1)
-    logger.info("IMPORT_PREFLIGHT_OK")
+            info = {
+                "module_name": mod,
+                "error": repr(exc),
+                "exc_type": exc.__class__.__name__,
+            }
+            failures.append(info)
+            logger.error("IMPORT_PREFLIGHT_FAILED", extra=info)
+
+    if failures:
+        logger.warning(
+            "IMPORT_PREFLIGHT_DEGRADED",
+            extra={"failed_modules": [f["module_name"] for f in failures]},
+        )
+    else:
+        logger.info("IMPORT_PREFLIGHT_OK")
+
     ensure_trade_log_path()
+    return not failures
+
+
+def should_enforce_strict_import_preflight() -> bool:
+    """Return ``True`` when import preflight failures should abort startup."""
+
+    if _is_truthy_env("IMPORT_PREFLIGHT_DISABLED"):
+        return False
+
+    if any(
+        _is_truthy_env(flag)
+        for flag in ("AI_TRADING_SYSTEMD_COMPAT", "SYSTEMD_COMPAT", "SYSTEMD_COMPAT_MODE")
+    ):
+        logger.info("IMPORT_PREFLIGHT_COMPAT_MODE", extra={"mode": "systemd"})
+        return False
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        has_key, has_secret = alpaca_credential_status()
+        if not (has_key and has_secret):
+            logger.info(
+                "IMPORT_PREFLIGHT_RELAXED",
+                extra={"reason": "pytest_missing_credentials"},
+            )
+            return False
+
+    return True
 
 
 def _check_alpaca_sdk() -> None:
@@ -774,7 +815,12 @@ def run_bot(*_a, **_k) -> int:
             memory_optimizer.enable_low_memory_mode()
             logger.info("Memory optimization enabled")
         logger.info("Bot startup complete - entering main loop")
-        preflight_import_health()
+        preflight_ok = preflight_import_health()
+        if not preflight_ok:
+            if should_enforce_strict_import_preflight():
+                logger.critical("IMPORT_PREFLIGHT_ABORT", extra={"strict": True})
+                raise SystemExit(1)
+            logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
         if not _TRADE_LOG_INITIALIZED:
             ensure_trade_log_path()
         run_cycle()

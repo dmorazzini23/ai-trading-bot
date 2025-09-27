@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -70,12 +71,23 @@ except Exception as e:
 
         try:
             # Run the test script in a clean subprocess
+            env = os.environ.copy()
+            project_root = Path(__file__).resolve().parents[1]
+            stub_path = project_root / "tests" / "stubs"
+            python_path_parts = [str(project_root)]
+            if stub_path.exists():
+                python_path_parts.append(str(stub_path))
+            existing_path = env.get("PYTHONPATH", "")
+            if existing_path:
+                python_path_parts.append(existing_path)
+            env["PYTHONPATH"] = os.pathsep.join(python_path_parts)
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
                 text=True,
                 timeout=30,
-                check=True
+                check=True,
+                env=env,
             )
 
             if result.stderr:

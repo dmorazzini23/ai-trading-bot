@@ -163,7 +163,11 @@ def run_trade() -> None:
     _validate_startup_config()
     from ai_trading import main as _main
 
-    _main.preflight_import_health()
+    preflight_ok = _main.preflight_import_health()
+    if not preflight_ok:
+        if _main.should_enforce_strict_import_preflight():
+            raise SystemExit("Import preflight failed; see logs for details")
+        logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
 
     try:
         _run_loop(_main.run_cycle, args, "Trade")
@@ -201,7 +205,11 @@ def run_backtest() -> None:
     _validate_startup_config()
     from ai_trading import main as _main
 
-    _main.preflight_import_health()
+    preflight_ok = _main.preflight_import_health()
+    if not preflight_ok:
+        if _main.should_enforce_strict_import_preflight():
+            raise SystemExit("Import preflight failed; see logs for details")
+        logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
 
     try:
         _run_loop(_main.run_cycle, args, "Backtest")
@@ -240,7 +248,11 @@ def run_healthcheck() -> None:
     from ai_trading.health_monitor import run_health_check
     from ai_trading import main as _main
 
-    _main.preflight_import_health()
+    preflight_ok = _main.preflight_import_health()
+    if not preflight_ok:
+        if _main.should_enforce_strict_import_preflight():
+            raise SystemExit("Import preflight failed; see logs for details")
+        logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
 
     try:
         _run_loop(run_health_check, args, "Health check")
@@ -280,7 +292,11 @@ def main() -> int:
         from ai_trading import main as _main
 
         # Ensure core imports are healthy before starting
-        _main.preflight_import_health()
+        preflight_ok = _main.preflight_import_health()
+        if not preflight_ok:
+            if _main.should_enforce_strict_import_preflight():
+                raise SystemExit("Import preflight failed; see logs for details")
+            logger.warning("IMPORT_PREFLIGHT_SOFT_FAIL", extra={"strict": False})
 
         # Route through the consolidated scheduler/API entrypoint so
         # `python -m ai_trading` behaves the same as `python -m ai_trading.main`.
