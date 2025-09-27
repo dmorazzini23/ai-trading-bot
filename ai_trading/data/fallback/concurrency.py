@@ -71,16 +71,21 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return obj
 
     bound_loop = None
+    loop_attr_seen = False
     for attr_name in ("_loop", "_bound_loop"):
         try:
             candidate = getattr(obj, attr_name)
         except Exception:
-            candidate = None
+            continue
+        loop_attr_seen = True
         if candidate is not None:
             bound_loop = candidate
             break
 
-    if bound_loop is None or bound_loop is loop:
+    if not loop_attr_seen:
+        return obj
+
+    if bound_loop is loop:
         return obj
 
     def _capture_sem_state() -> dict[str, int]:
@@ -167,11 +172,29 @@ def _recreate_dataclass_if_needed(
     if not mutated_fields:
         return obj
 
+    params = getattr(type(obj), "__dataclass_params__", None)
+    is_frozen = bool(getattr(params, "frozen", False))
+    has_slots = bool(getattr(params, "slots", False))
+
+    if is_frozen or has_slots:
+        try:
+            return replace(obj, **mutated_fields)
+        except Exception:
+            for name, value in mutated_fields.items():
+                _assign_dataclass_attr(obj, name, value)
+            return obj
+
+    assignment_failed = False
+    for name, value in mutated_fields.items():
+        if not _assign_dataclass_attr(obj, name, value):
+            assignment_failed = True
+
+    if not assignment_failed:
+        return obj
+
     try:
         return replace(obj, **mutated_fields)
     except Exception:
-        for name, value in mutated_fields.items():
-            _assign_dataclass_attr(obj, name, value)
         return obj
 
 
