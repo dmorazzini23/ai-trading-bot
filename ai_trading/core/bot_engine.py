@@ -21103,9 +21103,15 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if candidate is not None:
             price = candidate
             price_source = source or provider
-            if source in _ALPACA_TERMINAL_PRICE_SOURCES:
+            if source in _ALPACA_TERMINAL_PRICE_SOURCES or provider.startswith("alpaca"):
                 return _finalize_return()
             break
+        if provider == "alpaca_quote":
+            degraded = _resolve_cached_quote_bid(symbol, cache)
+            if degraded is not None:
+                price, price_source = degraded
+                last_source = price_source
+                return _finalize_return()
         _record_primary_failure(source or provider)
 
     if price is None:
