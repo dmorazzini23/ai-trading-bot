@@ -162,6 +162,115 @@ _PENDING_ORDER_LOG_INTERVAL_SECONDS = 60.0
 _PENDING_ORDER_TRACKER_KEY = "_pending_orders_tracker"
 _PENDING_ORDER_FIRST_SEEN_KEY = "first_seen_ts"
 _PENDING_ORDER_LAST_LOG_KEY = "last_log_ts"
+def _normalize_broker_order_status(value: Any) -> str:
+    """Return a lowercase order status regardless of enum/string input."""
+
+    if value is None:
+        return ""
+    status_value = getattr(value, "value", value)
+    if isinstance(status_value, str):
+        return status_value.lower()
+    try:
+        return str(status_value).lower()
+    except Exception:
+        return ""
+
+
+def _refresh_broker_order(
+    api: Any,
+    order: Any,
+    *,
+    log_on_failure: bool = False,
+) -> tuple[Any, str, bool]:
+    """Return a possibly refreshed order, status string, and confirmation flag."""
+
+    status = _normalize_broker_order_status(getattr(order, "status", None))
+    get_order = getattr(api, "get_order", None)
+    order_id = getattr(order, "id", None) or getattr(order, "client_order_id", None)
+    if not callable(get_order) or not order_id:
+        return order, status, False
+    try:
+        refreshed = get_order(order_id)
+    except Exception as exc:  # pragma: no cover - network/API failure
+        if log_on_failure:
+            logger.debug(
+                "PENDING_ORDER_REFRESH_FAILED",
+                extra={
+                    "order_id": str(order_id),
+                    "cause": exc.__class__.__name__,
+                    "detail": str(exc),
+                },
+                exc_info=True,
+            )
+        return order, status, False
+
+    refreshed_status = _normalize_broker_order_status(
+        getattr(refreshed, "status", None)
+    )
+    if not refreshed_status:
+        refreshed_status = status
+    return refreshed or order, refreshed_status, True
+
+
+def get_confirmed_pending_orders(
+    api: Any,
+    orders: Iterable[Any] | None = None,
+    *,
+    require_confirmation: bool = True,
+) -> list[Any]:
+    """Return orders still pending after confirming with the broker."""
+
+    if api is None:
+        return []
+
+    if orders is None:
+        try:
+            orders = list_open_orders(api)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "PENDING_ORDER_LIST_FAILED",
+                extra={
+                    "cause": exc.__class__.__name__,
+                    "detail": str(exc),
+                },
+                exc_info=True,
+            )
+            return []
+    else:
+        orders = list(orders)
+
+    get_order = getattr(api, "get_order", None)
+    if require_confirmation and not callable(get_order):
+        logger.debug("PENDING_ORDER_CONFIRMATION_UNAVAILABLE")
+        return []
+
+    pending: list[Any] = []
+    for order in orders:
+        initial_status = _normalize_broker_order_status(getattr(order, "status", None))
+        if initial_status not in _PENDING_ORDER_STATUSES:
+            continue
+        refreshed_order, refreshed_status, confirmed = _refresh_broker_order(
+            api,
+            order,
+            log_on_failure=require_confirmation,
+        )
+        if require_confirmation and not confirmed:
+            continue
+        if refreshed_status in _PENDING_ORDER_STATUSES:
+            pending.append(refreshed_order)
+            continue
+        logger.debug(
+            "PENDING_ORDER_STATUS_CHANGED",
+            extra={
+                "order_id": str(
+                    getattr(order, "id", None)
+                    or getattr(order, "client_order_id", "")
+                ),
+                "initial_status": initial_status or "",
+                "refreshed_status": refreshed_status or "",
+            },
+        )
+    return pending
 
 
 def _ensure_runtime_state(runtime: Any | None) -> dict[str, Any]:
@@ -19036,17 +19145,23 @@ def _handle_pending_orders(open_orders: Iterable[Any], runtime: Any) -> bool:
     else:
         open_list = list(open_orders)
 
+    api = getattr(runtime, "api", None)
+    confirmed_pending = (
+        get_confirmed_pending_orders(
+            api,
+            open_list,
+            require_confirmation=False,
+        )
+        if api is not None
+        else []
+    )
+
     pending_ids: list[str] = []
     pending_statuses: set[str] = set()
-    for order in open_list:
-        status_raw = getattr(order, "status", "")
-        status_val = getattr(status_raw, "value", status_raw)
-        try:
-            status = str(status_val).lower()
-        except Exception:  # pragma: no cover - defensive
-            status = ""
-        if status in _PENDING_ORDER_STATUSES:
-            pending_ids.append(str(getattr(order, "id", "?")))
+    for order in confirmed_pending:
+        status = _normalize_broker_order_status(getattr(order, "status", None))
+        pending_ids.append(str(getattr(order, "id", "?")))
+        if status:
             pending_statuses.add(status)
 
     tracker = _get_pending_tracker(runtime)
