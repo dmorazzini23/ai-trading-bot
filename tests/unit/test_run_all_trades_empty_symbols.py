@@ -76,6 +76,8 @@ def test_run_all_trades_handles_empty_symbols(monkeypatch):
 
     eng.run_all_trades_worker(state, runtime)
 
-    warn_mock.assert_called_once()
+    warn_mock.assert_any_call(
+        "RUN_ALL_TRADES_NO_SYMBOLS", key="run_all_trades_no_symbols_cycle"
+    )
     process_mock.assert_not_called()
     sleep_mock.assert_called_once()
