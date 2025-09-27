@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 import os
 from typing import Any
@@ -7,7 +8,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.config import get_settings
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.data.fetch import get_bars, get_minute_df
-from ai_trading.data.fetch import get_bars as http_get_bars
+from ai_trading.data.fetch import get_bars as _raw_http_get_bars
 from ai_trading.logging import get_logger
 from ai_trading.logging.empty_policy import classify as _empty_classify
 from ai_trading.logging.empty_policy import record as _empty_record
@@ -38,7 +39,7 @@ if should_import_alpaca_sdk():  # pragma: no cover - alpaca optional
     else:
         APIError = _RealAPIError
 
-__all__ = ["TimeFrame", "StockBarsRequest"]
+__all__ = ["TimeFrame", "StockBarsRequest", "BarsFetchFailed", "http_get_bars"]
 
 # Lazy pandas proxy; only imported on first use
 pd = load_pandas()
@@ -47,6 +48,121 @@ _log = get_logger(__name__)
 'AI-AGENT-REF: canonicalizers moved to ai_trading.logging.normalize'
 
 _TRUTHY = {"1", "true", "yes", "on"}
+
+
+@dataclass(slots=True)
+class BarsFetchFailed:
+    """Sentinel returned when Alpaca HTTP bars fail."""
+
+    symbol: str
+    feed: str | None
+    since: datetime
+    status: int | None = None
+    error: str | None = None
+
+
+def _extract_status_code(obj: Any) -> int | None:
+    """Return HTTP status code from *obj* when available."""
+
+    for attr in ("status_code", "status"):
+        value = getattr(obj, attr, None)
+        if isinstance(value, int):
+            return value
+    if isinstance(obj, dict):
+        for key in ("status_code", "status"):
+            value = obj.get(key)
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def _log_bars_failure_once(
+    *, symbol: str, feed: str | None, since: datetime | None, status: int | None, error: str | None = None
+) -> None:
+    """Emit a single structured log entry for an Alpaca bars outage."""
+
+    feed_norm = _canon_feed(feed)
+    since_iso = None
+    if isinstance(since, datetime):
+        try:
+            since_iso = since.astimezone(UTC).isoformat()
+        except (ValueError, TypeError):
+            since_iso = since.isoformat()
+    elif isinstance(since, str):
+        since_iso = since
+    key = f"alpaca-bars-fail:{_canon_symbol(symbol)}:{feed_norm}:{since_iso or ''}:{status or 'na'}"
+    payload = {
+        "symbol": _canon_symbol(symbol),
+        "feed": feed_norm,
+        "since": since_iso,
+    }
+    if status is not None:
+        payload["status"] = status
+    if error:
+        payload["error"] = error
+    emit_once(_log, key, "error", "ALPACA_BARS_FETCH_FAILED", **payload)
+
+
+def http_get_bars(
+    symbol: str,
+    timeframe: str,
+    start: Any,
+    end: Any,
+    *,
+    feed: str | None = None,
+    **kwargs: Any,
+) -> pd.DataFrame | BarsFetchFailed | Any:
+    """Wrapper around :mod:`ai_trading.data.fetch.get_bars` with failure sentinel."""
+
+    status: int | None = None
+    error_message: str | None = None
+    try:
+        since_dt = ensure_utc_datetime(start)
+    except (ValueError, TypeError):
+        since_dt = datetime.now(UTC)
+    feed_norm = _canon_feed(feed)
+    try:
+        response = _raw_http_get_bars(symbol, timeframe, start, end, feed=feed, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - propagate sentinel with details
+        status = _extract_status_code(exc)
+        error_message = str(exc)
+        _log_bars_failure_once(
+            symbol=symbol,
+            feed=feed_norm,
+            since=since_dt,
+            status=status,
+            error=error_message,
+        )
+        return BarsFetchFailed(
+            symbol=_canon_symbol(symbol),
+            feed=feed_norm,
+            since=since_dt,
+            status=status,
+            error=error_message,
+        )
+    status = _extract_status_code(response)
+    if status is not None and not (200 <= status < 300):
+        error_message = getattr(response, "text", None)
+        if isinstance(error_message, bytes):
+            try:
+                error_message = error_message.decode("utf-8", "ignore")
+            except Exception:  # pragma: no cover - defensive guard
+                error_message = None
+        _log_bars_failure_once(
+            symbol=symbol,
+            feed=feed_norm,
+            since=since_dt,
+            status=status,
+            error=error_message,
+        )
+        return BarsFetchFailed(
+            symbol=_canon_symbol(symbol),
+            feed=feed_norm,
+            since=since_dt,
+            status=status,
+            error=error_message if isinstance(error_message, str) else None,
+        )
+    return response
 
 
 def _env_bool(name: str) -> bool | None:
@@ -119,6 +235,14 @@ def _create_empty_bars_dataframe(timeframe: str | None = None) -> pd.DataFrame:
     cols = ["timestamp", "open", "high", "low", "close", "volume"]
     df = pd.DataFrame({col: [] for col in cols})
     return df
+
+
+def _coerce_http_bars(obj: Any) -> pd.DataFrame:
+    """Normalize HTTP bar results, returning an empty frame on sentinel."""
+
+    if isinstance(obj, BarsFetchFailed):
+        return _create_empty_bars_dataframe()
+    return _ensure_df(obj)
 
 def _is_minute_timeframe(tf) -> bool:
     try:
@@ -332,8 +456,9 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                     df = get_minute_df(symbol, iso_start, iso_end, feed=feed_str)
                 else:
                     df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
-                if df is None or df.empty:
-                    return _create_empty_bars_dataframe()
+                    df = _coerce_http_bars(df)
+                    if df is None or df.empty:
+                        return _create_empty_bars_dataframe()
         if isinstance(df.index, pd.MultiIndex):
             try:
                 df = df.xs(symbol, level=0, drop_level=False).droplevel(0)
@@ -357,7 +482,7 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
         tf_str = _canon_tf(getattr(request, 'timeframe', ''))
         feed_str = _canon_feed(getattr(request, 'feed', None))
         df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
-        return _ensure_df(df)
+        return _coerce_http_bars(df)
 
 def _fetch_daily_bars(client, symbol, start, end, **kwargs):
     symbol = _canon_symbol(symbol)
