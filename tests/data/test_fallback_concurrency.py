@@ -224,6 +224,84 @@ def test_run_with_concurrency_rebinds_lock_inside_frozenset_slots_dataclass():
     assert holder_after.lock is not original_lock
 
 
+def test_run_with_concurrency_rebinds_lock_inside_tuple_structure():
+    @dataclass
+    class Holder:
+        lock: asyncio.Lock
+
+    def build_lock_in_fresh_loop() -> asyncio.Lock:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _factory() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            return loop.run_until_complete(_factory())
+        finally:
+            loop.close()
+
+    original_lock = build_lock_in_fresh_loop()
+    namespace = SimpleNamespace(payload=(Holder(lock=original_lock),))
+
+    async def worker(sym: str) -> str:
+        holder = namespace.payload[0]
+        async with holder.lock:
+            await asyncio.sleep(0)
+            return sym
+
+    symbols = ["T1", "T2"]
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+
+    holder_after = namespace.payload[0]
+    assert holder_after.lock is not original_lock
+
+
+def test_run_with_concurrency_rebinds_lock_inside_frozenset_of_tuple():
+    @dataclass(frozen=True)
+    class FrozenHolder:
+        lock: asyncio.Lock
+
+    def build_lock_in_fresh_loop() -> asyncio.Lock:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _factory() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            return loop.run_until_complete(_factory())
+        finally:
+            loop.close()
+
+    original_lock = build_lock_in_fresh_loop()
+    namespace = SimpleNamespace(
+        payload=frozenset({(FrozenHolder(lock=original_lock), "marker")})
+    )
+
+    async def worker(sym: str) -> str:
+        holder_tuple = next(iter(namespace.payload))
+        holder = holder_tuple[0]
+        async with holder.lock:
+            await asyncio.sleep(0)
+            return sym
+
+    symbols = ["F1", "F2"]
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+
+    holder_tuple_after = next(iter(namespace.payload))
+    holder_after = holder_tuple_after[0]
+    assert holder_after.lock is not original_lock
+
+
 def test_run_with_concurrency_rebinds_foreign_loop_lock():
     def build_lock_in_fresh_loop() -> asyncio.Lock:
         loop = asyncio.new_event_loop()
