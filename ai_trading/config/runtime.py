@@ -1281,18 +1281,45 @@ for spec in CONFIG_SPECS:
         SPEC_BY_ENV[legacy.upper()] = spec
 
 
+_LIVE_ENV_VALUES = {"live", "live_prod", "prod", "production"}
+
+
+def _normalize_env_label(value: Any, *, default: str = "") -> str:
+    """Return a lowercase, stripped string for environment labels."""
+
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    return text.lower()
+
+
+def _normalize_base_url(value: Any) -> str:
+    """Return a sanitized Alpaca base URL string for downstream use."""
+
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def _infer_paper_mode(values: Mapping[str, Any]) -> bool:
-    base_url = str(values.get("alpaca_base_url") or "").lower()
+    base_url = _normalize_base_url(values.get("alpaca_base_url")).lower()
+    execution_mode = _normalize_env_label(values.get("execution_mode"))
+    trading_mode_env = _normalize_env_label(
+        os.getenv("TRADING_MODE") or os.getenv("AI_TRADING_TRADING_MODE")
+    )
+    app_env = _normalize_env_label(values.get("app_env"), default="test")
+
+    if execution_mode in _LIVE_ENV_VALUES:
+        return False
+    if trading_mode_env in _LIVE_ENV_VALUES:
+        return False
+    if app_env in _LIVE_ENV_VALUES:
+        return False
     if "paper" in base_url:
         return True
-    execution_mode = str(values.get("execution_mode") or "").lower()
-    if execution_mode in {"live", "live_prod", "prod"}:
-        return False
-    trading_mode_env = os.getenv("TRADING_MODE") or os.getenv("AI_TRADING_TRADING_MODE")
-    if trading_mode_env and str(trading_mode_env).strip().lower() in {"live", "live_prod", "prod"}:
-        return False
-    app_env = str(values.get("app_env") or "test").lower()
-    return app_env != "prod"
+    return app_env not in _LIVE_ENV_VALUES
 
 
 class TradingConfig:
@@ -1316,6 +1343,9 @@ class TradingConfig:
         normalized.update(values)
         for spec in CONFIG_SPECS:
             normalized.setdefault(spec.field, spec.default)
+
+        normalized["alpaca_base_url"] = _normalize_base_url(normalized.get("alpaca_base_url"))
+        normalized["app_env"] = _normalize_env_label(normalized.get("app_env"), default="test")
 
         _apply_mode_overlays(normalized, env_snapshot, explicit_fields=explicit_fields)
 
@@ -1355,6 +1385,10 @@ class TradingConfig:
             spec = SPEC_BY_FIELD.get(key)
             if spec is not None:
                 value = _validate_bounds(spec, value)
+            if key == "alpaca_base_url":
+                value = _normalize_base_url(value)
+            elif key == "app_env":
+                value = _normalize_env_label(value, default="test")
             self._values[key] = value
 
         if {"alpaca_base_url", "app_env"} & updates.keys():
