@@ -84,6 +84,8 @@ def monotonic_time() -> float:
             return float(monotonic())
         except RuntimeError:  # pragma: no cover - platform specific
             pass
+        except Exception:  # pragma: no cover - defensive: patched clocks may raise StopIteration, etc.
+            pass
     return float(_time_module.time())
 
 
