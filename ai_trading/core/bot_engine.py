@@ -372,15 +372,16 @@ class _DataClientAdapter:
 def _parse_timeframe(tf: Any) -> bars.TimeFrame:
     """Map configuration values to :class:`bars.TimeFrame` enums."""
 
-    if isinstance(tf, bars.TimeFrame):
+    timeframe_enum = getattr(bars, "TimeFrame", None)
+    if isinstance(timeframe_enum, type) and isinstance(tf, timeframe_enum):
         return tf
     tf_map = {
-        "1day": bars.TimeFrame.Day,
-        "1d": bars.TimeFrame.Day,
-        "day": bars.TimeFrame.Day,
-        "1min": bars.TimeFrame.Minute,
-        "1m": bars.TimeFrame.Minute,
-        "minute": bars.TimeFrame.Minute,
+        "1day": getattr(timeframe_enum, "Day", None),
+        "1d": getattr(timeframe_enum, "Day", None),
+        "day": getattr(timeframe_enum, "Day", None),
+        "1min": getattr(timeframe_enum, "Minute", None),
+        "1m": getattr(timeframe_enum, "Minute", None),
+        "minute": getattr(timeframe_enum, "Minute", None),
     }
     key = str(tf).lower()
     if key in tf_map:
@@ -7642,42 +7643,36 @@ class DataFetcher:
             return None, None, False
 
         with cache_lock:
-            memo_ts: float | None = None
-            memo_df: Any | None = None
-            memo_canonical = True
             refresh_stamp: float | None = None
             refresh_df: Any | None = None
             refresh_source: str | None = None
             refresh_provider_key: tuple[str, str, str] | None = None
-            memo_entry = _DAILY_FETCH_MEMO.get(memo_key)
-            if memo_entry is not None:
-                memo_ts, memo_df, memo_canonical = _normalize_memo_entry(memo_entry)
-                if memo_ts is None:
-                    memo_df = None
-                    _DAILY_FETCH_MEMO.pop(memo_key, None)
-            if memo_ts is None:
-                legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
-                if legacy_entry:
-                    legacy_ts, legacy_df, legacy_canonical = _normalize_memo_entry(legacy_entry)
-                    if legacy_ts is None:
-                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+            window_limit = min_interval if min_interval > 0 else ttl_window
+            memo_candidates = (
+                ("canonical", _DAILY_FETCH_MEMO.get(memo_key)),
+                ("legacy", _DAILY_FETCH_MEMO.get(legacy_memo_key)),
+            )
+            for kind, entry in memo_candidates:
+                if entry is None:
+                    continue
+                entry_ts, entry_df, _entry_canonical = _normalize_memo_entry(entry)
+                if entry_ts is None:
+                    if kind == "canonical":
+                        _DAILY_FETCH_MEMO.pop(memo_key, None)
                     else:
-                        memo_ts, memo_df = legacy_ts, legacy_df
-                        memo_canonical = True
-                        _DAILY_FETCH_MEMO[memo_key] = (legacy_ts, legacy_df)
-                        if not legacy_canonical:
-                            _DAILY_FETCH_MEMO[legacy_memo_key] = (legacy_ts, legacy_df)
-            if memo_ts is not None:
-                if not memo_canonical:
-                    _DAILY_FETCH_MEMO[memo_key] = (memo_ts, memo_df)
-                window_limit = min_interval if min_interval > 0 else ttl_window
-                if now_monotonic - memo_ts <= window_limit:
-                    cached_df = memo_df
+                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                    continue
+                _DAILY_FETCH_MEMO[memo_key] = (entry_ts, entry_df)
+                _DAILY_FETCH_MEMO[legacy_memo_key] = (entry_ts, entry_df)
+                age = now_monotonic - entry_ts
+                if age <= window_limit:
+                    cached_df = entry_df
                     cached_reason = "memo"
                     refresh_stamp = monotonic_time()
                     refresh_df = cached_df
                     refresh_source = "memo"
-                elif now_monotonic - memo_ts > ttl_window:
+                    break
+                if age > ttl_window:
                     _DAILY_FETCH_MEMO.pop(memo_key, None)
                     _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
             if cached_df is None:
@@ -7952,6 +7947,26 @@ class DataFetcher:
         fallback_feed_used: str | None = None
         df: pd.DataFrame | None = None
 
+        def _normalize_minute_index(frame: pd.DataFrame) -> pd.DataFrame:
+            if not isinstance(frame, pd.DataFrame) or frame.empty:
+                return frame
+            working = frame.copy()
+            idx = working.index
+            try:
+                idx = pd.to_datetime(idx, utc=True)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(str(exc)) from exc
+            try:
+                tzinfo = getattr(idx, "tz", None)
+                if tzinfo is None:
+                    idx = idx.tz_localize("UTC")
+                else:
+                    idx = idx.tz_convert("UTC")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(str(exc)) from exc
+            working.index = idx.rename("timestamp")
+            return working
+
         try:
             feed = self._resolve_feed(
                 getattr(
@@ -7978,12 +7993,35 @@ class DataFetcher:
             if df is None:
                 return None
 
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                try:
+                    df = _normalize_minute_index(df)
+                except ValueError as exc:
+                    logger.warning(
+                        "UNEXPECTED_MINUTE_INDEX",
+                        extra={"symbol": symbol, "cause": str(exc)},
+                    )
+                    return df
+
             current_minute = now_utc.replace(second=0, microsecond=0)
             try:
-                last_bar_ts = pd.to_datetime(df.index[-1], utc=True)
-            except (IndexError, ValueError, TypeError) as exc:
+                last_bar_ts = df.index[-1]
+            except (IndexError, AttributeError) as exc:
                 logger.warning(
                     "UNEXPECTED_MINUTE_INDEX", extra={"symbol": symbol, "cause": str(exc)}
+                )
+                return df
+
+            try:
+                last_bar_ts = pd.Timestamp(last_bar_ts)
+                if last_bar_ts.tzinfo is None:
+                    last_bar_ts = last_bar_ts.tz_localize(UTC)
+                else:
+                    last_bar_ts = last_bar_ts.tz_convert(UTC)
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "UNEXPECTED_MINUTE_INDEX",
+                    extra={"symbol": symbol, "cause": str(exc)},
                 )
                 return df
 
@@ -8040,12 +8078,23 @@ class DataFetcher:
                         client=client,
                     )
                     if fallback_df is not None:
-                        df = fallback_df
-                        try:
-                            last_bar_ts = pd.to_datetime(df.index[-1], utc=True)
-                            age_seconds = int((current_minute - last_bar_ts).total_seconds())
-                        except (IndexError, ValueError, TypeError):
-                            pass
+                        if isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
+                            try:
+                                df = _normalize_minute_index(fallback_df)
+                            except ValueError:
+                                df = fallback_df
+                        else:
+                            df = fallback_df
+                        if isinstance(df, pd.DataFrame) and not df.empty:
+                            try:
+                                normalized_last = pd.Timestamp(df.index[-1])
+                                if normalized_last.tzinfo is None:
+                                    normalized_last = normalized_last.tz_localize(UTC)
+                                else:
+                                    normalized_last = normalized_last.tz_convert(UTC)
+                                age_seconds = int((current_minute - normalized_last).total_seconds())
+                            except (IndexError, ValueError, TypeError):
+                                pass
                 except APIError as api_exc:
                     message = str(api_exc)
                     if "subscription does not permit" in message.lower():
@@ -8090,7 +8139,13 @@ class DataFetcher:
                         return None
                     fallback_attempted = True
                     fallback_feed_used = "iex"
-                    df = df_iex if isinstance(df_iex, pd.DataFrame) else pd.DataFrame()
+                    if isinstance(df_iex, pd.DataFrame) and not df_iex.empty:
+                        try:
+                            df = _normalize_minute_index(df_iex)
+                        except ValueError:
+                            df = df_iex
+                    else:
+                        df = df_iex if isinstance(df_iex, pd.DataFrame) else pd.DataFrame()
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -8107,7 +8162,16 @@ class DataFetcher:
             else:
                 logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
                 df = pd.DataFrame()
-        except (NameError, AttributeError) as e:
+        except AttributeError as e:
+            message = str(e)
+            normalized_msg = message.lower()
+            if "safe_get_stock_bars" in normalized_msg or "get_stock_bars" in normalized_msg:
+                raise
+            logger.error(
+                "DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": message}
+            )
+            df = bars._create_empty_bars_dataframe()
+        except NameError as e:
             # Handle pandas schema errors (like missing _RealMultiIndex) gracefully
             logger.error(
                 "DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": str(e)}
