@@ -749,6 +749,11 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+        closing_position = bool(
+            kwargs.get("closing_position")
+            or kwargs.get("close_position")
+            or kwargs.get("reduce_only")
+        )
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
@@ -760,6 +765,21 @@ class ExecutionEngine:
         }
         if kwargs.get("asset_class"):
             order_data["asset_class"] = kwargs["asset_class"]
+        if str(side).strip().lower() == "sell" and not closing_position:
+            trading_client = getattr(self, "trading_client", None)
+            get_asset = getattr(trading_client, "get_asset", None)
+            if callable(get_asset):
+                try:
+                    asset = get_asset(symbol)
+                except Exception:
+                    asset = None
+                else:
+                    if not getattr(asset, "shortable", False):
+                        logger.warning(
+                            "ORDER_SKIPPED_NONRETRYABLE | symbol=%s reason=shorting_disabled",
+                            symbol,
+                        )
+                        return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -896,6 +916,11 @@ class ExecutionEngine:
         except (ValueError, TypeError) as e:
             logger.error("ORDER_INPUT_INVALID", extra={"cause": e.__class__.__name__, "detail": str(e)})
             return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
+        closing_position = bool(
+            kwargs.get("closing_position")
+            or kwargs.get("close_position")
+            or kwargs.get("reduce_only")
+        )
         client_order_id = kwargs.get("client_order_id") or _stable_order_id(symbol, side)
         order_data = {
             "symbol": symbol,
@@ -908,6 +933,21 @@ class ExecutionEngine:
         }
         if kwargs.get("asset_class"):
             order_data["asset_class"] = kwargs["asset_class"]
+        if str(side).strip().lower() == "sell" and not closing_position:
+            trading_client = getattr(self, "trading_client", None)
+            get_asset = getattr(trading_client, "get_asset", None)
+            if callable(get_asset):
+                try:
+                    asset = get_asset(symbol)
+                except Exception:
+                    asset = None
+                else:
+                    if not getattr(asset, "shortable", False):
+                        logger.warning(
+                            "ORDER_SKIPPED_NONRETRYABLE | symbol=%s reason=shorting_disabled",
+                            symbol,
+                        )
+                        return None
         if self.shadow_mode:
             self.stats["total_orders"] += 1
             self.stats["successful_orders"] += 1
@@ -1022,6 +1062,11 @@ class ExecutionEngine:
         """
 
         kwargs = dict(kwargs)
+        closing_position = bool(
+            kwargs.get("closing_position")
+            or kwargs.get("close_position")
+            or kwargs.get("reduce_only")
+        )
         original_kwarg_keys = set(kwargs)
         mapped_side = self._map_core_side(side)
         if qty <= 0:
@@ -1065,6 +1110,7 @@ class ExecutionEngine:
         if extended_hours is not None:
             order_kwargs["extended_hours"] = extended_hours
             kwargs.pop("extended_hours", None)
+        order_kwargs["closing_position"] = closing_position
         for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price"):
             if passthrough in kwargs:
                 order_kwargs[passthrough] = kwargs.pop(passthrough)
