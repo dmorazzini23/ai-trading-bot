@@ -2844,7 +2844,6 @@ def _fetch_bars(
     resolved_feed = resolve_alpaca_feed(_feed)
     if resolved_feed is None:
         provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
-        provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
         logger.warning(
             "ALPACA_FEED_SWITCHOVER",
             extra=_norm_extra(
@@ -3084,12 +3083,12 @@ def _fetch_bars(
                     return None
             from_feed = _feed
             _interval, _feed, _start, _end = fb
+            from_provider_name = f"alpaca_{from_feed}"
+            to_provider_name = f"alpaca_{fb_feed}"
             provider_fallback.labels(
                 from_provider=f"alpaca_{from_feed}",
                 to_provider=f"alpaca_{fb_feed}",
             ).inc()
-            provider_monitor.record_switchover(f"alpaca_{from_feed}", f"alpaca_{fb_feed}")
-            fallback_order.register_fallback(f"alpaca_{fb_feed}", symbol)
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             _state["last_fallback_feed"] = fb_feed
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
@@ -3097,7 +3096,20 @@ def _fetch_bars(
                 "DATA_SOURCE_FALLBACK_ATTEMPT",
                 extra={"provider": "alpaca", "fallback": payload},
             )
-            return _req(session, None, headers=headers, timeout=timeout)
+            result = _req(session, None, headers=headers, timeout=timeout)
+            if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
+                _mark_fallback(
+                    symbol,
+                    fb_interval,
+                    fb_start,
+                    fb_end,
+                    from_provider=from_provider_name,
+                    fallback_feed=fb_feed,
+                    fallback_df=result,
+                    resolved_provider=to_provider_name,
+                    resolved_feed=fb_feed,
+                )
+            return result
 
         params = {
             "symbols": symbol,
@@ -4211,7 +4223,6 @@ def _fetch_bars(
                 alt_df = pd.DataFrame()
             if alt_df is not None and (not alt_df.empty):
                 provider_fallback.labels(from_provider=f"alpaca_{_feed}", to_provider="yahoo").inc()
-                provider_monitor.record_switchover(f"alpaca_{_feed}", "yahoo")
                 logger.info(
                     "DATA_SOURCE_FALLBACK_ATTEMPT",
                     extra=_norm_extra({"provider": "yahoo", "fallback": {"interval": y_int}}),
