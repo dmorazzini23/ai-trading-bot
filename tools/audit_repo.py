@@ -65,16 +65,16 @@ def scan_repo(root: Path) -> Dict[str, int]:
         if "site-packages" not in p.parts and not _is_dev_folder(p)
     ]
     for path in py_files:
-        try:
-            source = path.read_text()
-        except Exception:
-            continue
         skip_sensitive_metrics = _is_under_prefix(path, root, SAFE_PREFIXES)
         if not skip_sensitive_metrics:
             try:
                 py_compile.compile(str(path), doraise=True)
             except py_compile.PyCompileError:
                 metrics["py_compile_failures"] += 1
+        try:
+            source = path.read_text()
+        except Exception:
+            continue
         try:
             tree = ast.parse(source)
         except Exception:
