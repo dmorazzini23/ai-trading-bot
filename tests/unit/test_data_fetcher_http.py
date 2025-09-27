@@ -196,6 +196,133 @@ def test_timeout_triggers_fallback(monkeypatch: pytest.MonkeyPatch):
     assert calls["count"] >= 2
 
 
+def test_resolve_feed_none_uses_backup_provider(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(df, "_ALPACA_KEYS_MISSING_LOGGED", False, raising=False)
+    monkeypatch.setattr(df, "_ALPACA_DISABLED_ALERTED", False, raising=False)
+    monkeypatch.setattr(df, "_used_fallback", lambda *a, **k: False)
+    monkeypatch.setattr(df, "_has_alpaca_keys", lambda: True)
+    monkeypatch.setattr(df, "resolve_alpaca_feed", lambda _feed: None)
+    monkeypatch.setattr(df, "_resolve_backup_provider", lambda: ("yahoo", "yahoo"))
+
+    class _Counter:
+        def __init__(self) -> None:
+            self.labels_called: list[dict[str, str]] = []
+            self.increments = 0
+
+        def labels(self, **labels):
+            self.labels_called.append(labels)
+            return self
+
+        def inc(self):
+            self.increments += 1
+            return self
+
+    counter = _Counter()
+    monkeypatch.setattr(df, "provider_fallback", counter, raising=False)
+    monkeypatch.setattr(df.provider_monitor, "record_switchover", lambda *a, **k: None)
+    monkeypatch.setattr(df.fallback_order, "register_fallback", lambda *a, **k: None)
+    incr_calls: list[tuple[str, dict[str, str] | None]] = []
+
+    def _record_incr(name: str, value: float = 1.0, tags: dict[str, str] | None = None):
+        incr_calls.append((name, tags))
+
+    monkeypatch.setattr(df, "_incr", _record_incr)
+
+    fallback_calls: list[tuple[str, str]] = []
+
+    def fake_backup(symbol, start, end, interval):
+        fallback_calls.append((symbol, interval))
+        ts = datetime.now(UTC)
+        return pd.DataFrame(
+            {
+                "timestamp": [ts],
+                "open": [1.0],
+                "high": [1.5],
+                "low": [0.5],
+                "close": [1.2],
+                "volume": [100],
+            }
+        ).set_index("timestamp")
+
+    monkeypatch.setattr(df, "_backup_get_bars", fake_backup)
+
+    annotate_calls: list[dict[str, str | None]] = []
+
+    def fake_annotate(frame, *, provider, feed=None):
+        annotate_calls.append({"provider": provider, "feed": feed})
+        return frame
+
+    monkeypatch.setattr(df, "_annotate_df_source", fake_annotate)
+    monkeypatch.setattr(df, "_mark_fallback", lambda *a, **k: None)
+
+    class _Session:
+        def get(self, *args, **kwargs):  # noqa: D401, ANN002, ANN003 - signature matches requests
+            raise AssertionError("HTTP should not be called when resolving feed to None")
+
+    monkeypatch.setattr(df, "_HTTP_SESSION", _Session())
+
+    start, end = _dt_range(2)
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+
+    assert isinstance(out, pd.DataFrame) and not out.empty
+    assert fallback_calls and fallback_calls[0][0] == "TEST"
+    assert counter.increments == 1
+    assert counter.labels_called and counter.labels_called[0]["to_provider"] == "yahoo"
+    assert incr_calls and incr_calls[0][0] == "data.fetch.fallback_attempt"
+    assert annotate_calls and annotate_calls[0]["provider"] == "yahoo"
+
+
+def test_timeout_retry_records_backoff(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", False, raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_WINDOWS", set(), raising=False)
+    monkeypatch.setattr(df, "_FALLBACK_UNTIL", {}, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disabled_until", None, raising=False)
+    monkeypatch.setattr(df, "_alpaca_disable_count", 0, raising=False)
+    monkeypatch.setattr(df, "_used_fallback", lambda *a, **k: False)
+    monkeypatch.setattr(df, "_has_alpaca_keys", lambda: True)
+    monkeypatch.setattr(df, "resolve_alpaca_feed", lambda _feed: _feed)
+    monkeypatch.setattr(df, "_sip_allowed", lambda: False)
+
+    calls = {"count": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise df.Timeout("boom")
+        ts_iso = datetime.now(UTC).isoformat()
+        return _Resp(200, payload=_bars_payload(ts_iso))
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+
+    sleep_calls: list[float] = []
+
+    def fake_sleep(duration: float) -> None:
+        sleep_calls.append(duration)
+
+    monkeypatch.setattr(df.time, "sleep", fake_sleep)
+
+    log_calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_log(provider: str, **extra):
+        log_calls.append((provider, extra))
+
+    monkeypatch.setattr(df, "log_fetch_attempt", fake_log)
+
+    start, end = _dt_range(2)
+    out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
+
+    assert isinstance(out, pd.DataFrame) and not out.empty
+    assert calls["count"] == 2
+    assert sleep_calls and sleep_calls[0] == pytest.approx(1.0)
+    assert log_calls and log_calls[0][1].get("remaining_retries") == df._FETCH_BARS_MAX_RETRIES - 1
+
+
 def test_429_rate_limit_triggers_fallback(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     calls = {"count": 0}
@@ -238,6 +365,8 @@ def test_empty_bars_fallback(monkeypatch: pytest.MonkeyPatch):
 def test_sip_fallback_precheck_skips_request(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
     monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_SIP_UNAVAILABLE_LOGGED", set(), raising=False)
     feeds: list[str | None] = []
 
     def fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001

@@ -2771,6 +2771,9 @@ def _fetch_bars(
     explicit_feed_request = isinstance(feed, str)
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
 
+    # Mutable state for retry tracking shared by nested helpers.
+    _state: dict[str, Any] = {"corr_id": None, "retries": 0, "providers": []}
+
     def _tags(*, provider: str | None = None, feed: str | None = None) -> dict[str, str]:
         tag_provider = provider if provider is not None else "alpaca"
         tag_feed = _feed if feed is None else feed
@@ -2985,9 +2988,8 @@ def _fetch_bars(
     }
     timeout_v = clamp_request_timeout(10)
 
-    # Mutable state for retry tracking
+    # Track request start time for retry/backoff telemetry
     start_time = monotonic_time()
-    _state = {"corr_id": None, "retries": 0, "providers": []}
     max_retries = _FETCH_BARS_MAX_RETRIES
 
     def _push_to_caplog(
