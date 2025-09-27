@@ -30,6 +30,14 @@ from .json_formatter import JSONFormatter
 from ai_trading.logging.redact import _ENV_MASK
 
 
+def _emit_throttle_summary(logger: logging.Logger, key: str, suppressed: int) -> None:
+    """Emit a standard LOG_THROTTLE_SUMMARY line when suppression warrants it."""
+
+    if suppressed < 3:
+        return
+    logger.info('LOG_THROTTLE_SUMMARY | suppressed=%d key="%s"', suppressed, key)
+
+
 def _ensure_finnhub_enabled_flag() -> None:
     """Set ENABLE_FINNHUB when a key is present; safe to call multiple times."""
 
@@ -263,11 +271,12 @@ class MessageThrottleFilter(logging.Filter):
                 record.args = ()
 
     def _emit_summary(self, record: logging.LogRecord, message: str, suppressed: int) -> None:
-        if suppressed < 3:
-            return
         key = self._summary_key_from_message(message)
-        summary = f"LOG_THROTTLE_SUMMARY | suppressed={suppressed} key={self._quote_message(key)}"
-        logging.getLogger(record.name or _ROOT_LOGGER_NAME).info(summary)
+        _emit_throttle_summary(
+            logging.getLogger(record.name or _ROOT_LOGGER_NAME),
+            key,
+            suppressed,
+        )
 
     def filter(self, record: logging.LogRecord) -> bool:
         if self.throttle_seconds <= 0:
@@ -325,14 +334,14 @@ class MessageThrottleFilter(logging.Filter):
         with self._lock:
             for message, state in self._state.items():
                 suppressed = int(state.get("suppressed", 0))
-                if suppressed >= 3:
+                if suppressed:
                     logger_name = str(state.get("logger_name") or _ROOT_LOGGER_NAME)
                     key = self._summary_key_from_message(message)
-                    summary = (
-                        "LOG_THROTTLE_SUMMARY | suppressed="
-                        f"{suppressed} key={self._quote_message(key)}"
+                    _emit_throttle_summary(
+                        logging.getLogger(logger_name),
+                        key,
+                        suppressed,
                     )
-                    logging.getLogger(logger_name).info(summary)
                 state["suppressed"] = 0
                 state["last_summary"] = now
 
@@ -587,12 +596,8 @@ def _flush_provider_log_summaries() -> None:
         return
     summary_logger = logging.getLogger(_ROOT_LOGGER_NAME)
     for message, suppressed in sorted(entries):
-        if suppressed < 3:
-            continue
         key = _sanitize_summary_key(message)
-        summary_logger.info(
-            f'LOG_THROTTLE_SUMMARY | key="{key}" suppressed={suppressed}'
-        )
+        _emit_throttle_summary(summary_logger, key, suppressed)
 
 
 def reset_provider_log_dedupe() -> None:

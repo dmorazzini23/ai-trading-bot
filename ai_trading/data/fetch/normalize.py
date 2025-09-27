@@ -12,43 +12,73 @@ pd = load_pandas()
 REQUIRED = ("open", "high", "low", "close", "volume")
 
 
+def _empty_frame() -> "_pd.DataFrame":
+    idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
+    return pd.DataFrame(columns=REQUIRED, index=idx)
+
+
 def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     """Return a normalized OHLCV dataframe with canonical columns."""
 
     if df is None or len(df) == 0:
-        return pd.DataFrame(columns=REQUIRED)
+        return _empty_frame()
 
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.copy()
-        df.columns = [str(levels[0]).lower() for levels in df.columns]
-        df = df.loc[:, ~pd.Index(df.columns).duplicated()]
+        frame = df.copy()
+        frame.columns = [str(levels[0]).lower().strip() for levels in frame.columns]
+        frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
     else:
-        df = df.copy()
-        df.columns = [str(col).lower().strip() for col in df.columns]
+        frame = df.copy()
+        frame.columns = [str(col).lower().strip() for col in frame.columns]
+        frame = frame.loc[:, ~frame.columns.duplicated()]
 
-    if "adj close" in df.columns and "close" not in df.columns:
-        df["close"] = df["adj close"]
-    if "close" not in df.columns and "value" in df.columns:
-        df["close"] = df["value"]
+    if "adj close" in frame.columns and "close" not in frame.columns:
+        frame["close"] = frame["adj close"]
+    if "close" not in frame.columns and "value" in frame.columns:
+        frame["close"] = frame["value"]
 
     for column in REQUIRED:
-        if column in df.columns:
-            df[column] = pd.to_numeric(df[column], errors="coerce")
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
-    subset = [column for column in REQUIRED if column in df.columns]
-    if subset:
-        df = df.dropna(subset=subset)
+    if "timestamp" in frame.columns:
+        ts = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+        frame = frame.drop(columns=["timestamp"])
+        frame.index = ts
 
-    index = df.index
-    if isinstance(index, pd.DatetimeIndex):
-        if index.tz is None:
-            df.index = index.tz_localize("UTC")
-    elif hasattr(index, "tz") and getattr(index, "tz", None) is None:
+    if not isinstance(frame.index, pd.DatetimeIndex):
         try:
-            df.index = index.tz_localize("UTC")  # type: ignore[attr-defined]
+            frame.index = pd.to_datetime(frame.index, utc=True, errors="coerce")
         except Exception:
-            pass
+            return _empty_frame()
 
-    df = df.sort_index()
+    if frame.index.tz is None:
+        frame.index = frame.index.tz_localize("UTC")
+    else:
+        frame.index = frame.index.tz_convert("UTC")
 
-    return df[[column for column in REQUIRED if column in df.columns]]
+    valid_index = ~frame.index.isna()
+    if not valid_index.any():
+        return _empty_frame()
+    if not valid_index.all():
+        frame = frame.loc[valid_index]
+
+    subset = [column for column in REQUIRED if column in frame.columns]
+    if subset:
+        frame = frame.dropna(subset=subset, how="any")
+
+    if frame.empty:
+        return _empty_frame()
+
+    frame = frame[~frame.index.duplicated(keep="last")]
+    frame = frame.sort_index()
+    frame.index.rename("timestamp", inplace=True)
+
+    cols = [column for column in REQUIRED if column in frame.columns]
+    if not cols:
+        return _empty_frame()
+    normalized = frame[cols]
+    if normalized.index.tz is None:
+        normalized.index = normalized.index.tz_localize("UTC")
+    normalized.index.rename("timestamp", inplace=True)
+    return normalized

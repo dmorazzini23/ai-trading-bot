@@ -5,6 +5,7 @@ import os
 from typing import Any
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
+from ai_trading.data.fetch.normalize import normalize_ohlcv_df, REQUIRED as _OHLCV_REQUIRED
 from ai_trading.config import get_settings
 from ai_trading.data.market_calendar import previous_trading_session, rth_session_utc
 from ai_trading.data.fetch import get_bars, get_minute_df
@@ -245,15 +246,14 @@ def _ensure_df(obj: Any) -> pd.DataFrame:
         return pd.DataFrame()
 
 def empty_bars_dataframe() -> pd.DataFrame:
-    cols = ['open', 'high', 'low', 'close', 'volume', 'trade_count', 'vwap']
-    return pd.DataFrame(columns=cols)
+    cols = ["timestamp", *_OHLCV_REQUIRED]
+    base = pd.DataFrame({col: [] for col in cols})
+    return normalize_ohlcv_df(base)
 
 def _create_empty_bars_dataframe(timeframe: str | None = None) -> pd.DataFrame:
     """Return an empty OHLCV DataFrame including a timestamp column."""
 
-    cols = ["timestamp", "open", "high", "low", "close", "volume"]
-    df = pd.DataFrame({col: [] for col in cols})
-    return df
+    return empty_bars_dataframe()
 
 
 def _coerce_http_bars(obj: Any) -> pd.DataFrame:
@@ -261,7 +261,11 @@ def _coerce_http_bars(obj: Any) -> pd.DataFrame:
 
     if isinstance(obj, BarsFetchFailed):
         return _create_empty_bars_dataframe()
-    return _ensure_df(obj)
+    ensured = _ensure_df(obj)
+    normalized = normalize_ohlcv_df(ensured)
+    if normalized.empty:
+        return empty_bars_dataframe()
+    return normalized
 
 def _is_minute_timeframe(tf) -> bool:
     try:

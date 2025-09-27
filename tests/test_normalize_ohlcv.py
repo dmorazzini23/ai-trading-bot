@@ -25,6 +25,7 @@ def test_normalize_basic_yfinance_columns():
     assert list(out.columns) == list(REQUIRED)
     assert out.index.tz is not None
     assert str(out.index.tz) == "UTC"
+    assert out.index.name == "timestamp"
 
 
 def test_normalize_multiindex_columns_dedup():
@@ -42,7 +43,12 @@ def test_normalize_multiindex_columns_dedup():
 
     assert list(out.columns) == list(REQUIRED)
     # Ensure the first ticker's values survive the deduplication.
-    pd.testing.assert_series_equal(out["open"], pd.Series([0.0, 0.5], index=idx))
+    expected = pd.Series(
+        [0.0, 0.5],
+        index=idx.rename("timestamp"),
+        name="open",
+    )
+    pd.testing.assert_series_equal(out["open"], expected)
 
 
 def test_normalize_adj_close_mapping():
@@ -58,4 +64,5 @@ def test_normalize_adj_close_mapping():
     out = normalize_ohlcv_df(df)
 
     assert "close" in out.columns
-    pd.testing.assert_series_equal(out["close"], pd.Series([100.0, 101.0], index=out.index))
+    expected = pd.Series([100.0, 101.0], index=out.index, name="close")
+    pd.testing.assert_series_equal(out["close"], expected)

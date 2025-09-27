@@ -56,6 +56,7 @@ from ai_trading.data.metrics import (
     provider_disable_total,
 )
 from ai_trading.data.provider_monitor import provider_monitor
+from .normalize import normalize_ohlcv_df
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session
 from ai_trading.utils.http import clamp_request_timeout
@@ -988,7 +989,10 @@ def _normalize_ohlcv_df(df, _pd: Any | None = None):
         return None
     except Exception:
         return None
-    return normalized
+    try:
+        return normalize_ohlcv_df(normalized)
+    except Exception:
+        return normalized
 
 
 # --- END: universal OHLCV normalization helper ---
@@ -4827,6 +4831,7 @@ def get_minute_df(
             source=source_label or "alpaca",
             frequency="1Min",
         )
+        df = normalize_ohlcv_df(df)
     except MissingOHLCVColumnsError as exc:
         logger.error(
             "OHLCV_COLUMNS_MISSING",
@@ -4932,6 +4937,7 @@ def get_daily_df(
             source=normalized_feed or "alpaca",
             frequency="1Day",
         )
+        df = normalize_ohlcv_df(df)
     except MissingOHLCVColumnsError as exc:
         logger.error(
             "OHLCV_COLUMNS_MISSING",
