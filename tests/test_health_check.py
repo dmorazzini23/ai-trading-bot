@@ -16,8 +16,20 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data.get("ok") is False
-    assert data.get("error") == "boom"
+    assert data == {
+        "ok": False,
+        "error": "boom",
+        "alpaca": {
+            "sdk_ok": False,
+            "initialized": False,
+            "client_attached": False,
+            "has_key": False,
+            "has_secret": False,
+            "base_url": "",
+            "paper": False,
+            "shadow_mode": False,
+        },
+    }
 
 
 def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
@@ -39,5 +51,17 @@ def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data.get("ok") is False
-    assert data.get("error") == "boom"
+    assert data == {
+        "ok": False,
+        "error": "boom",
+        "alpaca": {
+            "sdk_ok": False,
+            "initialized": False,
+            "client_attached": False,
+            "has_key": False,
+            "has_secret": False,
+            "base_url": "",
+            "paper": False,
+            "shadow_mode": False,
+        },
+    }

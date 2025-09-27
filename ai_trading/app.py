@@ -56,7 +56,8 @@ def create_app():
         last_error: str | None = None
 
         def record_error(exc: Exception) -> str:
-            nonlocal last_error
+            nonlocal last_error, ok
+            ok = False
             message = str(exc) or exc.__class__.__name__
             if message and message not in errors:
                 errors.append(message)
@@ -113,6 +114,8 @@ def create_app():
             func = globals().get("jsonify")
             fallback_error = data.get("error") or last_error
             fallback_payload = dict(data)
+            if data.get("error"):
+                data["ok"] = False
             fallback_payload["ok"] = False
             fallback_payload["error"] = fallback_error or "jsonify unavailable"
 
