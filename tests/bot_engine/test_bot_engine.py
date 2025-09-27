@@ -837,7 +837,12 @@ def test_enter_long_blocks_on_stale_fallback_quote(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
-        lambda *_a, **_k: (False, 30.0, "quote_age=30.0s>limit=5.0s"),
+        lambda *_a, **_k: (False, 86400.0, "quote_age=86400.0s>limit=5.0s"),
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_fallback_quote_newer_than_last_close",
+        lambda *_a, **_k: False,
     )
 
     caplog.set_level("INFO")

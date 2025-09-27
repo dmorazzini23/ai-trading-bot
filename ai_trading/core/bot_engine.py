@@ -13926,25 +13926,10 @@ def _strict_data_gating_enabled() -> bool:
 
 @functools.lru_cache(maxsize=1)
 def _gap_ratio_gate_limit() -> float:
-    default_limit = 0.03
-    for key in ("DATA_GAP_RATIO_TRADE_LIMIT", "AI_TRADING_GAP_RATIO_LIMIT"):
-        try:
-            configured = get_env(key, None, cast=float)
-        except Exception:
-            configured = None
-        if configured is not None:
-            try:
-                return max(0.0, float(configured))
-            except (TypeError, ValueError):
-                logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": key, "value": configured})
-                continue
-        raw = os.getenv(key)
-        if raw not in (None, ""):
-            try:
-                return max(0.0, float(raw))
-            except (TypeError, ValueError):
-                logger.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": key, "value": raw})
-    return default_limit
+    """Return the maximum tolerated gap ratio before rejecting fallback prices."""
+
+    bps = float(os.getenv("AI_TRADING_GAP_LIMIT_BPS", "200"))
+    return max(0.0, bps) / 10000.0
 
 
 @functools.lru_cache(maxsize=1)
@@ -13957,6 +13942,33 @@ def _fallback_quote_max_age_seconds() -> float:
         return max(0.0, float(value))
     except (TypeError, ValueError):
         return 8.0
+
+
+def _fallback_quote_newer_than_last_close(
+    quote_ts: datetime | None, now: datetime
+) -> bool:
+    """Return ``True`` when *quote_ts* is after the most recent session close."""
+
+    if quote_ts is None:
+        return False
+    if pd is None:
+        return True
+    try:
+        now_ts = pd.Timestamp(now)
+    except Exception:
+        return True
+    try:
+        session = last_market_session(now_ts)
+    except Exception:
+        session = None
+    if session is None or getattr(session, "close", None) is None:
+        return True
+    close_ts = session.close
+    try:
+        close_dt = close_ts.to_pydatetime()
+    except AttributeError:
+        close_dt = datetime.fromtimestamp(close_ts.timestamp(), UTC)
+    return quote_ts > close_dt
 
 
 @functools.lru_cache(maxsize=1)
@@ -14306,7 +14318,26 @@ def _enter_long(
     gap_ratio = annotations.get("gap_ratio")
     gap_limit = annotations.get("gap_limit", _gap_ratio_gate_limit())
     fallback_ok = annotations.get("fallback_quote_ok")
-    fallback_quote_available = bool(fallback_ok)
+    fallback_age = annotations.get("fallback_quote_age")
+    fallback_error = annotations.get("fallback_quote_error")
+    now_utc = datetime.now(UTC)
+    fallback_ts: datetime | None = None
+    if isinstance(fallback_age, (int, float, np.floating)):
+        try:
+            fallback_ts = now_utc - timedelta(seconds=float(fallback_age))
+        except Exception:
+            fallback_ts = None
+    fallback_checked = fallback_ok is not None or fallback_error is not None or fallback_ts is not None
+    fallback_after_last_close = False
+    if fallback_ok is True:
+        fallback_after_last_close = True
+    elif fallback_ts is not None:
+        fallback_after_last_close = _fallback_quote_newer_than_last_close(fallback_ts, now_utc)
+    fallback_has_quote = bool(fallback_ok) or fallback_ts is not None
+    fallback_stale_session = False
+    if fallback_checked:
+        fallback_stale_session = not (fallback_after_last_close and fallback_has_quote)
+    fallback_quote_usable = fallback_has_quote and not fallback_stale_session
     if isinstance(gap_ratio, (int, float)) and gap_ratio >= 0.999:
         logger.warning(
             "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE | symbol=%s gap_ratio=%.2f%%",
@@ -14328,17 +14359,27 @@ def _enter_long(
             },
         )
         return True
-
-    if (
-        isinstance(gap_ratio, (int, float))
-        and gap_ratio > gap_limit
-        and not fallback_quote_available
-    ):
+    nbbo_available = _is_primary_price_source(price_source)
+    gap_exceeds = False
+    if isinstance(gap_ratio, (int, float, np.floating)):
+        gap_value = float(gap_ratio)
+        gap_exceeds = gap_value > gap_limit
+    skip_reasons: list[str] = []
+    if gap_exceeds:
+        skip_reasons.append(
+            f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+        )
+    if fallback_stale_session:
+        if isinstance(fallback_error, str) and fallback_error:
+            skip_reasons.append(fallback_error)
+        else:
+            skip_reasons.append("fallback_quote_before_last_close")
+    if not nbbo_available and (gap_exceeds or fallback_stale_session):
+        reason_label = ";".join(dict.fromkeys(skip_reasons)) or "unreliable_price"
         logger.info(
-            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=gap_ratio=%.2f%%>limit=%.2f%%;quote_source_unavailable",
+            "ORDER_SKIPPED_UNRELIABLE_PRICE | symbol=%s reason=%s",
             symbol,
-            gap_ratio * 100.0,
-            gap_limit * 100.0,
+            reason_label,
             extra={
                 "symbol": symbol,
                 "reasons": gate.reasons,
@@ -14353,12 +14394,8 @@ def _enter_long(
         filtered = [r for r in gate.reasons if r != "liquidity_fallback"]
         if filtered:
             reasons_to_log = tuple(filtered)
-    if (
-        isinstance(gap_ratio, (int, float))
-        and gap_ratio > gap_limit
-        and fallback_quote_available
-    ):
-        reason = f"gap_ratio={gap_ratio * 100:.2f}%>limit={gap_limit * 100:.2f}%"
+    if gap_exceeds and fallback_quote_usable:
+        reason = f"gap_ratio={gap_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
         if reasons_to_log is None:
             reasons_to_log = (reason,)
         elif reason not in reasons_to_log:
@@ -14375,7 +14412,7 @@ def _enter_long(
             },
         )
 
-    if (fallback_active or fallback_quote_available) and quote_price is not None:
+    if (fallback_active or fallback_quote_usable) and quote_price is not None:
         logger.info(
             "ORDER_USING_FALLBACK_PRICE",
             extra={"symbol": symbol, "price_source": price_source},
