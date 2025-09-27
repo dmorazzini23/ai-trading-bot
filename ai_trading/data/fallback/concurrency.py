@@ -333,7 +333,7 @@ async def run_with_concurrency(
     max_concurrency: int = 4,
     timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
-    """Execute ``worker`` for each symbol with at most ``max_concurrency`` tasks in flight."""
+    """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
 
     global PEAK_SIMULTANEOUS_WORKERS
 
@@ -349,78 +349,89 @@ async def run_with_concurrency(
     if host_limit is not None:
         limit = min(limit, host_limit)
 
+    sem = asyncio.Semaphore(limit)
+    active_lock = asyncio.Lock()
+    active = 0
+
     results: dict[str, T | None] = {}
-    pending_tasks: set[asyncio.Task[tuple[str, T | BaseException]]] = set()
-    symbol_iter = iter(symbols)
 
-    async def _execute(symbol: str) -> tuple[str, T | BaseException]:
-        try:
-            result = await worker(symbol)
-        except BaseException as exc:  # noqa: BLE001 - captured for aggregation
-            return symbol, exc
-        return symbol, result
 
-    async def _drive() -> None:
-        nonlocal pending_tasks
+    async def _wrapped(symbol: str) -> None:
+        nonlocal active
         global PEAK_SIMULTANEOUS_WORKERS
+        try:
+            await sem.acquire()
+        except asyncio.CancelledError:
+            results.setdefault(symbol, None)
+            FAILED_SYMBOLS.add(symbol)
+            raise
 
-        symbols_exhausted = False
+        try:
+            async with active_lock:
+                active += 1
+                if active > PEAK_SIMULTANEOUS_WORKERS:
+                    PEAK_SIMULTANEOUS_WORKERS = active
 
-        while True:
-            while len(pending_tasks) < limit and not symbols_exhausted:
-                try:
-                    symbol = next(symbol_iter)
-                except StopIteration:
-                    symbols_exhausted = True
-                    break
-                task = asyncio.create_task(_execute(symbol))
-                pending_tasks.add(task)
-                current = len(pending_tasks)
-                if current > PEAK_SIMULTANEOUS_WORKERS:
-                    PEAK_SIMULTANEOUS_WORKERS = current
+            try:
+                result = await worker(symbol)
+            except asyncio.CancelledError:
+                results.setdefault(symbol, None)
+                FAILED_SYMBOLS.add(symbol)
+                raise
+            except BaseException:
+                FAILED_SYMBOLS.add(symbol)
+                results[symbol] = None
+            else:
+                SUCCESSFUL_SYMBOLS.add(symbol)
+                results[symbol] = result
+        finally:
+            async with active_lock:
+                if active > 0:
+                    active -= 1
+            sem.release()
 
-            if not pending_tasks:
-                if symbols_exhausted:
-                    break
-                continue
+    tasks: list[asyncio.Task[None]] = []
+    task_to_symbol: dict[asyncio.Task[None], str] = {}
+    for symbol in symbols:
+        task = asyncio.create_task(_wrapped(symbol))
+        tasks.append(task)
+        task_to_symbol[task] = symbol
 
-            done, still_pending = await asyncio.wait(
-                pending_tasks, return_when=asyncio.FIRST_COMPLETED
-            )
-            pending_tasks = set(still_pending)
-
-            for task in done:
-                try:
-                    symbol, outcome = task.result()
-                except BaseException:
-                    continue
-                if isinstance(outcome, BaseException):
-                    FAILED_SYMBOLS.add(symbol)
-                    results[symbol] = None
-                else:
-                    SUCCESSFUL_SYMBOLS.add(symbol)
-                    results[symbol] = outcome
-
-            if pending_tasks:
-                continue
-
-    driver = _drive()
+    if tasks:
+        gather_coro = asyncio.gather(*tasks, return_exceptions=True)
+    else:
+        gather_coro = None
 
     try:
-        await asyncio.wait_for(driver, timeout_s) if timeout_s is not None else await driver
+        if gather_coro is None:
+            outcomes: list[object] = []
+        elif timeout_s is not None:
+            outcomes = await asyncio.wait_for(gather_coro, timeout_s)
+        else:
+            outcomes = await gather_coro
     except asyncio.TimeoutError:
-        for task in list(pending_tasks):
+        for task in tasks:
             task.cancel()
-        gathered = await asyncio.gather(*pending_tasks, return_exceptions=True)
-        for entry in gathered:
-            if isinstance(entry, tuple) and len(entry) == 2:
-                symbol, outcome = entry
-                if isinstance(outcome, BaseException):
-                    FAILED_SYMBOLS.add(symbol)
-                    results.setdefault(symbol, None)
-                else:
-                    SUCCESSFUL_SYMBOLS.add(symbol)
-                    results.setdefault(symbol, outcome)
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        for task, outcome in zip(tasks, outcomes):
+            symbol = task_to_symbol.get(task)
+            if symbol is None:
+                continue
+            if symbol not in results:
+                results[symbol] = None
+                FAILED_SYMBOLS.add(symbol)
+            elif isinstance(outcome, BaseException):
+                FAILED_SYMBOLS.add(symbol)
+                results.setdefault(symbol, None)
+    else:
+        for task, outcome in zip(tasks, outcomes):
+            if not isinstance(outcome, BaseException):
+                continue
+            symbol = task_to_symbol.get(task)
+            if symbol is None or symbol in results:
+                continue
+            results[symbol] = None
+            FAILED_SYMBOLS.add(symbol)
 
     return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
 
