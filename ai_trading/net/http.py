@@ -121,8 +121,14 @@ class HostLimitController:
         return max(limit, 1)
 
     def current_limit(self) -> int | None:
-        raw = os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
-        return self._parse_limit(raw)
+        """Return the active pool limit honoring legacy environment names."""
+
+        raw_new = os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
+        if raw_new is not None:
+            return self._parse_limit(raw_new)
+
+        raw_legacy = os.getenv("AI_TRADING_HOST_LIMIT")
+        return self._parse_limit(raw_legacy)
 
     def apply(self, session: TimeoutSession) -> None:
         limit = self.current_limit()
