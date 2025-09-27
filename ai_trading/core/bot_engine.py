@@ -18289,6 +18289,35 @@ def _resolve_limit_price(
     return None, None
 
 
+def _is_reliable_quote(price: float | None, source: str | None) -> bool:
+    """Return ``True`` when a quote price/source pair is usable without minute data."""
+
+    if price is None:
+        return False
+    try:
+        value = float(price)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(value) or value <= 0:
+        return False
+    if not source:
+        return False
+    normalized = str(source).strip().lower()
+    if not normalized:
+        return False
+    if normalized in {
+        _ALPACA_DISABLED_SENTINEL,
+        "alpaca_skipped",
+        "alpaca_auth_failed",
+    }:
+        return False
+    if normalized in _FALLBACK_PRICE_PROVIDERS:
+        return False
+    if normalized.startswith(("alpaca", "iex", "sip")):
+        return True
+    return normalized in _PRIMARY_PRICE_PROVIDERS
+
+
 def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
@@ -18453,68 +18482,96 @@ def run_multi_strategy(ctx) -> None:
         sig = to_trade_signal(sig)
         minute_df: pd.DataFrame | None = None
         last_close: float | None = None
+        minute_fetch_attempted = False
+
+        quote_price: float | None = None
+        quote_source: str | None = None
         try:
-            minute_df = fetch_minute_df_safe(sig.symbol)
-        except DataFetchError:
-            minute_df = pd.DataFrame()
-        if minute_df is not None and not minute_df.empty:
-            last_close = utils.get_latest_close(minute_df)
-            coverage_meta = getattr(minute_df, "attrs", {}).get("_coverage_meta", {})
-            tz_info = ZoneInfo("America/New_York")
-            start_val = coverage_meta.get("window_start") if isinstance(coverage_meta, dict) else None
-            end_val = coverage_meta.get("window_end") if isinstance(coverage_meta, dict) else None
-            def _normalize_window(val):
-                if hasattr(val, "to_pydatetime"):
-                    dt_val = val.to_pydatetime()
-                elif isinstance(val, datetime):
-                    dt_val = val
-                else:
-                    return None
-                if dt_val.tzinfo is None:
-                    dt_val = dt_val.replace(tzinfo=UTC)
-                return dt_val.astimezone(tz_info)
+            quote_price = get_latest_price(sig.symbol)
+            quote_source = get_price_source(sig.symbol)
+        except Exception:
+            quote_price = None
+            quote_source = None
 
-            start_window = _normalize_window(start_val)
-            end_window = _normalize_window(end_val)
-            if start_window is None or end_window is None:
-                now_local = datetime.now(tz_info)
-                start_window = now_local.replace(hour=9, minute=30, second=0, microsecond=0)
-                end_window = now_local.replace(hour=16, minute=0, second=0, microsecond=0)
-            def _gap_ratio_setting() -> float:
-                for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
-                    try:
-                        value = get_env(key, None, cast=float)
-                    except Exception:
-                        continue
-                    if value is not None:
+        quote_reliable = _is_reliable_quote(quote_price, quote_source)
+
+        def _maybe_fetch_minute_data() -> bool:
+            nonlocal minute_df, last_close, minute_fetch_attempted
+            if minute_fetch_attempted:
+                return False
+            minute_fetch_attempted = True
+            local_df: pd.DataFrame | None
+            try:
+                local_df = fetch_minute_df_safe(sig.symbol)
+            except DataFetchError:
+                local_df = pd.DataFrame()
+            if local_df is not None and not local_df.empty:
+                minute_df = local_df
+                last_close = utils.get_latest_close(local_df)
+                coverage_meta = getattr(local_df, "attrs", {}).get("_coverage_meta", {})
+                tz_info = ZoneInfo("America/New_York")
+                start_val = coverage_meta.get("window_start") if isinstance(coverage_meta, dict) else None
+                end_val = coverage_meta.get("window_end") if isinstance(coverage_meta, dict) else None
+
+                def _normalize_window(val):
+                    if hasattr(val, "to_pydatetime"):
+                        dt_val = val.to_pydatetime()
+                    elif isinstance(val, datetime):
+                        dt_val = val
+                    else:
+                        return None
+                    if dt_val.tzinfo is None:
+                        dt_val = dt_val.replace(tzinfo=UTC)
+                    return dt_val.astimezone(tz_info)
+
+                start_window = _normalize_window(start_val)
+                end_window = _normalize_window(end_val)
+                if start_window is None or end_window is None:
+                    now_local = datetime.now(tz_info)
+                    start_window = now_local.replace(hour=9, minute=30, second=0, microsecond=0)
+                    end_window = now_local.replace(hour=16, minute=0, second=0, microsecond=0)
+
+                def _gap_ratio_setting() -> float:
+                    for key in ("DATA_MAX_GAP_RATIO_BPS", "MAX_GAP_RATIO_BPS"):
                         try:
-                            return max(float(value), 0.0)
-                        except (TypeError, ValueError):
+                            value = get_env(key, None, cast=float)
+                        except Exception:
                             continue
-                return 5.0
+                        if value is not None:
+                            try:
+                                return max(float(value), 0.0)
+                            except (TypeError, ValueError):
+                                continue
+                    return 5.0
 
-            max_gap_bps = _gap_ratio_setting()
-            max_gap_ratio = max_gap_bps / 10000.0
-            if should_skip_symbol(
-                minute_df,
-                window=(start_window, end_window),
-                tz=tz_info,
-                max_gap_ratio=max_gap_ratio,
-            ):
-                gap_ratio = 0.0
-                if isinstance(coverage_meta, dict):
-                    try:
-                        gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
-                    except (TypeError, ValueError):
-                        gap_ratio = 0.0
-                logger.info(
-                    "SKIP_SYMBOL_DATA_GAPS | symbol=%s gap_ratio=%s",
-                    sig.symbol,
-                    f"{gap_ratio:.4%}",
-                )
+                max_gap_bps = _gap_ratio_setting()
+                max_gap_ratio = max_gap_bps / 10000.0
+                if should_skip_symbol(
+                    local_df,
+                    window=(start_window, end_window),
+                    tz=tz_info,
+                    max_gap_ratio=max_gap_ratio,
+                ):
+                    gap_ratio = 0.0
+                    if isinstance(coverage_meta, dict):
+                        try:
+                            gap_ratio = float(coverage_meta.get("gap_ratio", 0.0))
+                        except (TypeError, ValueError):
+                            gap_ratio = 0.0
+                    logger.info(
+                        "SKIP_SYMBOL_DATA_GAPS | symbol=%s gap_ratio=%s",
+                        sig.symbol,
+                        f"{gap_ratio:.4%}",
+                    )
+                    return True
+            else:
+                minute_df = None
+            return False
+
+        if not quote_reliable:
+            skip_due_to_gaps = _maybe_fetch_minute_data()
+            if skip_due_to_gaps:
                 continue
-        else:
-            minute_df = None
         price, _price_source = _resolve_limit_price(
             ctx,
             sig.symbol,
@@ -18522,6 +18579,17 @@ def run_multi_strategy(ctx) -> None:
             minute_df,
             last_close,
         )
+        if (price is None or price <= 0) and quote_reliable:
+            skip_due_to_gaps = _maybe_fetch_minute_data()
+            if skip_due_to_gaps:
+                continue
+            price, _price_source = _resolve_limit_price(
+                ctx,
+                sig.symbol,
+                sig.side,
+                minute_df,
+                last_close,
+            )
         if price is None or price <= 0:
             logger.info("SKIP_SYMBOL_NO_VALID_PRICE", extra={"symbol": sig.symbol})
             continue
