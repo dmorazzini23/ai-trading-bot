@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import for typing only
+    from ai_trading.data.bars import BarsFetchFailed
+
 from ai_trading.net.http import HTTPSession
 from ai_trading.integrations.rate_limit import get_rate_limiter
 
@@ -43,7 +48,18 @@ def fetch(
     if not _rate_limiter.acquire_sync(route):
         raise RuntimeError("rate_limit_exceeded")
 
-    return session.get(url, **kwargs)
+    response = session.get(url, **kwargs)
+
+    # Import lazily to avoid circular dependencies during module import.
+    try:  # pragma: no cover - fast path when bars available
+        from ai_trading.data.bars import BarsFetchFailed  # type: ignore
+    except Exception:  # pragma: no cover - defensive guard
+        BarsFetchFailed = None  # type: ignore[assignment]
+
+    if BarsFetchFailed is not None and isinstance(response, BarsFetchFailed):
+        return response
+
+    return response
 
 
 __all__ = ["fetch"]
