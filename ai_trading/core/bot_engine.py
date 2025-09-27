@@ -8222,6 +8222,33 @@ class DataFetcher:
         elif df is None:
             data_fresh = False
 
+        def _finalize_minute_index(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+            if not isinstance(frame, pd.DataFrame):
+                return frame
+
+            idx = frame.index
+            idx_name = getattr(idx, "name", None)
+
+            if isinstance(idx, pd.DatetimeIndex):
+                if idx_name != "timestamp":
+                    try:
+                        frame = frame.copy()
+                        frame.index = idx.rename("timestamp")
+                    except Exception:  # pragma: no cover - defensive normalization
+                        return frame
+                return frame
+
+            if idx_name is not None:
+                try:
+                    frame = frame.copy()
+                    frame.index = idx.rename(None)
+                except Exception:  # pragma: no cover - defensive normalization
+                    return frame
+
+            return frame
+
+        df = _finalize_minute_index(df)
+
         with cache_lock:
             if data_fresh:
                 self._minute_cache[symbol] = df
@@ -8229,12 +8256,6 @@ class DataFetcher:
             else:
                 self._minute_cache.pop(symbol, None)
                 self._minute_timestamps.pop(symbol, None)
-        if isinstance(df, pd.DataFrame) and getattr(df.index, "name", None) is not None:
-            try:
-                df = df.copy()
-                df.index.name = None
-            except Exception:  # pragma: no cover - defensive normalization
-                pass
         return df
 
 
