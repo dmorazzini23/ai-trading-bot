@@ -107,6 +107,26 @@ def invalidate_host_limit_cache() -> None:
     _LIMIT_CACHE = None
 
 
+def _ensure_limit_cache() -> _ResolvedLimitCache:
+    """Return a coherent snapshot of the resolved limit cache."""
+
+    global _LIMIT_CACHE
+
+    limit, version = _resolve_limit()
+    cache = _LIMIT_CACHE
+    if cache is not None and cache.limit == limit and cache.version == version:
+        return cache
+
+    raw_env = os.getenv("AI_TRADING_HOST_LIMIT")
+
+    # `_resolve_limit` should keep `_LIMIT_CACHE` aligned, but callers may
+    # mutate the globals. Rebuild defensively so the snapshot matches the
+    # semaphore we create.
+    cache = _ResolvedLimitCache(raw_env=raw_env, limit=limit, version=version)
+    _LIMIT_CACHE = cache
+    return cache
+
+
 def _get_host_map(loop: asyncio.AbstractEventLoop) -> _HostSemaphoreMap:
     host_map = _HOST_SEMAPHORES.get(loop)
     if host_map is None:
@@ -119,7 +139,9 @@ def _get_or_create_loop_semaphore(
     loop: asyncio.AbstractEventLoop,
     hostname: str,
 ) -> asyncio.Semaphore:
-    resolved_limit, version = _resolve_limit()
+    cache = _ensure_limit_cache()
+    resolved_limit = cache.limit
+    version = cache.version
     host_map = _get_host_map(loop)
     record = host_map.get(hostname)
     if record is not None:
@@ -143,7 +165,9 @@ def refresh_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
     """Force the cached semaphore for the current loop to refresh using the latest limit."""
 
     loop = asyncio.get_running_loop()
-    limit, version = _resolve_limit()
+    cache = _ensure_limit_cache()
+    limit = cache.limit
+    version = cache.version
     host = _normalize_host(hostname)
     semaphore = asyncio.Semaphore(limit)
     host_map = _get_host_map(loop)
