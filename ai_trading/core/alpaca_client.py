@@ -9,6 +9,7 @@ bot_engine while keeping runtime behavior identical.
 
 from typing import Any
 import os
+import sys
 
 from ai_trading.logging import get_logger, logger_once
 from ai_trading.alpaca_api import (
@@ -24,17 +25,50 @@ from ai_trading.exc import COMMON_EXC
 logger = get_logger(__name__)
 
 
+_shared_logger_once: Any | None = None
+
+
+def _get_bot_logger_once() -> Any:
+    """Return the shared logger_once exposed by bot_engine when available."""
+
+    global _shared_logger_once
+    if _shared_logger_once is not None:
+        return _shared_logger_once
+
+    bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
+    if bot_engine_module is not None:
+        shared = getattr(bot_engine_module, "logger_once", None)
+        if shared is not None:
+            _shared_logger_once = shared
+            return shared
+
+    try:
+        from ai_trading.core import bot_engine as bot_engine_module  # noqa: WPS433 - deferred import
+    except COMMON_EXC:
+        return logger_once
+    except Exception:
+        return logger_once
+
+    shared = getattr(bot_engine_module, "logger_once", None)
+    if shared is None:
+        return logger_once
+
+    _shared_logger_once = shared
+    return shared
+
+
 def _validate_trading_api(api: Any) -> bool:
     """Ensure trading api exposes required methods across SDK variants.
 
     - Guarantees `list_orders` exists, mapping to `get_orders(...)` if needed.
     - Guarantees `list_positions` exists, mapping to `get_all_positions()` if needed.
     """
+    log_once = _get_bot_logger_once()
     if api is None:
         if ALPACA_AVAILABLE and not is_shadow_mode():
-            logger_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
+            log_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
         else:
-            logger_once.warning("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
+            log_once.warning("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
         return False
     if not hasattr(api, "list_orders"):
         if hasattr(api, "get_orders"):
@@ -83,11 +117,11 @@ def _validate_trading_api(api: Any) -> bool:
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
             setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            logger_once.info(
+            log_once.info(
                 "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
             )
         else:
-            logger_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
+            log_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
             if not is_shadow_mode() and not os.getenv("PYTEST_RUNNING"):
                 raise RuntimeError("Alpaca client missing list_orders method")
             return False
@@ -100,7 +134,7 @@ def _validate_trading_api(api: Any) -> bool:
                 return api.get_all_positions()  # type: ignore[attr-defined]
 
             setattr(api, "list_positions", _list_positions_wrapper)  # type: ignore[attr-defined]
-            logger_once.info(
+            log_once.info(
                 "API_GET_POSITIONS_MAPPED", key="alpaca_get_positions_mapped"
             )
         except Exception:
@@ -116,7 +150,7 @@ def _validate_trading_api(api: Any) -> bool:
                 return cancel_by_id(order_id)
 
             setattr(api, "cancel_order", _cancel_order_wrapper)  # type: ignore[attr-defined]
-            logger_once.info(
+            log_once.info(
                 "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
             )
         elif callable(cancel_orders):
@@ -125,7 +159,7 @@ def _validate_trading_api(api: Any) -> bool:
                     "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
                 )
             except Exception as exc:  # pragma: no cover - defensive fallback
-                logger_once.error(
+                log_once.error(
                     "ALPACA_CANCEL_ORDERS_REQUEST_IMPORT_FAILED",
                     key="alpaca_cancel_orders_request_import_failed",
                     extra={"error": str(exc)},
@@ -134,7 +168,7 @@ def _validate_trading_api(api: Any) -> bool:
 
             CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
             if CancelOrdersRequest is None:
-                logger_once.error(
+                log_once.error(
                     "ALPACA_CANCEL_ORDERS_REQUEST_MISSING",
                     key="alpaca_cancel_orders_request_missing",
                 )
@@ -174,24 +208,24 @@ def _validate_trading_api(api: Any) -> bool:
                 ) from last_error
 
             setattr(api, "cancel_order", _cancel_order_via_batch)  # type: ignore[attr-defined]
-            logger_once.info(
+            log_once.info(
                 "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
             )
         else:
-            logger_once.error(
+            log_once.error(
                 "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"
             )
             return False
     try:
         TradingClient = get_trading_client_cls()
     except RuntimeError:
-        logger_once.warning(
+        log_once.warning(
             "ALPACA_TRADING_CLIENT_CLASS_MISSING",
             key="alpaca_trading_client_class_missing",
         )
         return True
     if not isinstance(api, TradingClient):
-        logger_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
+        log_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
     return True
 
 
@@ -202,6 +236,7 @@ def list_open_orders(api: Any):
 
 def ensure_alpaca_attached(ctx) -> None:
     """Attach global trading client to the context if it's missing."""
+    log_once = _get_bot_logger_once()
     if os.getenv("PYTEST_RUNNING") and not (
         os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")
     ):
@@ -217,11 +252,11 @@ def ensure_alpaca_attached(ctx) -> None:
     api = getattr(be, "trading_client", None)
     if api is None:
         if ALPACA_AVAILABLE and not is_shadow_mode():
-            logger_once.error(
+            log_once.error(
                 "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
             )
         else:
-            logger_once.warning(
+            log_once.warning(
                 "ALPACA_CLIENT_MISSING after initialization", key="alpaca_client_missing"
             )
         if not is_shadow_mode():
@@ -243,7 +278,7 @@ def ensure_alpaca_attached(ctx) -> None:
                 pass
     api = getattr(ctx, "api", None)
     if api is None:
-        logger_once.error("FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed")
+        log_once.error("FAILED_TO_ATTACH_ALPACA_CLIENT", key="alpaca_attach_failed")
         if not is_shadow_mode():
             raise RuntimeError("Failed to attach Alpaca client to context")
         return
@@ -256,6 +291,8 @@ def _initialize_alpaca_clients() -> bool:
     # Defer imports to avoid cycles
     import time
     import ai_trading.core.bot_engine as be
+
+    log_once = _get_bot_logger_once()
 
     if getattr(be, "trading_client", None) is not None:
         return True
@@ -293,7 +330,7 @@ def _initialize_alpaca_clients() -> bool:
                 except Exception:
                     pass
                 continue
-            logger_once.error("ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed")
+            log_once.error("ALPACA_CLIENT_INIT_FAILED - env", key="alpaca_client_init_failed")
             be.trading_client = None
             be.data_client = None
             raise
@@ -305,7 +342,7 @@ def _initialize_alpaca_clients() -> bool:
             except Exception:
                 pass
             logger.info("Shadow mode or missing credentials: skipping Alpaca client initialization")
-            logger_once.warning("ALPACA_INIT_SKIPPED - shadow mode or missing credentials", key="alpaca_init_skipped")
+            log_once.warning("ALPACA_INIT_SKIPPED - shadow mode or missing credentials", key="alpaca_init_skipped")
             logger.info("ALPACA_DIAG", extra=diag)
             _set_alpaca_service_available(False)
             return False
@@ -317,7 +354,7 @@ def _initialize_alpaca_clients() -> bool:
             if attempt == 1:
                 time.sleep(1)
                 continue
-            logger_once.error("ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed")
+            log_once.error("ALPACA_CLIENT_INIT_FAILED - import", key="alpaca_client_init_failed")
             be.trading_client = None
             be.data_client = None
             return False
@@ -331,7 +368,7 @@ def _initialize_alpaca_clients() -> bool:
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
             logger.error("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})
-            logger_once.error("ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed")
+            log_once.error("ALPACA_CLIENT_INIT_FAILED - client", key="alpaca_client_init_failed")
             be.trading_client = None
             be.data_client = None
             return False
