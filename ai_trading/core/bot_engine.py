@@ -7656,7 +7656,7 @@ class DataFetcher:
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = time.monotonic()
+        now_monotonic = monotonic_time()
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
@@ -7899,7 +7899,7 @@ class DataFetcher:
             )
 
         with cache_lock:
-            stamp = time.monotonic()
+            stamp = monotonic_time()
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
