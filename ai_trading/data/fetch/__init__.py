@@ -4940,11 +4940,19 @@ def get_minute_df(
             if not fallback_logged:
                 _record_minute_fallback(frame=df)
                 fallback_logged = True
+            try:
+                attrs = getattr(df, "attrs", None)
+            except Exception:
+                attrs = None
+            if isinstance(attrs, dict):
+                coverage_meta = attrs.get("_coverage_meta")
+                if isinstance(coverage_meta, dict):
+                    attrs["_coverage_meta"] = dict(coverage_meta)
             _set_price_reliability(df, reliable=True)
             mark_success(symbol, "1Min")
+            success_marked = True
             _EMPTY_BAR_COUNTS.pop(tf_key, None)
             _SKIPPED_SYMBOLS.discard(tf_key)
-            return df
     attempt_count_snapshot = max(attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot))
     allow_empty_return = not window_has_session
     try:
