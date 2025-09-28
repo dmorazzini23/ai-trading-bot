@@ -1,175 +1,99 @@
-"""Clean model registry for storage, versioning, and retrieval.
+"""
+Model registry and evaluation store.
 
-This module persists arbitrary model objects using ``pickle`` and falls back
-to :mod:`cloudpickle` or :mod:`dill` when needed. Paths are validated before
-loading to guard against unsafe deserialization.
+Keeps a lightweight JSON registry in `MODELS_DIR/registry.json` with
+per-symbol active version and metadata. Evaluations are appended to
+`MODELS_DIR/eval/{symbol}.jsonl` to track OOS metrics for promotion.
+
+All filesystem interactions are best-effort and gated at call time.
 """
 from __future__ import annotations
 
-from ai_trading.logging import get_logger
-import hashlib
-import importlib
 import json
-import os
-import pickle
+from dataclasses import dataclass, asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ai_trading.utils.pickle_safe import safe_pickle_load
-try:
-    from ai_trading.logging import logger
-except (ValueError, TypeError):
-    import logging
-    logger = get_logger(__name__)
+from ai_trading.paths import MODELS_DIR
+from ai_trading.logging import get_logger
 
-class ModelRegistry:
-    """Centralized registry for trained models."""
+logger = get_logger(__name__)
 
-    def __init__(self, base_path: str | None = None):
-        base = base_path or os.getenv("MODEL_REGISTRY_DIR") or Path.cwd() / "models"
-        self.base_path = Path(base).resolve()
-        self.base_path.mkdir(parents=True, exist_ok=True)
-        self.index_file = self.base_path / "registry_index.json"
-        self.model_index: dict[str, dict[str, Any]] = self._load_index()
-        logger.info('ModelRegistry initialized at %s', self.base_path)
 
-    def _load_index(self) -> dict[str, dict[str, Any]]:
-        if not self.index_file.exists():
-            return {}
-        try:
-            return json.loads(self.index_file.read_text(encoding='utf-8'))
-        except (ValueError, TypeError) as e:
-            logger.warning('Failed to load registry index: %s', e)
-            return {}
+_REGISTRY_PATH = MODELS_DIR / "registry.json"
+_EVAL_DIR = MODELS_DIR / "eval"
 
-    def _save_index(self) -> None:
-        self.index_file.write_text(json.dumps(self.model_index, indent=2), encoding='utf-8')
 
-    @staticmethod
-    def _hash_bytes(data: bytes) -> str:
-        return hashlib.sha256(data).hexdigest()[:16]
+def _load_registry() -> dict[str, Any]:
+    try:
+        if _REGISTRY_PATH.exists():
+            return json.loads(_REGISTRY_PATH.read_text())
+    except Exception:
+        logger.debug("MODEL_REGISTRY_LOAD_FAILED", exc_info=True)
+    return {}
 
-    def register_model(
-        self,
-        model: Any,
-        strategy: str,
-        model_type: str,
-        metadata: dict[str, Any] | None = None,
-        dataset_fingerprint: str | None = None,
-        tags: list[str] | None = None,
-    ) -> str:
-        """Store model + metadata and return deterministic ID.
 
-        Raises:
-            ValueError: If ``model`` is already registered.
-        """
-        placeholder_repr: str | None = None
-        try:
-            blob = pickle.dumps(model)
-        except Exception as e:  # pragma: no cover - exercised via tests
-            blob = None
-            for mod_name in ("cloudpickle", "dill"):
-                try:
-                    mod = importlib.import_module(mod_name)
-                except Exception:
-                    continue
-                try:
-                    blob = mod.dumps(model)
-                    logger.info("Serialized model using %s", mod_name)
-                    break
-                except Exception:
-                    continue
-            if blob is None:
-                placeholder_repr = repr(model)
-                blob = pickle.dumps({"__placeholder__": placeholder_repr})
-                logger.warning("Model not picklable, stored placeholder representation", extra={"model": placeholder_repr})
-        content_hash = self._hash_bytes(blob)
-        id_components = [strategy, model_type, content_hash]
-        if dataset_fingerprint:
-            id_components.append(dataset_fingerprint[:16])
-        model_id = '-'.join(id_components)
-        if model_id in self.model_index:
-            raise ValueError(f"Model {model_id} already registered")
-        model_dir = (self.base_path / model_id).resolve()
-        if not model_dir.is_relative_to(self.base_path):
-            raise RuntimeError(f"Model path escapes base directory: {model_dir}")
-        model_dir.mkdir(parents=True, exist_ok=True)
-        (model_dir / "model.pkl").write_bytes(blob)
-        meta = {
-            "strategy": strategy,
-            "model_type": model_type,
-            "registration_time": datetime.now(UTC).isoformat(),
-            "dataset_fingerprint": dataset_fingerprint,
-            "tags": tags or [],
-        }
-        if metadata:
-            meta.update(self._json_safe(metadata))
-        if placeholder_repr is not None:
-            meta["placeholder_repr"] = placeholder_repr
-        (model_dir / "meta.json").write_text(
-            json.dumps(meta, indent=2), encoding="utf-8"
-        )
-        self.model_index[model_id] = meta
-        self._save_index()
-        logger.info('Registered model %s', model_id)
-        return model_id
+def _save_registry(reg: dict[str, Any]) -> None:
+    try:
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        _REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    except Exception:
+        logger.debug("MODEL_REGISTRY_SAVE_FAILED", exc_info=True)
 
-    def load_model(self, model_id: str, verify_dataset_hash: bool=False, expected_dataset_fingerprint: str | None=None) -> tuple[Any, dict[str, Any]]:
-        """Return (model, metadata); optionally verify dataset fingerprint."""
-        model_dir = (self.base_path / model_id).resolve()
-        if not model_dir.is_relative_to(self.base_path):
-            raise RuntimeError(f"Model path escapes base directory: {model_dir}")
-        model_path = model_dir / "model.pkl"
-        meta_path = model_dir / "meta.json"
-        if not model_path.exists() or not meta_path.exists():
-            raise FileNotFoundError(f"Model {model_id} not found in registry")
-        model = safe_pickle_load(model_path, [self.base_path])
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if verify_dataset_hash and expected_dataset_fingerprint:
-            got = meta.get('dataset_fingerprint')
-            if got != expected_dataset_fingerprint:
-                raise ValueError(f'Dataset fingerprint mismatch: expected {expected_dataset_fingerprint}, got {got}')
-        return (model, meta)
 
-    def latest_for(self, strategy: str, model_type: str) -> str | None:
-        """Return most recently registered ID for (strategy, model_type)."""
-        candidates = [(mid, m.get('registration_time', '')) for mid, m in self.model_index.items() if m.get('strategy') == strategy and m.get('model_type') == model_type]
-        if not candidates:
-            return None
-        return sorted(candidates, key=lambda t: t[1])[-1][0]
+def register_model(symbol: str, version: str, path: Path, meta: dict[str, Any] | None = None, activate: bool = True) -> None:
+    """Register a model version for a symbol and optionally activate it."""
+    reg = _load_registry()
+    entry = reg.get(symbol) or {"versions": {}, "active": None}
+    entry["versions"][version] = {
+        "path": str(path),
+        "meta": meta or {},
+        "registered_at": datetime.now(UTC).isoformat(),
+    }
+    if activate:
+        entry["active"] = version
+    reg[symbol] = entry
+    _save_registry(reg)
 
-    def list_models(
-        self,
-        strategy: str | None = None,
-        model_type: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Return registered models with optional filtering."""
 
-        records: list[dict[str, Any]] = []
-        for model_id, meta in self.model_index.items():
-            if strategy and meta.get("strategy") != strategy:
-                continue
-            if model_type and meta.get("model_type") != model_type:
-                continue
-            record = {"model_id": model_id, **meta}
-            records.append(record)
-        records.sort(key=lambda item: item.get("registration_time", ""))
-        return records
+def set_active_model(symbol: str, version: str) -> None:
+    reg = _load_registry()
+    if symbol in reg and version in reg[symbol].get("versions", {}):
+        reg[symbol]["active"] = version
+        _save_registry(reg)
 
-    @staticmethod
-    def _json_safe(data: dict[str, Any]) -> dict[str, Any]:
-        """Convert non-JSON-serializable objects to string paths."""
 
-        def convert(obj: Any) -> Any:
-            if isinstance(obj, (str, int, float, bool)) or obj is None:
-                return obj
-            if isinstance(obj, dict):
-                return {k: convert(v) for k, v in obj.items()}
-            if isinstance(obj, (list, tuple, set)):
-                return [convert(v) for v in obj]
-            if hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
-                return f"{obj.__module__}.{obj.__qualname__}"
-            return repr(obj)
+def get_active_model_meta(symbol: str) -> dict[str, Any] | None:
+    reg = _load_registry()
+    entry = reg.get(symbol)
+    if not entry:
+        return None
+    ver = entry.get("active")
+    if not ver:
+        return None
+    return entry.get("versions", {}).get(ver)
 
-        return {k: convert(v) for k, v in data.items()}
+
+def record_evaluation(symbol: str, metrics: dict[str, Any]) -> None:
+    """Append evaluation metrics for a symbol in JSONL format."""
+    try:
+        _EVAL_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {"symbol": symbol, "ts": datetime.now(UTC).isoformat(), **metrics}
+        with (_EVAL_DIR / f"{symbol}.jsonl").open("a") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        logger.debug("MODEL_EVAL_WRITE_FAILED", exc_info=True)
+
+
+def list_evaluations(symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+    try:
+        path = _EVAL_DIR / f"{symbol}.jsonl"
+        if not path.exists():
+            return []
+        lines = path.read_text().splitlines()[-limit:]
+        return [json.loads(l) for l in lines if l.strip()]
+    except Exception:
+        logger.debug("MODEL_EVAL_READ_FAILED", exc_info=True)
+        return []
+

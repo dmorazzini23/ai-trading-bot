@@ -188,6 +188,9 @@ After deployment, monitor:
   - Cost estimate uses realized EWMA bps rather than static constants.
 - SignalDecisionPipeline cost model now uses EWMA bps for slippage/spread estimation.
 - No‑trade bands now accept per‑symbol bps to support liquidity‑aware thresholds.
+- Portfolio weights: added inverse-vol/risk-parity options in `ai_trading/portfolio/core.py` with safe fallback to inverse-price; method selectable via `ctx.portfolio_weight_method` or settings.
+- Execution: added config/kwargs-gated TWAP routing for large orders in `ai_trading/execution/engine.py` using existing `TWAPExecutor`.
+- Model governance scaffolding: `ai_trading/model_registry.py` to register versions, set active model per symbol, and record evaluations to JSONL.
 
 Test plan:
 - Unit sanity (import + light run): `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q`

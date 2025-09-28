@@ -1113,6 +1113,40 @@ class ExecutionEngine:
                             extra={"symbol": symbol, "cause": e.__class__.__name__},
                         )
             order = Order(symbol, side, quantity, order_type, **kwargs)
+
+            # Optional TWAP routing for large orders (config/kwargs gated)
+            use_twap = bool(kwargs.get("use_twap", False))
+            if not use_twap:
+                try:
+                    from ai_trading.core.constants import EXECUTION_PARAMETERS
+
+                    twap_min_qty = int(EXECUTION_PARAMETERS.get("TWAP_MIN_QTY", 5000))
+                    use_twap = quantity >= twap_min_qty or getattr(order, "execution_algorithm", None) == ExecutionAlgorithm.TWAP
+                except Exception:
+                    use_twap = False
+            if use_twap and quantity > 0:
+                try:
+                    from ai_trading.execution.algorithms import TWAPExecutor
+
+                    duration_min = int(kwargs.get("twap_duration_min", 15))
+                    twap = TWAPExecutor(self.order_manager)
+                    child_ids = twap.execute_twap_order(
+                        symbol,
+                        side,
+                        quantity,
+                        duration_minutes=duration_min,
+                        parent_order_id=getattr(order, "id", None),
+                        strategy_id=order.strategy_id,
+                    )
+                    self.logger.info(
+                        "TWAP_SUBMITTED",
+                        extra={"symbol": symbol, "qty": quantity, "slices": len(child_ids)},
+                    )
+                    # Track parent for monitoring/telemetry
+                    self._track_order(order)
+                    return ExecutionResult(order, order.status, 0, quantity, self._coerce_signal_weight(explicit_signal_weight, signal))
+                except Exception:
+                    self.logger.debug("TWAP_FALLBACK_TO_DIRECT", exc_info=True)
             if self.order_manager.submit_order(order):
                 self.execution_stats["total_orders"] += 1
                 meta_weight = self._coerce_signal_weight(explicit_signal_weight, signal)

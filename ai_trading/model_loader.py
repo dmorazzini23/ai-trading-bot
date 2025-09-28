@@ -158,6 +158,19 @@ def load_model(symbol: str) -> object:
     validated to remain within their respective base directories.
     """
 
+    # Prefer active model from registry when available
+    try:
+        from ai_trading.model_registry import get_active_model_meta
+
+        meta = get_active_model_meta(symbol)
+        if meta and meta.get("path"):
+            try:
+                return joblib.load(Path(meta["path"]))
+            except Exception as exc:
+                logger.warning("MODEL_REGISTRY_LOAD_FAILED for %s: %s", symbol, exc)
+    except Exception:
+        pass
+
     dirs = (MODELS_DIR, INTERNAL_MODELS_DIR)
     for base in dirs:
         path = (base / f"{symbol}.pkl").resolve()
