@@ -8,18 +8,23 @@ from ai_trading.utils.environment import env
 def sip_disallowed() -> bool:
     """Return ``True`` when the SIP feed should not be used."""
 
-    if not env.ALPACA_ALLOW_SIP:
+    allow_flag = getattr(env, "ALPACA_ALLOW_SIP", None)
+    if allow_flag is False:
         return True
 
     has_creds = bool(env.ALPACA_KEY) and bool(env.ALPACA_SECRET)
+    if not has_creds:
+        return True
+
     explicit_entitlement = getattr(env, "ALPACA_SIP_ENTITLED", None)
     if explicit_entitlement is not None:
-        if not bool(explicit_entitlement):
-            return True
-        return not has_creds
-    if hasattr(env, "ALPACA_HAS_SIP") and (env.ALPACA_HAS_SIP is not None):
-        return not (has_creds and bool(env.ALPACA_HAS_SIP))
-    return not has_creds
+        return not bool(explicit_entitlement)
+
+    has_sip = getattr(env, "ALPACA_HAS_SIP", None)
+    if has_sip is not None:
+        return not bool(has_sip)
+
+    return False
 
 
 __all__ = ["sip_disallowed"]
