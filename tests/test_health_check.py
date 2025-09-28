@@ -5,6 +5,26 @@ import pytest
 import ai_trading.app as app_module
 
 
+EXPECTED_ALPACA_MINIMAL = {
+    "sdk_ok": False,
+    "initialized": False,
+    "client_attached": False,
+    "has_key": False,
+    "has_secret": False,
+    "base_url": "",
+    "paper": False,
+    "shadow_mode": False,
+}
+
+
+def _expected_health_payload(error: str) -> dict:
+    return {
+        "ok": False,
+        "error": error,
+        "alpaca": dict(EXPECTED_ALPACA_MINIMAL),
+    }
+
+
 def test_health_endpoint_handles_import_error(monkeypatch):
     original_import = builtins.__import__
 
@@ -21,20 +41,8 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == {
-        "ok": False,
-        "error": "boom",
-        "alpaca": {
-            "sdk_ok": False,
-            "initialized": False,
-            "client_attached": False,
-            "has_key": False,
-            "has_secret": False,
-            "base_url": "",
-            "paper": False,
-            "shadow_mode": False,
-        },
-    }
+    assert data == _expected_health_payload("boom")
+    assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
 
 
 def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
@@ -56,20 +64,8 @@ def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == {
-        "ok": False,
-        "error": "boom",
-        "alpaca": {
-            "sdk_ok": False,
-            "initialized": False,
-            "client_attached": False,
-            "has_key": False,
-            "has_secret": False,
-            "base_url": "",
-            "paper": False,
-            "shadow_mode": False,
-        },
-    }
+    assert data == _expected_health_payload("boom")
+    assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
 
 
 def test_health_endpoint_structure_is_stable():
@@ -107,20 +103,6 @@ def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["ok"] is False
-    assert "error" in data
-    assert isinstance(data["error"], str) and data["error"]
-    alpaca_keys = {
-        "sdk_ok",
-        "initialized",
-        "client_attached",
-        "has_key",
-        "has_secret",
-        "base_url",
-        "paper",
-        "shadow_mode",
-    }
-    assert set(data["alpaca"].keys()) == alpaca_keys
-    bool_keys = alpaca_keys - {"base_url"}
-    assert all(isinstance(data["alpaca"][key], bool) for key in bool_keys)
-    assert isinstance(data["alpaca"]["base_url"], str)
+    err = data.get("error", "")
+    assert isinstance(err, str) and err
+    assert data == _expected_health_payload(err)
