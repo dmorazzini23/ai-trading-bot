@@ -1,8 +1,9 @@
 from __future__ import annotations
 import logging
 import os
+import json
 from importlib import import_module
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.optional_dep import missing
@@ -41,6 +42,57 @@ def create_app():
         _log.exception("ENV_VALIDATION_FAILED")
         app.config["_ENV_VALID"] = False
         app.config["_ENV_ERR"] = str(e)
+
+    def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
+        """Return a JSON ``Response`` with a resilient fallback.
+
+        When ``jsonify`` is unavailable or raises, fall back to ``json.dumps`` with
+        a stable payload to keep ``/health`` reliable under tests that monkeypatch
+        Flask internals.
+        """
+
+        func = globals().get("jsonify")
+        failure_exc: Exception | None = None
+        if callable(func):
+            try:
+                response = func(data)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
+                failure_exc = exc
+            else:
+                try:
+                    response.status_code = status
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                return response
+
+        payload = fallback if fallback is not None else data
+        if failure_exc is not None:
+            message = str(failure_exc) or failure_exc.__class__.__name__
+            if not isinstance(payload, dict):
+                payload = {"ok": False, "error": message}
+            else:
+                payload = dict(payload)
+                payload.setdefault("alpaca", {})
+                if not payload.get("error"):
+                    payload["error"] = message
+                payload["ok"] = False
+        try:
+            body = json.dumps(payload, default=str)
+        except Exception as exc:  # pragma: no cover - defensive
+            _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
+            safe_payload = {
+                "ok": False,
+                "alpaca": payload.get("alpaca", {}),
+                "error": str(exc) or "serialization_error",
+            }
+            payload = safe_payload
+            body = json.dumps(payload, default=str)
+
+        response_factory = getattr(app, "response_class", None)
+        if callable(response_factory):
+            return response_factory(body, status=status, mimetype="application/json")
+        return payload, status
 
     @app.route('/health')
     def health():
@@ -133,34 +185,17 @@ def create_app():
         if errors:
             payload["error"] = "; ".join(errors)
             payload["ok"] = False
+        fallback_payload = dict(payload)
+        fallback_payload["alpaca"] = dict(minimal_alpaca_payload)
+        if errors:
+            err_msg = payload.get("error") or last_error or "; ".join(errors)
+            if err_msg:
+                fallback_payload["error"] = err_msg
+        else:
+            fallback_payload.setdefault("error", last_error or "jsonify unavailable")
+        fallback_payload["ok"] = False
 
-        def _render_response(data: dict):
-            func = globals().get("jsonify")
-
-            def _fallback(message: str | None = None) -> dict:
-                detail = data.get("error") or message or last_error or "jsonify unavailable"
-                if not detail:
-                    detail = "jsonify unavailable"
-                return {
-                    "ok": False,
-                    "error": detail,
-                    "alpaca": dict(minimal_alpaca_payload),
-                }
-
-            if data.get("error"):
-                data["ok"] = False
-
-            if callable(func):
-                try:
-                    return func(data)
-                except Exception as exc:  # /health must not raise
-                    _log.exception("HEALTH_CHECK_FAILED")
-                    message = str(exc) or exc.__class__.__name__
-                    return _fallback(message)
-
-            return _fallback()
-
-        return _render_response(payload)
+        return _json_response(payload, fallback=fallback_payload)
 
     @app.route('/healthz')
     def healthz():

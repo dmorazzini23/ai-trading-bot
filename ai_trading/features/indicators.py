@@ -103,7 +103,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
             ],
             axis=1,
         ).max(axis=1)
-        df["atr"] = tr.rolling(window=period).mean()
+        df["atr"] = tr.rolling(window=period, min_periods=1).mean()
         return df
     except (pd.errors.EmptyDataError, KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
         logger.error("ATR computation failed", exc_info=True)

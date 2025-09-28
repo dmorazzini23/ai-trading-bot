@@ -511,6 +511,13 @@ def safe_get_stock_bars(client: Any, request: "StockBarsRequest", symbol: str, c
                     df = _coerce_http_bars(df)
                     if df is None or df.empty:
                         return _create_empty_bars_dataframe()
+        if df.empty:
+            tf_str = _canon_tf(getattr(request, 'timeframe', ''))
+            feed_str = _canon_feed(getattr(request, 'feed', None))
+            http_df = http_get_bars(symbol, tf_str, iso_start, iso_end, feed=feed_str)
+            df = _coerce_http_bars(http_df)
+            if df is None or df.empty:
+                return _create_empty_bars_dataframe()
         if isinstance(df.index, pd.MultiIndex):
             try:
                 df = df.xs(symbol, level=0, drop_level=False).droplevel(0)

@@ -769,12 +769,12 @@ def _mask_env_name(name: str) -> str:
 
 
 def _get_env_str(key: str) -> str:
-    try:
-        return cast(str, get_env(key, required=True))
-    except RuntimeError as e:  # noqa: BLE001
-        masked = _mask_env_name(key)
-        logger.error("Missing required environment variable: %s", masked)
-        raise RuntimeError(f"Missing required environment variable: {masked}") from e
+    raw = os.getenv(key)
+    if raw not in (None, ""):
+        return str(raw)
+    masked = _mask_env_name(key)
+    logger.error("Missing required environment variable: %s", masked)
+    raise RuntimeError(f"Missing required environment variable: {masked}")
 
 
 def _env_flag(key: str, default: bool = False) -> bool:
@@ -910,6 +910,7 @@ class BotEngine:
         cls = self._data_client_cls
         client = None
         if callable(cls):
+            _get_env_str("ALPACA_BASE_URL")
             client = cls(
                 api_key=_get_env_str("ALPACA_API_KEY"),
                 secret_key=_get_env_str("ALPACA_SECRET_KEY"),
@@ -9991,6 +9992,23 @@ if os.getenv("AI_TRADING_BOOTSTRAP_TRADE_LOG", "1") != "0":
         )
 
 
+class _DeferredRiskEngine:
+    """Placeholder risk engine that raises stored initialization errors lazily."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__setattr__("_error", error)
+        super().__setattr__("capital_scaler", None)
+
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover - defensive
+        raise RuntimeError(str(self._error)) from self._error
+
+    def __setattr__(self, name: str, value: Any) -> None:  # pragma: no cover - defensive
+        if name == "capital_scaler":
+            super().__setattr__(name, value)
+            return
+        raise RuntimeError(str(self._error)) from self._error
+
+
 def get_risk_engine():
     """Get risk engine with fallback to RiskManager from ai_trading.risk.manager."""
     global risk_engine
@@ -10019,7 +10037,14 @@ def get_risk_engine():
                 logging.INFO,
                 f"Risk engine: {cls.__module__}.{cls.__name__}",
             )
-            risk_engine = cls()
+            try:
+                risk_engine = cls()
+            except RuntimeError as exc:
+                logger.warning(
+                    "RISK_ENGINE_INIT_DEFERRED",
+                    extra={"detail": str(exc)},
+                )
+                risk_engine = _DeferredRiskEngine(exc)
     return risk_engine
 
 
@@ -10728,9 +10753,15 @@ def _update_risk_engine_exposure():
 
 def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     """Log warnings if no market data is available on startup."""
+    data_fetcher = getattr(ctx, "data_fetcher", None)
+    if data_fetcher is None:
+        logger.warning(
+            "DATA_SOURCE_HEALTH_CHECK: data fetcher unavailable; skipping check"
+        )
+        return
     missing: list[str] = []
     for sym in symbols:
-        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        df = data_fetcher.get_daily_df(ctx, sym)
         if df is None or df.empty:
             missing.append(sym)
     if not symbols:
@@ -21221,6 +21252,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     price: float | None = None
     price_source = "unknown"
     primary_failure_source: str | None = None
+    primary_failure_labels: set[str] = set()
 
     provider_disabled = False
     primary_provider_fn = getattr(
@@ -21333,11 +21365,15 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     if not provider_order:
         provider_order = ("yahoo", "bars")
 
+    has_primary_providers = any(_is_primary_price_source(p) for p in provider_order)
+
     def _record_primary_failure(source_label: str | None) -> None:
-        nonlocal primary_failure_source
-        if source_label and primary_failure_source is None:
-            if _is_primary_price_source(source_label):
-                primary_failure_source = source_label
+        nonlocal primary_failure_source, primary_failure_labels
+        if not source_label or not _is_primary_price_source(source_label):
+            return
+        if primary_failure_source is None:
+            primary_failure_source = source_label
+        primary_failure_labels.add(source_label)
 
     def _attempt_provider(provider: str) -> tuple[float | None, str]:
         if provider == "alpaca_trade":
@@ -21366,7 +21402,17 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     last_source = price_source
     prev_source = price_source
+    deferred_providers: list[str] = []
     for provider in provider_order:
+        if (
+            provider == "yahoo"
+            and not skip_primary
+            and price is None
+            and len(primary_failure_labels) < 2
+            and has_primary_providers
+        ):
+            deferred_providers.append(provider)
+            continue
         if provider in {"alpaca_minute_close", "yahoo"} and _use_cached_primary_success():
             return _finalize_return()
         candidate, source = _attempt_provider(provider)
@@ -21390,6 +21436,19 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 last_source = price_source
                 return _finalize_return()
         _record_primary_failure(source or provider)
+
+    if price is None and deferred_providers and (
+        skip_primary or len(primary_failure_labels) >= 2 or not has_primary_providers
+    ):
+        for provider in deferred_providers:
+            candidate, source = _attempt_provider(provider)
+            if source:
+                prev_source = last_source
+                last_source = source
+            if candidate is not None:
+                price = candidate
+                price_source = source or provider
+                break
 
     if price is None:
         degraded = _resolve_cached_quote_bid(symbol, cache)

@@ -2905,7 +2905,12 @@ def _fetch_bars(
     _feed = _to_feed_str(feed or _DEFAULT_FEED)
 
     # Mutable state for retry tracking shared by nested helpers.
-    _state: dict[str, Any] = {"corr_id": None, "retries": 0, "providers": []}
+    _state: dict[str, Any] = {
+        "corr_id": None,
+        "retries": 0,
+        "providers": [],
+        "empty_metric_emitted": False,
+    }
 
     def _tags(*, provider: str | None = None, feed: str | None = None) -> dict[str, str]:
         tag_provider = provider if provider is not None else "alpaca"
@@ -2980,6 +2985,22 @@ def _fetch_bars(
                     }
                 ),
             )
+            fallback_df = None
+            if _ENABLE_HTTP_FALLBACK:
+                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+                fb_interval = interval_map.get(_interval)
+                if fb_interval:
+                    provider_str, normalized_provider = _resolve_backup_provider()
+                    resolved_provider = normalized_provider or provider_str
+                    from_provider_label = f"alpaca_{_feed}"
+                    if from_provider_label == "alpaca_iex":
+                        from_provider_label = "alpaca_sip"
+                    fallback_df = _run_backup_fetch(
+                        fb_interval,
+                        from_provider=from_provider_label,
+                    )
+            if fallback_df is not None and not getattr(fallback_df, "empty", True):
+                return fallback_df
             empty_df = _empty_ohlcv_frame(pd)
             return empty_df if empty_df is not None else pd.DataFrame()
         raise
@@ -3658,7 +3679,9 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
-            _incr("data.fetch.empty", value=1.0, tags=_tags())
+            if not _state.get("empty_metric_emitted"):
+                _state["empty_metric_emitted"] = True
+                _incr("data.fetch.empty", value=1.0, tags=_tags())
             attempt = _state["retries"] + 1
             remaining_retries = max(0, max_retries - attempt)
             can_retry_timeframe = str(_interval).lower() not in {"1day", "day", "1d"}

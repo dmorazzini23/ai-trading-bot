@@ -43,14 +43,13 @@ def _normalize_host(hostname: str | None) -> str:
     return host or _DEFAULT_HOST_KEY
 
 
-def reset_host_semaphores() -> None:
-    """Clear cached host semaphores.
-
-    Useful for ensuring a clean slate when the module is reloaded in tests.
-    """
+def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
+    """Clear cached host semaphores and, optionally, the limit cache."""
 
     _HOST_SEMAPHORES.clear()
-    invalidate_host_limit_cache()
+    if clear_limit_cache:
+        global _LIMIT_CACHE
+        _LIMIT_CACHE = None
 
 
 def _compute_limit(raw: str | None = None) -> int:
@@ -137,6 +136,7 @@ def invalidate_host_limit_cache() -> None:
 
     global _LIMIT_CACHE
     _LIMIT_CACHE = None
+    reset_host_semaphores(clear_limit_cache=False)
 
 
 def _ensure_limit_cache() -> _ResolvedLimitCache:

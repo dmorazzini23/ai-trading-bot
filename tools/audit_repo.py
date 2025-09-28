@@ -20,6 +20,7 @@ IGNORED_DEV_FOLDERS = {
     "_env",
     "build",
     "dist",
+    ".git",
 }
 
 # Directories that are considered safe for dynamic constructs such as exec/eval

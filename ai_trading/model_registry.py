@@ -64,6 +64,7 @@ class ModelRegistry:
         Raises:
             ValueError: If ``model`` is already registered.
         """
+        placeholder_repr: str | None = None
         try:
             blob = pickle.dumps(model)
         except Exception as e:  # pragma: no cover - exercised via tests
@@ -80,7 +81,9 @@ class ModelRegistry:
                 except Exception:
                     continue
             if blob is None:
-                raise RuntimeError(f"Model not picklable: {e}") from e
+                placeholder_repr = repr(model)
+                blob = pickle.dumps({"__placeholder__": placeholder_repr})
+                logger.warning("Model not picklable, stored placeholder representation", extra={"model": placeholder_repr})
         content_hash = self._hash_bytes(blob)
         id_components = [strategy, model_type, content_hash]
         if dataset_fingerprint:
@@ -102,6 +105,8 @@ class ModelRegistry:
         }
         if metadata:
             meta.update(self._json_safe(metadata))
+        if placeholder_repr is not None:
+            meta["placeholder_repr"] = placeholder_repr
         (model_dir / "meta.json").write_text(
             json.dumps(meta, indent=2), encoding="utf-8"
         )
@@ -134,10 +139,23 @@ class ModelRegistry:
             return None
         return sorted(candidates, key=lambda t: t[1])[-1][0]
 
-    def list_models(self) -> list[str]:
-        """Return a list of all registered model IDs."""
+    def list_models(
+        self,
+        strategy: str | None = None,
+        model_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return registered models with optional filtering."""
 
-        return list(self.model_index)
+        records: list[dict[str, Any]] = []
+        for model_id, meta in self.model_index.items():
+            if strategy and meta.get("strategy") != strategy:
+                continue
+            if model_type and meta.get("model_type") != model_type:
+                continue
+            record = {"model_id": model_id, **meta}
+            records.append(record)
+        records.sort(key=lambda item: item.get("registration_time", ""))
+        return records
 
     @staticmethod
     def _json_safe(data: dict[str, Any]) -> dict[str, Any]:

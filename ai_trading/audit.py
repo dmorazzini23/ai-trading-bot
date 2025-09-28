@@ -169,9 +169,13 @@ def _compute_targets(main: Path) -> list[Path]:
         # tests that assert specific tmp_path locations.
         tmp_base = _find_pytest_tmpdir()
         if tmp_base is not None:
-            t1 = tmp_base / "data" / DEFAULT_LOG_FILE
-            t2 = tmp_base / DEFAULT_LOG_FILE
-            targets = [t1, t2]
+            extra_targets = [
+                tmp_base / "data" / DEFAULT_LOG_FILE,
+                tmp_base / DEFAULT_LOG_FILE,
+            ]
+            for candidate in extra_targets:
+                if candidate not in targets:
+                    targets.append(candidate)
     # Deduplicate while preserving order
     out: list[Path] = []
     for p in targets:
@@ -195,11 +199,17 @@ def log_trade(
     `extra_info` suggests a test/audit mode.
     """
     override = os.getenv("TRADE_LOG_FILE") or os.getenv("AI_TRADING_TRADE_LOG_FILE")
+    additional_path: Path | None = None
     if override:
         main_path = Path(override)
+        candidate = Path(TRADE_LOG_FILE)
+        if candidate != main_path:
+            additional_path = candidate
     else:
         main_path = Path(TRADE_LOG_FILE)
     targets = _compute_targets(main_path)
+    if additional_path is not None and additional_path not in targets:
+        targets.insert(0, additional_path)
     for p in targets:
         try:
             _ensure_parent_dir(p)

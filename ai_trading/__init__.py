@@ -4,7 +4,22 @@ Keep imports *lazy* to avoid optional deps at import-time (e.g., Alpaca).
 Expose a **minimal, explicit allowlist** of submodules and symbols that are
 safe to import from the package root for tests and CLI users.
 """
+import os
+import sys
+from pathlib import Path
 from importlib import import_module as _import_module
+
+PYTEST_DONT_REWRITE = ["ai_trading"]
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_root_str = str(_REPO_ROOT)
+if _root_str not in sys.path:
+    sys.path.insert(0, _root_str)
+_existing_pythonpath = os.environ.get("PYTHONPATH")
+if not _existing_pythonpath:
+    os.environ["PYTHONPATH"] = _root_str
+elif _root_str not in _existing_pythonpath.split(os.pathsep):
+    os.environ["PYTHONPATH"] = f"{_root_str}{os.pathsep}{_existing_pythonpath}"
 
 # AI-AGENT-REF: public surface allowlist
 _EXPORTS = {

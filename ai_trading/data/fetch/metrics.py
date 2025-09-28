@@ -40,6 +40,7 @@ _EMPTY: Counter[tuple[str, str]] = Counter()
 _FETCH_ATTEMPTS: Counter[str] = Counter()
 _BACKUP_PROVIDER_USED_COUNTS: Counter[tuple[str, str]] = Counter()
 _ALPACA_FAILED: int = 0
+_PROVIDER_FALLBACK_COUNTS: Counter[tuple[str, str]] = Counter()
 
 # Module-level gauges mirroring ``ai_trading.data.metrics.metrics`` values.
 rate_limit: int = 0
@@ -145,7 +146,10 @@ def inc_provider_fallback(from_provider: str, to_provider: str) -> int:
         from_provider=from_provider, to_provider=to_provider
     )
     metric.inc()
-    return _current_value(metric)
+    key = (from_provider, to_provider)
+    _PROVIDER_FALLBACK_COUNTS[key] += 1
+    value = _current_value(metric)
+    return value or _PROVIDER_FALLBACK_COUNTS[key]
 
 
 def inc_backup_provider_used(provider: str, symbol: str) -> int:
