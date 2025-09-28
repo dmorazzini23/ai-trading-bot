@@ -3689,6 +3689,30 @@ def _fetch_bars(
                     should_backoff_first_empty = True
                 else:
                     should_backoff_first_empty = remaining_fallbacks <= 0
+            fallback_enabled = bool(fallback) or bool(_ENABLE_HTTP_FALLBACK)
+            if not fallback_enabled:
+                fallback_enabled = _should_use_backup_on_empty()
+            retries_enabled = remaining_retries > 0 and not outside_market_hours
+            if outside_market_hours and not (retries_enabled or fallback_enabled):
+                logger.info(
+                    "ALPACA_FETCH_MARKET_CLOSED",
+                    extra=_norm_extra(
+                        {
+                            "provider": "alpaca",
+                            "status": "market_closed",
+                            "feed": _feed,
+                            "timeframe": _interval,
+                            "symbol": symbol,
+                            "start": _start.isoformat(),
+                            "end": _end.isoformat(),
+                            "correlation_id": _state["corr_id"],
+                        }
+                    ),
+                )
+                raise EmptyBarsError(
+                    "alpaca_empty: symbol="
+                    f"{symbol}, timeframe={_interval}, feed={_feed}, reason=market_closed"
+                )
             logged_attempt = False
             if empty_attempts == 1 and should_backoff_first_empty and remaining_retries > 0:
                 retry_delay = _state.get("delay", 0.25)
