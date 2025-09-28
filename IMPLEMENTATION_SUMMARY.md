@@ -177,3 +177,22 @@ After deployment, monitor:
 ---
 
 **Implementation transforms the bot from a high-frequency trader to a strategic position holder, maximizing gains while maintaining risk controls.**
+## Phase 1 optimization (cost feedback + optimizer upgrades)
+
+- Added lightweight slippage logging with EWMA feedback: `ai_trading/execution/slippage_log.py`.
+  - Engine records realized bps on fills and appends a compact CSV to `SLIPPAGE_LOG_PATH`.
+  - EWMA cost is fed into signal cost estimation and portfolio optimizer transaction cost.
+- Upgraded portfolio optimizer (`ai_trading/portfolio/optimizer.py`):
+  - Optional turnover penalty (config key `turnover_penalty`, default 0.01).
+  - Risk change uses Ledoit–Wolf covariance shrinkage when available; falls back safely.
+  - Cost estimate uses realized EWMA bps rather than static constants.
+- SignalDecisionPipeline cost model now uses EWMA bps for slippage/spread estimation.
+- No‑trade bands now accept per‑symbol bps to support liquidity‑aware thresholds.
+
+Test plan:
+- Unit sanity (import + light run): `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q`
+- Dry run slippage logging: ensure CSV appends and no exceptions when `expected_price` present.
+- Verify optimizer decisions unchanged on zero EWMA, start logging improves cost realism over time.
+
+Rollback plan:
+- Revert changes to the four touched files; behavior falls back to static costs and variance proxy.

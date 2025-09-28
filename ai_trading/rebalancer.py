@@ -18,15 +18,22 @@ from ai_trading.utils.time import safe_utcnow
 
 logger = get_logger(__name__)
 
-def apply_no_trade_bands(current: dict[str, float], target: dict[str, float], band_bps: float=25.0) -> dict[str, float]:
+def apply_no_trade_bands(current: dict[str, float], target: dict[str, float], band_bps: float | dict[str, float]=25.0) -> dict[str, float]:
     """
     Suppress small reallocations that are inside a no-trade band (in basis points).
     Example: band_bps=25 means ignore deltas smaller than 0.25% absolute weight.
     """
-    band = band_bps / 10000.0
+    def _band_for(sym: str) -> float:
+        try:
+            if isinstance(band_bps, dict):
+                return float(band_bps.get(sym, 25.0)) / 10000.0
+            return float(band_bps) / 10000.0
+        except Exception:
+            return 0.0025
     out = {}
     for sym, tgt in target.items():
         cur = current.get(sym, 0.0)
+        band = _band_for(sym)
         if abs(tgt - cur) < band:
             out[sym] = cur
         else:

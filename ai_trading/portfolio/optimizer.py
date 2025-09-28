@@ -91,7 +91,7 @@ class PortfolioOptimizer:
     their impact on overall portfolio performance rather than individual signals.
     """
 
-    def __init__(self, improvement_threshold: float=0.02, max_correlation_penalty: float=0.15, rebalance_drift_threshold: float=0.05):
+    def __init__(self, improvement_threshold: float=0.02, max_correlation_penalty: float=0.15, rebalance_drift_threshold: float=0.05, turnover_penalty: float=0.01, mode: str = "default"):
         """
         Initialize portfolio optimizer.
         
@@ -103,6 +103,8 @@ class PortfolioOptimizer:
         self.improvement_threshold = improvement_threshold
         self.max_correlation_penalty = max_correlation_penalty
         self.rebalance_drift_threshold = rebalance_drift_threshold
+        self.turnover_penalty = max(0.0, float(turnover_penalty))
+        self.mode = str(mode or "default")
         self.kelly_calculator = KellyCriterion()
         self.adaptive_sizer = AdaptivePositionSizer()
         from ai_trading.rebalancer import TaxAwareRebalancer
@@ -230,7 +232,15 @@ class PortfolioOptimizer:
             expected_return_change = self._estimate_return_change(symbol, position_change, market_data)
             risk_change = self._estimate_risk_change(symbol, position_change, current_positions, market_data)
             tax_impact = self._estimate_tax_impact(symbol, position_change, current_prices)
-            net_benefit = expected_return_change - transaction_cost - correlation_impact * self.max_correlation_penalty + tax_impact
+            # Turnover-aware penalty scaled by relative trade value
+            try:
+                total_val = sum((abs(v) * current_prices.get(s, 1.0) for s, v in current_positions.items()))
+                trade_val = abs(position_change) * current_prices.get(symbol, 1.0)
+                turnover_ratio = (trade_val / total_val) if total_val > 0 else 0.0
+            except Exception:
+                turnover_ratio = 0.0
+            turnover_penalty = self.turnover_penalty * turnover_ratio
+            net_benefit = expected_return_change - transaction_cost - correlation_impact * self.max_correlation_penalty - turnover_penalty + tax_impact
             confidence = self._calculate_confidence(symbol, market_data)
             return TradeImpactAnalysis(expected_return_change=expected_return_change, risk_change=risk_change, kelly_efficiency_change=kelly_efficiency_change, correlation_impact=correlation_impact, transaction_cost=transaction_cost, tax_impact=tax_impact, net_benefit=net_benefit, confidence=confidence)
         except (KeyError, ValueError, ZeroDivisionError) as e:
@@ -313,10 +323,18 @@ class PortfolioOptimizer:
         try:
             price = current_prices.get(symbol, 100.0)
             trade_value = abs(trade_size) * price
-            spread_cost = trade_value * 0.001
+            # Use realized EWMA slippage bps when available
+            try:
+                from ai_trading.execution.slippage_log import get_ewma_cost_bps
+
+                bps = float(get_ewma_cost_bps(symbol, default=2.0))
+            except Exception:
+                bps = 2.0
+            slippage_cost = trade_value * (bps / 10000.0)
+            # Conservative baseline components
             commission = min(1.0, trade_value * 0.0001)
-            market_impact = trade_value * 0.0005
-            total_cost = spread_cost + commission + market_impact
+            market_impact = trade_value * 0.0003
+            total_cost = slippage_cost + commission + market_impact
             return total_cost
         except (KeyError, TypeError, ValueError):
             return 0.01
@@ -335,17 +353,48 @@ class PortfolioOptimizer:
             return 0.0
 
     def _estimate_risk_change(self, symbol: str, position_change: float, current_positions: dict[str, float], market_data: dict[str, Any]) -> float:
-        """Estimate portfolio risk change from position modification."""
+        """Estimate portfolio risk change from position modification.
+
+        Uses Ledoit–Wolf covariance shrinkage when scikit-learn is available,
+        otherwise falls back to simple variance scaling for the symbol.
+        """
         try:
             returns_data = market_data.get('returns', {})
-            if symbol not in returns_data:
+            prices = market_data.get('prices', {})
+            if not returns_data:
                 return 0.0
-            symbol_returns = returns_data[symbol]
-            if len(symbol_returns) < 10:
+            symbols = [s for s in current_positions.keys() if s in returns_data]
+            if not symbols or len(symbols) < 2:
+                r = returns_data.get(symbol, [])
+                if len(r) < 10:
+                    return 0.0
+                return abs(position_change) * max(1e-6, statistics.stdev(r))
+            try:
+                import numpy as _np
+            except Exception:
                 return 0.0
-            volatility = statistics.stdev(symbol_returns)
-            risk_change = abs(position_change) * volatility
-            return risk_change
+            n = min(len(returns_data[s]) for s in symbols)
+            if n < 10:
+                return 0.0
+            R = _np.asarray([returns_data[s][-n:] for s in symbols], dtype=float)
+            R = R - R.mean(axis=1, keepdims=True)
+            try:
+                from sklearn.covariance import LedoitWolf  # type: ignore
+
+                cov = LedoitWolf().fit(R.T).covariance_
+            except Exception:
+                cov = _np.cov(R)
+            def _weights(pos: dict[str, float]) -> _np.ndarray:
+                vals = _np.array([abs(pos.get(s, 0.0)) * float(prices.get(s, 1.0)) for s in symbols], dtype=float)
+                tot = float(vals.sum())
+                return (vals / tot) if tot > 0 else _np.zeros_like(vals)
+            curr_w = _weights(current_positions)
+            prop = current_positions.copy()
+            prop[symbol] = prop.get(symbol, 0.0) + position_change
+            prop_w = _weights(prop)
+            curr_var = float(curr_w.T @ cov @ curr_w)
+            prop_var = float(prop_w.T @ cov @ prop_w)
+            return max(0.0, prop_var - curr_var)
         except (KeyError, statistics.StatisticsError, ValueError) as e:
             logger.error(f'Risk change estimate failed for {symbol}: {e}')
             return 0.0
@@ -389,4 +438,10 @@ def create_portfolio_optimizer(config: dict[str, Any] | None=None) -> PortfolioO
     """
     if config is None:
         config = {}
-    return PortfolioOptimizer(improvement_threshold=config.get('improvement_threshold', 0.02), max_correlation_penalty=config.get('max_correlation_penalty', 0.15), rebalance_drift_threshold=config.get('rebalance_drift_threshold', 0.05))
+    return PortfolioOptimizer(
+        improvement_threshold=config.get('improvement_threshold', 0.02),
+        max_correlation_penalty=config.get('max_correlation_penalty', 0.15),
+        rebalance_drift_threshold=config.get('rebalance_drift_threshold', 0.05),
+        turnover_penalty=config.get('turnover_penalty', 0.01),
+        mode=config.get('mode', 'default'),
+    )

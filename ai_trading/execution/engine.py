@@ -1452,6 +1452,20 @@ class ExecutionEngine:
                     "fill_id": fill_id,
                 }
             )
+            # Log realized slippage to CSV and update EWMA feedback (best-effort)
+            try:
+                from ai_trading.execution.slippage_log import record_fill as _log_slip
+
+                _log_slip(
+                    symbol=getattr(order, "symbol", ""),
+                    side=str(side_val).lower(),
+                    qty=int(delta_qty),
+                    expected_price=float(getattr(order, "expected_price", None) or 0) or None,
+                    fill_price=price,
+                    timestamp=timestamp if isinstance(timestamp, datetime) else datetime.now(UTC),
+                )
+            except Exception:
+                logger.debug("SLIPPAGE_EWMA_UPDATE_FAILED", exc_info=True)
         except Exception:  # pragma: no cover - persistence best effort
             logger.debug("META_TRADE_PERSIST_FAILED", exc_info=True)
 

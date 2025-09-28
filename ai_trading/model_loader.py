@@ -10,6 +10,8 @@ from ai_trading.logging import get_logger
 from ai_trading.paths import MODELS_DIR
 from datetime import UTC
 from pathlib import Path
+from dataclasses import asdict
+import json
 
 import joblib
 from ai_trading.utils.lazy_imports import load_pandas
@@ -22,7 +24,13 @@ INTERNAL_MODELS_DIR = Path(__file__).resolve().parent / "models"
 
 
 def train_and_save_model(symbol: str, models_dir: Path) -> object:
-    """Train a fallback classification model for ``symbol`` and persist it."""
+    """Train a simple feature/label pipeline with rolling OOS validation and persist it.
+
+    - Engineers basic features (momentum, volatility, skew/kurtosis, liquidity).
+    - Labels next-period direction.
+    - Uses ``TimeSeriesSplit`` for OOS scoring and fits LogisticRegression.
+    - Persists model and lightweight metadata for governance.
+    """
 
     from datetime import datetime, timedelta
 
@@ -30,43 +38,110 @@ def train_and_save_model(symbol: str, models_dir: Path) -> object:
     pd = load_pandas()
     if pd is None or not hasattr(pd, "DataFrame"):
         raise ImportError("pandas is required for train_and_save_model")
-    from sklearn.dummy import DummyClassifier
     from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import TimeSeriesSplit
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import make_pipeline
+    from sklearn.metrics import accuracy_score
 
     from ai_trading.data.fetch import get_daily_df
 
     end = datetime.now(UTC)
-    start = end - timedelta(days=30)
+    start = end - timedelta(days=240)
     try:
         df = get_daily_df(symbol, start, end)
     except (ValueError, TypeError) as exc:
         logger.warning("Data fetch failed for %s: %s", symbol, exc)
-        try:
-            df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
-        except AttributeError as exc:
-            raise ImportError("pandas DataFrame unavailable") from exc
+        df = None
     if df is None or df.empty or "close" not in df:
+        # Fallback synthetic monotonic series
+        df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 240), "volume": np.linspace(1e5, 2e5, 240)})
+
+    df = df.copy()
+    # Basic features
+    df["ret1"] = df["close"].pct_change()
+    df["mom5"] = df["close"].pct_change(5)
+    df["mom10"] = df["close"].pct_change(10)
+    df["vol20"] = df["ret1"].rolling(20).std()
+    with np.errstate(invalid="ignore"):
         try:
-            df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
-        except AttributeError as exc:
-            raise ImportError("pandas DataFrame unavailable") from exc
-
-    X = np.arange(len(df)).reshape(-1, 1)
-    y = (df["close"].diff().fillna(0) > 0).astype(int).values
-    model = LogisticRegression()
+            df["skew20"] = df["ret1"].rolling(20).skew()
+            df["kurt20"] = df["ret1"].rolling(20).kurt()
+        except Exception:
+            df["skew20"] = 0.0
+            df["kurt20"] = 0.0
+    if "volume" in df:
+        df["liq20"] = df["volume"].rolling(20).mean()
+        df["volchg5"] = df["volume"].pct_change(5)
+    else:
+        df["liq20"] = 0.0
+        df["volchg5"] = 0.0
+    # Trend strength via polyfit on cumulative return
     try:
-        model.fit(X, y)
-    except (Exception) as exc:  # noqa: BLE001 - broad to fall back gracefully
-        logger.exception("Model training failed: %s", exc)
-        model = DummyClassifier(strategy="prior").fit([[0], [1]], [0, 1])
+        x = np.arange(len(df))
+        y = df["ret1"].fillna(0).cumsum().to_numpy()
+        slope = np.polyfit(x, y, 1)[0]
+        df["trend"] = slope
+    except Exception:
+        df["trend"] = 0.0
 
+    # Label: next-period up/down
+    df["y"] = (df["close"].shift(-1) > df["close"]).astype(int)
+    df = df.dropna()
+    if len(df) < 60:
+        # Not enough data; fit a trivial prior model
+        X = np.arange(len(df)).reshape(-1, 1)
+        y = df["y"].values
+        model = LogisticRegression(max_iter=200)
+        model.fit(X, y)
+        try:
+            models_dir.mkdir(parents=True, exist_ok=True)
+            joblib.dump(model, models_dir / f"{symbol}.pkl")
+        except Exception as exc:
+            logger.warning("Failed saving model for %s: %s", symbol, exc)
+        return model
+
+    feature_cols = [c for c in ("ret1", "mom5", "mom10", "vol20", "skew20", "kurt20", "liq20", "volchg5", "trend") if c in df.columns]
+    X = df[feature_cols].astype(float).values
+    y = df["y"].astype(int).values
+
+    # Walk-forward OOS validation
+    tscv = TimeSeriesSplit(n_splits=5)
+    scores: list[float] = []
+    for train_idx, test_idx in tscv.split(X):
+        if len(test_idx) == 0 or len(train_idx) < 20:
+            continue
+        pipe = make_pipeline(StandardScaler(with_mean=True), LogisticRegression(max_iter=500))
+        pipe.fit(X[train_idx], y[train_idx])
+        yhat = pipe.predict(X[test_idx])
+        try:
+            scores.append(accuracy_score(y[test_idx], yhat))
+        except Exception:
+            continue
+
+    # Final fit on all but last 5 samples to reduce leakage
+    cutoff = max(0, len(X) - 5)
+    final_pipe = make_pipeline(StandardScaler(with_mean=True), LogisticRegression(max_iter=500))
+    final_pipe.fit(X[:cutoff], y[:cutoff])
+
+    # Persist model and metadata
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(model, models_dir / f"{symbol}.pkl")
+        joblib.dump(final_pipe, models_dir / f"{symbol}.pkl")
+        meta = {
+            "version": "1.0",
+            "model": "logreg",
+            "features": feature_cols,
+            "oos_accuracy_mean": float(sum(scores) / max(1, len(scores))),
+            "n_samples": int(len(df)),
+            "trained_at": datetime.now(UTC).isoformat(),
+        }
+        with (models_dir / f"{symbol}.meta.json").open("w") as f:
+            json.dump(meta, f)
     except (OSError, ValueError, TypeError) as exc:
         logger.warning("Failed saving model for %s: %s", symbol, exc)
 
-    return model
+    return final_pipe
 
 
 def load_model(symbol: str) -> object:

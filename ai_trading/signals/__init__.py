@@ -1198,8 +1198,14 @@ class SignalDecisionPipeline:
         """Estimate transaction costs for a trade."""
         notional = price * quantity
         commission_pct = 0.0001
-        spread_bp = 2
-        slippage_bp = 1
+        # Use realized EWMA slippage where available
+        try:
+            from ai_trading.execution.slippage_log import get_ewma_cost_bps
+
+            slippage_bp = float(get_ewma_cost_bps(symbol, default=2.0))
+        except Exception:
+            slippage_bp = 2.0
+        spread_bp = max(1.0, min(5.0, slippage_bp))  # bound spread guess
         spread_cost = spread_bp / 10000 * notional
         slippage_cost = slippage_bp / 10000 * notional
         commission = commission_pct * notional
