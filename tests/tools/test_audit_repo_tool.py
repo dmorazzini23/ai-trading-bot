@@ -22,7 +22,8 @@ def test_audit_repo_runs_clean():
 
 def test_scan_repo_skips_sensitive_checks(tmp_path, monkeypatch):
     """SAFE_PREFIXES should bypass py_compile and exec/eval metrics."""
-    safe_prefix = next(iter(audit_repo.SAFE_PREFIXES))
+    safe_prefix = ("tools", "ci")
+    assert safe_prefix in audit_repo.SAFE_PREFIXES
     safe_dir = tmp_path.joinpath(*safe_prefix)
     safe_dir.mkdir(parents=True)
 
@@ -46,4 +47,11 @@ def test_scan_repo_skips_sensitive_checks(tmp_path, monkeypatch):
     assert safe_file.resolve() not in compiled_paths
     assert metrics["exec_eval_count"] == 1
     assert metrics["py_compile_failures"] == 0
+
+
+def test_scan_repo_reports_zero_exec_eval_for_repo_root():
+    """Direct scan of the repository should report zero exec/eval usage."""
+    repo_root = Path(__file__).resolve().parents[2]
+    metrics = audit_repo.scan_repo(repo_root)
+    assert metrics["exec_eval_count"] == 0
 

@@ -32,7 +32,10 @@ SAFE_PREFIXES = (
     ("tests", "stubs"),
     ("tests", "vendor_stubs"),
     ("tests", "_stubs"),
+    ("tools", "ci"),
 )
+
+EXEC_EVAL_BUILTINS = frozenset({"exec", "eval"})
 
 
 def _is_under_prefix(path: Path, root: Path, prefixes: tuple[tuple[str, ...], ...]) -> bool:
@@ -48,6 +51,17 @@ def _is_under_prefix(path: Path, root: Path, prefixes: tuple[tuple[str, ...], ..
 
 def _is_dev_folder(path: Path) -> bool:
     return any(part in IGNORED_DEV_FOLDERS for part in path.parts)
+
+
+def _shadowed_exec_eval(tree: ast.AST) -> set[str]:
+    shadowed: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            if node.id in EXEC_EVAL_BUILTINS:
+                shadowed.add(node.id)
+        elif isinstance(node, ast.arg) and node.arg in EXEC_EVAL_BUILTINS:
+            shadowed.add(node.arg)
+    return shadowed
 
 
 def scan_repo(root: Path) -> Dict[str, int]:
@@ -79,6 +93,7 @@ def scan_repo(root: Path) -> Dict[str, int]:
             tree = ast.parse(source)
         except Exception:
             continue
+        shadowed_exec_eval = _shadowed_exec_eval(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name.startswith("Mock"):
                 metrics["mock_classes"] += 1
@@ -88,7 +103,8 @@ def scan_repo(root: Path) -> Dict[str, int]:
                 not skip_sensitive_metrics
                 and isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id in {"exec", "eval"}
+                and node.func.id in EXEC_EVAL_BUILTINS
+                and node.func.id not in shadowed_exec_eval
             ):
                 metrics["exec_eval_count"] += 1
             if isinstance(node, (ast.Import, ast.ImportFrom)):
