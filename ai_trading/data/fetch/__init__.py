@@ -1866,6 +1866,56 @@ def _flatten_and_normalize_ohlcv(
     return df_out
 
 
+def _mutate_dataframe_in_place(target: Any, source: Any) -> Any:
+    """Coerce ``target`` to match ``source`` while retaining object identity."""
+
+    if source is None:
+        return None
+
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        return source
+
+    dataframe_type = getattr(pd_local, "DataFrame", None)
+    if dataframe_type is None or not isinstance(source, dataframe_type):
+        return source
+    if not isinstance(target, dataframe_type):
+        return source
+    if target is source:
+        return target
+
+    try:
+        target.drop(target.index, inplace=True)
+    except Exception:
+        pass
+    try:
+        target.drop(columns=list(target.columns), inplace=True, errors="ignore")
+    except Exception:
+        pass
+
+    for column in source.columns:
+        try:
+            target[column] = source[column].to_numpy()
+        except Exception:
+            target[column] = list(source[column])
+
+    try:
+        target.index = source.index.copy()
+    except Exception:
+        try:
+            target.index = source.index
+        except Exception:
+            pass
+
+    try:
+        target.attrs.clear()
+        target.attrs.update(getattr(source, "attrs", {}) or {})
+    except Exception:
+        pass
+
+    return target
+
+
 def _set_price_reliability(
     df: pd.DataFrame,
     *,
@@ -2226,9 +2276,21 @@ def _post_process(
         return None
     candidate = df if _is_normalized_ohlcv_frame(df, pd) else _flatten_and_normalize_ohlcv(df, symbol, timeframe)
     try:
-        return normalize_ohlcv_df(candidate)
+        normalized = normalize_ohlcv_df(candidate)
     except Exception:
-        return candidate
+        normalized = candidate
+
+    if normalized is None:
+        return None
+
+    if normalized is df:
+        return df
+
+    if not isinstance(df, pd.DataFrame):
+        return normalized
+
+    result = _mutate_dataframe_in_place(df, normalized)
+    return result if isinstance(result, pd.DataFrame) else normalized
 
 
 def _verify_minute_continuity(df: pd.DataFrame | None, symbol: str, backfill: str | None = None) -> pd.DataFrame | None:
@@ -4731,6 +4793,19 @@ def get_minute_df(
         else:
             df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
+
+    if used_backup and df is not None and not getattr(df, "empty", True):
+        processed_df = _post_process(df, symbol=symbol, timeframe="1Min")
+        if processed_df is not None and not getattr(processed_df, "empty", True):
+            df = processed_df
+            if not fallback_logged:
+                _record_minute_fallback(frame=df)
+                fallback_logged = True
+            _set_price_reliability(df, reliable=True)
+            mark_success(symbol, "1Min")
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
+            _SKIPPED_SYMBOLS.discard(tf_key)
+            return df
     attempt_count_snapshot = max(attempt_count_snapshot, _EMPTY_BAR_COUNTS.get(tf_key, attempt_count_snapshot))
     allow_empty_return = not window_has_session
     try:
@@ -4947,13 +5022,18 @@ def get_minute_df(
         else primary_label
     )
     try:
-        df = ensure_ohlcv_schema(
+        ensured_df = ensure_ohlcv_schema(
             df,
             source=source_label or "alpaca",
             frequency="1Min",
         )
-        df = normalize_ohlcv_df(df)
-        df = _restore_timestamp_column(df)
+        df = _mutate_dataframe_in_place(df, ensured_df)
+
+        normalized_df = normalize_ohlcv_df(df)
+        df = _mutate_dataframe_in_place(df, normalized_df)
+
+        restored_df = _restore_timestamp_column(df)
+        df = _mutate_dataframe_in_place(df, restored_df)
     except MissingOHLCVColumnsError as exc:
         logger.error(
             "OHLCV_COLUMNS_MISSING",

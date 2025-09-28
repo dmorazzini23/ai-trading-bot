@@ -7984,6 +7984,7 @@ class DataFetcher:
                 return frame
             working = frame.copy()
             idx = working.index
+            original_name = getattr(idx, "name", None)
             try:
                 idx = pd.to_datetime(idx, utc=True)
             except (TypeError, ValueError) as exc:
@@ -7996,7 +7997,11 @@ class DataFetcher:
                     idx = idx.tz_convert("UTC")
             except (TypeError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
-            working.index = idx.rename("timestamp")
+            if original_name is not None:
+                idx = idx.rename(original_name)
+            else:
+                idx = idx.rename(None)
+            working.index = idx
             return working
 
         try:
@@ -8256,7 +8261,7 @@ class DataFetcher:
             idx_name = getattr(idx, "name", None)
 
             if isinstance(idx, pd.DatetimeIndex):
-                if idx_name != "timestamp":
+                if idx_name and idx_name != "timestamp":
                     try:
                         frame = frame.copy()
                         frame.index = idx.rename("timestamp")
@@ -9954,6 +9959,15 @@ from ai_trading.utils.imports import (
     resolve_strategy_allocator_cls,
 )
 logger = get_logger(__name__)
+
+if os.getenv("AI_TRADING_BOOTSTRAP_TRADE_LOG", "1") != "0":
+    try:
+        get_trade_logger()
+    except Exception as exc:  # pragma: no cover - defensive bootstrap
+        logger.debug(
+            "TRADE_LOG_BOOTSTRAP_SKIPPED",
+            extra={"detail": str(exc)},
+        )
 
 
 def get_risk_engine():

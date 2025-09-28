@@ -12,7 +12,19 @@ from ai_trading.config import get_settings
 from ai_trading.utils.device import TORCH_AVAILABLE
 
 config = None
-SKLEARN_AVAILABLE = bool(find_spec("sklearn"))
+
+
+def _module_available(name: str) -> bool:
+    """Return ``True`` when ``importlib`` can resolve ``name`` safely."""
+
+    try:
+        spec = find_spec(name)
+    except (ImportError, AttributeError, ValueError):
+        return False
+    return spec is not None
+
+
+SKLEARN_AVAILABLE = _module_available("sklearn")
 import csv
 import json
 from ai_trading.logging import get_logger
