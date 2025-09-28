@@ -24,6 +24,7 @@ class _ResolvedLimitCache:
     raw_env: str | None
     limit: int
     version: int
+    config_id: int | None
 
 
 _HostSemaphoreMap = dict[str, _SemaphoreRecord]
@@ -79,14 +80,45 @@ def _resolve_limit() -> tuple[int, int]:
     global _LIMIT_CACHE, _LIMIT_VERSION
 
     raw_env = os.getenv("AI_TRADING_HOST_LIMIT")
+    config_id: int | None = None
+
+    if raw_env not in (None, ""):
+        limit = _compute_limit(raw_env)
+    else:
+        try:
+            cfg = config.get_trading_config()
+        except Exception:
+            cfg = None
+        if cfg is not None:
+            config_id = id(cfg)
+            try:
+                limit_value = getattr(cfg, "host_concurrency_limit", _DEFAULT_LIMIT)
+            except Exception:
+                limit_value = _DEFAULT_LIMIT
+        else:
+            limit_value = _DEFAULT_LIMIT
+        try:
+            limit = max(1, int(limit_value))
+        except (TypeError, ValueError):
+            limit = _DEFAULT_LIMIT
+
     cache = _LIMIT_CACHE
-    if cache is not None and cache.raw_env == raw_env:
+    if (
+        cache is not None
+        and cache.raw_env == raw_env
+        and cache.config_id == config_id
+        and cache.limit == limit
+    ):
         return cache.limit, cache.version
 
-    limit = _compute_limit(raw_env)
     _LIMIT_VERSION += 1
     version = _LIMIT_VERSION
-    _LIMIT_CACHE = _ResolvedLimitCache(raw_env=raw_env, limit=limit, version=version)
+    _LIMIT_CACHE = _ResolvedLimitCache(
+        raw_env=raw_env,
+        limit=limit,
+        version=version,
+        config_id=config_id,
+    )
     return limit, version
 
 
@@ -118,11 +150,24 @@ def _ensure_limit_cache() -> _ResolvedLimitCache:
         return cache
 
     raw_env = os.getenv("AI_TRADING_HOST_LIMIT")
+    config_id: int | None = None
+    if raw_env in (None, ""):
+        try:
+            cfg = config.get_trading_config()
+        except Exception:
+            cfg = None
+        if cfg is not None:
+            config_id = id(cfg)
 
     # `_resolve_limit` should keep `_LIMIT_CACHE` aligned, but callers may
     # mutate the globals. Rebuild defensively so the snapshot matches the
     # semaphore we create.
-    cache = _ResolvedLimitCache(raw_env=raw_env, limit=limit, version=version)
+    cache = _ResolvedLimitCache(
+        raw_env=raw_env,
+        limit=limit,
+        version=version,
+        config_id=config_id,
+    )
     _LIMIT_CACHE = cache
     return cache
 
