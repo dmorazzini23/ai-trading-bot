@@ -60,12 +60,25 @@ def _force_window(monkeypatch):
 
 
 def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
+    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
+    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
     start, end = _ts_window()
-    responses = [Resp(429, {}), Resp(200, _bars_payload(start))]
+    responses: dict[str, list[Resp]] = {
+        "iex": [Resp(429, {}), Resp(429, {})],
+        "sip": [Resp(200, _bars_payload(start))],
+    }
 
     def fake_get(*args, **kwargs):
-        return responses.pop(0)
+        params = kwargs.get("params") or {}
+        feed = params.get("feed", "iex")
+        queue = responses.get(feed)
+        if not queue:
+            raise AssertionError(f"unexpected feed request: {feed}")
+        return queue.pop(0)
 
     monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
     monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
@@ -77,6 +90,7 @@ def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics
         "data.fetch.fallback_attempt",
         "data.fetch.success",
     ]
+    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
     assert capmetrics[0].tags["feed"] == "iex"
     assert capmetrics[1].tags["feed"] == "sip"
     assert capmetrics[2].tags["feed"] == "sip"
@@ -106,12 +120,25 @@ def test_rate_limit_no_retry_when_sip_unauthorized(
 
 
 def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
+    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
+    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
     start, end = _ts_window()
-    events: list[object] = [df.Timeout("boom"), Resp(200, _bars_payload(start))]
+    events: dict[str, list[object]] = {
+        "iex": [df.Timeout("boom"), df.Timeout("boom")],
+        "sip": [Resp(200, _bars_payload(start))],
+    }
 
     def fake_get(*args, **kwargs):
-        ev = events.pop(0)
+        params = kwargs.get("params") or {}
+        feed = params.get("feed", "iex")
+        queue = events.get(feed)
+        if not queue:
+            raise AssertionError(f"unexpected feed request: {feed}")
+        ev = queue.pop(0)
         if isinstance(ev, Exception):
             raise ev
         return ev
@@ -126,6 +153,7 @@ def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: l
         "data.fetch.fallback_attempt",
         "data.fetch.success",
     ]
+    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
     assert capmetrics[0].tags["feed"] == "iex"
     assert capmetrics[1].tags["feed"] == "sip"
 
@@ -154,12 +182,25 @@ def test_unauthorized_sip_returns_empty(
 def test_empty_payload_fallback_success(
     monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]
 ):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
+    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
+    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
     start, end = _ts_window()
-    responses = [Resp(200, {"bars": []}), Resp(200, _bars_payload(start))]
+    responses: dict[str, list[Resp]] = {
+        "iex": [Resp(200, {"bars": []}), Resp(200, {"bars": []})],
+        "sip": [Resp(200, _bars_payload(start))],
+    }
 
     def fake_get(*args, **kwargs):
-        return responses.pop(0)
+        params = kwargs.get("params") or {}
+        feed = params.get("feed", "iex")
+        queue = responses.get(feed)
+        if not queue:
+            raise AssertionError(f"unexpected feed request: {feed}")
+        return queue.pop(0)
 
     monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
     monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
@@ -171,6 +212,7 @@ def test_empty_payload_fallback_success(
         "data.fetch.fallback_attempt",
         "data.fetch.success",
     ]
+    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
     assert capmetrics[0].tags["feed"] == "iex"
     assert capmetrics[1].tags["feed"] == "sip"
 

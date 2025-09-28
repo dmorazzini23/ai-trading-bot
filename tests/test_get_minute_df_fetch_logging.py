@@ -74,5 +74,14 @@ def test_fetch_error_logs_and_sets_none(monkeypatch, caplog, exc_type):
         out = data_fetcher.get_minute_df("AAPL", start, end)
 
     assert yahoo_called["called"]
-    assert out is fallback_df
+    assert list(out.loc[:, ["open", "high", "low", "close", "volume"]].iloc[0]) == [1, 1, 1, 1, 1]
+    assert list(out.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert out.index.name == "timestamp"
     assert any(r.message == "ALPACA_FETCH_FAILED" for r in caplog.records)

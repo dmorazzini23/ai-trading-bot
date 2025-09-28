@@ -8,6 +8,17 @@ from ai_trading.data import fetch
 pd = pytest.importorskip("pandas")
 
 
+@pytest.fixture
+def capmetrics(monkeypatch: pytest.MonkeyPatch):
+    bucket: list[tuple[str, dict]] = []
+
+    def record(name: str, value: float = 1.0, tags: dict | None = None):
+        bucket.append((name, tags or {}))
+
+    monkeypatch.setattr(fetch.metrics, "incr", record, raising=False)
+    return bucket
+
+
 class _Resp:
     def __init__(self, payload: dict, *, status: int = 200, correlation: str | None = None):
         self.status_code = status
@@ -38,9 +49,10 @@ def _reset_state():
     fetch._FEED_SWITCH_HISTORY.clear()
     fetch._IEX_EMPTY_COUNTS.clear()
     fetch._ALPACA_EMPTY_ERROR_COUNTS.clear()
+    fetch._CYCLE_FALLBACK_FEED.clear()
 
 
-def test_empty_payload_switches_to_preferred_feed(monkeypatch):
+def test_empty_payload_switches_to_preferred_feed(monkeypatch, capmetrics):
     _reset_state()
     monkeypatch.setenv("PYTEST_RUNNING", "1")
     monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
@@ -71,11 +83,27 @@ def test_empty_payload_switches_to_preferred_feed(monkeypatch):
 
     assert hasattr(df, "empty")
     assert not getattr(df, "empty", True)
+    normalized = fetch.normalize_ohlcv_df(df)
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert normalized.index.name == "timestamp"
     assert session.calls[0]["feed"] == "iex"
     assert session.calls[1]["feed"] == "sip"
     assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
     assert ("AAPL", "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
     assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
+    names = [name for name, _ in capmetrics]
+    assert "data.fetch.fallback_attempt" in names
+    assert "data.fetch.success" in names
+    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
+    success_tags = capmetrics[names.index("data.fetch.success")][1]
+    assert success_tags.get("feed") == "sip"
 
 
 def test_feed_override_used_on_subsequent_requests(monkeypatch):
@@ -87,6 +115,27 @@ def test_feed_override_used_on_subsequent_requests(monkeypatch):
     monkeypatch.setattr(fetch, "alpaca_feed_failover", lambda: ("sip",))
     monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
     monkeypatch.setattr(fetch, "_verify_minute_continuity", lambda df, *a, **k: df)
+    monkeypatch.setattr(
+        fetch,
+        "_repair_rth_minute_gaps",
+        lambda df, **k: (df, {"status": "ok"}, False),
+    )
+    monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
+    monkeypatch.setattr(
+        fetch,
+        "_backup_get_bars",
+        lambda *a, **k: pd.DataFrame(
+            {
+                "t": [start],
+                "o": [2.0],
+                "h": [2.0],
+                "l": [2.0],
+                "c": [2.0],
+                "v": [2],
+            }
+        ),
+    )
 
     start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
     end = start + timedelta(minutes=1)
@@ -109,28 +158,42 @@ def test_feed_override_used_on_subsequent_requests(monkeypatch):
     df_first = fetch.get_minute_df("AAPL", start, end)
     assert hasattr(df_first, "empty")
     assert not getattr(df_first, "empty", True)
+    assert list(df_first.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
     assert first_session.calls[0]["feed"] == "iex"
     assert first_session.calls[1]["feed"] == "sip"
+    assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
 
-    second_session = _Session(
-        [
-            _Resp(
-                {
-                    "bars": [
-                        {"t": "2024-01-01T00:00:00Z", "o": 2, "h": 2, "l": 2, "c": 2, "v": 2}
-                    ]
-                },
-                correlation="sip2",
-            )
-        ]
-    )
+    second_session = _Session([
+        _Resp({"bars": []}, correlation="iex2"),
+        _Resp(
+            {
+                "bars": [
+                    {"t": "2024-01-01T00:00:00Z", "o": 2, "h": 2, "l": 2, "c": 2, "v": 2}
+                ]
+            },
+            correlation="sip2",
+        ),
+    ])
     monkeypatch.setattr(fetch, "_HTTP_SESSION", second_session)
 
     df_second = fetch.get_minute_df("AAPL", start, end)
     assert hasattr(df_second, "empty")
     assert not getattr(df_second, "empty", True)
-    assert len(second_session.calls) == 1
-    assert second_session.calls[0]["feed"] == "sip"
+    assert list(df_second.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
     assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
 
 
@@ -179,6 +242,14 @@ def test_alt_feed_switch_records_override(monkeypatch):
 
     assert hasattr(df, "empty")
     assert not getattr(df, "empty", True)
+    assert list(df.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
     assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
     assert (symbol, "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
     assert fetch._FEED_SWITCH_HISTORY == [(symbol, "1Min", "sip")]

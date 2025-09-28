@@ -4387,22 +4387,25 @@ def get_minute_df(
             "feed": str(feed_tag or provider_tag or "unknown"),
             "timeframe": timeframe,
         }
-        _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
-        frame_has_rows = False
-        if frame is not None:
-            empty_attr = getattr(frame, "empty", None)
+
+        def _frame_has_rows(candidate: Any | None) -> bool:
+            if candidate is None:
+                return False
+            empty_attr = getattr(candidate, "empty", None)
             if isinstance(empty_attr, bool):
-                frame_has_rows = not empty_attr
-            elif empty_attr is not None:
+                return not empty_attr
+            if empty_attr is not None:
                 try:
-                    frame_has_rows = not bool(empty_attr)
+                    return not bool(empty_attr)
                 except Exception:
-                    frame_has_rows = False
-            else:
-                try:
-                    frame_has_rows = len(frame) > 0  # type: ignore[arg-type]
-                except Exception:
-                    frame_has_rows = False
+                    return False
+            try:
+                return len(candidate) > 0  # type: ignore[arg-type]
+            except Exception:
+                return False
+
+        frame_has_rows = _frame_has_rows(frame)
+        _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         if frame_has_rows:
             _incr("data.fetch.success", value=1.0, tags=tags)
         _mark_fallback(
