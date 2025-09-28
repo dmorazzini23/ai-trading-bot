@@ -34,3 +34,14 @@ def test_ensure_entitled_feed_keeps_when_env_unset(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET", "test-secret")
     client = _Client(['sip'])
     assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+
+
+def test_ensure_entitled_feed_keeps_when_account_advertises_sip(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    for key in ("ALPACA_ALLOW_SIP", "ALPACA_SIP_ENTITLED"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET", "test-secret")
+    client = _Client(['sip'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
