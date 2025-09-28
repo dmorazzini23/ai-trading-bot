@@ -3564,7 +3564,12 @@ def _fetch_bars(
                 and _sip_allowed()
                 and not sip_locked
             ):
-                fallback_target = (_interval, "sip", _start, _end)
+                try:
+                    remaining_fallbacks = max_data_fallbacks()
+                except Exception:
+                    remaining_fallbacks = 1
+                if remaining_fallbacks > 0:
+                    fallback_target = (_interval, "sip", _start, _end)
             if fallback_target:
                 result = _attempt_fallback(fallback_target)
                 if result is not None:
@@ -3806,10 +3811,43 @@ def _fetch_bars(
                 _IEX_EMPTY_COUNTS[tf_key] = cnt
                 prev = _state.get("corr_id")
                 sip_locked = _is_sip_unauthorized()
+                allow_sip_fallback = _sip_configured() and not sip_locked
+                sip_fallbacks_remaining: int | None = None
+                if allow_sip_fallback:
+                    try:
+                        sip_fallbacks_remaining = max_data_fallbacks()
+                    except Exception:
+                        sip_fallbacks_remaining = None
+                    if sip_fallbacks_remaining is not None and sip_fallbacks_remaining <= 0:
+                        attempt = _state.get("retries", 0) + 1
+                        if attempt >= max_retries:
+                            allow_sip_fallback = False
+                        else:
+                            _state["retries"] = attempt
+                            backoff = min(
+                                _FETCH_BARS_BACKOFF_BASE ** (_state["retries"] - 1),
+                                _FETCH_BARS_BACKOFF_CAP,
+                            )
+                            logger.debug(
+                                "RETRY_AFTER_SIP_FALLBACK_DISABLED",
+                                extra=_norm_extra(
+                                    {
+                                        "provider": "alpaca",
+                                        "feed": _feed,
+                                        "timeframe": _interval,
+                                        "symbol": symbol,
+                                        "retry_delay": backoff,
+                                        "attempt": _state["retries"],
+                                        "remaining_retries": max_retries - _state["retries"],
+                                        "reason": "fallbacks_exhausted",
+                                    }
+                                ),
+                            )
+                            time.sleep(backoff)
+                            return _req(session, fallback, headers=headers, timeout=timeout)
                 if (
-                    "sip" not in _FEED_FAILOVER_ATTEMPTS.get(tf_key, set())
-                    and _sip_configured()
-                    and not sip_locked
+                    allow_sip_fallback
+                    and "sip" not in _FEED_FAILOVER_ATTEMPTS.get(tf_key, set())
                 ):
                     _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add("sip")
                     result = _attempt_fallback((base_interval, "sip", base_start, base_end))
@@ -3819,7 +3857,7 @@ def _fetch_bars(
                         _record_feed_switch(symbol, base_interval, base_feed, "sip")
                         return result
                     _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
-                if _sip_configured() and not sip_locked:
+                if allow_sip_fallback:
                     result = _attempt_fallback((_interval, "sip", _start, _end))
                     sip_corr = _state.get("corr_id")
                     if result is not None and not getattr(result, "empty", True):
