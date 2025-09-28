@@ -4305,6 +4305,44 @@ def get_minute_df(
         start_window = window_start or start_dt
         end_window = window_end or end_dt
         source_feed = from_feed or normalized_feed or _DEFAULT_FEED
+        provider_tag = resolved_backup_provider or "unknown"
+        feed_tag = resolved_backup_feed or provider_tag
+        if frame is not None:
+            try:
+                attrs = getattr(frame, "attrs", {})
+            except Exception:
+                attrs = {}
+            if isinstance(attrs, dict):
+                provider_attr = attrs.get("data_provider") or attrs.get("fallback_provider")
+                feed_attr = attrs.get("data_feed") or attrs.get("fallback_feed")
+                if provider_attr:
+                    provider_tag = str(provider_attr).strip() or provider_tag
+                if feed_attr:
+                    feed_tag = str(feed_attr).strip() or feed_tag
+        tags = {
+            "provider": str(provider_tag or "unknown"),
+            "symbol": symbol,
+            "feed": str(feed_tag or provider_tag or "unknown"),
+            "timeframe": timeframe,
+        }
+        _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
+        frame_has_rows = False
+        if frame is not None:
+            empty_attr = getattr(frame, "empty", None)
+            if isinstance(empty_attr, bool):
+                frame_has_rows = not empty_attr
+            elif empty_attr is not None:
+                try:
+                    frame_has_rows = not bool(empty_attr)
+                except Exception:
+                    frame_has_rows = False
+            else:
+                try:
+                    frame_has_rows = len(frame) > 0  # type: ignore[arg-type]
+                except Exception:
+                    frame_has_rows = False
+        if frame_has_rows:
+            _incr("data.fetch.success", value=1.0, tags=tags)
         _mark_fallback(
             symbol,
             timeframe,
