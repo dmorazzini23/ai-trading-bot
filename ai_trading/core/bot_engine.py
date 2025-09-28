@@ -18154,7 +18154,16 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=feed)
         else:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-        return ctx.data_client.get_stock_latest_quote(req)
+        quote = ctx.data_client.get_stock_latest_quote(req)
+        if quote is None:
+            return None
+        # alpaca-py returns ``StockLatestQuoteResponse`` with the quote nested
+        # under ``quote`` or ``latest_quote``; unwrap so downstream helpers see
+        # ``bid_price``/``ask_price`` attributes directly.
+        inner = getattr(quote, "quote", None) or getattr(quote, "latest_quote", None)
+        if inner is not None:
+            return inner
+        return quote
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.debug(
             "QUOTE_FETCH_FAILED",
@@ -18510,7 +18519,23 @@ def run_multi_strategy(ctx) -> None:
         logger.info("No signals produced this cycle; skipping allocation and execution")
         return
 
-    final = ctx.allocator.allocate(signals_by_strategy)
+    allocated = ctx.allocator.allocate(signals_by_strategy)
+    if allocated is None:
+        logger.info("Allocator returned no signals; skipping execution")
+        return
+    if isinstance(allocated, dict):
+        candidate_iterable = allocated.values()
+    else:
+        candidate_iterable = allocated
+    if isinstance(candidate_iterable, Iterable) and not isinstance(
+        candidate_iterable, (str, bytes)
+    ):
+        final = list(candidate_iterable)
+    else:
+        final = [candidate_iterable]
+    if not final:
+        logger.info("No tradable signals after allocation; skipping execution")
+        return
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
