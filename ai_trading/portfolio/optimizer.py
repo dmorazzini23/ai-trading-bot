@@ -234,10 +234,12 @@ class PortfolioOptimizer:
             tax_impact = self._estimate_tax_impact(symbol, position_change, current_prices)
             # Turnover-aware penalty scaled by relative trade value
             try:
-                total_val = sum((abs(v) * current_prices.get(s, 1.0) for s, v in current_positions.items()))
+                total_val = sum(
+                    (abs(v) * current_prices.get(s, 1.0) for s, v in current_positions.items())
+                )
                 trade_val = abs(position_change) * current_prices.get(symbol, 1.0)
                 turnover_ratio = (trade_val / total_val) if total_val > 0 else 0.0
-            except Exception:
+            except (TypeError, ValueError, ArithmeticError):
                 turnover_ratio = 0.0
             turnover_penalty = self.turnover_penalty * turnover_ratio
             net_benefit = expected_return_change - transaction_cost - correlation_impact * self.max_correlation_penalty - turnover_penalty + tax_impact
@@ -328,7 +330,7 @@ class PortfolioOptimizer:
                 from ai_trading.execution.slippage_log import get_ewma_cost_bps
 
                 bps = float(get_ewma_cost_bps(symbol, default=2.0))
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError, ValueError, TypeError):
                 bps = 2.0
             slippage_cost = trade_value * (bps / 10000.0)
             # Conservative baseline components
@@ -371,7 +373,7 @@ class PortfolioOptimizer:
                 return abs(position_change) * max(1e-6, statistics.stdev(r))
             try:
                 import numpy as _np
-            except Exception:
+            except ImportError:
                 return 0.0
             n = min(len(returns_data[s]) for s in symbols)
             if n < 10:
@@ -380,10 +382,14 @@ class PortfolioOptimizer:
             R = R - R.mean(axis=1, keepdims=True)
             try:
                 from sklearn.covariance import LedoitWolf  # type: ignore
-
-                cov = LedoitWolf().fit(R.T).covariance_
-            except Exception:
+            except ImportError:
                 cov = _np.cov(R)
+            else:
+                lin_alg_err = getattr(getattr(_np, "linalg", None), "LinAlgError", RuntimeError)
+                try:
+                    cov = LedoitWolf().fit(R.T).covariance_
+                except (ValueError, RuntimeError, lin_alg_err):
+                    cov = _np.cov(R)
             def _weights(pos: dict[str, float]) -> _np.ndarray:
                 vals = _np.array([abs(pos.get(s, 0.0)) * float(prices.get(s, 1.0)) for s in symbols], dtype=float)
                 tot = float(vals.sum())
