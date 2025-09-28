@@ -18740,6 +18740,22 @@ def run_multi_strategy(ctx) -> None:
             }
             if price is not None:
                 order_kwargs['price'] = price
+            # Wire ATR-based bracket targets when available on context
+            try:
+                sl = getattr(getattr(ctx, 'stop_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
+            except Exception:
+                sl = None
+            try:
+                tp = getattr(getattr(ctx, 'take_profit_targets', {}), 'get', lambda _s, _d=None: None)(sig.symbol, None)
+            except Exception:
+                tp = None
+            if isinstance(sl, (int, float)) and sl > 0:
+                order_kwargs['stop_loss'] = float(sl)
+                # Request bracket when either stop or take is present
+                order_kwargs.setdefault('order_class', 'bracket')
+            if isinstance(tp, (int, float)) and tp > 0:
+                order_kwargs['take_profit'] = float(tp)
+                order_kwargs.setdefault('order_class', 'bracket')
             result = ctx.execution_engine.execute_order(
                 sig.symbol,
                 sig.side,
