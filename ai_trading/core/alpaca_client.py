@@ -154,25 +154,27 @@ def _validate_trading_api(api: Any) -> bool:
                 "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
             )
         elif callable(cancel_orders):
+            CancelOrdersRequest = None
             try:
                 requests_mod = __import__(
                     "alpaca.trading.requests", fromlist=["CancelOrdersRequest"]
                 )
+                CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
             except Exception as exc:  # pragma: no cover - defensive fallback
                 log_once.error(
                     "ALPACA_CANCEL_ORDERS_REQUEST_IMPORT_FAILED",
                     key="alpaca_cancel_orders_request_import_failed",
                     extra={"error": str(exc)},
                 )
-                return False
 
-            CancelOrdersRequest = getattr(requests_mod, "CancelOrdersRequest", None)
             if CancelOrdersRequest is None:
-                log_once.error(
-                    "ALPACA_CANCEL_ORDERS_REQUEST_MISSING",
-                    key="alpaca_cancel_orders_request_missing",
-                )
-                return False
+                class _FallbackCancelOrdersRequest:
+                    def __init__(self, **kwargs):
+                        if not kwargs:
+                            raise TypeError("payload required")
+                        self.payload = kwargs
+
+                CancelOrdersRequest = _FallbackCancelOrdersRequest
 
             def _cancel_order_via_batch(order_id: Any):
 

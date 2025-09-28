@@ -6,10 +6,30 @@ from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 
 try:
-    from cachetools import TTLCache
+    from cachetools import TTLCache as _BaseTTLCache
+
+    class _SentimentTTLCache(_BaseTTLCache):
+        def __init__(self, maxsize=1000, ttl=3600):
+            super().__init__(maxsize=maxsize, ttl=ttl)
+            if not hasattr(self, "maxsize"):
+                self.maxsize = maxsize
+
+        def __setitem__(self, key, value):  # noqa: D401
+            super().__setitem__(key, value)
+            while len(self) > self.maxsize:
+                try:
+                    first_key = next(iter(self))
+                except StopIteration:
+                    break
+                if first_key == key:
+                    continue
+                try:
+                    super().__delitem__(first_key)
+                except KeyError:
+                    break
 
     _CACHETOOLS_AVAILABLE = True
-    _sentiment_cache = TTLCache(maxsize=1000, ttl=3600)
+    _sentiment_cache = _SentimentTTLCache(maxsize=1000, ttl=3600)
 except ImportError:
     _CACHETOOLS_AVAILABLE = False
     _sentiment_cache: dict[str, float] = {}
@@ -47,13 +67,18 @@ def fetch_sentiment(symbol: str) -> float:
         score = float(data.get("score", 0.0))
     except (RequestException, TimeoutError):
         score = 0.0
-    if _CACHETOOLS_AVAILABLE:
-        _sentiment_cache[symbol] = score
-    else:
-        if len(_sentiment_cache) >= 1000:
-            first_key = next(iter(_sentiment_cache), None)
-            if first_key is not None:
-                del _sentiment_cache[first_key]
-        _sentiment_cache[symbol] = score
+    target_cache = _sentiment_cache
+    target_cache[symbol] = score
+    if len(target_cache) > 1000:
+        try:
+            excess = len(target_cache) - 1000
+            for _ in range(excess):
+                first_key = next(iter(target_cache))
+                try:
+                    del target_cache[first_key]
+                except KeyError:
+                    break
+        except StopIteration:
+            pass
     return score
 __all__ = ['predict', 'load_model', 'fetch_sentiment', '_sentiment_cache', '_CACHETOOLS_AVAILABLE']

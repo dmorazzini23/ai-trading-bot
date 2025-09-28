@@ -769,6 +769,10 @@ class ExecutionEngine:
         self.slippage_limit_bps = int(settings.slippage_limit_bps)
         self.price_provider_order = tuple(settings.price_provider_order)
         self.data_feed_intraday = str(settings.data_feed_intraday or "iex").lower()
+        if self._explicit_mode is not None:
+            self.execution_mode = str(self._explicit_mode).lower()
+        if self._explicit_shadow is not None:
+            self.shadow_mode = bool(self._explicit_shadow)
 
     def initialize(self) -> bool:
         """

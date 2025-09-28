@@ -65,4 +65,6 @@ def __getattr__(name: str):  # pragma: no cover - thin lazy loader
     mod = _import_module(mod_name)
     obj = getattr(mod, attr) if attr else mod
     globals()[name] = obj
+    if not attr:
+        sys.modules.setdefault(name, obj)
     return obj

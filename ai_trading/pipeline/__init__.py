@@ -13,6 +13,11 @@ from ai_trading.utils.lazy_imports import (
 
 logger = get_logger(__name__)
 
+if load_sklearn_pipeline() is None:
+    raise ImportError(
+        "ai_trading.pipeline requires scikit-learn; install with `pip install scikit-learn`."
+    )
+
 
 class FeatureBuilder:
     """Simple feature transformer for price-based data."""
@@ -77,8 +82,6 @@ class _LazyPipeline:
             skl_pipeline = load_sklearn_pipeline()
             skl_pre = load_sklearn_preprocessing()
             skl_linear = load_sklearn_linear_model()
-            if not all([skl_pipeline, skl_pre, skl_linear]):  # pragma: no cover - runtime guard
-                raise RuntimeError("sklearn not available")
             Pipeline = skl_pipeline.Pipeline
             StandardScaler = skl_pre.StandardScaler
             SGDRegressor = skl_linear.SGDRegressor

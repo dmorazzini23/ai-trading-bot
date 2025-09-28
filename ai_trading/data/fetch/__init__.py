@@ -110,27 +110,38 @@ def _ordered_fallbacks(primary_feed: str) -> List[str]:
 
 
 _cycle_feed_override: Dict[str, str] = {}
+_override_set_ts: Dict[str, float] = {}
 _ALLOW_SIP: Optional[bool] | None = None
+_OVERRIDE_TTL_S = 600.0
+
+
+def _record_override(symbol: str, feed: str) -> None:
+    normalized = str(feed).strip().lower()
+    _cycle_feed_override[symbol] = normalized
+    _override_set_ts[symbol] = time.time()
+    _remember_fallback_for_cycle(_get_cycle_id(), symbol, "1Min", normalized)
+
+
+def _clear_override(symbol: str) -> None:
+    _cycle_feed_override.pop(symbol, None)
+    _override_set_ts.pop(symbol, None)
 
 
 def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
-    """Return cached fallback feed for *symbol* or the provided primary feed."""
-
     cached = _cycle_feed_override.get(symbol)
     if cached:
-        return cached
+        ts = _override_set_ts.get(symbol, 0.0)
+        if ts and (time.time() - ts) <= _OVERRIDE_TTL_S:
+            return cached
+        _clear_override(symbol)
     normalized_primary = str(primary_feed or "iex").strip().lower() or "iex"
     return normalized_primary
 
 
 def _cache_fallback(symbol: str, feed: str) -> None:
-    """Remember *feed* for the active process cycle."""
-
     if not feed:
         return
-    normalized = str(feed).strip().lower()
-    _cycle_feed_override[symbol] = normalized
-    _remember_fallback_for_cycle(_get_cycle_id(), symbol, "1Min", normalized)
+    _record_override(symbol, feed)
 
 
 async def run_with_concurrency(limit: int, coros):

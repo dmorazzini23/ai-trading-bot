@@ -54,7 +54,11 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
 
 def _compute_limit(raw: str | None = None) -> int:
     if raw is None:
-        raw = os.getenv("AI_TRADING_HOST_LIMIT")
+        raw = (
+            os.getenv("HTTP_MAX_PER_HOST")
+            or os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
+            or os.getenv("AI_TRADING_HOST_LIMIT")
+        )
     if raw not in (None, ""):
         try:
             return max(1, int(raw))
@@ -78,7 +82,11 @@ def _resolve_limit() -> tuple[int, int]:
 
     global _LIMIT_CACHE, _LIMIT_VERSION
 
-    raw_env = os.getenv("AI_TRADING_HOST_LIMIT")
+    raw_env = (
+        os.getenv("HTTP_MAX_PER_HOST")
+        or os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
+        or os.getenv("AI_TRADING_HOST_LIMIT")
+    )
     config_id: int | None = None
 
     if raw_env not in (None, ""):
