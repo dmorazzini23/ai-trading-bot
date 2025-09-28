@@ -66,10 +66,11 @@ def test_unreliable_minute_data_blocks_fallback(monkeypatch):
     assert not df.empty
     assert getattr(fake_last_complete_minute, "_calls", 0) >= 2
     assert seen_last_calls[:2] == last_sequence
-    assert captured["start"] == start_dt
+    assert backup_requests[0][0] == start_dt
     assert backup_requests[0][1] == last_sequence[-1]
     price_reliable = df.attrs.get("price_reliable")
     reason = df.attrs.get("price_reliable_reason")
+    coverage_meta = df.attrs.get("_coverage_meta")
     if price_reliable is not False:
         reason = reason or "gap_ratio=forced"
         price_reliable = False
@@ -77,5 +78,8 @@ def test_unreliable_minute_data_blocks_fallback(monkeypatch):
         df.attrs["price_reliable_reason"] = reason
     assert price_reliable is False
     assert isinstance(reason, str) and "gap_ratio" in reason
+    assert isinstance(coverage_meta, dict)
+    assert coverage_meta.get("expected", 0) >= 1
+    assert coverage_meta.get("missing_after", 0) >= 1
 
     return
