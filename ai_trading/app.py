@@ -47,6 +47,17 @@ def create_app():
         """Lightweight liveness probe with Alpaca diagnostics."""
         ok = True
         errors: list[str] = []
+        minimal_alpaca_payload = dict(
+            sdk_ok=False,
+            initialized=False,
+            client_attached=False,
+            has_key=False,
+            has_secret=False,
+            base_url="",
+            paper=False,
+            shadow_mode=False,
+        )
+        alpaca_payload = dict(minimal_alpaca_payload)
         sdk_ok = False
         trading_client = None
         key = secret = None
@@ -75,12 +86,14 @@ def create_app():
             sdk_ok = False
         except (KeyError, ValueError, TypeError) as exc:
             record_error(exc)
+            alpaca_import_ok = False
 
         if alpaca_import_ok:
             try:
                 from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client as _trading_client
                 trading_client = _trading_client
                 key, secret, base_url = _resolve_alpaca_env()
+                base_url = base_url or ""
                 paper = bool(base_url and 'paper' in base_url)
             except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
                 ok = False
@@ -96,11 +109,13 @@ def create_app():
             ok = False
             record_error(exc)
             shadow = False
+        else:
+            shadow = bool(shadow)
 
         if errors:
             ok = False
 
-        alpaca_payload = dict(
+        alpaca_payload.update(
             sdk_ok=bool(sdk_ok),
             initialized=bool(trading_client),
             client_attached=bool(trading_client),
@@ -129,7 +144,7 @@ def create_app():
                 return {
                     "ok": False,
                     "error": detail,
-                    "alpaca": dict(alpaca_payload),
+                    "alpaca": dict(minimal_alpaca_payload),
                 }
 
             if data.get("error"):
