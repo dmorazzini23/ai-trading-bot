@@ -735,6 +735,12 @@ def _mark_fallback(
             return None
         return normalized_value or None
 
+    def _normalize_lower(value: Any | None) -> str | None:
+        normalized_value = _normalize(value)
+        if normalized_value is None:
+            return None
+        return normalized_value.lower()
+
     provider_from_df: str | None = None
     feed_from_df: str | None = None
     if fallback_df is not None:
@@ -760,13 +766,40 @@ def _mark_fallback(
     if feed_hint is None and provider_hint and provider_hint.startswith("alpaca_"):
         feed_hint = provider_hint.split("_", 1)[1]
 
+    provider_hint_lower = _normalize_lower(provider_hint)
+    feed_hint_lower = _normalize_lower(feed_hint)
+    resolved_provider_lower = _normalize_lower(resolved_provider)
+    resolved_feed_lower = _normalize_lower(resolved_feed)
+    fallback_feed_lower = _normalize_lower(fallback_feed)
+    provider_from_df_lower = _normalize_lower(provider_from_df)
+    feed_from_df_lower = _normalize_lower(feed_from_df)
+
+    yahoo_detected = any(
+        hint == "yahoo"
+        for hint in (
+            resolved_provider_lower,
+            resolved_feed_lower,
+            fallback_feed_lower,
+            provider_hint_lower,
+            provider_from_df_lower,
+            feed_hint_lower,
+            feed_from_df_lower,
+        )
+    )
+
+    if yahoo_detected:
+        provider_hint = "yahoo"
+        provider_hint_lower = "yahoo"
+
+    provider_for_register = provider_hint or _normalize(configured_provider) or "yahoo"
+    provider_for_register_lower = _normalize_lower(provider_for_register)
+
     if from_provider:
         current = str(from_provider).strip().lower()
-        if current and provider_hint and current == provider_hint.strip().lower():
+        if current and provider_for_register_lower and current == provider_for_register_lower:
             return
 
     key = _fallback_key(symbol, timeframe, start, end)
-    provider_for_register = provider_hint or _normalize(configured_provider) or "yahoo"
     fallback_order.register_fallback(provider_for_register, symbol)
     metadata: dict[str, str] = {"fallback_provider": provider_for_register}
     log_extra: dict[str, str] = dict(metadata)
