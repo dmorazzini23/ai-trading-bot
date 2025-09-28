@@ -4537,7 +4537,17 @@ def get_minute_df(
         active_provider = provider_monitor.active_provider(primary_label, backup_label)
         if active_provider == backup_label:
             try:
-                df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+                refreshed_last_minute = _last_complete_minute(pd)
+            except Exception:
+                refreshed_last_minute = last_complete_minute
+            backup_end_dt = end_dt
+            if refreshed_last_minute is not None:
+                candidate_end = min(backup_end_dt, refreshed_last_minute)
+                backup_end_dt = max(start_dt, candidate_end)
+                if backup_end_dt != end_dt:
+                    end_dt = backup_end_dt
+            try:
+                df = _backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
             except Exception:
                 df = None
             else:
