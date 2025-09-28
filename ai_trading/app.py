@@ -54,6 +54,7 @@ def create_app():
         paper = False
         shadow = False
         last_error: str | None = None
+        alpaca_import_ok = True
 
         def record_error(exc: Exception) -> str:
             nonlocal last_error, ok
@@ -70,17 +71,22 @@ def create_app():
         except ImportError as exc:
             ok = False
             record_error(exc)
+            alpaca_import_ok = False
+            sdk_ok = False
         except (KeyError, ValueError, TypeError) as exc:
             record_error(exc)
 
-        try:
-            from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client as _trading_client
-            trading_client = _trading_client
-            key, secret, base_url = _resolve_alpaca_env()
-            paper = bool(base_url and 'paper' in base_url)
-        except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
-            ok = False
-            record_error(exc)
+        if alpaca_import_ok:
+            try:
+                from ai_trading.core.bot_engine import _resolve_alpaca_env, trading_client as _trading_client
+                trading_client = _trading_client
+                key, secret, base_url = _resolve_alpaca_env()
+                paper = bool(base_url and 'paper' in base_url)
+            except Exception as exc:  # pragma: no cover - defensive against unexpected import failures
+                ok = False
+                record_error(exc)
+                trading_client, key, secret, base_url, paper = (None, None, None, '', False)
+        else:
             trading_client, key, secret, base_url, paper = (None, None, None, '', False)
 
         try:
@@ -115,6 +121,17 @@ def create_app():
 
         def _render_response(data: dict):
             func = globals().get("jsonify")
+
+            def _fallback(message: str | None = None) -> dict:
+                detail = data.get("error") or message or last_error or "jsonify unavailable"
+                if not detail:
+                    detail = "jsonify unavailable"
+                return {
+                    "ok": False,
+                    "error": detail,
+                    "alpaca": dict(alpaca_payload),
+                }
+
             if data.get("error"):
                 data["ok"] = False
 
@@ -123,22 +140,10 @@ def create_app():
                     return func(data)
                 except Exception as exc:  # /health must not raise
                     _log.exception("HEALTH_CHECK_FAILED")
-                    if not data.get("error"):
-                        message = last_error or str(exc) or exc.__class__.__name__
-                        data = dict(data)
-                        data["error"] = message
-                        data["ok"] = False
-                        return data
-                    return dict(data)
+                    message = str(exc) or exc.__class__.__name__
+                    return _fallback(message)
 
-            if not data.get("error"):
-                message = last_error or "jsonify unavailable"
-                data = dict(data)
-                data["error"] = message
-                data["ok"] = False
-                return data
-
-            return dict(data)
+            return _fallback()
 
         return _render_response(payload)
 
