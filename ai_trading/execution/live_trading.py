@@ -913,6 +913,15 @@ class ExecutionEngine:
             "time_in_force": kwargs.get("time_in_force", "day"),
             "client_order_id": client_order_id,
         }
+        # Optional bracket fields (ATR-based levels should be passed in by caller)
+        tp = kwargs.get("take_profit")
+        sl = kwargs.get("stop_loss")
+        if tp is not None or sl is not None:
+            order_data["order_class"] = "bracket"
+            if tp is not None:
+                order_data["take_profit"] = {"limit_price": float(tp)}
+            if sl is not None:
+                order_data["stop_loss"] = {"stop_price": float(sl)}
         if kwargs.get("asset_class"):
             order_data["asset_class"] = kwargs["asset_class"]
         if str(side).strip().lower() == "sell" and not closing_position:
@@ -1104,6 +1113,15 @@ class ExecutionEngine:
             "time_in_force": kwargs.get("time_in_force", "day"),
             "client_order_id": client_order_id,
         }
+        # Optional bracket fields
+        tp = kwargs.get("take_profit")
+        sl = kwargs.get("stop_loss")
+        if tp is not None or sl is not None:
+            order_data["order_class"] = "bracket"
+            if tp is not None:
+                order_data["take_profit"] = {"limit_price": float(tp)}
+            if sl is not None:
+                order_data["stop_loss"] = {"stop_price": float(sl)}
         if kwargs.get("asset_class"):
             order_data["asset_class"] = kwargs["asset_class"]
         if str(side).strip().lower() == "sell" and not closing_position:
@@ -1308,7 +1326,7 @@ class ExecutionEngine:
             kwargs.pop("extended_hours", None)
         if closing_position:
             order_kwargs["closing_position"] = True
-        for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price"):
+        for passthrough in ("client_order_id", "notional", "trail_percent", "trail_price", "stop_loss", "take_profit", "order_class"):
             if passthrough in kwargs:
                 order_kwargs[passthrough] = kwargs.pop(passthrough)
 
@@ -1882,42 +1900,46 @@ class ExecutionEngine:
         if self.trading_client is None or OrderSide is None or MarketOrderRequest is None or TimeInForce is None:
             raise RuntimeError("Alpaca TradingClient is not initialized")
 
-        side = OrderSide.BUY if str(order_data["side"]).lower() == "buy" else OrderSide.SELL
-        tif = TimeInForce.DAY
-
+        # If bracket requested, call submit_order with keyword args to pass nested structures
         order_type = str(order_data.get("type", "limit")).lower()
-        common_kwargs = {
-            "symbol": order_data["symbol"],
-            "qty": order_data["quantity"],
-            "side": side,
-            "time_in_force": tif,
-            "client_order_id": order_data.get("client_order_id"),
-        }
-        asset_class = order_data.get("asset_class")
-        if asset_class:
-            common_kwargs["asset_class"] = asset_class
-
-        try:
-            if order_type == "market":
-                req = MarketOrderRequest(**common_kwargs)
-            else:
-                req = LimitOrderRequest(
-                    limit_price=order_data["limit_price"],
-                    **common_kwargs,
-                )
-        except TypeError as exc:
-            if asset_class and "asset_class" in common_kwargs:
-                common_kwargs.pop("asset_class", None)
-                logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
+        if order_data.get("order_class"):
+            try:
+                resp = self.trading_client.submit_order(**order_data)
+            except (APIError, TimeoutError, ConnectionError):
+                # Fallback: remove unsupported keys and retry without bracket
+                logger.warning("BRACKET_UNSUPPORTED_FALLBACK_LIMIT")
+                cleaned = {k: v for k, v in order_data.items() if k not in {"order_class", "take_profit", "stop_loss"}}
+                resp = self.trading_client.submit_order(**cleaned)
+        else:
+            side = OrderSide.BUY if str(order_data["side"]).lower() == "buy" else OrderSide.SELL
+            tif = TimeInForce.DAY
+            common_kwargs = {
+                "symbol": order_data["symbol"],
+                "qty": order_data["quantity"],
+                "side": side,
+                "time_in_force": tif,
+                "client_order_id": order_data.get("client_order_id"),
+            }
+            asset_class = order_data.get("asset_class")
+            if asset_class:
+                common_kwargs["asset_class"] = asset_class
+            try:
                 if order_type == "market":
                     req = MarketOrderRequest(**common_kwargs)
                 else:
                     req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
-            else:
-                raise
-
-        try:
-            resp = self.trading_client.submit_order(order_data=req)
+            except TypeError as exc:
+                if asset_class and "asset_class" in common_kwargs:
+                    common_kwargs.pop("asset_class", None)
+                    logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
+                    if order_type == "market":
+                        req = MarketOrderRequest(**common_kwargs)
+                    else:
+                        req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
+                else:
+                    raise
+            try:
+                resp = self.trading_client.submit_order(order_data=req)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
                 "ORDER_API_FAILED",

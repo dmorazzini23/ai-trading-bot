@@ -170,7 +170,7 @@ def walkforward_splits(
     
     Args:
         dates: Timeline of dates for analysis
-        mode: 'rolling' or 'anchored' walk-forward
+        mode: 'rolling', 'anchored', or 'expanding' walk-forward (anchored == expanding)
         train_span: Training period length (days or timedelta)
         test_span: Test period length (days or timedelta)  
         embargo_pct: Embargo period as fraction of training period
@@ -192,7 +192,8 @@ def walkforward_splits(
         end_date = dates.max()
         current_train_end = start_date + train_span
         while current_train_end + test_span <= end_date:
-            if mode == 'rolling':
+            normalized_mode = str(mode).lower().strip()
+            if normalized_mode == 'rolling':
                 train_start = current_train_end - train_span
             else:
                 train_start = start_date

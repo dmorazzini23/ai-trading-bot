@@ -98,6 +98,11 @@ class MLTrainer:
                 import sklearn  # noqa: F401
             except ImportError as exc:
                 raise ImportError("scikit-learn required for ridge model type") from exc
+        elif self.model_type == "stacking":
+            try:
+                import sklearn  # noqa: F401
+            except ImportError as exc:
+                raise ImportError("scikit-learn required for stacking model type") from exc
 
     def train(
         self,
@@ -255,6 +260,8 @@ class MLTrainer:
             }
         elif self.model_type == "ridge":
             return {"alpha": 1.0, "fit_intercept": True, "solver": "auto", "random_state": self.random_state}
+        elif self.model_type == "stacking":
+            return {"meta_label_threshold": None}
         else:
             return {}
 
@@ -272,6 +279,15 @@ class MLTrainer:
             from sklearn.linear_model import Ridge
 
             return Ridge(**params)
+        elif self.model_type == "stacking":
+            from .stacking import StackingMetaModel
+
+            return StackingMetaModel(
+                cv_splits=self.cv_splits,
+                embargo_pct=self.embargo_pct,
+                purge_pct=self.purge_pct,
+                meta_label_threshold=params.get("meta_label_threshold"),
+            )
         else:
             raise ValueError(f"Unknown model type: {self.model_type}")
 
