@@ -11,6 +11,18 @@ pd = load_pandas()
 
 REQUIRED = ("open", "high", "low", "close", "volume")
 
+_COLUMN_CANONICAL_MAP = {
+    "t": "timestamp",
+    "time": "timestamp",
+    "datetime": "timestamp",
+    "date": "timestamp",
+    "o": "open",
+    "h": "high",
+    "l": "low",
+    "c": "close",
+    "v": "volume",
+}
+
 
 def _empty_frame() -> "_pd.DataFrame":
     idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
@@ -34,11 +46,14 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     if isinstance(df.columns, pd.MultiIndex):
         frame = df.copy()
         frame.columns = [str(levels[0]).lower().strip() for levels in frame.columns]
-        frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
     else:
         frame = df.copy()
         frame.columns = [str(col).lower().strip() for col in frame.columns]
-        frame = frame.loc[:, ~frame.columns.duplicated()]
+
+    if _COLUMN_CANONICAL_MAP:
+        frame = frame.rename(columns=_COLUMN_CANONICAL_MAP)
+
+    frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
 
     had_timestamp_column = "timestamp" in frame.columns
     if "adj close" in frame.columns and "close" not in frame.columns:
