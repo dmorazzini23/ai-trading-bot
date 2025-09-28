@@ -387,16 +387,22 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             """Provide minimal cancel capability for validation."""
             return None
 
+    class DummyQuote:
+        def __init__(self, bid: float, ask: float):
+            self.bid_price = bid
+            self.ask_price = ask
+
     class DummyDataClient:
         def __init__(self):
             self.requests: list = []
 
         def get_stock_latest_quote(self, req):  # noqa: D401
-            """Record the request and return a static quote."""
+            """Record the request and return a structured NBBO payload."""
 
             self.requests.append(req)
             return types.SimpleNamespace(
-                ask_price=expected_price, bid_price=expected_price
+                symbol=req.symbol_or_symbols[0],
+                quote=DummyQuote(expected_price, expected_price),
             )
 
     dummy_exec = DummyExecutionEngine()
@@ -415,8 +421,9 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
     )
 
     class DummyQuoteRequest:
-        def __init__(self, symbol_or_symbols):
+        def __init__(self, symbol_or_symbols, feed=None):
             self.symbol_or_symbols = symbol_or_symbols
+            self.feed = feed
 
     signals_mod = types.ModuleType("ai_trading.signals")
     signals_mod.enhance_signals_with_position_logic = (
@@ -427,6 +434,8 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
     monkeypatch.setitem(sys.modules, "ai_trading.signals", signals_mod)
     monkeypatch.setattr(eng, "StockLatestQuoteRequest", DummyQuoteRequest)
     monkeypatch.setattr(eng, "to_trade_signal", lambda sig: sig)
+    monkeypatch.setattr(eng, "get_latest_price", lambda *_a, **_k: None)
+    monkeypatch.setattr(eng, "get_price_source", lambda _symbol: "alpaca_primary")
     fetch_minute_mock = Mock(return_value=None)
     monkeypatch.setattr(eng, "fetch_minute_df_safe", fetch_minute_mock)
 
