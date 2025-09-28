@@ -394,17 +394,24 @@ def test_rate_limit_backoff(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(df, "provider_priority", lambda: ["alpaca_iex"])
     sleep_calls: list[float] = []
     monkeypatch.setattr(df.time, "sleep", lambda s: sleep_calls.append(s))
+    feeds: list[str | None] = []
     resp_iter = iter(
         [
             _Resp(429, payload={"message": "rate limit"}),
             _Resp(200, payload=_bars_payload(datetime.now(UTC).isoformat())),
         ]
     )
-    monkeypatch.setattr(df._HTTP_SESSION, "get", lambda *a, **k: next(resp_iter))
+    def fake_get(url, params=None, headers=None, timeout=None):  # noqa: ARG001
+        feed = (params or {}).get("feed")
+        feeds.append(feed)
+        return next(resp_iter)
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get)
     start, end = _dt_range(2)
     out = df._fetch_bars("TEST", start, end, "1Min", feed="iex")
     assert isinstance(out, pd.DataFrame) and not out.empty
     assert sleep_calls and sleep_calls[0] >= 1.0
+    assert feeds == ["iex", "iex"]
 
 
 def test_rate_limit_disable_and_recover(monkeypatch: pytest.MonkeyPatch):
