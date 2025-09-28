@@ -122,6 +122,18 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
 
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
     monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_INTRADAY_FALLBACK_FEED",
+        "yahoo",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE",
+        {"AAPL": "yahoo"},
+        raising=False,
+    )
+    monkeypatch.setattr(
         "ai_trading.core.bot_engine.is_alpaca_service_available",
         lambda: True,
     )
@@ -145,12 +157,30 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
 
     assert price == 95.1
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {None, "iex", "sip"}
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {
+        None,
+        "iex",
+        "sip",
+    }
 
 
 def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
     """Bid should be accepted without invoking Yahoo/bars when ask/last unusable."""
 
     monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {})
+    monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_INTRADAY_FALLBACK_FEED",
+        "yahoo",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE",
+        {"AAPL": "yahoo"},
+        raising=False,
+    )
     monkeypatch.setattr(
         "ai_trading.core.bot_engine.is_alpaca_service_available",
         lambda: True,
@@ -182,6 +212,12 @@ def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
     assert calls["yahoo"] == 0
     assert price == 94.5
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid_degraded"
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {None, "iex", "sip"}
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {
+        None,
+        "iex",
+        "sip",
+    }
     assert "DELAYED_QUOTE_SLIPPAGE_FLAGGED" in caplog.text
 
 

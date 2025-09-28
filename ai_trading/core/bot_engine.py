@@ -890,11 +890,14 @@ class BotEngine:
         feed, symbol = _unwrap_cycle_cache_args(*args, **kwargs)
         sanitized, normalized_raw, cached_value = _cycle_fallback_feed_values(feed)
 
-        if symbol and cached_value:
-            self._cycle_minute_feed_override[symbol] = cached_value
+        if symbol:
+            if cached_value:
+                self._cycle_minute_feed_override[symbol] = cached_value
+            else:
+                self._cycle_minute_feed_override.pop(symbol, None)
 
-        if cached_value:
-            self._intraday_fallback_feed = cached_value
+        if sanitized:
+            self._intraday_fallback_feed = sanitized
 
         if sanitized:
             _cache_cycle_fallback_feed_helper(sanitized, symbol=symbol)
@@ -945,6 +948,7 @@ _FEATURE_CACHE: "OrderedDict[tuple[str, pd.Timestamp], pd.DataFrame]" = OrderedD
 _FEATURE_CACHE_LIMIT = 128
 _PRICE_SOURCE: dict[str, str] = {}
 _CANONICAL_FALLBACK_FEEDS = frozenset({"iex", "sip", "yahoo"})
+_ALPACA_COMPATIBLE_FALLBACK_FEEDS = frozenset({"iex", "sip"})
 _ALPACA_DISABLED_SENTINEL = "alpaca_disabled"
 _PRIMARY_PRICE_SOURCES = frozenset(
     {
@@ -1818,11 +1822,16 @@ def _cache_cycle_fallback_feed_internal(
 
     sanitized, normalized_raw, canonical_value = _cycle_fallback_feed_values(feed)
 
-    if symbol and canonical_value:
-        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = canonical_value
+    if symbol:
+        if canonical_value:
+            _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE[symbol] = canonical_value
+        else:
+            _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.pop(symbol, None)
 
-    if canonical_value:
+    if canonical_value in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
         _GLOBAL_INTRADAY_FALLBACK_FEED = canonical_value
+    elif canonical_value is None and feed is None:
+        _GLOBAL_INTRADAY_FALLBACK_FEED = None
 
     return sanitized, normalized_raw, canonical_value
 
@@ -1903,6 +1912,18 @@ def _cache_cycle_fallback_feed_helper(
                 raise exc
 
     return sanitized, normalized_raw, cached_value
+
+
+def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
+    """Remove cached Yahoo feed preferences when primary pricing recovers."""
+
+    global _GLOBAL_INTRADAY_FALLBACK_FEED
+
+    if symbol and _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol) == "yahoo":
+        _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.pop(symbol, None)
+
+    if _GLOBAL_INTRADAY_FALLBACK_FEED == "yahoo":
+        _GLOBAL_INTRADAY_FALLBACK_FEED = None
 
 
 def _sip_lockout_active() -> bool:
@@ -21220,6 +21241,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if price is not None and _should_flag_delayed_slippage(cache, price_source):
             _log_delayed_quote_slippage(symbol, price_source, price, cache)
         _set_price_source(symbol, price_source)
+        if _is_usable_alpaca_source(price_source):
+            _clear_cached_yahoo_fallback(symbol)
         return price
 
     def _use_cached_primary_success() -> bool:
@@ -21239,6 +21262,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         return False
 
     cycle_feed = _prefer_feed_this_cycle_helper(symbol)
+    if cycle_feed and cycle_feed not in _ALPACA_COMPATIBLE_FALLBACK_FEEDS:
+        cycle_feed = None
     configured_feed = cycle_feed or _get_intraday_feed()
     sanitized_feed = _normalize_cycle_feed(configured_feed)
     feed = sanitized_feed or configured_feed
