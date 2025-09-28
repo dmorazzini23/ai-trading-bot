@@ -1902,43 +1902,37 @@ class ExecutionEngine:
 
         # If bracket requested, call submit_order with keyword args to pass nested structures
         order_type = str(order_data.get("type", "limit")).lower()
-        if order_data.get("order_class"):
-            try:
+        try:
+            if order_data.get("order_class"):
                 resp = self.trading_client.submit_order(**order_data)
-            except (APIError, TimeoutError, ConnectionError):
-                # Fallback: remove unsupported keys and retry without bracket
-                logger.warning("BRACKET_UNSUPPORTED_FALLBACK_LIMIT")
-                cleaned = {k: v for k, v in order_data.items() if k not in {"order_class", "take_profit", "stop_loss"}}
-                resp = self.trading_client.submit_order(**cleaned)
-        else:
-            side = OrderSide.BUY if str(order_data["side"]).lower() == "buy" else OrderSide.SELL
-            tif = TimeInForce.DAY
-            common_kwargs = {
-                "symbol": order_data["symbol"],
-                "qty": order_data["quantity"],
-                "side": side,
-                "time_in_force": tif,
-                "client_order_id": order_data.get("client_order_id"),
-            }
-            asset_class = order_data.get("asset_class")
-            if asset_class:
-                common_kwargs["asset_class"] = asset_class
-            try:
-                if order_type == "market":
-                    req = MarketOrderRequest(**common_kwargs)
-                else:
-                    req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
-            except TypeError as exc:
-                if asset_class and "asset_class" in common_kwargs:
-                    common_kwargs.pop("asset_class", None)
-                    logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
+            else:
+                side = OrderSide.BUY if str(order_data["side"]).lower() == "buy" else OrderSide.SELL
+                tif = TimeInForce.DAY
+                common_kwargs = {
+                    "symbol": order_data["symbol"],
+                    "qty": order_data["quantity"],
+                    "side": side,
+                    "time_in_force": tif,
+                    "client_order_id": order_data.get("client_order_id"),
+                }
+                asset_class = order_data.get("asset_class")
+                if asset_class:
+                    common_kwargs["asset_class"] = asset_class
+                try:
                     if order_type == "market":
                         req = MarketOrderRequest(**common_kwargs)
                     else:
                         req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
-                else:
-                    raise
-            try:
+                except TypeError as exc:
+                    if asset_class and "asset_class" in common_kwargs:
+                        common_kwargs.pop("asset_class", None)
+                        logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
+                        if order_type == "market":
+                            req = MarketOrderRequest(**common_kwargs)
+                        else:
+                            req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
+                    else:
+                        raise
                 resp = self.trading_client.submit_order(order_data=req)
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
@@ -1955,6 +1949,12 @@ class ExecutionEngine:
                 },
             )
             raise
+        except TypeError:
+            # Some brokers may not support bracket fields; fallback without bracket
+            if order_data.get("order_class"):
+                logger.warning("BRACKET_UNSUPPORTED_FALLBACK_LIMIT")
+                cleaned = {k: v for k, v in order_data.items() if k not in {"order_class", "take_profit", "stop_loss"}}
+                resp = self.trading_client.submit_order(**cleaned)
 
         client_order_id = order_data.get("client_order_id")
         fallback_id = client_order_id or f"alpaca-pending-{int(time.time() * 1000)}"
