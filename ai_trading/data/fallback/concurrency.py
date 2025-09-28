@@ -71,21 +71,16 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return obj
 
     bound_loop = None
-    loop_attr_seen = False
     for attr_name in ("_loop", "_bound_loop"):
         try:
             candidate = getattr(obj, attr_name)
         except Exception:
             continue
-        loop_attr_seen = True
         if candidate is not None:
             bound_loop = candidate
             break
 
-    if not loop_attr_seen:
-        return obj
-
-    if bound_loop is loop:
+    if bound_loop is loop and bound_loop is not None:
         return obj
 
     def _capture_sem_state() -> dict[str, int]:
@@ -211,13 +206,16 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         mutated = False
         updates: list[tuple[object, object]] = []
         for key, value in list(obj.items()):
+            new_key = _scan(key, seen, loop)
             new_value = _scan(value, seen, loop)
-            mutated = mutated or new_value is not value
-            updates.append((key, new_value))
+            if new_key is not key or new_value is not value:
+                mutated = True
+            updates.append((new_key, new_value))
         if not mutated:
             return obj
 
         if isinstance(obj, MutableMapping):
+            obj.clear()
             for key, value in updates:
                 obj[key] = value
             return obj
@@ -386,35 +384,33 @@ async def run_with_concurrency(
         nonlocal active
         global PEAK_SIMULTANEOUS_WORKERS
         try:
-            await sem.acquire()
+            async with sem:
+                try:
+                    async with active_lock:
+                        active += 1
+                        if active > PEAK_SIMULTANEOUS_WORKERS:
+                            PEAK_SIMULTANEOUS_WORKERS = active
+
+                    try:
+                        result = await worker(symbol)
+                    except asyncio.CancelledError:
+                        results.setdefault(symbol, None)
+                        FAILED_SYMBOLS.add(symbol)
+                        raise
+                    except BaseException:
+                        FAILED_SYMBOLS.add(symbol)
+                        results[symbol] = None
+                    else:
+                        SUCCESSFUL_SYMBOLS.add(symbol)
+                        results[symbol] = result
+                finally:
+                    async with active_lock:
+                        if active > 0:
+                            active -= 1
         except asyncio.CancelledError:
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
             raise
-
-        try:
-            async with active_lock:
-                active += 1
-                if active > PEAK_SIMULTANEOUS_WORKERS:
-                    PEAK_SIMULTANEOUS_WORKERS = active
-
-            try:
-                result = await worker(symbol)
-            except asyncio.CancelledError:
-                results.setdefault(symbol, None)
-                FAILED_SYMBOLS.add(symbol)
-                raise
-            except BaseException:
-                FAILED_SYMBOLS.add(symbol)
-                results[symbol] = None
-            else:
-                SUCCESSFUL_SYMBOLS.add(symbol)
-                results[symbol] = result
-        finally:
-            async with active_lock:
-                if active > 0:
-                    active -= 1
-            sem.release()
 
     tasks: list[asyncio.Task[None]] = []
     task_to_symbol: dict[asyncio.Task[None], str] = {}
