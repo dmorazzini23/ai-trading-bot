@@ -4581,14 +4581,20 @@ def get_minute_df(
                     force_primary_fetch = False
                 else:
                     df = None
+    requested_feed = normalized_feed or _DEFAULT_FEED
+    feed_to_use = requested_feed
+    initial_feed = requested_feed
+    override_feed: str | None = None
+    proactive_switch = False
+    switch_recorded = False
+
     if _has_alpaca_keys() and force_primary_fetch:
         try:
-            requested_feed = normalized_feed or _DEFAULT_FEED
             override_raw = _FEED_OVERRIDE_BY_TF.get(tf_key) if feed is None else None
-            override_feed = _normalize_feed_value(override_raw) if override_raw is not None else None
+            if override_raw is not None:
+                override_feed = _normalize_feed_value(override_raw)
             feed_to_use = override_feed or requested_feed
             initial_feed = requested_feed
-            proactive_switch = False
             sip_locked_primary = _is_sip_unauthorized()
             if (
                 feed_to_use == "iex"
@@ -4603,8 +4609,14 @@ def get_minute_df(
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
-            if proactive_switch and feed_to_use != initial_feed and df is not None and not getattr(df, "empty", True):
+            if (
+                proactive_switch
+                and feed_to_use != initial_feed
+                and df is not None
+                and not getattr(df, "empty", True)
+            ):
                 _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
+                switch_recorded = True
         except (EmptyBarsError, ValueError, RuntimeError, AttributeError) as e:
             provider_feed_label = f"alpaca_{feed_to_use}"
             if isinstance(e, EmptyBarsError):
@@ -4809,6 +4821,25 @@ def get_minute_df(
     else:
         _warn_missing_alpaca(symbol, "1Min")
         df = None
+
+    if (
+        df is not None
+        and not getattr(df, "empty", True)
+        and feed is None
+        and feed_to_use != initial_feed
+        and not switch_recorded
+        and not used_backup
+    ):
+        existing_override = _FEED_OVERRIDE_BY_TF.get(tf_key)
+        normalized_override: str | None = None
+        if existing_override is not None:
+            try:
+                normalized_override = _normalize_feed_value(existing_override)
+            except ValueError:
+                normalized_override = str(existing_override).strip().lower() or None
+        if normalized_override != feed_to_use:
+            _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
+            switch_recorded = True
     if df is None or getattr(df, "empty", True):
         if use_finnhub:
             finnhub_df = None
