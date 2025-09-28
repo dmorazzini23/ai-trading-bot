@@ -69,6 +69,12 @@ def test_get_latest_price_uses_configured_feed(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
     monkeypatch.setattr(bot_engine, "_INTRADAY_FEED_CACHE", "sip", raising=False)
     monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_INTRADAY_FALLBACK_FEED",
+        "yahoo",
+        raising=False,
+    )
+    monkeypatch.setattr(
         "ai_trading.core.bot_engine.is_alpaca_service_available",
         lambda: True,
     )
@@ -94,6 +100,12 @@ def test_get_latest_price_uses_configured_feed(monkeypatch):
     )
     assert captured["params"] == {"feed": "sip"}
     assert bot_engine._PRICE_SOURCE[symbol] == "alpaca_ask"
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {None, "sip", "iex"}
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol) in {
+        None,
+        "sip",
+        "iex",
+    }
 
 
 def test_get_latest_price_http_error_falls_back(monkeypatch):
@@ -247,6 +259,12 @@ def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_INTRADAY_FALLBACK_FEED",
+        "yahoo",
+        raising=False,
+    )
+    monkeypatch.setattr(
         bot_engine.data_fetcher_module,
         "_sip_configured",
         lambda: True,
@@ -284,6 +302,12 @@ def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
     assert not any(
         record.message == "ALPACA_INVALID_FEED_SKIPPED" for record in caplog.records
     )
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {"sip", "iex"}
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get(symbol) in {
+        None,
+        "sip",
+        "iex",
+    }
 
 
 def test_execute_order_routes_market(monkeypatch):
