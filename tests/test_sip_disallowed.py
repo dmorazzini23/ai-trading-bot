@@ -51,3 +51,12 @@ def test_no_unauthorized_log_when_sip_disabled(monkeypatch):
     assert allowed is False
     assert all(msg != "UNAUTHORIZED_SIP" for msg in captured)
 
+
+def test_sip_disallowed_with_explicit_entitlement_false(monkeypatch):
+    for key in ("ALPACA_ALLOW_SIP", "ALPACA_HAS_SIP"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALPACA_SIP_ENTITLED", "0")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    assert sip_disallowed() is True
+
