@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Mapping
 
 try:  # pragma: no cover - optional dependency
     from flask import Flask, jsonify
@@ -71,31 +71,49 @@ class HealthCheck:
 
         @self.app.route("/healthz")
         def _healthz() -> Any:  # pragma: no cover - simple glue
-            errors: list[dict[str, str]] = []
             ok = True
+            err: str | None = None
             try:
                 service_name = self._get_ctx_attr("service", "ai-trading")
-            except ImportError as exc:  # pragma: no cover - defensive
-                ok = False
-                service_name = "ai-trading"
-                errors.append({
-                    "type": "ImportError",
-                    "detail": str(exc),
-                })
             except Exception as exc:  # pragma: no cover - defensive
                 ok = False
                 service_name = "ai-trading"
-                errors.append({
-                    "type": exc.__class__.__name__,
-                    "detail": str(exc),
-                })
+                err = str(exc) or exc.__class__.__name__
+
+            ctx_alpaca = self._get_ctx_attr("alpaca", None)
+            if isinstance(ctx_alpaca, Mapping):
+                alpaca_ctx = dict(ctx_alpaca)
+            else:
+                alpaca_ctx = {}
+
+            alpaca_payload = {
+                "sdk_ok": False,
+                "initialized": False,
+                "client_attached": False,
+                "has_key": False,
+                "has_secret": False,
+                "base_url": "",
+                "paper": False,
+                "shadow_mode": False,
+            }
+            try:
+                for key, value in alpaca_ctx.items():
+                    if key in alpaca_payload:
+                        if isinstance(alpaca_payload[key], bool):
+                            alpaca_payload[key] = bool(value)
+                        else:
+                            alpaca_payload[key] = value or ""
+            except Exception:
+                pass
 
             payload = {
                 "ok": ok,
-                "errors": errors,
+                "alpaca": alpaca_payload,
                 "ts": datetime.now(UTC).isoformat(),
                 "service": service_name,
             }
+            if err:
+                payload["error"] = err
             return jsonify(payload)
 
     # ------------------------------------------------------------------

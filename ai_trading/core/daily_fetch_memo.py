@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, Callable, Any
+from typing import Any, Dict, Tuple
 
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
 
@@ -23,20 +23,29 @@ def get_daily_df_memoized(
     timeframe: str,
     start: str,
     end: str,
-    fetcher: Callable[[str, str, str, str], Any],
+    df_or_factory: Any,
 ) -> Any:
-    """Return cached daily DataFrame within TTL, normalizing fresh fetches."""
+    """Return cached daily DataFrame within TTL, applying normalization once."""
 
     key = (symbol, timeframe, start, end)
     now = time.time()
     entry = _MEMO.get(key)
-    if entry and now - entry.ts < _TTL_S:
+    if entry and (now - entry.ts) < _TTL_S:
         return entry.df
-    df = fetcher(symbol, timeframe, start, end)
+
+    if callable(df_or_factory):
+        try:
+            df = df_or_factory(symbol, timeframe, start, end)
+        except TypeError:
+            df = df_or_factory()
+    else:
+        df = df_or_factory
+
     try:
         normalized = normalize_ohlcv_df(df)
     except Exception:
         normalized = df
+
     _MEMO[key] = _MemoEntry(now, key, normalized)
     return normalized
 

@@ -113,6 +113,38 @@ _cycle_feed_override: Dict[str, str] = {}
 _override_set_ts: Dict[str, float] = {}
 _ALLOW_SIP: Optional[bool] | None = None
 _OVERRIDE_TTL_S = 600.0
+_ENV_STAMP: tuple[str | None, str | None] | None = None
+
+
+def _env_signature() -> tuple[str | None, str | None]:
+    return (
+        os.getenv("ALPACA_DATA_FEED"),
+        os.getenv("ALPACA_SIP_UNAUTHORIZED"),
+    )
+
+
+def _clear_cycle_overrides() -> None:
+    _cycle_feed_override.clear()
+    _override_set_ts.clear()
+
+
+def reload_env_settings() -> None:
+    """Reset cached override state when environment configuration changes."""
+
+    global _ENV_STAMP
+    _clear_cycle_overrides()
+    _ENV_STAMP = _env_signature()
+
+
+def _ensure_override_state_current() -> None:
+    global _ENV_STAMP
+    sig = _env_signature()
+    if _ENV_STAMP is None:
+        _ENV_STAMP = sig
+        return
+    if sig != _ENV_STAMP:
+        _ENV_STAMP = sig
+        _clear_cycle_overrides()
 
 
 def _record_override(symbol: str, feed: str) -> None:
@@ -256,7 +288,9 @@ _YF_INTERVAL_MAP = {
 def get_settings():  # pragma: no cover - simple alias for tests
     from ai_trading.config.settings import get_settings as _get
 
-    return _get()
+    settings = _get()
+    _ensure_override_state_current()
+    return settings
 
 
 # Module-level session reused across requests
@@ -4480,6 +4514,7 @@ def get_minute_df(
         end_dt = max(start_dt, last_complete_minute)
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
+    _ensure_override_state_current()
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     backup_provider_str, backup_provider_normalized = _resolve_backup_provider()
     resolved_backup_provider = backup_provider_normalized or backup_provider_str
@@ -5382,11 +5417,12 @@ def get_bars(
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
+            backup_provider = getattr(S, "backup_data_provider", "yahoo")
             try:
                 logger.warning(
                     "ALPACA_KEYS_MISSING_USING_BACKUP",
                     extra={
-                        "provider": getattr(get_settings(), "backup_data_provider", "yahoo"),
+                        "provider": backup_provider,
                         "hint": "Set ALPACA_API_KEY, ALPACA_SECRET_KEY, and ALPACA_BASE_URL to use Alpaca data",
                     },
                 )
@@ -5394,7 +5430,7 @@ def get_bars(
                     AlertType.SYSTEM,
                     AlertSeverity.CRITICAL,
                     "Alpaca credentials missing; using backup provider",
-                    metadata={"provider": getattr(get_settings(), "backup_data_provider", "yahoo")},
+                    metadata={"provider": backup_provider},
                 )
             except Exception:
                 # Never allow diagnostics to break data path
@@ -5469,6 +5505,7 @@ __all__ = [
     "_reset_provider_auth_state_for_tests",
     "_get_cycle_id",
     "_fallback_cache_for_cycle",
+    "reload_env_settings",
     "ensure_datetime",
     "bars_time_window_day",
     "_parse_bars",

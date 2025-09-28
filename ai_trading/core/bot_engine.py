@@ -5253,9 +5253,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     # Check data freshness before proceeding with trading logic
     staleness_reference = now_utc if market_open_now else end_dt
 
-    if os.getenv("PYTEST_RUNNING") or os.getenv("PYTEST_CURRENT_TEST"):
-        return df
-
     try:
         staleness._ensure_data_fresh(
             df,

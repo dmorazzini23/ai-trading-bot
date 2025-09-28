@@ -22,7 +22,6 @@ from ai_trading.runtime.shutdown import (
 )
 
 logger = get_logger(__name__)
-register_signal_handlers()
 
 
 def _build_parser(description: str, *, symbols: bool = False) -> argparse.ArgumentParser:
@@ -139,6 +138,7 @@ def run_trade() -> None:
 
     parser = _build_parser("AI Trading Bot", symbols=True)
     args = parser.parse_args()
+    register_signal_handlers()
     stop_event.clear()
     timer = None
     if getattr(args, "max_runtime_seconds", None):
@@ -181,6 +181,7 @@ def run_backtest() -> None:
 
     parser = _build_parser("AI Trading Bot Backtesting", symbols=True)
     args = parser.parse_args()
+    register_signal_handlers()
     stop_event.clear()
     timer = None
     if getattr(args, "max_runtime_seconds", None):
@@ -223,6 +224,7 @@ def run_healthcheck() -> None:
 
     parser = _build_parser("AI Trading Bot Health Check")
     args = parser.parse_args()
+    register_signal_handlers()
     stop_event.clear()
     timer = None
     if getattr(args, "max_runtime_seconds", None):
