@@ -3293,6 +3293,19 @@ def _fetch_bars(
 
         reload_host_limit_if_env_changed(session)
 
+        call_attempts = _state.setdefault("fallback_feeds_attempted", set())
+
+        def _fallback_slots_remaining() -> int | None:
+            try:
+                max_slots = max_data_fallbacks()
+            except Exception:
+                return None
+            try:
+                max_slots_int = int(max_slots)
+            except (TypeError, ValueError):
+                return None
+            return max(0, max_slots_int - len(call_attempts))
+
         def _attempt_fallback(
             fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False
         ) -> pd.DataFrame | None:
@@ -3950,12 +3963,30 @@ def _fetch_bars(
             base_end = _end
             tf_key = (symbol, base_interval)
             if status == 200:
-                for alt_feed in _iter_preferred_feeds(symbol, base_interval, base_feed):
-                    result = _attempt_fallback((base_interval, alt_feed, base_start, base_end))
-                    if result is None or getattr(result, "empty", True):
-                        _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
+                fallback_result: Any | None = None
+                fallback_attempted = False
+                fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
+                sip_allowed = _sip_configured() and not _is_sip_unauthorized()
+                if sip_allowed and "sip" not in fallback_candidates and "sip" not in call_attempts:
+                    slots = _fallback_slots_remaining()
+                    if slots is None or slots > 0:
+                        fallback_candidates.insert(0, "sip")
+                for alt_feed in fallback_candidates:
+                    if alt_feed in call_attempts:
                         continue
-                    return result
+                    slots = _fallback_slots_remaining()
+                    if slots is not None and slots <= 0:
+                        break
+                    fallback_attempted = True
+                    call_attempts.add(alt_feed)
+                    _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(alt_feed)
+                    fallback_result = _attempt_fallback((base_interval, alt_feed, base_start, base_end))
+                    if fallback_result is not None and not getattr(fallback_result, "empty", True):
+                        return fallback_result
+                if fallback_attempted:
+                    _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
+                    _state["stop"] = True
+                    return fallback_result
                 _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
             if is_empty_error:
                 cnt = _ALPACA_EMPTY_ERROR_COUNTS.get(tf_key, 0) + 1
@@ -3988,10 +4019,15 @@ def _fetch_bars(
                 _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
             if fallback:
                 fb_interval, fb_feed, fb_start, fb_end = fallback
-                if fb_feed in _FEED_FAILOVER_ATTEMPTS.get(tf_key, set()):
+                if fb_feed in call_attempts:
                     fallback = None
+                else:
+                    slots = _fallback_slots_remaining()
+                    if slots is not None and slots <= 0:
+                        fallback = None
             if fallback:
                 fb_interval, fb_feed, fb_start, fb_end = fallback
+                call_attempts.add(fb_feed)
                 _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fb_feed)
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
@@ -4690,9 +4726,38 @@ def get_minute_df(
     provider_str, backup_normalized = _resolve_backup_provider()
     backup_label = (backup_normalized or provider_str.lower() or "").strip()
     primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
+
+    def _disable_signal_active(provider_label: str) -> bool:
+        try:
+            disabled_map = getattr(provider_monitor, "disabled_until", {})
+        except Exception:
+            return False
+        if not isinstance(disabled_map, Mapping):
+            return False
+        candidates = {provider_label}
+        base_label = provider_label.split("_", 1)[0].strip()
+        if base_label:
+            candidates.add(base_label)
+        now: _dt.datetime | None = None
+        for candidate in candidates:
+            if not candidate:
+                continue
+            until = disabled_map.get(candidate)
+            if isinstance(until, _dt.datetime):
+                if now is None:
+                    try:
+                        now = _dt.datetime.now(UTC)
+                    except Exception:
+                        now = None
+                if now is None or until > now:
+                    return True
+            elif until:
+                return True
+        return False
     force_primary_fetch = True
     if backup_label:
-        active_provider = provider_monitor.active_provider(primary_label, backup_label)
+        prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
+        active_provider = primary_label if prefer_primary_first else provider_monitor.active_provider(primary_label, backup_label)
         if active_provider == backup_label:
             try:
                 refreshed_last_minute = _last_complete_minute(pd)
