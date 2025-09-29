@@ -74,6 +74,7 @@ class SoftBudget:
         self._start_ns: int | None = None
         self._last_elapsed_ns: int = 0
         self._fractional_ns: int = 0
+        self._correction_ns: int = 0
         self._reported_ms: int = 0
         self.reset()
 
@@ -88,6 +89,7 @@ class SoftBudget:
         self._start_ns = time.perf_counter_ns()
         self._last_elapsed_ns = 0
         self._fractional_ns = 0
+        self._correction_ns = 0
         self._reported_ms = 0
 
     def _elapsed_ns(self) -> int:
@@ -110,9 +112,30 @@ class SoftBudget:
         self._last_elapsed_ns = elapsed_ns
         self._fractional_ns += delta_ns
 
+        had_correction = self._correction_ns > 0
+        if self._correction_ns:
+            if self._fractional_ns >= self._correction_ns:
+                self._fractional_ns -= self._correction_ns
+                self._correction_ns = 0
+            else:
+                self._correction_ns -= self._fractional_ns
+                self._fractional_ns = 0
+
         increment, self._fractional_ns = divmod(self._fractional_ns, 1_000_000)
         if increment:
             self._reported_ms += increment
+            return self._reported_ms
+
+        if had_correction:
+            return self._reported_ms
+
+        if self._reported_ms == 0:
+            borrow = max(0, 1_000_000 - self._fractional_ns)
+            self._correction_ns = borrow
+            self._fractional_ns = 0
+            self._reported_ms = 1
+            return self._reported_ms
+
         return self._reported_ms
 
     def over_budget(self) -> bool:

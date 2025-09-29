@@ -8,6 +8,7 @@ import uuid
 import inspect
 from dataclasses import dataclass
 from typing import Any, Optional, TYPE_CHECKING
+from types import SimpleNamespace
 
 try:
     from alpaca.trading.client import TradingClient
@@ -85,12 +86,74 @@ def _get_http_session() -> "HTTPSession":
     global _HTTP_SESSION
 
     if _HTTP_SESSION is None:
-        _HTTP_SESSION = _lazy_http_session()
+        session = _lazy_http_session()
+        if session is None:
+            session = SimpleNamespace()
+        _HTTP_SESSION = session
 
     session = _HTTP_SESSION
     if session is None:
         raise RuntimeError("HTTP session is not available yet")
     return session
+ 
+
+class _HTTPShim:
+    """Thin proxy that forwards attribute access to the live HTTP session."""
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_fallback", SimpleNamespace())
+        object.__setattr__(self, "post", None)
+        object.__setattr__(self, "request", None)
+
+    def _ensure_session(self) -> Optional["HTTPSession"]:
+        try:
+            session = _get_http_session()
+        except RuntimeError:
+            return None
+        fallback = object.__getattribute__(self, "_fallback")
+        if fallback is not None and vars(fallback):
+            for attr, value in vars(fallback).items():
+                setattr(session, attr, value)
+            object.__setattr__(self, "_fallback", SimpleNamespace())
+        return session
+
+    def __getattribute__(self, name):  # pragma: no cover - exercised via tests
+        if name.startswith("_") or name in {"__class__", "__dict__", "__setattr__", "__getattr__", "__getattribute__"}:
+            return object.__getattribute__(self, name)
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError:
+            return self.__getattr__(name)
+
+    def __getattr__(self, name):  # pragma: no cover - exercised via tests
+        session = self._ensure_session()
+        if session is not None:
+            try:
+                return getattr(session, name)
+            except AttributeError:
+                if isinstance(session, SimpleNamespace):
+                    setattr(session, name, None)
+                    return getattr(session, name)
+                raise
+        fallback = object.__getattribute__(self, "_fallback")
+        if not hasattr(fallback, name):
+            setattr(fallback, name, None)
+        if session is not None and isinstance(session, SimpleNamespace):
+            setattr(session, name, getattr(fallback, name))
+        return getattr(fallback, name)
+
+    def __setattr__(self, name, value):  # pragma: no cover - exercised via tests
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        session = self._ensure_session()
+        if session is not None:
+            setattr(session, name, value)
+        else:
+            setattr(object.__getattribute__(self, "_fallback"), name, value)
+
+
+_HTTP = _HTTPShim()
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
@@ -937,7 +1000,20 @@ def _http_submit(
         call = session.post
         if retry is not None:
             call = _with_retry(call)
-        resp = call(url, headers=headers, json=payload, timeout=timeout_v)
+            resp = call(url, headers=headers, json=payload, timeout=timeout_v)
+        else:
+            last_exc: RequestException | None = None
+            for attempt in range(2):
+                try:
+                    resp = call(url, headers=headers, json=payload, timeout=timeout_v)
+                    last_exc = None
+                    break
+                except RequestException as exc:
+                    last_exc = exc
+                    if attempt == 1:
+                        raise
+            if last_exc is not None:
+                raise last_exc
     except RequestException as e:  # pragma: no cover - network error path
         _err = e
         raise AlpacaOrderNetworkError(f"Network error calling {url}: {e}") from e
@@ -1218,4 +1294,5 @@ __all__ = [
     "alpaca_get",
     "start_trade_updates_stream",
     "initialize",
+    "_HTTP",
 ]

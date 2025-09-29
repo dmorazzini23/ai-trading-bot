@@ -4,6 +4,7 @@ import runpy, sys
 def test_module_imports_without_heavy_stacks(monkeypatch):
     heavy_roots = {"torch","gymnasium","pandas","pyarrow","sklearn","matplotlib"}
     before = set(sys.modules)
+    monkeypatch.setattr(sys, "argv", ["pytest"])
     # Running the module main should not pull heavy deps implicitly
     runpy.run_module("ai_trading", run_name="__main__")
     after = set(sys.modules)
