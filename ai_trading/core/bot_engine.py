@@ -18329,6 +18329,24 @@ def _apply_slippage_limit(
 def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | None:
     """Fetch the latest quote using the configured data client."""
 
+    def _unwrap_quote_payload(payload: Any) -> Any:
+        """Return the innermost quote object exposing bid/ask fields."""
+
+        current = payload
+        seen: set[int] = set()
+        while current is not None:
+            identifier = id(current)
+            if identifier in seen:
+                break
+            seen.add(identifier)
+            next_level = getattr(current, "quote", None)
+            if next_level is None:
+                next_level = getattr(current, "latest_quote", None)
+            if next_level is None or next_level is current:
+                break
+            current = next_level
+        return current
+
     try:
         _ensure_alpaca_classes()
         if feed:
@@ -18340,11 +18358,10 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
             return None
         # alpaca-py returns ``StockLatestQuoteResponse`` with the quote nested
         # under ``quote`` or ``latest_quote``; unwrap so downstream helpers see
-        # ``bid_price``/``ask_price`` attributes directly.
-        inner = getattr(quote, "quote", None) or getattr(quote, "latest_quote", None)
-        if inner is not None:
-            return inner
-        return quote
+        # ``bid_price``/``ask_price`` attributes directly. Some test doubles
+        # mimic the production response shape as ``quote.quote`` so walk the
+        # nesting chain until a leaf object is reached.
+        return _unwrap_quote_payload(quote)
     except Exception as exc:  # pragma: no cover - best effort logging
         logger.debug(
             "QUOTE_FETCH_FAILED",
