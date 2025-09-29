@@ -1,4 +1,6 @@
 import sys
+import subprocess
+
 import pytest
 
 from ai_trading.utils.safe_subprocess import safe_subprocess_run
@@ -42,4 +44,52 @@ def test_safe_subprocess_run_nonzero_exit(caplog):
     assert res.stderr == ""
     assert res.returncode == 2
     assert not res.timeout
+    assert not caplog.records
+
+
+def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog):
+    calls: dict[str, object] = {}
+
+    class DummyProcess:
+        def __init__(self) -> None:
+            self.kill_called = False
+            self.communicate_calls: list[float | None] = []
+            self.returncode = None
+
+        def communicate(self, timeout: float | None = None):
+            self.communicate_calls.append(timeout)
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
+            return None, None
+
+        def kill(self) -> None:
+            self.kill_called = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    dummy_proc = DummyProcess()
+
+    def fake_popen(*args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return dummy_proc
+
+    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", fake_popen)
+
+    with caplog.at_level("WARNING"):
+        res = safe_subprocess_run(["dummy"], timeout=0.25)
+
+    assert res.timeout is True
+    assert res.returncode == 124
+    assert res.stdout == ""
+    assert res.stderr == ""
+    assert dummy_proc.kill_called is True
+    assert dummy_proc.communicate_calls == [0.25, None]
+    assert calls["kwargs"]["stdout"] == subprocess.PIPE
+    assert calls["kwargs"]["stderr"] == subprocess.PIPE
+    assert calls["kwargs"]["text"] is True
     assert not caplog.records

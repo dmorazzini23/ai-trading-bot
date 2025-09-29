@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from dataclasses import dataclass
 from typing import Sequence
-import shlex
 
 from ai_trading.logging import get_logger
 
@@ -36,6 +36,25 @@ def _coerce_cmd(cmd: Sequence[str] | str) -> list[str]:
     raise TypeError("cmd must be a sequence or string")
 
 
+def _terminate_process(proc: subprocess.Popen[str]) -> tuple[str, str]:
+    """Best-effort termination helper used when a timeout is hit."""
+
+    try:
+        proc.kill()
+    except Exception:
+        # Ignore errors when attempting to terminate an already-dead process.
+        pass
+
+    try:
+        stdout, stderr = proc.communicate()
+    except Exception:
+        return "", ""
+
+    stdout_text = stdout or "" if stdout is not None else ""
+    stderr_text = stderr or "" if stderr is not None else ""
+    return stdout_text, stderr_text
+
+
 def safe_subprocess_run(
     cmd: Sequence[str] | str,
     timeout: float | int | None = None,
@@ -53,25 +72,21 @@ def safe_subprocess_run(
 
     argv = _coerce_cmd(cmd)
     try:
-        completed = subprocess.run(
+        with subprocess.Popen(
             argv,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=run_timeout,
-            check=False,
-        )
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        returncode = completed.returncode
-    except subprocess.TimeoutExpired as exc:
-        proc = getattr(exc, "process", None)
-        if proc is not None:
+        ) as proc:
             try:
-                proc.kill()
-                proc.communicate()
-            except Exception:
-                pass
-        return SafeSubprocessResult("", "", 124, True)
+                stdout, stderr = proc.communicate(timeout=run_timeout)
+            except subprocess.TimeoutExpired:
+                stdout, stderr = _terminate_process(proc)
+                return SafeSubprocessResult(stdout, stderr, 124, True)
+
+            stdout_text = stdout or "" if stdout is not None else ""
+            stderr_text = stderr or "" if stderr is not None else ""
+            return SafeSubprocessResult(stdout_text, stderr_text, proc.returncode or 0, False)
     except OSError as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
@@ -79,5 +94,3 @@ def safe_subprocess_run(
         # ``TimeoutExpired`` is handled above; this branch captures other subprocess failures.
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
-
-    return SafeSubprocessResult(stdout, stderr, returncode, False)
