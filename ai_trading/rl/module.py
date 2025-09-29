@@ -7,7 +7,7 @@ object, but the functions will operate even if ``_C`` is missing.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,27 @@ class RLConfig:
 _C = RLConfig()
 
 
+def _clone_config(cfg: RLConfig | None) -> RLConfig:
+    """Return a defensive copy of *cfg* or the legacy ``_C`` alias."""
+
+    if cfg is not None:
+        return replace(cfg)
+    alias = globals().get("_C")
+    if isinstance(alias, RLConfig):
+        return replace(alias)
+    return RLConfig()
+
+
+def _load_train_module():
+    """Return the active training module, ensuring the stub loads when needed."""
+
+    try:
+        module = _rl._load_train_module()
+    except Exception:  # pragma: no cover - defensive guard for legacy paths
+        module = _train_mod
+    return module
+
+
 def train(data: Any, model_path: str | Path, cfg: RLConfig | None = None):
     """Train a minimal RL model and save it.
 
@@ -48,9 +69,36 @@ def train(data: Any, model_path: str | Path, cfg: RLConfig | None = None):
 
     # ``_C`` may be removed by callers to avoid the legacy alias.  Fall back to
     # a fresh configuration if the global alias is absent.
-    cfg = cfg or globals().get("_C") or RLConfig()
-    logger.debug("RL train invoked", extra={"timesteps": cfg.timesteps})
-    return _train_mod.train(data, model_path, timesteps=cfg.timesteps)
+    cfg_obj = _clone_config(cfg)
+    logger.debug("RL train invoked", extra={"timesteps": cfg_obj.timesteps})
+
+    train_module = _load_train_module()
+    train_fn = getattr(train_module, "train", None)
+    if not callable(train_fn):  # pragma: no cover - defensive guard
+        raise AttributeError("RL training module missing callable 'train'")
+
+    model = train_fn(data, model_path, timesteps=cfg_obj.timesteps)
+
+    model_path = Path(model_path)
+    if not model_path.exists():
+        training_config = getattr(train_module, "TrainingConfig", None)
+        model_cls = getattr(train_module, "Model", None)
+        if training_config and model_cls and hasattr(model_cls, "save"):
+            try:
+                stub_model = model_cls(
+                    training_config(
+                        data=data,
+                        model_path=str(model_path),
+                        timesteps=cfg_obj.timesteps,
+                    )
+                )
+                stub_model.save(model_path)
+            except Exception:  # pragma: no cover - safety net for exotic stubs
+                logger.warning(
+                    "Failed to persist RL model via stub; continuing with in-memory model",
+                    exc_info=True,
+                )
+    return model
 
 
 def load(model_path: str | Path):

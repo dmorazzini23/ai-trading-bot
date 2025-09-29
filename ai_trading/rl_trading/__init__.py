@@ -94,10 +94,15 @@ class RLAgent:
         if not rl_ready or PPO is None or is_stub:
             self._load_stub_model(model_path)
             return
-        if model_path.exists():
-            self.model = PPO.load(self.model_path)
-        else:
+        if not model_path.exists():
             logger.error("RL model not found at %s", self.model_path)
+            self._load_stub_model(model_path)
+            return
+        try:
+            self.model = PPO.load(self.model_path)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.error("RL model load failed for %s: %s", self.model_path, exc)
+            self._load_stub_model(model_path)
 
     def predict(
         self, state: Iterable[Any] | Any, symbols: list[str] | None = None
