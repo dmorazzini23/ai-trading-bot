@@ -72,18 +72,29 @@ def _to_bool(val: Any, default: bool | None = None) -> bool:
 def _propagate_default_feed(feed: str) -> None:
     """Update module-level default feed constants when settings mutate."""
 
-    targets = (
-        "ai_trading.data.fetch",
-        "ai_trading.core.bot_engine",
-    )
-    for mod_name in targets:
+    normalized = str(feed or "iex").strip().lower() or "iex"
+    propagation_targets: dict[str, tuple[str, ...]] = {
+        "ai_trading.data.fetch": ("refresh_default_feed", "set_default_feed", "_DEFAULT_FEED"),
+        "ai_trading.core.bot_engine": ("set_default_feed", "_DEFAULT_FEED"),
+        "ai_trading.config": ("set_data_feed_intraday", "DATA_FEED_INTRADAY"),
+    }
+
+    for mod_name, handlers in propagation_targets.items():
         mod = sys.modules.get(mod_name)
         if mod is None:
             continue
-        try:
-            setattr(mod, "_DEFAULT_FEED", feed)
-        except Exception:  # pragma: no cover - defensive
-            logger.debug("DEFAULT_FEED_PROPAGATE_FAILED", extra={"module": mod_name})
+        for handler in handlers:
+            target = getattr(mod, handler, None)
+            try:
+                if callable(target):
+                    target(normalized)
+                    break
+                if target is not None:
+                    setattr(mod, handler, normalized)
+                    break
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("DEFAULT_FEED_PROPAGATE_FAILED", extra={"module": mod_name, "handler": handler})
+                break
 
 
 class Settings(BaseSettings):

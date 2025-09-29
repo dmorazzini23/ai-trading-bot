@@ -58,6 +58,42 @@ _LOCK_STATE = threading.local()
 logger = logging.getLogger(__name__)
 
 
+def _normalize_intraday_feed(feed: str | None) -> str:
+    normalized = str(feed or "iex").strip().lower()
+    return normalized or "iex"
+
+
+def _derive_intraday_feed(cfg: TradingConfig | None = None) -> str:
+    source = cfg or _CFG
+    return _normalize_intraday_feed(
+        getattr(source, "data_feed_intraday", getattr(source, "alpaca_data_feed", "iex"))
+    )
+
+
+def set_data_feed_intraday(feed: str | None) -> str:
+    """Update the exported DATA_FEED_INTRADAY constant."""
+
+    global DATA_FEED_INTRADAY
+    DATA_FEED_INTRADAY = _normalize_intraday_feed(feed)
+    try:
+        setattr(_CFG, "data_feed_intraday", DATA_FEED_INTRADAY)
+    except Exception:  # pragma: no cover - defensive fallback
+        pass
+    return DATA_FEED_INTRADAY
+
+
+def refresh_data_feed_intraday(feed: str | None = None) -> str:
+    """Refresh DATA_FEED_INTRADAY from *feed* or the latest trading config."""
+
+    if feed is None:
+        try:
+            cfg = get_trading_config()
+        except Exception:  # pragma: no cover - defensive fallback
+            cfg = _CFG
+        feed = getattr(cfg, "data_feed_intraday", getattr(cfg, "alpaca_data_feed", "iex"))
+    return set_data_feed_intraday(feed)
+
+
 def _is_lock_held_by_current_thread() -> bool:
     """Return True when the calling thread currently holds the validation lock."""
 
@@ -114,7 +150,7 @@ LIQUIDITY_REDUCTION_MODERATE = float(_CFG.liquidity_reduction_moderate)
 ORDER_STALE_CLEANUP_INTERVAL = int(_CFG.order_stale_cleanup_interval)
 EXECUTION_MODE = str(getattr(_CFG, "execution_mode", "sim") or "sim").lower()
 SHADOW_MODE = bool(getattr(_CFG, "shadow_mode", False))
-DATA_FEED_INTRADAY = str(getattr(_CFG, "data_feed_intraday", getattr(_CFG, "alpaca_data_feed", "iex")) or "iex").lower()
+DATA_FEED_INTRADAY = _derive_intraday_feed()
 SLIPPAGE_LIMIT_BPS = int(getattr(_CFG, "slippage_limit_bps", getattr(_CFG, "max_slippage_bps", 75)))
 PRICE_PROVIDER_ORDER = tuple(getattr(_CFG, "price_provider_order", (
     "alpaca_quote",
@@ -295,6 +331,7 @@ __all__ = sorted([
     "ORDER_TIMEOUT_SECONDS",
     "ORDER_STALE_CLEANUP_INTERVAL",
     "PRICE_PROVIDER_ORDER",
+    "refresh_data_feed_intraday",
     "SENTIMENT_API_KEY",
     "SENTIMENT_API_URL",
     "SENTIMENT_ENHANCED_CACHING",
@@ -303,6 +340,7 @@ __all__ = sorted([
     "SENTIMENT_SUCCESS_RATE_TARGET",
     "Settings",
     "SHADOW_MODE",
+    "set_data_feed_intraday",
     "SLIPPAGE_LIMIT_BPS",
     "TradingConfig",
     "TRADING_MODE",
