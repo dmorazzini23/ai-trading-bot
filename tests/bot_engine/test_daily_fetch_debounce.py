@@ -161,6 +161,43 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     assert be._DAILY_FETCH_MEMO[memo_key][1] is cached_df
 
 
+def test_daily_fetch_memo_handles_generator_factory():
+    from ai_trading.data import fetch as fetch_module
+
+    fetch_module._daily_memo.clear()
+
+    key = ("GEN", "2024-01-01")
+    call_count = 0
+
+    def _generator_factory():
+        nonlocal call_count
+        call_count += 1
+        yield {"call": call_count}
+
+    first = fetch_module.daily_fetch_memo(key, _generator_factory)
+    assert first == {"call": 1}
+    assert key in fetch_module._daily_memo
+    assert fetch_module._daily_memo[key][1] == {"call": 1}
+    assert not isinstance(fetch_module._daily_memo[key][1], types.GeneratorType)
+    assert call_count == 1
+
+    second = fetch_module.daily_fetch_memo(key, _generator_factory)
+    assert second == first
+    assert call_count == 1
+
+    empty_key = ("GEN", "empty")
+
+    def _empty_generator():
+        if False:  # pragma: no cover - generator needs a yield
+            yield None
+
+    empty = fetch_module.daily_fetch_memo(empty_key, _empty_generator)
+    assert empty is None
+    assert empty_key not in fetch_module._daily_memo
+
+    fetch_module._daily_memo.clear()
+
+
 def test_daily_missing_columns_error_sticky(monkeypatch):
     fetcher = _stub_fetcher(monkeypatch)
     symbol = "AAPL"

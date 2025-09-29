@@ -11,6 +11,8 @@ import warnings
 import weakref
 from datetime import UTC, datetime
 from threading import Lock
+from contextlib import suppress
+from types import GeneratorType
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
@@ -232,10 +234,24 @@ def daily_fetch_memo(key: Tuple[str, str], value_factory):
         if (now - ts) < _DAILY_TTL_S:
             return value
     try:
-        value = value_factory()
+        value_or_generator = value_factory()
     except StopIteration:
         _daily_memo.pop(key, None)
         return None
+
+    if isinstance(value_or_generator, GeneratorType):
+        generator = value_or_generator
+        try:
+            value = next(generator)
+        except StopIteration:
+            _daily_memo.pop(key, None)
+            return None
+        finally:
+            with suppress(Exception):
+                generator.close()
+    else:
+        value = value_or_generator
+
     _daily_memo[key] = (now, value)
     return value
 
