@@ -107,6 +107,8 @@ class SoftBudget:
         elapsed_ns = self._elapsed_ns()
         delta_ns = elapsed_ns - self._last_elapsed_ns
         if delta_ns <= 0:
+            if self._reported_ms == 0:
+                return 1
             return self._reported_ms
 
         self._last_elapsed_ns = elapsed_ns

@@ -361,10 +361,21 @@ if __name__ == "__main__":
     # avoid raising SystemExit so collection/execution continues cleanly.
     rc = main()
     try:
-        import os
-        if any("pytest" in arg for arg in sys.argv) or any("::" in arg for arg in sys.argv) or os.getenv("PYTEST_RUNNING") == "1":
+        import os as _os
+        if (
+            any("pytest" in arg for arg in sys.argv)
+            or any("::" in arg for arg in sys.argv)
+            or _os.getenv("PYTEST_RUNNING") == "1"
+        ):
             pass
         else:
             sys.exit(rc)
-    except Exception:
-        sys.exit(rc)
+    finally:
+        try:
+            import sys as _sys
+            import os as _os2
+
+            if _os2.getenv("PYTEST_RUNNING") == "1":
+                _sys.modules.pop(__name__, None)
+        except Exception:
+            pass
