@@ -659,6 +659,7 @@ def _iter_preferred_feeds(symbol: str, timeframe: str, current_feed: str) -> tup
 def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: str) -> None:
     key = (symbol, timeframe)
     _FEED_OVERRIDE_BY_TF[key] = to_feed
+    _record_override(symbol, to_feed)
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
     attempted.add(to_feed)
     _FEED_SWITCH_HISTORY.append((symbol, timeframe, to_feed))
@@ -3260,6 +3261,8 @@ def _fetch_bars(
                 extra={"provider": "alpaca", "fallback": payload},
             )
             result = _req(session, None, headers=headers, timeout=timeout)
+            if result is not None and not getattr(result, "empty", True):
+                _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
             if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
                 _mark_fallback(
                     symbol,
@@ -3886,7 +3889,6 @@ def _fetch_bars(
                     if result is None or getattr(result, "empty", True):
                         _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
                         continue
-                    _record_feed_switch(symbol, base_interval, base_feed, alt_feed)
                     return result
                 _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
             if is_empty_error:
@@ -3925,10 +3927,8 @@ def _fetch_bars(
             if fallback:
                 fb_interval, fb_feed, fb_start, fb_end = fallback
                 _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fb_feed)
-                from_feed = base_feed
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
-                    _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
                     return result
                 _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
             if _feed == "iex" and is_empty_error:
@@ -3979,7 +3979,6 @@ def _fetch_bars(
                     sip_corr = _state.get("corr_id")
                     if result is not None and not getattr(result, "empty", True):
                         _IEX_EMPTY_COUNTS.pop(tf_key, None)
-                        _record_feed_switch(symbol, base_interval, base_feed, "sip")
                         return result
                     _interval, _feed, _start, _end = base_interval, base_feed, base_start, base_end
                 if allow_sip_fallback:
