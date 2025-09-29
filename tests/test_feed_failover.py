@@ -59,6 +59,7 @@ def test_empty_payload_switches_to_preferred_feed(monkeypatch, capmetrics):
     monkeypatch.setattr(fetch, "_HAS_SIP", True)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
     monkeypatch.setattr(fetch, "alpaca_feed_failover", lambda: ("sip",))
+    monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
     monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
 
     start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
@@ -104,6 +105,82 @@ def test_empty_payload_switches_to_preferred_feed(monkeypatch, capmetrics):
     assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
     success_tags = capmetrics[names.index("data.fetch.success")][1]
     assert success_tags.get("feed") == "sip"
+
+
+def test_empty_payload_switch_records_override_without_preferred_list(monkeypatch, capmetrics):
+    _reset_state()
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
+    monkeypatch.setattr(fetch, "_HAS_SIP", True)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
+    monkeypatch.setattr(fetch, "alpaca_feed_failover", lambda: ())
+    monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex"])
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 1)
+    monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
+
+    start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+
+    session = _Session(
+        [
+            _Resp({"bars": []}, correlation="iex"),
+            _Resp(
+                {
+                    "bars": [
+                        {"t": "2024-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}
+                    ]
+                },
+                correlation="sip",
+            ),
+        ]
+    )
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", session)
+
+    df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert hasattr(df, "empty")
+    assert not getattr(df, "empty", True)
+    normalized = fetch.normalize_ohlcv_df(df)
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert normalized.index.name == "timestamp"
+    assert session.calls[0]["feed"] == "iex"
+    assert session.calls[1]["feed"] == "sip"
+    assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
+    assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
+    names = [name for name, _ in capmetrics]
+    assert "data.fetch.fallback_attempt" in names
+    assert "data.fetch.success" in names
+    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
+    success_tags = capmetrics[names.index("data.fetch.success")][1]
+    assert success_tags.get("feed") == "sip"
+
+
+def test_cached_override_respects_ttl(monkeypatch):
+    _reset_state()
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    base_time = 1_000.0
+
+    def faux_time():
+        return faux_time.current
+
+    faux_time.current = base_time
+    monkeypatch.setattr(fetch.time, "time", lambda: faux_time())
+    monkeypatch.setattr(fetch, "_OVERRIDE_TTL_S", 10.0, raising=False)
+
+    fetch._record_feed_switch("AAPL", "1Min", "iex", "sip")
+
+    assert fetch._get_cached_or_primary("AAPL", "iex") == "sip"
+    faux_time.current = base_time + 5
+    assert fetch._get_cached_or_primary("AAPL", "iex") == "sip"
+    faux_time.current = base_time + 15
+    assert fetch._get_cached_or_primary("AAPL", "iex") == "iex"
 
 
 def test_feed_override_used_on_subsequent_requests(monkeypatch):
