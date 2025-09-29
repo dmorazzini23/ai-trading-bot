@@ -64,6 +64,9 @@ def _validate_trading_api(api: Any) -> bool:
     - Guarantees `list_positions` exists, mapping to `get_all_positions()` if needed.
     """
     log_once = _get_bot_logger_once()
+    warned_adapter = False
+    adapted_api = False
+
     if api is None:
         if ALPACA_AVAILABLE and not is_shadow_mode():
             log_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
@@ -120,6 +123,7 @@ def _validate_trading_api(api: Any) -> bool:
             log_once.info(
                 "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
             )
+            adapted_api = True
         else:
             log_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
             if not is_shadow_mode() and not os.getenv("PYTEST_RUNNING"):
@@ -153,6 +157,7 @@ def _validate_trading_api(api: Any) -> bool:
             log_once.info(
                 "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
             )
+            adapted_api = True
         elif callable(cancel_orders):
             CancelOrdersRequest = None
             try:
@@ -213,11 +218,16 @@ def _validate_trading_api(api: Any) -> bool:
             log_once.info(
                 "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
             )
+            adapted_api = True
         else:
             log_once.error(
                 "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"
             )
             return False
+    if adapted_api:
+        log_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
+        warned_adapter = True
+
     try:
         TradingClient = get_trading_client_cls()
     except RuntimeError:
@@ -226,8 +236,9 @@ def _validate_trading_api(api: Any) -> bool:
             key="alpaca_trading_client_class_missing",
         )
         return True
-    if not isinstance(api, TradingClient):
+    if not isinstance(api, TradingClient) and not warned_adapter:
         log_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
+        warned_adapter = True
     return True
 
 
