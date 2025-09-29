@@ -3559,11 +3559,29 @@ _ALPACA_IMPORT_ERROR: Exception | None = None
 def _ensure_alpaca_classes() -> None:
     """Import Alpaca SDK types on demand."""
     global Quote, Order, OrderSide, OrderStatus, TimeInForce, MarketOrderRequest, LimitOrderRequest, StopOrderRequest, StopLimitOrderRequest, StockLatestQuoteRequest, _ALPACA_IMPORT_ERROR
-    if Quote is not None or _ALPACA_IMPORT_ERROR is not None:
+
+    assigned = (
+        Quote,
+        Order,
+        OrderSide,
+        OrderStatus,
+        TimeInForce,
+        MarketOrderRequest,
+        LimitOrderRequest,
+        StopOrderRequest,
+        StopLimitOrderRequest,
+        StockLatestQuoteRequest,
+    )
+    if all(item is not None for item in assigned) and _ALPACA_IMPORT_ERROR is None:
         return
+    _ALPACA_IMPORT_ERROR = None
+    fatal_error: Exception | None = None
+
     try:  # pragma: no cover - independent imports with fallbacks
         from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
-    except ImportError:
+    except Exception as exc:  # pragma: no cover - missing optional dependency
+        if not isinstance(exc, ImportError):
+            fatal_error = fatal_error or exc
         from dataclasses import dataclass, field
         from typing import Any as _Any
 
@@ -3595,7 +3613,9 @@ def _ensure_alpaca_classes() -> None:
             StopOrderRequest as _StopOrderRequest,
             StopLimitOrderRequest as _StopLimitOrderRequest,
         )
-    except ImportError:
+    except Exception as exc:
+        if not isinstance(exc, ImportError):
+            fatal_error = fatal_error or exc
         from dataclasses import dataclass
 
         @dataclass
@@ -3641,7 +3661,9 @@ def _ensure_alpaca_classes() -> None:
             OrderStatus as _OrderStatus,
             TimeInForce as _TimeInForce,
         )
-    except ImportError:
+    except Exception as exc:
+        if not isinstance(exc, ImportError):
+            fatal_error = fatal_error or exc
         from enum import Enum
 
         class _OrderSide(str, Enum):  # pragma: no cover - fallback enum
@@ -3661,7 +3683,9 @@ def _ensure_alpaca_classes() -> None:
             GTC = "gtc"
     try:
         from alpaca.data.models import Quote as _Quote  # type: ignore
-    except ImportError:
+    except Exception as exc:
+        if not isinstance(exc, ImportError):
+            fatal_error = fatal_error or exc
         from dataclasses import dataclass
 
         @dataclass
@@ -3670,7 +3694,9 @@ def _ensure_alpaca_classes() -> None:
             ask_price: float | None = None
     try:
         from alpaca.trading.models import Order as _Order  # type: ignore
-    except ImportError:
+    except Exception as exc:
+        if not isinstance(exc, ImportError):
+            fatal_error = fatal_error or exc
         from dataclasses import dataclass
 
         @dataclass
@@ -3687,6 +3713,9 @@ def _ensure_alpaca_classes() -> None:
     StopOrderRequest = _StopOrderRequest
     StopLimitOrderRequest = _StopLimitOrderRequest
     StockLatestQuoteRequest = _StockLatestQuoteRequest
+
+    if fatal_error is not None:
+        _ALPACA_IMPORT_ERROR = fatal_error
 
 
 # Ensure fallback classes are available during import when Alpaca SDK is missing.
@@ -13000,6 +13029,8 @@ def safe_submit_order(api: Any, req, *, bypass_market_check: bool = False) -> Or
     ``PYTEST_RUNNING`` flag is set, or when ``bypass_market_check`` is
     explicitly ``True``.
     """
+
+    _ensure_alpaca_classes()
 
     pytest_running = bool(get_env("PYTEST_RUNNING", "0", cast=bool))
     skip_market_check = (
