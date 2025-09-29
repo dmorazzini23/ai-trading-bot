@@ -46,53 +46,78 @@ def create_app():
     def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
         """Return a JSON ``Response`` with a resilient fallback.
 
-        When ``jsonify`` is unavailable or raises, fall back to ``json.dumps`` with
-        a stable payload to keep ``/health`` reliable under tests that monkeypatch
-        Flask internals.
+        When ``jsonify`` is unavailable or raises, fall back to ``json.dumps`` while
+        preserving the canonical payload structure so callers consistently receive
+        ``{"ok": bool, "alpaca": {...}}`` along with any error context.
         """
 
+        def _normalise_payload(raw: dict | None) -> dict:
+            """Return a shallow copy with defensive defaults."""
+
+            base = dict(raw or {})
+            if "ok" in base:
+                base["ok"] = bool(base["ok"])
+            alpaca_raw = base.get("alpaca")
+            base["alpaca"] = dict(alpaca_raw) if isinstance(alpaca_raw, dict) else {}
+            return base
+
+        canonical_payload = _normalise_payload(data)
+        fallback_payload = dict(canonical_payload)
+        fallback_payload["alpaca"] = dict(canonical_payload["alpaca"])
+
+        if fallback is not None:
+            fallback_source = _normalise_payload(fallback)
+            for key, value in fallback_source.items():
+                if key == "alpaca":
+                    fallback_payload["alpaca"].update(value)
+                else:
+                    fallback_payload[key] = value
+
         func = globals().get("jsonify")
-        failure_exc: Exception | None = None
+        fallback_reason: str | None = None
         if callable(func):
             try:
-                response = func(data)
+                response = func(canonical_payload)
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
-                failure_exc = exc
+                fallback_reason = str(exc) or exc.__class__.__name__
             else:
                 try:
                     response.status_code = status
                 except Exception:  # pragma: no cover - defensive
                     pass
                 return response
+        else:
+            fallback_reason = "jsonify unavailable"
 
-        payload = fallback if fallback is not None else data
-        if failure_exc is not None:
-            message = str(failure_exc) or failure_exc.__class__.__name__
-            if not isinstance(payload, dict):
-                payload = {"ok": False, "error": message}
+        message = str(fallback_payload.get("error") or "").strip()
+        if fallback_reason:
+            if message:
+                if fallback_reason not in message:
+                    message = f"{message}; {fallback_reason}"
             else:
-                payload = dict(payload)
-                payload.setdefault("alpaca", {})
-                if not payload.get("error"):
-                    payload["error"] = message
-                payload["ok"] = False
+                message = fallback_reason
+        if not message:
+            message = "jsonify unavailable"
+        fallback_payload["error"] = message
+        fallback_payload["ok"] = False
+
         try:
-            body = json.dumps(payload, default=str)
+            body = json.dumps(fallback_payload, default=str)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
             safe_payload = {
                 "ok": False,
-                "alpaca": payload.get("alpaca", {}),
+                "alpaca": fallback_payload.get("alpaca", {}),
                 "error": str(exc) or "serialization_error",
             }
-            payload = safe_payload
-            body = json.dumps(payload, default=str)
+            fallback_payload = safe_payload
+            body = json.dumps(fallback_payload, default=str)
 
         response_factory = getattr(app, "response_class", None)
         if callable(response_factory):
             return response_factory(body, status=status, mimetype="application/json")
-        return payload, status
+        return fallback_payload, status
 
     @app.route('/health')
     def health():
@@ -178,22 +203,26 @@ def create_app():
             shadow_mode=shadow,
         )
 
-        payload = dict(
-            ok=ok,
-            alpaca=alpaca_payload,
-        )
+        payload = {
+            "ok": ok,
+            "alpaca": alpaca_payload,
+        }
         if errors:
             payload["error"] = "; ".join(errors)
             payload["ok"] = False
-        fallback_payload = dict(payload)
-        fallback_payload["alpaca"] = dict(minimal_alpaca_payload)
+
+        fallback_payload = {
+            "ok": ok,
+            "alpaca": dict(minimal_alpaca_payload),
+        }
+        fallback_payload["alpaca"].update(alpaca_payload)
+
         if errors:
             err_msg = payload.get("error") or last_error or "; ".join(errors)
-            if err_msg:
-                fallback_payload["error"] = err_msg
         else:
-            fallback_payload.setdefault("error", last_error or "jsonify unavailable")
-        fallback_payload["ok"] = False
+            err_msg = last_error
+        if err_msg:
+            fallback_payload["error"] = err_msg
 
         return _json_response(payload, fallback=fallback_payload)
 

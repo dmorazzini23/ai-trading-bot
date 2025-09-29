@@ -17,12 +17,21 @@ EXPECTED_ALPACA_MINIMAL = {
 }
 
 
-def _expected_health_payload(error: str) -> dict:
-    return {
-        "ok": False,
-        "error": error,
-        "alpaca": dict(EXPECTED_ALPACA_MINIMAL),
-    }
+def _assert_payload_structure(payload: dict) -> None:
+    alpaca_keys = set(EXPECTED_ALPACA_MINIMAL)
+    assert set(payload) >= {"ok", "alpaca"}
+    assert isinstance(payload["ok"], bool)
+    assert set(payload["alpaca"]) == alpaca_keys
+    bool_keys = alpaca_keys - {"base_url"}
+    assert all(isinstance(payload["alpaca"][key], bool) for key in bool_keys)
+    assert isinstance(payload["alpaca"]["base_url"], str)
+
+
+def _assert_error_contains(payload: dict, *expected: str) -> None:
+    err = payload.get("error", "")
+    assert isinstance(err, str) and err
+    for fragment in expected:
+        assert fragment in err
 
 
 def test_health_endpoint_handles_import_error(monkeypatch):
@@ -41,8 +50,10 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == _expected_health_payload("boom")
+    _assert_payload_structure(data)
+    assert data["ok"] is False
     assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
+    _assert_error_contains(data, "boom")
 
 
 def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
@@ -64,8 +75,10 @@ def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data == _expected_health_payload("boom")
+    _assert_payload_structure(data)
+    assert data["ok"] is False
     assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
+    _assert_error_contains(data, "boom", "json busted")
 
 
 def test_health_endpoint_structure_is_stable():
@@ -74,22 +87,7 @@ def test_health_endpoint_structure_is_stable():
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    alpaca_keys = {
-        "sdk_ok",
-        "initialized",
-        "client_attached",
-        "has_key",
-        "has_secret",
-        "base_url",
-        "paper",
-        "shadow_mode",
-    }
-    assert set(data.keys()) >= {"ok", "alpaca"}
-    assert set(data["alpaca"].keys()) == alpaca_keys
-    assert isinstance(data["ok"], bool)
-    bool_keys = alpaca_keys - {"base_url"}
-    assert all(isinstance(data["alpaca"][key], bool) for key in bool_keys)
-    assert isinstance(data["alpaca"]["base_url"], str)
+    _assert_payload_structure(data)
 
 
 def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
@@ -103,6 +101,19 @@ def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
     resp = client.get("/health")
     assert resp.status_code == 200
     data = resp.get_json()
-    err = data.get("error", "")
-    assert isinstance(err, str) and err
-    assert data == _expected_health_payload(err)
+    _assert_payload_structure(data)
+    assert data["ok"] is False
+    _assert_error_contains(data, "json busted")
+
+
+def test_health_endpoint_handles_missing_jsonify(monkeypatch):
+    monkeypatch.delattr(app_module, "jsonify", raising=False)
+
+    app = app_module.create_app()
+    client = app.test_client()
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    _assert_payload_structure(data)
+    assert data["ok"] is False
+    _assert_error_contains(data, "jsonify unavailable")
