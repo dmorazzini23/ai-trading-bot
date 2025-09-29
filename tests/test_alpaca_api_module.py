@@ -3,6 +3,11 @@ import pytest
 
 from ai_trading import alpaca_api
 
+if hasattr(alpaca_api, "_load"):
+    _REAL_ALPACA_API = alpaca_api._load()
+else:
+    _REAL_ALPACA_API = alpaca_api
+
 
 class DummyAPI:
     def __init__(self, fail_status: int | None = None):
@@ -20,8 +25,14 @@ class DummyAPI:
 
 def test_submit_order_shadow(monkeypatch):
     api = DummyAPI()
-    monkeypatch.setenv("SHADOW_MODE", "1")
-    res = alpaca_api.submit_order("AAPL", "buy", qty=1, client=api, shadow=True)
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
+
+    def _from_env():
+        return _REAL_ALPACA_API._AlpacaConfig("https://paper-api.alpaca.markets", None, None, True)
+
+    monkeypatch.setattr(_REAL_ALPACA_API._AlpacaConfig, "from_env", staticmethod(_from_env))
+
+    res = alpaca_api.submit_order("AAPL", "buy", qty=1, client=api)
     assert res["id"].startswith("shadow-")
     assert api.calls == 0
 
@@ -36,6 +47,11 @@ def test_submit_order_missing_submit(monkeypatch):
 def test_submit_order_rate_limit(monkeypatch):
     monkeypatch.delenv("SHADOW_MODE", raising=False)
     api = DummyAPI(fail_status=429)
+
+    def _from_env():
+        return _REAL_ALPACA_API._AlpacaConfig("https://paper-api.alpaca.markets", None, None, False)
+
+    monkeypatch.setattr(_REAL_ALPACA_API._AlpacaConfig, "from_env", staticmethod(_from_env))
     with pytest.raises(Exception) as e:
         alpaca_api.submit_order("AAPL", "buy", qty=1, client=api)
     assert getattr(e.value, "status", None) == 429
@@ -63,10 +79,15 @@ def test_submit_order_uses_request_object(monkeypatch):
     class _StopLimitReq(_BaseRequest):
         pass
 
-    monkeypatch.setattr(alpaca_api, "MarketOrderRequest", _MarketReq)
-    monkeypatch.setattr(alpaca_api, "LimitOrderRequest", _LimitReq)
-    monkeypatch.setattr(alpaca_api, "StopOrderRequest", _StopReq)
-    monkeypatch.setattr(alpaca_api, "StopLimitOrderRequest", _StopLimitReq)
+    monkeypatch.setattr(_REAL_ALPACA_API, "MarketOrderRequest", _MarketReq)
+    monkeypatch.setattr(_REAL_ALPACA_API, "LimitOrderRequest", _LimitReq)
+    monkeypatch.setattr(_REAL_ALPACA_API, "StopOrderRequest", _StopReq)
+    monkeypatch.setattr(_REAL_ALPACA_API, "StopLimitOrderRequest", _StopLimitReq)
+
+    def _from_env():
+        return _REAL_ALPACA_API._AlpacaConfig("https://paper-api.alpaca.markets", None, None, False)
+
+    monkeypatch.setattr(_REAL_ALPACA_API._AlpacaConfig, "from_env", staticmethod(_from_env))
 
     class RequestClient:
         def __init__(self):
