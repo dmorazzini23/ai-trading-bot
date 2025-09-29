@@ -9,6 +9,7 @@ from ai_trading.utils.lazy_imports import load_pandas
 
 # Simple day-scoped cache for last_market_session to avoid repeated calendar work
 _LAST_SESSION_CACHE: dict[str, "SessionWindow | None"] = {}
+_LAST_MONOTONIC_VALUE: float | None = None
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only
     import pandas as pd
@@ -78,15 +79,28 @@ def monotonic_time() -> float:
     raises ``RuntimeError`` (possible when the underlying clock is not ready).
     """
 
+    global _LAST_MONOTONIC_VALUE
+
     monotonic = getattr(_time_module, "monotonic", None)
     if monotonic is not None:
         try:
-            return float(monotonic())
-        except RuntimeError:  # pragma: no cover - platform specific
-            pass
-        except Exception:  # pragma: no cover - defensive: patched clocks may raise StopIteration, etc.
-            pass
-    return float(_time_module.time())
+            value = float(monotonic())
+        except StopIteration:  # pragma: no cover - patched generators may exhaust
+            value = None
+        except RuntimeError:  # pragma: no cover - platform specific or patched generator stop
+            value = None
+        except Exception:  # pragma: no cover - defensive: patched clocks may raise other errors
+            value = None
+        else:
+            _LAST_MONOTONIC_VALUE = value
+            return value
+
+    fallback = float(_time_module.time())
+    if _LAST_MONOTONIC_VALUE is not None and fallback < _LAST_MONOTONIC_VALUE:
+        return _LAST_MONOTONIC_VALUE
+
+    _LAST_MONOTONIC_VALUE = fallback
+    return fallback
 
 
 __all__ = ['safe_utcnow', 'utcnow', 'now_utc', 'SessionWindow', 'last_market_session', 'monotonic_time']
