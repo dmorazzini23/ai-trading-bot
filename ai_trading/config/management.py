@@ -6,7 +6,12 @@ from urllib.parse import urlparse
 
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv as _load_dotenv  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - optional dependency may be absent
+    _load_dotenv = None
+
+_DOTENV_WARNING_EMITTED = False
 
 from ai_trading.logging import logger
 from .settings import Settings, get_settings
@@ -78,10 +83,35 @@ def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True
         reload_trading_config()
         refresh_alpaca_credentials_cache()
         return None
-    load_dotenv(dotenv_path=path, override=override)
+    _maybe_load_dotenv(path, override=override)
     reload_trading_config()
     refresh_alpaca_credentials_cache()
     return os.fspath(path)
+
+
+def _maybe_load_dotenv(path: os.PathLike[str] | str, *, override: bool = True) -> bool:
+    """Best-effort dotenv loader that tolerates optional dependency absence."""
+
+    global _DOTENV_WARNING_EMITTED
+
+    if _load_dotenv is None:
+        if not _DOTENV_WARNING_EMITTED:
+            logger.warning(
+                "PYTHON_DOTENV_NOT_AVAILABLE",
+                extra={"path": os.fspath(path)},
+            )
+            _DOTENV_WARNING_EMITTED = True
+        return False
+
+    try:
+        _load_dotenv(dotenv_path=path, override=override)
+    except Exception as exc:  # pragma: no cover - logged for diagnostics
+        logger.warning(
+            "PYTHON_DOTENV_LOAD_FAILED",
+            extra={"path": os.fspath(path), "error": str(exc)},
+        )
+        return False
+    return True
 
 
 def _coerce(value: Any, cast: Optional[Callable[[Any], T]]) -> T | Any:
