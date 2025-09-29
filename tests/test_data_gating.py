@@ -152,7 +152,7 @@ def test_gap_limit_env_override(monkeypatch):
     )
     state.data_quality["NFLX"] = {
         "gap_ratio": 0.02,
-        "price_reliable": False,
+        "price_reliable": True,
         "price_reliable_reason": "gap_ratio=2.00%>limit=1.50%",
     }
     ctx = SimpleNamespace(data_client=None, liquidity_annotations={})
@@ -170,6 +170,34 @@ def test_gap_limit_env_override(monkeypatch):
         prefer_backup_quote=True,
     )
 
-    assert not decision.block
+    assert decision.block
     assert any("limit=1.50%" in reason for reason in decision.reasons)
     assert bot_engine._gap_ratio_gate_limit() == pytest.approx(0.015)
+
+
+def test_strict_gating_env_toggle_runtime(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_STRICT_GATING", "0")
+    assert not bot_engine._strict_data_gating_enabled()
+    monkeypatch.setenv("AI_TRADING_STRICT_GATING", "1")
+    assert bot_engine._strict_data_gating_enabled()
+
+
+def test_fallback_quote_age_env_toggle_runtime(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC", "4.5")
+    assert bot_engine._fallback_quote_max_age_seconds() == pytest.approx(4.5)
+    monkeypatch.setenv("AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC", "9.0")
+    assert bot_engine._fallback_quote_max_age_seconds() == pytest.approx(9.0)
+
+
+def test_gap_limit_env_toggle_runtime(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "250")
+    assert bot_engine._gap_ratio_gate_limit() == pytest.approx(0.025)
+    monkeypatch.setenv("AI_TRADING_GAP_LIMIT_BPS", "125")
+    assert bot_engine._gap_ratio_gate_limit() == pytest.approx(0.0125)
+
+
+def test_liquidity_cap_env_toggle_runtime(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_LIQ_FALLBACK_CAP", "0.35")
+    assert bot_engine._liquidity_fallback_cap() == pytest.approx(0.35)
+    monkeypatch.setenv("AI_TRADING_LIQ_FALLBACK_CAP", "0.10")
+    assert bot_engine._liquidity_fallback_cap() == pytest.approx(0.10)
