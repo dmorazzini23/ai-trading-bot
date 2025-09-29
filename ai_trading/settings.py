@@ -273,7 +273,16 @@ class Settings(BaseSettings):
     rl_model_path: str = Field("rl_agent.zip", alias="AI_TRADING_RL_MODEL_PATH")
     use_rl_agent: bool = Field(False, alias="USE_RL_AGENT")
     trade_cooldown_min: int = Field(15, alias="TRADE_COOLDOWN_MIN")
-    health_tick_seconds: int = Field(default=300, env="AI_TRADING_HEALTH_TICK_SECONDS")
+    health_tick_seconds: int = Field(
+        default=300,
+        env="AI_TRADING_HEALTH_TICK_SECONDS",
+        ge=1,
+        description=(
+            "Interval between background health checks. Testing may lower this"
+            " below the 30s production recommendation; runtime clamps when"
+            " needed."
+        ),
+    )
     cpu_only: bool = Field(default=False, validation_alias="CPU_ONLY")
     news_api_key: str | None = None
     sentiment_api_key: str | None = Field(

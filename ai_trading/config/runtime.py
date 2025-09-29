@@ -812,8 +812,11 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         env=("HEALTH_TICK_SECONDS", "AI_TRADING_HEALTH_TICK_SECONDS"),
         cast="float",
         default=300.0,
-        description="Interval between background health checks.",
-        min_value=30.0,
+        description=(
+            "Interval between background health checks. Values below 30s are"
+            " allowed for testing but will be clamped at runtime."
+        ),
+        min_value=1.0,
     ),
     ConfigSpec(
         field="hard_stop_cooldown_min",

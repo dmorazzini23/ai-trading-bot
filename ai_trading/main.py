@@ -1280,10 +1280,26 @@ def main(argv: list[str] | None = None) -> None:
 
     get_device()
     raw_tick = get_env("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
+    recommended_health_tick = 30
     try:
         health_tick_seconds = int(raw_tick)
     except (ValueError, TypeError):
         health_tick_seconds = 300
+    if health_tick_seconds < 1:
+        logger.warning(
+            "HEALTH_TICK_INTERVAL_INVALID",
+            extra={"configured": health_tick_seconds, "normalized": 1},
+        )
+        health_tick_seconds = 1
+    if health_tick_seconds < recommended_health_tick:
+        logger.warning(
+            "HEALTH_TICK_INTERVAL_BELOW_RECOMMENDED",
+            extra={
+                "configured": health_tick_seconds,
+                "recommended_min": recommended_health_tick,
+            },
+        )
+    health_tick_runtime = max(recommended_health_tick, health_tick_seconds)
     last_health = monotonic_time()
     env_iter = _get_int_env("SCHEDULER_ITERATIONS")
     raw_iter = (
@@ -1497,7 +1513,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             _logging.flush_log_throttle_summaries()
             now_mono = monotonic_time()
-            if now_mono - last_health >= max(30, health_tick_seconds):
+            if now_mono - last_health >= health_tick_runtime:
                 logger.info("HEALTH_TICK", extra={"iteration": count, "interval": effective_interval, "closed": closed})
                 last_health = now_mono
             try:
