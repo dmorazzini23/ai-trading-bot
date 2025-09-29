@@ -45,12 +45,33 @@ def _normalize_host(hostname: str | None) -> str:
 
 
 def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
-    """Clear cached host semaphores and, optionally, the limit cache."""
+    """Clear cached host semaphores and, optionally, the limit cache.
+
+    Resetting the semaphore cache should also advance the cached limit
+    version so that subsequent callers pick up freshly created semaphore
+    instances even when the resolved limit value itself has not changed.
+    """
+
+    global _LIMIT_CACHE, _LIMIT_VERSION
 
     _HOST_SEMAPHORES.clear()
+
+    # Bump the global version so that future semaphore lookups will treat the
+    # cleared cache as a new generation. When we retain the limit cache we
+    # rewrite it with the updated version to keep the metadata consistent.
+    _LIMIT_VERSION += 1
+
     if clear_limit_cache:
-        global _LIMIT_CACHE
         _LIMIT_CACHE = None
+    elif _LIMIT_CACHE is not None:
+        cache = _LIMIT_CACHE
+        _LIMIT_CACHE = _ResolvedLimitCache(
+            env_key=cache.env_key,
+            raw_env=cache.raw_env,
+            limit=cache.limit,
+            version=_LIMIT_VERSION,
+            config_id=cache.config_id,
+        )
 
 
 def _compute_limit(raw: str | None = None) -> int:
@@ -130,8 +151,13 @@ def _resolve_limit() -> tuple[int, int]:
     ):
         return cache.limit, cache.version
 
-    _LIMIT_VERSION += 1
-    version = _LIMIT_VERSION
+    if cache is None:
+        if _LIMIT_VERSION == 0:
+            _LIMIT_VERSION = 1
+        version = _LIMIT_VERSION
+    else:
+        _LIMIT_VERSION += 1
+        version = _LIMIT_VERSION
     _LIMIT_CACHE = _ResolvedLimitCache(
         env_key=env_key,
         raw_env=raw_env,
@@ -155,9 +181,7 @@ def invalidate_host_limit_cache() -> None:
     The next access will recompute the limit and refresh semaphore records as needed.
     """
 
-    global _LIMIT_CACHE
-    _LIMIT_CACHE = None
-    reset_host_semaphores(clear_limit_cache=False)
+    reset_host_semaphores(clear_limit_cache=True)
 
 
 def _ensure_limit_cache() -> _ResolvedLimitCache:
@@ -198,10 +222,21 @@ def _get_or_create_loop_semaphore(
     resolved_limit = cache.limit
     version = cache.version
     host_map = _get_host_map(loop)
+
+    if host_map:
+        stale_hosts = [
+            host
+            for host, record in list(host_map.items())
+            if record.limit != resolved_limit or record.version != version
+        ]
+        for host in stale_hosts:
+            host_map[host] = _SemaphoreRecord(
+                asyncio.Semaphore(resolved_limit), resolved_limit, version
+            )
+
     record = host_map.get(hostname)
-    if record is not None:
-        if record.limit == resolved_limit and record.version == version:
-            return record.semaphore
+    if record is not None and record.limit == resolved_limit and record.version == version:
+        return record.semaphore
 
     semaphore = asyncio.Semaphore(resolved_limit)
     host_map[hostname] = _SemaphoreRecord(semaphore, resolved_limit, version)
