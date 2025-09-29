@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 import sys
 import types
+import sitecustomize  # noqa: F401
 from pathlib import Path
 from typing import Any
 
