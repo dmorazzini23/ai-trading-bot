@@ -24,18 +24,40 @@ from dataclasses import fields, is_dataclass, replace
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import TypeVar
 
-try:
-    from ai_trading.http.pooling import get_host_limit as _pooling_host_limit
+try:  # pragma: no cover - optional during stubbed tests
+    from ai_trading.http import pooling as _http_pooling
 except Exception:  # pragma: no cover - pooling optional during stubbed tests
-    def _get_effective_host_limit() -> int | None:
+    _pooling_host_limit = None
+    _pooling_get_host_semaphore = None
+else:  # pragma: no cover - exercised in integration tests
+    _pooling_host_limit = getattr(_http_pooling, "get_host_limit", None)
+    _pooling_get_host_semaphore = getattr(_http_pooling, "get_host_semaphore", None)
+
+
+def _get_effective_host_limit() -> int | None:
+    """Return the currently configured host limit or ``None`` when unset."""
+
+    if not callable(_pooling_host_limit):
         return None
-else:
-    def _get_effective_host_limit() -> int | None:
-        try:
-            limit = int(_pooling_host_limit())
-        except Exception:
-            return None
-        return max(1, limit)
+    try:
+        limit = int(_pooling_host_limit())
+    except Exception:
+        return None
+    return max(1, limit)
+
+
+def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
+    """Return the shared host-limit semaphore when pooling is available."""
+
+    if not callable(_pooling_get_host_semaphore):
+        return None
+    try:
+        semaphore = _pooling_get_host_semaphore()
+    except Exception:
+        return None
+    if isinstance(semaphore, asyncio.Semaphore):
+        return semaphore
+    return None
 
 T = TypeVar("T")
 
@@ -404,6 +426,8 @@ def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
+_LAST_HOST_SEMAPHORE_ID: int | None = None
+_LAST_EFFECTIVE_LIMIT: int | None = None
 
 
 async def run_with_concurrency(
@@ -415,9 +439,7 @@ async def run_with_concurrency(
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
 
-    global PEAK_SIMULTANEOUS_WORKERS
-
-    PEAK_SIMULTANEOUS_WORKERS = 0
+    global PEAK_SIMULTANEOUS_WORKERS, _LAST_HOST_SEMAPHORE_ID, _LAST_EFFECTIVE_LIMIT
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
 
@@ -426,11 +448,33 @@ async def run_with_concurrency(
 
     limit = _normalise_positive_int(max_concurrency) or 1
     host_limit = _get_effective_host_limit()
+    host_semaphore: asyncio.Semaphore | None = None
+    reset_peak = False
     if host_limit is not None:
         host_limit_value = _normalise_positive_int(host_limit)
         if host_limit_value is not None:
             limit = min(limit, host_limit_value)
+        host_semaphore = _get_host_limit_semaphore()
+        if host_semaphore is not None:
+            semaphore_id = id(host_semaphore)
+            if semaphore_id != _LAST_HOST_SEMAPHORE_ID:
+                reset_peak = True
+            _LAST_HOST_SEMAPHORE_ID = semaphore_id
+        else:
+            if _LAST_HOST_SEMAPHORE_ID is not None:
+                reset_peak = True
+            _LAST_HOST_SEMAPHORE_ID = None
+    else:
+        reset_peak = True
+        _LAST_HOST_SEMAPHORE_ID = None
+
     limit = max(1, limit)
+    if _LAST_EFFECTIVE_LIMIT != limit:
+        reset_peak = True
+    _LAST_EFFECTIVE_LIMIT = limit
+
+    if reset_peak:
+        PEAK_SIMULTANEOUS_WORKERS = 0
 
     sem = asyncio.Semaphore(limit)
     active_lock = asyncio.Lock()
@@ -443,29 +487,55 @@ async def run_with_concurrency(
         nonlocal active
         global PEAK_SIMULTANEOUS_WORKERS
         try:
-            async with sem:
-                try:
-                    async with active_lock:
-                        active += 1
-                        if active > PEAK_SIMULTANEOUS_WORKERS:
-                            PEAK_SIMULTANEOUS_WORKERS = active
-
+            if host_semaphore is None:
+                async with sem:
                     try:
-                        result = await worker(symbol)
-                    except asyncio.CancelledError:
-                        results.setdefault(symbol, None)
-                        FAILED_SYMBOLS.add(symbol)
-                        raise
-                    except BaseException:
-                        FAILED_SYMBOLS.add(symbol)
-                        results[symbol] = None
-                    else:
-                        SUCCESSFUL_SYMBOLS.add(symbol)
-                        results[symbol] = result
-                finally:
-                    async with active_lock:
-                        if active > 0:
-                            active -= 1
+                        async with active_lock:
+                            active += 1
+                            if active > PEAK_SIMULTANEOUS_WORKERS:
+                                PEAK_SIMULTANEOUS_WORKERS = active
+
+                        try:
+                            result = await worker(symbol)
+                        except asyncio.CancelledError:
+                            results.setdefault(symbol, None)
+                            FAILED_SYMBOLS.add(symbol)
+                            raise
+                        except BaseException:
+                            FAILED_SYMBOLS.add(symbol)
+                            results[symbol] = None
+                        else:
+                            SUCCESSFUL_SYMBOLS.add(symbol)
+                            results[symbol] = result
+                    finally:
+                        async with active_lock:
+                            if active > 0:
+                                active -= 1
+            else:
+                async with sem:
+                    async with host_semaphore:
+                        try:
+                            async with active_lock:
+                                active += 1
+                                if active > PEAK_SIMULTANEOUS_WORKERS:
+                                    PEAK_SIMULTANEOUS_WORKERS = active
+
+                            try:
+                                result = await worker(symbol)
+                            except asyncio.CancelledError:
+                                results.setdefault(symbol, None)
+                                FAILED_SYMBOLS.add(symbol)
+                                raise
+                            except BaseException:
+                                FAILED_SYMBOLS.add(symbol)
+                                results[symbol] = None
+                            else:
+                                SUCCESSFUL_SYMBOLS.add(symbol)
+                                results[symbol] = result
+                        finally:
+                            async with active_lock:
+                                if active > 0:
+                                    active -= 1
         except asyncio.CancelledError:
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
