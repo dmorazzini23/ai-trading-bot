@@ -90,3 +90,47 @@ def test_fallback_cache_expires_entries_on_get(monkeypatch):
 
     assert cache.get_existing_order(key) is None
     assert cache.is_duplicate(key) is False
+
+
+def test_fallback_ttl_cache_contains_prunes_expired_entries(monkeypatch):
+    module = _load_module_without_cachetools(monkeypatch)
+
+    time_state = {"now": 0.0}
+
+    def _fake_monotonic() -> float:
+        return time_state["now"]
+
+    monkeypatch.setattr(module, "monotonic_time", _fake_monotonic)
+
+    cache = module.TTLCache(maxsize=10, ttl=1)
+    cache["foo"] = "bar"
+
+    assert "foo" in cache
+
+    time_state["now"] = 2.0
+
+    assert ("foo" in cache) is False
+    assert "foo" not in cache
+    assert len(cache) == 0
+
+
+def test_fallback_ttl_cache_get_prunes_expired_entries(monkeypatch):
+    module = _load_module_without_cachetools(monkeypatch)
+
+    time_state = {"now": 0.0}
+
+    def _fake_monotonic() -> float:
+        return time_state["now"]
+
+    monkeypatch.setattr(module, "monotonic_time", _fake_monotonic)
+
+    cache = module.TTLCache(maxsize=10, ttl=1)
+    cache["foo"] = "bar"
+
+    assert cache.get("foo") == "bar"
+
+    time_state["now"] = 2.0
+
+    assert cache.get("foo") is None
+    assert cache.get("foo") is None  # ensure the entry stays absent on repeated lookup
+    assert len(cache) == 0
