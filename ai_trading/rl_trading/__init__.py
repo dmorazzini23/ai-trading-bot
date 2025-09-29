@@ -201,6 +201,7 @@ def _load_train_stub(module_name: str, original_exc: Exception) -> ModuleType:
             f"module {__name__!r} has no attribute 'train'"
         ) from original_exc
     module = importlib.util.module_from_spec(stub_spec)
+    sys.modules[module_name] = module
     try:
         stub_spec.loader.exec_module(module)
     except Exception as stub_exc:  # pragma: no cover - defensive guard
