@@ -50,35 +50,16 @@ def test_safe_subprocess_run_nonzero_exit(caplog):
 def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog):
     calls: dict[str, object] = {}
 
-    class DummyProcess:
-        def __init__(self) -> None:
-            self.kill_called = False
-            self.communicate_calls: list[float | None] = []
-            self.returncode = None
-
-        def communicate(self, timeout: float | None = None):
-            self.communicate_calls.append(timeout)
-            if timeout is not None:
-                raise subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
-            return None, None
-
-        def kill(self) -> None:
-            self.kill_called = True
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-    dummy_proc = DummyProcess()
-
-    def fake_popen(*args, **kwargs):
+    def fake_run(*args, **kwargs):
         calls["args"] = args
         calls["kwargs"] = kwargs
-        return dummy_proc
+        exc = subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+        # ``subprocess.run`` populates ``stdout``/``stderr`` attributes; mimic that here.
+        exc.stdout = None
+        exc.stderr = None
+        raise exc
 
-    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.run", fake_run)
 
     with caplog.at_level("WARNING"):
         res = safe_subprocess_run(["dummy"], timeout=0.25)
@@ -87,9 +68,10 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
     assert res.returncode == 124
     assert res.stdout == ""
     assert res.stderr == ""
-    assert dummy_proc.kill_called is True
-    assert dummy_proc.communicate_calls == [0.25, None]
+    assert calls["args"] == (["dummy"],)
     assert calls["kwargs"]["stdout"] == subprocess.PIPE
     assert calls["kwargs"]["stderr"] == subprocess.PIPE
     assert calls["kwargs"]["text"] is True
+    assert calls["kwargs"]["check"] is False
+    assert calls["kwargs"]["timeout"] == 0.25
     assert not caplog.records

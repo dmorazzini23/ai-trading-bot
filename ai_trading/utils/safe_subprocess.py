@@ -36,25 +36,6 @@ def _coerce_cmd(cmd: Sequence[str] | str) -> list[str]:
     raise TypeError("cmd must be a sequence or string")
 
 
-def _terminate_process(proc: subprocess.Popen[str]) -> tuple[str, str]:
-    """Best-effort termination helper used when a timeout is hit."""
-
-    try:
-        proc.kill()
-    except Exception:
-        # Ignore errors when attempting to terminate an already-dead process.
-        pass
-
-    try:
-        stdout, stderr = proc.communicate()
-    except Exception:
-        return "", ""
-
-    stdout_text = stdout or "" if stdout is not None else ""
-    stderr_text = stderr or "" if stderr is not None else ""
-    return stdout_text, stderr_text
-
-
 def safe_subprocess_run(
     cmd: Sequence[str] | str,
     timeout: float | int | None = None,
@@ -72,21 +53,18 @@ def safe_subprocess_run(
 
     argv = _coerce_cmd(cmd)
     try:
-        with subprocess.Popen(
+        completed = subprocess.run(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-        ) as proc:
-            try:
-                stdout, stderr = proc.communicate(timeout=run_timeout)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = _terminate_process(proc)
-                return SafeSubprocessResult(stdout, stderr, 124, True)
-
-            stdout_text = stdout or "" if stdout is not None else ""
-            stderr_text = stderr or "" if stderr is not None else ""
-            return SafeSubprocessResult(stdout_text, stderr_text, proc.returncode or 0, False)
+            timeout=run_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or "" if exc.stdout is not None else ""
+        stderr = exc.stderr or "" if exc.stderr is not None else ""
+        return SafeSubprocessResult(stdout, stderr, 124, True)
     except OSError as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
@@ -94,3 +72,7 @@ def safe_subprocess_run(
         # ``TimeoutExpired`` is handled above; this branch captures other subprocess failures.
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
+    else:
+        stdout_text = completed.stdout or "" if completed.stdout is not None else ""
+        stderr_text = completed.stderr or "" if completed.stderr is not None else ""
+        return SafeSubprocessResult(stdout_text, stderr_text, completed.returncode or 0, False)
