@@ -3542,11 +3542,30 @@ def _ensure_alpaca_classes() -> None:
     try:  # pragma: no cover - independent imports with fallbacks
         from alpaca.data.requests import StockLatestQuoteRequest as _StockLatestQuoteRequest
     except ImportError:
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
+        from typing import Any as _Any
 
-        @dataclass
+        @dataclass(init=False)
         class _StockLatestQuoteRequest:  # pragma: no cover - lightweight fallback
-            symbol_or_symbols: Any
+            symbol_or_symbols: _Any
+            feed: _Any | None = None
+            currency: _Any | None = None
+            _extra: dict[str, _Any] = field(default_factory=dict)
+
+            def __init__(
+                self,
+                *,
+                symbol_or_symbols: _Any,
+                feed: _Any | None = None,
+                currency: _Any | None = None,
+                **kwargs: _Any,
+            ) -> None:
+                self.symbol_or_symbols = symbol_or_symbols
+                self.feed = feed
+                self.currency = currency
+                self._extra = dict(kwargs)
+                for key, value in kwargs.items():
+                    setattr(self, key, value)
     try:
         from alpaca.trading.requests import (
             MarketOrderRequest as _MarketOrderRequest,
