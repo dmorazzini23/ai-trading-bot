@@ -14389,33 +14389,75 @@ class DataGateDecision:
     annotations: dict[str, Any] = field(default_factory=dict)
 
 
-@functools.lru_cache(maxsize=1)
+def _env_signature(*keys: str) -> tuple[str | None, ...]:
+    """Return a hashable snapshot of selected environment variable values."""
+
+    return tuple(os.environ.get(key) for key in keys)
+
+
+def _parse_env_bool(value: str | None, default: bool) -> bool:
+    if value in (None, ""):
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+@functools.lru_cache(maxsize=8)
+def _strict_data_gating_enabled_cached(signature: tuple[str | None, ...]) -> bool:
+    raw = signature[0] if signature else None
+    return _parse_env_bool(raw, True)
+
+
 def _strict_data_gating_enabled() -> bool:
-    try:
-        return bool(get_env("AI_TRADING_STRICT_GATING", "1", cast=bool))
-    except Exception:
-        raw = os.getenv("AI_TRADING_STRICT_GATING", "1")
-        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return _strict_data_gating_enabled_cached(_env_signature("AI_TRADING_STRICT_GATING"))
 
 
-@functools.lru_cache(maxsize=1)
-def _gap_ratio_gate_limit() -> float:
+_strict_data_gating_enabled.cache_clear = _strict_data_gating_enabled_cached.cache_clear  # type: ignore[attr-defined]
+_strict_data_gating_enabled.cache_info = _strict_data_gating_enabled_cached.cache_info  # type: ignore[attr-defined]
+
+
+@functools.lru_cache(maxsize=8)
+def _gap_ratio_gate_limit_cached(signature: tuple[str | None, ...]) -> float:
     """Return the maximum tolerated gap ratio before rejecting fallback prices."""
 
-    bps = float(os.getenv("AI_TRADING_GAP_LIMIT_BPS", "200"))
+    raw = signature[0] if signature else None
+    try:
+        bps = float(raw) if raw not in (None, "") else 200.0
+    except (TypeError, ValueError):
+        bps = 200.0
     return max(0.0, bps) / 10000.0
 
 
-@functools.lru_cache(maxsize=1)
-def _fallback_quote_max_age_seconds() -> float:
+def _gap_ratio_gate_limit() -> float:
+    return _gap_ratio_gate_limit_cached(_env_signature("AI_TRADING_GAP_LIMIT_BPS"))
+
+
+_gap_ratio_gate_limit.cache_clear = _gap_ratio_gate_limit_cached.cache_clear  # type: ignore[attr-defined]
+_gap_ratio_gate_limit.cache_info = _gap_ratio_gate_limit_cached.cache_info  # type: ignore[attr-defined]
+
+
+@functools.lru_cache(maxsize=8)
+def _fallback_quote_max_age_seconds_cached(signature: tuple[str | None, ...]) -> float:
+    raw = signature[0] if signature else None
     try:
-        value = get_env("AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC", 8.0, cast=float)
-    except Exception:
-        value = _env_float(8.0, "AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC")
-    try:
-        return max(0.0, float(value))
+        value = float(raw) if raw not in (None, "") else 8.0
     except (TypeError, ValueError):
-        return 8.0
+        value = 8.0
+    return max(0.0, value)
+
+
+def _fallback_quote_max_age_seconds() -> float:
+    return _fallback_quote_max_age_seconds_cached(
+        _env_signature("AI_TRADING_FALLBACK_QUOTE_MAX_AGE_SEC")
+    )
+
+
+_fallback_quote_max_age_seconds.cache_clear = _fallback_quote_max_age_seconds_cached.cache_clear  # type: ignore[attr-defined]
+_fallback_quote_max_age_seconds.cache_info = _fallback_quote_max_age_seconds_cached.cache_info  # type: ignore[attr-defined]
 
 
 def _fallback_quote_newer_than_last_close(
@@ -14445,17 +14487,22 @@ def _fallback_quote_newer_than_last_close(
     return quote_ts > close_dt
 
 
-@functools.lru_cache(maxsize=1)
-def _liquidity_fallback_cap() -> float:
+@functools.lru_cache(maxsize=8)
+def _liquidity_fallback_cap_cached(signature: tuple[str | None, ...]) -> float:
+    raw = signature[0] if signature else None
     try:
-        value = get_env("AI_TRADING_LIQ_FALLBACK_CAP", 0.25, cast=float)
-    except Exception:
-        value = _env_float(0.25, "AI_TRADING_LIQ_FALLBACK_CAP")
-    try:
-        capped = float(value)
+        capped = float(raw) if raw not in (None, "") else 0.25
     except (TypeError, ValueError):
         capped = 0.25
     return min(1.0, max(0.0, capped))
+
+
+def _liquidity_fallback_cap() -> float:
+    return _liquidity_fallback_cap_cached(_env_signature("AI_TRADING_LIQ_FALLBACK_CAP"))
+
+
+_liquidity_fallback_cap.cache_clear = _liquidity_fallback_cap_cached.cache_clear  # type: ignore[attr-defined]
+_liquidity_fallback_cap.cache_info = _liquidity_fallback_cap_cached.cache_info  # type: ignore[attr-defined]
 
 
 def _coerce_quote_timestamp(value: Any) -> datetime | None:
