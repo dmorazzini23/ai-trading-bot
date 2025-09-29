@@ -91,6 +91,33 @@ def _get_http_session() -> "HTTPSession":
     if session is None:
         raise RuntimeError("HTTP session is not available yet")
     return session
+
+
+class _HTTPShim:
+    """Attribute-forwarding proxy exposing the shared HTTP session."""
+
+    def __getattr__(self, name):  # pragma: no cover - exercised in tests
+        session = _get_http_session()
+        try:
+            return getattr(session, name)
+        except AttributeError:
+            if name == "post":
+                # Provide a best-effort default when the underlying session
+                # lacks ``post`` (e.g. minimal test shims without requests).
+                def _post(url, *args, **kwargs):
+                    return session.request("POST", url, *args, **kwargs)
+
+                setattr(session, "post", _post)
+                return getattr(session, name)
+            raise
+
+    def __setattr__(self, name, value):  # pragma: no cover - exercised in tests
+        if name.startswith("_"):
+            return super().__setattr__(name, value)
+        setattr(_get_http_session(), name, value)
+
+
+_HTTP = _HTTPShim()
 from ai_trading.exc import RequestException
 from ai_trading.utils.http import clamp_request_timeout
 import importlib
@@ -524,10 +551,20 @@ def _require_pandas(consumer: str = "this function"):
 
 # Optional retry/backoff support using tenacity
 if missing("tenacity", "retry"):
-    retry = None  # type: ignore
+    retry = object()  # type: ignore[assignment]
 
     def _with_retry(callable_):  # type: ignore
-        return callable_
+        def _wrapper(*args, **kwargs):
+            attempts = 0
+            while True:
+                try:
+                    return callable_(*args, **kwargs)
+                except RequestException:
+                    attempts += 1
+                    if attempts >= 2:
+                        raise
+
+        return _wrapper
 
 else:  # pragma: no cover - optional dependency wrapper
     from tenacity import (
@@ -1218,4 +1255,5 @@ __all__ = [
     "alpaca_get",
     "start_trade_updates_stream",
     "initialize",
+    "_HTTP",
 ]

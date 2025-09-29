@@ -17,7 +17,8 @@ if "dotenv" not in sys.modules:
     sys.modules["dotenv"] = dotenv_stub
 
 import pytest
-import ai_trading.data.fetch as data_fetcher
+
+# NOTE: Avoid importing `ai_trading` modules at collection time; lazy import in helpers.
 
 
 if "flask" not in _sys.modules:
@@ -206,6 +207,10 @@ def dummy_data_fetcher():
 
 @pytest.fixture(autouse=True)
 def _reset_fallback_cache(monkeypatch):
+    """Reset fallback cache state without eager package imports."""
+
+    import ai_trading.data.fetch as data_fetcher  # local import to avoid test import side effects
+
     monkeypatch.setattr(data_fetcher, "_FALLBACK_WINDOWS", set())
     monkeypatch.setattr(data_fetcher, "_FALLBACK_UNTIL", {})
 
