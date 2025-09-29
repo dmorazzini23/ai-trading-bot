@@ -102,6 +102,8 @@ class SoftBudget:
         return elapsed_ns if elapsed_ns >= 0 else 0
 
     def elapsed_ms(self) -> int:
+        """Return elapsed milliseconds since the most recent reset."""
+
         elapsed_ns = self._elapsed_ns()
         delta_ns = elapsed_ns - self._last_elapsed_ns
         if delta_ns <= 0:
@@ -113,6 +115,12 @@ class SoftBudget:
         increment, self._fractional_ns = divmod(self._fractional_ns, 1_000_000)
         if increment:
             self._reported_ms += increment
+
+        if self._reported_ms == 0 and self._fractional_ns > 0:
+            # Surface a minimal positive tick so extremely short durations
+            # are observable without skewing subsequent accumulation.
+            return 1
+
         return self._reported_ms
 
     def over_budget(self) -> bool:

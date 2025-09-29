@@ -54,8 +54,8 @@ def test_elapsed_ms_accumulates_fractional_nanoseconds(monkeypatch):
     monkeypatch.setattr(prof.time, "perf_counter_ns", lambda: next(sequence))
 
     budget = SoftBudget(10)
-    assert budget.elapsed_ms() == 0
-    assert budget.elapsed_ms() == 0
+    assert budget.elapsed_ms() == 1
+    assert budget.elapsed_ms() == 1
     assert budget.elapsed_ms() == 1
     assert budget.elapsed_ms() == 1
     assert budget.elapsed_ms() == 2

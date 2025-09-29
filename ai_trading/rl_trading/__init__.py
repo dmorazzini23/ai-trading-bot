@@ -227,5 +227,5 @@ def __dir__() -> list[str]:  # pragma: no cover - keep introspection predictable
 
 try:  # Eagerly import to keep a stable module reference for reloads.
     _load_train_module()
-except AttributeError:  # pragma: no cover - optional dependency missing in tests
+except Exception:  # pragma: no cover - optional dependency missing or other import failure
     train = None

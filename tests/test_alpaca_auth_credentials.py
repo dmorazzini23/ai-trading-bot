@@ -1,6 +1,8 @@
 from tests.optdeps import require
 require("numpy")
 require("pydantic")
+import sys
+
 import pytest
 from ai_trading.risk.engine import RiskEngine
 from ai_trading.settings import get_settings
