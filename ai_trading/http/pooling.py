@@ -21,6 +21,7 @@ class _SemaphoreRecord:
 
 @dataclass(slots=True)
 class _ResolvedLimitCache:
+    env_key: str | None
     raw_env: str | None
     limit: int
     version: int
@@ -77,50 +78,62 @@ def _compute_limit(raw: str | None = None) -> int:
         return _DEFAULT_LIMIT
 
 
+def _read_limit_source() -> tuple[int, str | None, str | None, int | None]:
+    """Return the resolved limit and metadata describing its source."""
+
+    for env_key in (
+        "HTTP_MAX_PER_HOST",
+        "AI_TRADING_HTTP_HOST_LIMIT",
+        "AI_TRADING_HOST_LIMIT",
+    ):
+        raw_env = os.getenv(env_key)
+        if raw_env not in (None, ""):
+            limit = _compute_limit(raw_env)
+            return limit, env_key, raw_env, None
+
+    try:
+        cfg = config.get_trading_config()
+    except Exception:
+        cfg = None
+
+    config_id: int | None = None
+    limit_value = _DEFAULT_LIMIT
+    if cfg is not None:
+        config_id = id(cfg)
+        try:
+            limit_value = getattr(cfg, "host_concurrency_limit", _DEFAULT_LIMIT)
+        except Exception:
+            limit_value = _DEFAULT_LIMIT
+
+    try:
+        limit = max(1, int(limit_value))
+    except (TypeError, ValueError):
+        limit = _DEFAULT_LIMIT
+
+    return limit, None, None, config_id
+
+
 def _resolve_limit() -> tuple[int, int]:
     """Return the current host limit and cache version."""
 
     global _LIMIT_CACHE, _LIMIT_VERSION
 
-    raw_env = (
-        os.getenv("HTTP_MAX_PER_HOST")
-        or os.getenv("AI_TRADING_HTTP_HOST_LIMIT")
-        or os.getenv("AI_TRADING_HOST_LIMIT")
-    )
-    config_id: int | None = None
-
-    if raw_env not in (None, ""):
-        limit = _compute_limit(raw_env)
-    else:
-        try:
-            cfg = config.get_trading_config()
-        except Exception:
-            cfg = None
-        if cfg is not None:
-            config_id = id(cfg)
-            try:
-                limit_value = getattr(cfg, "host_concurrency_limit", _DEFAULT_LIMIT)
-            except Exception:
-                limit_value = _DEFAULT_LIMIT
-        else:
-            limit_value = _DEFAULT_LIMIT
-        try:
-            limit = max(1, int(limit_value))
-        except (TypeError, ValueError):
-            limit = _DEFAULT_LIMIT
+    limit, env_key, raw_env, config_id = _read_limit_source()
 
     cache = _LIMIT_CACHE
     if (
         cache is not None
+        and cache.limit == limit
+        and cache.env_key == env_key
         and cache.raw_env == raw_env
         and cache.config_id == config_id
-        and cache.limit == limit
     ):
         return cache.limit, cache.version
 
     _LIMIT_VERSION += 1
     version = _LIMIT_VERSION
     _LIMIT_CACHE = _ResolvedLimitCache(
+        env_key=env_key,
         raw_env=raw_env,
         limit=limit,
         version=version,
@@ -152,31 +165,20 @@ def _ensure_limit_cache() -> _ResolvedLimitCache:
 
     global _LIMIT_CACHE
 
-    limit, version = _resolve_limit()
+    _resolve_limit()
     cache = _LIMIT_CACHE
-    if cache is not None and cache.limit == limit and cache.version == version:
-        return cache
-
-    raw_env = os.getenv("AI_TRADING_HOST_LIMIT")
-    config_id: int | None = None
-    if raw_env in (None, ""):
-        try:
-            cfg = config.get_trading_config()
-        except Exception:
-            cfg = None
-        if cfg is not None:
-            config_id = id(cfg)
-
-    # `_resolve_limit` should keep `_LIMIT_CACHE` aligned, but callers may
-    # mutate the globals. Rebuild defensively so the snapshot matches the
-    # semaphore we create.
-    cache = _ResolvedLimitCache(
-        raw_env=raw_env,
-        limit=limit,
-        version=version,
-        config_id=config_id,
-    )
-    _LIMIT_CACHE = cache
+    if cache is None:
+        # As a last resort, rebuild a minimal cache so downstream code can
+        # proceed. This should be rare and indicates external mutation.
+        limit, version = _resolve_limit()
+        cache = _ResolvedLimitCache(
+            env_key=None,
+            raw_env=None,
+            limit=limit,
+            version=version,
+            config_id=None,
+        )
+        _LIMIT_CACHE = cache
     return cache
 
 
