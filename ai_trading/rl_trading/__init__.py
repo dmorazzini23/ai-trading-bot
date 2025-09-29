@@ -215,7 +215,9 @@ def _load_train_stub(module_name: str, original_exc: Exception) -> ModuleType:
     return module
 
 
-def __getattr__(name: str) -> Any:  # pragma: no cover - thin lazy loader
+def __getattr__(name: str) -> Any:  # pragma: no cover
+    """PEP 562 hook to keep ``train`` lazily importable and stable."""
+
     if name == "train":
         return _load_train_module()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -226,6 +228,21 @@ def __dir__() -> list[str]:  # pragma: no cover - keep introspection predictable
 
 
 try:  # Eagerly import to keep a stable module reference for reloads.
-    _load_train_module()
-except Exception:  # pragma: no cover - optional dependency missing or other import failure
-    train = None
+    train = _load_train_module()
+except Exception as exc:  # pragma: no cover - optional dependency missing or other import failure
+    stub = ModuleType(f"{__name__}.train")
+
+    def _raise_import_error(*_a: Any, **_k: Any) -> None:
+        raise ImportError(
+            "RL stack not available; install stable-baselines3, gymnasium, and torch"
+        ) from exc
+
+    stub.__dict__.update(
+        {
+            "train": _raise_import_error,
+            "USING_RL_TRAIN_STUB": True,
+            "__fallback_exception__": exc,
+        }
+    )
+    sys.modules.setdefault(f"{__name__}.train", stub)
+    train = stub

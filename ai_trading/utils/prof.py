@@ -71,11 +71,10 @@ class SoftBudget:
 
     def __init__(self, millis: int):
         self.budget_ms = max(0, int(millis))
-        self._start_ns: int | None = None
+        self._start_ns: int | None = time.perf_counter_ns()
         self._last_elapsed_ns: int = 0
         self._fractional_ns: int = 0
         self._reported_ms: int = 0
-        self.reset()
 
     def __enter__(self) -> "SoftBudget":
         self.reset()
@@ -107,9 +106,7 @@ class SoftBudget:
         elapsed_ns = self._elapsed_ns()
         delta_ns = elapsed_ns - self._last_elapsed_ns
         if delta_ns <= 0:
-            if self._reported_ms == 0:
-                return 1
-            return self._reported_ms
+            return max(1, self._reported_ms)
 
         self._last_elapsed_ns = elapsed_ns
         self._fractional_ns += delta_ns
@@ -130,9 +127,7 @@ class SoftBudget:
 
     def remaining(self) -> float:
         remaining_ns = (self.budget_ms * 1_000_000) - self._elapsed_ns()
-        if remaining_ns <= 0:
-            return 0.0
-        return round(remaining_ns / 1_000_000_000, 3)
+        return 0.0 if remaining_ns <= 0 else round(remaining_ns / 1_000_000_000, 3)
 
     def over(self) -> bool:  # Backward compatibility
         return self.over_budget()

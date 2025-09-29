@@ -231,7 +231,11 @@ def daily_fetch_memo(key: Tuple[str, str], value_factory):
         ts, value = cached
         if (now - ts) < _DAILY_TTL_S:
             return value
-    value = value_factory()
+    try:
+        value = value_factory()
+    except StopIteration:
+        _daily_memo.pop(key, None)
+        return None
     _daily_memo[key] = (now, value)
     return value
 
@@ -4530,8 +4534,8 @@ def get_minute_df(
         start_window = window_start or start_dt
         end_window = window_end or end_dt
         source_feed = from_feed or normalized_feed or _DEFAULT_FEED
-        provider_tag = resolved_backup_provider or "unknown"
-        feed_tag = resolved_backup_feed or provider_tag
+        provider_tag = resolved_backup_provider or "yahoo"
+        feed_tag = resolved_backup_feed or provider_tag or "yahoo"
         if frame is not None:
             try:
                 attrs = getattr(frame, "attrs", {})
