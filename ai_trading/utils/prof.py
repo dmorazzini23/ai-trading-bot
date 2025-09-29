@@ -71,10 +71,12 @@ class SoftBudget:
 
     def __init__(self, millis: int):
         self.budget_ms = max(0, int(millis))
-        self._start_ns: int | None = time.perf_counter_ns()
-        self._last_elapsed_ns: int = 0
+        start_ns = time.perf_counter_ns()
+        self._start_ns: int = start_ns
+        self._last_sample_ns: int = start_ns
         self._fractional_ns: int = 0
-        self._reported_ms: int = 0
+        self._elapsed_ms: int = 0
+        self._minimum_tick_emitted: bool = False
 
     def __enter__(self) -> "SoftBudget":
         self.reset()
@@ -84,50 +86,56 @@ class SoftBudget:
         return False
 
     def reset(self) -> None:
-        self._start_ns = time.perf_counter_ns()
-        self._last_elapsed_ns = 0
+        start_ns = time.perf_counter_ns()
+        self._start_ns = start_ns
+        self._last_sample_ns = start_ns
         self._fractional_ns = 0
-        self._reported_ms = 0
+        self._elapsed_ms = 0
+        self._minimum_tick_emitted = False
 
-    def _elapsed_ns(self) -> int:
+    def _update_elapsed_state(self) -> None:
         now = time.perf_counter_ns()
-        if self._start_ns is None:
-            self._start_ns = now
-            self._last_elapsed_ns = 0
-            self._fractional_ns = 0
-            self._reported_ms = 0
-            return 0
-        elapsed_ns = now - self._start_ns
-        return elapsed_ns if elapsed_ns >= 0 else 0
+        if now < self._last_sample_ns:
+            # perf_counter_ns is monotonic, but guard against unexpected clock
+            # behaviour from monkeypatched or emulated timers.
+            self._last_sample_ns = now
+            return
+
+        delta_ns = now - self._last_sample_ns
+        if delta_ns:
+            self._last_sample_ns = now
+            self._fractional_ns += delta_ns
+            increment, self._fractional_ns = divmod(self._fractional_ns, 1_000_000)
+            if increment:
+                self._elapsed_ms += increment
+                if self._elapsed_ms > 0:
+                    self._minimum_tick_emitted = False
+        else:
+            self._last_sample_ns = now
 
     def elapsed_ms(self) -> int:
         """Return elapsed milliseconds since the most recent reset."""
 
-        elapsed_ns = self._elapsed_ns()
-        delta_ns = elapsed_ns - self._last_elapsed_ns
-        if delta_ns <= 0:
-            return max(1, self._reported_ms)
+        self._update_elapsed_state()
 
-        self._last_elapsed_ns = elapsed_ns
-        self._fractional_ns += delta_ns
-
-        increment, self._fractional_ns = divmod(self._fractional_ns, 1_000_000)
-        if increment:
-            self._reported_ms += increment
-
-        if self._reported_ms == 0 and self._fractional_ns > 0:
-            # Surface a minimal positive tick so extremely short durations
-            # are observable without skewing subsequent accumulation.
+        if self._elapsed_ms == 0 and self._fractional_ns > 0:
+            self._minimum_tick_emitted = True
             return 1
 
-        return self._reported_ms
+        if self._minimum_tick_emitted and self._elapsed_ms == 0:
+            return 1
+
+        return self._elapsed_ms
 
     def over_budget(self) -> bool:
-        return self._elapsed_ns() >= (self.budget_ms * 1_000_000)
+        return self.elapsed_ms() >= self.budget_ms
 
     def remaining(self) -> float:
-        remaining_ns = (self.budget_ms * 1_000_000) - self._elapsed_ns()
-        return 0.0 if remaining_ns <= 0 else round(remaining_ns / 1_000_000_000, 3)
+        elapsed_ms = self.elapsed_ms()
+        if elapsed_ms >= self.budget_ms:
+            return 0.0
+        remaining_ms = self.budget_ms - elapsed_ms
+        return round(remaining_ms / 1_000, 3)
 
     def over(self) -> bool:  # Backward compatibility
         return self.over_budget()
