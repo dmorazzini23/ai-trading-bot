@@ -1,4 +1,6 @@
 import builtins
+import sys
+import types
 
 import pytest
 
@@ -15,6 +17,37 @@ EXPECTED_ALPACA_MINIMAL = {
     "paper": False,
     "shadow_mode": False,
 }
+
+
+def _install_alpaca_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    key: str | None = "key",
+    secret: str | None = "secret",
+    base_url: str = "https://paper-api.alpaca.markets",
+    client: object | None = None,
+) -> None:
+    """Install lightweight Alpaca stubs to avoid heavyweight imports."""
+
+    stub_alpaca = types.ModuleType("ai_trading.alpaca_api")
+    stub_alpaca.ALPACA_AVAILABLE = True
+    monkeypatch.setitem(sys.modules, "ai_trading.alpaca_api", stub_alpaca)
+
+    stub_bot = types.ModuleType("ai_trading.core.bot_engine")
+
+    def _resolver():
+        return key, secret, base_url
+
+    stub_bot._resolve_alpaca_env = _resolver  # type: ignore[attr-defined]
+    stub_bot.trading_client = client if client is not None else object()
+    monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", stub_bot)
+
+    try:
+        import ai_trading.core as core_pkg
+    except Exception:
+        pass
+    else:
+        monkeypatch.setattr(core_pkg, "bot_engine", stub_bot, raising=False)
 
 
 def _assert_payload_structure(payload: dict) -> None:
@@ -117,3 +150,52 @@ def test_health_endpoint_handles_missing_jsonify(monkeypatch):
     _assert_payload_structure(data)
     assert data["ok"] is False
     _assert_error_contains(data, "jsonify unavailable")
+
+
+def test_shadow_mode_disabled_when_credentials_missing(monkeypatch):
+    import ai_trading.config.management as config_mgmt
+
+    _install_alpaca_stubs(monkeypatch, key=None, secret=None, base_url="", client=None)
+    monkeypatch.setattr(config_mgmt, "validate_required_env", lambda: {})
+    monkeypatch.setattr(config_mgmt, "is_shadow_mode", lambda: True)
+
+    app = app_module.create_app()
+    client = app.test_client()
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    _assert_payload_structure(data)
+    assert data["ok"] is True
+    assert data["alpaca"]["shadow_mode"] is False
+    assert data["alpaca"]["has_key"] is False
+    assert data["alpaca"]["has_secret"] is False
+
+
+def test_jsonify_failure_preserves_ok_when_healthy(monkeypatch):
+    import ai_trading.config.management as config_mgmt
+
+    def broken_jsonify(payload):
+        raise RuntimeError("json busted")
+
+    _install_alpaca_stubs(
+        monkeypatch,
+        key="key",
+        secret="secret",
+        base_url="https://paper-api.alpaca.markets",
+        client=object(),
+    )
+    monkeypatch.setattr(config_mgmt, "validate_required_env", lambda: {})
+    monkeypatch.setattr(config_mgmt, "is_shadow_mode", lambda: False)
+    monkeypatch.setattr(app_module, "jsonify", broken_jsonify, raising=False)
+
+    app = app_module.create_app()
+    client = app.test_client()
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    _assert_payload_structure(data)
+    assert data["ok"] is True
+    assert data["alpaca"]["has_key"] is True
+    assert data["alpaca"]["has_secret"] is True
+    assert data["alpaca"]["shadow_mode"] is False
+    _assert_error_contains(data, "json busted")
