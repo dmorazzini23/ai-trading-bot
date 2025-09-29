@@ -11,14 +11,29 @@ class _LazyModule(ModuleType):
     def __init__(self, name: str) -> None:
         super().__init__(name)
         self._real: ModuleType | None = None
+        self._loading = False
 
     def _load(self) -> ModuleType:
+        if self._real is None and not self._loading:
+            self._loading = True
+            try:
+                # Remove the proxy so ``import_module`` loads the real module
+                sys.modules.pop(self.__name__, None)
+                module = importlib.import_module(self.__name__)
+                self._real = module
+            finally:
+                # Keep the proxy registered for future imports, even on failure.
+                sys.modules[self.__name__] = self
+                self._loading = False
+        elif self._real is None and self._loading:
+            # Re-entrant access while loading should behave as if the module is
+            # still the proxy to avoid recursion issues.
+            sys.modules[self.__name__] = self
+        else:
+            sys.modules[self.__name__] = self
+
         if self._real is None:
-            # Remove the proxy so ``import_module`` loads the real module
-            sys.modules.pop(self.__name__, None)
-            self._real = importlib.import_module(self.__name__)
-        # Ensure ``sys.modules`` contains the loaded module for future imports
-        sys.modules[self.__name__] = self._real
+            raise ImportError(f"Failed to load module {self.__name__!r}")
         return self._real
 
     def __getattr__(self, item: str):  # pragma: no cover - exercised via tests

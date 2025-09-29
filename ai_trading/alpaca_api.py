@@ -1040,11 +1040,6 @@ def submit_order(
     prefix = f"{symbol_part}-{side_part}"
     idempotency_key = idempotency_key or generate_client_order_id(prefix)
 
-    if client is not None and shadow is None:
-        # Respect explicit shadow override but default to real execution when a
-        # client is supplied (callers may choose shadow=True explicitly).
-        do_shadow = False
-
     def _ensure_client_order_id(payload: Any) -> Any:
         if not isinstance(payload, dict):
             return payload
