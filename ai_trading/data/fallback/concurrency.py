@@ -489,13 +489,19 @@ async def run_with_concurrency(
                 async with active_lock:
                     active -= 1
 
-        if host_semaphore is None:
-            async with semaphore:
+        async with semaphore:
+            if host_semaphore is None:
                 await _call_worker()
-        else:
-            async with semaphore:
-                async with host_semaphore:
-                    await _call_worker()
+                return
+
+            acquired_host_permit = False
+            try:
+                await host_semaphore.acquire()
+                acquired_host_permit = True
+                await _call_worker()
+            finally:
+                if acquired_host_permit:
+                    host_semaphore.release()
 
     tasks: list[asyncio.Task[None]] = []
     task_to_symbol: dict[asyncio.Task[None], str] = {}

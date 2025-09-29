@@ -301,6 +301,76 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
 
 
+def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release():
+    class StrictSemaphore(asyncio.Semaphore):
+        def __init__(self, value: int):
+            super().__init__(value)
+            self._initial_value = value
+            self._held = 0
+
+        async def acquire(self) -> bool:
+            result = await super().acquire()
+            self._held += 1
+            return result
+
+        def release(self) -> None:
+            if self._held <= 0:
+                raise AssertionError("release called without a matching acquire")
+            self._held -= 1
+            super().release()
+            if self._value > self._initial_value:
+                raise AssertionError(
+                    f"Semaphore value exceeded initial limit: {self._value} > {self._initial_value}"
+                )
+
+    host_semaphore = StrictSemaphore(1)
+
+    original_host_limit = concurrency._get_effective_host_limit
+    original_get_host_semaphore = concurrency._get_host_limit_semaphore
+
+    def _fake_host_limit() -> int:
+        return 1
+
+    def _fake_get_host_semaphore() -> asyncio.Semaphore:
+        return host_semaphore
+
+    concurrency._get_effective_host_limit = _fake_host_limit
+    concurrency._get_host_limit_semaphore = _fake_get_host_semaphore
+
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.1)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    symbols = [f"HOST_WAIT{i}" for i in range(4)]
+
+    try:
+        results, succeeded, failed = asyncio.run(
+            concurrency.run_with_concurrency(symbols, worker, max_concurrency=3, timeout_s=0.05)
+        )
+    finally:
+        concurrency._get_effective_host_limit = original_host_limit
+        concurrency._get_host_limit_semaphore = original_get_host_semaphore
+
+    assert any(value is None for value in results.values())
+    assert failed
+    assert max_seen == 1
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 1
+    assert host_semaphore._held == 0
+
+
 def test_run_with_concurrency_rebinds_nested_dataclass_lock():
     @dataclass
     class InnerLockHolder:
