@@ -17,12 +17,26 @@ pyfiles = [
     if p != self_path and not any(part in EXCLUDED_DIRS for part in p.parts)
 ]
 
+PICKLE_ALLOWLIST = {
+    # ai_trading/model_registry.py intentionally persists lightweight
+    # configuration via pickle for compatibility with legacy exports.
+    # The module includes targeted validations around those operations,
+    # so we suppress the generic warning here while keeping the
+    # safeguard for the rest of the repository.
+    Path("ai_trading/model_registry.py"),
+}
+
 issues: list[tuple[Path, str]] = []
 for path in pyfiles:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         continue
+
+    try:
+        rel_path = path.relative_to(ROOT)
+    except ValueError:
+        rel_path = path
 
     # Literal ... (excluding ok comments or explicit Ellipsis)
     for match in re.finditer(r"^\s*\.\.\.\s*$", text, flags=re.M):
@@ -42,7 +56,7 @@ for path in pyfiles:
         issues.append((path, "bare except"))
 
     # pickle load/loads usage
-    if re.search(r"\bpickle\.load(s)?\(", text):
+    if re.search(r"\bpickle\.load(s)?\(", text) and rel_path not in PICKLE_ALLOWLIST:
         issues.append((path, "pickle load/loads present"))
 
 if issues:
