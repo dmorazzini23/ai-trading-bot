@@ -4421,11 +4421,45 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         getattr(CFG, "minute_gap_backfill", None)
     )
     active_backfill: str | None = configured_backfill
+    configured_feed: str | None = None
 
-    def _minute_fetch_kwargs(*, extra: dict[str, object] | None = None) -> dict[str, object]:
+    def _minute_fetch_kwargs(
+        *, feed: str | None = None, extra: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        nonlocal active_backfill
+
         kwargs: dict[str, object] = {}
-        if active_backfill:
-            kwargs["backfill"] = active_backfill
+        effective_feed = feed
+        if extra and effective_feed is None and "feed" in extra:
+            effective_feed = extra["feed"]  # type: ignore[index]
+
+        normalized_feed: str | None = None
+        if effective_feed is not None:
+            try:
+                normalized_feed = str(effective_feed).strip().lower()
+            except Exception:
+                normalized_feed = None
+            else:
+                if normalized_feed and "_" in normalized_feed:
+                    normalized_feed = normalized_feed.rsplit("_", 1)[-1]
+
+        primary_feed_local = configured_feed or data_fetcher_module._DEFAULT_FEED
+        effective_backfill = active_backfill
+        if (
+            effective_backfill is None
+            and auto_gap_fill
+            and normalized_feed
+            and normalized_feed != primary_feed_local
+        ):
+            effective_backfill = "ffill"
+
+        if effective_backfill:
+            kwargs["backfill"] = effective_backfill
+            if active_backfill is None:
+                active_backfill = effective_backfill
+
+        if effective_feed is not None:
+            kwargs["feed"] = effective_feed
         if extra:
             kwargs.update(extra)
         return kwargs
@@ -4698,10 +4732,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         cached_feeds = None
 
     def _initial_fetch_kwargs() -> dict[str, object]:
-        kwargs = _minute_fetch_kwargs()
+        target_feed = None
         if current_feed and current_feed != configured_feed:
-            kwargs["feed"] = current_feed
-        return kwargs
+            target_feed = current_feed
+        return _minute_fetch_kwargs(feed=target_feed)
 
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
     if hasattr(CFG, "market_cache_enabled") and CFG.market_cache_enabled:
@@ -4773,7 +4807,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         for feed_name, provider_name in attempts:
             attempt_now = datetime.now(UTC)
             attempt_end = attempt_now if market_open_now else end_dt
-            fetch_kwargs = _minute_fetch_kwargs()
+            fetch_kwargs = _minute_fetch_kwargs(feed=feed_name)
             try:
                 refreshed = get_minute_df(symbol, start_dt, attempt_end, **fetch_kwargs)
             except DataFetchError:
@@ -4978,7 +5012,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     symbol,
                     fallback_start_dt,
                     end_dt,
-                    feed="sip",
+                    **_minute_fetch_kwargs(feed="sip"),
                 )
             except Exception as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
@@ -5018,7 +5052,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                             symbol,
                             fallback_start_dt,
                             end_dt,
-                            feed=resolved_feed,
+                            **_minute_fetch_kwargs(feed=resolved_feed),
                         )
                     except Exception:  # pragma: no cover - fall back to existing frame
                         override_df = None
@@ -5130,7 +5164,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                     symbol,
                     fallback_start_dt,
                     end_dt,
-                    feed="yahoo",
+                    **_minute_fetch_kwargs(feed="yahoo"),
                 )
             except Exception as exc:  # pragma: no cover - diagnostics only
                 logger.debug(
