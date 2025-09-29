@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 
@@ -146,6 +147,46 @@ def test_run_with_concurrency_respects_host_limit():
     assert not failed
     assert max_seen == 2
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
+
+
+def test_run_with_concurrency_host_limit_floors_to_one():
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    symbols = [f"HOSTF{i}" for i in range(4)]
+
+    original_host_limit = concurrency._get_effective_host_limit
+
+    def _fake_host_limit() -> int:
+        return 0
+
+    concurrency._get_effective_host_limit = _fake_host_limit
+    try:
+        results, succeeded, failed = asyncio.run(
+            concurrency.run_with_concurrency(symbols, worker, max_concurrency=3)
+        )
+    finally:
+        concurrency._get_effective_host_limit = original_host_limit
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen == 1
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 1
 
 
 def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
@@ -431,6 +472,47 @@ def test_run_with_concurrency_rebinds_lock_inside_frozenset_of_tuple():
 
     holder_tuple_after = next(iter(namespace.payload))
     holder_after = holder_tuple_after[0]
+    assert holder_after.lock is not original_lock
+
+
+def test_run_with_concurrency_rebinds_lock_inside_deque_nested_dataclass():
+    @dataclass
+    class Inner:
+        lock: asyncio.Lock
+
+    @dataclass
+    class Wrapper:
+        holders: deque[Inner]
+
+    def build_lock_in_fresh_loop() -> asyncio.Lock:
+        loop = asyncio.new_event_loop()
+        try:
+            async def _factory() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            return loop.run_until_complete(_factory())
+        finally:
+            loop.close()
+
+    original_lock = build_lock_in_fresh_loop()
+    wrapped = Wrapper(holders=deque([Inner(lock=original_lock)]))
+
+    async def worker(sym: str) -> str:
+        holder = wrapped.holders[0]
+        async with holder.lock:
+            await asyncio.sleep(0)
+            return sym
+
+    symbols = ["DQ1", "DQ2"]
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+
+    holder_after = wrapped.holders[0]
     assert holder_after.lock is not original_lock
 
 

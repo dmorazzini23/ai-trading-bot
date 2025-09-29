@@ -10,7 +10,16 @@ with those structures.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping
+from collections import deque
+from collections.abc import (
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+)
 from dataclasses import fields, is_dataclass, replace
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import TypeVar
@@ -139,6 +148,18 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
         return obj
 
 
+def _normalise_positive_int(value: object) -> int | None:
+    """Best-effort coercion of ``value`` to a positive integer."""
+
+    try:
+        candidate = int(value)
+    except (TypeError, ValueError):
+        return None
+    if candidate < 1:
+        return 1
+    return candidate
+
+
 def _assign_dataclass_attr(target: object, name: str, value: object) -> bool:
     """Assign ``value`` to ``target.name`` bypassing frozen guards when possible."""
 
@@ -228,6 +249,28 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
         except Exception:
             return dict(updates)
 
+    if isinstance(obj, deque):
+        mutated = False
+        new_items: list[object] = []
+        for value in list(obj):
+            new_value = _scan(value, seen, loop)
+            mutated = mutated or new_value is not value
+            new_items.append(new_value)
+
+        if mutated:
+            obj.clear()
+            obj.extend(new_items)
+        return obj
+
+    if isinstance(obj, MutableSequence) and not isinstance(obj, list):
+        mutated = False
+        for index, value in enumerate(list(obj)):
+            new_value = _scan(value, seen, loop)
+            if new_value is not value:
+                obj[index] = new_value
+                mutated = True
+        return obj
+
     if isinstance(obj, (list, tuple, set, frozenset)):
         mutated = False
         new_items: list[object] = []
@@ -265,6 +308,19 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
                 return tuple_type(new_items)
             except TypeError:
                 return tuple(new_items)
+
+    if isinstance(obj, MutableSet) and not isinstance(obj, set):
+        mutated = False
+        new_items: list[object] = []
+        for value in list(obj):
+            new_value = _scan(value, seen, loop)
+            mutated = mutated or new_value is not value
+            new_items.append(new_value)
+
+        if mutated:
+            obj.clear()
+            obj.update(new_items)
+        return obj
 
     if is_dataclass(obj) and not isinstance(obj, type):
         replacements: dict[str, object] = {}
@@ -368,10 +424,13 @@ async def run_with_concurrency(
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
 
-    limit = max(1, int(max_concurrency))
+    limit = _normalise_positive_int(max_concurrency) or 1
     host_limit = _get_effective_host_limit()
     if host_limit is not None:
-        limit = min(limit, host_limit)
+        host_limit_value = _normalise_positive_int(host_limit)
+        if host_limit_value is not None:
+            limit = min(limit, host_limit_value)
+    limit = max(1, limit)
 
     sem = asyncio.Semaphore(limit)
     active_lock = asyncio.Lock()
