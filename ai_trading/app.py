@@ -62,16 +62,23 @@ def create_app():
             return base
 
         canonical_payload = _normalise_payload(data)
+        if "ok" not in canonical_payload:
+            canonical_payload["ok"] = False
+
         fallback_payload = dict(canonical_payload)
         fallback_payload["alpaca"] = dict(canonical_payload["alpaca"])
 
         if fallback is not None:
             fallback_source = _normalise_payload(fallback)
+            if "ok" in fallback_source:
+                fallback_payload["ok"] = fallback_source["ok"]
+            fallback_payload["alpaca"].update(fallback_source.get("alpaca", {}))
             for key, value in fallback_source.items():
-                if key == "alpaca":
-                    fallback_payload["alpaca"].update(value)
-                else:
-                    fallback_payload[key] = value
+                if key in {"ok", "alpaca"}:
+                    continue
+                fallback_payload[key] = value
+
+        fallback_payload["ok"] = bool(fallback_payload.get("ok", False))
 
         func = globals().get("jsonify")
         fallback_reason: str | None = None
@@ -100,7 +107,6 @@ def create_app():
         if not message:
             message = "jsonify unavailable"
         fallback_payload["error"] = message
-        fallback_payload["ok"] = False
 
         try:
             body = json.dumps(fallback_payload, default=str)
@@ -188,6 +194,9 @@ def create_app():
             shadow = False
         else:
             shadow = bool(shadow)
+
+        if (not alpaca_import_ok) or (not key) or (not secret):
+            shadow = False
 
         if errors:
             ok = False
