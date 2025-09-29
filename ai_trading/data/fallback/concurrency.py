@@ -426,22 +426,20 @@ def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
-_LAST_HOST_SEMAPHORE_ID: int | None = None
-_LAST_EFFECTIVE_LIMIT: int | None = None
 
 
 async def run_with_concurrency(
     symbols: Iterable[str],
     worker: Callable[[str], Awaitable[T]],
-    *,
-    max_concurrency: int = 4,
+    max_concurrency: int,
     timeout_s: float | None = None,
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
 
-    global PEAK_SIMULTANEOUS_WORKERS, _LAST_HOST_SEMAPHORE_ID, _LAST_EFFECTIVE_LIMIT
+    global PEAK_SIMULTANEOUS_WORKERS
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
+    PEAK_SIMULTANEOUS_WORKERS = 0
 
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
@@ -449,142 +447,86 @@ async def run_with_concurrency(
     limit = _normalise_positive_int(max_concurrency) or 1
     host_limit = _get_effective_host_limit()
     host_semaphore: asyncio.Semaphore | None = None
-    reset_peak = False
     if host_limit is not None:
         host_limit_value = _normalise_positive_int(host_limit)
         if host_limit_value is not None:
             limit = min(limit, host_limit_value)
         host_semaphore = _get_host_limit_semaphore()
-        if host_semaphore is not None:
-            semaphore_id = id(host_semaphore)
-            if semaphore_id != _LAST_HOST_SEMAPHORE_ID:
-                reset_peak = True
-            _LAST_HOST_SEMAPHORE_ID = semaphore_id
-        else:
-            if _LAST_HOST_SEMAPHORE_ID is not None:
-                reset_peak = True
-            _LAST_HOST_SEMAPHORE_ID = None
-    else:
-        reset_peak = True
-        _LAST_HOST_SEMAPHORE_ID = None
 
     limit = max(1, limit)
-    if _LAST_EFFECTIVE_LIMIT != limit:
-        reset_peak = True
-    _LAST_EFFECTIVE_LIMIT = limit
 
-    if reset_peak:
-        PEAK_SIMULTANEOUS_WORKERS = 0
-
-    sem = asyncio.Semaphore(limit)
+    semaphore = asyncio.Semaphore(limit)
     active_lock = asyncio.Lock()
     active = 0
-
     results: dict[str, T | None] = {}
 
-
-    async def _wrapped(symbol: str) -> None:
+    async def _execute(symbol: str) -> None:
         nonlocal active
         global PEAK_SIMULTANEOUS_WORKERS
-        try:
-            if host_semaphore is None:
-                async with sem:
-                    try:
-                        async with active_lock:
-                            active += 1
-                            if active > PEAK_SIMULTANEOUS_WORKERS:
-                                PEAK_SIMULTANEOUS_WORKERS = active
 
-                        try:
-                            result = await worker(symbol)
-                        except asyncio.CancelledError:
-                            results.setdefault(symbol, None)
-                            FAILED_SYMBOLS.add(symbol)
-                            raise
-                        except BaseException:
-                            FAILED_SYMBOLS.add(symbol)
-                            results[symbol] = None
-                        else:
-                            SUCCESSFUL_SYMBOLS.add(symbol)
-                            results[symbol] = result
-                    finally:
-                        async with active_lock:
-                            if active > 0:
-                                active -= 1
-            else:
-                async with sem:
-                    async with host_semaphore:
-                        try:
-                            async with active_lock:
-                                active += 1
-                                if active > PEAK_SIMULTANEOUS_WORKERS:
-                                    PEAK_SIMULTANEOUS_WORKERS = active
+        async def _call_worker() -> None:
+            nonlocal active
+            global PEAK_SIMULTANEOUS_WORKERS
 
-                            try:
-                                result = await worker(symbol)
-                            except asyncio.CancelledError:
-                                results.setdefault(symbol, None)
-                                FAILED_SYMBOLS.add(symbol)
-                                raise
-                            except BaseException:
-                                FAILED_SYMBOLS.add(symbol)
-                                results[symbol] = None
-                            else:
-                                SUCCESSFUL_SYMBOLS.add(symbol)
-                                results[symbol] = result
-                        finally:
-                            async with active_lock:
-                                if active > 0:
-                                    active -= 1
-        except asyncio.CancelledError:
-            results.setdefault(symbol, None)
-            FAILED_SYMBOLS.add(symbol)
-            raise
+            async with active_lock:
+                active += 1
+                if active > PEAK_SIMULTANEOUS_WORKERS:
+                    PEAK_SIMULTANEOUS_WORKERS = active
+            try:
+                try:
+                    result = await worker(symbol)
+                except asyncio.CancelledError:
+                    results.setdefault(symbol, None)
+                    FAILED_SYMBOLS.add(symbol)
+                    raise
+                except BaseException:
+                    FAILED_SYMBOLS.add(symbol)
+                    results[symbol] = None
+                else:
+                    SUCCESSFUL_SYMBOLS.add(symbol)
+                    results[symbol] = result
+            finally:
+                async with active_lock:
+                    active -= 1
+
+        if host_semaphore is None:
+            async with semaphore:
+                await _call_worker()
+        else:
+            async with semaphore:
+                async with host_semaphore:
+                    await _call_worker()
 
     tasks: list[asyncio.Task[None]] = []
     task_to_symbol: dict[asyncio.Task[None], str] = {}
     for symbol in symbols:
-        task = asyncio.create_task(_wrapped(symbol))
+        task = asyncio.create_task(_execute(symbol))
         tasks.append(task)
         task_to_symbol[task] = symbol
 
-    if tasks:
-        gather_coro = asyncio.gather(*tasks, return_exceptions=True)
-    else:
-        gather_coro = None
+    if not tasks:
+        return {}, set(), set()
+
+    gather_coro = asyncio.gather(*tasks, return_exceptions=True)
 
     try:
-        if gather_coro is None:
-            outcomes: list[object] = []
-        elif timeout_s is not None:
-            outcomes = await asyncio.wait_for(gather_coro, timeout_s)
-        else:
+        if timeout_s is None:
             outcomes = await gather_coro
+        else:
+            outcomes = await asyncio.wait_for(gather_coro, timeout_s)
     except asyncio.TimeoutError:
         for task in tasks:
             task.cancel()
         outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        for task, outcome in zip(tasks, outcomes):
-            symbol = task_to_symbol.get(task)
-            if symbol is None:
-                continue
-            if symbol not in results:
-                results[symbol] = None
-                FAILED_SYMBOLS.add(symbol)
-            elif isinstance(outcome, BaseException):
-                FAILED_SYMBOLS.add(symbol)
-                results.setdefault(symbol, None)
-    else:
-        for task, outcome in zip(tasks, outcomes):
-            if not isinstance(outcome, BaseException):
-                continue
-            symbol = task_to_symbol.get(task)
-            if symbol is None or symbol in results:
-                continue
+    for task, outcome in zip(tasks, outcomes):
+        symbol = task_to_symbol.get(task)
+        if symbol is None:
+            continue
+        if isinstance(outcome, BaseException) and symbol not in results:
             results[symbol] = None
             FAILED_SYMBOLS.add(symbol)
 
-    return results, SUCCESSFUL_SYMBOLS.copy(), FAILED_SYMBOLS.copy()
+    return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
 
 async def run_with_concurrency_limit(
@@ -599,7 +541,7 @@ async def run_with_concurrency_limit(
     return await run_with_concurrency(
         symbols,
         worker,
-        max_concurrency=max_concurrency,
+        max_concurrency,
         timeout_s=timeout_s,
     )
 

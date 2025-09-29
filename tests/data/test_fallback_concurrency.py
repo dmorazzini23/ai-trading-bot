@@ -21,6 +21,70 @@ def test_run_with_concurrency_returns_results():
     assert not failed
 
 
+def test_run_with_concurrency_respects_limit_minimal():
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    symbols = [f"MIN{i}" for i in range(5)]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen == 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
+
+
+def test_run_with_concurrency_peak_counter_respects_limit_minimal():
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    concurrency.PEAK_SIMULTANEOUS_WORKERS = 99
+
+    symbols = [f"PEAK_SIMPLE{i}" for i in range(4)]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=3)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen == 3
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+
+
 def test_run_with_concurrency_respects_limit():
     @dataclass
     class InnerLockHolder:
