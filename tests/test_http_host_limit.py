@@ -1,4 +1,5 @@
 import asyncio
+import types
 
 from tests.conftest import reload_module
 
@@ -165,3 +166,57 @@ def test_http_host_limit_controller_legacy_env(monkeypatch):
     adapter = session.adapters["https://"]
     assert adapter.pool_connections == 3
     assert adapter.pool_maxsize == 3
+
+
+def test_switching_between_env_keys_refreshes_semaphore(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "4")
+    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
+    monkeypatch.delenv("HTTP_MAX_PER_HOST", raising=False)
+    pooling = _reload_pooling()
+
+    loop = asyncio.new_event_loop()
+    try:
+        first_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=6)) == 4
+
+        monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+        monkeypatch.setenv("AI_TRADING_HTTP_HOST_LIMIT", "4")
+
+        second_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert second_id != first_id
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=6)) == 4
+    finally:
+        loop.close()
+
+    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
+    _reload_pooling(pooling)
+
+
+def test_config_changes_refresh_semaphore(monkeypatch):
+    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+    monkeypatch.delenv("AI_TRADING_HTTP_HOST_LIMIT", raising=False)
+    monkeypatch.delenv("HTTP_MAX_PER_HOST", raising=False)
+
+    pooling = _reload_pooling()
+
+    cfg = types.SimpleNamespace(host_concurrency_limit=2)
+    monkeypatch.setattr(pooling.config, "get_trading_config", lambda: cfg)
+
+    loop = asyncio.new_event_loop()
+    try:
+        first_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=4)) == 2
+
+        cfg.host_concurrency_limit = 6
+        second_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert second_id != first_id
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=8)) == 6
+
+        cfg.host_concurrency_limit = "invalid"
+        third_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert third_id != second_id
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=9)) == pooling._DEFAULT_LIMIT
+    finally:
+        loop.close()
+
+    _reload_pooling(pooling)
