@@ -29,47 +29,64 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
             self.ttl = ttl
             self._store: OrderedDict[str, tuple[object, float]] = OrderedDict()
 
-        def _expire(self) -> None:
+        def _expire(self, *, now: float | None = None) -> None:
             """Remove expired entries in-place."""
-            now = monotonic_time()
-            expired_keys = [key for key, (_, exp) in self._store.items() if exp <= now]
+
+            if not self._store:
+                return
+
+            current_time = monotonic_time() if now is None else now
+            expired_keys = [key for key, (_, exp) in list(self._store.items()) if exp <= current_time]
             for key in expired_keys:
                 self._store.pop(key, None)
 
         def __contains__(self, key: str) -> bool:
-            self._expire()
-            if key not in self._store:
+            now = monotonic_time()
+            self._expire(now=now)
+
+            item = self._store.get(key)
+            if item is None:
                 return False
-            value, exp = self._store[key]
-            if exp <= monotonic_time():
+
+            _, exp = item
+            if exp <= now:
                 self._store.pop(key, None)
                 return False
+
             # touch to maintain recency semantics similar to OrderedDict move-to-end
             self._store.move_to_end(key)
             return True
 
         def __setitem__(self, key: str, value: object) -> None:
-            self._expire()
+            now = monotonic_time()
+            self._expire(now=now)
+
             if key in self._store:
                 self._store.pop(key, None)
             elif self.maxsize and len(self._store) >= self.maxsize:
                 self._store.popitem(last=False)
-            self._store[key] = (value, monotonic_time() + self.ttl)
+
+            self._store[key] = (value, now + self.ttl)
 
         def get(self, key: str, default: object | None=None) -> object | None:
-            self._expire()
+            now = monotonic_time()
+            self._expire(now=now)
+
             item = self._store.get(key)
             if item is None:
                 return default
+
             value, exp = item
-            if exp <= monotonic_time():
+            if exp <= now:
                 self._store.pop(key, None)
                 return default
+
             self._store.move_to_end(key)
             return value
 
         def keys(self):  # noqa: D401 - mimic cachetools API
             """Return current cache keys after expiring stale entries."""
+
             self._expire()
             return list(self._store.keys())
 
