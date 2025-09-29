@@ -44,3 +44,16 @@ class BaseModel:
             setattr(self, k, v)
     def model_dump(self) -> dict[str, Any]:  # pragma: no cover
         return self.__dict__.copy()
+
+
+class TypeAdapter:
+    """Minimal stub matching the interface used by pydantic_settings."""
+
+    def __init__(self, type_: Any):
+        self._type = type_
+
+    def validate_python(self, value: Any) -> Any:  # pragma: no cover - passthrough
+        return value
+
+    def dump_python(self, value: Any) -> Any:  # pragma: no cover - passthrough
+        return value
