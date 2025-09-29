@@ -1470,24 +1470,70 @@ def last_minute_bar_age_seconds(symbol: str) -> int | None:
     return max(0, now_s - int(ts))
 
 
-try:
-    _cfg_default = get_settings()
-    _DEFAULT_FEED = (
-        getattr(_cfg_default, "data_feed", None) or getattr(_cfg_default, "alpaca_data_feed", "iex") or "iex"
-    )
-except Exception:  # pragma: no cover - defensive default
-    _DEFAULT_FEED = "iex"
+_DEFAULT_FEED = "iex"
+_DATA_FEED_OVERRIDE: str | None = None
+_LAST_OVERRIDE_LOGGED: str | None = None
 
-_DATA_FEED_OVERRIDE = get_data_feed_override()
-if _DATA_FEED_OVERRIDE:
-    logger.info(
-        "DATA_PROVIDER_DOWNGRADED",
-        extra={
-            "from": f"alpaca_{_DEFAULT_FEED or 'iex'}",
-            "to": _DATA_FEED_OVERRIDE,
-            "reason": get_data_feed_downgrade_reason() or "missing_credentials",
-        },
-    )
+
+def _normalize_feed_name(feed: str | None) -> str:
+    normalized = str(feed or "iex").strip().lower()
+    return normalized or "iex"
+
+
+def refresh_default_feed(feed: str | None = None) -> str:
+    """Refresh the module-level default feed from *feed* or current settings."""
+
+    global _DEFAULT_FEED, _DATA_FEED_OVERRIDE, _LAST_OVERRIDE_LOGGED
+
+    if feed is None:
+        try:
+            cfg_default = get_settings()
+        except Exception:  # pragma: no cover - defensive fallback
+            candidate = None
+        else:
+            candidate = (
+                getattr(cfg_default, "data_feed", None)
+                or getattr(cfg_default, "alpaca_data_feed", "iex")
+                or "iex"
+            )
+    else:
+        candidate = feed
+
+    _DEFAULT_FEED = _normalize_feed_name(candidate)
+    new_override = get_data_feed_override()
+    override_changed = new_override != _DATA_FEED_OVERRIDE
+    _DATA_FEED_OVERRIDE = new_override
+
+    if _DATA_FEED_OVERRIDE:
+        if override_changed or _DATA_FEED_OVERRIDE != _LAST_OVERRIDE_LOGGED:
+            logger.info(
+                "DATA_PROVIDER_DOWNGRADED",
+                extra={
+                    "from": f"alpaca_{_DEFAULT_FEED or 'iex'}",
+                    "to": _DATA_FEED_OVERRIDE,
+                    "reason": get_data_feed_downgrade_reason() or "missing_credentials",
+                },
+            )
+        _LAST_OVERRIDE_LOGGED = _DATA_FEED_OVERRIDE
+    else:
+        _LAST_OVERRIDE_LOGGED = None
+
+    return _DEFAULT_FEED
+
+
+def get_default_feed() -> str:
+    """Return the currently configured default feed."""
+
+    return _DEFAULT_FEED
+
+
+def set_default_feed(feed: str | None) -> str:
+    """Compatibility wrapper delegating to :func:`refresh_default_feed`."""
+
+    return refresh_default_feed(feed)
+
+
+refresh_default_feed()
 
 
 def _env_flag(key: str, default: bool = False) -> bool:
@@ -5496,6 +5542,9 @@ def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
 
 __all__ = [
     "_DEFAULT_FEED",
+    "refresh_default_feed",
+    "get_default_feed",
+    "set_default_feed",
     "_VALID_FEEDS",
     "_ALLOW_SIP",
     "_HAS_SIP",

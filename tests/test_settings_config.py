@@ -72,6 +72,7 @@ def test_cfg_data_feed_updates_default_feed(monkeypatch):
 
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
     pytest.importorskip("numpy")
+    import ai_trading.config as config_pkg
     from ai_trading.config import settings as config_settings
     from ai_trading.data import fetch as data_fetch
     from ai_trading.core import bot_engine
@@ -81,9 +82,16 @@ def test_cfg_data_feed_updates_default_feed(monkeypatch):
     try:
         cfg.data_feed = "sip"
         assert cfg.data_feed == "sip"
+        assert data_fetch.get_default_feed() == "sip"
         assert data_fetch._DEFAULT_FEED == "sip"
+        assert bot_engine.get_default_feed() == "sip"
         assert bot_engine._DEFAULT_FEED == "sip"
+        assert config_pkg.DATA_FEED_INTRADAY == "sip"
     finally:
         cfg.data_feed = original_feed
-        assert data_fetch._DEFAULT_FEED == cfg.data_feed
-        assert bot_engine._DEFAULT_FEED == cfg.data_feed
+        expected_feed = cfg.data_feed
+        assert data_fetch.get_default_feed() == expected_feed
+        assert data_fetch._DEFAULT_FEED == expected_feed
+        assert bot_engine.get_default_feed() == expected_feed
+        assert bot_engine._DEFAULT_FEED == expected_feed
+        assert config_pkg.DATA_FEED_INTRADAY == expected_feed

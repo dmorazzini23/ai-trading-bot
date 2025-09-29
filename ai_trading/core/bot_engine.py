@@ -624,6 +624,8 @@ __all__ = [
     "clear_cycle_budget_context",
     "FeatureDataResult",
     "fetch_feature_data",
+    "get_default_feed",
+    "set_default_feed",
 ]
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
@@ -3209,11 +3211,31 @@ if getattr(S, "use_rl_agent", False) and RL_MODEL_PATH:
             extra={"hint": "ai_trading.rl_trading import failed"},
         )
 
-_DEFAULT_FEED = (
-    getattr(CFG, "data_feed", None)
-    or getattr(CFG, "alpaca_data_feed", "iex")
-    or "iex"
-)
+def _normalize_feed_name(feed: str | None) -> str:
+    normalized = str(feed or "iex").strip().lower()
+    return normalized or "iex"
+
+
+try:
+    _DEFAULT_FEED = _normalize_feed_name(data_fetcher_module.get_default_feed())
+except AttributeError:
+    _DEFAULT_FEED = _normalize_feed_name(
+        getattr(CFG, "data_feed", None) or getattr(CFG, "alpaca_data_feed", "iex")
+    )
+
+
+def set_default_feed(feed: str | None) -> str:
+    """Update the module-level default feed used for Alpaca requests."""
+
+    global _DEFAULT_FEED
+    _DEFAULT_FEED = _normalize_feed_name(feed)
+    return _DEFAULT_FEED
+
+
+def get_default_feed() -> str:
+    """Return the currently configured Alpaca data feed."""
+
+    return _DEFAULT_FEED
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
@@ -4443,7 +4465,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 if normalized_feed and "_" in normalized_feed:
                     normalized_feed = normalized_feed.rsplit("_", 1)[-1]
 
-        primary_feed_local = configured_feed or data_fetcher_module._DEFAULT_FEED
+        primary_feed_local = configured_feed or data_fetcher_module.get_default_feed()
         effective_backfill = active_backfill
         if (
             effective_backfill is None
@@ -4676,14 +4698,14 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         try:
             feed_val = str(value).strip().lower()
         except Exception:
-            return data_fetcher_module._DEFAULT_FEED
+            return data_fetcher_module.get_default_feed()
         if "sip" in feed_val:
             return "sip"
         if "iex" in feed_val:
             return "iex"
         if "yahoo" in feed_val:
             return "yahoo"
-        return data_fetcher_module._DEFAULT_FEED
+        return data_fetcher_module.get_default_feed()
 
     configured_feed = _normalize_feed_name(getattr(CFG, "data_feed", None))
 
@@ -4718,7 +4740,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         _GLOBAL_INTRADAY_FALLBACK_FEED = None
         _GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.clear()
 
-    primary_feed = configured_feed or data_fetcher_module._DEFAULT_FEED
+    primary_feed = configured_feed or data_fetcher_module.get_default_feed()
     current_feed = primary_feed
     cache_key_candidates: list[str] = []
     cycle_pref = _prefer_feed_this_cycle_helper(symbol)
