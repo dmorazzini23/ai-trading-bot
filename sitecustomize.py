@@ -48,18 +48,34 @@ _ESSENTIAL_NAMES = (
 _ESSENTIAL_MODULES = {
     name: sys.modules.get(name)
     for name in _ESSENTIAL_NAMES
-    if sys.modules.get(name) is not None
 }
 
 _ORIG_CLEAR_DICT = unittest.mock._clear_dict
 
 
+def _resolve_essential(name):
+    module = _ESSENTIAL_MODULES.get(name)
+    if module is None:
+        module = sys.modules.get(name)
+        if module is not None:
+            _ESSENTIAL_MODULES[name] = module
+    if module is None:
+        try:
+            module = importlib.import_module(name)
+        except Exception:
+            return None
+        else:
+            _ESSENTIAL_MODULES[name] = module
+    return module
+
+
 def _safe_clear_dict(in_dict):  # pragma: no cover - simple shim
     _ORIG_CLEAR_DICT(in_dict)
     if in_dict is sys.modules:
-        for key, module in _ESSENTIAL_MODULES.items():
+        for key in _ESSENTIAL_NAMES:
+            module = _resolve_essential(key)
             if module is not None:
-                in_dict.setdefault(key, module)
+                in_dict[key] = module
 
 
 unittest.mock._clear_dict = _safe_clear_dict
