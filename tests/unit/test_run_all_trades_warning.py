@@ -312,12 +312,14 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
         ):  # noqa: D401
             """Capture the order payload."""
 
+            limit_price = kwargs.get("limit_price", price)
             self.calls.append(
                 {
                     "symbol": symbol,
                     "side": side,
                     "qty": qty,
                     "price": price,
+                    "limit_price": limit_price,
                     "asset_class": asset_class,
                     "extra": kwargs,
                 }
@@ -402,7 +404,9 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
             self.requests.append(req)
             return types.SimpleNamespace(
                 symbol=req.symbol_or_symbols[0],
-                quote=DummyQuote(expected_price, expected_price),
+                quote=types.SimpleNamespace(
+                    quote=DummyQuote(expected_price, expected_price)
+                ),
             )
 
     dummy_exec = DummyExecutionEngine()
@@ -444,5 +448,7 @@ def test_run_multi_strategy_forwards_price_to_execution(monkeypatch):
     assert dummy_exec.calls, "execute_order should be invoked"
     call = dummy_exec.calls[0]
     assert call["price"] == pytest.approx(expected_price)
+    assert call["limit_price"] == pytest.approx(expected_price)
     assert call["asset_class"] == "equity"
     assert dummy_risk.last_price == pytest.approx(expected_price)
+    assert dummy_risk.last_price == pytest.approx(call["limit_price"])
