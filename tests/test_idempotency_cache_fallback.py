@@ -69,3 +69,24 @@ def test_order_idempotency_cache_fallback(monkeypatch, caplog):
     assert size_cache.is_duplicate(first) is False, "LRU eviction should remove the oldest entry"
     assert size_cache.stats()["size"] <= 2
 
+
+def test_fallback_cache_expires_entries_on_get(monkeypatch):
+    module = _load_module_without_cachetools(monkeypatch)
+
+    time_state = {"now": 0.0}
+
+    def _fake_monotonic() -> float:
+        return time_state["now"]
+
+    monkeypatch.setattr(module, "monotonic_time", _fake_monotonic)
+
+    cache = module.OrderIdempotencyCache(ttl_seconds=1, max_size=10)
+    key = cache.generate_key("MSFT", "buy", 5)
+
+    cache.mark_submitted(key, "ORDER-1")
+    assert cache.get_existing_order(key)["order_id"] == "ORDER-1"
+
+    time_state["now"] += 2
+
+    assert cache.get_existing_order(key) is None
+    assert cache.is_duplicate(key) is False
