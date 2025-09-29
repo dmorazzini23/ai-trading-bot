@@ -53,26 +53,25 @@ def safe_subprocess_run(
 
     argv = _coerce_cmd(cmd)
     try:
-        with subprocess.Popen(
+        completed = subprocess.run(
             argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
-        ) as proc:
+            timeout=run_timeout,
+            check=False,
+        )
+        stdout = completed.stdout or ""
+        stderr = completed.stderr or ""
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as exc:
+        proc = getattr(exc, "process", None)
+        if proc is not None:
             try:
-                stdout, stderr = proc.communicate(timeout=run_timeout)
-            except subprocess.TimeoutExpired:
                 proc.kill()
-                try:
-                    # Drain any remaining output buffers to avoid zombie processes.
-                    proc.communicate()
-                except Exception:
-                    # Ignore secondary errors during cleanup.
-                    pass
-                return SafeSubprocessResult("", "", 124, True)
-            stdout = stdout or ""
-            stderr = stderr or ""
-            returncode = proc.returncode
+                proc.communicate()
+            except Exception:
+                pass
+        return SafeSubprocessResult("", "", 124, True)
     except OSError as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
