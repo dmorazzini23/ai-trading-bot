@@ -73,6 +73,7 @@ from ai_trading.utils.env import (
 )
 from ai_trading.data.finnhub import fh_fetcher, FinnhubAPIException
 from . import fallback_order
+from .metrics import inc_provider_fallback
 from .validators import validate_adjustment, validate_feed
 from .._alpaca_guard import should_import_alpaca_sdk
 
@@ -3307,7 +3308,7 @@ def _fetch_bars(
             return max(0, max_slots_int - len(call_attempts))
 
         def _attempt_fallback(
-            fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False
+            fb: tuple[str, str, _dt.datetime, _dt.datetime], *, skip_check: bool = False, skip_metrics: bool = False
         ) -> pd.DataFrame | None:
             """Execute a provider fallback attempt.
 
@@ -3328,10 +3329,11 @@ def _fetch_bars(
             _interval, _feed, _start, _end = fb
             from_provider_name = f"alpaca_{from_feed}"
             to_provider_name = f"alpaca_{fb_feed}"
-            provider_fallback.labels(
-                from_provider=f"alpaca_{from_feed}",
-                to_provider=f"alpaca_{fb_feed}",
-            ).inc()
+            if not skip_metrics:
+                provider_fallback.labels(
+                    from_provider=f"alpaca_{from_feed}",
+                    to_provider=f"alpaca_{fb_feed}",
+                ).inc()
             _incr("data.fetch.fallback_attempt", value=1.0, tags=_tags())
             _state["last_fallback_feed"] = fb_feed
             payload = _format_fallback_payload_df(_interval, _feed, _start, _end)
@@ -4191,23 +4193,26 @@ def _fetch_bars(
                 and not sip_locked
                 and _sip_fallback_allowed(session, headers, _interval)
             ):
-                logger.warning(
-                    "ALPACA_IEX_EMPTY_SWITCH_SIP",
-                    extra=_norm_extra(
-                        {
-                            "provider": "alpaca",
-                            "symbol": symbol,
-                            "timeframe": _interval,
-                            "correlation_id": _state["corr_id"],
-                        }
-                    ),
+                occurrences = _IEX_EMPTY_COUNTS.get(key, 0)
+                _FEED_OVERRIDE_BY_TF[key] = "sip"
+                _record_override(symbol, "sip")
+                _FEED_FAILOVER_ATTEMPTS.setdefault(key, set()).add("sip")
+                extra_payload = _norm_extra(
+                    {
+                        "provider": "alpaca",
+                        "symbol": symbol,
+                        "timeframe": _interval,
+                        "correlation_id": _state.get("corr_id"),
+                        "occurrences": occurrences,
+                    }
                 )
+                logger.warning("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
+                _push_to_caplog("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
                 _incr("data.fetch.feed_switch", value=1.0, tags=_tags())
-                try:
-                    metrics.feed_switch += 1
-                except Exception:
-                    pass
-                result = _attempt_fallback((_interval, "sip", _start, _end))
+                inc_provider_fallback("alpaca_iex", "alpaca_sip")
+                result = _attempt_fallback(
+                    (_interval, "sip", _start, _end), skip_metrics=True
+                )
                 if result is not None:
                     if not getattr(result, "empty", True):
                         _IEX_EMPTY_COUNTS.pop(key, None)
