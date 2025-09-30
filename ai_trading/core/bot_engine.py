@@ -11673,17 +11673,12 @@ def check_pdt_rule(runtime) -> bool:
     operating in simulation mode.
     """
     def _log_pdt_skip() -> None:
-        logger_once.info(
+        emit_once(
+            logger,
+            "pdt_check_skipped",
+            "info",
             "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
-            key="pdt_check_skipped",
         )
-        message = "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
-        logger.info(message)
-        logger.warning("PDT_PPED_SENTINEL_MSG")
-        logging.getLogger("ai_trading.core.bot_engine").info(message)
-        logging.warning(message)
-        logging.getLogger("tests.test_broker_unavailable_paths").warning(message)
-        _emit_test_capture(message, logging.WARNING)
 
     runtime_api = getattr(runtime, "api", None)
     if runtime_api is None and not _has_alpaca_credentials():
@@ -11708,11 +11703,7 @@ def check_pdt_rule(runtime) -> bool:
 
     # If account is unavailable (Alpaca not available), assume no PDT blocking
     if acct is None:  # AI-AGENT-REF: contract now explicit; keep None-check
-        # Log once to prevent per-cycle PDT spam
-        logger_once.info(
-            "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
-            key="pdt_check_skipped",
-        )  # AI-AGENT-REF: rate-limit PDT skip message
+        _log_pdt_skip()
         return False
 
     try:
