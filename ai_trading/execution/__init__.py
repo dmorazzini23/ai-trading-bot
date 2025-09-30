@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Tuple
 
@@ -35,6 +37,53 @@ _DEFAULT_EXECUTION_SETTINGS = SimpleNamespace(
     price_provider_order=_DEFAULT_PRICE_PROVIDER_ORDER,
     data_feed_intraday="iex",
 )
+
+
+@dataclass(frozen=True)
+class ExecutionEngineStatus:
+    """Snapshot of the last execution engine selection outcome."""
+
+    mode: str
+    engine_class: str | None
+    shadow_mode: bool
+    missing_credentials: tuple[str, ...]
+    missing_dependencies: tuple[str, ...]
+    reason: str | None
+    settings_fallback: str | None
+
+
+_RUNTIME_STATUS = ExecutionEngineStatus(
+    mode="sim",
+    engine_class=f"{_SimExecutionEngine.__module__}.{_SimExecutionEngine.__qualname__}",
+    shadow_mode=False,
+    missing_credentials=(),
+    missing_dependencies=(),
+    reason=None,
+    settings_fallback=None,
+)
+
+
+def _collect_dependency_gaps(mode: str) -> list[str]:
+    """Return missing optional runtime dependencies for the requested *mode*."""
+
+    required_modules: tuple[str, ...] = ()
+    if mode in {"paper", "live"}:
+        required_modules = (
+            "alpaca",
+            "alpaca.common",
+            "alpaca.trading",
+            "alpaca.trading.client",
+            "alpaca.trading.requests",
+            "alpaca.trading.enums",
+            "alpaca.data",
+        )
+    missing: list[str] = []
+    for module_name in required_modules:
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            missing.append(module_name)
+    return missing
 
 
 def _load_execution_settings() -> Tuple[Any, str | None]:
@@ -120,6 +169,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
     engine_class_path = f"{engine_cls.__module__}.{engine_cls.__qualname__}"
     missing_creds: list[str] | None = None
     reason: str | None = settings_reason
+    missing_dependencies = _collect_dependency_gaps(normalized_mode)
 
     has_key, has_secret = alpaca_credential_status()
     base_url = get_alpaca_base_url()
@@ -128,6 +178,19 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
         missing_creds = _missing_creds() or None
         try:
             from .live_trading import ExecutionEngine as _LiveExecutionEngine
+        except ModuleNotFoundError as exc:  # pragma: no cover - dependency guard
+            reason = reason or "import_failed"
+            missing_mod = getattr(exc, "name", None)
+            if missing_mod and missing_mod not in missing_dependencies:
+                missing_dependencies.append(missing_mod)
+            _logger.error(
+                "EXECUTION_ENGINE_IMPORT_FAILED",
+                extra={
+                    "mode": normalized_mode,
+                    "error": str(exc),
+                    "missing_module": missing_mod,
+                },
+            )
         except Exception as exc:  # pragma: no cover - runtime guard
             reason = reason or "import_failed"
             _logger.error(
@@ -153,6 +216,17 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
             extra={"requested_mode": mode},
         )
 
+    global _RUNTIME_STATUS
+    _RUNTIME_STATUS = ExecutionEngineStatus(
+        mode=normalized_mode,
+        engine_class=engine_class_path,
+        shadow_mode=shadow,
+        missing_credentials=tuple(missing_creds or ()),
+        missing_dependencies=tuple(missing_dependencies),
+        reason=reason,
+        settings_fallback=settings_reason,
+    )
+
     _logger.info(
         "EXECUTION_ENGINE_SELECTED",
         extra={
@@ -165,12 +239,19 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
             "has_key": has_key,
             "has_secret": has_secret,
             "base_url": base_url,
+            "missing_dependencies": tuple(missing_dependencies) or None,
         },
     )
     return engine_cls
 
 
 ExecutionEngine = _select_execution_engine()
+
+
+def get_execution_runtime_status() -> ExecutionEngineStatus:
+    """Return the most recent execution engine selection status."""
+
+    return _RUNTIME_STATUS
 
 # Optional submodule: algorithms
 try:  # pragma: no cover - optional dependency
