@@ -317,7 +317,13 @@ class TradingClientAdapter:
     type and avoid emitting compatibility warnings.
     """
 
-    __slots__ = ("_client", "_ai_trading_wrapped_client", "__ai_trading_adapter__")
+    __slots__ = (
+        "_client",
+        "_ai_trading_wrapped_client",
+        "__ai_trading_adapter__",
+        "list_orders",
+        "list_positions",
+    )
 
     def __init__(self, client: Any):
         self._client = client

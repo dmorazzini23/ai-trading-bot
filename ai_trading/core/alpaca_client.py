@@ -68,6 +68,22 @@ def _validate_trading_api(api: Any) -> bool:
     warned_adapter = False
     adapted_api = False
 
+    def _try_setattr(target: Any, name: str, value: Any) -> bool:
+        """Set attribute on ``target`` or its wrapped client when possible."""
+
+        try:
+            setattr(target, name, value)
+            return True
+        except AttributeError:
+            wrapped = getattr(target, "_ai_trading_wrapped_client", None)
+            if wrapped is not None and wrapped is not target:
+                try:
+                    setattr(wrapped, name, value)
+                    return True
+                except AttributeError:
+                    return False
+            return False
+
     if api is None:
         if ALPACA_AVAILABLE and not is_shadow_mode():
             log_once.error("ALPACA_CLIENT_MISSING", key="alpaca_client_missing")
@@ -120,11 +136,16 @@ def _validate_trading_api(api: Any) -> bool:
                     kwargs["status"] = enum_val
                     return api.get_orders(*args, **kwargs)  # type: ignore[attr-defined]
 
-            setattr(api, "list_orders", _list_orders_wrapper)  # type: ignore[attr-defined]
-            log_once.info(
-                "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
-            )
-            adapted_api = True
+            if _try_setattr(api, "list_orders", _list_orders_wrapper):
+                log_once.info(
+                    "API_GET_ORDERS_MAPPED", key="alpaca_get_orders_mapped"
+                )
+                adapted_api = True
+            else:  # pragma: no cover - defensive fallback
+                log_once.error(
+                    "ALPACA_LIST_ORDERS_PATCH_FAILED",
+                    key="alpaca_list_orders_patch_failed",
+                )
         else:
             log_once.error("ALPACA_LIST_ORDERS_MISSING", key="alpaca_list_orders_missing")
             if not is_shadow_mode() and not os.getenv("PYTEST_RUNNING"):
@@ -138,10 +159,15 @@ def _validate_trading_api(api: Any) -> bool:
                 # TradingClient.get_all_positions() takes no filters; ignore args
                 return api.get_all_positions()  # type: ignore[attr-defined]
 
-            setattr(api, "list_positions", _list_positions_wrapper)  # type: ignore[attr-defined]
-            log_once.info(
-                "API_GET_POSITIONS_MAPPED", key="alpaca_get_positions_mapped"
-            )
+            if _try_setattr(api, "list_positions", _list_positions_wrapper):
+                log_once.info(
+                    "API_GET_POSITIONS_MAPPED", key="alpaca_get_positions_mapped"
+                )
+            else:  # pragma: no cover - defensive fallback
+                log_once.error(
+                    "ALPACA_LIST_POSITIONS_PATCH_FAILED",
+                    key="alpaca_list_positions_patch_failed",
+                )
         except Exception:
             # Non-fatal; caller may handle attribute absence
             pass
@@ -154,11 +180,16 @@ def _validate_trading_api(api: Any) -> bool:
             def _cancel_order_wrapper(order_id: Any):
                 return cancel_by_id(order_id)
 
-            setattr(api, "cancel_order", _cancel_order_wrapper)  # type: ignore[attr-defined]
-            log_once.info(
-                "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
-            )
-            adapted_api = True
+            if _try_setattr(api, "cancel_order", _cancel_order_wrapper):
+                log_once.info(
+                    "API_CANCEL_ORDER_MAPPED", key="alpaca_cancel_order_mapped"
+                )
+                adapted_api = True
+            else:  # pragma: no cover - defensive fallback
+                log_once.error(
+                    "ALPACA_CANCEL_ORDER_PATCH_FAILED",
+                    key="alpaca_cancel_order_patch_failed",
+                )
         elif callable(cancel_orders):
             CancelOrdersRequest = None
             try:
@@ -215,11 +246,16 @@ def _validate_trading_api(api: Any) -> bool:
                     "Alpaca client cancel_orders shim could not adapt provided API"
                 ) from last_error
 
-            setattr(api, "cancel_order", _cancel_order_via_batch)  # type: ignore[attr-defined]
-            log_once.info(
-                "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
-            )
-            adapted_api = True
+            if _try_setattr(api, "cancel_order", _cancel_order_via_batch):
+                log_once.info(
+                    "API_CANCEL_ORDERS_MAPPED", key="alpaca_cancel_orders_mapped"
+                )
+                adapted_api = True
+            else:  # pragma: no cover - defensive fallback
+                log_once.error(
+                    "ALPACA_CANCEL_ORDER_PATCH_FAILED",
+                    key="alpaca_cancel_order_patch_failed",
+                )
         else:
             log_once.error(
                 "ALPACA_CANCEL_ORDER_MISSING", key="alpaca_cancel_order_missing"
