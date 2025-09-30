@@ -141,9 +141,6 @@ def vwap_pegged_submit(
         fetch_minute_df_safe,
         DataFetchError,
         ta,
-        LimitOrderRequest,
-        OrderSide,
-        TimeInForce,
         APIError,
         utc_now_iso,
         slippage_total,
@@ -154,6 +151,12 @@ def vwap_pegged_submit(
         safe_submit_order,
     )
     from ai_trading.core import bot_engine as _bot_engine
+
+    _bot_engine._ensure_alpaca_classes()
+    OrderSide = _bot_engine.OrderSide
+    TimeInForce = _bot_engine.TimeInForce
+    LimitOrderRequest = _bot_engine.LimitOrderRequest
+    MarketOrderRequest = _bot_engine.MarketOrderRequest
 
     start_time = pytime.time()
     placed = 0
@@ -302,13 +305,14 @@ def send_exit_order(
     raw_positions: list | None = None,
 ) -> None:
     """Submit an exit order (market or limit) with simple validations."""
-    from ai_trading.core.bot_engine import (
-        MarketOrderRequest,
-        LimitOrderRequest,
-        OrderSide,
-        TimeInForce,
-        safe_submit_order,
-    )
+    from ai_trading.core import bot_engine as _bot_engine
+
+    _bot_engine._ensure_alpaca_classes()
+    MarketOrderRequest = _bot_engine.MarketOrderRequest
+    LimitOrderRequest = _bot_engine.LimitOrderRequest
+    OrderSide = _bot_engine.OrderSide
+    TimeInForce = _bot_engine.TimeInForce
+    safe_submit_order = _bot_engine.safe_submit_order
 
     logger.info(
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"

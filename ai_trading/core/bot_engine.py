@@ -9259,6 +9259,8 @@ def audit_positions(ctx) -> None:
 
     max_order_size = _as_int(os.getenv("MAX_ORDER_SIZE", "1000"), 1000)
 
+    _ensure_alpaca_classes()
+
     # 3) For any symbol in remote whose remote_qty != local_qty, correct via market order
     for sym, rq in remote.items():
         lq = local.get(sym, 0)
@@ -9355,6 +9357,7 @@ def validate_open_orders(ctx: BotContext) -> None:
         return
 
     now = datetime.now(UTC)
+    _ensure_alpaca_classes()
     for od in open_orders:
         created = pd.to_datetime(getattr(od, "created_at", now))
         age = (now - created).total_seconds() / 60.0
