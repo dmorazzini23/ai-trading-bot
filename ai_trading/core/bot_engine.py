@@ -3718,6 +3718,17 @@ def _ensure_alpaca_classes() -> None:
         _ALPACA_IMPORT_ERROR = fatal_error
 
 
+def _stock_quote_request_ready() -> bool:
+    """Return ``True`` when ``StockLatestQuoteRequest`` can be instantiated."""
+
+    if StockLatestQuoteRequest is not None:
+        return True
+    if _ALPACA_IMPORT_ERROR is not None:
+        return False
+    _ensure_alpaca_classes()
+    return StockLatestQuoteRequest is not None
+
+
 # Ensure fallback classes are available during import when Alpaca SDK is missing.
 if not ALPACA_AVAILABLE:
     _ensure_alpaca_classes()
@@ -12527,10 +12538,13 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     fallback_error: str | None = None
 
     if data_client is not None:
-        _ensure_alpaca_classes()
-        if _ALPACA_IMPORT_ERROR is not None or StockLatestQuoteRequest is None:
+        if not _stock_quote_request_ready():
             fallback_reason = "quote_source_unavailable"
-            fallback_error = "alpaca_sdk_missing"
+            fallback_error = (
+                "alpaca_sdk_missing"
+                if _ALPACA_IMPORT_ERROR is not None
+                else "quote_request_missing"
+            )
         else:
             try:
                 req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
@@ -14601,8 +14615,7 @@ def _check_fallback_quote_age(
     *,
     max_age: float,
 ) -> tuple[bool, float | None, str | None]:
-    _ensure_alpaca_classes()
-    if _ALPACA_IMPORT_ERROR is not None or StockLatestQuoteRequest is None:
+    if not _stock_quote_request_ready():
         logger.warning(
             "FALLBACK_QUOTE_UNAVAILABLE",
             extra={"symbol": symbol, "detail": "alpaca_sdk_missing"},
@@ -18354,8 +18367,7 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
         return current
 
     try:
-        _ensure_alpaca_classes()
-        if _ALPACA_IMPORT_ERROR is not None or StockLatestQuoteRequest is None:
+        if not _stock_quote_request_ready():
             raise RuntimeError("StockLatestQuoteRequest unavailable")
         if feed:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=feed)
