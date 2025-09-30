@@ -77,7 +77,7 @@ def test_repair_rth_gap_uses_backup(monkeypatch: pytest.MonkeyPatch) -> None:
         assert ts in set(repaired_index)
 
 
-def test_should_skip_symbol_logs_on_excessive_gap(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_should_skip_symbol_full_gap_triggers_skip(caplog: pytest.LogCaptureFixture) -> None:
     tz = ZoneInfo("America/New_York")
     start_local = datetime(2024, 1, 3, 9, 30, tzinfo=tz)
     end_local = datetime(2024, 1, 3, 16, 0, tzinfo=tz)
@@ -99,16 +99,54 @@ def test_should_skip_symbol_logs_on_excessive_gap(monkeypatch: pytest.MonkeyPatc
         "SKIP_SYMBOL_INSUFFICIENT_INTRADAY_COVERAGE" in record.message
         for record in caplog.records
     )
-    # Partial gaps should no longer trigger auto-skip
-    partial_missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
-    partial_df = _build_base_frame(start_local, end_local, partial_missing)
+    assert df.attrs["_coverage_meta"]["skip_flagged"] is True
+
+
+def test_should_skip_symbol_partial_gap_sets_metadata() -> None:
+    tz = ZoneInfo("America/New_York")
+    start_local = datetime(2024, 1, 4, 9, 30, tzinfo=tz)
+    end_local = datetime(2024, 1, 4, 16, 0, tzinfo=tz)
+    expected_local = pd.date_range(start_local, end_local, freq="min", tz=tz, inclusive="left")
+    missing = {expected_local[i].tz_convert("UTC") for i in range(0, 30)}
+    partial_df = _build_base_frame(start_local, end_local, missing)
     partial_df.attrs["symbol"] = "KEEPX"
-    assert (
-        fetch_module.should_skip_symbol(
-            partial_df,
-            window=(start_local.astimezone(UTC), end_local.astimezone(UTC)),
-            tz=tz,
-            max_gap_ratio=0.0,
-        )
-        is False
+    fetch_module._SKIP_LOGGED.clear()  # type: ignore[attr-defined]
+
+    should_skip = fetch_module.should_skip_symbol(
+        partial_df,
+        window=(start_local.astimezone(UTC), end_local.astimezone(UTC)),
+        tz=tz,
+        max_gap_ratio=0.0,
     )
+
+    assert should_skip is False
+    meta = partial_df.attrs.get("_coverage_meta")
+    assert isinstance(meta, dict)
+    assert meta["expected"] == expected_local.size
+    assert meta["missing_after"] == len(missing)
+    assert meta["gap_ratio"] == pytest.approx(len(missing) / expected_local.size)
+    assert "skip_flagged" not in meta
+
+
+def test_should_skip_symbol_zero_gap_records_metadata() -> None:
+    tz = ZoneInfo("America/New_York")
+    start_local = datetime(2024, 1, 5, 9, 30, tzinfo=tz)
+    end_local = datetime(2024, 1, 5, 16, 0, tzinfo=tz)
+    df = _build_base_frame(start_local, end_local, set())
+    df.attrs["symbol"] = "CLEAN"
+    fetch_module._SKIP_LOGGED.clear()  # type: ignore[attr-defined]
+
+    should_skip = fetch_module.should_skip_symbol(
+        df,
+        window=(start_local.astimezone(UTC), end_local.astimezone(UTC)),
+        tz=tz,
+        max_gap_ratio=0.0,
+    )
+
+    assert should_skip is False
+    meta = df.attrs.get("_coverage_meta")
+    assert isinstance(meta, dict)
+    assert meta["expected"] > 0
+    assert meta["missing_after"] == 0
+    assert meta["gap_ratio"] == pytest.approx(0.0)
+    assert "skip_flagged" not in meta

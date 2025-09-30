@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import math
 import datetime as _dt
 import gc
 import importlib
@@ -2705,31 +2706,45 @@ def should_skip_symbol(
     if expected_count == 0:
         return False
     try:
-        timestamps = pd_local.to_datetime(df["timestamp"], utc=True).tz_convert(tzinfo)
+        raw_timestamps = pd_local.to_datetime(df["timestamp"], utc=True)
+        if isinstance(raw_timestamps, pd_local.Series):
+            raw_timestamps = pd_local.DatetimeIndex(raw_timestamps)
+        timestamps = raw_timestamps.tz_convert(tzinfo)
     except Exception:
         timestamps = pd_local.DatetimeIndex([])
     missing_after = int(expected_local.difference(timestamps).size)
     gap_ratio = missing_after / expected_count if expected_count else 0.0
-    metadata = getattr(df, "attrs", {}).get("_coverage_meta")
-    if isinstance(metadata, dict):
-        metadata.update(
+    try:
+        attrs = df.attrs  # type: ignore[attr-defined]
+    except Exception:
+        attrs = None
+    coverage_meta: dict[str, object] | None = None
+    if isinstance(attrs, dict):
+        existing_meta = attrs.get("_coverage_meta")
+        if isinstance(existing_meta, dict):
+            coverage_meta = existing_meta
+        else:
+            coverage_meta = {}
+            attrs["_coverage_meta"] = coverage_meta
+    if coverage_meta is not None:
+        coverage_meta.update(
             {
                 "expected": expected_count,
                 "missing_after": missing_after,
                 "gap_ratio": gap_ratio,
             }
         )
-    symbol = getattr(getattr(df, "attrs", {}), "get", lambda *_: None)("symbol")
-    if callable(symbol):
-        symbol = df.attrs.get("symbol")  # type: ignore[assignment]
+    symbol = None
+    if isinstance(attrs, dict):
+        symbol = attrs.get("symbol")
     symbol_str = str(symbol) if symbol else "UNKNOWN"
-    catastrophic_gap = gap_ratio >= 0.999
+    catastrophic_gap = math.isclose(gap_ratio, 1.0, rel_tol=0.0, abs_tol=1e-6) or gap_ratio >= 0.999999
     skip = catastrophic_gap
     if skip:
-        try:
-            coverage_meta = df.attrs.setdefault("_coverage_meta", {})  # type: ignore[attr-defined]
-        except Exception:
-            coverage_meta = {}
+        if coverage_meta is None and isinstance(attrs, dict):
+            meta_candidate = attrs.setdefault("_coverage_meta", {})
+            if isinstance(meta_candidate, dict):
+                coverage_meta = meta_candidate
         if isinstance(coverage_meta, dict):
             coverage_meta["skip_flagged"] = True
             coverage_meta["gap_ratio"] = gap_ratio
@@ -2745,12 +2760,10 @@ def should_skip_symbol(
                 f"{gap_ratio:.4%}",
             )
             _SKIP_LOGGED.add(key)
-    elif gap_ratio > max_gap_ratio:
-        try:
-            coverage_meta = df.attrs.setdefault("_coverage_meta", {})  # type: ignore[attr-defined]
-        except Exception:
-            coverage_meta = {}
+    else:
         if isinstance(coverage_meta, dict):
+            coverage_meta.pop("skip_flagged", None)
+        if gap_ratio > max_gap_ratio and isinstance(coverage_meta, dict):
             coverage_meta["gap_ratio"] = gap_ratio
             coverage_meta["missing_after"] = missing_after
             coverage_meta["expected"] = expected_count
