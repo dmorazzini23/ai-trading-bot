@@ -141,3 +141,37 @@ def test_fill_rate_calculation_with_valid_order_data():
             # Should use order.filled_qty (75) not calculated value (75)
             assert log_extra['filled_qty'] == 75, f"Expected filled_qty=75, got {log_extra['filled_qty']}"
             assert log_extra['fill_rate_pct'] == 75.0, f"Expected 75% fill rate, got {log_extra['fill_rate_pct']}"
+
+
+def test_partial_fill_summary_exposed_and_cleared():
+    ctx = MockContext()
+    engine = ExecutionEngine(ctx)
+
+    with patch.object(engine, 'logger'):
+        partial_order = MockOrder(filled_qty=15)
+        engine._reconcile_partial_fills(
+            symbol="AAPL",
+            submitted_qty=50,
+            remaining_qty=35,
+            side="buy",
+            last_order=partial_order,
+        )
+
+    summary = engine.last_partial_fill_summary
+    assert summary is not None
+    assert summary["symbol"] == "AAPL"
+    assert summary["filled_qty"] == 15
+    assert summary["requested_qty"] == 50
+    assert summary["fill_rate_pct"] == pytest.approx(30.0)
+
+    with patch.object(engine, 'logger'):
+        filled_order = MockOrder(filled_qty=50)
+        engine._reconcile_partial_fills(
+            symbol="AAPL",
+            submitted_qty=50,
+            remaining_qty=0,
+            side="buy",
+            last_order=filled_order,
+        )
+
+    assert engine.last_partial_fill_summary is None

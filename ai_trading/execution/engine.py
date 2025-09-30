@@ -714,6 +714,7 @@ class ExecutionEngine:
             "total_volume": 0.0,
             "average_fill_time": 0.0,
         }
+        self._last_partial_fill_summary: dict[str, Any] | None = None
         emit_once(logger, "EXECUTION_ENGINE_INIT", "info", "ExecutionEngine initialized")
         try:
             self.order_manager.add_execution_callback(self._handle_execution_event)
@@ -747,6 +748,11 @@ class ExecutionEngine:
     def position_ledger(self) -> dict[str, int]:
         """Return a copy of the tracked positions."""
         return self._position_ledger.copy()
+
+    @property
+    def last_partial_fill_summary(self) -> dict[str, Any] | None:
+        """Return the most recent partial fill summary recorded by the engine."""
+        return self._last_partial_fill_summary
 
     def _update_position(self, symbol: str, side: OrderSide, quantity: int) -> None:
         """Update in-memory position ledger for a fill event."""
@@ -883,6 +889,8 @@ class ExecutionEngine:
             rem = float(remaining_qty)
             if rq <= 0:
                 return
+            # Reset summary before processing a new fill snapshot
+            self._last_partial_fill_summary = None
             # Prefer last_order.filled_qty when available
             order = _kwargs.get("last_order")
             if order is not None and hasattr(order, "filled_qty") and order.filled_qty is not None:
@@ -923,15 +931,23 @@ class ExecutionEngine:
 
             if filled_for_eval < rq:
                 fill_rate = (filled_for_eval / rq) if rq else 0.0
+                summary_payload = {
+                    "symbol": symbol,
+                    "side": side,
+                    "filled_qty": int(filled_for_eval),
+                    "requested_qty": int(rq),
+                    "fill_rate_pct": round(fill_rate * 100.0, 2),
+                }
+                if ord_filled is not None:
+                    summary_payload["reported_filled_qty"] = float(ord_filled)
+                if mismatch:
+                    summary_payload["mismatch_detected"] = True
+                self._last_partial_fill_summary = summary_payload
                 # Structured log for tests to parse via `extra`, keep message token stable
                 self.logger.warning(
                     "PARTIAL_FILL_DETECTED",
                     extra={
-                        "symbol": symbol,
-                        "side": side,
-                        "filled_qty": int(filled_for_eval),
-                        "requested_qty": int(rq),
-                        "fill_rate_pct": round(fill_rate * 100.0, 2),
+                        **summary_payload,
                     },
                 )
                 # Human-readable detail to satisfy substring checks in some tests
@@ -950,6 +966,7 @@ class ExecutionEngine:
                 # Full fill
                 # Only claim full-fill when sources agree or no mismatch detected
                 if not mismatch:
+                    self._last_partial_fill_summary = None
                     self.logger.info(
                         "FULL_FILL_SUCCESS",
                         extra={
