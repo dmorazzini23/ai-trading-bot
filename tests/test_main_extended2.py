@@ -1,3 +1,4 @@
+import os
 import sys
 import types
 from typing import Any
@@ -6,6 +7,56 @@ import errno
 import socket
 
 import pytest
+
+os.environ.setdefault("PYTEST_RUNNING", "1")
+
+
+if "numpy" not in sys.modules:
+    class _RandomStub:
+        def seed(self, *_args, **_kwargs):
+            return None
+
+    class _NumpyStub(types.ModuleType):
+        def __init__(self) -> None:
+            super().__init__("numpy")
+            self.random = _RandomStub()
+            self.nan = float("nan")
+            self.NaN = self.nan
+            self.ndarray = object
+
+        def __getattr__(self, _name):  # type: ignore[override]
+            def _stub(*_args, **_kwargs):
+                return 0
+
+            return _stub
+
+    sys.modules["numpy"] = _NumpyStub()
+
+if "portalocker" not in sys.modules:
+    portalocker_stub = types.ModuleType("portalocker")
+    portalocker_stub.LOCK_EX = 1
+    portalocker_stub.lock = lambda *_args, **_kwargs: None
+    portalocker_stub.unlock = lambda *_args, **_kwargs: None
+    sys.modules["portalocker"] = portalocker_stub
+
+if "bs4" not in sys.modules:
+    bs4_stub = types.ModuleType("bs4")
+
+    class _Soup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def find_all(self, *_args, **_kwargs):
+            return []
+
+        def find_parent(self, *_args, **_kwargs):
+            return None
+
+        def get_text(self, *_args, **_kwargs):
+            return ""
+
+    bs4_stub.BeautifulSoup = lambda *_args, **_kwargs: _Soup()
+    sys.modules["bs4"] = bs4_stub
 
 flask_mod: Any = types.ModuleType("flask")
 
@@ -132,3 +183,40 @@ def test_main_runs_once(monkeypatch):
     main.main()
     assert called.get("api")
     assert called.get("cycle") == 1
+
+
+def test_main_allows_blank_env_under_test(monkeypatch):
+    """Blank secrets under pytest should not abort startup."""
+
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
+    for key in (
+        "ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY",
+        "ALPACA_DATA_FEED",
+        "WEBHOOK_SECRET",
+        "CAPITAL_CAP",
+        "DOLLAR_RISK_LIMIT",
+        "ALPACA_API_URL",
+        "ALPACA_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    def _start_api(ready_signal=None):
+        if ready_signal:
+            ready_signal.set()
+
+    call_order: list[str] = []
+
+    def _cycle():
+        call_order.append("cycle")
+
+    monkeypatch.setattr(main, "start_api", _start_api)
+    monkeypatch.setattr(main, "run_cycle", _cycle)
+    monkeypatch.setattr(main, "_init_http_session", lambda _cfg: True)
+    monkeypatch.setattr(main.time, "sleep", lambda _s: None)
+
+    main.main([])
+
+    assert call_order, "run_cycle should be invoked at least once"
+    assert len(call_order[1:]) == 1
