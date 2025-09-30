@@ -85,7 +85,26 @@ class TestOrderExecutionTracking(unittest.TestCase):
             # Test that we can access the POV submit function
             if hasattr(bot_engine, 'pov_submit'):
                 # This would expose the quantity tracking issue
-                bot_engine.pov_submit(self.mock_ctx, symbol, total_qty, side)
+                result = bot_engine.pov_submit(self.mock_ctx, symbol, total_qty, side)
+
+                # Ensure POV submit succeeded and partial fill tracking is captured
+                self.assertTrue(result)
+                tracker = getattr(self.mock_ctx, "partial_fill_tracker", None)
+                self.assertIsInstance(tracker, dict)
+                self.assertIn(symbol, tracker)
+
+                summary = tracker[symbol]
+                self.assertIsInstance(summary.get("partial_fills"), list)
+                self.assertGreater(len(summary["partial_fills"]), 0)
+                self.assertEqual(summary.get("symbol"), symbol)
+
+                first_partial = summary["partial_fills"][0]
+                self.assertEqual(first_partial.get("symbol"), symbol)
+                self.assertEqual(
+                    first_partial.get("actual_slice_filled"),
+                    int(self.mock_order.filled_qty),
+                )
+                self.assertEqual(first_partial.get("order_id"), self.mock_order.id)
 
                 # Verify that submit_order was called with sliced quantities
                 self.assertTrue(mock_submit.called)
