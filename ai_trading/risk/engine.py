@@ -311,59 +311,153 @@ class RiskEngine:
                     _series(df_local, "close"),
                 )
 
-            def _sequence_to_arrays(
-                seq: Sequence[Any],
-            ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-                if not seq:
-                    return (None, None, None)
-                df_from_seq = None
-                if pd is not None:
-                    try:
-                        records = []
-                        for bar in seq:
-                            if isinstance(bar, dict):
-                                records.append(bar)
-                            elif hasattr(bar, "__dict__"):
-                                records.append(vars(bar))
-                            else:
-                                record = {}
-                                for attr in ("open", "high", "low", "close", "o", "h", "l", "c"):
-                                    if hasattr(bar, attr):
-                                        record[attr] = getattr(bar, attr)
-                                if record:
-                                    records.append(record)
+            def _sequence_to_records(seq: Sequence[Any]) -> list[dict[str, Any]]:
+                records: list[dict[str, Any]] = []
+                allowed_keys = (
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "o",
+                    "h",
+                    "l",
+                    "c",
+                    "Open",
+                    "High",
+                    "Low",
+                    "Close",
+                )
+                for bar in seq:
+                    if bar is None:
+                        continue
+                    if isinstance(bar, dict):
+                        records.append(bar)
+                        continue
+                    if hasattr(bar, "__dict__"):
+                        data = {key: value for key, value in vars(bar).items() if key in allowed_keys}
+                        if data:
+                            records.append(data)
+                        continue
+                    if isinstance(bar, Sequence) and not isinstance(bar, (str, bytes, bytearray)):
+                        values = list(bar)
+                        record: dict[str, Any] = {}
+                        if len(values) >= 4:
+                            record = {
+                                "open": values[0],
+                                "high": values[1],
+                                "low": values[2],
+                                "close": values[3],
+                            }
+                        elif len(values) >= 3:
+                            record = {
+                                "high": values[0],
+                                "low": values[1],
+                                "close": values[2],
+                            }
+                        if record:
+                            records.append(record)
+                        continue
+                    record = {}
+                    for attr in allowed_keys:
+                        if hasattr(bar, attr):
+                            record[attr] = getattr(bar, attr)
+                    if record:
+                        records.append(record)
+                return records
+
+            def _coerce_dataframe(candidate: Any) -> "pd.DataFrame | None":
+                if pd is None or candidate is None:
+                    return None
+                try:
+                    if isinstance(candidate, pd.DataFrame):
+                        df_candidate = candidate.copy()
+                    elif isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+                        try:
+                            seq_list = list(candidate)
+                        except TypeError:
+                            return None
+                        records = _sequence_to_records(seq_list)
                         if records:
-                            df_from_seq = pd.DataFrame(records)
-                    except (
-                        APIError,
-                        TimeoutError,
-                        ConnectionError,
-                        ValueError,
-                        TypeError,
-                        OSError,
-                        AttributeError,
-                    ) as exc:  # pragma: no cover - defensive
-                        logger.debug("ATR bars sequence conversion failed for %s: %s", symbol, exc)
-                        df_from_seq = None
-                if df_from_seq is not None and getattr(df_from_seq, "empty", True) is False:
+                            df_candidate = pd.DataFrame(records)
+                        else:
+                            df_candidate = pd.DataFrame(seq_list)
+                    elif hasattr(candidate, "to_dict"):
+                        try:
+                            records = candidate.to_dict("records")
+                        except (TypeError, ValueError, AttributeError):
+                            records = None
+                        if records:
+                            df_candidate = pd.DataFrame(records)
+                        else:
+                            df_candidate = pd.DataFrame(candidate)
+                    else:
+                        df_candidate = pd.DataFrame(candidate)
+                except (ValueError, TypeError, AttributeError):
+                    return None
+                if getattr(df_candidate, "empty", True):
+                    return None
+                return df_candidate
+
+            def _sequence_to_arrays(
+                seq: Any,
+            ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+                if seq is None:
+                    return (None, None, None)
+                df_from_seq = _coerce_dataframe(seq)
+                if df_from_seq is not None:
                     try:
-                        return _extract_arrays(df_from_seq)
+                        high_arr, low_arr, close_arr = _extract_arrays(df_from_seq)
+                        if all(
+                            arr is not None and len(arr) > 0 for arr in (high_arr, low_arr, close_arr)
+                        ):
+                            return high_arr, low_arr, close_arr
                     except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover - defensive
                         logger.debug("ATR sequence dataframe extraction failed for %s: %s", symbol, exc)
+                records: list[dict[str, Any]] = []
+                if isinstance(seq, Sequence) and not isinstance(seq, (str, bytes, bytearray)):
+                    records = _sequence_to_records(seq)
+                elif pd is not None and hasattr(seq, "to_dict"):
+                    try:
+                        maybe_records = seq.to_dict("records")
+                    except (TypeError, ValueError, AttributeError):
+                        maybe_records = None
+                    if maybe_records:
+                        records = _sequence_to_records(maybe_records)
+                if not records:
+                    return (None, None, None)
                 highs: list[float] = []
                 lows: list[float] = []
                 closes: list[float] = []
-                for bar in seq:
-                    high_val = _safe_bar_value(bar, ("high", "h"))
-                    low_val = _safe_bar_value(bar, ("low", "l"))
-                    close_val = _safe_bar_value(bar, ("close", "c"))
+                for record in records:
+                    high_val = None
+                    for key in ("high", "High", "h", "H"):
+                        if key in record and record[key] is not None:
+                            high_val = record[key]
+                            break
+                    low_val = None
+                    for key in ("low", "Low", "l", "L"):
+                        if key in record and record[key] is not None:
+                            low_val = record[key]
+                            break
+                    close_val = None
+                    for key in ("close", "Close", "c", "C"):
+                        if key in record and record[key] is not None:
+                            close_val = record[key]
+                            break
                     if None in (high_val, low_val, close_val):
                         continue
-                    highs.append(float(high_val))
-                    lows.append(float(low_val))
-                    closes.append(float(close_val))
+                    try:
+                        highs.append(float(high_val))
+                        lows.append(float(low_val))
+                        closes.append(float(close_val))
+                    except (TypeError, ValueError):
+                        continue
                 if highs and lows and closes:
-                    return (np.asarray(highs), np.asarray(lows), np.asarray(closes))
+                    return (
+                        np.asarray(highs, dtype=float),
+                        np.asarray(lows, dtype=float),
+                        np.asarray(closes, dtype=float),
+                    )
                 return (None, None, None)
 
             def _candidate_to_arrays(candidate: Any) -> tuple[
@@ -374,42 +468,36 @@ class RiskEngine:
             ]:
                 if candidate is None:
                     return (None, None, None, None)
-                seq_candidate: Sequence[Any] | None = None
                 cand_high = cand_low = cand_close = None
-                if pd is not None and hasattr(candidate, "empty"):
+                df_candidate = _coerce_dataframe(candidate)
+                if df_candidate is not None:
                     try:
-                        df_candidate = (
-                            candidate.copy() if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
-                        )
-                    except (ValueError, TypeError, AttributeError):
-                        df_candidate = None
-                    if df_candidate is not None and getattr(df_candidate, "empty", True) is False:
                         cand_high, cand_low, cand_close = _extract_arrays(df_candidate)
-                if cand_high is None or cand_low is None or cand_close is None:
-                    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
-                        seq_candidate = candidate
-                        cand_high, cand_low, cand_close = _sequence_to_arrays(candidate)
-                if (
-                    (cand_high is None or cand_low is None or cand_close is None)
-                    and seq_candidate is None
-                    and not isinstance(candidate, (str, bytes, bytearray))
-                    and not hasattr(candidate, "empty")
-                ):
+                    except (ValueError, TypeError, AttributeError) as exc:  # pragma: no cover - defensive
+                        logger.debug("ATR candidate dataframe extraction failed for %s: %s", symbol, exc)
+                        cand_high = cand_low = cand_close = None
+                seq_candidate: Sequence[Any] | None = None
+                if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+                    seq_candidate = candidate
+                elif not hasattr(candidate, "empty"):
                     try:
                         seq_list = list(candidate)
                     except TypeError:
                         seq_list = None
-                    if seq_list:
-                        seq_candidate = seq_list
-                        cand_high, cand_low, cand_close = _sequence_to_arrays(seq_list)
-                if cand_high is None or cand_low is None or cand_close is None:
-                    if pd is not None and not hasattr(candidate, "empty"):
-                        try:
-                            df_candidate = pd.DataFrame(candidate)
-                        except (ValueError, TypeError, AttributeError):
-                            df_candidate = None
-                        if df_candidate is not None and getattr(df_candidate, "empty", True) is False:
-                            cand_high, cand_low, cand_close = _extract_arrays(df_candidate)
+                    else:
+                        if seq_list:
+                            seq_candidate = seq_list
+                seq_high = seq_low = seq_close = None
+                if seq_candidate is not None:
+                    seq_high, seq_low, seq_close = _sequence_to_arrays(seq_candidate)
+                else:
+                    seq_high, seq_low, seq_close = _sequence_to_arrays(candidate)
+                if seq_high is not None and seq_low is not None and seq_close is not None:
+                    cand_high, cand_low, cand_close = seq_high, seq_low, seq_close
+                    if seq_candidate is None and isinstance(candidate, Sequence) and not isinstance(
+                        candidate, (str, bytes, bytearray)
+                    ):
+                        seq_candidate = candidate
                 return cand_high, cand_low, cand_close, seq_candidate
 
             high = low = close = None

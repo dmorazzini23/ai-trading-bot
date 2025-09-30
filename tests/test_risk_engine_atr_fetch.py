@@ -5,12 +5,14 @@ import types
 os.environ.setdefault("PYTEST_RUNNING", "1")
 os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
 
-import pandas as pd
 import pytest
 
 from ai_trading.config.settings import get_settings
 from ai_trading.data.providers import yfinance_provider
 from ai_trading.risk.engine import RiskEngine
+
+
+pd = pytest.importorskip("pandas")
 
 
 class _StockBarsClient:
@@ -31,6 +33,19 @@ def _make_df(rows: int = 30) -> pd.DataFrame:
         "close": [1.5] * rows,
     }
     return pd.DataFrame(data)
+
+
+@pytest.fixture
+def yfinance_dict_rows() -> list[dict[str, float]]:
+    return [
+        {"Open": 1.0, "High": 2.0, "Low": 1.0, "Close": 1.5, "Volume": 10}
+        for _ in range(30)
+    ]
+
+
+@pytest.fixture
+def simple_list_rows() -> list[list[float]]:
+    return [[1.0, 2.0, 1.0, 1.5] for _ in range(30)]
 
 
 def test_get_atr_data_with_stock_bars_client(caplog: pytest.LogCaptureFixture):
@@ -130,3 +145,55 @@ def test_get_atr_data_falls_back_to_simple_get_bars(monkeypatch: pytest.MonkeyPa
     assert atr == 1.0
     assert client.calls and client.calls[-1][0] == "AAPL"
     assert client.calls[-1][1] >= 15
+
+
+def test_get_atr_data_handles_yfinance_dict_rows(
+    monkeypatch: pytest.MonkeyPatch, yfinance_dict_rows: list[dict[str, float]]
+) -> None:
+    eng = RiskEngine()
+
+    class FallbackClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def get_bars(self, symbol: str, limit: int):
+            self.calls.append((symbol, limit))
+            return yfinance_dict_rows
+
+    client = FallbackClient()
+    eng.ctx = types.SimpleNamespace(data_client=client)
+
+    def _raise(*_args, **_kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr("ai_trading.risk.engine.safe_get_stock_bars", _raise)
+
+    atr = eng._get_atr_data("AAPL", lookback=14)
+    assert atr is not None and atr > 0
+    assert client.calls and client.calls[-1][0] == "AAPL"
+
+
+def test_get_atr_data_handles_simple_list_rows(
+    monkeypatch: pytest.MonkeyPatch, simple_list_rows: list[list[float]]
+) -> None:
+    eng = RiskEngine()
+
+    class FallbackClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int]] = []
+
+        def get_bars(self, symbol: str, limit: int):
+            self.calls.append((symbol, limit))
+            return simple_list_rows
+
+    client = FallbackClient()
+    eng.ctx = types.SimpleNamespace(data_client=client)
+
+    def _raise(*_args, **_kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr("ai_trading.risk.engine.safe_get_stock_bars", _raise)
+
+    atr = eng._get_atr_data("AAPL", lookback=14)
+    assert atr is not None and atr > 0
+    assert client.calls and client.calls[-1][0] == "AAPL"
