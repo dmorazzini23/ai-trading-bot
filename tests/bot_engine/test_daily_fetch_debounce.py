@@ -7,6 +7,7 @@ import sys
 import types
 
 import pytest
+from ai_trading.data.fetch.normalize import normalize_ohlcv_df
 from ai_trading.utils.lazy_imports import load_pandas
 
 pytest.importorskip("pandas")
@@ -196,6 +197,107 @@ def test_daily_fetch_memo_handles_generator_factory():
     assert empty_key not in fetch_module._daily_memo
 
     fetch_module._daily_memo.clear()
+
+
+def test_get_daily_df_memoized_reuses_generator_result(monkeypatch):
+    from ai_trading.core import daily_fetch_memo as memo_module
+
+    memo_module.clear_memo()
+
+    pd = load_pandas()
+    index = pd.DatetimeIndex(["2024-01-01"], tz="UTC", name="timestamp")
+    raw_df = pd.DataFrame(
+        {
+            "open": [1.0],
+            "high": [2.0],
+            "low": [0.5],
+            "close": [1.5],
+            "volume": [1000],
+        },
+        index=index,
+    )
+
+    call_count = 0
+
+    def _generator_factory(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        assert args == ("AAPL", "1Day", "2024-01-01", "2024-01-02")
+        assert kwargs == {}
+        yield raw_df
+
+    first = memo_module.get_daily_df_memoized(
+        "AAPL", "1Day", "2024-01-01", "2024-01-02", _generator_factory
+    )
+    pd.testing.assert_frame_equal(first, normalize_ohlcv_df(raw_df))
+    assert call_count == 1
+
+    second = memo_module.get_daily_df_memoized(
+        "AAPL", "1Day", "2024-01-01", "2024-01-02", _generator_factory
+    )
+    assert second is first
+    assert call_count == 1
+
+    memo_module.clear_memo()
+
+
+def test_get_daily_df_memoized_retry_on_stop_iteration(monkeypatch):
+    from ai_trading.core import daily_fetch_memo as memo_module
+
+    memo_module.clear_memo()
+
+    pd = load_pandas()
+    index = pd.DatetimeIndex(["2024-01-01"], tz="UTC", name="timestamp")
+    raw_df = pd.DataFrame(
+        {
+            "open": [3.0],
+            "high": [4.0],
+            "low": [2.5],
+            "close": [3.5],
+            "volume": [2000],
+        },
+        index=index,
+    )
+
+    times = [0.0]
+
+    def _fake_time():
+        return times[0]
+
+    monkeypatch.setattr(memo_module.time, "time", _fake_time)
+
+    call_count = 0
+
+    def _generator_factory(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield raw_df
+            return
+        if False:  # pragma: no cover - generator marker for subsequent calls
+            yield None
+        return
+
+    expected = memo_module.get_daily_df_memoized(
+        "MSFT", "1Day", "2024-01-01", "2024-01-02", _generator_factory
+    )
+    pd.testing.assert_frame_equal(expected, normalize_ohlcv_df(raw_df))
+    assert call_count == 1
+
+    times[0] = memo_module._TTL_S + 0.5
+    retry = memo_module.get_daily_df_memoized(
+        "MSFT", "1Day", "2024-01-01", "2024-01-02", _generator_factory
+    )
+    assert call_count == 3
+    assert retry is expected
+
+    third = memo_module.get_daily_df_memoized(
+        "MSFT", "1Day", "2024-01-01", "2024-01-02", _generator_factory
+    )
+    assert third is expected
+    assert call_count == 3
+
+    memo_module.clear_memo()
 
 
 def test_daily_missing_columns_error_sticky(monkeypatch):

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import time
+from contextlib import suppress
 from dataclasses import dataclass
+from types import GeneratorType
 from typing import Any, Dict, Tuple
 
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
@@ -33,20 +35,59 @@ def get_daily_df_memoized(
     if entry and (now - entry.ts) < _TTL_S:
         return entry.df
 
-    if callable(df_or_factory):
+    last_good_df = entry.df if entry else None
+
+    factory_callable = callable(df_or_factory)
+
+    def _invoke_factory() -> Any:
+        if not factory_callable:
+            return df_or_factory
         try:
-            df = df_or_factory(symbol, timeframe, start, end)
+            return df_or_factory(symbol, timeframe, start, end)
         except TypeError:
-            df = df_or_factory()
-    else:
-        df = df_or_factory
+            return df_or_factory()
+
+    attempts = 0
+    while True:
+        attempts += 1
+        stop_iteration = False
+        try:
+            candidate = _invoke_factory()
+        except StopIteration:
+            stop_iteration = True
+            candidate = None
+
+        if isinstance(candidate, GeneratorType):
+            generator = candidate
+            try:
+                candidate = next(generator)
+            except StopIteration:
+                stop_iteration = True
+                candidate = None
+            finally:
+                with suppress(Exception):
+                    generator.close()
+
+        if stop_iteration:
+            _MEMO.pop(key, None)
+            if (not factory_callable) or attempts >= 2:
+                if last_good_df is not None:
+                    refreshed_at = time.time()
+                    _MEMO[key] = _MemoEntry(refreshed_at, key, last_good_df)
+                    return last_good_df
+                return None
+            continue
+
+        df = candidate
+        break
 
     try:
         normalized = normalize_ohlcv_df(df)
     except Exception:
         normalized = df
 
-    _MEMO[key] = _MemoEntry(now, key, normalized)
+    refreshed_at = time.time()
+    _MEMO[key] = _MemoEntry(refreshed_at, key, normalized)
     return normalized
 
 
