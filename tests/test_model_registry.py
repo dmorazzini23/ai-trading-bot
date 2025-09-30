@@ -188,11 +188,32 @@ class TestModelRegistry:
             m2 = registry.register_model({"b": 2}, "s2", "t2")
             assert sorted(registry.list_models()) == sorted([m1, m2])
 
-    def test_duplicate_registration(self):
-        """registering the same model twice should raise ValueError."""
+    def test_sequential_registration_updates_latest(self):
+        """Sequential registrations of identical payloads should succeed."""
         with tempfile.TemporaryDirectory() as temp_dir:
             registry = ModelRegistry(temp_dir)
             model = {"a": 1}
-            registry.register_model(model, "s", "t")
-            with pytest.raises(ValueError, match="already registered"):
-                registry.register_model(model, "s", "t")
+
+            first_id = registry.register_model(
+                model,
+                "s",
+                "t",
+                metadata={"version": 1},
+            )
+            second_id = registry.register_model(
+                model,
+                "s",
+                "t",
+                metadata={"version": 2},
+            )
+
+            assert first_id != second_id
+
+            latest_id = registry.latest_for("s", "t")
+            assert latest_id == second_id
+
+            _old_model, old_meta = registry.load_model(first_id)
+            assert old_meta["version"] == 1
+
+            _new_model, new_meta = registry.load_model(second_id)
+            assert new_meta["version"] == 2

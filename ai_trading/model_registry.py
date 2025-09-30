@@ -315,10 +315,6 @@ class ModelRegistry:
         payload, pickler_name = self._serialise_model(model)
         model_hash = hashlib.sha256(payload).hexdigest()
 
-        for existing in self.model_index.values():
-            if existing.get("model_hash") == model_hash:
-                raise ValueError("Model already registered")
-
         registered_at = datetime.now(UTC)
         dataset_fp = str(dataset_fingerprint) if dataset_fingerprint is not None else None
 
