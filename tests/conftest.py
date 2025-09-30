@@ -4,6 +4,7 @@ import os
 import sys as _sys
 
 import asyncio
+import importlib
 import random
 import socket
 import sys
@@ -11,10 +12,26 @@ from datetime import datetime, timezone
 import pathlib
 import types
 
+_STUB_PATH = pathlib.Path(__file__).resolve().parent / "stubs"
+_STUB_PATH_STR = str(_STUB_PATH)
+
 if "dotenv" not in sys.modules:
-    dotenv_stub = types.ModuleType("dotenv")
-    dotenv_stub.load_dotenv = lambda *args, **kwargs: None
-    sys.modules["dotenv"] = dotenv_stub
+    removed_stub_for_dotenv = False
+    if _STUB_PATH_STR in _sys.path:
+        _sys.path.remove(_STUB_PATH_STR)
+        removed_stub_for_dotenv = True
+
+    try:
+        dotenv_mod = importlib.import_module("dotenv")
+    except ModuleNotFoundError:
+        dotenv_stub = types.ModuleType("dotenv")
+        dotenv_stub.load_dotenv = lambda *args, **kwargs: None
+        sys.modules["dotenv"] = dotenv_stub
+    else:
+        sys.modules["dotenv"] = dotenv_mod
+    finally:
+        if removed_stub_for_dotenv:
+            _sys.path.append(_STUB_PATH_STR)
 
 import pytest
 
