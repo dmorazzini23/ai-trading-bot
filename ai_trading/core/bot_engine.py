@@ -12533,48 +12533,53 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     fallback_error: str | None = None
 
     if data_client is not None:
-        try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
-            quote = data_client.get_stock_latest_quote(req)
-        except APIError as exc:
-            fallback_reason = "api_error"
-            fallback_error = str(exc)
-        except Exception as exc:
-            fallback_reason = exc.__class__.__name__
-            fallback_error = str(exc)
+        _ensure_alpaca_classes()
+        if _ALPACA_IMPORT_ERROR is not None or StockLatestQuoteRequest is None:
+            fallback_reason = "quote_source_unavailable"
+            fallback_error = "alpaca_sdk_missing"
         else:
             try:
-                ask = getattr(quote, "ask_price", None)
-                bid = getattr(quote, "bid_price", None)
-                if ask is None or bid is None:
-                    if isinstance(quote, dict):
-                        ask = quote.get("ask_price", quote.get("ap", ask))
-                        bid = quote.get("bid_price", quote.get("bp", bid))
-                        if (ask is None or bid is None) and symbol in quote:
-                            nested = quote.get(symbol) or {}
-                            if isinstance(nested, dict):
-                                ask = nested.get("ask_price", nested.get("ap", ask))
-                                bid = nested.get("bid_price", nested.get("bp", bid))
-                try:
-                    ask_f = float(ask) if ask is not None else 0.0
-                    bid_f = float(bid) if bid is not None else 0.0
-                except (TypeError, ValueError):
-                    ask_f = bid_f = 0.0
-                spread = (ask_f - bid_f) if (ask_f > 0 and bid_f > 0) else 0.0
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as exc:
-                fallback_reason = "quote_parse_error"
+                req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+                quote = data_client.get_stock_latest_quote(req)
+            except APIError as exc:
+                fallback_reason = "api_error"
+                fallback_error = str(exc)
+            except Exception as exc:
+                fallback_reason = exc.__class__.__name__
                 fallback_error = str(exc)
             else:
-                quote_available = True
+                try:
+                    ask = getattr(quote, "ask_price", None)
+                    bid = getattr(quote, "bid_price", None)
+                    if ask is None or bid is None:
+                        if isinstance(quote, dict):
+                            ask = quote.get("ask_price", quote.get("ap", ask))
+                            bid = quote.get("bid_price", quote.get("bp", bid))
+                            if (ask is None or bid is None) and symbol in quote:
+                                nested = quote.get(symbol) or {}
+                                if isinstance(nested, dict):
+                                    ask = nested.get("ask_price", nested.get("ap", ask))
+                                    bid = nested.get("bid_price", nested.get("bp", bid))
+                    try:
+                        ask_f = float(ask) if ask is not None else 0.0
+                        bid_f = float(bid) if bid is not None else 0.0
+                    except (TypeError, ValueError):
+                        ask_f = bid_f = 0.0
+                    spread = (ask_f - bid_f) if (ask_f > 0 and bid_f > 0) else 0.0
+                except (
+                    FileNotFoundError,
+                    PermissionError,
+                    IsADirectoryError,
+                    JSONDecodeError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    OSError,
+                ) as exc:
+                    fallback_reason = "quote_parse_error"
+                    fallback_error = str(exc)
+                else:
+                    quote_available = True
     else:
         fallback_reason = "missing_client"
 
@@ -14602,12 +14607,17 @@ def _check_fallback_quote_age(
     *,
     max_age: float,
 ) -> tuple[bool, float | None, str | None]:
+    _ensure_alpaca_classes()
+    if _ALPACA_IMPORT_ERROR is not None or StockLatestQuoteRequest is None:
+        logger.warning(
+            "FALLBACK_QUOTE_UNAVAILABLE",
+            extra={"symbol": symbol, "detail": "alpaca_sdk_missing"},
+        )
+        return False, None, "quote_source_unavailable"
     data_client = getattr(ctx, "data_client", None)
     if data_client is None:
         return False, None, "quote_source_unavailable"
     try:
-        if StockLatestQuoteRequest is None:
-            raise RuntimeError("StockLatestQuoteRequest unavailable")
         req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quote = data_client.get_stock_latest_quote(req)
     except Exception as exc:  # noqa: BLE001 - defensive around SDK variations
@@ -14621,7 +14631,7 @@ def _check_fallback_quote_age(
         return False, None, "quote_timestamp_missing"
     age = max(0.0, (datetime.now(UTC) - ts.astimezone(UTC)).total_seconds())
     if age > max_age:
-        return False, age, f"quote_age={age:.1f}s>limit={max_age:.1f}s"
+        return False, age, "fallback_quote_stale"
     return True, age, None
 
 
@@ -14671,10 +14681,12 @@ def _evaluate_data_gating(
             fatal_reasons.append(reason_text)
         fallback_source = fallback_source or fallback_required
         if fallback_source:
+            max_fallback_age = _fallback_quote_max_age_seconds()
             ok, age, reason = _check_fallback_quote_age(
-                ctx, symbol, max_age=_fallback_quote_max_age_seconds()
+                ctx, symbol, max_age=max_fallback_age
             )
             annotations["fallback_quote_ok"] = bool(ok)
+            annotations["fallback_quote_limit"] = max_fallback_age
             if ok:
                 annotations["fallback_quote_age"] = age
                 annotations["fallback_quote_error"] = None
@@ -18349,6 +18361,8 @@ def _fetch_quote(ctx: Any, symbol: str, *, feed: str | None = None) -> Any | Non
 
     try:
         _ensure_alpaca_classes()
+        if _ALPACA_IMPORT_ERROR is not None or StockLatestQuoteRequest is None:
+            raise RuntimeError("StockLatestQuoteRequest unavailable")
         if feed:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol], feed=feed)
         else:

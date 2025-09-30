@@ -92,7 +92,6 @@ def vwap_pegged_submit(
         fetch_minute_df_safe,
         DataFetchError,
         ta,
-        StockLatestQuoteRequest,
         LimitOrderRequest,
         OrderSide,
         TimeInForce,
@@ -105,6 +104,7 @@ def vwap_pegged_submit(
         SLIPPAGE_LOG_FILE,
         safe_submit_order,
     )
+    from ai_trading.core import bot_engine as _bot_engine
 
     start_time = pytime.time()
     placed = 0
@@ -119,7 +119,13 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).iloc[-1]
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            _bot_engine._ensure_alpaca_classes()
+            if (
+                _bot_engine._ALPACA_IMPORT_ERROR is not None
+                or _bot_engine.StockLatestQuoteRequest is None
+            ):
+                raise RuntimeError("StockLatestQuoteRequest unavailable")
+            req = _bot_engine.StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (
                 (quote.ask_price - quote.bid_price)
@@ -138,6 +144,7 @@ def vwap_pegged_submit(
             KeyError,
             TypeError,
             OSError,
+            RuntimeError,
         ) as _:
             spread = 0.0
         if spread > 0.05:
@@ -331,11 +338,11 @@ def pov_submit(
     from ai_trading.core.bot_engine import (
         fetch_minute_df_safe,
         DataFetchError,
-        StockLatestQuoteRequest,
         Quote,
         APIError,
         submit_order,
     )
+    from ai_trading.core import bot_engine as _bot_engine
     import random
 
     import os as _os
@@ -388,7 +395,13 @@ def pov_submit(
         retries = 0
         interval = cfg.sleep_interval
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            _bot_engine._ensure_alpaca_classes()
+            if (
+                _bot_engine._ALPACA_IMPORT_ERROR is not None
+                or _bot_engine.StockLatestQuoteRequest is None
+            ):
+                raise RuntimeError("StockLatestQuoteRequest unavailable")
+            req = _bot_engine.StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)  # type: ignore[assignment]
             spread = (
                 (quote.ask_price - quote.bid_price)

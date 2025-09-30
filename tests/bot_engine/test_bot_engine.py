@@ -837,7 +837,7 @@ def test_enter_long_blocks_on_stale_fallback_quote(monkeypatch, caplog):
     monkeypatch.setattr(
         bot_engine,
         "_check_fallback_quote_age",
-        lambda *_a, **_k: (False, 86400.0, "quote_age=86400.0s>limit=5.0s"),
+        lambda *_a, **_k: (False, 86400.0, "fallback_quote_stale"),
     )
     monkeypatch.setattr(
         bot_engine,
@@ -869,8 +869,8 @@ def test_enter_long_blocks_on_stale_fallback_quote(monkeypatch, caplog):
     )
 
     quality_meta = state.data_quality.get(symbol, {})
-    assert "quote_age=" in next(iter(quality_meta.get("gate_reasons", ())), "")
-    assert "quote_age=" in quality_meta.get("fallback_quote_error", "")
+    assert "fallback_quote_stale" in tuple(quality_meta.get("gate_reasons", ()))
+    assert quality_meta.get("fallback_quote_error") == "fallback_quote_stale"
 
 
 def test_enter_short_skips_fallback_log_for_alpaca_sources(monkeypatch, caplog):
