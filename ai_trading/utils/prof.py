@@ -128,14 +128,19 @@ class SoftBudget:
         return self._elapsed_ms
 
     def over_budget(self) -> bool:
-        return self.elapsed_ms() >= self.budget_ms
+        self._update_elapsed_state()
+        total_elapsed_ns = (self._elapsed_ms * 1_000_000) + self._fractional_ns
+        budget_ns = self.budget_ms * 1_000_000
+        return total_elapsed_ns >= budget_ns
 
     def remaining(self) -> float:
-        elapsed_ms = self.elapsed_ms()
-        if elapsed_ms >= self.budget_ms:
+        self._update_elapsed_state()
+        budget_ns = self.budget_ms * 1_000_000
+        total_elapsed_ns = (self._elapsed_ms * 1_000_000) + self._fractional_ns
+        if total_elapsed_ns >= budget_ns:
             return 0.0
-        remaining_ms = self.budget_ms - elapsed_ms
-        return round(remaining_ms / 1_000, 3)
+        remaining_ns = budget_ns - total_elapsed_ns
+        return round(remaining_ns / 1_000_000_000, 3)
 
     def over(self) -> bool:  # Backward compatibility
         return self.over_budget()
