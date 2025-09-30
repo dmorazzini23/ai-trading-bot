@@ -14,6 +14,7 @@ import sys
 from ai_trading.logging import get_logger, logger_once
 from ai_trading.alpaca_api import (
     ALPACA_AVAILABLE,
+    TradingClientAdapter,
     get_trading_client_cls,
     get_data_client_cls,
     get_api_error_cls,
@@ -236,7 +237,12 @@ def _validate_trading_api(api: Any) -> bool:
             key="alpaca_trading_client_class_missing",
         )
         return True
-    if not isinstance(api, TradingClient) and not warned_adapter:
+    wrapped_client = getattr(api, "_ai_trading_wrapped_client", None)
+    if isinstance(api, TradingClient):
+        pass
+    elif wrapped_client is not None and isinstance(wrapped_client, TradingClient):
+        pass
+    elif not warned_adapter:
         log_once.warning("ALPACA_API_ADAPTER", key="alpaca_api_adapter")
         warned_adapter = True
     return True
@@ -372,12 +378,13 @@ def _initialize_alpaca_clients() -> bool:
             be.data_client = None
             return False
         try:
-            be.trading_client = AlpacaREST(
+            raw_trading_client = AlpacaREST(
                 api_key=key,
                 secret_key=secret,
                 paper="paper" in str(base_url).lower(),
                 url_override=base_url,
             )
+            be.trading_client = TradingClientAdapter(raw_trading_client)
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
             logger.error("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})
