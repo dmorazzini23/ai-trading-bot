@@ -1,6 +1,7 @@
 import sys
 import types
 from datetime import UTC, datetime, time, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -158,6 +159,51 @@ class TestProcessSymbol:
         assert any(
             record.message == "TRADE_QUOTA_EXHAUSTED_SKIP" for record in caplog.records
         )
+
+
+def test_get_trade_logger_uses_fallback_when_primary_unwritable(monkeypatch, tmp_path):
+    primary_dir = tmp_path / "primary"
+    fallback_dir = tmp_path / "fallback"
+    primary_dir.mkdir()
+    fallback_dir.mkdir()
+    primary_file = primary_dir / "trades.csv"
+    fallback_path = fallback_dir / "trades.csv"
+
+    constructed_paths: list[str] = []
+    primary_dir_resolved = primary_dir.resolve()
+
+    def fake_is_dir_writable(path: str) -> bool:
+        try:
+            resolved = Path(path).resolve()
+        except OSError:
+            resolved = Path(path)
+        if resolved == primary_dir_resolved:
+            return False
+        return True
+
+    class _StubTradeLogger:
+        def __init__(self, path, *args, **kwargs):
+            self.path = str(path)
+            constructed_paths.append(self.path)
+
+    monkeypatch.setattr(bot_engine, "_is_dir_writable", fake_is_dir_writable)
+    monkeypatch.setattr(bot_engine, "TradeLogger", _StubTradeLogger)
+    monkeypatch.setattr(
+        bot_engine,
+        "_compute_user_state_trade_log_path",
+        lambda filename="trades.csv": str(fallback_path),
+    )
+    monkeypatch.setattr(bot_engine, "_TRADE_LOGGER_SINGLETON", None, raising=False)
+    monkeypatch.setattr(bot_engine, "_TRADE_LOG_FALLBACK_PATH", None, raising=False)
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(primary_file), raising=False)
+
+    logger = bot_engine.get_trade_logger()
+
+    assert constructed_paths[0] == str(primary_file)
+    assert constructed_paths[-1] == str(fallback_path)
+    assert logger.path == str(fallback_path)
+    assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
+    assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(fallback_path)
 
 
 def test_trade_logic_uses_fallback_when_primary_disabled(monkeypatch):
