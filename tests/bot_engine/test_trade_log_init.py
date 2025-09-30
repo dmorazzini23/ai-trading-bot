@@ -148,18 +148,65 @@ def test_get_trade_logger_falls_back_when_dir_not_writable(tmp_path, monkeypatch
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
     with caplog.at_level(logging.WARNING):
-        logger_instance = bot_engine.get_trade_logger()
+        with pytest.raises(SystemExit) as excinfo:
+            bot_engine.get_trade_logger()
 
-    fallback_path = state_home / "ai-trading-bot" / log_path.name
-    assert logger_instance.path == str(fallback_path)
+    assert excinfo.value.code == 1
+    fallback_path = Path.cwd() / "logs" / log_path.name
+    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        bot_engine.get_trade_logger()
+        logger_instance = bot_engine.get_trade_logger()
 
-    assert not any(record.message == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
+    assert logger_instance.path == str(fallback_path)
+    assert not any(record.getMessage() == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
+
+
+def test_default_trade_log_path_prefers_local_logs_over_state(tmp_path, monkeypatch):
+    """default_trade_log_path() should prefer ./logs before state fallbacks."""
+
+    workspace = tmp_path / "workspace"
+    logs_dir = workspace / "logs"
+    logs_dir.mkdir(parents=True)
+
+    state_home = tmp_path / "state-home"
+    state_home.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    home_dir = tmp_path / "home-dir"
+    home_dir.mkdir()
+    monkeypatch.setattr(bot_engine.Path, "home", _as_classmethod(home_dir))
+
+    tmp_root = tmp_path / "tmp-root"
+    tmp_root.mkdir()
+    monkeypatch.setattr(bot_engine.tempfile, "gettempdir", lambda: str(tmp_root))
+
+    monkeypatch.setattr(bot_engine.Path, "cwd", _as_classmethod(workspace))
+
+    original_makedirs = bot_engine.os.makedirs
+
+    def fake_makedirs(path: str, *args, **kwargs):  # noqa: D401, ANN001
+        if bot_engine.os.path.abspath(path) == "/var/log/ai-trading-bot":
+            raise PermissionError("mocked permission error")
+        return original_makedirs(path, *args, **kwargs)
+
+    monkeypatch.setattr(bot_engine.os, "makedirs", fake_makedirs)
+
+    original_access = bot_engine.os.access
+
+    def fake_access(path: str, mode: int) -> bool:  # noqa: D401, ANN001
+        if bot_engine.os.path.abspath(path) == "/var/log/ai-trading-bot":
+            return False
+        return original_access(path, mode)
+
+    monkeypatch.setattr(bot_engine.os, "access", fake_access)
+
+    resolved_path = bot_engine.default_trade_log_path()
+
+    assert Path(resolved_path) == logs_dir / "trades.jsonl"
 
 
 def test_get_trade_logger_keeps_child_dir_when_parent_readonly(tmp_path, monkeypatch, caplog, request):
@@ -190,7 +237,52 @@ def test_get_trade_logger_keeps_child_dir_when_parent_readonly(tmp_path, monkeyp
     assert bot_engine.TRADE_LOG_FILE == str(log_path)
     assert bot_engine._TRADE_LOG_FALLBACK_PATH is None
     assert log_path.exists()
-    assert not any(record.message == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
+    assert not any(record.getMessage() == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
+
+
+def test_get_trade_logger_exits_when_env_override_unwritable(tmp_path, monkeypatch, caplog):
+    """Env-configured unwritable paths force a SystemExit and prefer ./logs fallback."""
+
+    workspace = tmp_path / "workspace"
+    logs_dir = workspace / "logs"
+    logs_dir.mkdir(parents=True)
+
+    monkeypatch.chdir(workspace)
+
+    state_home = tmp_path / "state-home"
+    state_home.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+
+    env_dir = tmp_path / "env-target"
+    env_dir.mkdir()
+    env_target = env_dir / "trades.jsonl"
+
+    original_is_dir_writable = bot_engine._is_dir_writable
+
+    def fake_is_dir_writable(path: str) -> bool:  # noqa: D401, ANN001
+        resolved = Path(path).resolve(strict=False)
+        if resolved == env_dir.resolve():
+            return False
+        return original_is_dir_writable(path)
+
+    monkeypatch.setattr(bot_engine, "_is_dir_writable", fake_is_dir_writable)
+
+    monkeypatch.setenv("AI_TRADING_TRADE_LOG_PATH", str(env_target))
+    monkeypatch.setattr(bot_engine, "TRADE_LOG_FILE", str(env_target))
+    bot_engine._TRADE_LOGGER_SINGLETON = None
+    bot_engine._TRADE_LOG_FALLBACK_PATH = None
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(SystemExit) as excinfo:
+            bot_engine.get_trade_logger()
+
+    assert excinfo.value.code == 1
+    expected_path = logs_dir / env_target.name
+    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(expected_path)
+    assert bot_engine.TRADE_LOG_FILE == str(expected_path)
+    assert expected_path.exists()
+
+    assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
 
 
 def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, monkeypatch, caplog):
@@ -233,10 +325,12 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
     with caplog.at_level(logging.WARNING):
-        logger_instance = bot_engine.get_trade_logger()
+        with pytest.raises(SystemExit) as excinfo:
+            bot_engine.get_trade_logger()
 
-    fallback_path = state_home / "ai-trading-bot" / log_path.name
-    assert logger_instance.path == str(fallback_path)
+    assert excinfo.value.code == 1
+    fallback_path = Path.cwd() / "logs" / log_path.name
+    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
     assert not caplog.records
@@ -290,11 +384,13 @@ def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monke
     bot_engine._TRADE_LOGGER_SINGLETON = None
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
-    logger_instance = bot_engine.get_trade_logger()
+    with pytest.raises(SystemExit) as excinfo:
+        bot_engine.get_trade_logger()
 
+    assert excinfo.value.code == 1
     expected_dir = temp_parent / "ai-trading-bot"
     expected_path = expected_dir / log_name
-    assert logger_instance.path == str(expected_path)
+    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(expected_path)
     assert bot_engine.TRADE_LOG_FILE == str(expected_path)
     assert expected_path.exists()
     assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
@@ -361,10 +457,12 @@ def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_pat
     bot_engine._TRADE_LOGGER_SINGLETON = None
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
-    logger_instance = bot_engine.get_trade_logger()
+    with pytest.raises(SystemExit) as excinfo:
+        bot_engine.get_trade_logger()
 
+    assert excinfo.value.code == 1
     fallback_path = state_home / "ai-trading-bot" / log_path.name
-    assert logger_instance.path == str(fallback_path)
+    assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
 
