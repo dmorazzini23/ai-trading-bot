@@ -25,19 +25,56 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int = 120) -> None:
     a fixed interval so tests can set small timeouts without hanging.
     """
     start = pytime.time()
-    interval = 0.2 if timeout <= 1 else 1.0
-    while pytime.time() - start < timeout:
+    interval = 0.2 if timeout <= 1 else min(1.0, max(0.2, timeout / 10))
+    open_statuses = {"new", "accepted", "partially_filled", "pending_new"}
+    last_status = ""
+    last_filled: float | None = None
+    last_qty: float | None = None
+
+    def _coerce_numeric_attr(obj: Any, primary: str, aliases: tuple[str, ...] = ()) -> float | None:
+        names = (primary,) + aliases
+        value: float | None = None
+        for name in names:
+            if not hasattr(obj, name):
+                continue
+            raw = getattr(obj, name)
+            if raw in (None, ""):
+                continue
+            if isinstance(raw, (int, float)):
+                value = float(raw)
+            else:
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    continue
+            for target in names:
+                if hasattr(obj, target):
+                    try:
+                        setattr(obj, target, value)
+                    except Exception:
+                        # Ignore read-only attributes from broker SDKs
+                        pass
+            break
+        return value
+
+    while True:
         try:
             od = ctx.api.get_order(order_id)  # type: ignore[attr-defined]
-            status = getattr(od, "status", "")
-            filled = getattr(od, "filled_qty", "0")
-            if status not in {"new", "accepted", "partially_filled"}:
+            status_raw = getattr(od, "status", "")
+            status = str(status_raw or "").lower()
+            filled = _coerce_numeric_attr(od, "filled_qty", ("filled_quantity",))
+            qty = _coerce_numeric_attr(od, "qty", ("quantity",))
+            last_status = str(status_raw or "")
+            last_filled = filled if filled is not None else last_filled
+            last_qty = qty if qty is not None else last_qty
+            if status not in open_statuses:
                 logger.info(
                     "ORDER_FINAL_STATUS",
                     extra={
                         "order_id": order_id,
-                        "status": status,
-                        "filled_qty": filled,
+                        "status": last_status,
+                        "filled_qty": filled if filled is not None else getattr(od, "filled_qty", "0"),
+                        "qty": qty if qty is not None else getattr(od, "qty", getattr(od, "quantity", "0")),
                     },
                 )
                 return
@@ -57,6 +94,18 @@ def poll_order_fill_status(ctx: Any, order_id: str, timeout: int = 120) -> None:
         if remaining <= 0:
             break
         pytime.sleep(min(interval, remaining))
+
+    if last_status:
+        logger.warning(
+            "ORDER_POLL_TIMEOUT",
+            extra={
+                "order_id": order_id,
+                "status": last_status,
+                "timeout_s": timeout,
+                "filled_qty": last_filled,
+                "qty": last_qty,
+            },
+        )
 
 
 def twap_submit(
