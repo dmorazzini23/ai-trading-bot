@@ -4048,11 +4048,24 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
                 kwargs,
             )
 
-        def execute_order(self, symbol: str, side: OrderSide, qty: int):
+        def execute_order(
+            self,
+            symbol: str,
+            side: OrderSide,
+            qty: int,
+            *args: Any,
+            **kwargs: Any,
+        ) -> types.SimpleNamespace:
             """Simulate an order execution and return a dummy order object."""
-            self.logger("execute_order", symbol, side, qty)
+
+            price = kwargs.pop("price", None)
+            if args:
+                self.logger("execute_order_extra_args", *args)
+            if kwargs:
+                self.logger("execute_order_extra_kwargs", **kwargs)
+            self.logger("execute_order", symbol, side, qty, price=price)
             # Return a simple namespace with an id attribute to mimic a real order
-            return types.SimpleNamespace(id=None)
+            return types.SimpleNamespace(id=None, price=price)
 
         # Provide empty hooks for cycle management used elsewhere in the code
         def start_cycle(self) -> None:

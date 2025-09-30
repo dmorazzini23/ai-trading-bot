@@ -145,5 +145,50 @@ def test_submit_order_execution_error_propagation():
         bot_engine._exec_engine = original_exec_engine
 
 
+def test_submit_order_stub_engine_accepts_price(monkeypatch):
+    """Submit order succeeds when stubbed execution engine receives a price kwarg."""
+
+    import importlib
+    import sys
+    import types
+
+    from unittest.mock import Mock
+
+    # Keep references so we can restore the real modules after exercising the stub.
+    real_execution_module = importlib.import_module("ai_trading.execution")
+
+    # Replace the execution package with a minimal stub that lacks ExecutionEngine
+    # to trigger the fallback branch inside bot_engine during import.
+    sys.modules["ai_trading.execution"] = types.ModuleType("ai_trading.execution")
+    for key in list(sys.modules):
+        if key.startswith("ai_trading.execution."):
+            sys.modules.pop(key)
+
+    try:
+        # Reload bot_engine so it picks up the stubbed execution module.
+        sys.modules.pop("ai_trading.core.bot_engine", None)
+        stub_bot_engine = importlib.import_module("ai_trading.core.bot_engine")
+        stub_bot_engine._exec_engine = stub_bot_engine.ExecutionEngine()
+
+        with patch("ai_trading.core.bot_engine.market_is_open", return_value=True):
+            mock_ctx = Mock(spec=stub_bot_engine.BotContext)
+
+            result = stub_bot_engine.submit_order(
+                mock_ctx,
+                "AAPL",
+                5,
+                "buy",
+                price=123.45,
+            )
+
+        assert hasattr(result, "id")
+        assert result.price == 123.45
+    finally:
+        # Restore the real execution module and reload bot_engine for subsequent tests.
+        sys.modules["ai_trading.execution"] = real_execution_module
+        importlib.reload(real_execution_module)
+        importlib.reload(importlib.import_module("ai_trading.core.bot_engine"))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
