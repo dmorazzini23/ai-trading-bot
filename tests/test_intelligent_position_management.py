@@ -378,6 +378,11 @@ class TestPortfolioCorrelationAnalyzer:
                 self.symbol = symbol; self.qty = qty
                 self.avg_entry_price = avg_entry_price; self.market_value = market_value
 
+        cached_positions = [
+            MockPosition('AAPL', 100, 100.0, 11000.0)
+        ]
+        self.mock_ctx.current_positions = cached_positions
+
         positions = [
             MockPosition('MSFT', 50, 200.0, 10500.0),
             MockPosition('GOOGL', 25, 150.0, 3750.0)
