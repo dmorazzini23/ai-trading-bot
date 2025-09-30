@@ -9,6 +9,11 @@ import sys
 from pathlib import Path
 from importlib import import_module as _import_module
 
+# Ensure a prior ``python -m ai_trading`` run does not leave behind a stale
+# ``ai_trading.__main__`` module entry that would short-circuit lazy exports
+# during package initialization.
+sys.modules.pop(f"{__name__}.__main__", None)
+
 PYTEST_DONT_REWRITE = ["ai_trading"]
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -65,6 +70,4 @@ def __getattr__(name: str):  # pragma: no cover - thin lazy loader
     mod = _import_module(mod_name)
     obj = getattr(mod, attr) if attr else mod
     globals()[name] = obj
-    if not attr:
-        sys.modules.setdefault(name, obj)
     return obj
