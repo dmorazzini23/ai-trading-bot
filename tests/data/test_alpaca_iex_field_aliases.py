@@ -160,6 +160,49 @@ def test_ensure_ohlcv_schema_handles_camelcase_payload(caplog: pytest.LogCapture
     assert pytest.approx(first["volume"]) == payload[0]["totalVolume"]
 
 
+def test_ensure_ohlcv_schema_handles_iex_prefixed_payload(caplog: pytest.LogCaptureFixture):
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "iexOpen": 188.45,
+            "iexHigh": 189.12,
+            "iexLow": 187.3,
+            "iexClose": 188.77,
+            "iexVolume": 1_234_567,
+            "tradeCount": 6421,
+            "vwap": 188.73,
+        }
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        normalized = fetch.ensure_ohlcv_schema(frame, source="alpaca_iex", frequency="1Min")
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
+    first = normalized.iloc[0]
+    assert pytest.approx(first["open"]) == payload[0]["iexOpen"]
+    assert pytest.approx(first["high"]) == payload[0]["iexHigh"]
+    assert pytest.approx(first["low"]) == payload[0]["iexLow"]
+    assert pytest.approx(first["close"]) == payload[0]["iexClose"]
+    assert pytest.approx(first["volume"]) == payload[0]["iexVolume"]
+
+
 def test_ensure_ohlcv_schema_handles_compact_payload():
     payload = [
         {"t": "2024-01-02T09:30:00Z", "o": 188.45, "h": 189.12, "l": 187.3, "c": 188.77, "v": 1_234_567}
