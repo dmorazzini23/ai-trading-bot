@@ -21,6 +21,10 @@ _COLUMN_CANONICAL_MAP = {
     "l": "low",
     "c": "close",
     "v": "volume",
+    "totalvolume": "volume",
+    "volumetotal": "volume",
+    "volume_total": "volume",
+    "total_volume": "volume",
 }
 
 

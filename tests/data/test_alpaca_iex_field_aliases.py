@@ -21,10 +21,10 @@ def _alpaca_iex_raw_frame():
     )
     return pd.DataFrame(
         {
-            "open_price": [188.45],
-            "high_price": [189.12],
-            "low_price": [187.3],
-            "close_price": [188.77],
+            "open": [188.45],
+            "high": [189.12],
+            "low": [187.3],
+            "close": [188.77],
             "volume": [1_234_567],
             "trade_count": [6421],
             "vwap": [188.73],
@@ -72,10 +72,10 @@ def test_get_bars_df_alpaca_iex_columns(monkeypatch: pytest.MonkeyPatch):
     assert list(df.columns) == [
         "symbol",
         "timestamp",
-        "open_price",
-        "high_price",
-        "low_price",
-        "close_price",
+        "open",
+        "high",
+        "low",
+        "close",
         "volume",
         "trade_count",
         "vwap",
@@ -109,10 +109,10 @@ def test_get_daily_df_normalizes_alpaca_iex_columns(monkeypatch: pytest.MonkeyPa
     assert df.index.name == "timestamp"
     assert not df.empty
     first = df.iloc[0]
-    assert pytest.approx(first["open"]) == bars_df.loc[0, "open_price"]
-    assert pytest.approx(first["high"]) == bars_df.loc[0, "high_price"]
-    assert pytest.approx(first["low"]) == bars_df.loc[0, "low_price"]
-    assert pytest.approx(first["close"]) == bars_df.loc[0, "close_price"]
+    assert pytest.approx(first["open"]) == bars_df.loc[0, "open"]
+    assert pytest.approx(first["high"]) == bars_df.loc[0, "high"]
+    assert pytest.approx(first["low"]) == bars_df.loc[0, "low"]
+    assert pytest.approx(first["close"]) == bars_df.loc[0, "close"]
     assert pytest.approx(first["volume"]) == bars_df.loc[0, "volume"]
     assert fetch._FEED_OVERRIDE_BY_TF == {}
 
@@ -125,7 +125,7 @@ def test_ensure_ohlcv_schema_handles_camelcase_payload(caplog: pytest.LogCapture
             "highPrice": 189.12,
             "lowPrice": 187.3,
             "closePrice": 188.77,
-            "volumeTotal": 1_234_567,
+            "totalVolume": 1_234_567,
             "tradeCount": 6421,
             "vwap": 188.73,
         }
@@ -157,7 +157,39 @@ def test_ensure_ohlcv_schema_handles_camelcase_payload(caplog: pytest.LogCapture
     assert pytest.approx(first["high"]) == payload[0]["highPrice"]
     assert pytest.approx(first["low"]) == payload[0]["lowPrice"]
     assert pytest.approx(first["close"]) == payload[0]["closePrice"]
-    assert pytest.approx(first["volume"]) == payload[0]["volumeTotal"]
+    assert pytest.approx(first["volume"]) == payload[0]["totalVolume"]
+
+
+def test_ensure_ohlcv_schema_handles_compact_payload():
+    payload = [
+        {"t": "2024-01-02T09:30:00Z", "o": 188.45, "h": 189.12, "l": 187.3, "c": 188.77, "v": 1_234_567}
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    normalized = fetch.ensure_ohlcv_schema(frame, source="alpaca_iex", frequency="1Min")
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    first = normalized.iloc[0]
+    assert pytest.approx(first["open"]) == payload[0]["o"]
+    assert pytest.approx(first["high"]) == payload[0]["h"]
+    assert pytest.approx(first["low"]) == payload[0]["l"]
+    assert pytest.approx(first["close"]) == payload[0]["c"]
+    assert pytest.approx(first["volume"]) == payload[0]["v"]
 
 
 def test_ensure_ohlcv_schema_logs_payload_columns(caplog: pytest.LogCaptureFixture):

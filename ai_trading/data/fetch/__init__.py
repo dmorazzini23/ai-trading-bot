@@ -1247,6 +1247,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "total_volume",
         "volume_total",
         "volumetotal",
+        "totalvolume",
         "volume_traded",
         "volumetraded",
         "sharevolume",
@@ -2148,7 +2149,7 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
         "high": {"high", "h"},
         "low": {"low", "l"},
         "close": {"close", "c", "price"},
-        "volume": {"volume", "v"},
+        "volume": {"volume", "v", "totalvolume", "volume_total", "total_volume", "volumetotal"},
     }
     for canonical, aliases in alias_groups.items():
         for alias in list(aliases):
@@ -2195,7 +2196,7 @@ def _flatten_and_normalize_ohlcv(
                 "low": {"low", "l"},
                 "close": {"close", "c", "price"},
                 "adj_close": {"adj_close", "adjclose", "adjusted_close"},
-                "volume": {"volume", "v"},
+                "volume": {"volume", "v", "totalvolume", "volume_total", "total_volume", "volumetotal"},
             }
 
             def _normalize_token(token: Any) -> str:
