@@ -1085,6 +1085,92 @@ def _normalize_column_token(value: Any) -> str:
     return normalized
 
 
+def _extract_payload_keys(payload: Any) -> tuple[str, ...]:
+    """Return the set of keys found in a raw payload list or mapping."""
+
+    keys: set[str] = set()
+    if isinstance(payload, Mapping):
+        # Alpaca responses either return a list directly or nest under "bars".
+        candidate = payload.get("bars")
+        if isinstance(candidate, list):
+            payload = candidate
+        elif isinstance(candidate, Mapping):
+            payload = list(candidate.values())
+
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, Mapping):
+                continue
+            for key in item.keys():
+                try:
+                    keys.add(str(key))
+                except Exception:  # pragma: no cover - defensive conversion
+                    continue
+            if len(keys) >= 32:
+                # Prevent unbounded growth on large responses while still
+                # capturing a representative sample of the payload schema.
+                break
+    return tuple(sorted(keys))
+
+
+def _attach_payload_metadata(
+    frame: Any,
+    *,
+    payload: Any | None = None,
+    provider: str | None = None,
+    feed: str | None = None,
+    timeframe: str | None = None,
+    symbol: str | None = None,
+) -> None:
+    """Annotate *frame* with metadata about the originating payload."""
+
+    try:
+        attrs = getattr(frame, "attrs", None)
+    except Exception:  # pragma: no cover - defensive access
+        attrs = None
+    if not isinstance(attrs, dict):
+        return
+
+    try:
+        column_snapshot = tuple(str(col) for col in getattr(frame, "columns", []))
+    except Exception:  # pragma: no cover - defensive conversion
+        column_snapshot = tuple()
+
+    if column_snapshot and "raw_payload_columns" not in attrs:
+        attrs["raw_payload_columns"] = column_snapshot
+    if provider and "raw_payload_provider" not in attrs:
+        attrs["raw_payload_provider"] = provider
+    if feed and "raw_payload_feed" not in attrs:
+        attrs["raw_payload_feed"] = feed
+    if timeframe and "raw_payload_timeframe" not in attrs:
+        attrs["raw_payload_timeframe"] = timeframe
+    if symbol and "raw_payload_symbol" not in attrs:
+        attrs["raw_payload_symbol"] = symbol
+
+    if payload is not None and "raw_payload_keys" not in attrs:
+        keys = _extract_payload_keys(payload)
+        if keys:
+            attrs["raw_payload_keys"] = keys
+            if not hasattr(frame, "_raw_payload_keys"):
+                try:
+                    setattr(frame, "_raw_payload_keys", keys)
+                except Exception:  # pragma: no cover - defensive attribute set
+                    pass
+
+    # Provide a plain attribute fallback for callers that may not propagate
+    # pandas ``attrs`` (for example when serialising/deserialising test frames).
+    if column_snapshot and not hasattr(frame, "_raw_payload_columns"):
+        try:
+            setattr(frame, "_raw_payload_columns", column_snapshot)
+        except Exception:  # pragma: no cover - defensive attribute set
+            pass
+    if symbol and not hasattr(frame, "_raw_payload_symbol"):
+        try:
+            setattr(frame, "_raw_payload_symbol", str(symbol))
+        except Exception:  # pragma: no cover - defensive attribute set
+            pass
+
+
 _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "timestamp": (
         "timestamp",
@@ -1099,36 +1185,53 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "open",
         "o",
         "open_price",
+        "openprice",
         "price_open",
         "opening_price",
         "openvalue",
         "open_val",
+        "openpx",
+        "open_prc",
+        "openprc",
     ),
     "high": (
         "high",
         "h",
         "high_price",
+        "highprice",
         "price_high",
         "max_price",
         "highvalue",
+        "highpx",
+        "high_prc",
+        "highprc",
     ),
     "low": (
         "low",
         "l",
         "low_price",
+        "lowprice",
         "price_low",
         "min_price",
         "lowvalue",
+        "lowpx",
+        "low_prc",
+        "lowprc",
     ),
     "close": (
         "close",
         "c",
         "close_price",
+        "closeprice",
         "price_close",
         "closing_price",
+        "closingprice",
         "last_price",
         "final_price",
         "settle_price",
+        "closepx",
+        "close_prc",
+        "closeprc",
     ),
     "adj_close": (
         "adj close",
@@ -1143,7 +1246,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "share_volume",
         "total_volume",
         "volume_total",
+        "volumetotal",
         "volume_traded",
+        "volumetraded",
+        "sharevolume",
     ),
 }
 
@@ -1220,6 +1326,7 @@ def ensure_ohlcv_schema(
         raise DataFetchError("DATA_FETCH_EMPTY")
 
     work_df = df.copy()
+    _attach_payload_metadata(work_df, provider=source, timeframe=frequency)
 
     rename_map = _alias_rename_map(work_df.columns)
     # `_alias_rename_map` now examines tuple components and underscore tokens so
@@ -1273,9 +1380,92 @@ def ensure_ohlcv_schema(
     required = ["open", "high", "low", "close"]
     missing = [col for col in required if col not in work_df.columns]
     if missing:
-        raise MissingOHLCVColumnsError(
-            f"OHLCV_COLUMNS_MISSING | missing={missing} source={source} frequency={frequency}"
+        def _seq_metadata(frame: Any, attr_name: str, fallback_attr: str) -> tuple[str, ...]:
+            if frame is None:
+                return tuple()
+            try:
+                attrs = getattr(frame, "attrs", None)
+            except Exception:  # pragma: no cover - defensive
+                attrs = None
+            values: Any | None = None
+            if isinstance(attrs, Mapping):
+                values = attrs.get(attr_name)
+            if values is None:
+                values = getattr(frame, fallback_attr, None)
+            if values is None:
+                return tuple()
+            try:
+                return tuple(str(item) for item in values)
+            except Exception:  # pragma: no cover - defensive coercion
+                try:
+                    return tuple(map(str, list(values)))
+                except Exception:
+                    return tuple()
+
+        def _scalar_metadata(frame: Any, attr_name: str) -> str | None:
+            if frame is None:
+                return None
+            try:
+                attrs = getattr(frame, "attrs", None)
+            except Exception:  # pragma: no cover - defensive
+                attrs = None
+            if isinstance(attrs, Mapping):
+                value = attrs.get(attr_name)
+                if value is not None:
+                    try:
+                        return str(value)
+                    except Exception:
+                        return None
+            return None
+
+        payload_columns = (
+            _seq_metadata(work_df, "raw_payload_columns", "_raw_payload_columns")
+            or _seq_metadata(df, "raw_payload_columns", "_raw_payload_columns")
         )
+        payload_keys = (
+            _seq_metadata(work_df, "raw_payload_keys", "_raw_payload_keys")
+            or _seq_metadata(df, "raw_payload_keys", "_raw_payload_keys")
+        )
+        payload_feed = _scalar_metadata(work_df, "raw_payload_feed") or _scalar_metadata(df, "raw_payload_feed")
+        payload_timeframe = _scalar_metadata(work_df, "raw_payload_timeframe") or _scalar_metadata(df, "raw_payload_timeframe")
+        payload_provider = _scalar_metadata(work_df, "raw_payload_provider") or _scalar_metadata(df, "raw_payload_provider")
+        payload_symbol = _scalar_metadata(work_df, "raw_payload_symbol") or _scalar_metadata(df, "raw_payload_symbol")
+
+        extra = {
+            "symbol": payload_symbol,
+            "timeframe": frequency,
+            "missing_columns": missing,
+            "columns": [str(col) for col in getattr(df, "columns", [])],
+            "rows": int(getattr(df, "shape", (0, 0))[0]),
+            "raw_payload_columns": list(payload_columns) if payload_columns else None,
+            "raw_payload_keys": list(payload_keys) if payload_keys else None,
+            "raw_payload_feed": payload_feed,
+            "raw_payload_timeframe": payload_timeframe,
+            "raw_payload_provider": payload_provider,
+            "raw_payload_symbol": payload_symbol,
+        }
+        extra = {k: v for k, v in extra.items() if v is not None}
+        logger.error("OHLCV_COLUMNS_MISSING", extra=extra)
+        reason = "close_column_missing" if "close" in missing else "ohlcv_columns_missing"
+        err = MissingOHLCVColumnsError(reason)
+        setattr(err, "fetch_reason", reason)
+        setattr(err, "missing_columns", tuple(missing))
+        if payload_symbol:
+            setattr(err, "symbol", payload_symbol)
+        setattr(err, "timeframe", frequency)
+        if payload_columns:
+            setattr(err, "raw_payload_columns", payload_columns)
+        if payload_keys:
+            setattr(err, "raw_payload_keys", payload_keys)
+        if payload_feed:
+            setattr(err, "raw_payload_feed", payload_feed)
+        if payload_timeframe:
+            setattr(err, "raw_payload_timeframe", payload_timeframe)
+        if payload_provider:
+            setattr(err, "raw_payload_provider", payload_provider)
+        if payload_symbol:
+            setattr(err, "raw_payload_symbol", payload_symbol)
+        raise err
 
     if "volume" not in work_df.columns:
         work_df["volume"] = 0
@@ -1996,6 +2186,7 @@ def _flatten_and_normalize_ohlcv(
     pd = _ensure_pandas()
     if pd is None:
         return []  # type: ignore[return-value]
+    _attach_payload_metadata(df, symbol=symbol, timeframe=timeframe)
     if isinstance(df.columns, pd.MultiIndex):
         try:
             alias_groups: dict[str, set[str]] = {
@@ -4077,6 +4268,14 @@ def _fetch_bars(
             time.sleep(backoff)
             return _req(session, fallback, headers=headers, timeout=timeout)
         df = pd.DataFrame(data)
+        _attach_payload_metadata(
+            df,
+            payload=data,
+            provider="alpaca",
+            feed=_feed,
+            timeframe=_interval,
+            symbol=symbol,
+        )
         if data:
             _state.pop("empty_attempts", None)
         if df.empty:

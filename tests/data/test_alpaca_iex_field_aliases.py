@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import pytest
@@ -114,3 +115,80 @@ def test_get_daily_df_normalizes_alpaca_iex_columns(monkeypatch: pytest.MonkeyPa
     assert pytest.approx(first["close"]) == bars_df.loc[0, "close_price"]
     assert pytest.approx(first["volume"]) == bars_df.loc[0, "volume"]
     assert fetch._FEED_OVERRIDE_BY_TF == {}
+
+
+def test_ensure_ohlcv_schema_handles_camelcase_payload(caplog: pytest.LogCaptureFixture):
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "openPrice": 188.45,
+            "highPrice": 189.12,
+            "lowPrice": 187.3,
+            "closePrice": 188.77,
+            "volumeTotal": 1_234_567,
+            "tradeCount": 6421,
+            "vwap": 188.73,
+        }
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        normalized = fetch.ensure_ohlcv_schema(frame, source="alpaca_iex", frequency="1Min")
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
+    first = normalized.iloc[0]
+    assert pytest.approx(first["open"]) == payload[0]["openPrice"]
+    assert pytest.approx(first["high"]) == payload[0]["highPrice"]
+    assert pytest.approx(first["low"]) == payload[0]["lowPrice"]
+    assert pytest.approx(first["close"]) == payload[0]["closePrice"]
+    assert pytest.approx(first["volume"]) == payload[0]["volumeTotal"]
+
+
+def test_ensure_ohlcv_schema_logs_payload_columns(caplog: pytest.LogCaptureFixture):
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "volume": 1_000,
+        }
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(fetch.MissingOHLCVColumnsError) as excinfo:
+            fetch.ensure_ohlcv_schema(frame, source="alpaca_iex", frequency="1Min")
+
+    records = [record for record in caplog.records if record.message == "OHLCV_COLUMNS_MISSING"]
+    assert records, "expected OHLCV_COLUMNS_MISSING to be logged"
+    logged = records[-1]
+    assert getattr(logged, "raw_payload_columns", None) == ["t", "volume"]
+    assert getattr(logged, "raw_payload_feed", None) == "iex"
+    assert getattr(logged, "raw_payload_timeframe", None) == "1Min"
+    assert getattr(logged, "raw_payload_symbol", None) == "AAPL"
+    err = excinfo.value
+    assert getattr(err, "raw_payload_columns", None) == ("t", "volume")
+    assert getattr(err, "raw_payload_feed", None) == "iex"
+    assert getattr(err, "raw_payload_symbol", None) == "AAPL"
