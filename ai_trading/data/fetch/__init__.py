@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from contextlib import suppress
 from types import GeneratorType
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Callable
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time
@@ -701,6 +701,42 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
             ),
         )
         _FEED_SWITCH_LOGGED.add(log_key)
+
+
+def _prepare_sip_fallback(
+    symbol: str,
+    timeframe: str,
+    from_feed: str,
+    *,
+    occurrences: int,
+    correlation_id: str | None,
+    push_to_caplog: Callable[..., None],
+    tags_factory: Callable[[], dict[str, str]],
+) -> dict[str, object]:
+    """Record SIP fallback bookkeeping and emit the associated log payload."""
+
+    _record_feed_switch(symbol, timeframe, from_feed, "sip")
+    extra_payload = _norm_extra(
+        {
+            "provider": "alpaca",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "correlation_id": correlation_id,
+            "occurrences": occurrences,
+        }
+    )
+    logger.warning("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
+    try:
+        push_to_caplog("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
+    except Exception:  # pragma: no cover - defensive
+        pass
+    try:
+        tags = tags_factory()
+    except Exception:
+        tags = {}
+    _incr("data.fetch.feed_switch", value=1.0, tags=tags)
+    inc_provider_fallback("alpaca_iex", "alpaca_sip")
+    return extra_payload
 
 
 # Track consecutive empty Alpaca responses across all symbols to temporarily
@@ -4194,22 +4230,15 @@ def _fetch_bars(
                 and _sip_fallback_allowed(session, headers, _interval)
             ):
                 occurrences = _IEX_EMPTY_COUNTS.get(key, 0)
-                _FEED_OVERRIDE_BY_TF[key] = "sip"
-                _record_override(symbol, "sip")
-                _FEED_FAILOVER_ATTEMPTS.setdefault(key, set()).add("sip")
-                extra_payload = _norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "symbol": symbol,
-                        "timeframe": _interval,
-                        "correlation_id": _state.get("corr_id"),
-                        "occurrences": occurrences,
-                    }
+                _prepare_sip_fallback(
+                    symbol,
+                    _interval,
+                    _feed,
+                    occurrences=occurrences,
+                    correlation_id=_state.get("corr_id"),
+                    push_to_caplog=_push_to_caplog,
+                    tags_factory=_tags,
                 )
-                logger.warning("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
-                _push_to_caplog("ALPACA_IEX_FALLBACK_SIP", extra=extra_payload)
-                _incr("data.fetch.feed_switch", value=1.0, tags=_tags())
-                inc_provider_fallback("alpaca_iex", "alpaca_sip")
                 result = _attempt_fallback(
                     (_interval, "sip", _start, _end), skip_metrics=True
                 )
