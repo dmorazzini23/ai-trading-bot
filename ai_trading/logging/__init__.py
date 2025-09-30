@@ -582,12 +582,18 @@ def record_provider_log_suppressed(message: str) -> None:
 
 
 def _drain_provider_log_summaries() -> list[tuple[str, int]]:
+    """Return provider suppression totals that warrant a summary this cycle."""
+
     with _provider_log_lock:
         if not _provider_log_suppressed:
             return []
-        items = list(_provider_log_suppressed.items())
-        _provider_log_suppressed.clear()
-        return items
+
+        ready: list[tuple[str, int]] = []
+        for message, suppressed in list(_provider_log_suppressed.items()):
+            if suppressed >= 3:
+                ready.append((message, suppressed))
+                del _provider_log_suppressed[message]
+        return ready
 
 
 def _flush_provider_log_summaries() -> None:
