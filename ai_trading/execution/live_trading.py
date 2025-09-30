@@ -493,6 +493,8 @@ def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | No
         _format_money(downsized_notional),
     )
     return CapacityCheck(True, max_qty, None)
+from ai_trading.core import bot_engine as _bot_engine
+
 try:  # pragma: no cover - optional dependency
     from alpaca.trading.client import TradingClient as AlpacaREST  # type: ignore
     from alpaca.trading.enums import OrderSide, TimeInForce
@@ -500,6 +502,25 @@ try:  # pragma: no cover - optional dependency
 except (ValueError, TypeError, ModuleNotFoundError, ImportError):
     AlpacaREST = None
     OrderSide = TimeInForce = LimitOrderRequest = MarketOrderRequest = None  # type: ignore[assignment]
+
+
+def _ensure_request_models():
+    """Ensure Alpaca request models are available, falling back to bot_engine stubs."""
+
+    global MarketOrderRequest, LimitOrderRequest, OrderSide, TimeInForce
+
+    _bot_engine._ensure_alpaca_classes()
+
+    if MarketOrderRequest is None:
+        MarketOrderRequest = _bot_engine.MarketOrderRequest
+    if LimitOrderRequest is None:
+        LimitOrderRequest = _bot_engine.LimitOrderRequest
+    if OrderSide is None:
+        OrderSide = _bot_engine.OrderSide
+    if TimeInForce is None:
+        TimeInForce = _bot_engine.TimeInForce
+
+    return MarketOrderRequest, LimitOrderRequest, OrderSide, TimeInForce
 
 
 def _req_str(name: str, v: str | None) -> str:
@@ -1491,7 +1512,8 @@ class ExecutionEngine:
             return self._asset_class_support
 
         support = False
-        for req in (MarketOrderRequest, LimitOrderRequest):
+        market_cls, limit_cls, *_ = _ensure_request_models()
+        for req in (market_cls, limit_cls):
             if req is None:
                 continue
             for candidate in (req, getattr(req, "__init__", None)):
@@ -1897,17 +1919,24 @@ class ExecutionEngine:
             )
             return normalized
 
-        if self.trading_client is None or OrderSide is None or MarketOrderRequest is None or TimeInForce is None:
+        if self.trading_client is None:
             raise RuntimeError("Alpaca TradingClient is not initialized")
 
         # If bracket requested, call submit_order with keyword args to pass nested structures
         order_type = str(order_data.get("type", "limit")).lower()
+        market_cls, limit_cls, side_enum, tif_enum = _ensure_request_models()
+        if side_enum is None or tif_enum is None or market_cls is None or limit_cls is None:
+            raise RuntimeError("Alpaca request models unavailable")
         try:
             if order_data.get("order_class"):
                 resp = self.trading_client.submit_order(**order_data)
             else:
-                side = OrderSide.BUY if str(order_data["side"]).lower() == "buy" else OrderSide.SELL
-                tif = TimeInForce.DAY
+                side = (
+                    side_enum.BUY
+                    if str(order_data["side"]).lower() == "buy"
+                    else side_enum.SELL
+                )
+                tif = tif_enum.DAY
                 common_kwargs = {
                     "symbol": order_data["symbol"],
                     "qty": order_data["quantity"],
@@ -1920,17 +1949,17 @@ class ExecutionEngine:
                     common_kwargs["asset_class"] = asset_class
                 try:
                     if order_type == "market":
-                        req = MarketOrderRequest(**common_kwargs)
+                        req = market_cls(**common_kwargs)
                     else:
-                        req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
+                        req = limit_cls(limit_price=order_data["limit_price"], **common_kwargs)
                 except TypeError as exc:
                     if asset_class and "asset_class" in common_kwargs:
                         common_kwargs.pop("asset_class", None)
                         logger.debug("EXEC_IGNORED_KWARG", extra={"kw": "asset_class", "detail": str(exc)})
                         if order_type == "market":
-                            req = MarketOrderRequest(**common_kwargs)
+                            req = market_cls(**common_kwargs)
                         else:
-                            req = LimitOrderRequest(limit_price=order_data["limit_price"], **common_kwargs)
+                            req = limit_cls(limit_price=order_data["limit_price"], **common_kwargs)
                     else:
                         raise
                 resp = self.trading_client.submit_order(order_data=req)

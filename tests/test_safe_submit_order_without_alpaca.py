@@ -248,3 +248,36 @@ def test_safe_submit_order_without_alpaca_order_data(monkeypatch: pytest.MonkeyP
     assert isinstance(sent_request, bot_engine.MarketOrderRequest)
     assert getattr(sent_request, "symbol", "") == "MSFT"
     assert getattr(sent_request, "qty", 0) == 3
+
+
+def test_live_trading_request_helper_survives_missing_shims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _block_alpaca_imports(monkeypatch)
+
+    import ai_trading.execution.live_trading as live_trading
+
+    importlib.reload(live_trading)
+
+    for name in [m for m in list(sys.modules) if m.startswith("ai_trading.alpaca")]:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    monkeypatch.setattr(live_trading, "MarketOrderRequest", None, raising=False)
+    monkeypatch.setattr(live_trading, "LimitOrderRequest", None, raising=False)
+    monkeypatch.setattr(live_trading, "OrderSide", None, raising=False)
+    monkeypatch.setattr(live_trading, "TimeInForce", None, raising=False)
+
+    market_cls, limit_cls, side_enum, tif_enum = live_trading._ensure_request_models()
+
+    assert market_cls is not None
+    assert limit_cls is not None
+    assert side_enum is not None
+    assert tif_enum is not None
+
+    order = market_cls(
+        symbol="AAPL",
+        qty=1,
+        side=side_enum.BUY if hasattr(side_enum, "BUY") else "buy",
+        time_in_force=tif_enum.DAY if hasattr(tif_enum, "DAY") else "day",
+    )
+    assert getattr(order, "symbol", "") == "AAPL"
