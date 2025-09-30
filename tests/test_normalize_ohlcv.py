@@ -92,6 +92,31 @@ def test_flatten_handles_ticker_multiindex_level1():
     assert not unexpected
 
 
+def test_flatten_backfills_missing_price_columns_from_close():
+    idx = pd.date_range("2024-01-01", periods=2, freq="1D")
+    columns = pd.MultiIndex.from_tuples(
+        [("Close", "AAPL"), ("Adj Close", "AAPL")]
+    )
+    df = pd.DataFrame(
+        [[150.0, 150.5], [151.0, 151.4]],
+        index=idx,
+        columns=columns,
+    )
+
+    try:
+        out = _flatten_and_normalize_ohlcv(df.copy(), symbol="AAPL", timeframe="1Day")
+    except MissingOHLCVColumnsError as exc:  # pragma: no cover - explicit failure path
+        pytest.fail(f"unexpected MissingOHLCVColumnsError: {exc}")
+
+    required = {"open", "high", "low", "close", "volume"}
+    assert required.issubset(out.columns)
+
+    pd.testing.assert_series_equal(out["open"], out["close"], check_names=False)
+    pd.testing.assert_series_equal(out["high"], out["close"], check_names=False)
+    pd.testing.assert_series_equal(out["low"], out["close"], check_names=False)
+    assert (out["volume"] == 0).all()
+
+
 def test_ensure_schema_handles_multiindex_alias_level():
     idx = pd.date_range("2024-01-01", periods=3, freq="1D", tz="UTC")
     level0 = ["Open", "High", "Low", "Close", "Volume"]
