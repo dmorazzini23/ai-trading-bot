@@ -2068,6 +2068,25 @@ def _flatten_and_normalize_ohlcv(
     elif "close" not in df.columns and "adj_close" in df.columns:
         df["close"] = df["adj_close"]
 
+    close_like = None
+    if "close" in df.columns:
+        close_like = df["close"]
+    elif "adj_close" in df.columns:
+        close_like = df["adj_close"]
+
+    if close_like is not None:
+        for column in ("open", "high", "low"):
+            if column not in df.columns:
+                df[column] = close_like
+        if "volume" not in df.columns:
+            try:
+                df["volume"] = pd.Series(0, index=df.index)
+            except Exception:
+                df["volume"] = 0
+
+    normalize_ohlcv_columns(df)
+    df = normalize_ohlcv_df(df)
+
     required = ["open", "high", "low", "close", "volume"]
     missing = [col for col in required if col not in df.columns]
     if missing:
