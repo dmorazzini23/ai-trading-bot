@@ -6,6 +6,7 @@ import numpy as np
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.lazy_imports import (
+    load_pandas,
     load_sklearn_linear_model,
     load_sklearn_pipeline,
     load_sklearn_preprocessing,
@@ -57,6 +58,13 @@ class FeatureBuilder:
 
     def _calculate_rsi(self, close, period: int = 14):
         """Calculate RSI indicator."""
+        pd = load_pandas()
+        if not hasattr(close, "diff"):
+            close = pd.Series(close)
+
+        if not hasattr(close, "diff"):
+            return pd.Series([50.0] * len(close))
+
         delta = close.diff()
         gain = delta.where(delta > 0, 0).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()

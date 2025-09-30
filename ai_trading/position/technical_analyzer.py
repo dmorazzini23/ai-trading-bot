@@ -342,6 +342,16 @@ class TechnicalSignalAnalyzer:
         try:
             if len(prices) < period + 1:
                 return 50.0
+
+            if not hasattr(prices, "diff"):
+                try:
+                    prices = pd.Series(prices)
+                except TypeError:
+                    return 50.0
+
+            if not hasattr(prices, "diff"):
+                return 50.0
+
             deltas = prices.diff()
             gains = deltas.where(deltas > 0, 0)
             losses = -deltas.where(deltas < 0, 0)
