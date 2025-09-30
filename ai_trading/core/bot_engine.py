@@ -2124,6 +2124,13 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
     """Return a user-writable trade log path under the state directory."""
 
     candidates: list[Path] = []
+
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path(BASE_DIR)
+    candidates.append(cwd / "logs")
+
     env_state = os.getenv("XDG_STATE_HOME")
     if env_state:
         expanded = Path(env_state).expanduser()
@@ -2143,12 +2150,6 @@ def _compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:
         tmp_root = None
     if tmp_root and tmp_root.is_absolute():
         candidates.append(tmp_root / "ai-trading-bot")
-
-    try:
-        cwd = Path.cwd()
-    except OSError:
-        cwd = Path(BASE_DIR)
-    candidates.append(cwd / "logs")
 
     basename = Path(filename).name or "trades.jsonl"
     for directory in candidates:
@@ -9998,6 +9999,8 @@ def get_trade_logger() -> TradeLogger:
         # AI-AGENT-REF: respect configured trade log path
         _TRADE_LOGGER_SINGLETON = TradeLogger(TRADE_LOG_FILE)
 
+    fallback_triggered = False
+
     for _ in range(2):
         path = _TRADE_LOGGER_SINGLETON.path
         log_dir = os.path.dirname(path) or "."
@@ -10043,6 +10046,7 @@ def get_trade_logger() -> TradeLogger:
             TRADE_LOG_FILE = new_path
             _TRADE_LOG_FALLBACK_PATH = new_path
             _TRADE_LOGGER_SINGLETON = TradeLogger(new_path)
+            fallback_triggered = True
             continue
         break
 
@@ -10083,6 +10087,8 @@ def get_trade_logger() -> TradeLogger:
                 log_dir,
                 extra={"dir": log_dir, "detail": str(exc)},
             )
+    if fallback_triggered:
+        raise SystemExit(1)
     return _TRADE_LOGGER_SINGLETON
 
 
