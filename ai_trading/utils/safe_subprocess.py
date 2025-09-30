@@ -62,9 +62,9 @@ def safe_subprocess_run(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or "" if exc.stdout is not None else ""
-        stderr = exc.stderr or "" if exc.stderr is not None else ""
-        return SafeSubprocessResult(stdout, stderr, 124, True)
+        stdout_text = _normalize_stream(exc.stdout)
+        stderr_text = _normalize_stream(exc.stderr)
+        return SafeSubprocessResult(stdout_text, stderr_text, 124, True)
     except OSError as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
@@ -76,3 +76,13 @@ def safe_subprocess_run(
         stdout_text = completed.stdout or "" if completed.stdout is not None else ""
         stderr_text = completed.stderr or "" if completed.stderr is not None else ""
         return SafeSubprocessResult(stdout_text, stderr_text, completed.returncode or 0, False)
+
+
+def _normalize_stream(stream: str | bytes | None) -> str:
+    """Return a safe string representation of subprocess output."""
+
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return stream

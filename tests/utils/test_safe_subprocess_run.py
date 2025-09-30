@@ -25,10 +25,11 @@ def test_safe_subprocess_run_timeout(caplog):
     assert not caplog.records  # timeout should not emit warnings
 
 
-def test_safe_subprocess_run_immediate_timeout(caplog):
+@pytest.mark.parametrize("timeout_value", [0, -0.5])
+def test_safe_subprocess_run_immediate_timeout(caplog, timeout_value):
     cmd = [sys.executable, "-c", "print('never runs')"]
     with caplog.at_level("WARNING"):
-        res = safe_subprocess_run(cmd, timeout=0)
+        res = safe_subprocess_run(cmd, timeout=timeout_value)
     assert res.stdout == ""
     assert res.stderr == ""
     assert res.timeout
@@ -75,3 +76,20 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
     assert calls["kwargs"]["check"] is False
     assert calls["kwargs"]["timeout"] == 0.25
     assert not caplog.records
+
+
+def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
+    def fake_run(*args, **kwargs):
+        exc = subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+        exc.stdout = "partial stdout"
+        exc.stderr = "partial stderr"
+        raise exc
+
+    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.run", fake_run)
+
+    res = safe_subprocess_run(["dummy"], timeout=0.25)
+
+    assert res.timeout is True
+    assert res.returncode == 124
+    assert res.stdout == "partial stdout"
+    assert res.stderr == "partial stderr"
