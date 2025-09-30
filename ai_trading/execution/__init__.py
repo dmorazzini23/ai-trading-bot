@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, Tuple
+
 from ai_trading.logging import get_logger
-from ai_trading.config import get_execution_settings
 from ai_trading.utils.env import (
     alpaca_credential_status,
     get_alpaca_base_url,
@@ -16,6 +18,71 @@ _logger = get_logger(__name__)
 from .classes import ExecutionResult, OrderRequest
 from .engine import ExecutionAlgorithm, Order
 from .engine import ExecutionEngine as _SimExecutionEngine
+
+_DEFAULT_PRICE_PROVIDER_ORDER: tuple[str, ...] = (
+    "alpaca_quote",
+    "alpaca_trade",
+    "alpaca_minute_close",
+    "yahoo",
+    "bars",
+)
+
+_DEFAULT_EXECUTION_SETTINGS = SimpleNamespace(
+    mode="sim",
+    shadow_mode=False,
+    order_timeout_seconds=300,
+    slippage_limit_bps=75,
+    price_provider_order=_DEFAULT_PRICE_PROVIDER_ORDER,
+    data_feed_intraday="iex",
+)
+
+
+def _load_execution_settings() -> Tuple[Any, str | None]:
+    """Return execution settings and a fallback reason when defaults are used."""
+
+    fallback = SimpleNamespace(**vars(_DEFAULT_EXECUTION_SETTINGS))
+
+    try:
+        from ai_trading.config import (  # type: ignore[import-not-found]
+            DATA_FEED_INTRADAY as _DATA_FEED_INTRADAY,
+            PRICE_PROVIDER_ORDER as _PRICE_PROVIDER_ORDER,
+            get_execution_settings as _get_execution_settings,
+        )
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency missing
+        missing = getattr(exc, "name", "")
+        if missing in {"pydantic", "pydantic_settings"}:
+            _logger.warning(
+                "EXECUTION_SETTINGS_DEPENDENCY_MISSING",
+                extra={"dependency": missing},
+            )
+            return fallback, "config_dependency_missing"
+        raise
+    except ImportError as exc:  # pragma: no cover - unexpected import failure
+        _logger.error(
+            "EXECUTION_SETTINGS_IMPORT_FAILED",
+            extra={"error": str(exc)},
+        )
+        return fallback, "config_import_failed"
+
+    # Update fallback defaults with values exported from the config module when available.
+    fallback = SimpleNamespace(
+        mode="sim",
+        shadow_mode=False,
+        order_timeout_seconds=300,
+        slippage_limit_bps=75,
+        price_provider_order=tuple(_PRICE_PROVIDER_ORDER),
+        data_feed_intraday=str(_DATA_FEED_INTRADAY or "iex"),
+    )
+
+    try:
+        settings = _get_execution_settings()
+    except Exception as exc:  # pragma: no cover - configuration load failure
+        _logger.error(
+            "EXECUTION_SETTINGS_LOAD_FAILED",
+            extra={"error": str(exc)},
+        )
+        return fallback, "config_load_failed"
+    return settings, None
 
 
 def _missing_creds() -> list[str]:
@@ -36,14 +103,7 @@ def _creds_ok() -> bool:
 def _select_execution_engine() -> type[_SimExecutionEngine]:
     """Return the execution engine class based on runtime configuration."""
 
-    try:
-        settings = get_execution_settings()
-    except Exception as exc:  # pragma: no cover - defensive configuration guard
-        _logger.error(
-            "EXECUTION_SETTINGS_UNAVAILABLE",
-            extra={"error": str(exc)},
-        )
-        settings = None
+    settings, settings_reason = _load_execution_settings()
 
     mode = "sim"
     shadow = False
@@ -59,7 +119,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
     engine_cls: type[_SimExecutionEngine] = _SimExecutionEngine
     engine_class_path = f"{engine_cls.__module__}.{engine_cls.__qualname__}"
     missing_creds: list[str] | None = None
-    reason: str | None = None
+    reason: str | None = settings_reason
 
     has_key, has_secret = alpaca_credential_status()
     base_url = get_alpaca_base_url()
@@ -69,7 +129,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
         try:
             from .live_trading import ExecutionEngine as _LiveExecutionEngine
         except Exception as exc:  # pragma: no cover - runtime guard
-            reason = "import_failed"
+            reason = reason or "import_failed"
             _logger.error(
                 "EXECUTION_ENGINE_IMPORT_FAILED",
                 extra={"mode": normalized_mode, "error": str(exc)},
@@ -87,7 +147,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
                     },
                 )
     elif normalized_mode not in {"sim"}:
-        reason = "mode_unknown"
+        reason = reason or "mode_unknown"
         _logger.warning(
             "EXECUTION_MODE_UNKNOWN",
             extra={"requested_mode": mode},
@@ -101,6 +161,7 @@ def _select_execution_engine() -> type[_SimExecutionEngine]:
             "shadow_mode": shadow,
             "creds_missing": tuple(missing_creds) if missing_creds else None,
             "reason": reason,
+            "settings_fallback": settings_reason,
             "has_key": has_key,
             "has_secret": has_secret,
             "base_url": base_url,
