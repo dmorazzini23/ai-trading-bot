@@ -10014,7 +10014,7 @@ def get_trade_logger() -> TradeLogger:
         # AI-AGENT-REF: respect configured trade log path
         _TRADE_LOGGER_SINGLETON = TradeLogger(TRADE_LOG_FILE)
 
-    fallback_triggered = False
+    fallback_payload: dict[str, object] | None = None
 
     for _ in range(2):
         path = _TRADE_LOGGER_SINGLETON.path
@@ -10061,7 +10061,13 @@ def get_trade_logger() -> TradeLogger:
             TRADE_LOG_FILE = new_path
             _TRADE_LOG_FALLBACK_PATH = new_path
             _TRADE_LOGGER_SINGLETON = TradeLogger(new_path)
-            fallback_triggered = True
+            fallback_payload = {
+                "preferred_path": current_path,
+                "fallback_path": new_path,
+                "reason": fallback_reason,
+            }
+            if fallback_detail:
+                fallback_payload["detail"] = fallback_detail
             continue
         break
 
@@ -10102,8 +10108,12 @@ def get_trade_logger() -> TradeLogger:
                 log_dir,
                 extra={"dir": log_dir, "detail": str(exc)},
             )
-    if fallback_triggered:
-        raise SystemExit(1)
+    if fallback_payload:
+        logger_once.warning(
+            "TRADE_LOGGER_FALLBACK_ACTIVE",
+            key="trade_logger_fallback_active",
+            extra=fallback_payload,
+        )
     return _TRADE_LOGGER_SINGLETON
 
 

@@ -34,9 +34,9 @@ release the port) before relaunching to avoid running duplicate trading loops.
 
 ### Paths & default files
 - Trade log location is controlled by `TRADE_LOG_PATH` (or the legacy `AI_TRADING_TRADE_LOG_PATH`). The packaged systemd unit pins it to `/home/aiuser/ai-trading-bot/logs/trades.jsonl` and creates that directory with `0700` permissions for `aiuser`.
-- Without an override the bot prefers `/var/log/ai-trading-bot/trades.jsonl`; if that directory—or an explicit override—cannot be created or written it first falls back to `./logs/trades.jsonl` relative to the working directory before considering state-directory locations. The fallback directory is created for inspection, but startup now raises `SystemExit(1)` so operators can fix the underlying permissions instead of silently continuing.
+- Without an override the bot prefers `/var/log/ai-trading-bot/trades.jsonl`; if that directory—or an explicit override—cannot be created or written it first falls back to `./logs/trades.jsonl` relative to the working directory before considering state-directory locations. When this happens the process logs `TRADE_LOG_FALLBACK_USER_STATE` and `TRADE_LOGGER_FALLBACK_ACTIVE` once per boot so operators can inspect the condition while the bot continues running.
 - The application initializes this trade log on startup via `ai_trading.core.bot_engine.get_trade_logger()` and trade execution lazily creates it if missing. Custom deployments should call it once if they bypass the standard entrypoint.
-- Startup verifies this trade log path is writable, logs `TRADE_LOG_PATH_READY` with the resolved location, and exits if it cannot be created or if a fallback path was required.
+- Startup verifies this trade log path is writable, logs `TRADE_LOG_PATH_READY` with the resolved location, and exits only when it cannot create any writable location (including the fallback search paths).
 - Empty model path disables ML quietly. Set `MODEL_PATH` to enable.
 - Override cache location with `AI_TRADING_CACHE_DIR` when the default `~/.cache/ai-trading-bot`
   path is not writable (for example, on read-only home directories). The application

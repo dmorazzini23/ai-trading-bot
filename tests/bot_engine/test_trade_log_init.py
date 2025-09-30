@@ -148,21 +148,25 @@ def test_get_trade_logger_falls_back_when_dir_not_writable(tmp_path, monkeypatch
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(SystemExit) as excinfo:
-            bot_engine.get_trade_logger()
+        logger_instance = bot_engine.get_trade_logger()
 
-    assert excinfo.value.code == 1
     fallback_path = Path.cwd() / "logs" / log_path.name
+    assert logger_instance.path == str(fallback_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
+    assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(fallback_path)
     assert fallback_path.exists()
+    messages = [record.getMessage() for record in caplog.records]
+    assert "TRADE_LOG_FALLBACK_USER_STATE" in messages
+    assert "TRADE_LOGGER_FALLBACK_ACTIVE" in messages
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        logger_instance = bot_engine.get_trade_logger()
+        bot_engine.get_trade_logger()
 
-    assert logger_instance.path == str(fallback_path)
-    assert not any(record.getMessage() == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "TRADE_LOG_FALLBACK_USER_STATE" not in messages
+    assert "TRADE_LOGGER_FALLBACK_ACTIVE" not in messages
 
 
 def test_default_trade_log_path_prefers_local_logs_over_state(tmp_path, monkeypatch):
@@ -240,8 +244,8 @@ def test_get_trade_logger_keeps_child_dir_when_parent_readonly(tmp_path, monkeyp
     assert not any(record.getMessage() == "TRADE_LOG_FALLBACK_USER_STATE" for record in caplog.records)
 
 
-def test_get_trade_logger_exits_when_env_override_unwritable(tmp_path, monkeypatch, caplog):
-    """Env-configured unwritable paths force a SystemExit and prefer ./logs fallback."""
+def test_get_trade_logger_falls_back_when_env_override_unwritable(tmp_path, monkeypatch, caplog):
+    """Env-configured unwritable paths fall back to ./logs without exiting."""
 
     workspace = tmp_path / "workspace"
     logs_dir = workspace / "logs"
@@ -273,16 +277,18 @@ def test_get_trade_logger_exits_when_env_override_unwritable(tmp_path, monkeypat
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(SystemExit) as excinfo:
-            bot_engine.get_trade_logger()
+        logger_instance = bot_engine.get_trade_logger()
 
-    assert excinfo.value.code == 1
     expected_path = logs_dir / env_target.name
+    assert logger_instance.path == str(expected_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(expected_path)
     assert bot_engine.TRADE_LOG_FILE == str(expected_path)
     assert expected_path.exists()
-
     assert bot_engine._TRADE_LOG_FALLBACK_PATH == str(expected_path)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "TRADE_LOG_FALLBACK_USER_STATE" in messages
+    assert "TRADE_LOGGER_FALLBACK_ACTIVE" in messages
 
 
 def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, monkeypatch, caplog):
@@ -325,15 +331,16 @@ def test_get_trade_logger_falls_back_on_dir_creation_permission_error(tmp_path, 
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
     with caplog.at_level(logging.WARNING):
-        with pytest.raises(SystemExit) as excinfo:
-            bot_engine.get_trade_logger()
+        logger_instance = bot_engine.get_trade_logger()
 
-    assert excinfo.value.code == 1
     fallback_path = Path.cwd() / "logs" / log_path.name
+    assert logger_instance.path == str(fallback_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
-    assert not caplog.records
+    messages = [record.getMessage() for record in caplog.records]
+    assert "TRADE_LOG_FALLBACK_USER_STATE" in messages
+    assert "TRADE_LOGGER_FALLBACK_ACTIVE" in messages
 
 
 def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monkeypatch):
@@ -384,12 +391,11 @@ def test_trade_log_fallback_uses_tempdir_when_everything_blocked(tmp_path, monke
     bot_engine._TRADE_LOGGER_SINGLETON = None
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
-    with pytest.raises(SystemExit) as excinfo:
-        bot_engine.get_trade_logger()
+    logger_instance = bot_engine.get_trade_logger()
 
-    assert excinfo.value.code == 1
     expected_dir = temp_parent / "ai-trading-bot"
     expected_path = expected_dir / log_name
+    assert logger_instance.path == str(expected_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(expected_path)
     assert bot_engine.TRADE_LOG_FILE == str(expected_path)
     assert expected_path.exists()
@@ -457,18 +463,21 @@ def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_pat
     bot_engine._TRADE_LOGGER_SINGLETON = None
     bot_engine._TRADE_LOG_FALLBACK_PATH = None
 
-    with pytest.raises(SystemExit) as excinfo:
-        bot_engine.get_trade_logger()
+    logger_instance = bot_engine.get_trade_logger()
 
-    assert excinfo.value.code == 1
     fallback_path = state_home / "ai-trading-bot" / log_path.name
+    assert logger_instance.path == str(fallback_path)
     assert bot_engine._TRADE_LOGGER_SINGLETON.path == str(fallback_path)
     assert bot_engine.TRADE_LOG_FILE == str(fallback_path)
     assert fallback_path.exists()
 
     # Ensure once-per-process warning semantics remain intact.
-    assert logger_once_stub.calls and logger_once_stub.calls[0][0] == "TRADE_LOG_FALLBACK_USER_STATE"
+    messages = [call[0] for call in logger_once_stub.calls]
+    assert messages == [
+        "TRADE_LOG_FALLBACK_USER_STATE",
+        "TRADE_LOGGER_FALLBACK_ACTIVE",
+    ]
 
     bot_engine.get_trade_logger()
 
-    assert len(logger_once_stub.calls) == 1
+    assert len(logger_once_stub.calls) == 2
