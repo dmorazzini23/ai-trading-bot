@@ -4,7 +4,11 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
-from ai_trading.data.fetch import MissingOHLCVColumnsError, _flatten_and_normalize_ohlcv
+from ai_trading.data.fetch import (
+    MissingOHLCVColumnsError,
+    _flatten_and_normalize_ohlcv,
+    ensure_ohlcv_schema,
+)
 from ai_trading.data.fetch.normalize import REQUIRED, normalize_ohlcv_df
 
 
@@ -86,3 +90,19 @@ def test_flatten_handles_ticker_multiindex_level1():
     assert {"open", "high", "low", "close", "volume"}.issubset(out.columns)
     unexpected = {col for col in out.columns if isinstance(col, str) and col.startswith("msft_")}
     assert not unexpected
+
+
+def test_ensure_schema_handles_multiindex_alias_level():
+    idx = pd.date_range("2024-01-01", periods=3, freq="1D", tz="UTC")
+    level0 = ["Open", "High", "Low", "Close", "Volume"]
+    level1 = ["AAPL", "MSFT"]
+    columns = pd.MultiIndex.from_product([level0, level1])
+    data = {col: [float(i), float(i) + 1.0, float(i) + 2.0] for i, col in enumerate(columns)}
+    df = pd.DataFrame(data, index=idx)
+
+    try:
+        ensured = ensure_ohlcv_schema(df.copy(), source="fixture", frequency="1Day")
+    except MissingOHLCVColumnsError as exc:  # pragma: no cover - explicit failure path
+        pytest.fail(f"ensure_ohlcv_schema unexpectedly raised: {exc}")
+
+    assert set(REQUIRED).issubset(ensured.columns)
