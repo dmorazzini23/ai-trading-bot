@@ -19717,9 +19717,93 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 def _ensure_execution_engine(runtime) -> None:
     """Ensure an execution engine with check_stops is attached to runtime."""
     try:
-        from ai_trading.execution.engine import ExecutionEngine as _ExecutionEngine  # deferred import
-    except ImportError:
-        _ExecutionEngine = ExecutionEngine  # type: ignore[name-defined]
+        from ai_trading.execution import (
+            ExecutionEngine as _ExecutionEngine,
+            get_execution_runtime_status,
+        )
+    except ImportError as exc:
+        missing_mod = getattr(exc, "name", None)
+        logger_once.error(
+            "EXECUTION_ENGINE_IMPORT_ABORTED",
+            key="execution_engine_import_aborted",
+            extra={
+                "error": str(exc),
+                "missing_module": missing_mod,
+            },
+        )
+        raise RuntimeError(
+            "Execution engine dependencies are unavailable. Install the required runtime "
+            "packages (pydantic, pydantic-settings, alpaca-py) before trading."
+        ) from exc
+
+    status = get_execution_runtime_status()
+    engine_class_path = status.engine_class or ""
+    missing_deps = tuple(status.missing_dependencies)
+    missing_creds = tuple(status.missing_credentials)
+    diagnostics = {
+        "engine_class": engine_class_path or None,
+        "execution_mode": status.mode,
+        "shadow_mode": status.shadow_mode,
+        "missing_dependencies": missing_deps or None,
+        "missing_credentials": missing_creds or None,
+        "reason": status.reason,
+        "settings_fallback": status.settings_fallback,
+    }
+
+    if getattr(_ExecutionEngine, "_IS_STUB", False):
+        logger_once.error(
+            "EXECUTION_ENGINE_STUB_SELECTED",
+            key="execution_engine_stub_selected",
+            extra=diagnostics,
+        )
+        raise RuntimeError(
+            "Execution engine stub detected; install runtime dependencies to restore risk-stop enforcement."
+        )
+
+    if not hasattr(_ExecutionEngine, "check_stops"):
+        logger_once.error(
+            "EXECUTION_ENGINE_MISSING_CHECK_STOPS",
+            key="execution_engine_missing_check_stops",
+            extra=diagnostics,
+        )
+        raise RuntimeError(
+            "Execution engine missing check_stops(); risk-stop enforcement cannot start."
+        )
+
+    expects_live_engine = status.mode in {"paper", "live"}
+    engine_is_live = engine_class_path.startswith("ai_trading.execution.live_trading.")
+    if expects_live_engine and not engine_is_live:
+        logger_once.error(
+            "EXECUTION_ENGINE_LIVE_UNAVAILABLE",
+            key="execution_engine_live_unavailable",
+            extra=diagnostics,
+        )
+        missing_desc = f" missing_dependencies={missing_deps}" if missing_deps else ""
+        creds_desc = f" missing_credentials={missing_creds}" if missing_creds else ""
+        raise RuntimeError(
+            "Live execution requested but the live trading engine was not selected." +
+            f"{missing_desc}{creds_desc}"
+        )
+
+    if expects_live_engine and missing_creds:
+        logger_once.error(
+            "EXECUTION_ENGINE_CREDENTIALS_MISSING",
+            key="execution_engine_credentials_missing",
+            extra=diagnostics,
+        )
+        raise RuntimeError(
+            "Live execution requested but Alpaca credentials are missing."
+        )
+
+    if missing_deps and status.mode in {"paper", "live"}:
+        logger_once.error(
+            "EXECUTION_ENGINE_DEPENDENCY_GAP",
+            key="execution_engine_dependency_gap",
+            extra=diagnostics,
+        )
+        raise RuntimeError(
+            "Execution engine dependencies missing: " + ", ".join(missing_deps)
+        )
 
     global _exec_engine
     exec_engine = getattr(runtime, "execution_engine", None) or getattr(
@@ -19744,12 +19828,11 @@ def _ensure_execution_engine(runtime) -> None:
         runtime.exec_engine = exec_engine
         _exec_engine = exec_engine
     if getattr(exec_engine, "_IS_STUB", False):
-        logger_once.warning(
-            "EXECUTION_ENGINE_STUB_ACTIVE - risk-stop enforcement degraded",
-            key="execution_engine_stub_active",
+        raise RuntimeError(
+            "Execution engine stub detected after initialization; aborting startup."
         )
     if not hasattr(exec_engine, "check_stops"):
-        logger.warning(
+        raise RuntimeError(
             "Execution engine lacks check_stops(); risk-stop checks disabled"
         )
 
