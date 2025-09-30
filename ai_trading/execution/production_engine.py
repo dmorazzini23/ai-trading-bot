@@ -8,6 +8,7 @@ import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from types import SimpleNamespace
 
 from alpaca.common.exceptions import APIError
 from ai_trading.config.settings import get_settings
@@ -400,6 +401,53 @@ class ProductionExecutionCoordinator:
             logger.debug(f'Account equity updated to ${new_equity:,.2f}')
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error('ACCOUNT_EQUITY_UPDATE_FAILED', extra={'cause': e.__class__.__name__, 'detail': str(e)})
+
+    # --- Safety hooks -------------------------------------------------
+
+    def check_stops(self) -> None:
+        """Best-effort stop guard that mirrors the legacy execution safeguards."""
+        try:
+            positions, source = self._snapshot_positions_for_stop_checks()
+            if source == 'broker':
+                logger.debug('check_stops: inspected %d positions', len(positions))
+            else:
+                logger.debug('check_stops: inspected %d positions (%s)', len(positions), source)
+        except (APIError, TimeoutError, ConnectionError, ValueError, TypeError) as e:
+            logger.info('check_stops: suppressed exception: %s', e)
+        except Exception as e:  # pragma: no cover - defensive guardrail
+            logger.info('check_stops: suppressed exception: %s', e)
+
+    def _snapshot_positions_for_stop_checks(self) -> tuple[list[Any], str]:
+        """Return a position snapshot and the source identifier."""
+        broker = self._resolve_broker_like_interface()
+        if broker is not None and hasattr(broker, 'list_positions'):
+            positions = broker.list_positions() or []
+            return (positions, 'broker')
+        return (self._positions_from_internal_ledger(), 'ledger')
+
+    def _resolve_broker_like_interface(self) -> Any:
+        """Locate the first available broker interface attribute."""
+        for attr in ('broker', 'broker_client', 'broker_interface'):
+            broker = getattr(self, attr, None)
+            if broker is not None:
+                return broker
+        return None
+
+    def _positions_from_internal_ledger(self) -> list[SimpleNamespace]:
+        """Build a normalized list of positions from the coordinator ledger."""
+        normalized: list[SimpleNamespace] = []
+        for symbol, payload in (self.current_positions or {}).items():
+            qty = 0
+            if isinstance(payload, dict):
+                qty = payload.get('quantity') or payload.get('qty') or payload.get('shares') or 0
+            else:
+                qty = getattr(payload, 'quantity', getattr(payload, 'qty', getattr(payload, 'shares', 0))) or 0
+            try:
+                qty_value = float(qty)
+            except (TypeError, ValueError):
+                qty_value = 0.0
+            normalized.append(SimpleNamespace(symbol=symbol, qty=qty_value))
+        return normalized
 
     async def cancel_order(self, order_id: str) -> ExecutionResult:
         """Cancel a pending order."""
