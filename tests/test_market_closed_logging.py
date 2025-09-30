@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import time
 import types
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -37,6 +38,11 @@ def test_logs_closed_once_per_date(monkeypatch, caplog):
     monkeypatch.setattr(utils, "_LAST_MARKET_CLOSED_DATE", None)
     monkeypatch.setattr(utils, "_LAST_MARKET_HOURS_LOG", 0.0)
     monkeypatch.setattr(utils, "_LAST_MARKET_STATE", "")
+    monkeypatch.setattr(
+        utils,
+        "_LAST_MARKET_STATE_DATES",
+        {"OPEN": None, "CLOSED": None},
+    )
 
     with caplog.at_level(logging.DEBUG):
         sat = datetime(2024, 1, 6, 10, tzinfo=ZoneInfo("America/New_York"))
@@ -47,6 +53,34 @@ def test_logs_closed_once_per_date(monkeypatch, caplog):
 
     msgs = [r.getMessage() for r in caplog.records if "Detected Market Hours today: CLOSED" in r.getMessage()]
     assert len(msgs) == 2
+
+
+def test_consecutive_closed_days_log_each_day(monkeypatch, caplog):
+    """Ensure closed logs emit on consecutive closed days even without state change."""
+
+    if pd is None:  # pragma: no cover - depends on optional pandas
+        pytest.skip("pandas is required for calendar schedule stubs")
+
+    _install_dummy_calendar(monkeypatch)
+    monkeypatch.setattr(utils, "_LAST_MARKET_CLOSED_DATE", None)
+    monkeypatch.setattr(utils, "_LAST_MARKET_STATE", "CLOSED")
+    monkeypatch.setattr(utils, "_LAST_MARKET_HOURS_LOG", time.time())
+    monkeypatch.setattr(
+        utils,
+        "_LAST_MARKET_STATE_DATES",
+        {"OPEN": None, "CLOSED": datetime(2024, 1, 5, tzinfo=ZoneInfo("America/New_York")).date()},
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        sat = datetime(2024, 1, 6, 10, tzinfo=ZoneInfo("America/New_York"))
+        utils.is_market_open(sat)
+        utils._LAST_MARKET_HOURS_LOG = time.time()
+        sun = datetime(2024, 1, 7, 10, tzinfo=ZoneInfo("America/New_York"))
+        utils.is_market_open(sun)
+
+    msgs = [r.getMessage() for r in caplog.records if "Detected Market Hours today: CLOSED" in r.getMessage()]
+    assert len(msgs) == 2
+    assert utils._LAST_MARKET_STATE_DATES["CLOSED"] == datetime(2024, 1, 7, tzinfo=ZoneInfo("America/New_York")).date()
 
 
 def test_market_closed_sleep_is_capped(monkeypatch, caplog):
