@@ -4036,6 +4036,8 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
         dummy order objects.
         """
 
+        _IS_STUB = True
+
         def __init__(self, *args, **kwargs) -> None:
             # Provide a logger specific to the stub
             self._logger = get_logger(__name__ + ".StubExecutionEngine")
@@ -4077,6 +4079,10 @@ except ImportError:  # pragma: no cover - allow tests with stubbed module
         def check_trailing_stops(self) -> None:
             """Stub method for trailing stops check - used when real execution engine unavailable."""
             self.logger("check_trailing_stops")
+
+        def check_stops(self) -> None:
+            """Mirror the real engine safety hook with a debug no-op."""
+            self.logger("check_stops")
 
 
 try:
@@ -19710,7 +19716,10 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 
 def _ensure_execution_engine(runtime) -> None:
     """Ensure an execution engine with check_stops is attached to runtime."""
-    from ai_trading.execution.engine import ExecutionEngine  # deferred import
+    try:
+        from ai_trading.execution.engine import ExecutionEngine as _ExecutionEngine  # deferred import
+    except ImportError:
+        _ExecutionEngine = ExecutionEngine  # type: ignore[name-defined]
 
     global _exec_engine
     exec_engine = getattr(runtime, "execution_engine", None) or getattr(
@@ -19718,7 +19727,7 @@ def _ensure_execution_engine(runtime) -> None:
     )
     if exec_engine is None:
         try:
-            exec_engine = ExecutionEngine(runtime)
+            exec_engine = _ExecutionEngine(runtime)
             runtime.execution_engine = exec_engine
             runtime.exec_engine = exec_engine
             _exec_engine = exec_engine
@@ -19734,6 +19743,11 @@ def _ensure_execution_engine(runtime) -> None:
         runtime.execution_engine = exec_engine
         runtime.exec_engine = exec_engine
         _exec_engine = exec_engine
+    if getattr(exec_engine, "_IS_STUB", False):
+        logger_once.warning(
+            "EXECUTION_ENGINE_STUB_ACTIVE - risk-stop enforcement degraded",
+            key="execution_engine_stub_active",
+        )
     if not hasattr(exec_engine, "check_stops"):
         logger.warning(
             "Execution engine lacks check_stops(); risk-stop checks disabled"
