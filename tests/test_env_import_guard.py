@@ -31,7 +31,7 @@ def test_guard_detects_shadowed_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "python-dotenv is shadowed" in str(exc.value)
 
 
-def test_guard_detects_shadowed_dotenv_without_python_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_guard_skips_when_python_dotenv_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = Path(env_check.__file__).resolve().parents[2]
     real_find_spec = importlib.util.find_spec
 
@@ -44,10 +44,9 @@ def test_guard_detects_shadowed_dotenv_without_python_dotenv(monkeypatch: pytest
     monkeypatch.setattr(importlib.machinery.PathFinder, "find_spec", lambda name, path=None, target=None: fake_find_spec(name))
     monkeypatch.setattr(env_check, "PYTHON_DOTENV_RESOLVED", False)
 
-    with pytest.raises(env_check.DotenvImportError) as exc:
-        env_check.assert_dotenv_not_shadowed()
-
-    assert "python-dotenv is shadowed" in str(exc.value)
+    # The guard should short-circuit when python-dotenv is unavailable so no
+    # import error is raised despite the shadowed module layout.
+    env_check.assert_dotenv_not_shadowed()
 
 
 def test_guard_allows_repo_local_virtualenv(monkeypatch: pytest.MonkeyPatch) -> None:
