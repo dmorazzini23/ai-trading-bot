@@ -6,6 +6,7 @@ import gc
 import importlib
 import logging
 import os
+import re
 import sys
 import time
 import warnings
@@ -1072,12 +1073,17 @@ def _normalize_column_token(value: Any) -> str:
             if part is None:
                 continue
             try:
-                parts.append(str(part).strip())
+                segment = str(part).strip()
             except Exception:  # pragma: no cover - defensive
                 continue
+            segment = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", segment)
+            segment = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", segment)
+            parts.append(segment)
         token = "_".join(parts)
     else:
         token = str(value).strip()
+        token = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", token)
+        token = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", token)
     lowered = token.lower()
     normalized = lowered.replace(" ", "_").replace("-", "_")
     while "__" in normalized:
@@ -1180,6 +1186,9 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "t",
         "timestamp_utc",
         "timestamp_z",
+        "timestamp_iex",
+        "iex_timestamp",
+        "iex_time",
     ),
     "open": (
         "open",
@@ -1193,6 +1202,14 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "openpx",
         "open_prc",
         "openprc",
+        "open_iex",
+        "iex_open",
+        "openiex",
+        "iexopen",
+        "open_price_iex",
+        "iex_open_price",
+        "openpriceiex",
+        "iexopenprice",
     ),
     "high": (
         "high",
@@ -1205,6 +1222,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "highpx",
         "high_prc",
         "highprc",
+        "high_iex",
+        "iex_high",
+        "highiex",
+        "iexhigh",
     ),
     "low": (
         "low",
@@ -1217,6 +1238,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "lowpx",
         "low_prc",
         "lowprc",
+        "low_iex",
+        "iex_low",
+        "lowiex",
+        "iexlow",
     ),
     "close": (
         "close",
@@ -1232,6 +1257,14 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "closepx",
         "close_prc",
         "closeprc",
+        "close_iex",
+        "iex_close",
+        "closeiex",
+        "iexclose",
+        "close_price_iex",
+        "iex_close_price",
+        "closepriceiex",
+        "iexcloseprice",
     ),
     "adj_close": (
         "adj close",
@@ -1251,6 +1284,14 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "volume_traded",
         "volumetraded",
         "sharevolume",
+        "volume_iex",
+        "iex_volume",
+        "volumeiex",
+        "iexvolume",
+        "total_volume_iex",
+        "iex_total_volume",
+        "totalvolumeiex",
+        "iextotalvolume",
     ),
 }
 
