@@ -9500,8 +9500,9 @@ class SignalManager:
     def signal_momentum(
         self, df: pd.DataFrame, model=None
     ) -> tuple[int, float, str] | None:
+        fallback: tuple[int, float, str] = (-1, 0.0, "momentum")
         if df is None or len(df) <= self.momentum_lookback:
-            return None
+            return fallback
         try:
             df["momentum"] = df["close"].pct_change(
                 self.momentum_lookback, fill_method=None
@@ -9509,11 +9510,12 @@ class SignalManager:
             val = df["momentum"].iloc[-1]
             if math.isnan(val):
                 logger.warning("Momentum indicator NaN, skipping")
-                return None
+                return fallback
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
             if math.isnan(w):
-                return None
+                logger.warning("Momentum weight NaN, using safe default")
+                return fallback
             return s, w, "momentum"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_momentum")
@@ -9522,19 +9524,20 @@ class SignalManager:
     def signal_mean_reversion(
         self, df: pd.DataFrame, model=None
     ) -> tuple[int, float, str] | None:
+        fallback: tuple[int, float, str] = (-1, 0.0, "mean_reversion")
         if df is None or len(df) < self.mean_rev_lookback:
-            return None
+            return fallback
         try:
             ma = df["close"].rolling(self.mean_rev_lookback).mean()
             sd = df["close"].rolling(self.mean_rev_lookback).std()
             if sd.iloc[-1] == 0 or math.isnan(sd.iloc[-1]):
                 logger.warning("Mean reversion invalid rolling stats, skipping")
-                return None
+                return fallback
             df["zscore"] = (df["close"] - ma) / sd
             val = df["zscore"].iloc[-1]
             if math.isnan(val):
                 logger.warning("Mean reversion zscore NaN, skipping")
-                return None
+                return fallback
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
@@ -9542,7 +9545,8 @@ class SignalManager:
             )
             w = min(abs(val) / 3, 1.0)
             if math.isnan(w):
-                return None
+                logger.warning("Mean reversion weight NaN, using safe default")
+                return fallback
             return s, w, "mean_reversion"
         except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_mean_reversion")
