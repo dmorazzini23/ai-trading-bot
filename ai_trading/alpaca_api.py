@@ -330,6 +330,20 @@ class TradingClientAdapter:
         self._ai_trading_wrapped_client = client
         self.__ai_trading_adapter__ = "trading_client"
 
+        if hasattr(client, "list_orders"):
+            self.list_orders = client.list_orders  # type: ignore[assignment]
+        else:
+            orders_shim = self._build_list_orders_shim()
+            if orders_shim is not None:
+                self.list_orders = orders_shim  # type: ignore[assignment]
+
+        if hasattr(client, "list_positions"):
+            self.list_positions = client.list_positions  # type: ignore[assignment]
+        else:
+            positions_shim = self._build_list_positions_shim()
+            if positions_shim is not None:
+                self.list_positions = positions_shim  # type: ignore[assignment]
+
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
 
@@ -340,6 +354,69 @@ class TradingClientAdapter:
 
     def __repr__(self) -> str:  # pragma: no cover - diagnostic aid
         return f"TradingClientAdapter({self._client!r})"
+
+    def _build_list_orders_shim(self):
+        get_orders = getattr(self._client, "get_orders", None)
+        if not callable(get_orders):
+            return None
+
+        try:
+            sig = inspect.signature(get_orders)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            sig = None
+        accepts_status = bool(sig and "status" in sig.parameters)
+        accepts_filter = bool(sig and "filter" in sig.parameters)
+
+        def _list_orders(*args: Any, **kwargs: Any):
+            status = kwargs.pop("status", None)
+            if status is None:
+                return get_orders(*args, **kwargs)
+
+            enum_val: Any = status
+            try:  # pragma: no cover - best effort import
+                enums_mod = __import__("alpaca.trading.enums", fromlist=[""])
+                enum_cls = getattr(enums_mod, "QueryOrderStatus", None) or getattr(
+                    enums_mod, "OrderStatus", None
+                )
+                if enum_cls is not None:
+                    enum_val = getattr(enum_cls, str(status).upper(), status)
+            except Exception:
+                pass
+
+            if accepts_filter:
+                try:
+                    requests_mod = __import__(
+                        "alpaca.trading.requests", fromlist=["GetOrdersRequest"]
+                    )
+                    GetOrdersRequest = getattr(requests_mod, "GetOrdersRequest")
+                except Exception:
+                    GetOrdersRequest = None
+                if GetOrdersRequest is not None:
+                    try:
+                        filter_obj = GetOrdersRequest(statuses=[enum_val])
+                        return get_orders(*args, filter=filter_obj, **kwargs)
+                    except TypeError:
+                        # Fall back to status kwargs below
+                        pass
+
+            if accepts_status:
+                kwargs["status"] = enum_val
+                return get_orders(*args, **kwargs)
+
+            kwargs["status"] = enum_val
+            return get_orders(*args, **kwargs)
+
+        return _list_orders
+
+    def _build_list_positions_shim(self):
+        get_all_positions = getattr(self._client, "get_all_positions", None)
+        if not callable(get_all_positions):
+            return None
+
+        def _list_positions(*_args: Any, **_kwargs: Any):
+            return get_all_positions()
+
+        return _list_positions
 
     def cancel_order(self, order_id: Any) -> Any:
         """Cancel an order by delegating to the wrapped SDK client."""

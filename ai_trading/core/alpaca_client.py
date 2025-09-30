@@ -402,7 +402,7 @@ def _initialize_alpaca_clients() -> bool:
             _set_alpaca_service_available(False)
             return False
         try:
-            AlpacaREST = get_trading_client_cls()
+            trading_client_cls = get_trading_client_cls()
             stock_client_cls = get_data_client_cls()
         except COMMON_EXC as e:
             logger.error("ALPACA_CLIENT_IMPORT_FAILED", extra={"error": str(e)})
@@ -413,14 +413,28 @@ def _initialize_alpaca_clients() -> bool:
             be.trading_client = None
             be.data_client = None
             return False
+        factory_cls = trading_client_cls
+        legacy_module = str(getattr(trading_client_cls, "__module__", ""))
+        if legacy_module.startswith("alpaca_trade_api"):
+            try:
+                from alpaca.trading.client import TradingClient as _NativeTradingClient
+            except Exception:
+                _NativeTradingClient = None
+            if _NativeTradingClient is not None:
+                factory_cls = _NativeTradingClient
         try:
-            raw_trading_client = AlpacaREST(
+            raw_trading_client = factory_cls(
                 api_key=key,
                 secret_key=secret,
                 paper="paper" in str(base_url).lower(),
                 url_override=base_url,
             )
-            be.trading_client = TradingClientAdapter(raw_trading_client)
+            trading_client_obj: Any
+            if isinstance(raw_trading_client, TradingClientAdapter):
+                trading_client_obj = raw_trading_client
+            else:
+                trading_client_obj = TradingClientAdapter(raw_trading_client)
+            be.trading_client = trading_client_obj
             be.data_client = stock_client_cls(api_key=key, secret_key=secret)
         except (APIError, TypeError, ValueError, OSError) as e:
             logger.error("ALPACA_CLIENT_INIT_FAILED", extra={"error": str(e)})

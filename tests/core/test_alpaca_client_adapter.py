@@ -1,6 +1,8 @@
 """Tests for the Alpaca trading client adapter integration."""
 
 import os
+import sys
+from types import ModuleType
 from typing import Any
 
 os.environ.setdefault("PYTEST_RUNNING", "1")
@@ -12,6 +14,7 @@ import ai_trading.util.env_check as env_check
 env_check.assert_dotenv_not_shadowed = lambda: None  # type: ignore[assignment]
 
 from ai_trading.alpaca_api import TradingClientAdapter
+from ai_trading.config.management import reload_trading_config
 from ai_trading.core import alpaca_client
 
 class _StubLogger:
@@ -106,3 +109,76 @@ def test_validate_trading_api_injects_shims_for_get_only_client(
     error_keys = {kwargs.get("key") for _, kwargs in stub_logger.error_calls}
     assert "alpaca_list_orders_patch_failed" not in error_keys
     assert "alpaca_list_positions_patch_failed" not in error_keys
+
+
+def test_initialize_production_config_avoids_adapter_warning(
+    stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production configuration should initialise native TradingClient without warnings."""
+
+    class _ProdTradingClient:
+        __module__ = "alpaca.trading.client"
+
+        def __init__(self, *_, **__):
+            self._orders: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        def get_orders(self, *args: Any, **kwargs: Any) -> list[str]:
+            self._orders.append((args, dict(kwargs)))
+            return ["order"]
+
+        def get_all_positions(self) -> list[str]:
+            return ["position"]
+
+        def cancel_order_by_id(self, order_id: Any) -> dict[str, Any]:
+            return {"id": order_id}
+
+    class _ProdDataClient:
+        def __init__(self, *_, **__):
+            self.initialized = True
+
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_API_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+
+    reload_trading_config()
+
+    monkeypatch.setattr(alpaca_client, "ALPACA_AVAILABLE", True)
+    monkeypatch.setattr(alpaca_client, "get_trading_client_cls", lambda: _ProdTradingClient)
+    monkeypatch.setattr(alpaca_client, "get_data_client_cls", lambda: _ProdDataClient)
+    monkeypatch.setattr(alpaca_client, "get_api_error_cls", lambda: Exception)
+
+    stub_be = ModuleType("ai_trading.core.bot_engine")
+    stub_be.trading_client = None
+    stub_be.data_client = None
+    stub_be._ensure_alpaca_env_or_raise = lambda: (
+        "test-key",
+        "test-secret",
+        "https://api.alpaca.markets",
+    )
+    stub_be._alpaca_diag_info = lambda: {"env": "prod"}
+
+    monkeypatch.setitem(sys.modules, "ai_trading.core.bot_engine", stub_be)
+
+    try:
+        initialised = alpaca_client._initialize_alpaca_clients()
+        assert initialised is True
+
+        trading_client = getattr(stub_be, "trading_client", None)
+        assert isinstance(trading_client, TradingClientAdapter)
+        assert trading_client.list_orders(status="open") == ["order"]
+        assert trading_client.list_positions() == ["position"]
+
+        result = alpaca_client._validate_trading_api(trading_client)
+        assert result is True
+        assert ("ALPACA_API_ADAPTER", {"key": "alpaca_api_adapter"}) not in stub_logger.warning_calls
+    finally:
+        monkeypatch.delenv("APP_ENV", raising=False)
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_API_URL", raising=False)
+        monkeypatch.delenv("EXECUTION_MODE", raising=False)
+        reload_trading_config()
+        stub_be.trading_client = None
+        stub_be.data_client = None
