@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from contextlib import suppress
 from types import GeneratorType
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Callable
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Callable
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time
@@ -1063,6 +1063,107 @@ except ImportError:  # pragma: no cover - optional dependency missing
     _pd_norm_helper = None
 
 
+def _normalize_column_token(value: Any) -> str:
+    """Return a normalized alias key for column *value*."""
+
+    if isinstance(value, tuple):
+        parts: list[str] = []
+        for part in value:
+            if part is None:
+                continue
+            try:
+                parts.append(str(part).strip())
+            except Exception:  # pragma: no cover - defensive
+                continue
+        token = "_".join(parts)
+    else:
+        token = str(value).strip()
+    lowered = token.lower()
+    normalized = lowered.replace(" ", "_").replace("-", "_")
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    return normalized
+
+
+_OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "timestamp": (
+        "timestamp",
+        "time",
+        "datetime",
+        "date",
+        "t",
+        "timestamp_utc",
+        "timestamp_z",
+    ),
+    "open": (
+        "open",
+        "o",
+        "open_price",
+        "price_open",
+        "opening_price",
+        "openvalue",
+        "open_val",
+    ),
+    "high": (
+        "high",
+        "h",
+        "high_price",
+        "price_high",
+        "max_price",
+        "highvalue",
+    ),
+    "low": (
+        "low",
+        "l",
+        "low_price",
+        "price_low",
+        "min_price",
+        "lowvalue",
+    ),
+    "close": (
+        "close",
+        "c",
+        "close_price",
+        "price_close",
+        "closing_price",
+        "last_price",
+        "final_price",
+        "settle_price",
+    ),
+    "adj_close": (
+        "adj close",
+        "adj_close",
+        "adjclose",
+        "adjusted_close",
+        "close_adjusted",
+    ),
+    "volume": (
+        "volume",
+        "v",
+        "share_volume",
+        "total_volume",
+        "volume_total",
+        "volume_traded",
+    ),
+}
+
+_OHLCV_ALIAS_LOOKUP: dict[str, str] = {}
+for canonical, aliases in _OHLCV_COLUMN_ALIASES.items():
+    for alias in aliases:
+        _OHLCV_ALIAS_LOOKUP[_normalize_column_token(alias)] = canonical
+
+
+def _alias_rename_map(columns: Iterable[Any]) -> dict[Any, str]:
+    """Return a mapping of columns that should be renamed to canonical names."""
+
+    rename_map: dict[Any, str] = {}
+    for column in columns:
+        canonical = _OHLCV_ALIAS_LOOKUP.get(_normalize_column_token(column))
+        if canonical is not None:
+            rename_map[column] = canonical
+    return rename_map
+
+
 def ensure_ohlcv_schema(
     df: Any,
     *,
@@ -1090,37 +1191,25 @@ def ensure_ohlcv_schema(
 
     work_df = df.copy()
 
-    rename_map: dict[Any, str] = {}
-    ts_candidates: dict[str, Any] = {}
-    for col in list(work_df.columns):
-        key = str(col).strip().lower()
-        if key in {"timestamp", "time", "datetime", "date", "t"}:
-            ts_candidates.setdefault("timestamp", col)
-            rename_map[col] = "timestamp"
-        elif key in {"open", "o"}:
-            rename_map[col] = "open"
-        elif key in {"high", "h"}:
-            rename_map[col] = "high"
-        elif key in {"low", "l"}:
-            rename_map[col] = "low"
-        elif key in {"close", "c"}:
-            rename_map[col] = "close"
-        elif key in {"adj close", "adj_close", "adjclose", "adjusted_close"}:
-            rename_map[col] = "adj_close"
-        elif key in {"volume", "v"}:
-            rename_map[col] = "volume"
-
+    rename_map = _alias_rename_map(work_df.columns)
     if rename_map:
         work_df = work_df.rename(columns=rename_map)
 
-    timestamp_col = None
+    if hasattr(work_df.columns, "duplicated"):
+        try:
+            work_df = work_df.loc[:, ~work_df.columns.duplicated()]
+        except Exception:  # pragma: no cover - defensive guard
+            pass
+
+    timestamp_col: str | None = None
     if "timestamp" in work_df.columns:
         timestamp_col = "timestamp"
-    elif ts_candidates:
-        # Prefer whichever candidate was recorded first
-        timestamp_col = next(iter(ts_candidates.values()))
-        work_df = work_df.rename(columns={timestamp_col: "timestamp"})
-        timestamp_col = "timestamp"
+    else:
+        for col in list(work_df.columns):
+            if _OHLCV_ALIAS_LOOKUP.get(_normalize_column_token(col)) == "timestamp":
+                work_df = work_df.rename(columns={col: "timestamp"})
+                timestamp_col = "timestamp"
+                break
 
     if timestamp_col is None:
         if isinstance(work_df.index, pd_local.DatetimeIndex):
@@ -5551,16 +5640,6 @@ def get_daily_df(
 ) -> pd.DataFrame:
     """Fetch daily bars and ensure canonical OHLCV columns."""
 
-    rename_map = {
-        "t": "timestamp",
-        "time": "timestamp",
-        "o": "open",
-        "h": "high",
-        "l": "low",
-        "c": "close",
-        "v": "volume",
-    }
-
     use_alpaca = should_import_alpaca_sdk()
 
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
@@ -5618,13 +5697,32 @@ def get_daily_df(
         return df
 
     if isinstance(df, pd_mod.DataFrame):
-        if "timestamp" not in df.columns and getattr(df.index, "name", None) in {
-            "t",
-            "time",
-            "timestamp",
-        }:
-            df = df.reset_index().rename(columns={df.index.name: "timestamp"})
-        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+        if "timestamp" not in df.columns:
+            index_names: list[Any] = []
+            try:
+                if isinstance(df.index, pd_mod.MultiIndex):
+                    index_names = [name for name in df.index.names if name is not None]
+                else:
+                    index_names = [getattr(df.index, "name", None)]
+            except Exception:  # pragma: no cover - defensive fallback
+                index_names = [getattr(df.index, "name", None)]
+
+            for index_name in index_names:
+                if index_name is None:
+                    continue
+                if _OHLCV_ALIAS_LOOKUP.get(_normalize_column_token(index_name)) == "timestamp":
+                    df = df.reset_index().rename(columns={index_name: "timestamp"})
+                    break
+
+        alias_map = _alias_rename_map(df.columns)
+        if alias_map:
+            df = df.rename(columns=alias_map)
+
+        if hasattr(df.columns, "duplicated"):
+            try:
+                df = df.loc[:, ~df.columns.duplicated()]
+            except Exception:  # pragma: no cover - defensive guard
+                pass
     try:
         df = ensure_ohlcv_schema(
             df,
