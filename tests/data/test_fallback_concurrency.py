@@ -298,7 +298,7 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
     assert any(value is None for value in results.values())
     assert failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 0
 
 
 def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release():
@@ -367,8 +367,78 @@ def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release(
     assert any(value is None for value in results.values())
     assert failed
     assert max_seen == 1
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 1
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 0
     assert host_semaphore._held == 0
+
+
+def test_run_with_concurrency_back_to_back_host_limit_runs_reset_peak(monkeypatch):
+    class TrackingSemaphore(asyncio.Semaphore):
+        def __init__(self, value: int):
+            super().__init__(value)
+            self._initial_value = value
+            self._held = 0
+
+        async def acquire(self) -> bool:  # type: ignore[override]
+            await super().acquire()
+            self._held += 1
+            return True
+
+        def release(self) -> None:  # type: ignore[override]
+            if self._held <= 0:
+                raise AssertionError("release called without a matching acquire")
+            self._held -= 1
+            super().release()
+            if self._value > self._initial_value:
+                raise AssertionError(
+                    f"Semaphore value exceeded initial limit: {self._value} > {self._initial_value}"
+                )
+
+    symbols = [f"SEQ{i}" for i in range(6)]
+
+    async def run_once(limit: int, *, timeout: float | None = None) -> tuple[int, TrackingSemaphore]:
+        tracker_lock = asyncio.Lock()
+        running = 0
+        max_seen = 0
+
+        async def worker(sym: str) -> str:
+            nonlocal running, max_seen
+            async with tracker_lock:
+                running += 1
+                if running > max_seen:
+                    max_seen = running
+            try:
+                await asyncio.sleep(0.1)
+                return sym
+            finally:
+                async with tracker_lock:
+                    running -= 1
+
+        semaphore = TrackingSemaphore(limit)
+
+        monkeypatch.setattr(concurrency, "_get_effective_host_limit", lambda: limit)
+        monkeypatch.setattr(concurrency, "_get_host_limit_semaphore", lambda: semaphore)
+
+        await concurrency.run_with_concurrency(
+            symbols,
+            worker,
+            max_concurrency=5,
+            timeout_s=timeout,
+        )
+
+        return max_seen, semaphore
+
+    async def orchestrate() -> None:
+        max_seen_timeout, timeout_semaphore = await run_once(1, timeout=0.05)
+        assert max_seen_timeout == 1
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 0
+        assert timeout_semaphore._held == 0
+
+        max_seen_success, success_semaphore = await run_once(3)
+        assert max_seen_success == 3
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+        assert success_semaphore._held == 0
+
+    asyncio.run(orchestrate())
 
 
 def test_run_with_concurrency_rebinds_nested_dataclass_lock():
