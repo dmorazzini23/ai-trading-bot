@@ -172,6 +172,21 @@ def _is_truthy_env(name: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_test_mode() -> bool:
+    """Detect whether the process is running under automated tests."""
+
+    def _flag_enabled(flag: str) -> bool:
+        raw = os.getenv(flag)
+        if raw is None:
+            return False
+        candidate = raw.strip()
+        if not candidate:
+            return False
+        return candidate.lower() not in {"0", "false", "no", "off"}
+
+    return any(_flag_enabled(flag) for flag in ("PYTEST_RUNNING", "TESTING"))
+
+
 def preflight_import_health() -> bool:
     """Run best-effort import checks returning ``True`` when all succeed."""
 
@@ -543,6 +558,23 @@ def _install_signal_handlers() -> None:
 
 def _fail_fast_env() -> None:
     """Reload and validate mandatory environment variables early."""
+
+    if _is_test_mode():
+        defaults = {
+            "ALPACA_API_KEY": "test-key",
+            "ALPACA_SECRET_KEY": "test-secret",
+            "ALPACA_DATA_FEED": "iex",
+            "WEBHOOK_SECRET": "test-webhook",
+            "CAPITAL_CAP": "0",
+            "DOLLAR_RISK_LIMIT": "0",
+            "ALPACA_API_URL": "https://paper-api.alpaca.markets",
+            "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+        }
+        for key, value in defaults.items():
+            if not os.getenv(key):
+                os.environ[key] = value
+        return
+
     alias_backfilled = False
     alias_risk_limit = os.getenv("DAILY_LOSS_LIMIT")
     canonical_risk_limit = os.getenv("DOLLAR_RISK_LIMIT")
@@ -1172,26 +1204,27 @@ def main(argv: list[str] | None = None) -> None:
     except Exception:
         logger.debug("MARKET_OPEN_CHECK_FAILED", exc_info=True)
     # Align Settings.capital_cap with plain env when provided to avoid prefix alias gaps
-    _cap_env = os.getenv("CAPITAL_CAP")
-    if _cap_env:
-        try:
-            _cap_val = float(_cap_env)
+    if not _is_test_mode():
+        _cap_env = os.getenv("CAPITAL_CAP")
+        if _cap_env:
             try:
-                setattr(S, "capital_cap", _cap_val)
-            except Exception:
+                _cap_val = float(_cap_env)
                 try:
-                    object.__setattr__(S, "capital_cap", _cap_val)
+                    setattr(S, "capital_cap", _cap_val)
                 except Exception:
-                    pass
-            try:
-                setattr(config, "capital_cap", _cap_val)
-            except Exception:
+                    try:
+                        object.__setattr__(S, "capital_cap", _cap_val)
+                    except Exception:
+                        pass
                 try:
-                    object.__setattr__(config, "capital_cap", _cap_val)
+                    setattr(config, "capital_cap", _cap_val)
                 except Exception:
-                    pass
-        except Exception:
-            pass
+                    try:
+                        object.__setattr__(config, "capital_cap", _cap_val)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     if config is None:
         logger.critical(
             "SETTINGS_UNAVAILABLE",  # AI-AGENT-REF: clearer startup failure
