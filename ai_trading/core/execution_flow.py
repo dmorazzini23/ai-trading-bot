@@ -532,8 +532,11 @@ def pov_submit(
             "partial_fills": partial_fill_summaries,
         }
         logger.info("POV_PARTIAL_FILL_SUMMARY", extra=summary_payload)
-        if hasattr(ctx, "partial_fill_tracker") and isinstance(ctx.partial_fill_tracker, dict):
-            ctx.partial_fill_tracker[symbol] = summary_payload
+        tracker = getattr(ctx, "partial_fill_tracker", None)
+        if not isinstance(tracker, dict):
+            tracker = {}
+            setattr(ctx, "partial_fill_tracker", tracker)
+        tracker[symbol] = summary_payload
     logger.info(
         "POV_SUBMIT_COMPLETE",
         extra={"symbol": symbol, "placed": placed, "intended_total": intended_total},
