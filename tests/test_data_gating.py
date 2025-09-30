@@ -139,7 +139,10 @@ def test_fallback_quote_age_blocks_when_stale(monkeypatch):
     )
 
     assert decision.block
-    assert any("quote" in reason for reason in decision.reasons)
+    assert "fallback_quote_stale" in decision.reasons
+    assert decision.annotations.get("fallback_quote_error") == "fallback_quote_stale"
+    assert decision.annotations.get("fallback_quote_ok") is False
+    assert decision.annotations.get("fallback_quote_limit") == pytest.approx(1.0)
 
 
 def test_gap_limit_env_override(monkeypatch):
