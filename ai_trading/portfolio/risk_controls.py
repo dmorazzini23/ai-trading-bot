@@ -19,6 +19,12 @@ def _import_clustering():
     S = get_settings()
     if not S.ENABLE_PORTFOLIO_FEATURES:
         return (None, None, None, False)
+    try:
+        from scipy.cluster.hierarchy import fcluster, linkage
+        from scipy.spatial.distance import squareform
+    except ImportError:
+        return (None, None, None, False)
+    return (fcluster, linkage, squareform, True)
 logger = get_logger(__name__)
 
 @dataclass
