@@ -79,6 +79,29 @@ def test_load_real_model():
     assert pred in [0, 1]
 
 
+def test_load_ml_model_uses_cached_registry(monkeypatch):
+    class DummyModel:
+        def predict(self, X):  # pragma: no cover - simple stub
+            return X
+
+        def predict_proba(self, X):  # pragma: no cover - simple stub
+            return X
+
+    cached_model = DummyModel()
+
+    def fail_load(symbol: str):  # pragma: no cover - should not be invoked
+        raise AssertionError("load_model should not be called when cache is primed")
+
+    monkeypatch.setattr(model_loader, "load_model", fail_load)
+    model_loader.ML_MODELS["CACHE"] = cached_model
+
+    loaded = bot_engine._load_ml_model("CACHE")
+
+    assert loaded is cached_model
+    assert bot_engine._ML_MODEL_CACHE["CACHE"] is cached_model
+    assert model_loader.ML_MODELS["CACHE"] is cached_model
+
+
 def test_signal_ml_returns_prediction_and_probability():
     pd = pytest.importorskip("pandas")
     model = DummyClassifier(strategy="prior")
