@@ -20,14 +20,14 @@ def test_throttle_summaries_flush_each_cycle(caplog):
 
     logger = log_mod.get_logger("ai_trading.tests.deduper")
 
-    logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
-    logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
+    for _ in range(4):
+        logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
 
     with throttle_filter._lock:  # type: ignore[attr-defined]
         first_cycle_suppressed = int(
             throttle_filter._state.get("PROVIDER_SPAM", {}).get("suppressed", 0)  # type: ignore[attr-defined]
         )
-    assert first_cycle_suppressed >= 1
+    assert first_cycle_suppressed >= 3
 
     flush()
 
@@ -52,14 +52,14 @@ def test_throttle_summaries_flush_each_cycle(caplog):
         )
     assert suppressed_after == 0
 
-    logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
-    logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
+    for _ in range(4):
+        logger.info("PROVIDER_SPAM", extra={"provider": "feed-a"})
 
     with throttle_filter._lock:  # type: ignore[attr-defined]
         second_cycle_suppressed = int(
             throttle_filter._state.get("PROVIDER_SPAM", {}).get("suppressed", 0)  # type: ignore[attr-defined]
         )
-    assert second_cycle_suppressed >= 1
+    assert second_cycle_suppressed >= 3
 
     flush()
 
@@ -105,23 +105,54 @@ def test_provider_dedupe_emits_summary(caplog):
                     count = None
         return message, count if count is not None else -1
 
-    assert not any(
-        'key="DATA_PROVIDER_SWITCHOVER"' in rec.getMessage()
-        for rec in caplog.records
-        if rec.getMessage().startswith("LOG_THROTTLE_SUMMARY")
-    ), "Unexpected summary for single suppressed event"
+    def _provider_summaries() -> list[logging.LogRecord]:
+        return [
+            rec
+            for rec in caplog.records
+            if rec.getMessage().startswith("LOG_THROTTLE_SUMMARY")
+            and 'key="DATA_PROVIDER_SWITCHOVER"' in rec.getMessage()
+        ]
+
+    assert not _provider_summaries(), "Unexpected summary for single suppressed event"
 
     caplog.clear()
 
-    for _ in range(3):
-        record_suppressed("DATA_PROVIDER_SWITCHOVER")
-
+    # Second flush cycle should keep prior suppressions without emitting yet.
+    record_suppressed("DATA_PROVIDER_SWITCHOVER")
     flush()
+    assert not _provider_summaries(), "Summary emitted before threshold reached"
 
-    summaries = [rec for rec in caplog.records if rec.getMessage().startswith("LOG_THROTTLE_SUMMARY")]
-    matching = [rec for rec in summaries if 'key="DATA_PROVIDER_SWITCHOVER"' in rec.getMessage()]
-    assert matching, "Expected summary for DATA_PROVIDER_SWITCHOVER"
-    summary_message, suppressed = _summary_count(matching[-1])
+    caplog.clear()
+
+    # Third cycle accumulates to threshold across flushes and should emit once.
+    record_suppressed("DATA_PROVIDER_SWITCHOVER")
+    flush()
+    summaries = _provider_summaries()
+    assert summaries, "Expected summary once suppression threshold reached"
+    summary_message, suppressed = _summary_count(summaries[-1])
+    assert suppressed == 3, summary_message
+
+    caplog.clear()
+
+    # Additional flush without new suppressions must not repeat the summary.
+    flush()
+    assert not _provider_summaries(), "Summary should not repeat without new suppressions"
+
+    caplog.clear()
+
+    # New suppressions after the summary should start fresh per cycle.
+    record_suppressed("DATA_PROVIDER_SWITCHOVER")
+    record_suppressed("DATA_PROVIDER_SWITCHOVER")
+    flush()
+    assert not _provider_summaries(), "Threshold not yet reached for new cycle"
+
+    caplog.clear()
+
+    record_suppressed("DATA_PROVIDER_SWITCHOVER")
+    flush()
+    summaries = _provider_summaries()
+    assert summaries, "Expected summary after new suppressions reach threshold"
+    summary_message, suppressed = _summary_count(summaries[-1])
     assert suppressed == 3, summary_message
 
     reset()
