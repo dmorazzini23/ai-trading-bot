@@ -34,16 +34,22 @@ if os.getenv("AI_TRADING_DOTENV_GUARD") == "1":
 
 
 _ESSENTIAL_NAMES = (
-    "pathlib",
-    "ntpath",
-    "posixpath",
+    "sys",
+    "builtins",
+    "sitecustomize",
     "importlib",
     "importlib.machinery",
     "importlib.abc",
     "importlib.util",
+    "importlib._bootstrap",
+    "importlib._bootstrap_external",
+    "pathlib",
+    "posixpath",
+    "ntpath",
+    "logging",
+    "logging.config",
+    "logging.handlers",
     "unittest.mock",
-    "sys",
-    "builtins",
 )
 _ESSENTIAL_MODULES = {
     name: sys.modules.get(name)
@@ -51,6 +57,13 @@ _ESSENTIAL_MODULES = {
 }
 
 _ORIG_CLEAR_DICT = unittest.mock._clear_dict
+
+
+def _snapshot_essential_modules():
+    for name in _ESSENTIAL_NAMES:
+        module = sys.modules.get(name)
+        if module is not None:
+            _ESSENTIAL_MODULES[name] = module
 
 
 def _resolve_essential(name):
@@ -70,8 +83,11 @@ def _resolve_essential(name):
 
 
 def _safe_clear_dict(in_dict):  # pragma: no cover - simple shim
+    snapshot_required = in_dict is sys.modules
+    if snapshot_required:
+        _snapshot_essential_modules()
     _ORIG_CLEAR_DICT(in_dict)
-    if in_dict is sys.modules:
+    if snapshot_required:
         for key in _ESSENTIAL_NAMES:
             module = _resolve_essential(key)
             if module is not None:
