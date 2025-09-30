@@ -12,8 +12,9 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation, ROUND_DOWN
+from functools import lru_cache
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional
 
 from ai_trading.logging import get_logger
 from ai_trading.market.symbol_specs import get_tick_size
@@ -256,6 +257,44 @@ class CapacityCheck:
     can_submit: bool
     suggested_qty: int
     reason: str | None = None
+
+
+@lru_cache(maxsize=8)
+def _preflight_supports_account_kwarg(preflight_fn: Callable[..., Any]) -> bool:
+    """Return True when the provided preflight callable supports an account kwarg."""
+
+    try:
+        params = inspect.signature(preflight_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "account" in params:
+        return True
+    return any(param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values())
+
+
+def _call_preflight_capacity(
+    symbol: Any,
+    side: Any,
+    price_hint: Any,
+    quantity: Any,
+    broker: Any,
+    account_snapshot: Any,
+    preflight_fn: Callable[..., CapacityCheck] | None = None,
+) -> CapacityCheck:
+    """Invoke the configured preflight helper with compatibility shims."""
+
+    fn = preflight_fn or preflight_capacity
+    supports_account = False
+    try:
+        supports_account = _preflight_supports_account_kwarg(fn)
+    except Exception:
+        supports_account = False
+    if supports_account:
+        try:
+            return fn(symbol, side, price_hint, quantity, broker, account=account_snapshot)
+        except TypeError:
+            _preflight_supports_account_kwarg.cache_clear()
+    return fn(symbol, side, price_hint, quantity, broker)
 
 
 def preflight_capacity(symbol, side, limit_price, qty, broker, account: Any | None = None) -> CapacityCheck:
@@ -1002,7 +1041,7 @@ class ExecutionEngine:
                     price_hint = (_safe_decimal(raw_notional) / Decimal(quantity))
                 except Exception:
                     price_hint = None
-        capacity = preflight_capacity(
+        capacity = _call_preflight_capacity(
             symbol,
             side.lower(),
             price_hint,
@@ -1196,7 +1235,7 @@ class ExecutionEngine:
                 "client_order_id": client_order_id,
                 "asset_class": kwargs.get("asset_class"),
             }
-        capacity = preflight_capacity(
+        capacity = _call_preflight_capacity(
             symbol,
             side.lower(),
             limit_price,

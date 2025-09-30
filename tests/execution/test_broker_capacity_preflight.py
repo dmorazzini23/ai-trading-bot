@@ -122,3 +122,50 @@ def test_skip_when_pdt_limit_reached(monkeypatch, caplog):
     assert any("ORDER_SKIPPED_NONRETRYABLE" == msg for msg in messages)
     reasons = [getattr(record, "reason", None) for record in caplog.records]
     assert "pdt_limit_reached" in reasons
+
+
+def test_preflight_helper_supports_account_kwarg():
+    lt._preflight_supports_account_kwarg.cache_clear()
+    account = {"id": "acct"}
+    captured: dict[str, object] = {}
+
+    def new_signature(symbol, side, price_hint, quantity, broker, *, account=None):
+        captured["args"] = (symbol, side, price_hint, quantity, broker)
+        captured["account"] = account
+        return lt.CapacityCheck(True, int(quantity), None)
+
+    check = lt._call_preflight_capacity(
+        "AAPL",
+        "buy",
+        123.45,
+        5,
+        object(),
+        account,
+        preflight_fn=new_signature,
+    )
+
+    assert check.can_submit is True
+    assert captured["account"] is account
+    assert captured["args"][:4] == ("AAPL", "buy", 123.45, 5)
+
+
+def test_preflight_helper_legacy_signature():
+    lt._preflight_supports_account_kwarg.cache_clear()
+    called: dict[str, object] = {}
+
+    def legacy_signature(symbol, side, price_hint, quantity, broker):
+        called["args"] = (symbol, side, price_hint, quantity, broker)
+        return lt.CapacityCheck(True, int(quantity), None)
+
+    check = lt._call_preflight_capacity(
+        "MSFT",
+        "sell",
+        250.0,
+        3,
+        object(),
+        {"id": "acct"},
+        preflight_fn=legacy_signature,
+    )
+
+    assert check.can_submit is True
+    assert called["args"][:4] == ("MSFT", "sell", 250.0, 3)
