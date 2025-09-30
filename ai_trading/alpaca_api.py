@@ -305,6 +305,93 @@ def get_trading_client_cls():
     return client_cls
 
 
+class TradingClientAdapter:
+    """Adapter that exposes ``cancel_order`` regardless of SDK shape.
+
+    The modern alpaca-py ``TradingClient`` exposes ``cancel_order_by_id`` and
+    ``cancel_orders`` helpers, but older call sites – including our validation
+    logic – expect a ``cancel_order`` method. This adapter provides that method
+    while transparently proxying all other attribute access to the wrapped
+    client. The adapter stores the underlying instance on
+    ``_ai_trading_wrapped_client`` so validation can recognise the concrete SDK
+    type and avoid emitting compatibility warnings.
+    """
+
+    __slots__ = ("_client", "_ai_trading_wrapped_client", "__ai_trading_adapter__")
+
+    def __init__(self, client: Any):
+        self._client = client
+        self._ai_trading_wrapped_client = client
+        self.__ai_trading_adapter__ = "trading_client"
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._client, item)
+
+    def __dir__(self) -> list[str]:  # pragma: no cover - convenience only
+        merged = set(dir(self._client))
+        merged.update(["cancel_order", "_ai_trading_wrapped_client"])
+        return sorted(merged)
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic aid
+        return f"TradingClientAdapter({self._client!r})"
+
+    def cancel_order(self, order_id: Any) -> Any:
+        """Cancel an order by delegating to the wrapped SDK client."""
+
+        cancel_by_id = getattr(self._client, "cancel_order_by_id", None)
+        if callable(cancel_by_id):
+            return cancel_by_id(order_id)
+
+        cancel_orders = getattr(self._client, "cancel_orders", None)
+        if not callable(cancel_orders):  # pragma: no cover - defensive guard
+            raise AttributeError("cancel_order not supported by wrapped client")
+
+        CancelOrdersRequest: Any | None
+        try:  # pragma: no cover - exercised indirectly in integration tests
+            from alpaca.trading.requests import CancelOrdersRequest  # type: ignore
+        except Exception:
+            CancelOrdersRequest = None
+
+        if CancelOrdersRequest is None:
+
+            class _FallbackCancelOrdersRequest:
+                def __init__(self, **kwargs: Any):
+                    if not kwargs:
+                        raise TypeError("payload required")
+                    self.payload = kwargs
+
+            CancelOrdersRequest = _FallbackCancelOrdersRequest
+
+        last_error: Exception | None = None
+        init_variants = (
+            {"order_id": order_id},
+            {"order_ids": [order_id]},
+            {"client_order_id": order_id},
+        )
+
+        for init_kwargs in init_variants:
+            try:
+                request_obj = CancelOrdersRequest(**init_kwargs)
+            except TypeError as exc:
+                last_error = exc
+                continue
+
+            for caller in (
+                lambda ro=request_obj: cancel_orders(ro),
+                lambda ro=request_obj: cancel_orders(request=ro),
+                lambda ro=request_obj: cancel_orders(cancel_orders_request=ro),
+            ):
+                try:
+                    return caller()
+                except TypeError as exc:
+                    last_error = exc
+                    continue
+
+        raise RuntimeError(
+            "Alpaca client cancel_orders shim could not adapt provided API"
+        ) from last_error
+
+
 def get_data_client_cls():
     """Return the Alpaca StockHistoricalDataClient class via lazy import."""
     try:
