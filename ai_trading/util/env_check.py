@@ -10,6 +10,9 @@ class DotenvImportError(ImportError): ...
 
 
 def assert_dotenv_not_shadowed():
+    if not PYTHON_DOTENV_RESOLVED:
+        return
+
     existing = sys.modules.get("dotenv")
     if existing is not None and getattr(existing, "__spec__", None) is None:
         sys.modules.pop("dotenv", None)
