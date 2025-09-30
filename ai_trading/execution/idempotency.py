@@ -42,21 +42,23 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
 
         def __contains__(self, key: str) -> bool:
             now = monotonic_time()
+            self._expire(now=now)
+
             item = self._store.get(key)
             if item is None:
-                self._expire(now=now)
-                return False
-
-            _, exp = item
-            if exp <= now:
-                self._store.pop(key, None)
-                self._expire(now=now)
                 return False
 
             # touch to maintain recency semantics similar to OrderedDict move-to-end
             self._store.move_to_end(key)
-            self._expire(now=now)
             return True
+
+        def __getitem__(self, key: str) -> object:
+            now = monotonic_time()
+            self._expire(now=now)
+
+            value, _ = self._store[key]
+            self._store.move_to_end(key)
+            return value
 
         def __setitem__(self, key: str, value: object) -> None:
             now = monotonic_time()
@@ -71,19 +73,14 @@ except ImportError:  # pragma: no cover - exercised via explicit fallback tests
 
         def get(self, key: str, default: object | None=None) -> object | None:
             now = monotonic_time()
+            self._expire(now=now)
+
             item = self._store.get(key)
             if item is None:
-                self._expire(now=now)
                 return default
 
-            value, exp = item
-            if exp <= now:
-                self._store.pop(key, None)
-                self._expire(now=now)
-                return default
-
+            value, _ = item
             self._store.move_to_end(key)
-            self._expire(now=now)
             return value
 
         def keys(self):  # noqa: D401 - mimic cachetools API
