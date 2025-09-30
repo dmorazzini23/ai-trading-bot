@@ -514,6 +514,7 @@ async def run_with_concurrency(
         return {}, set(), set()
 
     gather_coro = asyncio.gather(*tasks, return_exceptions=True)
+    reset_peak_after_run = False
 
     try:
         if timeout_s is None:
@@ -523,7 +524,16 @@ async def run_with_concurrency(
     except asyncio.TimeoutError:
         for task in tasks:
             task.cancel()
-        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            reset_peak_after_run = True
+    except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        PEAK_SIMULTANEOUS_WORKERS = 0
+        raise
     for task, outcome in zip(tasks, outcomes):
         symbol = task_to_symbol.get(task)
         if symbol is None:
@@ -531,6 +541,9 @@ async def run_with_concurrency(
         if isinstance(outcome, BaseException) and symbol not in results:
             results[symbol] = None
             FAILED_SYMBOLS.add(symbol)
+
+    if reset_peak_after_run:
+        PEAK_SIMULTANEOUS_WORKERS = 0
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
