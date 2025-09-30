@@ -10611,10 +10611,10 @@ class LazyBotContext:
             pass
         # ExecutionEngine does not accept slippage/metrics kwargs.
         # Metrics remain tracked in bot_engine via Prometheus counters.
-        _exec_engine = ExecutionEngine(
-            self._context
-        )  # AI-AGENT-REF: remove unsupported kwargs
-        self._context.execution_engine = _exec_engine
+        _exec_engine = None
+        self._context.execution_engine = None
+        self._context.exec_engine = None
+        _ensure_execution_engine(self._context)
         data_fetcher = fetcher
         # One-time, mandatory model load
         if getattr(self._context, "model", None) is None:
@@ -19717,10 +19717,7 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 def _ensure_execution_engine(runtime) -> None:
     """Ensure an execution engine with check_stops is attached to runtime."""
     try:
-        from ai_trading.execution import (
-            ExecutionEngine as _ExecutionEngine,
-            get_execution_runtime_status,
-        )
+        execution_module = importlib.import_module("ai_trading.execution")
     except ImportError as exc:
         missing_mod = getattr(exc, "name", None)
         logger_once.error(
@@ -19736,29 +19733,89 @@ def _ensure_execution_engine(runtime) -> None:
             "packages (pydantic, pydantic-settings, alpaca-py) before trading."
         ) from exc
 
-    status = get_execution_runtime_status()
+    try:
+        _ExecutionEngine = getattr(execution_module, "ExecutionEngine")
+        get_execution_runtime_status = getattr(
+            execution_module, "get_execution_runtime_status"
+        )
+    except AttributeError as exc:
+        logger_once.error(
+            "EXECUTION_ENGINE_IMPORT_ABORTED",
+            key="execution_engine_import_aborted",
+            extra={"error": str(exc), "missing_module": "ai_trading.execution"},
+        )
+        raise RuntimeError(
+            "Execution engine dependencies are unavailable. Install the required runtime "
+            "packages (pydantic, pydantic-settings, alpaca-py) before trading."
+        ) from exc
+
+    def _capture_status() -> tuple[Any, dict[str, Any]]:
+        status_local = get_execution_runtime_status()
+        engine_class_path_local = status_local.engine_class or ""
+        missing_deps_local = tuple(status_local.missing_dependencies)
+        missing_creds_local = tuple(status_local.missing_credentials)
+        diagnostics_local = {
+            "engine_class": engine_class_path_local or None,
+            "execution_mode": status_local.mode,
+            "shadow_mode": status_local.shadow_mode,
+            "missing_dependencies": missing_deps_local or None,
+            "missing_credentials": missing_creds_local or None,
+            "reason": status_local.reason,
+            "settings_fallback": status_local.settings_fallback,
+        }
+        return status_local, diagnostics_local
+
+    status, diagnostics = _capture_status()
+
+    global _exec_engine, ExecutionEngine
+
+    exec_engine = getattr(runtime, "execution_engine", None) or getattr(
+        runtime, "exec_engine", None
+    )
+    stub_attached = getattr(exec_engine, "_IS_STUB", False)
+    stub_class = getattr(_ExecutionEngine, "_IS_STUB", False)
+    recovered_stub = False
+
+    if stub_attached or stub_class:
+        try:
+            execution_module = importlib.reload(execution_module)
+            _ExecutionEngine = getattr(execution_module, "ExecutionEngine")
+            get_execution_runtime_status = getattr(
+                execution_module, "get_execution_runtime_status"
+            )
+        except (ImportError, AttributeError) as exc:
+            logger_once.error(
+                "EXECUTION_ENGINE_STUB_SELECTED",
+                key="execution_engine_stub_selected",
+                extra=diagnostics,
+            )
+            raise RuntimeError(
+                "Execution engine stub detected; install runtime dependencies to restore risk-stop enforcement."
+            ) from exc
+
+        status, diagnostics = _capture_status()
+        stub_class = getattr(_ExecutionEngine, "_IS_STUB", False)
+        if stub_class:
+            logger_once.error(
+                "EXECUTION_ENGINE_STUB_SELECTED",
+                key="execution_engine_stub_selected",
+                extra=diagnostics,
+            )
+            raise RuntimeError(
+                "Execution engine stub detected; install runtime dependencies to restore risk-stop enforcement."
+            )
+
+        exec_engine = None
+        runtime.execution_engine = None
+        runtime.exec_engine = None
+        _exec_engine = None
+        recovered_stub = True
+
+    ExecutionEngine = _ExecutionEngine
+
     engine_class_path = status.engine_class or ""
     missing_deps = tuple(status.missing_dependencies)
     missing_creds = tuple(status.missing_credentials)
-    diagnostics = {
-        "engine_class": engine_class_path or None,
-        "execution_mode": status.mode,
-        "shadow_mode": status.shadow_mode,
-        "missing_dependencies": missing_deps or None,
-        "missing_credentials": missing_creds or None,
-        "reason": status.reason,
-        "settings_fallback": status.settings_fallback,
-    }
-
-    if getattr(_ExecutionEngine, "_IS_STUB", False):
-        logger_once.error(
-            "EXECUTION_ENGINE_STUB_SELECTED",
-            key="execution_engine_stub_selected",
-            extra=diagnostics,
-        )
-        raise RuntimeError(
-            "Execution engine stub detected; install runtime dependencies to restore risk-stop enforcement."
-        )
 
     if not hasattr(_ExecutionEngine, "check_stops"):
         logger_once.error(
@@ -19805,7 +19862,6 @@ def _ensure_execution_engine(runtime) -> None:
             "Execution engine dependencies missing: " + ", ".join(missing_deps)
         )
 
-    global _exec_engine
     exec_engine = getattr(runtime, "execution_engine", None) or getattr(
         runtime, "exec_engine", None
     )
@@ -19822,6 +19878,10 @@ def _ensure_execution_engine(runtime) -> None:
             logger.warning(
                 "Execution engine initialization failed: %s", e
             )
+            if recovered_stub:
+                raise RuntimeError(
+                    "Execution engine initialization failed after replacing stub; aborting startup."
+                ) from e
             return
     else:
         runtime.execution_engine = exec_engine
