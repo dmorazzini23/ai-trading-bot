@@ -2954,8 +2954,7 @@ from ai_trading.utils.timefmt import (
 )
 
 # AI-AGENT-REF: Avoid importing model_loader (and pandas) at import-time.
-# Always initialize an empty cache; _load_ml_model() lazily imports model_loader.
-ML_MODELS: dict[str, object | None] = {}
+# _load_ml_model() lazily imports model_loader and mirrors its registry cache.
 
 
 # AI-AGENT-REF: lazy numpy loader for improved import performance
@@ -4380,14 +4379,20 @@ def _load_ml_model(symbol: str):
 
     cached = _ML_MODEL_CACHE.get(symbol)
     if cached is not None:
+        module = sys.modules.get("ai_trading.model_loader")
+        if module is not None:
+            registry = getattr(module, "ML_MODELS", None)
+            if isinstance(registry, dict):
+                registry[symbol] = cached
         return cached
 
-    model = ML_MODELS.get(symbol)
+    from ai_trading import model_loader as _model_loader
+
+    registry = _model_loader.ML_MODELS
+    model = registry.get(symbol)
     if model is None:
         try:
-            from ai_trading.model_loader import load_model
-
-            model = load_model(symbol)
+            model = _model_loader.load_model(symbol)
         except RuntimeError as exc:
             logger.error(
                 "MODEL_LOAD_ERROR", extra={"symbol": symbol, "error": str(exc)}
@@ -4407,6 +4412,12 @@ def _load_ml_model(symbol: str):
         )
         model = None
 
+    if model is None:
+        registry.pop(symbol, None)
+        _ML_MODEL_CACHE.pop(symbol, None)
+        return None
+
+    registry[symbol] = model
     _ML_MODEL_CACHE[symbol] = model
     return model
 
