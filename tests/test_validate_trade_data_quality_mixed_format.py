@@ -26,3 +26,5 @@ def test_mixed_format_detection(mixed_format_file):
     assert report["mixed_format_detected"] is True
     assert report["audit_format_rows"] >= 1
     assert report["meta_format_rows"] >= 1
+    assert report["has_valid_format"] is True
+    assert report["data_quality_score"] > 0

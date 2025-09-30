@@ -421,7 +421,10 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                 quality_report['recommendations'].append(
                     'Separate audit and meta-learning logs or implement unified parsing'
                 )
-                quality_report['has_valid_format'] = audit_format_rows > 0 or meta_format_rows > 0
+                # Mixed-format files should still be treated as having a valid structure so
+                # downstream consumers do not reject them outright. The recommendation above
+                # guides operators to split or convert the data without blocking ingestion.
+                quality_report['has_valid_format'] = True
                 logger.warning(
                     'TRADE_HISTORY_MIXED_FORMAT: %s',
                     trade_log_path,
