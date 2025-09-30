@@ -1875,14 +1875,67 @@ def _flatten_and_normalize_ohlcv(
         return []  # type: ignore[return-value]
     if isinstance(df.columns, pd.MultiIndex):
         try:
-            lvl0 = set(map(str, df.columns.get_level_values(0)))
-            if {"Open", "High", "Low", "Close", "Adj Close", "Volume"} & lvl0:
-                df.columns = df.columns.get_level_values(0)
+            alias_groups: dict[str, set[str]] = {
+                "open": {"open", "o"},
+                "high": {"high", "h"},
+                "low": {"low", "l"},
+                "close": {"close", "c", "price"},
+                "adj_close": {"adj_close", "adjclose", "adjusted_close"},
+                "volume": {"volume", "v"},
+            }
+
+            def _normalize_token(token: Any) -> str:
+                return str(token).strip().lower().replace(" ", "_")
+
+            normalized_aliases = {
+                key: {key, *aliases} for key, aliases in alias_groups.items()
+            }
+
+            new_columns: list[str] = []
+            matched_alias = False
+            for col_tuple in df.columns:
+                parts = [_normalize_token(part) for part in col_tuple if part is not None]
+                canonical: str | None = None
+                for key, aliases in normalized_aliases.items():
+                    if any(part in aliases for part in parts):
+                        canonical = key
+                        break
+                if canonical:
+                    matched_alias = True
+                    new_columns.append(canonical)
+                else:
+                    new_columns.append("_".join([str(x) for x in col_tuple if x is not None]))
+
+            if matched_alias:
+                df.columns = new_columns
+                try:
+                    df = df.loc[:, ~pd.Index(df.columns).duplicated()]
+                except Exception:  # pragma: no cover - defensive fallback
+                    pass
             else:
-                df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
+                lvl0 = set(map(str, df.columns.get_level_values(0)))
+                if {"Open", "High", "Low", "Close", "Adj Close", "Volume"} & lvl0:
+                    df.columns = df.columns.get_level_values(0)
+                else:
+                    df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
         except (AttributeError, IndexError, TypeError):
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
     normalize_ohlcv_columns(df)
+
+    canonical_primary = {"open", "high", "low", "close", "volume"}
+    for canonical in list(canonical_primary):
+        if canonical not in getattr(df, "columns", []):
+            continue
+        redundant = [
+            col
+            for col in getattr(df, "columns", [])
+            if isinstance(col, str) and col != canonical and col.startswith(f"{canonical}_")
+        ]
+        if redundant:
+            try:
+                df.drop(columns=redundant, inplace=True)
+            except Exception:  # pragma: no cover - defensive fallback
+                pass
 
     timeframe_norm = str(timeframe or "").lower()
     is_daily = "day" in timeframe_norm or timeframe_norm.endswith("d")

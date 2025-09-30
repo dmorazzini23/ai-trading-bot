@@ -4,6 +4,7 @@ import pytest
 
 pd = pytest.importorskip("pandas")
 
+from ai_trading.data.fetch import MissingOHLCVColumnsError, _flatten_and_normalize_ohlcv
 from ai_trading.data.fetch.normalize import REQUIRED, normalize_ohlcv_df
 
 
@@ -66,3 +67,22 @@ def test_normalize_adj_close_mapping():
     assert "close" in out.columns
     expected = pd.Series([100.0, 101.0], index=out.index, name="close")
     pd.testing.assert_series_equal(out["close"], expected)
+
+
+def test_flatten_handles_ticker_multiindex_level1():
+    idx = pd.date_range("2024-01-01", periods=2, freq="1D", tz="UTC")
+    columns = pd.MultiIndex.from_product([["MSFT"], ["Open", "High", "Low", "Close", "Volume"]])
+    df = pd.DataFrame(
+        [[10.0, 10.5, 9.8, 10.2, 1000], [10.1, 10.6, 9.9, 10.3, 1100]],
+        index=idx,
+        columns=columns,
+    )
+
+    try:
+        out = _flatten_and_normalize_ohlcv(df.copy(), symbol="MSFT")
+    except MissingOHLCVColumnsError as exc:  # pragma: no cover - explicit failure path
+        pytest.fail(f"unexpected MissingOHLCVColumnsError: {exc}")
+
+    assert {"open", "high", "low", "close", "volume"}.issubset(out.columns)
+    unexpected = {col for col in out.columns if isinstance(col, str) and col.startswith("msft_")}
+    assert not unexpected
