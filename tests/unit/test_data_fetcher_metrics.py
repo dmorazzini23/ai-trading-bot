@@ -88,12 +88,17 @@ def test_rate_limit_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics
     assert names == [
         "data.fetch.rate_limited",
         "data.fetch.fallback_attempt",
+        "data.fetch.fallback_success",
         "data.fetch.success",
     ]
-    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
+    idx_attempt = names.index("data.fetch.fallback_attempt")
+    idx_fb_success = names.index("data.fetch.fallback_success")
+    idx_success = names.index("data.fetch.success")
+    assert idx_attempt < idx_fb_success < idx_success
     assert capmetrics[0].tags["feed"] == "iex"
-    assert capmetrics[1].tags["feed"] == "sip"
-    assert capmetrics[2].tags["feed"] == "sip"
+    assert capmetrics[idx_attempt].tags["feed"] == "sip"
+    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
+    assert capmetrics[idx_success].tags["feed"] == "sip"
 
 
 def test_rate_limit_no_retry_when_sip_unauthorized(
@@ -151,11 +156,17 @@ def test_timeout_fallback_success(monkeypatch: pytest.MonkeyPatch, capmetrics: l
     assert names == [
         "data.fetch.timeout",
         "data.fetch.fallback_attempt",
+        "data.fetch.fallback_success",
         "data.fetch.success",
     ]
-    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
+    idx_attempt = names.index("data.fetch.fallback_attempt")
+    idx_fb_success = names.index("data.fetch.fallback_success")
+    idx_success = names.index("data.fetch.success")
+    assert idx_attempt < idx_fb_success < idx_success
     assert capmetrics[0].tags["feed"] == "iex"
-    assert capmetrics[1].tags["feed"] == "sip"
+    assert capmetrics[idx_attempt].tags["feed"] == "sip"
+    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
+    assert capmetrics[idx_success].tags["feed"] == "sip"
 
 
 def test_unauthorized_sip_returns_empty(
@@ -210,9 +221,15 @@ def test_empty_payload_fallback_success(
     assert names == [
         "data.fetch.empty",
         "data.fetch.fallback_attempt",
+        "data.fetch.fallback_success",
         "data.fetch.success",
     ]
-    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
+    idx_attempt = names.index("data.fetch.fallback_attempt")
+    idx_fb_success = names.index("data.fetch.fallback_success")
+    idx_success = names.index("data.fetch.success")
+    assert idx_attempt < idx_fb_success < idx_success
     assert capmetrics[0].tags["feed"] == "iex"
-    assert capmetrics[1].tags["feed"] == "sip"
+    assert capmetrics[idx_attempt].tags["feed"] == "sip"
+    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
+    assert capmetrics[idx_success].tags["feed"] == "sip"
 
