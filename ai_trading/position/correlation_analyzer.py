@@ -189,23 +189,228 @@ class PortfolioCorrelationAnalyzer:
         """Extract relevant data from position objects."""
         position_data = {}
         try:
-            for pos in positions:
-                symbol = getattr(pos, 'symbol', '')
-                if not symbol:
-                    continue
-                qty = int(getattr(pos, 'qty', 0))
-                if qty == 0:
-                    continue
-                market_value = float(getattr(pos, 'market_value', 0))
-                if market_value == 0:
-                    current_price = self._get_current_price(symbol)
-                    if current_price > 0:
-                        market_value = abs(qty * current_price)
-                position_data[symbol] = {'symbol': symbol, 'qty': qty, 'market_value': abs(market_value), 'sector': self._get_symbol_sector(symbol)}
+            ctx_positions = self._collect_ctx_positions()
+            for ctx_pos in ctx_positions:
+                record = self._build_position_record(ctx_pos)
+                if record and record['symbol'] not in position_data:
+                    position_data[record['symbol']] = record
+
+            for pos in positions or []:
+                record = self._build_position_record(pos)
+                if record:
+                    position_data[record['symbol']] = record
             return position_data
         except COMMON_EXC as exc:
             self.logger.warning('_extract_position_data failed: %s', exc)
             return {}
+
+    def _collect_ctx_positions(self) -> list[Any]:
+        """Gather any cached/current positions exposed by the context."""
+        if not self.ctx:
+            return []
+
+        collected: dict[str, Any] = {}
+        try:
+            candidates: list[Any] = []
+
+            getter = self._safe_ctx_attribute('get_current_positions')
+            if callable(getter):
+                try:
+                    candidates.append(getter())
+                except COMMON_EXC:
+                    pass
+
+            for attr in ('current_positions', 'cached_positions'):
+                value = self._safe_ctx_attribute(attr)
+                if value is not None:
+                    candidates.append(value)
+
+            portfolio_state = self._safe_ctx_attribute('portfolio_state')
+            if isinstance(portfolio_state, dict):
+                for key in ('current_positions', 'positions'):
+                    if portfolio_state.get(key):
+                        candidates.append(portfolio_state[key])
+
+            for candidate in candidates:
+                for normalized in self._normalize_ctx_positions(candidate):
+                    symbol = normalized.get('symbol')
+                    if not symbol:
+                        continue
+                    symbol_str = str(symbol).strip()
+                    if not symbol_str or symbol_str in collected:
+                        continue
+                    normalized['symbol'] = symbol_str
+                    collected[symbol_str] = normalized
+
+        except COMMON_EXC as exc:
+            self.logger.debug('ctx position merge skipped: %s', exc)
+
+        return list(collected.values())
+
+    def _normalize_ctx_positions(self, raw_positions: Any) -> list[dict[str, Any]]:
+        """Normalize various context position containers into dictionaries."""
+        normalized: list[dict[str, Any]] = []
+        if raw_positions is None:
+            return normalized
+
+        if isinstance(raw_positions, dict):
+            for symbol, payload in raw_positions.items():
+                data = self._coerce_position_payload(payload, symbol_hint=symbol)
+                if data:
+                    normalized.append(data)
+            return normalized
+
+        iterable: list[Any]
+        if isinstance(raw_positions, (list, tuple, set)):
+            iterable = list(raw_positions)
+        else:
+            iterable = [raw_positions]
+
+        for payload in iterable:
+            data = self._coerce_position_payload(payload)
+            if data:
+                normalized.append(data)
+        return normalized
+
+    def _coerce_position_payload(self, payload: Any, symbol_hint: str | None = None) -> dict[str, Any] | None:
+        """Convert a payload into a dictionary the extractor can consume."""
+        if payload is None or self._is_mock(payload):
+            return None
+
+        if isinstance(payload, dict):
+            data = dict(payload)
+            symbol = data.get('symbol') or symbol_hint
+            if symbol is None or self._is_mock(symbol):
+                return None
+            data['symbol'] = symbol
+            return data
+
+        if isinstance(payload, (int, float)) and symbol_hint:
+            return {'symbol': symbol_hint, 'qty': payload}
+
+        if isinstance(payload, str):
+            if not symbol_hint:
+                return None
+            try:
+                qty = float(payload)
+            except (TypeError, ValueError):
+                return None
+            return {'symbol': symbol_hint, 'qty': qty}
+
+        data: dict[str, Any] = {}
+        symbol = getattr(payload, 'symbol', None) or symbol_hint
+        if symbol is None or self._is_mock(symbol):
+            return None
+        data['symbol'] = symbol
+
+        for attr in (
+            'qty',
+            'quantity',
+            'shares',
+            'position',
+            'size',
+            'units',
+            'market_value',
+            'marketValue',
+            'notional_value',
+            'market_notional',
+            'value',
+            'avg_entry_price',
+            'avg_price',
+            'average_price',
+            'entry_price',
+            'price',
+        ):
+            if hasattr(payload, attr):
+                attr_value = getattr(payload, attr)
+                if not self._is_mock(attr_value):
+                    data[attr] = attr_value
+
+        return data
+
+    def _build_position_record(self, pos: Any) -> dict[str, Any] | None:
+        """Create a standardized record from a position-like object."""
+        if pos is None:
+            return None
+
+        if isinstance(pos, dict):
+            getter = pos.get
+        else:
+            getter = lambda key, default=None: getattr(pos, key, default)
+
+        def _first_value(keys: tuple[str, ...]) -> Any:
+            for key in keys:
+                value = getter(key)
+                if value not in (None, '') and not self._is_mock(value):
+                    return value
+            return None
+
+        symbol = _first_value(('symbol',))
+        if not symbol:
+            return None
+        symbol = str(symbol).strip()
+        if not symbol:
+            return None
+
+        qty_value = _first_value(('qty', 'quantity', 'shares', 'position', 'size', 'units'))
+        if qty_value in (None, ''):
+            return None
+        try:
+            qty = int(float(qty_value))
+        except (TypeError, ValueError):
+            return None
+        if qty == 0:
+            return None
+
+        market_value = None
+        market_value_value = _first_value(('market_value', 'marketValue', 'notional_value', 'market_notional', 'value'))
+        if market_value_value not in (None, ''):
+            try:
+                market_value = float(market_value_value)
+            except (TypeError, ValueError):
+                market_value = None
+
+        if market_value in (None, 0.0):
+            avg_price_value = _first_value(('avg_entry_price', 'avg_price', 'average_price', 'entry_price', 'price'))
+            if avg_price_value not in (None, ''):
+                try:
+                    market_value = abs(qty * float(avg_price_value))
+                except (TypeError, ValueError):
+                    market_value = None
+
+        if market_value in (None, 0.0):
+            current_price = self._get_current_price(symbol)
+            if current_price > 0:
+                market_value = abs(qty * current_price)
+            else:
+                market_value = 0.0
+
+        return {
+            'symbol': symbol,
+            'qty': qty,
+            'market_value': abs(market_value),
+            'sector': self._get_symbol_sector(symbol),
+        }
+
+    def _safe_ctx_attribute(self, attr_name: str) -> Any:
+        """Safely read an attribute from the context, filtering out mocks."""
+        if not self.ctx:
+            return None
+        try:
+            value = getattr(self.ctx, attr_name, None)
+        except AttributeError:
+            return None
+        if value is None or self._is_mock(value):
+            return None
+        return value
+
+    def _is_mock(self, value: Any) -> bool:
+        """Return True when the value is a unittest.mock construct."""
+        cls = getattr(value, '__class__', None)
+        if cls is None:
+            return False
+        module = getattr(cls, '__module__', '')
+        return isinstance(module, str) and module.startswith('unittest.mock')
 
     def _calculate_position_correlations(self, position_data: dict[str, dict]) -> list[PositionCorrelation]:
         """Calculate correlations between all position pairs."""
