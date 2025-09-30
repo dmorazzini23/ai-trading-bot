@@ -102,8 +102,14 @@ def test_empty_payload_switches_to_preferred_feed(monkeypatch, capmetrics):
     names = [name for name, _ in capmetrics]
     assert "data.fetch.fallback_attempt" in names
     assert "data.fetch.success" in names
-    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
-    success_tags = capmetrics[names.index("data.fetch.success")][1]
+    assert "data.fetch.fallback_success" in names
+    idx_attempt = names.index("data.fetch.fallback_attempt")
+    idx_fb_success = names.index("data.fetch.fallback_success")
+    idx_success = names.index("data.fetch.success")
+    assert idx_attempt < idx_fb_success < idx_success
+    fallback_success_tags = capmetrics[idx_fb_success][1]
+    assert fallback_success_tags.get("feed") == "sip"
+    success_tags = capmetrics[idx_success][1]
     assert success_tags.get("feed") == "sip"
 
 
@@ -157,8 +163,14 @@ def test_empty_payload_switch_records_override_without_preferred_list(monkeypatc
     names = [name for name, _ in capmetrics]
     assert "data.fetch.fallback_attempt" in names
     assert "data.fetch.success" in names
-    assert names.index("data.fetch.fallback_attempt") < names.index("data.fetch.success")
-    success_tags = capmetrics[names.index("data.fetch.success")][1]
+    assert "data.fetch.fallback_success" in names
+    idx_attempt = names.index("data.fetch.fallback_attempt")
+    idx_fb_success = names.index("data.fetch.fallback_success")
+    idx_success = names.index("data.fetch.success")
+    assert idx_attempt < idx_fb_success < idx_success
+    fallback_success_tags = capmetrics[idx_fb_success][1]
+    assert fallback_success_tags.get("feed") == "sip"
+    success_tags = capmetrics[idx_success][1]
     assert success_tags.get("feed") == "sip"
 
 

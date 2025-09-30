@@ -806,6 +806,25 @@ def _fallback_key(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.dat
     return (symbol, timeframe, int(start.timestamp()), int(end.timestamp()))
 
 
+def _frame_has_rows(candidate: Any | None) -> bool:
+    """Return ``True`` when ``candidate`` resembles a non-empty frame."""
+
+    if candidate is None:
+        return False
+    empty_attr = getattr(candidate, "empty", None)
+    if isinstance(empty_attr, bool):
+        return not empty_attr
+    if empty_attr is not None:
+        try:
+            return not bool(empty_attr)
+        except Exception:
+            return False
+    try:
+        return len(candidate) > 0  # type: ignore[arg-type]
+    except Exception:
+        return False
+
+
 def _mark_fallback(
     symbol: str,
     timeframe: str,
@@ -3092,6 +3111,25 @@ def _fetch_bars(
             provider=resolved_provider,
             feed=normalized_provider or None,
         )
+        frame_has_rows = _frame_has_rows(annotated_df)
+        if frame_has_rows:
+            _incr("data.fetch.fallback_success", value=1.0, tags=tags)
+            try:
+                to_feed = _normalize_feed_value(feed_tag)
+            except Exception:
+                try:
+                    to_feed = str(feed_tag).strip().lower() or None
+                except Exception:
+                    to_feed = None
+            try:
+                from_feed = _normalize_feed_value(_feed)
+            except Exception:
+                try:
+                    from_feed = str(_feed).strip().lower() or None
+                except Exception:
+                    from_feed = None
+            if from_feed and to_feed and to_feed != from_feed:
+                _record_feed_switch(symbol, _interval, from_feed, to_feed)
         _mark_fallback(
             symbol,
             _interval,
@@ -3102,7 +3140,7 @@ def _fetch_bars(
             resolved_provider=resolved_provider,
             resolved_feed=normalized_provider or None,
         )
-        if annotated_df is not None and not getattr(annotated_df, "empty", True):
+        if frame_has_rows:
             _incr("data.fetch.success", value=1.0, tags=tags)
         return annotated_df
     resolved_feed = resolve_alpaca_feed(_feed)
@@ -3392,6 +3430,7 @@ def _fetch_bars(
             )
             result = _req(session, None, headers=headers, timeout=timeout)
             if result is not None and not getattr(result, "empty", True):
+                _incr("data.fetch.fallback_success", value=1.0, tags=_tags())
                 _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
             if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
                 _mark_fallback(
@@ -4700,25 +4739,32 @@ def get_minute_df(
             "timeframe": timeframe,
         }
 
-        def _frame_has_rows(candidate: Any | None) -> bool:
-            if candidate is None:
-                return False
-            empty_attr = getattr(candidate, "empty", None)
-            if isinstance(empty_attr, bool):
-                return not empty_attr
-            if empty_attr is not None:
-                try:
-                    return not bool(empty_attr)
-                except Exception:
-                    return False
-            try:
-                return len(candidate) > 0  # type: ignore[arg-type]
-            except Exception:
-                return False
-
         frame_has_rows = _frame_has_rows(frame)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         if frame_has_rows:
+            _incr("data.fetch.fallback_success", value=1.0, tags=tags)
+            fallback_feed: str | None = None
+            if feed_tag:
+                try:
+                    fallback_feed = _normalize_feed_value(feed_tag)
+                except Exception:
+                    try:
+                        fallback_feed = str(feed_tag).strip().lower() or None
+                    except Exception:
+                        fallback_feed = None
+            try:
+                source_feed_norm = _normalize_feed_value(source_feed)
+            except Exception:
+                try:
+                    source_feed_norm = str(source_feed).strip().lower() or None
+                except Exception:
+                    source_feed_norm = None
+            if (
+                source_feed_norm
+                and fallback_feed
+                and fallback_feed != source_feed_norm
+            ):
+                _record_feed_switch(symbol, timeframe, source_feed_norm, fallback_feed)
             _incr("data.fetch.success", value=1.0, tags=tags)
         _mark_fallback(
             symbol,
