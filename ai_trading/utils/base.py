@@ -78,6 +78,7 @@ def ensure_utc_index(df: DataFrame) -> DataFrame:
 logger = get_logger(__name__)
 _LAST_MARKET_HOURS_LOG = 0.0
 _LAST_MARKET_STATE = ""
+_LAST_MARKET_STATE_DATES: dict[str, date | None] = {"OPEN": None, "CLOSED": None}
 _LAST_MARKET_CLOSED_DATE: date | None = None
 _LAST_HEALTH_ROW_LOG = 0.0
 _LAST_HEALTH_ROWS_COUNT = -1
@@ -294,17 +295,31 @@ def get_current_price(symbol: str) -> float:
     return price
 
 
-def _log_market_hours(message: str) -> None:
-    """Emit market hours message only on state change or hourly."""
-    global _LAST_MARKET_HOURS_LOG, _LAST_MARKET_STATE
+def _log_market_hours(message: str, *, log_date: date | None = None) -> None:
+    """Emit market hours message only on state change, new day, or hourly."""
+
+    global _LAST_MARKET_HOURS_LOG, _LAST_MARKET_STATE, _LAST_MARKET_STATE_DATES
+
     now = time.time()
     state = "OPEN" if "OPEN" in message else "CLOSED"
-    if state != _LAST_MARKET_STATE or now - _LAST_MARKET_HOURS_LOG >= 3600:
+    current_date = log_date or datetime.now(EASTERN_TZ).date()
+    last_state_date = _LAST_MARKET_STATE_DATES.get(state)
+
+    should_log = False
+    if state != _LAST_MARKET_STATE:
+        should_log = True
+    elif last_state_date != current_date:
+        should_log = True
+    elif now - _LAST_MARKET_HOURS_LOG >= 3600:
+        should_log = True
+
+    if should_log:
         if get_verbose_logging():
             logger.info(message)
         else:
             logger.debug(message)
         _LAST_MARKET_STATE = state
+        _LAST_MARKET_STATE_DATES[state] = current_date
         _LAST_MARKET_HOURS_LOG = now
 
 
@@ -373,7 +388,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                     "No market schedule for %s in is_market_open (likely holiday); returning False.", current_date
                 )
             _LAST_MARKET_CLOSED_DATE = current_date
-            _log_market_hours("Detected Market Hours today: CLOSED")
+            _log_market_hours("Detected Market Hours today: CLOSED", log_date=current_date)
             return False
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
@@ -383,7 +398,8 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         _log_market_hours(
             "Detected Market Hours today: OPEN from {} to {}".format(
                 market_open.strftime("%H:%M"), market_close.strftime("%H:%M")
-            )
+            ),
+            log_date=current_date,
         )
         current = check_time.time()
         _LAST_MARKET_CLOSED_DATE = None
@@ -393,13 +409,14 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         now_et = check_time
         if now_et.weekday() >= 5:
             _LAST_MARKET_CLOSED_DATE = now_et.date()
-            _log_market_hours("Detected Market Hours today: CLOSED")
+            _log_market_hours("Detected Market Hours today: CLOSED", log_date=now_et.date())
             return False
         current = now_et.time()
         _log_market_hours(
             "Detected Market Hours today: OPEN from {} to {}".format(
                 MARKET_OPEN_TIME.strftime("%H:%M"), MARKET_CLOSE_TIME.strftime("%H:%M")
-            )
+            ),
+            log_date=now_et.date(),
         )
         _LAST_MARKET_CLOSED_DATE = None
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
