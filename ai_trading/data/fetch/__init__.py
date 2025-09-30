@@ -1158,9 +1158,39 @@ def _alias_rename_map(columns: Iterable[Any]) -> dict[Any, str]:
 
     rename_map: dict[Any, str] = {}
     for column in columns:
-        canonical = _OHLCV_ALIAS_LOOKUP.get(_normalize_column_token(column))
+        normalized = _normalize_column_token(column)
+        canonical = _OHLCV_ALIAS_LOOKUP.get(normalized)
         if canonical is not None:
             rename_map[column] = canonical
+            continue
+
+        tokens: list[str] = []
+        seen: set[str] = set()
+
+        def _add_token(token: str) -> None:
+            if not token or token in seen:
+                return
+            seen.add(token)
+            tokens.append(token)
+            if "_" in token:
+                for piece in token.split("_"):
+                    if piece and piece not in seen:
+                        seen.add(piece)
+                        tokens.append(piece)
+
+        if isinstance(column, tuple):
+            for part in column:
+                if part is None:
+                    continue
+                _add_token(_normalize_column_token(part))
+        else:
+            _add_token(normalized)
+
+        for token in tokens:
+            canonical = _OHLCV_ALIAS_LOOKUP.get(token)
+            if canonical is not None:
+                rename_map[column] = canonical
+                break
     return rename_map
 
 
@@ -1192,6 +1222,8 @@ def ensure_ohlcv_schema(
     work_df = df.copy()
 
     rename_map = _alias_rename_map(work_df.columns)
+    # `_alias_rename_map` now examines tuple components and underscore tokens so
+    # MultiIndex aliases like ("Open", "AAPL") or "open_aapl" collapse to OHLCV names.
     if rename_map:
         work_df = work_df.rename(columns=rename_map)
 
@@ -1917,6 +1949,8 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+    # Upstream `_alias_rename_map` already inspects tuple pieces and underscore
+    # tokens; this legacy map keeps the manual fallback logic untouched.
 
     alias_groups = {
         "timestamp": {"timestamp", "time", "t", "ts"},
