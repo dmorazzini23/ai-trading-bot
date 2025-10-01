@@ -21675,6 +21675,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     price: float | None = None
     price_source = "unknown"
+    winning_provider: str | None = None
     primary_failure_source: str | None = None
     primary_failure_labels: set[str] = set()
 
@@ -21717,8 +21718,25 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         )
 
     cache: dict[str, Any] = {}
+    primary_providers_required: set[str] = {
+        provider for provider in provider_order if _is_primary_price_source(provider)
+    }
+    primary_providers_seen: set[str] = set()
+
+    def _primary_providers_pending() -> bool:
+        return bool(primary_providers_required - primary_providers_seen)
+
+    def _mark_primary_attempt(source_label: str | None, provider_label: str) -> None:
+        if _is_primary_price_source(provider_label):
+            primary_providers_seen.add(provider_label)
+        if source_label and _is_primary_price_source(source_label):
+            primary_providers_seen.add(source_label)
 
     def _finalize_return() -> float | None:
+        nonlocal price_source, winning_provider
+        resolved_source = winning_provider or price_source
+        if resolved_source:
+            price_source = resolved_source
         if price is not None and _should_flag_delayed_slippage(cache, price_source):
             _log_delayed_quote_slippage(symbol, price_source, price, cache)
         _set_price_source(symbol, price_source)
@@ -21729,7 +21747,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         return price
 
     def _use_cached_primary_success() -> bool:
-        nonlocal price, price_source, last_source, prev_source
+        nonlocal price, price_source, last_source, prev_source, winning_provider
         for prefix in ("trade", "quote"):
             cached_price = cache.get(f"{prefix}_price")
             cached_source = cache.get(f"{prefix}_source")
@@ -21741,6 +21759,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             price_source = str(cached_source)
             prev_source = last_source
             last_source = price_source
+            winning_provider = price_source
             return True
         return False
 
@@ -21842,8 +21861,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             provider == "yahoo"
             and not skip_primary
             and price is None
-            and len(primary_failure_labels) < 2
             and has_primary_providers
+            and _primary_providers_pending()
         ):
             deferred_providers.append(provider)
             continue
@@ -21853,6 +21872,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if source:
             prev_source = last_source
             last_source = source
+        _mark_primary_attempt(source, provider)
         if source == "alpaca_auth_failed":
             price_source = source
             _set_price_source(symbol, price_source)
@@ -21860,6 +21880,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if candidate is not None:
             price = candidate
             price_source = source or provider
+            winning_provider = price_source
             if source in _ALPACA_TERMINAL_PRICE_SOURCES or provider.startswith("alpaca"):
                 return _finalize_return()
             break
@@ -21868,11 +21889,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             if degraded is not None:
                 price, price_source = degraded
                 last_source = price_source
+                winning_provider = price_source
                 return _finalize_return()
         _record_primary_failure(source or provider)
 
     if price is None and deferred_providers and (
-        skip_primary or len(primary_failure_labels) >= 2 or not has_primary_providers
+        skip_primary or not has_primary_providers or not _primary_providers_pending()
     ):
         for provider in deferred_providers:
             candidate, source = _attempt_provider(provider)
@@ -21882,6 +21904,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             if candidate is not None:
                 price = candidate
                 price_source = source or provider
+                winning_provider = price_source
                 break
 
     if price is None:
@@ -21889,10 +21912,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
         if degraded is not None:
             price, price_source = degraded
             last_source = price_source
+            winning_provider = price_source
             cache_source = cache.get("quote_degraded_source")
             if isinstance(cache_source, str):
                 price_source = cache_source
                 last_source = price_source
+                winning_provider = price_source
             cache_price = cache.get("quote_degraded_price")
             if cache_price is not None:
                 price = cache_price
