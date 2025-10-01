@@ -4,7 +4,7 @@ import asyncio
 import os
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, NamedTuple
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
@@ -29,6 +29,13 @@ class _ResolvedLimitCache:
     env_snapshot: tuple[str | None, str | None, str | None]
 
 
+class HostLimitSnapshot(NamedTuple):
+    """Lightweight snapshot describing the current host limit state."""
+
+    limit: int
+    version: int
+
+
 _HostSemaphoreMap = dict[str, _SemaphoreRecord]
 _HOST_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, _HostSemaphoreMap] = (
     WeakKeyDictionary()
@@ -49,6 +56,16 @@ _DEFAULT_HOST_KEY: Final[str] = "__default__"
 def _normalize_host(hostname: str | None) -> str:
     host = (hostname or "").strip().lower()
     return host or _DEFAULT_HOST_KEY
+
+
+def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
+    semaphore = asyncio.Semaphore(limit)
+    try:
+        setattr(semaphore, "_ai_trading_host_limit", limit)
+        setattr(semaphore, "_ai_trading_host_limit_version", version)
+    except Exception:  # pragma: no cover - attribute assignment failure should not break runtime
+        pass
+    return semaphore
 
 
 def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
@@ -188,22 +205,6 @@ def _resolve_limit() -> tuple[int, int]:
     return limit, version
 
 
-def get_host_limit() -> int:
-    """Return the configured maximum concurrency per host."""
-
-    limit, _ = _resolve_limit()
-    return limit
-
-
-def invalidate_host_limit_cache() -> None:
-    """Invalidate cached host limit values.
-
-    The next access will recompute the limit and refresh semaphore records as needed.
-    """
-
-    reset_host_semaphores(clear_limit_cache=True)
-
-
 def _ensure_limit_cache() -> _ResolvedLimitCache:
     """Return a coherent snapshot of the resolved limit cache."""
 
@@ -225,6 +226,42 @@ def _ensure_limit_cache() -> _ResolvedLimitCache:
         )
         _LIMIT_CACHE = cache
     return cache
+
+
+def get_host_limit_snapshot() -> HostLimitSnapshot:
+    """Return the current host limit together with its cache version."""
+
+    cache = _ensure_limit_cache()
+    return HostLimitSnapshot(cache.limit, cache.version)
+
+
+def get_host_limit() -> int:
+    """Return the configured maximum concurrency per host."""
+
+    snapshot = get_host_limit_snapshot()
+    return snapshot.limit
+
+
+def invalidate_host_limit_cache() -> None:
+    """Invalidate cached host limit values.
+
+    The next access will recompute the limit and refresh semaphore records as needed.
+    """
+
+    reset_host_semaphores(clear_limit_cache=True)
+
+
+def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
+    """Refresh cached limit metadata when relevant environment variables change."""
+
+    env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+    cache = _LIMIT_CACHE
+    if cache is not None and cache.env_snapshot == env_snapshot:
+        return HostLimitSnapshot(cache.limit, cache.version)
+
+    reset_host_semaphores(clear_limit_cache=True)
+    limit, version = _resolve_limit()
+    return HostLimitSnapshot(limit, version)
 
 
 def _get_host_map(loop: asyncio.AbstractEventLoop) -> _HostSemaphoreMap:
@@ -252,14 +289,14 @@ def _get_or_create_loop_semaphore(
         ]
         for host in stale_hosts:
             host_map[host] = _SemaphoreRecord(
-                asyncio.Semaphore(resolved_limit), resolved_limit, version
+                _build_semaphore(resolved_limit, version), resolved_limit, version
             )
 
     record = host_map.get(hostname)
     if record is not None and record.limit == resolved_limit and record.version == version:
         return record.semaphore
 
-    semaphore = asyncio.Semaphore(resolved_limit)
+    semaphore = _build_semaphore(resolved_limit, version)
     host_map[hostname] = _SemaphoreRecord(semaphore, resolved_limit, version)
     return semaphore
 
@@ -276,13 +313,12 @@ def refresh_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
     """Force the cached semaphore for the current loop to refresh using the latest limit."""
 
     loop = asyncio.get_running_loop()
-    cache = _ensure_limit_cache()
-    limit = cache.limit
-    version = cache.version
     host = _normalize_host(hostname)
-    semaphore = asyncio.Semaphore(limit)
     host_map = _get_host_map(loop)
-    host_map[host] = _SemaphoreRecord(semaphore, limit, version)
+    old_record = host_map.pop(host, None)
+    cache = _ensure_limit_cache()
+    semaphore = _build_semaphore(cache.limit, cache.version)
+    host_map[host] = _SemaphoreRecord(semaphore, cache.limit, cache.version)
     return semaphore
 
 
@@ -327,11 +363,14 @@ def limit_url(url: str) -> AsyncHostLimiter:
 
 __all__ = [
     "AsyncHostLimiter",
+    "HostLimitSnapshot",
     "get_host_limit",
+    "get_host_limit_snapshot",
     "get_host_semaphore",
     "invalidate_host_limit_cache",
     "limit_host",
     "limit_url",
+    "reload_host_limit_if_env_changed",
     "refresh_host_semaphore",
     "reset_host_semaphores",
     "testing_reset_host_limits",

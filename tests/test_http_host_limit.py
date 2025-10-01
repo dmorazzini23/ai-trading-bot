@@ -71,6 +71,30 @@ def test_host_limit_updates_when_env_changes(monkeypatch):
     _reload_pooling(pooling)
 
 
+def test_reload_host_limit_if_env_changed_triggers_refresh(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
+    pooling = _reload_pooling()
+
+    loop = asyncio.new_event_loop()
+    try:
+        initial_snapshot = pooling.get_host_limit_snapshot()
+        first_id = loop.run_until_complete(_semaphore_id(pooling))
+
+        monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "5")
+        snapshot = pooling.reload_host_limit_if_env_changed()
+        assert snapshot.limit == 5
+        assert snapshot.version != initial_snapshot.version
+
+        second_id = loop.run_until_complete(_semaphore_id(pooling))
+        assert second_id != first_id
+        assert loop.run_until_complete(_max_concurrency(pooling, worker_count=8)) == 5
+    finally:
+        loop.close()
+
+    monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+    _reload_pooling(pooling)
+
+
 def test_host_semaphore_is_scoped_per_event_loop(monkeypatch):
     monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "3")
     pooling = _reload_pooling()
