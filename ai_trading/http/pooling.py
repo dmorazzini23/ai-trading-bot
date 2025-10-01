@@ -26,6 +26,7 @@ class _ResolvedLimitCache:
     limit: int
     version: int
     config_id: int | None
+    env_snapshot: tuple[str | None, str | None, str | None]
 
 
 _HostSemaphoreMap = dict[str, _SemaphoreRecord]
@@ -35,6 +36,12 @@ _HOST_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, _HostSemaphoreMap
 
 _LIMIT_CACHE: _ResolvedLimitCache | None = None
 _LIMIT_VERSION: int = 0
+
+_ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
+    "HTTP_MAX_PER_HOST",
+    "AI_TRADING_HTTP_HOST_LIMIT",
+    "AI_TRADING_HOST_LIMIT",
+)
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
 
@@ -71,7 +78,20 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
             limit=cache.limit,
             version=_LIMIT_VERSION,
             config_id=cache.config_id,
+            env_snapshot=cache.env_snapshot,
         )
+
+
+def testing_reset_host_semaphores() -> None:
+    """Test helper: clear cached host semaphores without dropping the limit cache."""
+
+    reset_host_semaphores(clear_limit_cache=False)
+
+
+def testing_reset_host_limits() -> None:
+    """Test helper: clear cached semaphores and force the limit to recompute."""
+
+    reset_host_semaphores(clear_limit_cache=True)
 
 
 def _compute_limit(raw: str | None = None) -> int:
@@ -99,15 +119,12 @@ def _compute_limit(raw: str | None = None) -> int:
         return _DEFAULT_LIMIT
 
 
-def _read_limit_source() -> tuple[int, str | None, str | None, int | None]:
+def _read_limit_source(
+    env_snapshot: tuple[str | None, str | None, str | None]
+) -> tuple[int, str | None, str | None, int | None]:
     """Return the resolved limit and metadata describing its source."""
 
-    for env_key in (
-        "HTTP_MAX_PER_HOST",
-        "AI_TRADING_HTTP_HOST_LIMIT",
-        "AI_TRADING_HOST_LIMIT",
-    ):
-        raw_env = os.getenv(env_key)
+    for env_key, raw_env in zip(_ENV_LIMIT_KEYS, env_snapshot):
         if raw_env not in (None, ""):
             limit = _compute_limit(raw_env)
             return limit, env_key, raw_env, None
@@ -139,7 +156,8 @@ def _resolve_limit() -> tuple[int, int]:
 
     global _LIMIT_CACHE, _LIMIT_VERSION
 
-    limit, env_key, raw_env, config_id = _read_limit_source()
+    env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+    limit, env_key, raw_env, config_id = _read_limit_source(env_snapshot)
 
     cache = _LIMIT_CACHE
     if (
@@ -148,6 +166,7 @@ def _resolve_limit() -> tuple[int, int]:
         and cache.env_key == env_key
         and cache.raw_env == raw_env
         and cache.config_id == config_id
+        and cache.env_snapshot == env_snapshot
     ):
         return cache.limit, cache.version
 
@@ -164,6 +183,7 @@ def _resolve_limit() -> tuple[int, int]:
         limit=limit,
         version=version,
         config_id=config_id,
+        env_snapshot=env_snapshot,
     )
     return limit, version
 
@@ -201,6 +221,7 @@ def _ensure_limit_cache() -> _ResolvedLimitCache:
             limit=limit,
             version=version,
             config_id=None,
+            env_snapshot=tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS),
         )
         _LIMIT_CACHE = cache
     return cache
@@ -313,4 +334,6 @@ __all__ = [
     "limit_url",
     "refresh_host_semaphore",
     "reset_host_semaphores",
+    "testing_reset_host_limits",
+    "testing_reset_host_semaphores",
 ]
