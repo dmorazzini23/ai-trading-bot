@@ -124,7 +124,9 @@ def _parse_intraday_feed(raw: str) -> str:
         return "iex"
     if value == "sip":
         return "sip"
-    raise ValueError("DATA_FEED_INTRADAY must be one of: iex, sip")
+    if value == "finnhub":
+        return "finnhub"
+    raise ValueError("DATA_FEED_INTRADAY must be one of: iex, sip, finnhub")
 
 
 _VALID_PRICE_PROVIDERS = {

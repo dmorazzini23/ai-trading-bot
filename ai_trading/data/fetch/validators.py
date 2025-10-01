@@ -1,7 +1,7 @@
 """Lightweight parameter validators for data fetchers."""
 from __future__ import annotations
 
-VALID_FEEDS = {"iex", "sip", "yahoo"}
+VALID_FEEDS = {"iex", "sip", "yahoo", "finnhub"}
 VALID_ADJUSTMENTS = {"raw", "split", "all"}
 
 
