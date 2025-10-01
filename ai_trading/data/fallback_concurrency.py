@@ -1,43 +1,32 @@
-"""Async helpers for running fallback fetches with bounded concurrency."""
+"""Compatibility shim for legacy fallback concurrency helpers."""
 
 from __future__ import annotations
 
-import asyncio
-from typing import Awaitable, Callable, Iterable, List, Tuple, Any
+import sys
+from typing import TYPE_CHECKING
 
+from ai_trading.data.fallback import concurrency as _concurrency
 
-async def run_with_concurrency(
-    jobs: Iterable[Callable[[], Awaitable[Any]]],
-    limit: int,
-) -> Tuple[List[Any], int, int]:
-    """Execute *jobs* concurrently while keeping at most ``limit`` tasks in flight."""
+if TYPE_CHECKING:  # pragma: no cover - for static type checkers only
+    from ai_trading.data.fallback.concurrency import (
+        FAILED_SYMBOLS,
+        PEAK_SIMULTANEOUS_WORKERS,
+        SUCCESSFUL_SYMBOLS,
+        reset_peak_simultaneous_workers,
+        reset_tracking_state,
+        run_with_concurrency,
+        run_with_concurrency_limit,
+        _collect_asyncio_primitive_types,
+        _get_effective_host_limit,
+        _get_host_limit_semaphore,
+        _maybe_recreate_lock,
+        _normalise_pooling_state,
+    )
 
-    max_concurrency = max(int(limit or 1), 1)
-    semaphore = asyncio.Semaphore(max_concurrency)
-    results: List[Any] = []
-    succeeded = failed = 0
+# Ensure ``ai_trading.data.fallback_concurrency`` resolves to the modern
+# implementation while preserving backwards-compatible attribute access and
+# mutation semantics.
+__doc__ = _concurrency.__doc__
+__all__ = getattr(_concurrency, "__all__", ())
 
-    async def _run(job: Callable[[], Awaitable[Any]]):
-        await semaphore.acquire()
-        try:
-            value = await job()
-            return True, value
-        except Exception as exc:  # pragma: no cover - surfaced to caller
-            return False, exc
-        finally:
-            semaphore.release()
-
-    tasks = [_run(job) for job in jobs]
-    if not tasks:
-        return [], 0, 0
-
-    for ok, value in await asyncio.gather(*tasks, return_exceptions=False):
-        results.append(value)
-        if ok:
-            succeeded += 1
-        else:
-            failed += 1
-    return results, succeeded, failed
-
-
-__all__ = ["run_with_concurrency"]
+sys.modules[__name__] = _concurrency
