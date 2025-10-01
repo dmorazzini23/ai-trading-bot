@@ -3950,15 +3950,18 @@ def _fetch_bars(
                 )
             return result
 
-        params = {
-            "symbols": symbol,
-            "timeframe": _interval,
-            "start": _start.isoformat(),
-            "end": _end.isoformat(),
-            "limit": 10000,
-            "feed": _feed,
-            "adjustment": adjustment,
-        }
+        def _build_request_params() -> dict[str, Any]:
+            return {
+                "symbols": symbol,
+                "timeframe": _interval,
+                "start": _start.isoformat(),
+                "end": _end.isoformat(),
+                "limit": 10000,
+                "feed": _feed,
+                "adjustment": adjustment,
+            }
+
+        params: dict[str, Any] = {}
         url = "https://data.alpaca.markets/v2/stocks/bars"
         # Prefer an instance-level patched ``session.get`` when present (tests);
         # otherwise route through the module-level ``requests.get`` so tests
@@ -3966,6 +3969,7 @@ def _fetch_bars(
         use_session_get = hasattr(session, "get")
         prev_corr = _state.get("corr_id")
         try:
+            params = _build_request_params()
             if use_session_get:
                 resp = session.get(url, params=params, headers=headers, timeout=timeout)
             else:
