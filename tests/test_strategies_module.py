@@ -8,8 +8,9 @@ from ai_trading.core.bot_engine import get_strategies
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _stub_modules(monkeypatch):
+def _stub_modules():
     """Provide lightweight stubs for optional heavy dependencies."""
+    monkeypatch = pytest.MonkeyPatch()
     os.environ.setdefault("PYTEST_RUNNING", "1")
 
     monkeypatch.setitem(
@@ -76,7 +77,10 @@ def _stub_modules(monkeypatch):
     finnhub_stub.FinnhubAPIException = type("FinnhubAPIException", (Exception,), {})
     monkeypatch.setitem(sys.modules, "finnhub", finnhub_stub)
 
-    yield
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
 
 
 def _prep_settings(strategies):
