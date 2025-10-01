@@ -7,6 +7,7 @@ from types import GeneratorType
 from typing import Any, Dict, Tuple
 
 from ai_trading.data.fetch.normalize import normalize_ohlcv_df
+from ai_trading.utils.time import is_generator_stop
 
 
 @dataclass(slots=True)
@@ -56,6 +57,12 @@ def get_daily_df_memoized(
         except StopIteration:
             stop_iteration = True
             candidate = None
+        except RuntimeError as exc:
+            if is_generator_stop(exc):
+                stop_iteration = True
+                candidate = None
+            else:
+                raise
 
         if isinstance(candidate, GeneratorType):
             generator = candidate
@@ -64,6 +71,12 @@ def get_daily_df_memoized(
             except StopIteration:
                 stop_iteration = True
                 candidate = None
+            except RuntimeError as exc:
+                if is_generator_stop(exc):
+                    stop_iteration = True
+                    candidate = None
+                else:
+                    raise
             finally:
                 with suppress(Exception):
                     generator.close()

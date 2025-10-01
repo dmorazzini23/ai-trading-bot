@@ -18,7 +18,7 @@ from types import GeneratorType
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Callable
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
-from ai_trading.utils.time import monotonic_time
+from ai_trading.utils.time import monotonic_time, is_generator_stop
 
 
 from ai_trading.data.timeutils import ensure_utc_datetime
@@ -241,6 +241,11 @@ def daily_fetch_memo(key: Tuple[str, str], value_factory):
     except StopIteration:
         _daily_memo.pop(key, None)
         return None
+    except RuntimeError as exc:
+        if is_generator_stop(exc):
+            _daily_memo.pop(key, None)
+            return None
+        raise
 
     if isinstance(value_or_generator, GeneratorType):
         generator = value_or_generator
@@ -249,6 +254,11 @@ def daily_fetch_memo(key: Tuple[str, str], value_factory):
         except StopIteration:
             _daily_memo.pop(key, None)
             return None
+        except RuntimeError as exc:
+            if is_generator_stop(exc):
+                _daily_memo.pop(key, None)
+                return None
+            raise
         finally:
             with suppress(Exception):
                 generator.close()
