@@ -84,7 +84,7 @@ def test_empty_payload_switches_to_preferred_feed(monkeypatch, capmetrics):
 
     assert hasattr(df, "empty")
     assert not getattr(df, "empty", True)
-    normalized = fetch.normalize_ohlcv_df(df)
+    normalized = fetch.normalize_ohlcv_df(df, include_columns=("timestamp",))
     assert list(normalized.columns[:6]) == [
         "timestamp",
         "open",
@@ -146,7 +146,7 @@ def test_empty_payload_switch_records_override_without_preferred_list(monkeypatc
 
     assert hasattr(df, "empty")
     assert not getattr(df, "empty", True)
-    normalized = fetch.normalize_ohlcv_df(df)
+    normalized = fetch.normalize_ohlcv_df(df, include_columns=("timestamp",))
     assert list(normalized.columns[:6]) == [
         "timestamp",
         "open",

@@ -1052,7 +1052,7 @@ def _normalize_with_attrs(df: pd.DataFrame) -> pd.DataFrame:
         attrs = dict(getattr(df, "attrs", {}) or {})
     except (AttributeError, TypeError):
         attrs = {}
-    normalized = normalize_ohlcv_df(df)
+    normalized = normalize_ohlcv_df(df, include_columns=("timestamp",))
     if attrs:
         try:
             normalized.attrs.update(attrs)
@@ -1736,7 +1736,7 @@ def _normalize_ohlcv_df(df, _pd: Any | None = None):
     except Exception:
         return None
     try:
-        normalized = normalize_ohlcv_df(normalized)
+        normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
     except Exception:
         return normalized
     restored = _restore_timestamp_column(normalized)
@@ -1755,7 +1755,7 @@ def _empty_ohlcv_frame(pd_local: Any | None = None) -> pd.DataFrame | None:
         return None
     cols = ["timestamp", "open", "high", "low", "close", "volume"]
     base = pd_local.DataFrame({col: [] for col in cols})
-    return normalize_ohlcv_df(base)
+    return normalize_ohlcv_df(base, include_columns=("timestamp",))
 
 
 def _resolve_backup_provider() -> tuple[str, str]:
@@ -2538,7 +2538,7 @@ def _flatten_and_normalize_ohlcv(
                 df["volume"] = 0
 
     normalize_ohlcv_columns(df)
-    df = normalize_ohlcv_df(df)
+    df = normalize_ohlcv_df(df, include_columns=("timestamp",))
 
     required = ["open", "high", "low", "close", "volume"]
     missing = [col for col in required if col not in df.columns]
@@ -3053,7 +3053,7 @@ def _backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.Dat
         return []  # type: ignore[return-value]
     cols = ["timestamp", "open", "high", "low", "close", "volume"]
     empty_df = pd_local.DataFrame({col: [] for col in cols})
-    normalized_df = normalize_ohlcv_df(empty_df)
+    normalized_df = normalize_ohlcv_df(empty_df, include_columns=("timestamp",))
     return _annotate_df_source(normalized_df, provider=normalized or "none", feed=normalized or None)
 
 
@@ -3137,7 +3137,7 @@ def _post_process(
         return None
     candidate = df if _is_normalized_ohlcv_frame(df, pd) else _flatten_and_normalize_ohlcv(df, symbol, timeframe)
     try:
-        normalized = normalize_ohlcv_df(candidate)
+        normalized = normalize_ohlcv_df(candidate, include_columns=("timestamp",))
     except Exception:
         normalized = candidate
 
@@ -6299,7 +6299,7 @@ def get_minute_df(
         )
         df = _mutate_dataframe_in_place(df, ensured_df)
 
-        normalized_df = normalize_ohlcv_df(df)
+        normalized_df = normalize_ohlcv_df(df, include_columns=("timestamp",))
         df = _mutate_dataframe_in_place(df, normalized_df)
 
         restored_df = _restore_timestamp_column(df)
@@ -6418,7 +6418,7 @@ def get_daily_df(
             source=normalized_feed or "alpaca",
             frequency="1Day",
         )
-        df = normalize_ohlcv_df(df)
+        df = normalize_ohlcv_df(df, include_columns=("timestamp",))
         df = _restore_timestamp_column(df)
     except MissingOHLCVColumnsError as exc:
         logger.error(

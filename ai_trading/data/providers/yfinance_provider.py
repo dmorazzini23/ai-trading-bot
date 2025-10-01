@@ -38,7 +38,7 @@ class Provider:
         yf = self._yf()
         t = yf.Ticker(symbol)
         df = t.history(period=kwargs.get("period", "1y"), interval=interval)
-        df = normalize_ohlcv_df(df)
+        df = normalize_ohlcv_df(df, include_columns=("timestamp",))
         if len(df) == 0:
             return []
         return df
@@ -59,7 +59,7 @@ class Provider:
             df_raw = t.history(period=f"{int(limit)}d", interval="1d")
         except Exception:  # pragma: no cover - network/third-party errors
             return []
-        df = normalize_ohlcv_df(df_raw)
+        df = normalize_ohlcv_df(df_raw, include_columns=("timestamp",))
         if len(df) == 0:
             return []
         df = df.tail(limit)
