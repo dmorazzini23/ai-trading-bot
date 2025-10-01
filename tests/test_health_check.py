@@ -231,3 +231,44 @@ def test_jsonify_failure_preserves_ok_when_healthy(monkeypatch):
     assert data["alpaca"]["has_secret"] is True
     assert data["alpaca"]["shadow_mode"] is False
     _assert_error_contains(data, "json busted")
+
+
+def test_json_dump_failure_rebuilds_payload(monkeypatch):
+    import ai_trading.config.management as config_mgmt
+
+    def broken_jsonify(payload):
+        raise RuntimeError("json busted")
+
+    _install_alpaca_stubs(
+        monkeypatch,
+        key="key",
+        secret="secret",
+        base_url="https://paper-api.alpaca.markets",
+        client=object(),
+    )
+    monkeypatch.setattr(config_mgmt, "validate_required_env", lambda: {})
+    monkeypatch.setattr(config_mgmt, "is_shadow_mode", lambda: False)
+    monkeypatch.setattr(app_module, "jsonify", broken_jsonify, raising=False)
+
+    original_dumps = app_module.json.dumps
+    call_count = {"calls": 0}
+
+    def flaky_dumps(payload, *args, **kwargs):
+        call_count["calls"] += 1
+        if call_count["calls"] == 1:
+            raise TypeError("not serializable")
+        return original_dumps(payload, *args, **kwargs)
+
+    monkeypatch.setattr(app_module.json, "dumps", flaky_dumps)
+
+    app = app_module.create_app()
+    client = app.test_client()
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    _assert_payload_structure(data)
+    assert data["ok"] is False
+    assert data["alpaca"]["has_key"] is True
+    assert data["alpaca"]["has_secret"] is True
+    _assert_error_contains(data, "not serializable")
+    assert call_count["calls"] >= 2

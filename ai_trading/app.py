@@ -82,8 +82,7 @@ def create_app():
             )
             return payload
 
-        canonical_payload = _normalise_payload(data)
-        canonical_payload = _ensure_core_fields(canonical_payload)
+        canonical_payload = _ensure_core_fields(_normalise_payload(data))
 
         fallback_payload = dict(canonical_payload)
         fallback_payload["alpaca"] = dict(canonical_payload["alpaca"])
@@ -118,13 +117,14 @@ def create_app():
                 continue
             response_payload[key] = value
 
-        fallback_payload = _ensure_core_fields(response_payload)
+        final_payload = _ensure_core_fields(response_payload)
 
         func = globals().get("jsonify")
         fallback_used = False
         fallback_reasons: list[str] = []
         if callable(func):
             try:
+                canonical_payload = _ensure_core_fields(dict(canonical_payload))
                 response = func(canonical_payload)
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
@@ -150,10 +150,10 @@ def create_app():
                 fallback_reasons.append("ImportError")
 
         if fallback_used:
-            fallback_payload["ok"] = False
+            final_payload["ok"] = False
 
         message_candidates: list[str] = []
-        existing_error = fallback_payload.get("error")
+        existing_error = final_payload.get("error")
         if existing_error is None:
             existing_error = canonical_payload.get("error")
         existing_error_str: str | None = None
@@ -171,36 +171,43 @@ def create_app():
 
         if message_candidates:
             merged = "; ".join(dict.fromkeys(message_candidates))
-            if existing_error_str is not None or not fallback_payload.get("error"):
-                fallback_payload["error"] = merged
+            if existing_error_str is not None or not final_payload.get("error"):
+                final_payload["error"] = merged
             else:
                 # Preserve non-string canonical error payloads while surfacing
                 # fallback context in a dedicated string field.
-                fallback_payload.setdefault("error_details", {})
-                if isinstance(fallback_payload["error_details"], dict):
-                    fallback_payload["error_details"].setdefault("messages", merged)
+                final_payload.setdefault("error_details", {})
+                if isinstance(final_payload["error_details"], dict):
+                    final_payload["error_details"].setdefault("messages", merged)
                 else:
-                    fallback_payload["error_details"] = {"messages": merged}
+                    final_payload["error_details"] = {"messages": merged}
 
         try:
-            body = json.dumps(fallback_payload, default=str)
+            final_payload = _ensure_core_fields(final_payload)
+            body = json.dumps(final_payload, default=str)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
             fallback_reasons = []
             fallback_used = True
+            alpaca_section = (
+                dict(final_payload.get("alpaca", {}))
+                if isinstance(final_payload.get("alpaca"), dict)
+                else {}
+            )
             safe_payload = {
                 "ok": False,
-                "alpaca": dict(fallback_payload.get("alpaca", {})),
+                "alpaca": alpaca_section,
                 "error": str(exc) or exc.__class__.__name__ or "serialization_error",
             }
-            fallback_payload = _ensure_core_fields(_normalise_payload(safe_payload))
-            fallback_payload["ok"] = False
-            body = json.dumps(fallback_payload, default=str)
+            final_payload = _ensure_core_fields(safe_payload)
+            body = json.dumps(final_payload, default=str)
 
         response_factory = getattr(app, "response_class", None)
         if callable(response_factory):
+            final_payload = _ensure_core_fields(final_payload)
             return response_factory(body, status=status, mimetype="application/json")
-        return fallback_payload, status
+        final_payload = _ensure_core_fields(final_payload)
+        return final_payload, status
 
     @app.route('/health')
     def health():
