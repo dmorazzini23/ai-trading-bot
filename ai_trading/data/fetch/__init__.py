@@ -2894,13 +2894,24 @@ def _is_normalized_ohlcv_frame(
 
     expected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
     try:
-        if list(df.columns) != expected_columns:
-            return False
+        cols_lower = {str(col).lower() for col in getattr(df, "columns", [])}
     except Exception:
+        return False
+    if any(required not in cols_lower for required in expected_columns):
         return False
 
     try:
-        ts_series = df["timestamp"]
+        ts_col = next(
+            (col for col in df.columns if str(col).lower() == "timestamp"),
+            None,
+        )
+    except Exception:
+        ts_col = None
+    if ts_col is None:
+        return False
+
+    try:
+        ts_series = df[ts_col]
     except Exception:
         return False
 
