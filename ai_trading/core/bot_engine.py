@@ -1528,7 +1528,9 @@ def _log_delayed_quote_slippage(
 logger = get_logger(__name__)
 
 
-def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
+def _attempt_alpaca_trade(
+    symbol: str, feed: str | None, cache: dict[str, Any]
+) -> tuple[float | None, str]:
     if cache.get('trade_attempted'):
         cached_price = cache.get('trade_price')
         cached_source = cache.get('trade_source')
@@ -1589,7 +1591,9 @@ def _attempt_alpaca_trade(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
     return price, cache['trade_source']
 
 
-def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
+def _attempt_alpaca_quote(
+    symbol: str, feed: str | None, cache: dict[str, Any]
+) -> tuple[float | None, str]:
     if cache.get('quote_attempted'):
         cached_price = cache.get('quote_price')
         cached_source = cache.get('quote_source')
@@ -1671,7 +1675,9 @@ def _attempt_alpaca_quote(symbol: str, feed: str, cache: dict[str, Any]) -> tupl
     return price, source
 
 
-def _attempt_alpaca_minute_close(symbol: str, feed: str, cache: dict[str, Any]) -> tuple[float | None, str]:
+def _attempt_alpaca_minute_close(
+    symbol: str, feed: str | None, cache: dict[str, Any]
+) -> tuple[float | None, str]:
     if cache.get('minute_attempted'):
         return cache.get('minute_price'), cache.get('minute_source', 'alpaca_minute_invalid')
     cache['minute_attempted'] = True
@@ -21705,6 +21711,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             _log_delayed_quote_slippage(symbol, price_source, price, cache)
         _set_price_source(symbol, price_source)
         if _is_usable_alpaca_source(price_source):
+            if alpaca_feed:
+                _cache_cycle_fallback_feed_helper(alpaca_feed, symbol=symbol)
             _clear_cached_yahoo_fallback(symbol)
         return price
 
@@ -21730,6 +21738,14 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     configured_feed = cycle_feed or _get_intraday_feed()
     sanitized_feed = _normalize_cycle_feed(configured_feed)
     feed = sanitized_feed or configured_feed
+
+    alpaca_feed: str | None = sanitized_feed
+    if alpaca_feed is None:
+        default_feed = _normalize_cycle_feed(_get_intraday_feed())
+        if default_feed:
+            alpaca_feed = default_feed
+    if alpaca_feed is None:
+        alpaca_feed = _sanitize_alpaca_feed(DATA_FEED_INTRADAY) or "iex"
     switchover_reason: str | None = None
     if sanitized_feed == "sip":
         if not data_fetcher_module._sip_configured():
@@ -21756,7 +21772,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     elif cycle_feed is None and sanitized_feed:
         _cache_cycle_fallback_feed_helper(sanitized_feed, symbol=symbol)
 
-    if feed and _sanitize_alpaca_feed(feed) is None:
+    if feed and _sanitize_alpaca_feed(feed) is None and not alpaca_feed:
         filtered_order = tuple(
             provider for provider in provider_order if not provider.startswith("alpaca")
         )
@@ -21783,12 +21799,12 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
 
     def _attempt_provider(provider: str) -> tuple[float | None, str]:
         if provider == "alpaca_trade":
-            return _attempt_alpaca_trade(symbol, feed, cache)
+            return _attempt_alpaca_trade(symbol, alpaca_feed, cache)
         if provider == "alpaca_quote":
-            return _attempt_alpaca_quote(symbol, feed, cache)
+            return _attempt_alpaca_quote(symbol, alpaca_feed, cache)
         if provider in {"alpaca_ask", "alpaca_bid"}:
             if not cache.get("quote_attempted"):
-                _attempt_alpaca_quote(symbol, feed, cache)
+                _attempt_alpaca_quote(symbol, alpaca_feed, cache)
             values = cache.get("quote_values") or {}
             value = values.get(provider)
             if value is None and provider == "alpaca_bid":
@@ -21799,7 +21815,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
                 return None, f"{provider}_invalid"
             return value, provider
         if provider == "alpaca_minute_close":
-            return _attempt_alpaca_minute_close(symbol, feed, cache)
+            return _attempt_alpaca_minute_close(symbol, alpaca_feed, cache)
         if provider == "yahoo":
             return _attempt_yahoo_price(symbol)
         if provider == "bars":
