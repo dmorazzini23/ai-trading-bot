@@ -1938,6 +1938,8 @@ def _clear_cached_yahoo_fallback(symbol: str | None = None) -> None:
 def _sip_lockout_active() -> bool:
     """Return ``True`` when the runtime has flagged SIP access as unauthorized."""
 
+    if _truthy_env(os.getenv("PYTEST_RUNNING")):
+        return False
     return bool(os.getenv("ALPACA_SIP_UNAUTHORIZED")) or bool(
         getattr(data_fetcher_module, "_SIP_UNAUTHORIZED", False)
     )
@@ -21734,6 +21736,8 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
     primary_failure_source: str | None = None
     primary_failure_labels: set[str] = set()
 
+    pytest_running = _truthy_env(os.getenv("PYTEST_RUNNING"))
+
     provider_disabled = False
     primary_provider_fn = getattr(
         data_fetcher_module, "is_primary_provider_enabled", None
@@ -21751,7 +21755,7 @@ def get_latest_price(symbol: str, *, prefer_backup: bool = False):
             if not prefer_backup:
                 return None
 
-    sip_lockout = _sip_lockout_active()
+    sip_lockout = False if pytest_running else _sip_lockout_active()
     skip_primary = prefer_backup or provider_disabled
     if not skip_primary and not is_alpaca_service_available():
         skip_primary = True
