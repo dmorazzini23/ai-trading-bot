@@ -3654,45 +3654,34 @@ def _fetch_bars(
     validate_adjustment(adjustment_norm)
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment_norm)
     try:
-        if not _window_has_trading_session(_start, _end):
-            raise ValueError("window_no_trading_session")
+        window_has_session = _window_has_trading_session(_start, _end)
     except ValueError as e:
         if "window_no_trading_session" in str(e):
-            tf_key = (symbol, _interval)
-            _SKIPPED_SYMBOLS.discard(tf_key)
-            _IEX_EMPTY_COUNTS.pop(tf_key, None)
-            logger.info(
-                "DATA_WINDOW_NO_SESSION",
-                extra=_norm_extra(
-                    {
-                        "provider": "alpaca",
-                        "feed": _feed,
-                        "timeframe": _interval,
-                        "symbol": symbol,
-                        "start": _start.isoformat(),
-                        "end": _end.isoformat(),
-                    }
-                ),
-            )
-            fallback_df = None
-            if _ENABLE_HTTP_FALLBACK:
-                interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
-                fb_interval = interval_map.get(_interval)
-                if fb_interval:
-                    provider_str, normalized_provider = _resolve_backup_provider()
-                    resolved_provider = normalized_provider or provider_str
-                    from_provider_label = f"alpaca_{_feed}"
-                    if from_provider_label == "alpaca_iex":
-                        from_provider_label = "alpaca_sip"
-                    fallback_df = _run_backup_fetch(
-                        fb_interval,
-                        from_provider=from_provider_label,
-                    )
-            if fallback_df is not None and not getattr(fallback_df, "empty", True):
-                return fallback_df
-            empty_df = _empty_ohlcv_frame(pd)
-            return empty_df if empty_df is not None else pd.DataFrame()
-        raise
+            window_has_session = False
+        else:
+            raise
+    else:
+        window_has_session = bool(window_has_session)
+    if not window_has_session:
+        tf_key = (symbol, _interval)
+        _SKIPPED_SYMBOLS.discard(tf_key)
+        _IEX_EMPTY_COUNTS.pop(tf_key, None)
+        logger.info(
+            "DATA_WINDOW_NO_SESSION",
+            extra=_norm_extra(
+                {
+                    "provider": "alpaca",
+                    "feed": _feed,
+                    "timeframe": _interval,
+                    "symbol": symbol,
+                    "start": _start.isoformat(),
+                    "end": _end.isoformat(),
+                }
+            ),
+        )
+        _state["window_has_session"] = False
+    else:
+        _state["window_has_session"] = True
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
@@ -3778,11 +3767,27 @@ def _fetch_bars(
                 )
             except Exception:
                 pass
-    if _used_fallback(symbol, _interval, _start, _end):
-        interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
-        fb_int = interval_map.get(_interval)
-        if fb_int:
-            return _run_backup_fetch(fb_int)
+    fallback_key = _fallback_key(symbol, _interval, _start, _end)
+    if fallback_key in _FALLBACK_WINDOWS:
+        override_feed = _FEED_OVERRIDE_BY_TF.get((symbol, _interval))
+        override_norm: str | None = None
+        if override_feed is not None:
+            try:
+                override_norm = _normalize_feed_value(override_feed)
+            except ValueError:
+                try:
+                    override_norm = str(override_feed).strip().lower() or None
+                except Exception:
+                    override_norm = None
+        if override_norm in {"iex", "sip"}:
+            _FALLBACK_WINDOWS.discard(fallback_key)
+            _FALLBACK_UNTIL.pop((symbol, _interval), None)
+            _feed = override_norm
+        else:
+            interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
+            fb_int = interval_map.get(_interval)
+            if fb_int:
+                return _run_backup_fetch(fb_int)
     # Respect recent fallback TTL at coarse granularity
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
@@ -3917,9 +3922,19 @@ def _fetch_bars(
                 "DATA_SOURCE_FALLBACK_ATTEMPT",
                 extra={"provider": "alpaca", "fallback": payload},
             )
-            result = _req(session, None, headers=headers, timeout=timeout)
+            prev_defer = _state.get("defer_success_metric")
+            _state["defer_success_metric"] = True
+            try:
+                result = _req(session, None, headers=headers, timeout=timeout)
+            finally:
+                if prev_defer is None:
+                    _state.pop("defer_success_metric", None)
+                else:
+                    _state["defer_success_metric"] = prev_defer
             if result is not None and not getattr(result, "empty", True):
-                _record_fallback_success_metric(_tags())
+                tags = _tags()
+                _record_fallback_success_metric(tags)
+                _record_success_metric(tags, prefer_fallback=True)
                 _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
             if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
                 _mark_fallback(
@@ -5047,7 +5062,8 @@ def _fetch_bars(
         last_fallback_feed = _state.pop("last_fallback_feed", None)
         if last_fallback_feed:
             success_tags = _tags(feed=last_fallback_feed)
-        _record_success_metric(success_tags, prefer_fallback=True)
+        if not _state.get("defer_success_metric"):
+            _record_success_metric(success_tags, prefer_fallback=True)
         return df
 
     priority = list(provider_priority())
