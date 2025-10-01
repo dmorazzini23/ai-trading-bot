@@ -3967,7 +3967,17 @@ def _fetch_bars(
         # Prefer an instance-level patched ``session.get`` when present (tests);
         # otherwise route through the module-level ``requests.get`` so tests
         # that monkeypatch ``df.requests.get`` can intercept deterministically.
-        use_session_get = hasattr(session, "get")
+        session_get = getattr(session, "get", None)
+        use_session_get = callable(session_get)
+        if use_session_get:
+            default_session_get = getattr(HTTPSession, "get", None)
+            bound_func = getattr(session_get, "__func__", None)
+            if (
+                isinstance(session, HTTPSession)
+                and default_session_get is not None
+                and bound_func is default_session_get
+            ):
+                use_session_get = False
         prev_corr = _state.get("corr_id")
         try:
             params = _build_request_params()
