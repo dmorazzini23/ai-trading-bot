@@ -56,7 +56,9 @@ def _normalize_alpaca_base_url(value: str | None, *, source_key: str) -> tuple[s
     return raw, None
 
 
-def _select_alpaca_base_url(env: Mapping[str, str] | None = None) -> tuple[str | None, list[tuple[str, str, str]]]:
+def _select_alpaca_base_url(
+    env: Mapping[str, str] | None = None,
+) -> tuple[str | None, str | None, list[tuple[str, str, str]]]:
     env_map = env or os.environ
     invalid_entries: list[tuple[str, str, str]] = []
 
@@ -64,11 +66,11 @@ def _select_alpaca_base_url(env: Mapping[str, str] | None = None) -> tuple[str |
         raw = env_map.get(env_key)
         normalized, message = _normalize_alpaca_base_url(raw, source_key=env_key)
         if normalized:
-            return normalized, invalid_entries
+            return normalized, env_key, invalid_entries
         if raw and message:
             invalid_entries.append((env_key, raw, message))
 
-    return None, invalid_entries
+    return None, None, invalid_entries
 
 
 def reload_env(path: str | os.PathLike[str] | None = None, override: bool = True) -> str | None:
@@ -237,6 +239,11 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
 
     default_base_url = "https://paper-api.alpaca.markets"
 
+    base_url: str | None
+    source: str | None
+    base_url, source, errors = _select_alpaca_base_url()
+    alias_used = source == "ALPACA_BASE_URL"
+
     cfg: TradingConfig | None
     try:
         cfg = get_trading_config()
@@ -247,16 +254,17 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
         )
         cfg = None
 
-    base_url: str | None
-    if cfg is not None:
-        base_url, errors = _select_alpaca_base_url(
+    if base_url is None and cfg is not None:
+        cfg_base_url, cfg_source, cfg_errors = _select_alpaca_base_url(
             {
                 "ALPACA_BASE_URL": cfg.alpaca_base_url or "",
                 "ALPACA_API_URL": cfg.alpaca_base_url or "",
             }
         )
-    else:
-        base_url, errors = _select_alpaca_base_url()
+        errors.extend(cfg_errors)
+        if cfg_base_url:
+            base_url = cfg_base_url
+            alias_used = cfg_source == "ALPACA_BASE_URL"
 
     for env_key, raw, message in errors:
         logger.error(message, extra={"env_key": env_key, "value": raw})
@@ -267,10 +275,15 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
         )
         if normalized_cfg:
             base_url = normalized_cfg
+            alias_used = False
         elif cfg_error:
             logger.error(cfg_error, extra={"env_key": "ALPACA_API_URL", "value": cfg.alpaca_base_url})
 
     resolved_base_url = base_url or default_base_url
+    if base_url and alias_used:
+        canonical_env = os.getenv("ALPACA_API_URL")
+        if canonical_env is None or canonical_env.strip() == "":
+            os.environ["ALPACA_API_URL"] = base_url
 
     api_key = (getattr(cfg, "alpaca_api_key", None) if cfg is not None else None) or os.getenv(
         "ALPACA_API_KEY"
@@ -292,7 +305,7 @@ def validate_alpaca_credentials() -> None:
     if TESTING:
         return
     reload_trading_config()
-    _, url_errors = _select_alpaca_base_url()
+    _, _, url_errors = _select_alpaca_base_url()
     if url_errors:
         messages = "; ".join(error for _, _, error in url_errors)
         raise RuntimeError(messages)

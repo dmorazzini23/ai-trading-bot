@@ -7,7 +7,7 @@ if not hasattr(config_pkg, "get_settings"):
     config_pkg.get_settings = settings_mod.get_settings
 
 from ai_trading import main
-from ai_trading.config.management import validate_required_env
+from ai_trading.config.management import _resolve_alpaca_env, validate_required_env
 from ai_trading.logging.redact import _ENV_MASK, _SENSITIVE_ENV, redact_env
 from ai_trading.env.config_redaction import redact_config_env
 
@@ -96,3 +96,11 @@ def test_base_url_alias_logged(caplog, monkeypatch):
     main._fail_fast_env()
     env_log = next(rec for rec in caplog.records if rec.getMessage() == "ENV_CONFIG_LOADED")
     assert env_log.ALPACA_API_URL == "https://alias-api.alpaca.markets"
+    assert not hasattr(env_log, "ALPACA_BASE_URL")
+
+    redacted = redact_env({"ALPACA_BASE_URL": "https://alias-api.alpaca.markets"})
+    assert redacted["ALPACA_API_URL"] == "https://alias-api.alpaca.markets"
+    assert "ALPACA_BASE_URL" not in redacted
+
+    _, _, resolved_base_url = _resolve_alpaca_env()
+    assert resolved_base_url == "https://alias-api.alpaca.markets"
