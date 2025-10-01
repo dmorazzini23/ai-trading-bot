@@ -62,8 +62,10 @@ def safe_subprocess_run(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        stdout_text = _normalize_stream(exc.stdout)
-        stderr_text = _normalize_stream(exc.stderr)
+        stdout_text = _normalize_stream(
+            getattr(exc, "stdout", getattr(exc, "output", None))
+        )
+        stderr_text = _normalize_stream(getattr(exc, "stderr", None))
         return SafeSubprocessResult(stdout_text, stderr_text, 124, True)
     except OSError as exc:
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
