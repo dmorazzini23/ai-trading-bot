@@ -51,15 +51,39 @@ def get_daily_df_memoized(
     exhaustions = 0
     _RETRY = object()
 
-    def _handle_exhaustion() -> Any:
+    def _handle_exhaustion(*, terminal: bool = False) -> Any:
         nonlocal exhaustions
         exhaustions += 1
         _MEMO.pop(key, None)
-        if (not factory_callable) or exhaustions >= 2:
+        if terminal or (not factory_callable) or exhaustions >= 2:
             if last_good_df is not None:
+                refreshed_at = time.time()
+                _MEMO[key] = _MemoEntry(refreshed_at, key, last_good_df)
                 return last_good_df
             return None
         return _RETRY
+
+    def _is_empty_frame(candidate: Any) -> bool:
+        if candidate is None:
+            return True
+
+        empty_attr = getattr(candidate, "empty", None)
+        if isinstance(empty_attr, bool):
+            return empty_attr
+        if callable(empty_attr):
+            try:
+                empty_value = empty_attr()
+            except Exception:
+                empty_value = None
+            if isinstance(empty_value, bool):
+                return empty_value
+
+        if hasattr(candidate, "__len__"):
+            try:
+                return len(candidate) == 0
+            except TypeError:
+                return False
+        return False
 
     while True:
         try:
@@ -98,6 +122,12 @@ def get_daily_df_memoized(
             finally:
                 with suppress(Exception):
                     generator.close()
+
+        if _is_empty_frame(candidate):
+            result = _handle_exhaustion(terminal=True)
+            if result is _RETRY:
+                continue
+            return result
 
         df = candidate
         break
