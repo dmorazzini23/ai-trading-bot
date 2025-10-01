@@ -1,7 +1,10 @@
+import os
 import sys
 import types
 
 import pytest
+
+import ai_trading.data.fetch as data_fetch
 
 if "numpy" not in sys.modules:  # pragma: no cover - test stub for optional dep
 
@@ -67,6 +70,7 @@ def test_get_latest_price_uses_configured_feed(monkeypatch):
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setattr(bot_engine, "_INTRADAY_FEED_CACHE", "sip", raising=False)
     monkeypatch.setattr(
         bot_engine,
@@ -217,10 +221,12 @@ def test_get_latest_price_invalid_feed_skips_alpaca(monkeypatch, caplog):
 def test_get_latest_price_uses_fallback_when_sip_lockout(monkeypatch):
     symbol = "SPY"
     bot_engine._reset_cycle_cache()
+    monkeypatch.setenv("PYTEST_RUNNING", "")
     monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
     monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
     monkeypatch.setenv("ALPACA_API_KEY", "test-key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
     monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
     monkeypatch.setattr(
         "ai_trading.data.fetch._SIP_UNAUTHORIZED", True, raising=False
@@ -248,6 +254,78 @@ def test_get_latest_price_uses_fallback_when_sip_lockout(monkeypatch):
 
     assert price == pytest.approx(sentinel)
     assert bot_engine._PRICE_SOURCE[symbol] == "yahoo"
+
+
+def test_get_latest_price_resumes_primary_after_sip_lockout_cleared(monkeypatch):
+    symbol = "QQQ"
+    bot_engine._reset_cycle_cache()
+    monkeypatch.setenv("ALPACA_DATA_FEED", "sip")
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ALPACA_HAS_SIP", "1")
+    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", True, raising=False)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED_UNTIL", None, raising=False)
+    monkeypatch.setattr(
+        "ai_trading.core.bot_engine.is_alpaca_service_available", lambda: True
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_get_price_provider_order",
+        lambda: ("alpaca_trade", "yahoo"),
+    )
+
+    fallback_price = 101.01
+    primary_price = 212.12
+    fallback_calls: list[str] = []
+    alpaca_calls: list[str | None] = []
+
+    def _mock_alpaca_trade(_symbol: str, feed: str | None, _cache: dict):
+        alpaca_calls.append(feed)
+        return primary_price, "alpaca_trade"
+
+    def _mock_yahoo_price(_symbol: str):
+        fallback_calls.append(_symbol)
+        return fallback_price, "yahoo"
+
+    monkeypatch.setattr(bot_engine, "_attempt_alpaca_trade", _mock_alpaca_trade)
+    monkeypatch.setattr(bot_engine, "_attempt_yahoo_price", _mock_yahoo_price)
+
+    # Lockout active without pytest fast path -> fallback feed handles pricing.
+    monkeypatch.setenv("PYTEST_RUNNING", "")
+    locked_out_price = bot_engine.get_latest_price(symbol)
+    assert locked_out_price == pytest.approx(fallback_price)
+    assert fallback_calls == [symbol]
+    assert not alpaca_calls
+
+    # Fast path under pytest bypasses SIP lockout and reuses Alpaca pricing.
+    bot_engine._reset_cycle_cache()
+    fallback_calls.clear()
+    alpaca_calls.clear()
+    monkeypatch.setenv("ALPACA_SIP_UNAUTHORIZED", "1")
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    assert os.getenv("ALPACA_SIP_UNAUTHORIZED") == "1"
+    bypass_price = bot_engine.get_latest_price(symbol)
+    assert bypass_price == pytest.approx(primary_price)
+    assert len(alpaca_calls) == 1
+    assert not fallback_calls
+    assert bot_engine._PRICE_SOURCE[symbol].startswith("alpaca")
+
+    # Clearing lockout flags restores Alpaca usage even outside pytest fast path.
+    bot_engine._reset_cycle_cache()
+    fallback_calls.clear()
+    alpaca_calls.clear()
+    monkeypatch.setenv("PYTEST_RUNNING", "")
+    monkeypatch.delenv("ALPACA_SIP_UNAUTHORIZED", raising=False)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(data_fetch, "_SIP_UNAUTHORIZED_UNTIL", None, raising=False)
+    cleared_price = bot_engine.get_latest_price(symbol)
+    assert cleared_price == pytest.approx(primary_price)
+    assert len(alpaca_calls) == 1
+    assert not fallback_calls
+    assert bot_engine._PRICE_SOURCE[symbol].startswith("alpaca")
+    assert not os.getenv("ALPACA_SIP_UNAUTHORIZED")
 
 
 def test_cached_alpaca_fallback_feed_sanitized(monkeypatch, caplog):
