@@ -1243,6 +1243,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "opening",
         "session_open",
         "session_open_price",
+        "first_price",
         "openvalue",
         "open_val",
         "openpx",
@@ -1269,6 +1270,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "price_high",
         "max_price",
         "maximum_price",
+        "highest_price",
         "session_high",
         "session_high_price",
         "peak_price",
@@ -1290,6 +1292,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "price_low",
         "min_price",
         "minimum_price",
+        "lowest_price",
         "session_low",
         "session_low_price",
         "floor_price",
@@ -1354,6 +1357,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "volume_total",
         "volumetotal",
         "totalvolume",
+        "accumulated_volume",
+        "cumulative_volume",
         "volume_traded",
         "volumetraded",
         "sharevolume",
@@ -1392,24 +1397,26 @@ def _heuristic_alias_match(tokens: Iterable[str], normalized: str) -> str | None
         return any(candidate in normalized_compact for candidate in candidates)
 
     # Handle open variants that do not explicitly contain "open".
-    if _has_any("start_price", "starting_price") or (
-        _has_any("start", "starting", "begin", "initial")
+    if _has_any("start_price", "starting_price", "first_price") or (
+        _has_any("start", "starting", "begin", "initial", "first")
         and _has_any("price", "value")
     ):
         return "open"
 
-    if _contains_any("openingprice"):
+    if _contains_any("openingprice") or _contains_any("firstprice"):
         return "open"
 
     # Handle high variants that rely on synonyms like "max" or "peak".
-    if _has_any("maximum_price", "peak_price") or (
-        _has_any("max", "maximum", "peak") and _has_any("price", "value")
+    if _has_any("maximum_price", "peak_price", "highest_price") or (
+        _has_any("max", "maximum", "peak", "highest")
+        and _has_any("price", "value")
     ):
         return "high"
 
     # Handle low variants that rely on synonyms like "min" or "floor".
-    if _has_any("minimum_price", "floor_price") or (
-        _has_any("min", "minimum", "floor") and _has_any("price", "value")
+    if _has_any("minimum_price", "floor_price", "lowest_price") or (
+        _has_any("min", "minimum", "floor", "lowest")
+        and _has_any("price", "value")
     ):
         return "low"
 
@@ -1424,13 +1431,19 @@ def _heuristic_alias_match(tokens: Iterable[str], normalized: str) -> str | None
         return "close"
 
     # Handle volume variants that lean on share/quantity terminology.
-    if _has_any("share_count", "shares_traded", "session_volume"):
+    if _has_any("share_count", "shares_traded", "session_volume", "accumulated_volume", "cumulative_volume"):
         return "volume"
 
     if (
-        _has_any("shares", "share", "quantity", "qty")
+        _has_any("shares", "share", "quantity", "qty", "accumulated", "cumulative", "aggregate")
         and _has_any("traded", "trade", "count", "total", "volume")
     ):
+        return "volume"
+
+    if _has_any("quantity", "qty") and not token_set.isdisjoint({"bars", "bar"}):
+        return "volume"
+
+    if _has_any("quantity", "qty") and len(token_set) == 1:
         return "volume"
 
     return None

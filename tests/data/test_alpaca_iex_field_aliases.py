@@ -361,6 +361,51 @@ def test_ensure_ohlcv_schema_handles_two_letter_payload(caplog: pytest.LogCaptur
     assert pytest.approx(first["volume"]) == payload[0]["vol"]
 
 
+def test_ensure_ohlcv_schema_handles_first_highest_lowest_payload(
+    caplog: pytest.LogCaptureFixture,
+):
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "firstPrice": 188.45,
+            "highestPrice": 189.12,
+            "lowestPrice": 187.3,
+            "lastPrice": 188.77,
+            "accumulatedVolume": 1_234_567,
+        }
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        normalized = fetch.ensure_ohlcv_schema(
+            frame, source="alpaca_iex", frequency="1Min"
+        )
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
+    first = normalized.iloc[0]
+    assert pytest.approx(first["open"]) == payload[0]["firstPrice"]
+    assert pytest.approx(first["high"]) == payload[0]["highestPrice"]
+    assert pytest.approx(first["low"]) == payload[0]["lowestPrice"]
+    assert pytest.approx(first["close"]) == payload[0]["lastPrice"]
+    assert pytest.approx(first["volume"]) == payload[0]["accumulatedVolume"]
+
+
 def test_ensure_ohlcv_schema_logs_payload_columns(caplog: pytest.LogCaptureFixture):
     payload = [
         {
