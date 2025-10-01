@@ -27,6 +27,27 @@ _SENSITIVE_ENV = {
     "MASTER_ENCRYPTION_KEY",
 }
 
+_ALIAS_MAP = {
+    "ALPACA_BASE_URL": "ALPACA_API_URL",
+}
+
+
+def normalize_aliases(env: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a mapping with environment aliases normalized to canonical keys."""
+
+    resolved: dict[str, Any] = {}
+    for key, value in env.items():
+        canonical = _ALIAS_MAP.get(key, key)
+        if canonical in resolved:
+            existing = resolved[canonical]
+            if key == canonical:
+                resolved[canonical] = value
+            elif (existing in (None, "")) and value not in (None, ""):
+                resolved[canonical] = value
+            continue
+        resolved[canonical] = value
+    return resolved
+
 
 def _redact_inplace(obj: Any) -> Any:
     """Recursively redact matching keys."""
@@ -65,7 +86,8 @@ def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, An
         values with :data:`_ENV_MASK`.
     """
 
-    dup: MutableMapping[str, Any] = dict(env)
+    normalized = normalize_aliases(env)
+    dup: MutableMapping[str, Any] = dict(normalized)
     for key in list(dup):
         if key in _SENSITIVE_ENV and dup[key]:
             if drop:
@@ -75,5 +97,5 @@ def redact_env(env: Mapping[str, Any], *, drop: bool = False) -> Mapping[str, An
     return dup
 
 
-__all__ = ["redact", "redact_env"]
+__all__ = ["redact", "redact_env", "normalize_aliases"]
 
