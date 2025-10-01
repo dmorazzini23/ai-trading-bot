@@ -131,3 +131,26 @@ def test_ensure_schema_handles_multiindex_alias_level():
         pytest.fail(f"ensure_ohlcv_schema unexpectedly raised: {exc}")
 
     assert set(REQUIRED).issubset(ensured.columns)
+
+
+def test_normalize_handles_latest_price_columns():
+    timestamps = pd.to_datetime(["2024-01-02T09:30:00Z", "2024-01-02T09:31:00Z"], utc=True)
+    df = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "sessionOpen": [188.45, 188.5],
+            "sessionHigh": [189.12, 189.2],
+            "sessionLow": [187.3, 187.8],
+            "latestPrice": [188.77, 188.9],
+            "sessionVolume": [1_234_567, 1_300_000],
+        }
+    )
+    df = df.set_index("timestamp")
+
+    normalized = normalize_ohlcv_df(df)
+
+    assert list(normalized.columns[:6]) == ["timestamp", *REQUIRED]
+    first = normalized.iloc[0]
+    assert pytest.approx(first["open"]) == 188.45
+    assert pytest.approx(first["close"]) == 188.77
+    assert pytest.approx(first["volume"]) == 1_234_567

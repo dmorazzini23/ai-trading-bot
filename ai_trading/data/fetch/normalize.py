@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import re
 
 from ai_trading.utils.lazy_imports import load_pandas
 
@@ -11,6 +12,16 @@ pd = load_pandas()
 
 REQUIRED = ("open", "high", "low", "close", "volume")
 
+
+def _normalize_column_name(value: object) -> str:
+    token = str(value).strip()
+    token = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", token)
+    token = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", token)
+    lowered = token.lower().replace(" ", "_").replace("-", "_")
+    while "__" in lowered:
+        lowered = lowered.replace("__", "_")
+    return lowered
+
 _COLUMN_CANONICAL_MAP = {
     "t": "timestamp",
     "time": "timestamp",
@@ -18,17 +29,43 @@ _COLUMN_CANONICAL_MAP = {
     "date": "timestamp",
     "o": "open",
     "open_price": "open",
+    "opening_price": "open",
+    "session_open": "open",
+    "session_open_price": "open",
+    "start_price": "open",
+    "starting_price": "open",
     "h": "high",
     "high_price": "high",
+    "maximum_price": "high",
+    "session_high": "high",
+    "session_high_price": "high",
+    "peak_price": "high",
     "l": "low",
     "low_price": "low",
+    "minimum_price": "low",
+    "session_low": "low",
+    "session_low_price": "low",
+    "floor_price": "low",
     "c": "close",
     "close_price": "close",
+    "latest_price": "close",
+    "latest_value": "close",
+    "market_price": "close",
+    "official_price": "close",
+    "ending_price": "close",
+    "end_price": "close",
+    "final_value": "close",
+    "session_close": "close",
+    "session_close_price": "close",
     "v": "volume",
     "volume_total": "volume",
     "total_volume": "volume",
     "totalvolume": "volume",
     "volumetotal": "volume",
+    "session_volume": "volume",
+    "share_count": "volume",
+    "shares_traded": "volume",
+    "shares": "volume",
     "adjclose": "adj close",
     "adj_close": "adj close",
     "closeadj": "adj close",
@@ -57,10 +94,10 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
 
     if isinstance(df.columns, pd.MultiIndex):
         frame = df.copy()
-        frame.columns = [str(levels[0]).lower().strip() for levels in frame.columns]
+        frame.columns = [_normalize_column_name(levels[0]) for levels in frame.columns]
     else:
         frame = df.copy()
-        frame.columns = [str(col).lower().strip() for col in frame.columns]
+        frame.columns = [_normalize_column_name(col) for col in frame.columns]
 
     if _COLUMN_CANONICAL_MAP:
         frame = frame.rename(columns=_COLUMN_CANONICAL_MAP)
@@ -72,6 +109,23 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
         frame["close"] = frame["adj close"]
     if "close" not in frame.columns and "value" in frame.columns:
         frame["close"] = frame["value"]
+    if "close" not in frame.columns:
+        for candidate in (
+            "latest_price",
+            "latest_value",
+            "market_price",
+            "official_price",
+            "ending_price",
+            "end_price",
+            "final_value",
+            "final_price",
+            "last_value",
+            "last_price",
+            "price",
+        ):
+            if candidate in frame.columns:
+                frame["close"] = frame[candidate]
+                break
 
     for column in REQUIRED:
         if column in frame.columns:
