@@ -29,25 +29,91 @@ try:  # pragma: no cover - optional during stubbed tests
 except Exception:  # pragma: no cover - pooling optional during stubbed tests
     _pooling_host_limit = None
     _pooling_get_host_semaphore = None
+    _pooling_reload_host_limit = None
+    _pooling_get_limit_snapshot = None
+    _pooling_refresh_host_semaphore = None
 else:  # pragma: no cover - exercised in integration tests
     _pooling_host_limit = getattr(_http_pooling, "get_host_limit", None)
     _pooling_get_host_semaphore = getattr(_http_pooling, "get_host_semaphore", None)
+    _pooling_reload_host_limit = getattr(
+        _http_pooling, "reload_host_limit_if_env_changed", None
+    )
+    _pooling_get_limit_snapshot = getattr(
+        _http_pooling, "get_host_limit_snapshot", None
+    )
+    _pooling_refresh_host_semaphore = getattr(
+        _http_pooling, "refresh_host_semaphore", None
+    )
+
+
+_POOLING_LIMIT_STATE: tuple[int, int] | None = None
+
+
+def _normalise_pooling_state(snapshot: object | None) -> tuple[int, int] | None:
+    """Return ``(limit, version)`` when ``snapshot`` exposes that metadata."""
+
+    if snapshot is None:
+        return None
+
+    limit = getattr(snapshot, "limit", None)
+    version = getattr(snapshot, "version", None)
+    if not isinstance(limit, int) or not isinstance(version, int):
+        if isinstance(snapshot, tuple) and len(snapshot) >= 2:
+            limit, version = snapshot[0], snapshot[1]
+        else:
+            return None
+    try:
+        limit = int(limit)
+        version = int(version)
+    except (TypeError, ValueError):
+        return None
+    if limit < 1:
+        limit = 1
+    return limit, version
 
 
 def _get_effective_host_limit() -> int | None:
     """Return the currently configured host limit or ``None`` when unset."""
 
+    global _POOLING_LIMIT_STATE
+
+    snapshot: tuple[int, int] | None = None
+
+    if callable(_pooling_reload_host_limit):
+        try:
+            snapshot = _normalise_pooling_state(_pooling_reload_host_limit())
+        except Exception:
+            snapshot = None
+
+    if snapshot is None and callable(_pooling_get_limit_snapshot):
+        try:
+            snapshot = _normalise_pooling_state(_pooling_get_limit_snapshot())
+        except Exception:
+            snapshot = None
+
+    if snapshot is not None:
+        _POOLING_LIMIT_STATE = snapshot
+        return snapshot[0]
+
     if not callable(_pooling_host_limit):
+        _POOLING_LIMIT_STATE = None
         return None
+
     try:
         limit = int(_pooling_host_limit())
     except Exception:
+        _POOLING_LIMIT_STATE = None
         return None
-    return max(1, limit)
+
+    limit = max(1, limit)
+    _POOLING_LIMIT_STATE = None
+    return limit
 
 
 def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     """Return the shared host-limit semaphore when pooling is available."""
+
+    global _POOLING_LIMIT_STATE
 
     if not callable(_pooling_get_host_semaphore):
         return None
@@ -55,9 +121,37 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
         semaphore = _pooling_get_host_semaphore()
     except Exception:
         return None
-    if isinstance(semaphore, asyncio.Semaphore):
-        return semaphore
-    return None
+    if not isinstance(semaphore, asyncio.Semaphore):
+        return None
+
+    expected_version = None
+    if _POOLING_LIMIT_STATE is not None:
+        expected_version = _POOLING_LIMIT_STATE[1]
+
+    actual_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
+    actual_limit = getattr(semaphore, "_ai_trading_host_limit", None)
+
+    if (
+        expected_version is not None
+        and isinstance(actual_version, int)
+        and actual_version != expected_version
+        and callable(_pooling_refresh_host_semaphore)
+    ):
+        try:
+            refreshed = _pooling_refresh_host_semaphore()
+        except Exception:
+            return None
+        if isinstance(refreshed, asyncio.Semaphore):
+            semaphore = refreshed
+            actual_version = getattr(semaphore, "_ai_trading_host_limit_version", actual_version)
+            actual_limit = getattr(semaphore, "_ai_trading_host_limit", actual_limit)
+
+    if isinstance(actual_limit, int) and isinstance(actual_version, int):
+        normalised = _normalise_pooling_state((actual_limit, actual_version))
+        if normalised is not None:
+            _POOLING_LIMIT_STATE = normalised
+
+    return semaphore
 
 T = TypeVar("T")
 

@@ -262,6 +262,15 @@ def reload_host_limit_if_env_changed(session: TimeoutSession | None = None) -> N
     target = session or _GLOBAL_SESSION
     if target is None:
         return
+    try:
+        from ai_trading.http import pooling as _pooling
+    except Exception:  # pragma: no cover - pooling optional during stubbed tests
+        pass
+    else:
+        try:
+            _pooling.reload_host_limit_if_env_changed()
+        except Exception:
+            pass
     _HOST_LIMIT_CONTROLLER.reload_if_changed(target)
 
 
