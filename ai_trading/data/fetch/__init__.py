@@ -3855,6 +3855,7 @@ def _fetch_bars(
             raise
     else:
         window_has_session = bool(window_has_session)
+    _state["window_has_session"] = window_has_session
     if not window_has_session:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -3872,10 +3873,13 @@ def _fetch_bars(
                 }
             ),
         )
-        _state["window_has_session"] = False
-        return pd.DataFrame()
+        _state["skip_empty_metrics"] = True
+        try:
+            _state["preferred_feeds_snapshot"] = tuple(_preferred_feed_failover())
+        except Exception:
+            _state["preferred_feeds_snapshot"] = ()
     else:
-        _state["window_has_session"] = True
+        _state["skip_empty_metrics"] = False
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
@@ -4070,6 +4074,7 @@ def _fetch_bars(
         reload_host_limit_if_env_changed(session)
 
         call_attempts = _state.setdefault("fallback_feeds_attempted", set())
+        skip_empty_metrics = bool(_state.get("skip_empty_metrics"))
 
         def _fallback_slots_remaining() -> int | None:
             try:
@@ -4616,7 +4621,7 @@ def _fetch_bars(
                     "attempt": empty_attempts,
                 },
             )
-            if not _state.get("empty_metric_emitted"):
+            if not skip_empty_metrics and not _state.get("empty_metric_emitted"):
                 _state["empty_metric_emitted"] = True
                 _incr("data.fetch.empty", value=1.0, tags=_tags())
             attempt = _state["retries"] + 1
@@ -4674,7 +4679,12 @@ def _fetch_bars(
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason=market_closed"
                 )
             logged_attempt = False
-            if empty_attempts == 1 and should_backoff_first_empty and remaining_retries > 0:
+            if (
+                not skip_empty_metrics
+                and empty_attempts == 1
+                and should_backoff_first_empty
+                and remaining_retries > 0
+            ):
                 retry_delay = _state.get("delay", 0.25)
                 _state["delay"] = retry_delay
                 log_extra["delay"] = retry_delay
@@ -4765,7 +4775,8 @@ def _fetch_bars(
                     )
                     _push_to_caplog("ALPACA_FETCH_ABORTED", level=logging.WARNING, extra=payload)
                     _state["abort_logged"] = True
-            metrics.empty_payload += 1
+            if not skip_empty_metrics:
+                metrics.empty_payload += 1
             is_empty_error = isinstance(payload, dict) and payload.get("error") == "empty"
             base_interval = _interval
             base_feed = _feed
@@ -4811,7 +4822,8 @@ def _fetch_bars(
                     provider_monitor.record_switchover(
                         f"alpaca_{_feed}", resolved_provider
                     )
-                    metrics.empty_fallback += 1
+                    if not skip_empty_metrics:
+                        metrics.empty_fallback += 1
                     _ALPACA_EMPTY_ERROR_COUNTS.pop(tf_key, None)
                     _state["stop"] = True
                     interval_map = {
@@ -5322,7 +5334,8 @@ def _fetch_bars(
             break
         empty_attempts += 1
         if empty_attempts >= 2:
-            metrics.empty_fallback += 1
+            if not _state.get("skip_empty_metrics"):
+                metrics.empty_fallback += 1
             logger.info(
                 "ALPACA_EMPTY_RESPONSE_THRESHOLD",
                 extra=_norm_extra(
@@ -5343,6 +5356,12 @@ def _fetch_bars(
     if df is not None and not getattr(df, "empty", True):
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
         return df
+    if not _state.get("window_has_session", True):
+        tf_key = (symbol, _interval)
+        _IEX_EMPTY_COUNTS.pop(tf_key, None)
+        _SKIPPED_SYMBOLS.discard(tf_key)
+        empty_df = _empty_ohlcv_frame(pd)
+        return empty_df if empty_df is not None else pd.DataFrame()
     if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
