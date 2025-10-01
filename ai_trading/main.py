@@ -559,7 +559,9 @@ def _install_signal_handlers() -> None:
 def _fail_fast_env() -> None:
     """Reload and validate mandatory environment variables early."""
 
-    if _is_test_mode():
+    test_mode = _is_test_mode()
+    risk_default: str | None = None
+    if test_mode:
         defaults = {
             "ALPACA_API_KEY": "test-key",
             "ALPACA_SECRET_KEY": "test-secret",
@@ -570,10 +572,10 @@ def _fail_fast_env() -> None:
             "ALPACA_API_URL": "https://paper-api.alpaca.markets",
             "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
         }
+        risk_default = defaults.pop("DOLLAR_RISK_LIMIT")
         for key, value in defaults.items():
             if not os.getenv(key):
                 os.environ[key] = value
-        return
 
     alias_backfilled = False
     alias_risk_limit = os.getenv("DAILY_LOSS_LIMIT")
@@ -583,6 +585,9 @@ def _fail_fast_env() -> None:
     ):
         os.environ["DOLLAR_RISK_LIMIT"] = alias_risk_limit
         alias_backfilled = True
+    elif test_mode and (canonical_risk_limit is None or canonical_risk_limit.strip() == ""):
+        if risk_default is not None:
+            os.environ["DOLLAR_RISK_LIMIT"] = risk_default
 
     required = (
         "ALPACA_API_KEY",
@@ -650,7 +655,7 @@ def _fail_fast_env() -> None:
     cfg_risk_limit = getattr(trading_cfg, "dollar_risk_limit", None)
     alias_raw = get_env("DAILY_LOSS_LIMIT")
     canonical_env_value = os.getenv("DOLLAR_RISK_LIMIT")
-    if alias_backfilled and cfg_risk_limit is not None:
+    if alias_backfilled:
         logger.warning(
             "DOLLAR_RISK_LIMIT_ALIAS_OVERRIDE",
             extra={
