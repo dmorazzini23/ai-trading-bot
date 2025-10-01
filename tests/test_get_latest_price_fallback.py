@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 import sys
 import types
 
@@ -134,11 +135,20 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
         raising=False,
     )
     monkeypatch.setattr(
+        bot_engine,
+        "_INTRADAY_FEED_CACHE",
+        "iex",
+        raising=False,
+    )
+    monkeypatch.setattr(
         "ai_trading.core.bot_engine.is_alpaca_service_available",
         lambda: True,
     )
 
+    captured: dict[str, Any] = {}
+
     def fake_alpaca_get(*_a, **_k):
+        captured["params"] = dict(_k.get("params", {}) or {})
         return {
             "ap": 0.0,
             "bp": 94.5,
@@ -157,9 +167,9 @@ def test_get_latest_price_prefers_last_trade_when_ask_invalid(monkeypatch):
 
     assert price == 95.1
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_last"
-    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {None, "iex", "sip"}
+    assert captured["params"].get("feed") in {"iex", "sip"}
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {"iex", "sip"}
     assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {
-        None,
         "iex",
         "sip",
     }
@@ -182,11 +192,20 @@ def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
         raising=False,
     )
     monkeypatch.setattr(
+        bot_engine,
+        "_INTRADAY_FEED_CACHE",
+        "iex",
+        raising=False,
+    )
+    monkeypatch.setattr(
         "ai_trading.core.bot_engine.is_alpaca_service_available",
         lambda: True,
     )
 
+    captured: dict[str, Any] = {}
+
     def fake_alpaca_get(*_a, **_k):
+        captured["params"] = dict(_k.get("params", {}) or {})
         return {
             "ap": 0.0,
             "bp": 94.5,
@@ -212,9 +231,9 @@ def test_get_latest_price_degrades_to_bid_before_backups(monkeypatch, caplog):
     assert calls["yahoo"] == 0
     assert price == 94.5
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_bid_degraded"
-    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {None, "iex", "sip"}
+    assert captured["params"].get("feed") in {"iex", "sip"}
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {"iex", "sip"}
     assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {
-        None,
         "iex",
         "sip",
     }
@@ -269,8 +288,30 @@ def test_get_latest_price_skips_non_positive_from_yahoo(monkeypatch):
 
 def test_get_latest_price_handles_auth_failure(monkeypatch):
     monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", True)
+    monkeypatch.setattr(bot_engine, "_PRICE_SOURCE", {}, raising=False)
+    monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_INTRADAY_FALLBACK_FEED",
+        "yahoo",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE",
+        {"AAPL": "yahoo"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        bot_engine,
+        "_INTRADAY_FEED_CACHE",
+        "iex",
+        raising=False,
+    )
+
+    captured: dict[str, Any] = {}
 
     def raise_auth(*_a, **_k):
+        captured["params"] = dict(_k.get("params", {}) or {})
         monkeypatch.setattr(alpaca_api, "_ALPACA_SERVICE_AVAILABLE", False)
         raise AlpacaAuthenticationError("Unauthorized")
 
@@ -285,6 +326,12 @@ def test_get_latest_price_handles_auth_failure(monkeypatch):
 
     assert price is None
     assert bot_engine._PRICE_SOURCE["AAPL"] == "alpaca_auth_failed"
+    assert captured["params"].get("feed") in {"iex", "sip"}
+    assert bot_engine._GLOBAL_INTRADAY_FALLBACK_FEED in {"iex", "sip"}
+    assert bot_engine._GLOBAL_CYCLE_MINUTE_FEED_OVERRIDE.get("AAPL") in {
+        "iex",
+        "sip",
+    }
     assert not is_alpaca_service_available()
 
 
