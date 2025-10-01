@@ -1565,8 +1565,29 @@ def ensure_ohlcv_schema(
     if work_df.empty:
         raise DataFetchError("DATA_FETCH_EMPTY")
 
-    if "close" not in work_df.columns and "adj_close" in work_df.columns:
-        work_df["close"] = work_df["adj_close"]
+    if "close" not in work_df.columns:
+        close_aliases = (
+            "adj_close",
+            "c",
+            "close_price",
+            "closing_price",
+            "latest_price",
+            "end_price",
+            "final_price",
+            "official_price",
+            "value",
+        )
+        for alias in close_aliases:
+            if alias in work_df.columns:
+                work_df["close"] = work_df[alias]
+                break
+
+    if "open" not in work_df.columns and "o" in work_df.columns:
+        work_df["open"] = work_df["o"]
+    if "high" not in work_df.columns and "h" in work_df.columns:
+        work_df["high"] = work_df["h"]
+    if "low" not in work_df.columns and "l" in work_df.columns:
+        work_df["low"] = work_df["l"]
 
     required = ["open", "high", "low", "close"]
     missing = [col for col in required if col not in work_df.columns]

@@ -32,6 +32,8 @@ _COLUMN_CANONICAL_MAP = {
     "time": "timestamp",
     "datetime": "timestamp",
     "date": "timestamp",
+    "ts": "timestamp",
+    "timestamp_utc": "timestamp",
     "bars_t": "timestamp",
     "bar_t": "timestamp",
     "bars_time": "timestamp",
@@ -63,12 +65,14 @@ _COLUMN_CANONICAL_MAP = {
     "bar_low": "low",
     "c": "close",
     "close_price": "close",
+    "closing_price": "close",
     "latest_price": "close",
     "latest_value": "close",
     "market_price": "close",
     "official_price": "close",
     "ending_price": "close",
     "end_price": "close",
+    "final_price": "close",
     "final_value": "close",
     "session_close": "close",
     "session_close_price": "close",
@@ -198,5 +202,10 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
         try:
             normalized.attrs.update(attrs)
         except (AttributeError, TypeError, ValueError):  # pragma: no cover - metadata optional
+            pass
+    if "trade_count" not in normalized.columns:
+        try:
+            normalized["trade_count"] = 0
+        except Exception:  # pragma: no cover - defensive fallback
             pass
     return normalized

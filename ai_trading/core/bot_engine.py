@@ -21043,9 +21043,10 @@ def main() -> None:
         logger.critical("Runtime configuration failed: %s", e)
         sys.exit(2)
 
-    # AI-AGENT-REF: Validate Alpaca credentials using settings singleton
+    # AI-AGENT-REF: Validate Alpaca credentials via existing Settings API
     cfg = get_settings()
-    api_key, api_secret = cfg.get_alpaca_keys()
+    api_key = getattr(cfg, "alpaca_api_key", None)
+    api_secret = get_alpaca_secret_key_plain()
     if not api_key or not api_secret:
         logger.critical("Alpaca credentials missing – aborting startup")
         logger.critical(
