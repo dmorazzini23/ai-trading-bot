@@ -48,19 +48,33 @@ def get_daily_df_memoized(
         except TypeError:
             return df_or_factory()
 
-    attempts = 0
+    exhaustions = 0
+    _RETRY = object()
+
+    def _handle_exhaustion() -> Any:
+        nonlocal exhaustions
+        exhaustions += 1
+        _MEMO.pop(key, None)
+        if (not factory_callable) or exhaustions >= 2:
+            if last_good_df is not None:
+                return last_good_df
+            return None
+        return _RETRY
+
     while True:
-        attempts += 1
-        stop_iteration = False
         try:
             candidate = _invoke_factory()
         except StopIteration:
-            stop_iteration = True
-            candidate = None
+            result = _handle_exhaustion()
+            if result is _RETRY:
+                continue
+            return result
         except RuntimeError as exc:
             if is_generator_stop(exc):
-                stop_iteration = True
-                candidate = None
+                result = _handle_exhaustion()
+                if result is _RETRY:
+                    continue
+                return result
             else:
                 raise
 
@@ -69,27 +83,21 @@ def get_daily_df_memoized(
             try:
                 candidate = next(generator)
             except StopIteration:
-                stop_iteration = True
-                candidate = None
+                result = _handle_exhaustion()
+                if result is _RETRY:
+                    continue
+                return result
             except RuntimeError as exc:
                 if is_generator_stop(exc):
-                    stop_iteration = True
-                    candidate = None
+                    result = _handle_exhaustion()
+                    if result is _RETRY:
+                        continue
+                    return result
                 else:
                     raise
             finally:
                 with suppress(Exception):
                     generator.close()
-
-        if stop_iteration:
-            _MEMO.pop(key, None)
-            if (not factory_callable) or attempts >= 2:
-                if last_good_df is not None:
-                    refreshed_at = time.time()
-                    _MEMO[key] = _MemoEntry(refreshed_at, key, last_good_df)
-                    return last_good_df
-                return None
-            continue
 
         df = candidate
         break
