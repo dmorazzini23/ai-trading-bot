@@ -18,11 +18,15 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "key")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
     monkeypatch.setenv("ENABLE_HTTP_FALLBACK", "1")
+    monkeypatch.delenv("TESTING", raising=False)
     fetch._SIP_UNAUTHORIZED = False
     fetch._ALLOW_SIP = True
     fetch._ENABLE_HTTP_FALLBACK = True
 
+    called = {}
+
     def fake_get(url, params=None, headers=None, timeout=None):
+        called["requests_get"] = called.get("requests_get", 0) + 1
         data = {"bars": []}
         return types.SimpleNamespace(
             status_code=200,
@@ -32,8 +36,6 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
         )
 
     monkeypatch.setattr(fetch.requests, "get", fake_get)
-
-    called = {}
 
     def fake_yahoo(symbol, start, end, interval):
         called["yahoo"] = True
@@ -57,6 +59,7 @@ def test_yahoo_used_after_two_alpaca_failures(monkeypatch):
 
     after = inc_provider_fallback("alpaca_sip", "yahoo")
 
+    assert called.get("requests_get")
     assert called.get("yahoo")
     assert not df.empty
     assert after == before + 1
