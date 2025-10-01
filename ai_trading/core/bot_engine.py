@@ -19928,7 +19928,8 @@ def _check_runtime_stops(runtime) -> None:
         getattr(exec_engine, "check_trailing_stops", lambda: None)()
     except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
         logger.info(
-            "check_trailing_stops raised but was suppressed: %s", e
+            "TRAILING_STOP_CHECK_SUPPRESSED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
     else:
         if not hasattr(exec_engine, "check_trailing_stops"):
@@ -20628,9 +20629,20 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     s for s, q in state.position_cache.items() if q < 0
                 }
                 if runtime.execution_engine:
-                    trailing_hook = getattr(runtime.execution_engine, "check_trailing_stops", None)
+                    trailing_hook = getattr(
+                        runtime.execution_engine, "check_trailing_stops", None
+                    )
                     if callable(trailing_hook):
-                        trailing_hook()
+                        try:
+                            trailing_hook()
+                        except (ValueError, TypeError) as e:
+                            logger.info(
+                                "TRAILING_STOP_CHECK_SUPPRESSED",
+                                extra={
+                                    "cause": e.__class__.__name__,
+                                    "detail": str(e),
+                                },
+                            )
             except (
                 APIError,
                 TimeoutError,
