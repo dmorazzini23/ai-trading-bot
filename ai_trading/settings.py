@@ -500,12 +500,28 @@ class Settings(BaseSettings):
         _propagate_default_feed(str(normalized))
 
     if _HAS_SETTINGS_CONFIG_DICT:
-        model_config = SettingsConfigDict(
-            env_prefix="AI_TRADING_",
-            extra="ignore",
-            case_sensitive=False,
-            validate_assignment=True,
-        )
+        _model_config_candidate = None
+        try:
+            _model_config_candidate = SettingsConfigDict(
+                env_prefix="AI_TRADING_",
+                extra="ignore",
+                case_sensitive=False,
+                validate_assignment=True,
+            )
+        except (TypeError, ValueError) as exc:  # pragma: no cover - defensive fallback
+            logger.debug(
+                "SETTINGS_CONFIG_DICT_REJECTED",
+                extra={"error": str(exc)},
+            )
+
+        if _model_config_candidate is not None:
+            model_config = _model_config_candidate
+        else:  # pragma: no cover - compatibility with lean pydantic-settings
+            class Config:  # type: ignore[override,unused-ignore]
+                env_prefix = "AI_TRADING_"
+                extra = "ignore"
+                case_sensitive = False
+                validate_assignment = True
     else:  # pragma: no cover - compatibility with pydantic v1 BaseSettings
         class Config:  # type: ignore[override,unused-ignore]
             env_prefix = "AI_TRADING_"
