@@ -20,6 +20,7 @@ from collections.abc import (
     MutableSequence,
     MutableSet,
 )
+from contextlib import AbstractAsyncContextManager
 from dataclasses import fields, is_dataclass, replace
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import TypeVar
@@ -564,11 +565,46 @@ async def run_with_concurrency(
     concurrency_semaphore = asyncio.Semaphore(limit)
     active_lock = asyncio.Lock()
     active_workers = 0
+    peak_this_run = 0
     results: dict[str, T | None] = {}
 
+    def _acquire_host_permit() -> AbstractAsyncContextManager[None]:
+        """Return an async context manager that manages a host semaphore permit."""
+
+        class _HostPermit(AbstractAsyncContextManager[None]):
+            __slots__ = ("_semaphore", "_acquired")
+
+            def __init__(self, semaphore: asyncio.Semaphore | None) -> None:
+                self._semaphore = semaphore
+                self._acquired = False
+
+            async def __aenter__(self) -> None:
+                if self._semaphore is None:
+                    return None
+                try:
+                    await self._semaphore.acquire()
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:
+                    # If host semaphore acquisition fails, proceed without holding a permit.
+                    return None
+                self._acquired = True
+                return None
+
+            async def __aexit__(
+                self,
+                exc_type: type[BaseException] | None,
+                exc: BaseException | None,
+                tb: object | None,
+            ) -> None:
+                if self._semaphore is not None and self._acquired:
+                    self._acquired = False
+                    self._semaphore.release()
+
+        return _HostPermit(host_semaphore)
+
     async def _execute(symbol: str) -> None:
-        nonlocal active_workers
-        global PEAK_SIMULTANEOUS_WORKERS
+        nonlocal active_workers, peak_this_run
 
         # Ensure the symbol is registered in the result mapping even if the
         # worker never starts (e.g. due to cancellation or timeout).
@@ -576,16 +612,11 @@ async def run_with_concurrency(
 
         try:
             async with concurrency_semaphore:
-                acquired_host_permit = False
-                try:
-                    if host_semaphore is not None:
-                        await host_semaphore.acquire()
-                        acquired_host_permit = True
-
+                async with _acquire_host_permit():
                     async with active_lock:
                         active_workers += 1
-                        if active_workers > PEAK_SIMULTANEOUS_WORKERS:
-                            PEAK_SIMULTANEOUS_WORKERS = active_workers
+                        if active_workers > peak_this_run:
+                            peak_this_run = active_workers
 
                     try:
                         result = await worker(symbol)
@@ -600,9 +631,6 @@ async def run_with_concurrency(
                     finally:
                         async with active_lock:
                             active_workers -= 1
-                finally:
-                    if acquired_host_permit:
-                        host_semaphore.release()
         except asyncio.CancelledError:
             FAILED_SYMBOLS.add(symbol)
             raise
@@ -648,6 +676,9 @@ async def run_with_concurrency(
 
     if reset_peak_after_run:
         reset_peak_simultaneous_workers()
+    else:
+        global PEAK_SIMULTANEOUS_WORKERS
+        PEAK_SIMULTANEOUS_WORKERS = peak_this_run
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
