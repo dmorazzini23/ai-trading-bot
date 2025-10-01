@@ -723,10 +723,11 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     _record_override(symbol, to_norm, tf_norm)
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
     attempted.add(to_norm)
-    _FEED_SWITCH_HISTORY.append((symbol, tf_norm, to_norm))
+    log_key = (symbol, tf_norm, to_norm)
+    if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
+        _FEED_SWITCH_HISTORY.append(log_key)
     if from_norm == "iex":
         _IEX_EMPTY_COUNTS.pop(key, None)
-    log_key = (symbol, tf_norm, to_norm)
     if log_key not in _FEED_SWITCH_LOGGED:
         logger.info(
             "ALPACA_FEED_SWITCH",
