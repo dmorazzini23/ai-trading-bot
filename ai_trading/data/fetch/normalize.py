@@ -17,7 +17,12 @@ def _normalize_column_name(value: object) -> str:
     token = str(value).strip()
     token = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", token)
     token = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", token)
-    lowered = token.lower().replace(" ", "_").replace("-", "_")
+    lowered = (
+        token.lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+        .replace(".", "_")
+    )
     while "__" in lowered:
         lowered = lowered.replace("__", "_")
     return lowered
@@ -27,6 +32,10 @@ _COLUMN_CANONICAL_MAP = {
     "time": "timestamp",
     "datetime": "timestamp",
     "date": "timestamp",
+    "bars_t": "timestamp",
+    "bar_t": "timestamp",
+    "bars_time": "timestamp",
+    "bar_time": "timestamp",
     "o": "open",
     "open_price": "open",
     "opening_price": "open",
@@ -34,18 +43,24 @@ _COLUMN_CANONICAL_MAP = {
     "session_open_price": "open",
     "start_price": "open",
     "starting_price": "open",
+    "bars_open": "open",
+    "bar_open": "open",
     "h": "high",
     "high_price": "high",
     "maximum_price": "high",
     "session_high": "high",
     "session_high_price": "high",
     "peak_price": "high",
+    "bars_high": "high",
+    "bar_high": "high",
     "l": "low",
     "low_price": "low",
     "minimum_price": "low",
     "session_low": "low",
     "session_low_price": "low",
     "floor_price": "low",
+    "bars_low": "low",
+    "bar_low": "low",
     "c": "close",
     "close_price": "close",
     "latest_price": "close",
@@ -57,6 +72,8 @@ _COLUMN_CANONICAL_MAP = {
     "final_value": "close",
     "session_close": "close",
     "session_close_price": "close",
+    "bars_close": "close",
+    "bar_close": "close",
     "v": "volume",
     "volume_total": "volume",
     "total_volume": "volume",
@@ -66,6 +83,8 @@ _COLUMN_CANONICAL_MAP = {
     "share_count": "volume",
     "shares_traded": "volume",
     "shares": "volume",
+    "bars_volume": "volume",
+    "bar_volume": "volume",
     "adjclose": "adj close",
     "adj_close": "adj close",
     "closeadj": "adj close",

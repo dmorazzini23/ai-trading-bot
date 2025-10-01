@@ -3,7 +3,7 @@ import pytest
 
 from ai_trading.data.fetch import DataFetchError, _flatten_and_normalize_ohlcv, normalize_ohlcv_columns
 
-def test_normalize_requires_volume_column():
+def test_normalize_backfills_missing_volume():
     df = pd.DataFrame(
         {
             "open": [1.0],
@@ -13,13 +13,10 @@ def test_normalize_requires_volume_column():
         },
         index=pd.DatetimeIndex([pd.Timestamp("2024-01-01")], name="date"),
     )
-    with pytest.raises(DataFetchError) as excinfo:
-        _flatten_and_normalize_ohlcv(df, symbol="AAPL", timeframe="1Min")
+    out = _flatten_and_normalize_ohlcv(df, symbol="AAPL", timeframe="1Min")
 
-    assert getattr(excinfo.value, "fetch_reason", "") in {
-        "ohlcv_columns_missing",
-        "close_column_missing",
-    }
+    assert "volume" in out.columns
+    assert (out["volume"] == 0).all()
 
 
 def test_normalize_removes_timestamp_index_conflict():
@@ -57,8 +54,32 @@ def test_normalize_maps_provider_aliases():
     out = _flatten_and_normalize_ohlcv(df)
     assert {"timestamp", "open", "high", "low", "close", "volume"}.issubset(out.columns)
     assert not {"t", "o", "h", "l", "c", "v"} & set(out.columns)
-    pd.testing.assert_series_equal(out["open"], pd.Series([10.0, 10.5, 10.75]), check_names=False)
-    pd.testing.assert_series_equal(out["close"], pd.Series([10.1, 10.6, 10.8]), check_names=False)
+    assert out["open"].tolist() == [10.0, 10.5, 10.75]
+    assert out["close"].tolist() == [10.1, 10.6, 10.8]
+
+
+def test_normalize_maps_dotted_aliases():
+    ts = pd.date_range("2024-01-01 09:30", periods=2, freq="1min", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "bars.t": ts,
+            "bars.open": [10.0, 10.5],
+            "bars.high": [10.2, 10.7],
+            "bars.low": [9.9, 10.3],
+            "bars.close": [10.1, 10.6],
+            "bars.volume": [1_000, 1_500],
+        }
+    )
+
+    out = _flatten_and_normalize_ohlcv(df)
+
+    assert {"timestamp", "open", "high", "low", "close", "volume"}.issubset(out.columns)
+    first = out.iloc[0]
+    assert pytest.approx(first["open"]) == 10.0
+    assert pytest.approx(first["high"]) == 10.2
+    assert pytest.approx(first["low"]) == 9.9
+    assert pytest.approx(first["close"]) == 10.1
+    assert pytest.approx(first["volume"]) == 1_000
 
 
 def test_normalize_rejects_string_nan_close_values():
