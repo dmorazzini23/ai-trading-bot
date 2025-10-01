@@ -187,13 +187,11 @@ def _resolve_limit() -> tuple[int, int]:
     ):
         return cache.limit, cache.version
 
-    if cache is None:
-        if _LIMIT_VERSION == 0:
-            _LIMIT_VERSION = 1
-        version = _LIMIT_VERSION
+    if _LIMIT_VERSION == 0:
+        _LIMIT_VERSION = 1
     else:
         _LIMIT_VERSION += 1
-        version = _LIMIT_VERSION
+    version = _LIMIT_VERSION
     _LIMIT_CACHE = _ResolvedLimitCache(
         env_key=env_key,
         raw_env=raw_env,
@@ -282,11 +280,14 @@ def _get_or_create_loop_semaphore(
     host_map = _get_host_map(loop)
 
     if host_map:
-        stale_hosts = [
-            host
-            for host, record in list(host_map.items())
-            if record.limit != resolved_limit or record.version != version
-        ]
+        if any(record.version != version for record in host_map.values()):
+            stale_hosts = list(host_map.keys())
+        else:
+            stale_hosts = [
+                host
+                for host, record in list(host_map.items())
+                if record.limit != resolved_limit
+            ]
         for host in stale_hosts:
             host_map[host] = _SemaphoreRecord(
                 _build_semaphore(resolved_limit, version), resolved_limit, version
