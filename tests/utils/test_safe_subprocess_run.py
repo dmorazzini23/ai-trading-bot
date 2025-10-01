@@ -1,5 +1,5 @@
-import sys
 import subprocess
+import sys
 
 import pytest
 
@@ -17,8 +17,12 @@ def test_safe_subprocess_run_success():
 def test_safe_subprocess_run_timeout(caplog):
     cmd = [sys.executable, "-c", "import time; time.sleep(1)"]
     with caplog.at_level("WARNING"):
-        res = safe_subprocess_run(cmd, timeout=0.1)
-    assert res == SafeSubprocessResult("", "", 124, True)
+        with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+            safe_subprocess_run(cmd, timeout=0.1)
+
+    assert excinfo.value.result == SafeSubprocessResult("", "", 124, True)
+    assert excinfo.value.stdout == ""
+    assert excinfo.value.stderr == ""
     assert not caplog.records  # timeout should not emit warnings
 
 
@@ -48,45 +52,86 @@ def test_safe_subprocess_run_nonzero_exit(caplog):
 def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog):
     calls: dict[str, object] = {}
 
-    def fake_run(*args, **kwargs):
-        calls["args"] = args
-        calls["kwargs"] = kwargs
-        exc = subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
-        # ``subprocess.run`` populates ``stdout``/``stderr`` attributes; mimic that here.
-        exc.stdout = None
-        exc.stderr = None
-        raise exc
+    class FakeProc:
+        def __init__(self, *args, **kwargs):
+            calls["args"] = args
+            calls["kwargs"] = kwargs
+            self._killed = False
+            self.returncode = None
+            calls["instance"] = self
 
-    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.run", fake_run)
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                exc = subprocess.TimeoutExpired(cmd=calls["args"][0], timeout=timeout)
+                exc.stdout = None
+                exc.stderr = None
+                raise exc
+            self.returncode = 124
+            return "", ""
+
+        def kill(self):
+            self._killed = True
+            calls["killed"] = True
+
+        def wait(self):
+            pass
+
+    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", FakeProc)
 
     with caplog.at_level("WARNING"):
-        res = safe_subprocess_run(["dummy"], timeout=0.25)
+        with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+            safe_subprocess_run(["dummy"], timeout=0.25)
 
-    assert res.timeout is True
-    assert res.returncode == 124
-    assert res.stdout == ""
-    assert res.stderr == ""
+    result = excinfo.value.result
+    assert result.timeout is True
+    assert result.returncode == 124
+    assert result.stdout == ""
+    assert result.stderr == ""
     assert calls["args"] == (["dummy"],)
     assert calls["kwargs"]["stdout"] == subprocess.PIPE
     assert calls["kwargs"]["stderr"] == subprocess.PIPE
     assert calls["kwargs"]["text"] is True
-    assert calls["kwargs"]["check"] is False
-    assert calls["kwargs"]["timeout"] == 0.25
+    assert calls.get("killed") is True
+    assert calls["instance"]._killed is True
     assert not caplog.records
 
 
 def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
-    def fake_run(*args, **kwargs):
-        exc = subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
-        exc.stdout = "partial stdout"
-        exc.stderr = "partial stderr"
-        raise exc
+    state: dict[str, object] = {}
 
-    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.run", fake_run)
+    class FakeProc:
+        def __init__(self, *args, **kwargs):
+            self.returncode = None
+            self._killed = False
+            self.args = args
+            state["instance"] = self
 
-    res = safe_subprocess_run(["dummy"], timeout=0.25)
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                exc = subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
+                exc.stdout = "partial stdout"
+                exc.stderr = "partial stderr"
+                raise exc
+            self.returncode = 124
+            return "partial stdout", "partial stderr"
 
-    assert res.timeout is True
-    assert res.returncode == 124
-    assert res.stdout == "partial stdout"
-    assert res.stderr == "partial stderr"
+        def kill(self):
+            self._killed = True
+
+        def wait(self):
+            pass
+
+    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", FakeProc)
+
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        safe_subprocess_run(["dummy"], timeout=0.25)
+
+    result = excinfo.value.result
+    assert result.timeout is True
+    assert result.returncode == 124
+    assert result.stdout == "partial stdout"
+    assert result.stderr == "partial stderr"
+    assert excinfo.value.stdout == "partial stdout"
+    assert excinfo.value.stderr == "partial stderr"
+    assert isinstance(excinfo.value.result, SafeSubprocessResult)
+    assert state["instance"]._killed is True
