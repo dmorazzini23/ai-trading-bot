@@ -10,6 +10,8 @@ bot_engine while keeping runtime behavior identical.
 from typing import Any
 import os
 import sys
+from importlib import import_module
+from types import ModuleType
 
 from ai_trading.logging import get_logger, logger_once
 from ai_trading.alpaca_api import (
@@ -29,6 +31,15 @@ logger = get_logger(__name__)
 _shared_logger_once: Any | None = None
 
 
+def _get_bot_engine_module() -> ModuleType:
+    """Return the active bot_engine module, honouring monkeypatched stubs."""
+
+    module = sys.modules.get("ai_trading.core.bot_engine")
+    if isinstance(module, ModuleType):
+        return module
+    return import_module("ai_trading.core.bot_engine")
+
+
 def _get_bot_logger_once() -> Any:
     """Return the shared logger_once exposed by bot_engine when available."""
 
@@ -36,15 +47,8 @@ def _get_bot_logger_once() -> Any:
     if _shared_logger_once is not None:
         return _shared_logger_once
 
-    bot_engine_module = sys.modules.get("ai_trading.core.bot_engine")
-    if bot_engine_module is not None:
-        shared = getattr(bot_engine_module, "logger_once", None)
-        if shared is not None:
-            _shared_logger_once = shared
-            return shared
-
     try:
-        from ai_trading.core import bot_engine as bot_engine_module  # noqa: WPS433 - deferred import
+        bot_engine_module = _get_bot_engine_module()
     except COMMON_EXC:
         return logger_once
     except Exception:
@@ -303,7 +307,7 @@ def ensure_alpaca_attached(ctx) -> None:
     if not _initialize_alpaca_clients():
         return
     # Mirror the global singleton in bot_engine for compatibility
-    import ai_trading.core.bot_engine as be
+    be = _get_bot_engine_module()
     api = getattr(be, "trading_client", None)
     if api is None:
         if ALPACA_AVAILABLE and not is_shadow_mode():
@@ -345,7 +349,8 @@ def _initialize_alpaca_clients() -> bool:
     """Initialize Alpaca trading clients lazily to avoid import delays."""
     # Defer imports to avoid cycles
     import time
-    import ai_trading.core.bot_engine as be
+
+    be = _get_bot_engine_module()
 
     log_once = _get_bot_logger_once()
 

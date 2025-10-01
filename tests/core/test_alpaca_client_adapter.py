@@ -182,3 +182,90 @@ def test_initialize_production_config_avoids_adapter_warning(
         reload_trading_config()
         stub_be.trading_client = None
         stub_be.data_client = None
+
+
+def test_initialize_uses_active_bot_engine_stub_after_real_import(
+    stub_logger: _StubLogger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Initialization should target the active bot_engine module even after imports."""
+
+    class _StubTradingClient:
+        def __init__(self, *_, **__):
+            self._orders: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        def list_orders(self, *args: Any, **kwargs: Any) -> list[str]:
+            self._orders.append((args, dict(kwargs)))
+            return ["order"]
+
+        def list_positions(self) -> list[str]:
+            return ["position"]
+
+    class _StubDataClient:
+        def __init__(self, *_, **__):
+            self.initialized = True
+
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("ALPACA_API_KEY", "stub-key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "stub-secret")
+    monkeypatch.setenv("ALPACA_API_URL", "https://api.alpaca.markets")
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+
+    reload_trading_config()
+
+    import ai_trading.core as core_pkg
+
+    original_bot_engine = sys.modules.get("ai_trading.core.bot_engine")
+
+    real_bot_engine = ModuleType("ai_trading.core.bot_engine")
+    real_bot_engine.trading_client = "real-client"  # type: ignore[attr-defined]
+    real_bot_engine.data_client = "real-data"  # type: ignore[attr-defined]
+    real_bot_engine.logger_once = stub_logger
+
+    sys.modules["ai_trading.core.bot_engine"] = real_bot_engine
+    monkeypatch.setattr(core_pkg, "bot_engine", real_bot_engine, raising=False)
+
+    monkeypatch.setattr(alpaca_client, "ALPACA_AVAILABLE", True)
+    monkeypatch.setattr(alpaca_client, "get_trading_client_cls", lambda: _StubTradingClient)
+    monkeypatch.setattr(alpaca_client, "get_data_client_cls", lambda: _StubDataClient)
+    monkeypatch.setattr(alpaca_client, "get_api_error_cls", lambda: Exception)
+    monkeypatch.setattr(alpaca_client, "_shared_logger_once", None)
+
+    stub_be = ModuleType("ai_trading.core.bot_engine")
+    stub_be.trading_client = None  # type: ignore[attr-defined]
+    stub_be.data_client = None  # type: ignore[attr-defined]
+    stub_be._ensure_alpaca_env_or_raise = lambda: (
+        "stub-key",
+        "stub-secret",
+        "https://api.alpaca.markets",
+    )
+    stub_be._alpaca_diag_info = lambda: {"env": "prod"}
+    stub_be.logger_once = stub_logger
+
+    try:
+        sys.modules["ai_trading.core.bot_engine"] = stub_be
+
+        initialised = alpaca_client._initialize_alpaca_clients()
+
+        assert initialised is True
+
+        trading_client = getattr(stub_be, "trading_client", None)
+        data_client = getattr(stub_be, "data_client", None)
+
+        assert isinstance(trading_client, TradingClientAdapter)
+        assert isinstance(data_client, _StubDataClient)
+        assert trading_client.list_orders(status="open") == ["order"]
+        assert trading_client.list_positions() == ["position"]
+        assert real_bot_engine.trading_client == "real-client"  # type: ignore[attr-defined]
+        assert real_bot_engine.data_client == "real-data"  # type: ignore[attr-defined]
+    finally:
+        monkeypatch.delenv("APP_ENV", raising=False)
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_API_URL", raising=False)
+        monkeypatch.delenv("EXECUTION_MODE", raising=False)
+        reload_trading_config()
+        if original_bot_engine is None:
+            sys.modules.pop("ai_trading.core.bot_engine", None)
+        else:
+            sys.modules["ai_trading.core.bot_engine"] = original_bot_engine
+
