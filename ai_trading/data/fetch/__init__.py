@@ -3521,10 +3521,33 @@ def _fetch_bars(
         "empty_metric_emitted": False,
     }
 
+    success_metrics: dict[str, Any] = {
+        "success_emitted": False,
+        "fallback_tags": None,
+        "fallback_emitted": False,
+    }
+    _state["success_metrics"] = success_metrics
+
     def _tags(*, provider: str | None = None, feed: str | None = None) -> dict[str, str]:
         tag_provider = provider if provider is not None else "alpaca"
         tag_feed = _feed if feed is None else feed
         return {"provider": tag_provider, "symbol": symbol, "feed": tag_feed, "timeframe": _interval}
+
+    def _record_fallback_success_metric(tags: dict[str, str]) -> None:
+        success_metrics["fallback_tags"] = dict(tags)
+        success_metrics["fallback_emitted"] = True
+        _incr("data.fetch.fallback_success", value=1.0, tags=dict(tags))
+
+    def _record_success_metric(tags: dict[str, str], *, prefer_fallback: bool = False) -> None:
+        if success_metrics.get("success_emitted"):
+            return
+        selected_tags = dict(tags)
+        fallback_tags = success_metrics.get("fallback_tags")
+        if (prefer_fallback or success_metrics.get("fallback_emitted")) and isinstance(fallback_tags, dict):
+            selected_tags = dict(fallback_tags)
+        _incr("data.fetch.success", value=1.0, tags=selected_tags)
+        success_metrics["success_emitted"] = True
+        success_metrics["fallback_emitted"] = False
 
     def _run_backup_fetch(interval_code: str, *, from_provider: str | None = None) -> pd.DataFrame:
         provider_str, normalized_provider = _resolve_backup_provider()
@@ -3541,7 +3564,7 @@ def _fetch_bars(
         )
         frame_has_rows = _frame_has_rows(annotated_df)
         if frame_has_rows:
-            _incr("data.fetch.fallback_success", value=1.0, tags=tags)
+            _record_fallback_success_metric(tags)
             try:
                 to_feed = _normalize_feed_value(feed_tag)
             except Exception:
@@ -3569,7 +3592,7 @@ def _fetch_bars(
             resolved_feed=normalized_provider or None,
         )
         if frame_has_rows:
-            _incr("data.fetch.success", value=1.0, tags=tags)
+            _record_success_metric(tags, prefer_fallback=True)
         return annotated_df
     resolved_feed = resolve_alpaca_feed(_feed)
     if resolved_feed is None:
@@ -3858,7 +3881,7 @@ def _fetch_bars(
             )
             result = _req(session, None, headers=headers, timeout=timeout)
             if result is not None and not getattr(result, "empty", True):
-                _incr("data.fetch.fallback_success", value=1.0, tags=_tags())
+                _record_fallback_success_metric(_tags())
                 _record_feed_switch(symbol, fb_interval, from_feed, fb_feed)
             if result is not None and not _used_fallback(symbol, fb_interval, fb_start, fb_end):
                 _mark_fallback(
@@ -4986,7 +5009,7 @@ def _fetch_bars(
         last_fallback_feed = _state.pop("last_fallback_feed", None)
         if last_fallback_feed:
             success_tags = _tags(feed=last_fallback_feed)
-        _incr("data.fetch.success", value=1.0, tags=success_tags)
+        _record_success_metric(success_tags, prefer_fallback=True)
         return df
 
     priority = list(provider_priority())
@@ -5143,6 +5166,28 @@ def get_minute_df(
     resolved_backup_provider = backup_provider_normalized or backup_provider_str
     resolved_backup_feed = backup_provider_normalized or None
 
+    minute_metrics: dict[str, Any] = {
+        "success_emitted": False,
+        "fallback_tags": None,
+        "fallback_emitted": False,
+    }
+
+    def _record_minute_success(tags: dict[str, str], *, prefer_fallback: bool = False) -> None:
+        if minute_metrics.get("success_emitted"):
+            return
+        selected_tags = dict(tags)
+        fallback_tags = minute_metrics.get("fallback_tags")
+        if (prefer_fallback or minute_metrics.get("fallback_emitted")) and isinstance(fallback_tags, dict):
+            selected_tags = dict(fallback_tags)
+        _incr("data.fetch.success", value=1.0, tags=selected_tags)
+        minute_metrics["success_emitted"] = True
+        minute_metrics["fallback_emitted"] = False
+
+    def _record_minute_fallback_success(tags: dict[str, str]) -> None:
+        minute_metrics["fallback_tags"] = dict(tags)
+        minute_metrics["fallback_emitted"] = True
+        _incr("data.fetch.fallback_success", value=1.0, tags=dict(tags))
+
     def _record_minute_fallback(
         *,
         frame: Any | None = None,
@@ -5178,7 +5223,7 @@ def get_minute_df(
         frame_has_rows = _frame_has_rows(frame)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         if frame_has_rows:
-            _incr("data.fetch.fallback_success", value=1.0, tags=tags)
+            _record_minute_fallback_success(tags)
             fallback_feed: str | None = None
             if feed_tag:
                 try:
@@ -5201,7 +5246,7 @@ def get_minute_df(
                 and fallback_feed != source_feed_norm
             ):
                 _record_feed_switch(symbol, timeframe, source_feed_norm, fallback_feed)
-            _incr("data.fetch.success", value=1.0, tags=tags)
+            _record_minute_success(tags, prefer_fallback=True)
         _mark_fallback(
             symbol,
             timeframe,
@@ -5246,6 +5291,7 @@ def get_minute_df(
     used_backup = False
     success_marked = False
     fallback_logged = False
+    fallback_frame: Any | None = None
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
@@ -5307,6 +5353,7 @@ def get_minute_df(
                 if df is not None and not getattr(df, "empty", True):
                     used_backup = True
                     force_primary_fetch = False
+                    fallback_frame = df
                 else:
                     df = None
     requested_feed = normalized_feed or _DEFAULT_FEED
@@ -5590,6 +5637,8 @@ def get_minute_df(
                 )
             df = finnhub_df
             used_backup = True
+            if df is not None and not getattr(df, "empty", True):
+                fallback_frame = df
         elif not enable_finnhub:
             finnhub_disabled_requested = True
             warn_finnhub_disabled_no_data(
@@ -5653,18 +5702,28 @@ def get_minute_df(
                         provider=str(provider_attr),
                         feed=str(feed_attr) if feed_attr else None,
                     )
+                if df is not None and not getattr(df, "empty", True):
+                    fallback_frame = df
             elif dfs:
                 df = dfs[0]
+                if df is not None and not getattr(df, "empty", True):
+                    fallback_frame = df
             else:
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
         else:
             df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
+            if df is not None and not getattr(df, "empty", True):
+                fallback_frame = df
 
     if used_backup and df is not None and not getattr(df, "empty", True):
         processed_df = _post_process(df, symbol=symbol, timeframe="1Min")
+        candidate_df = df
         if processed_df is not None and not getattr(processed_df, "empty", True):
-            df = processed_df
+            candidate_df = processed_df
+        fallback_frame = candidate_df
+        if candidate_df is not None and not getattr(candidate_df, "empty", True):
+            df = candidate_df
             if not fallback_logged:
                 _record_minute_fallback(frame=df)
                 fallback_logged = True
@@ -5867,6 +5926,24 @@ def get_minute_df(
         unreliable_reason = f"gap_ratio={ratio_value * 100:.2f}%>limit={gap_limit * 100:.2f}%"
     _set_price_reliability(df, reliable=price_reliable, reason=unreliable_reason)
     if df is None or getattr(df, "empty", False):
+        fallback_candidate = fallback_frame
+        if fallback_candidate is None or getattr(fallback_candidate, "empty", True):
+            if original_df is not None and not getattr(original_df, "empty", True):
+                fallback_candidate = original_df
+        if fallback_candidate is not None and not getattr(fallback_candidate, "empty", True):
+            if not success_marked:
+                mark_success(symbol, "1Min")
+                success_marked = True
+            if used_backup and not fallback_logged:
+                _record_minute_fallback(frame=fallback_candidate)
+                fallback_logged = True
+            try:
+                attrs = getattr(fallback_candidate, "attrs", None)
+            except Exception:
+                attrs = None
+            if isinstance(attrs, dict) and "price_reliable" not in attrs:
+                _set_price_reliability(fallback_candidate, reliable=True)
+            return fallback_candidate
         if allow_empty_return:
             if used_backup and not fallback_logged:
                 _record_minute_fallback(frame=df)
