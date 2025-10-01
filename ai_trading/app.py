@@ -65,11 +65,25 @@ def create_app():
                 base["ok"] = bool(base["ok"])
             alpaca_raw = base.get("alpaca")
             base["alpaca"] = dict(alpaca_raw) if isinstance(alpaca_raw, dict) else {}
+            if "ok" not in base:
+                base["ok"] = False
             return base
 
+        def _ensure_core_fields(payload: dict) -> dict:
+            """Ensure ``ok`` and ``alpaca`` keys exist with safe defaults."""
+
+            payload.setdefault("ok", False)
+            payload["ok"] = bool(payload.get("ok", False))
+            alpaca_section = payload.get("alpaca")
+            payload["alpaca"] = (
+                dict(alpaca_section)
+                if isinstance(alpaca_section, dict)
+                else {}
+            )
+            return payload
+
         canonical_payload = _normalise_payload(data)
-        if "ok" not in canonical_payload:
-            canonical_payload["ok"] = False
+        canonical_payload = _ensure_core_fields(canonical_payload)
 
         fallback_payload = dict(canonical_payload)
         fallback_payload["alpaca"] = dict(canonical_payload["alpaca"])
@@ -84,7 +98,7 @@ def create_app():
                     continue
                 fallback_payload[key] = value
 
-        fallback_payload["ok"] = bool(fallback_payload.get("ok", False))
+        fallback_payload = _ensure_core_fields(fallback_payload)
 
         func = globals().get("jsonify")
         fallback_used = False
@@ -119,9 +133,14 @@ def create_app():
             fallback_payload["ok"] = False
 
         message_candidates: list[str] = []
-        existing_error = fallback_payload.get("error") or canonical_payload.get("error")
-        if isinstance(existing_error, str) and existing_error.strip():
-            message_candidates.append(existing_error.strip())
+        existing_error = fallback_payload.get("error")
+        if existing_error is None:
+            existing_error = canonical_payload.get("error")
+        existing_error_str: str | None = None
+        if isinstance(existing_error, str):
+            existing_error_str = existing_error.strip() or None
+            if existing_error_str:
+                message_candidates.append(existing_error_str)
 
         for reason in fallback_reasons:
             if reason and reason not in message_candidates:
@@ -131,7 +150,17 @@ def create_app():
             message_candidates.append("jsonify unavailable")
 
         if message_candidates:
-            fallback_payload["error"] = "; ".join(message_candidates)
+            merged = "; ".join(dict.fromkeys(message_candidates))
+            if existing_error_str is not None or not fallback_payload.get("error"):
+                fallback_payload["error"] = merged
+            else:
+                # Preserve non-string canonical error payloads while surfacing
+                # fallback context in a dedicated string field.
+                fallback_payload.setdefault("error_details", {})
+                if isinstance(fallback_payload["error_details"], dict):
+                    fallback_payload["error_details"].setdefault("messages", merged)
+                else:
+                    fallback_payload["error_details"] = {"messages": merged}
 
         try:
             body = json.dumps(fallback_payload, default=str)
@@ -144,7 +173,7 @@ def create_app():
                 "alpaca": dict(fallback_payload.get("alpaca", {})),
                 "error": str(exc) or exc.__class__.__name__ or "serialization_error",
             }
-            fallback_payload = _normalise_payload(safe_payload)
+            fallback_payload = _ensure_core_fields(_normalise_payload(safe_payload))
             fallback_payload["ok"] = False
             body = json.dumps(fallback_payload, default=str)
 
