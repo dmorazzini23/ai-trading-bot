@@ -36,6 +36,7 @@
 - Candidate tickers: `tickers.csv` if present, else built-in fallback `[SPY, AAPL, MSFT, AMZN, GOOGL]`.
 - Model loader tries: `cfg.ml_model_path` / `cfg.model_path` (joblib/pickle), or `cfg.ml_model_module` / `cfg.model_module` (import module, `get_model(cfg)` or `Model(cfg)`).
 - Cache on `runtime.model`.
+- Data fetch normalization bypasses work only when an incoming OHLCV frame already includes the canonical column set (`timestamp`, `open`, `high`, `low`, `close`, `volume`) regardless of ordering or extra metadata, ensuring superset frames do not trigger false provider failovers.
 
 ## Coding Conventions
 - `runtime` parameter is mandatory in hot paths.
