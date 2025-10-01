@@ -100,6 +100,67 @@ except Exception as e:
         finally:
             os.unlink(script_path)
 
+    def test_import_management_when_settings_config_dict_rejects(self):
+        """Simulate lean env where SettingsConfigDict rejects options."""
+
+        test_script = '''
+import sys
+import types
+
+# Ensure no cached module leaks through
+sys.modules.pop("pydantic_settings", None)
+
+stub = types.ModuleType("pydantic_settings")
+
+
+class BaseSettings:
+    model_config = None
+
+
+class RejectingSettingsConfigDict(dict):
+    def __init__(self, *args, **kwargs):
+        raise TypeError("options not supported")
+
+
+stub.BaseSettings = BaseSettings
+stub.SettingsConfigDict = RejectingSettingsConfigDict
+sys.modules["pydantic_settings"] = stub
+
+from ai_trading.config import management  # noqa: F401 - import ensures no crash
+
+print("✓ management import succeeded with rejecting SettingsConfigDict")
+'''
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(test_script)
+            script_path = f.name
+
+        try:
+            env = os.environ.copy()
+            project_root = Path(__file__).resolve().parents[1]
+            stub_path = project_root / "tests" / "stubs"
+            python_path_parts = [str(project_root)]
+            if stub_path.exists():
+                python_path_parts.append(str(stub_path))
+            existing_path = env.get("PYTHONPATH", "")
+            if existing_path:
+                python_path_parts.append(existing_path)
+            env["PYTHONPATH"] = os.pathsep.join(python_path_parts)
+
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+                env=env,
+            )
+
+            assert result.returncode == 0, result.stderr
+            assert "management import succeeded" in result.stdout
+        finally:
+            os.unlink(script_path)
+
     def test_alpaca_credential_schema_with_env_file(self):
         """Test that the ALPACA credential schema works with .env files."""
         alpaca_env_content = """
