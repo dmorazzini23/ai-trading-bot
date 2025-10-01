@@ -592,18 +592,38 @@ def _fail_fast_env() -> None:
         "CAPITAL_CAP",
         "DOLLAR_RISK_LIMIT",
     )
+    loaded = reload_env(override=False)
     try:
-        loaded = reload_env(override=False)
-        validate_required_env(required)
-        snapshot = {k: get_env(k, "") or "" for k in required}
-        _, _, base_url = _resolve_alpaca_env()
-        if not base_url:
-            raise RuntimeError("Missing required environment variable: ALPACA_API_URL or ALPACA_BASE_URL")
-        snapshot["ALPACA_API_URL"] = base_url
         trading_cfg = TradingConfig.from_env()
     except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
+
+    try:
+        validate_required_env(required)
+    except RuntimeError as exc:
+        message = str(exc)
+        _, _, tail = message.partition(":")
+        missing = tuple(sorted(part.strip() for part in tail.split(",") if part.strip()))
+        alpaca_fields = {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}
+        non_alpaca_missing = tuple(name for name in missing if name not in alpaca_fields)
+        if non_alpaca_missing:
+            logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(exc)})
+            raise SystemExit(1) from exc
+        missing_alpaca = tuple(name for name in missing if name in alpaca_fields)
+        if missing_alpaca:
+            logger.warning(
+                "ALPACA_CREDENTIALS_MISSING",
+                extra={"missing": missing_alpaca},
+            )
+
+    snapshot = {k: get_env(k, "") or "" for k in required}
+    _, _, base_url = _resolve_alpaca_env()
+    if not base_url:
+        error = "Missing required environment variable: ALPACA_API_URL or ALPACA_BASE_URL"
+        logger.critical("ENV_VALIDATION_FAILED", extra={"error": error})
+        raise SystemExit(1)
+    snapshot["ALPACA_API_URL"] = base_url
     logger.info(
         "ENV_CONFIG_LOADED",
         extra={"dotenv_path": loaded, **redact_config_env(snapshot)},
@@ -629,11 +649,13 @@ def _fail_fast_env() -> None:
     raw_risk_limit = get_env("DOLLAR_RISK_LIMIT")
     cfg_risk_limit = getattr(trading_cfg, "dollar_risk_limit", None)
     alias_raw = get_env("DAILY_LOSS_LIMIT")
+    canonical_env_value = os.getenv("DOLLAR_RISK_LIMIT")
     if alias_backfilled and cfg_risk_limit is not None:
         logger.warning(
             "DOLLAR_RISK_LIMIT_ALIAS_OVERRIDE",
             extra={
                 "env_value": alias_raw,
+                "canonical_env_value": canonical_env_value,
                 "trading_config_value": cfg_risk_limit,
             },
         )
