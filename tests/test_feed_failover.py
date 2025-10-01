@@ -226,6 +226,58 @@ def test_window_no_session_prefers_alpaca_fallback(monkeypatch, capmetrics):
     assert idx_attempt < idx_fb_success < idx_success
 
 
+def test_no_session_empty_payload_uses_sip_before_backup(monkeypatch):
+    _reset_state()
+    fetch._SKIPPED_SYMBOLS.clear()
+    fetch._IEX_EMPTY_COUNTS.clear()
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setenv("ALPACA_API_KEY", "key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "secret")
+    monkeypatch.setattr(fetch, "_ALLOW_SIP", True)
+    monkeypatch.setattr(fetch, "_HAS_SIP", True)
+    monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
+    monkeypatch.setattr(fetch, "_ENABLE_HTTP_FALLBACK", True, raising=False)
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: False)
+    monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
+
+    fallback_calls: list[tuple[str, ...]] = []
+
+    def fake_feed_failover():
+        feeds = ("sip", "yahoo")
+        fallback_calls.append(feeds)
+        return feeds
+
+    monkeypatch.setattr(fetch, "alpaca_feed_failover", fake_feed_failover)
+    monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip", "yahoo"])
+    monkeypatch.setattr(fetch, "alpaca_empty_to_backup", lambda: False)
+
+    def _fail_backup(*_a, **_k):
+        raise AssertionError("backup provider should not execute during no-session handling")
+
+    monkeypatch.setattr(fetch, "_backup_get_bars", _fail_backup)
+
+    start = datetime(2024, 1, 2, 15, 30, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+
+    session = _Session([
+        _Resp({"bars": []}, correlation="iex"),
+        _Resp({"bars": []}, correlation="sip"),
+    ])
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", session)
+
+    df = fetch._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+
+    assert fallback_calls, "alpaca_feed_failover should be evaluated"
+    assert len(session.calls) == 2
+    assert session.calls[0]["feed"] == "iex"
+    assert session.calls[1]["feed"] == "sip"
+    assert hasattr(df, "empty")
+    assert getattr(df, "empty", True)
+    tf_key = ("AAPL", "1Min")
+    assert tf_key not in fetch._IEX_EMPTY_COUNTS or fetch._IEX_EMPTY_COUNTS[tf_key] == 0
+    assert "sip" in fetch._FEED_FAILOVER_ATTEMPTS.get(tf_key, set())
+
+
 def test_cached_override_respects_ttl(monkeypatch):
     _reset_state()
     monkeypatch.setenv("PYTEST_RUNNING", "1")
