@@ -5207,9 +5207,25 @@ def get_minute_df(
 
     Also updates in-memory minute cache for freshness checks."""
     pd = _ensure_pandas()
+    last_complete_evaluations = 0
+
+    def _evaluate_last_complete(
+        fallback: _dt.datetime | None = None,
+    ) -> _dt.datetime:
+        nonlocal last_complete_evaluations
+        try:
+            value = _last_complete_minute(pd)
+        except Exception:
+            if fallback is not None:
+                return fallback
+            raise
+        else:
+            last_complete_evaluations += 1
+            return value
+
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    last_complete_minute = _last_complete_minute(pd)
+    last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
     window_has_session = _window_has_trading_session(start_dt, end_dt)
@@ -5386,12 +5402,21 @@ def get_minute_df(
     force_primary_fetch = True
     if backup_label:
         prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
-        active_provider = primary_label if prefer_primary_first else provider_monitor.active_provider(primary_label, backup_label)
+        if prefer_primary_first:
+            try:
+                monitored_choice = provider_monitor.active_provider(primary_label, backup_label)
+            except Exception:
+                monitored_choice = primary_label
+            active_provider = monitored_choice if monitored_choice == backup_label else primary_label
+        else:
+            active_provider = provider_monitor.active_provider(primary_label, backup_label)
         if active_provider == backup_label:
             try:
-                refreshed_last_minute = _last_complete_minute(pd)
+                refreshed_last_minute = _evaluate_last_complete(last_complete_minute)
             except Exception:
                 refreshed_last_minute = last_complete_minute
+            else:
+                last_complete_minute = refreshed_last_minute
             backup_end_dt = end_dt
             if refreshed_last_minute is not None:
                 candidate_end = min(backup_end_dt, refreshed_last_minute)
@@ -5911,6 +5936,36 @@ def get_minute_df(
     except Exception:
         pass
 
+    if isinstance(coverage_meta, dict):
+        try:
+            existing = int(coverage_meta.get("last_complete_evaluations", 0))
+        except Exception:
+            existing = 0
+        coverage_meta["last_complete_evaluations"] = max(existing, last_complete_evaluations)
+
+    def _apply_last_complete_meta(frame: Any | None) -> None:
+        if frame is None or not last_complete_evaluations:
+            return
+        try:
+            attrs = getattr(frame, "attrs", None)
+        except Exception:
+            return
+        if not isinstance(attrs, dict):
+            return
+        meta = attrs.get("_coverage_meta")
+        if isinstance(meta, dict):
+            try:
+                existing_count = int(meta.get("last_complete_evaluations", 0))
+            except Exception:
+                existing_count = 0
+            meta["last_complete_evaluations"] = max(existing_count, last_complete_evaluations)
+        else:
+            attrs["_coverage_meta"] = {
+                "last_complete_evaluations": last_complete_evaluations,
+            }
+
+    _apply_last_complete_meta(df)
+
     def _gap_ratio_setting() -> float:
         try:
             env_ratio = get_env("AI_TRADING_GAP_RATIO_LIMIT", None, cast=float)
@@ -5997,6 +6052,7 @@ def get_minute_df(
                 attrs = None
             if isinstance(attrs, dict) and "price_reliable" not in attrs:
                 _set_price_reliability(fallback_candidate, reliable=True)
+            _apply_last_complete_meta(fallback_candidate)
             return fallback_candidate
         if allow_empty_return:
             if used_backup and not fallback_logged:
