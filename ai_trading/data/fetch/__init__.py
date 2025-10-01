@@ -1235,6 +1235,9 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "openprice",
         "price_open",
         "opening_price",
+        "opening",
+        "session_open",
+        "session_open_price",
         "openvalue",
         "open_val",
         "openpx",
@@ -1248,6 +1251,9 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_open_price",
         "openpriceiex",
         "iexopenprice",
+        "start_price",
+        "starting_price",
+        "begin_price",
     ),
     "high": (
         "high",
@@ -1256,6 +1262,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "highprice",
         "price_high",
         "max_price",
+        "maximum_price",
+        "session_high",
+        "session_high_price",
+        "peak_price",
         "highvalue",
         "highpx",
         "high_prc",
@@ -1272,6 +1282,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "lowprice",
         "price_low",
         "min_price",
+        "minimum_price",
+        "session_low",
+        "session_low_price",
+        "floor_price",
         "lowvalue",
         "lowpx",
         "low_prc",
@@ -1290,11 +1304,17 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "closing_price",
         "closingprice",
         "last_price",
+        "last_value",
         "final_price",
+        "final_value",
+        "ending_price",
+        "end_price",
         "settle_price",
         "closepx",
         "close_prc",
         "closeprc",
+        "session_close",
+        "session_close_price",
         "close_iex",
         "iex_close",
         "closeiex",
@@ -1303,6 +1323,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_close_price",
         "closepriceiex",
         "iexcloseprice",
+        "latest_price",
+        "latest_value",
+        "market_price",
+        "official_price",
     ),
     "adj_close": (
         "adj close",
@@ -1315,6 +1339,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "volume",
         "v",
         "share_volume",
+        "session_volume",
         "total_volume",
         "volume_total",
         "volumetotal",
@@ -1322,6 +1347,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "volume_traded",
         "volumetraded",
         "sharevolume",
+        "share_count",
+        "shares_traded",
+        "shares",
+        "traded_shares",
         "volume_iex",
         "iex_volume",
         "volumeiex",
@@ -1337,6 +1366,64 @@ _OHLCV_ALIAS_LOOKUP: dict[str, str] = {}
 for canonical, aliases in _OHLCV_COLUMN_ALIASES.items():
     for alias in aliases:
         _OHLCV_ALIAS_LOOKUP[_normalize_column_token(alias)] = canonical
+
+
+def _heuristic_alias_match(tokens: Iterable[str], normalized: str) -> str | None:
+    """Return a canonical column inferred from *tokens* heuristically."""
+
+    token_list = [token for token in tokens if token]
+    token_set = set(token_list)
+    normalized_compact = normalized.replace("_", "")
+
+    def _has_any(*candidates: str) -> bool:
+        return any(candidate in token_set for candidate in candidates)
+
+    def _contains_any(*candidates: str) -> bool:
+        return any(candidate in normalized_compact for candidate in candidates)
+
+    # Handle open variants that do not explicitly contain "open".
+    if _has_any("start_price", "starting_price") or (
+        _has_any("start", "starting", "begin", "initial")
+        and _has_any("price", "value")
+    ):
+        return "open"
+
+    if _contains_any("openingprice"):
+        return "open"
+
+    # Handle high variants that rely on synonyms like "max" or "peak".
+    if _has_any("maximum_price", "peak_price") or (
+        _has_any("max", "maximum", "peak") and _has_any("price", "value")
+    ):
+        return "high"
+
+    # Handle low variants that rely on synonyms like "min" or "floor".
+    if _has_any("minimum_price", "floor_price") or (
+        _has_any("min", "minimum", "floor") and _has_any("price", "value")
+    ):
+        return "low"
+
+    # Handle close variants such as "latest_price" or "official_price".
+    if _has_any("latest_price", "latest_value", "market_price", "official_price", "ending_price", "end_price", "final_value"):
+        return "close"
+
+    if (
+        _has_any("latest", "last", "final", "ending", "end", "settlement", "settled")
+        and _has_any("price", "value")
+    ) or _contains_any("officialprice"):
+        return "close"
+
+    # Handle volume variants that lean on share/quantity terminology.
+    if _has_any("share_count", "shares_traded", "session_volume"):
+        return "volume"
+
+    if (
+        _has_any("shares", "share", "quantity", "qty")
+        and _has_any("traded", "trade", "count", "total", "volume")
+    ):
+        return "volume"
+
+    return None
 
 
 def _alias_rename_map(columns: Iterable[Any]) -> dict[Any, str]:
@@ -1377,6 +1464,10 @@ def _alias_rename_map(columns: Iterable[Any]) -> dict[Any, str]:
             if canonical is not None:
                 rename_map[column] = canonical
                 break
+        else:
+            inferred = _heuristic_alias_match(tokens, normalized)
+            if inferred is not None:
+                rename_map[column] = inferred
     return rename_map
 
 
@@ -1412,7 +1503,10 @@ def ensure_ohlcv_schema(
     # `_alias_rename_map` now examines tuple components and underscore tokens so
     # MultiIndex aliases like ("Open", "AAPL") or "open_aapl" collapse to OHLCV names.
     if rename_map:
-        work_df = work_df.rename(columns=rename_map)
+        new_columns: list[Any] = []
+        for column in work_df.columns:
+            new_columns.append(rename_map.get(column, column))
+        work_df.columns = new_columns
 
     if hasattr(work_df.columns, "duplicated"):
         try:
@@ -1432,10 +1526,17 @@ def ensure_ohlcv_schema(
 
     if timestamp_col is None:
         if isinstance(work_df.index, pd_local.DatetimeIndex):
-            timestamp_col = "timestamp"
+            original_columns = list(work_df.columns)
             work_df = work_df.reset_index()
-            first_column = work_df.columns[0]
-            work_df = work_df.rename(columns={first_column: "timestamp"})
+            added_columns = [
+                col for col in work_df.columns if col not in original_columns
+            ]
+            if added_columns:
+                index_column = added_columns[0]
+            else:
+                index_column = work_df.columns[0]
+            work_df = work_df.rename(columns={index_column: "timestamp"})
+            timestamp_col = "timestamp"
         else:
             raise MissingOHLCVColumnsError(
                 f"missing timestamp column | source={source} frequency={frequency}"
@@ -2315,6 +2416,28 @@ def _flatten_and_normalize_ohlcv(
         except (AttributeError, IndexError, TypeError):
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
     normalize_ohlcv_columns(df)
+
+    if "close" not in getattr(df, "columns", []):
+        for candidate in (
+            "latest_price",
+            "latest_value",
+            "market_price",
+            "official_price",
+            "ending_price",
+            "end_price",
+            "final_value",
+            "final_price",
+            "last_value",
+            "last_price",
+            "price",
+        ):
+            if candidate in getattr(df, "columns", []):
+                try:
+                    df["close"] = df[candidate]
+                except Exception:  # pragma: no cover - defensive assignment
+                    pass
+                else:
+                    break
 
     canonical_primary = {"open", "high", "low", "close", "volume"}
     for canonical in list(canonical_primary):
