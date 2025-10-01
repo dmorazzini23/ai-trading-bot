@@ -45,3 +45,24 @@ def test_ensure_entitled_feed_keeps_when_account_advertises_sip(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET", "test-secret")
     client = _Client(['sip'])
     assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+
+
+def test_ensure_entitled_feed_keeps_when_account_reports_sip_without_creds(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    for key in ("ALPACA_ALLOW_SIP", "ALPACA_SIP_ENTITLED", "ALPACA_HAS_SIP"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("ALPACA_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET", raising=False)
+    client = _Client(['sip'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+
+
+def test_ensure_entitled_feed_downgrades_when_allow_flag_disables(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    monkeypatch.setenv("ALPACA_ALLOW_SIP", "0")
+    for key in ("ALPACA_SIP_ENTITLED", "ALPACA_HAS_SIP"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("ALPACA_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET", raising=False)
+    client = _Client(['sip', 'iex'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'

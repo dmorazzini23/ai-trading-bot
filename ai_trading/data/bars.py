@@ -68,6 +68,7 @@ _log = get_logger(__name__)
 'AI-AGENT-REF: canonicalizers moved to ai_trading.logging.normalize'
 
 _TRUTHY = {"1", "true", "yes", "on"}
+_FALSEY = {"0", "false", "no", "off", "disable", "disabled"}
 
 
 @dataclass(slots=True)
@@ -192,6 +193,13 @@ def _env_bool(name: str) -> bool | None:
     if raw is None:
         return None
     return raw.strip().lower() in _TRUTHY
+
+
+def _env_explicit_false(name: str) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return False
+    return raw.strip().lower() in _FALSEY
 
 
 def _default_sip_entitled() -> bool:
@@ -326,10 +334,13 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     req_raw = str(requested or '').lower()
     normalized_req = req_raw.replace("alpaca_", "")
     sip_allowed = not sip_disallowed()
+    allow_explicit_disallow = _env_explicit_false("ALPACA_ALLOW_SIP")
     env_flag = _env_bool("ALPACA_SIP_ENTITLED")
     if env_flag is None:
         env_flag = _env_bool("ALPACA_HAS_SIP")
     sip_capability = "sip" in feeds
+    if sip_capability and not sip_allowed and not allow_explicit_disallow:
+        sip_allowed = True
     sip_entitled_flag = False
     if sip_allowed and sip_capability:
         if env_flag is False:
