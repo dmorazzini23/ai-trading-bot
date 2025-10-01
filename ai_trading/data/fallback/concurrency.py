@@ -428,6 +428,21 @@ FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
 
 
+def reset_peak_simultaneous_workers() -> None:
+    """Reset ``PEAK_SIMULTANEOUS_WORKERS`` to ``0`` for test isolation."""
+
+    global PEAK_SIMULTANEOUS_WORKERS
+    PEAK_SIMULTANEOUS_WORKERS = 0
+
+
+def reset_tracking_state() -> None:
+    """Clear success and failure tracking sets and reset the peak counter."""
+
+    SUCCESSFUL_SYMBOLS.clear()
+    FAILED_SYMBOLS.clear()
+    reset_peak_simultaneous_workers()
+
+
 async def run_with_concurrency(
     symbols: Iterable[str],
     worker: Callable[[str], Awaitable[T]],
@@ -436,10 +451,7 @@ async def run_with_concurrency(
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
 
-    global PEAK_SIMULTANEOUS_WORKERS
-    SUCCESSFUL_SYMBOLS.clear()
-    FAILED_SYMBOLS.clear()
-    PEAK_SIMULTANEOUS_WORKERS = 0
+    reset_tracking_state()
 
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
@@ -455,53 +467,51 @@ async def run_with_concurrency(
 
     limit = max(1, limit)
 
-    semaphore = asyncio.Semaphore(limit)
+    concurrency_semaphore = asyncio.Semaphore(limit)
     active_lock = asyncio.Lock()
-    active = 0
+    active_workers = 0
     results: dict[str, T | None] = {}
 
     async def _execute(symbol: str) -> None:
-        nonlocal active
+        nonlocal active_workers
         global PEAK_SIMULTANEOUS_WORKERS
 
-        async def _call_worker() -> None:
-            nonlocal active
-            global PEAK_SIMULTANEOUS_WORKERS
+        # Ensure the symbol is registered in the result mapping even if the
+        # worker never starts (e.g. due to cancellation or timeout).
+        results.setdefault(symbol, None)
 
-            async with active_lock:
-                active += 1
-                if active > PEAK_SIMULTANEOUS_WORKERS:
-                    PEAK_SIMULTANEOUS_WORKERS = active
-            try:
+        try:
+            async with concurrency_semaphore:
+                acquired_host_permit = False
                 try:
-                    result = await worker(symbol)
-                except asyncio.CancelledError:
-                    results.setdefault(symbol, None)
-                    FAILED_SYMBOLS.add(symbol)
-                    raise
-                except BaseException:
-                    FAILED_SYMBOLS.add(symbol)
-                    results[symbol] = None
-                else:
-                    SUCCESSFUL_SYMBOLS.add(symbol)
-                    results[symbol] = result
-            finally:
-                async with active_lock:
-                    active -= 1
+                    if host_semaphore is not None:
+                        await host_semaphore.acquire()
+                        acquired_host_permit = True
 
-        async with semaphore:
-            if host_semaphore is None:
-                await _call_worker()
-                return
+                    async with active_lock:
+                        active_workers += 1
+                        if active_workers > PEAK_SIMULTANEOUS_WORKERS:
+                            PEAK_SIMULTANEOUS_WORKERS = active_workers
 
-            acquired_host_permit = False
-            try:
-                await host_semaphore.acquire()
-                acquired_host_permit = True
-                await _call_worker()
-            finally:
-                if acquired_host_permit:
-                    host_semaphore.release()
+                    try:
+                        result = await worker(symbol)
+                    except asyncio.CancelledError:
+                        FAILED_SYMBOLS.add(symbol)
+                        raise
+                    except BaseException:
+                        FAILED_SYMBOLS.add(symbol)
+                    else:
+                        SUCCESSFUL_SYMBOLS.add(symbol)
+                        results[symbol] = result
+                    finally:
+                        async with active_lock:
+                            active_workers -= 1
+                finally:
+                    if acquired_host_permit:
+                        host_semaphore.release()
+        except asyncio.CancelledError:
+            FAILED_SYMBOLS.add(symbol)
+            raise
 
     tasks: list[asyncio.Task[None]] = []
     task_to_symbol: dict[asyncio.Task[None], str] = {}
@@ -532,18 +542,18 @@ async def run_with_concurrency(
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        PEAK_SIMULTANEOUS_WORKERS = 0
+        reset_peak_simultaneous_workers()
         raise
     for task, outcome in zip(tasks, outcomes):
         symbol = task_to_symbol.get(task)
         if symbol is None:
             continue
-        if isinstance(outcome, BaseException) and symbol not in results:
-            results[symbol] = None
+        if isinstance(outcome, BaseException):
+            results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 
     if reset_peak_after_run:
-        PEAK_SIMULTANEOUS_WORKERS = 0
+        reset_peak_simultaneous_workers()
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
@@ -571,5 +581,7 @@ __all__ = [
     "SUCCESSFUL_SYMBOLS",
     "FAILED_SYMBOLS",
     "PEAK_SIMULTANEOUS_WORKERS",
+    "reset_peak_simultaneous_workers",
+    "reset_tracking_state",
 ]
 
