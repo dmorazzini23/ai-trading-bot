@@ -3,7 +3,10 @@ from collections import deque
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
 
+import pytest
+
 from ai_trading.data.fallback import concurrency
+from ai_trading.data import fallback_concurrency as legacy_concurrency
 
 
 def test_run_with_concurrency_returns_results():
@@ -173,7 +176,8 @@ def test_run_with_concurrency_peak_counter_respects_limit():
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
 
 
-def test_run_with_concurrency_respects_host_limit():
+@pytest.mark.parametrize("module", (concurrency, legacy_concurrency))
+def test_run_with_concurrency_respects_host_limit(module):
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
@@ -193,27 +197,31 @@ def test_run_with_concurrency_respects_host_limit():
 
     symbols = [f"HOST{i}" for i in range(6)]
 
-    original_host_limit = concurrency._get_effective_host_limit
+    module.reset_tracking_state()
+    module.reset_peak_simultaneous_workers()
+
+    original_host_limit = module._get_effective_host_limit
 
     def _fake_host_limit() -> int:
         return 2
 
-    concurrency._get_effective_host_limit = _fake_host_limit
+    module._get_effective_host_limit = _fake_host_limit
     try:
         results, succeeded, failed = asyncio.run(
-            concurrency.run_with_concurrency(symbols, worker, max_concurrency=5)
+            module.run_with_concurrency(symbols, worker, max_concurrency=5)
         )
     finally:
-        concurrency._get_effective_host_limit = original_host_limit
+        module._get_effective_host_limit = original_host_limit
 
     assert results == {symbol: symbol for symbol in symbols}
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
+    assert module.PEAK_SIMULTANEOUS_WORKERS == 2
 
 
-def test_run_with_concurrency_host_limit_floors_to_one():
+@pytest.mark.parametrize("module", (concurrency, legacy_concurrency))
+def test_run_with_concurrency_host_limit_floors_to_one(module):
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
@@ -233,24 +241,27 @@ def test_run_with_concurrency_host_limit_floors_to_one():
 
     symbols = [f"HOSTF{i}" for i in range(4)]
 
-    original_host_limit = concurrency._get_effective_host_limit
+    module.reset_tracking_state()
+    module.reset_peak_simultaneous_workers()
+
+    original_host_limit = module._get_effective_host_limit
 
     def _fake_host_limit() -> int:
         return 0
 
-    concurrency._get_effective_host_limit = _fake_host_limit
+    module._get_effective_host_limit = _fake_host_limit
     try:
         results, succeeded, failed = asyncio.run(
-            concurrency.run_with_concurrency(symbols, worker, max_concurrency=3)
+            module.run_with_concurrency(symbols, worker, max_concurrency=3)
         )
     finally:
-        concurrency._get_effective_host_limit = original_host_limit
+        module._get_effective_host_limit = original_host_limit
 
     assert results == {symbol: symbol for symbol in symbols}
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 1
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 1
+    assert module.PEAK_SIMULTANEOUS_WORKERS == 1
 
 
 def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
@@ -790,3 +801,11 @@ def test_run_with_concurrency_handles_blocking_and_failures():
     assert results["FAIL"] is None
     assert "FAIL" in failed
     assert "BLOCK" in succeeded
+
+
+def test_legacy_shim_reuses_concurrency_module():
+    assert legacy_concurrency is concurrency
+    assert legacy_concurrency.run_with_concurrency is concurrency.run_with_concurrency
+    assert legacy_concurrency.__doc__ == concurrency.__doc__
+
+
