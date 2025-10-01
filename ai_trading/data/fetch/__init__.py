@@ -152,11 +152,20 @@ def _ensure_override_state_current() -> None:
         _clear_cycle_overrides()
 
 
-def _record_override(symbol: str, feed: str) -> None:
-    normalized = str(feed).strip().lower()
-    _cycle_feed_override[symbol] = normalized
+def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
+    try:
+        normalized_feed = _normalize_feed_value(feed)
+    except ValueError:
+        try:
+            normalized_feed = str(feed).strip().lower()
+        except Exception:  # pragma: no cover - defensive
+            return
+    if not normalized_feed:
+        return
+    tf_norm = _canon_tf(timeframe)
+    _cycle_feed_override[symbol] = normalized_feed
     _override_set_ts[symbol] = time.time()
-    _remember_fallback_for_cycle(_get_cycle_id(), symbol, "1Min", normalized)
+    _remember_fallback_for_cycle(_get_cycle_id(), symbol, tf_norm, normalized_feed)
 
 
 def _clear_override(symbol: str) -> None:
@@ -175,10 +184,10 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     return normalized_primary
 
 
-def _cache_fallback(symbol: str, feed: str) -> None:
+def _cache_fallback(symbol: str, feed: str, timeframe: str = "1Min") -> None:
     if not feed:
         return
-    _record_override(symbol, feed)
+    _record_override(symbol, feed, timeframe)
 
 
 async def run_with_concurrency(limit: int, coros):
@@ -680,15 +689,34 @@ def _iter_preferred_feeds(symbol: str, timeframe: str, current_feed: str) -> tup
 
 
 def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: str) -> None:
-    key = (symbol, timeframe)
-    _FEED_OVERRIDE_BY_TF[key] = to_feed
-    _record_override(symbol, to_feed)
+    tf_norm = _canon_tf(timeframe)
+
+    def _coerce_feed(value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return _normalize_feed_value(value)
+        except ValueError:
+            try:
+                coerced = str(value).strip().lower()
+            except Exception:  # pragma: no cover - defensive
+                return None
+            return coerced or None
+
+    from_norm = _coerce_feed(from_feed)
+    to_norm = _coerce_feed(to_feed)
+    if not to_norm:
+        return
+
+    key = (symbol, tf_norm)
+    _FEED_OVERRIDE_BY_TF[key] = to_norm
+    _record_override(symbol, to_norm, tf_norm)
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
-    attempted.add(to_feed)
-    _FEED_SWITCH_HISTORY.append((symbol, timeframe, to_feed))
-    if from_feed == "iex":
+    attempted.add(to_norm)
+    _FEED_SWITCH_HISTORY.append((symbol, tf_norm, to_norm))
+    if from_norm == "iex":
         _IEX_EMPTY_COUNTS.pop(key, None)
-    log_key = (symbol, timeframe, to_feed)
+    log_key = (symbol, tf_norm, to_norm)
     if log_key not in _FEED_SWITCH_LOGGED:
         logger.info(
             "ALPACA_FEED_SWITCH",
@@ -696,9 +724,9 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
                 {
                     "provider": "alpaca",
                     "symbol": symbol,
-                    "timeframe": timeframe,
-                    "from_feed": from_feed,
-                    "to_feed": to_feed,
+                    "timeframe": tf_norm,
+                    "from_feed": from_norm or from_feed,
+                    "to_feed": to_norm,
                 }
             ),
         )
