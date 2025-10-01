@@ -4,6 +4,26 @@ import logging
 from pathlib import Path
 
 
+class _LoggerOnceStub:
+    """Mimic ``logger_once`` behaviour by deduplicating on key."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._emitted: set[str] = set()
+
+    def warning(self, message: str, *args, **kwargs) -> None:  # noqa: D401, ANN001
+        key = kwargs.get("key") or message
+        if key in self._emitted:
+            return
+        self._emitted.add(key)
+        extra = kwargs.get("extra") or {}
+        self.calls.append({
+            "message": message,
+            "key": key,
+            "extra": dict(extra),
+        })
+
+
 def _as_classmethod(path: Path):
     """Return a classmethod returning ``path`` for monkeypatching ``Path`` hooks."""
 
@@ -441,19 +461,6 @@ def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_pat
         def log_entry(self, *args, **kwargs) -> None:  # noqa: D401, ARG002
             return None
 
-    class _LoggerOnceStub:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
-            self._emitted: set[str] = set()
-
-        def warning(self, msg: str, *args, **kwargs) -> None:  # noqa: D401, ANN001
-            key = kwargs.get("key") or msg
-            if key in self._emitted:
-                return
-            self._emitted.add(key)
-            payload = kwargs.get("extra") or {}
-            self.calls.append((msg, dict(payload)))
-
     logger_once_stub = _LoggerOnceStub()
 
     monkeypatch.setattr(bot_engine, "TradeLogger", _StubTradeLogger)
@@ -472,7 +479,7 @@ def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_pat
     assert fallback_path.exists()
 
     # Ensure once-per-process warning semantics remain intact.
-    messages = [call[0] for call in logger_once_stub.calls]
+    messages = [call["message"] for call in logger_once_stub.calls]
     assert messages == [
         "TRADE_LOG_FALLBACK_USER_STATE",
         "TRADE_LOGGER_FALLBACK_ACTIVE",
@@ -481,3 +488,43 @@ def test_trade_log_fallback_prefers_state_home_when_no_writable_ancestor(tmp_pat
     bot_engine.get_trade_logger()
 
     assert len(logger_once_stub.calls) == 2
+
+
+def test_emit_trade_log_fallback_logs_per_destination(monkeypatch):
+    """Repeated fallbacks with different targets should emit separate warnings."""
+
+    fallback_paths = iter([
+        "/tmp/state/ai-trading-bot/trades.jsonl",
+        "/tmp/state/ai-trading-bot/other.jsonl",
+    ])
+
+    def fake_compute_user_state_trade_log_path(filename: str = "trades.jsonl") -> str:  # noqa: D401, ARG001
+        return next(fallback_paths)
+
+    logger_once_stub = _LoggerOnceStub()
+
+    monkeypatch.setattr(bot_engine, "logger_once", logger_once_stub)
+    monkeypatch.setattr(
+        bot_engine,
+        "_compute_user_state_trade_log_path",
+        fake_compute_user_state_trade_log_path,
+    )
+
+    first_path = bot_engine._emit_trade_log_fallback(
+        preferred_path="/blocked/first/trades.jsonl",
+        reason="first",
+    )
+    second_path = bot_engine._emit_trade_log_fallback(
+        preferred_path="/blocked/second/other.jsonl",
+        reason="second",
+    )
+
+    fallback_messages = [
+        call for call in logger_once_stub.calls if call["message"] == "TRADE_LOG_FALLBACK_USER_STATE"
+    ]
+
+    assert len(fallback_messages) == 2
+    keys = [call["key"] for call in fallback_messages]
+    assert keys[0] != keys[1]
+    assert first_path in keys[0]
+    assert second_path in keys[1]

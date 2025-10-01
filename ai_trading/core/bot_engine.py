@@ -2198,7 +2198,7 @@ def _emit_trade_log_fallback(
         payload.update(extra)
     logger_once.warning(
         "TRADE_LOG_FALLBACK_USER_STATE",
-        key="trade_log_fallback_user_state",
+        key=f"trade_log_fallback_user_state::{reason}::{fallback_path}",
         extra=payload,
     )
     return fallback_path
@@ -10128,9 +10128,11 @@ def get_trade_logger() -> TradeLogger:
                 extra={"dir": log_dir, "detail": str(exc)},
             )
     if fallback_payload:
+        fallback_reason = fallback_payload.get("reason")
+        fallback_target = fallback_payload.get("fallback_path")
         logger_once.warning(
             "TRADE_LOGGER_FALLBACK_ACTIVE",
-            key="trade_logger_fallback_active",
+            key=f"trade_logger_fallback_active::{fallback_reason}::{fallback_target}",
             extra=fallback_payload,
         )
     return _TRADE_LOGGER_SINGLETON
