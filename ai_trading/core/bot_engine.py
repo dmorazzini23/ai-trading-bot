@@ -7387,8 +7387,17 @@ class DataFetcher:
 
         normalized = data_fetcher_module.normalize_ohlcv_df(
             frame.drop(columns=["symbol"], errors="ignore"),
-            include_columns=("timestamp",),
         )
+
+        try:
+            index = normalized.index
+        except AttributeError:  # pragma: no cover - defensive guard for duck typing
+            return normalized
+
+        try:
+            normalized.index = index.rename(None)
+        except Exception:  # pragma: no cover - defensive fallback
+            pass
 
         return normalized
 
