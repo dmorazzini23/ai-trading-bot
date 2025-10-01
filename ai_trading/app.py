@@ -100,6 +100,26 @@ def create_app():
 
         fallback_payload = _ensure_core_fields(fallback_payload)
 
+        # Merge any caller-provided fallback data back into the canonical payload so
+        # the final body always exposes the required structure.
+        response_payload = dict(canonical_payload)
+        response_payload.setdefault("alpaca", {})
+        response_payload["alpaca"] = dict(response_payload.get("alpaca", {}))
+
+        fallback_alpaca_section = fallback_payload.get("alpaca", {})
+        if isinstance(fallback_alpaca_section, dict):
+            response_payload["alpaca"].update(fallback_alpaca_section)
+
+        if "ok" in fallback_payload:
+            response_payload["ok"] = fallback_payload["ok"]
+
+        for key, value in fallback_payload.items():
+            if key in {"ok", "alpaca"}:
+                continue
+            response_payload[key] = value
+
+        fallback_payload = _ensure_core_fields(response_payload)
+
         func = globals().get("jsonify")
         fallback_used = False
         fallback_reasons: list[str] = []
