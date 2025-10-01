@@ -7378,13 +7378,14 @@ class DataFetcher:
             return None
 
         frame.index = idx
-        normalized = frame.rename(columns=lambda c: c.lower())
-        normalized = normalized.drop(columns=["symbol"], errors="ignore")
+        try:
+            frame = data_fetcher_module.normalize_ohlcv_columns(frame)
+        except AttributeError:  # pragma: no cover - objects without columns
+            pass
 
-        expected_cols = ["open", "high", "low", "close", "volume"]
-        available_cols = [col for col in expected_cols if col in normalized.columns]
-        if available_cols:
-            normalized = normalized[available_cols]
+        normalized = data_fetcher_module.normalize_ohlcv_df(
+            frame.drop(columns=["symbol"], errors="ignore")
+        )
 
         return normalized
 
