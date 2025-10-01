@@ -166,6 +166,24 @@ def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     _assert_error_contains(data, "jsonify unavailable", "ImportError", "flask missing")
 
 
+def test_health_endpoint_tuple_fallback_preserves_structure(monkeypatch):
+    def broken_jsonify(payload):
+        raise RuntimeError("json busted")
+
+    monkeypatch.setattr(app_module, "jsonify", broken_jsonify, raising=False)
+
+    app = app_module.create_app()
+    app.response_class = None
+    client = app.test_client()
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    _assert_payload_structure(data)
+    assert data["ok"] is False
+    _assert_error_contains(data, "json busted")
+
+
 def test_shadow_mode_disabled_when_credentials_missing(monkeypatch):
     import ai_trading.config.management as config_mgmt
 
