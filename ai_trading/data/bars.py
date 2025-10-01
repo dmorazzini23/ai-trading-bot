@@ -333,20 +333,32 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
     feeds = _get_entitled_feeds(client)
     req_raw = str(requested or '').lower()
     normalized_req = req_raw.replace("alpaca_", "")
-    sip_allowed = not sip_disallowed()
+    sip_capability = "sip" in feeds
+
     allow_explicit_disallow = _env_explicit_false("ALPACA_ALLOW_SIP")
+    allow_override = _env_bool("ALPACA_ALLOW_SIP")
+
     env_flag = _env_bool("ALPACA_SIP_ENTITLED")
     if env_flag is None:
         env_flag = _env_bool("ALPACA_HAS_SIP")
-    sip_capability = "sip" in feeds
-    if sip_capability and not sip_allowed and not allow_explicit_disallow:
+
+    sip_allowed = not sip_disallowed()
+    if allow_explicit_disallow:
+        sip_allowed = False
+    elif allow_override is True:
         sip_allowed = True
+    elif sip_capability and not sip_allowed:
+        sip_allowed = True
+
     sip_entitled_flag = False
-    if sip_allowed and sip_capability:
-        if env_flag is False:
-            sip_entitled_flag = False
-        else:
-            sip_entitled_flag = True
+    if allow_explicit_disallow:
+        sip_entitled_flag = False
+    elif env_flag is True:
+        sip_entitled_flag = True
+    elif env_flag is False:
+        sip_entitled_flag = False
+    elif sip_allowed and sip_capability:
+        sip_entitled_flag = True
     prefer_sip = normalized_req == "sip"
     resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_entitled_flag)
     if resolved in feeds:
