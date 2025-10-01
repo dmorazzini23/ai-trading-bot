@@ -7,6 +7,28 @@ from typing import TYPE_CHECKING
 
 from ai_trading.utils.lazy_imports import load_pandas
 
+
+def is_generator_stop(exc: BaseException) -> bool:
+    """Return ``True`` when *exc* represents generator exhaustion."""
+
+    if isinstance(exc, StopIteration):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        if "generator raised StopIteration" in message:
+            return True
+        cause = exc.__cause__
+        while cause is not None:
+            if isinstance(cause, StopIteration):
+                return True
+            cause = cause.__cause__
+        context = exc.__context__
+        while context is not None:
+            if isinstance(context, StopIteration):
+                return True
+            context = context.__context__
+    return False
+
 # Simple day-scoped cache for last_market_session to avoid repeated calendar work
 _LAST_SESSION_CACHE: dict[str, "SessionWindow | None"] = {}
 _LAST_MONOTONIC_VALUE: float | None = None
@@ -87,8 +109,11 @@ def monotonic_time() -> float:
             value = float(monotonic())
         except StopIteration:  # pragma: no cover - patched generators may exhaust
             value = None
-        except RuntimeError:  # pragma: no cover - platform specific or patched generator stop
-            value = None
+        except RuntimeError as exc:  # pragma: no cover - platform specific or patched generator stop
+            if is_generator_stop(exc):
+                value = None
+            else:
+                value = None
         except Exception:  # pragma: no cover - defensive: patched clocks may raise other errors
             value = None
         else:
@@ -103,4 +128,4 @@ def monotonic_time() -> float:
     return fallback
 
 
-__all__ = ['safe_utcnow', 'utcnow', 'now_utc', 'SessionWindow', 'last_market_session', 'monotonic_time']
+__all__ = ['safe_utcnow', 'utcnow', 'now_utc', 'SessionWindow', 'last_market_session', 'monotonic_time', 'is_generator_stop']
