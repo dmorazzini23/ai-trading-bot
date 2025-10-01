@@ -20339,8 +20339,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         else:
             state.minute_feed_cache = {}
         _reset_cycle_cache()
+        previous_last_run_at = state.last_run_at
         state.running = True
         state.last_run_at = now
+
+        def _restore_last_run_timestamp() -> None:
+            """Revert ``state.last_run_at`` to its pre-cycle value."""
+
+            state.last_run_at = previous_last_run_at
         if not getattr(state, "_strategies_loaded", False):
             runtime.strategies = get_strategies()
             state._strategies_loaded = True
@@ -20397,6 +20403,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         extra={"detail": str(e), "attempt": attempt + 1},
                     )
                     if attempt == 2:
+                        _restore_last_run_timestamp()
                         return
                     time.sleep(1.0)
                 except APIError as e:
@@ -20405,6 +20412,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         extra={"detail": str(e), "attempt": attempt + 1},
                     )
                     if attempt == 2:
+                        _restore_last_run_timestamp()
                         return
                     time.sleep(1.0)
 
@@ -20810,6 +20818,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 "TRADING_CYCLE_API_ERROR",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
+            _restore_last_run_timestamp()
             return
         except (
             TimeoutError,
@@ -20823,6 +20832,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
                 exc_info=True,
             )
+            _restore_last_run_timestamp()
             raise
         finally:
             # Always reset running flag
