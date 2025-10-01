@@ -233,3 +233,47 @@ def test_empty_payload_fallback_success(
     assert capmetrics[idx_fb_success].tags["feed"] == "sip"
     assert capmetrics[idx_success].tags["feed"] == "sip"
 
+
+def test_window_no_session_metrics(monkeypatch: pytest.MonkeyPatch, capmetrics: list[Rec]):
+    monkeypatch.setenv("PYTEST_RUNNING", "1")
+    monkeypatch.setattr(df, "_SIP_UNAUTHORIZED", False, raising=False)
+    monkeypatch.setattr(df, "_ALLOW_SIP", True, raising=False)
+    monkeypatch.setattr(df, "_SIP_PRECHECK_DONE", False, raising=False)
+    monkeypatch.setattr(df, "_window_has_trading_session", lambda *a, **k: False, raising=False)
+    monkeypatch.setattr(df, "alpaca_feed_failover", lambda: ("sip",), raising=False)
+    monkeypatch.setattr(df, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"], raising=False)
+    monkeypatch.setattr(df, "max_data_fallbacks", lambda: 2, raising=False)
+    monkeypatch.setattr(df, "_sip_configured", lambda: True, raising=False)
+    start, end = _ts_window()
+    responses: dict[str, list[Resp]] = {
+        "iex": [Resp(200, {"bars": []})],
+        "sip": [Resp(200, _bars_payload(start))],
+    }
+
+    def fake_get(*args, **kwargs):
+        params = kwargs.get("params") or {}
+        feed = params.get("feed", "iex")
+        queue = responses.get(feed)
+        if not queue:
+            raise AssertionError(f"unexpected feed request: {feed}")
+        return queue.pop(0)
+
+    monkeypatch.setattr(df._HTTP_SESSION, "get", fake_get, raising=False)
+    monkeypatch.setattr(df.requests, "get", fake_get, raising=False)
+    out = df._fetch_bars("AAPL", start, end, "1Min", feed="iex")
+    assert out is not None and not out.empty
+    names = [r.name for r in capmetrics]
+    assert names == [
+        "data.fetch.empty",
+        "data.fetch.fallback_attempt",
+        "data.fetch.fallback_success",
+        "data.fetch.success",
+    ]
+    idx_attempt = names.index("data.fetch.fallback_attempt")
+    idx_fb_success = names.index("data.fetch.fallback_success")
+    idx_success = names.index("data.fetch.success")
+    assert idx_attempt < idx_fb_success < idx_success
+    assert capmetrics[idx_attempt].tags["feed"] == "sip"
+    assert capmetrics[idx_fb_success].tags["feed"] == "sip"
+    assert capmetrics[idx_success].tags["feed"] == "sip"
+
