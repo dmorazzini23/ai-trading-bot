@@ -399,6 +399,123 @@ def test_get_daily_df_memoized_runtime_error_reuses_last_good(monkeypatch):
     memo_module.clear_memo()
 
 
+def test_get_daily_df_memoized_stop_iteration_preserves_cache(monkeypatch):
+    from ai_trading.core import daily_fetch_memo as memo_module
+
+    memo_module.clear_memo()
+
+    pd = load_pandas()
+    index = pd.DatetimeIndex(["2024-02-01"], tz="UTC", name="timestamp")
+    raw_df = pd.DataFrame(
+        {
+            "open": [7.0],
+            "high": [8.0],
+            "low": [6.5],
+            "close": [7.5],
+            "volume": [4000],
+        },
+        index=index,
+    )
+
+    times = [0.0]
+
+    def _fake_time():
+        return times[0]
+
+    monkeypatch.setattr(memo_module.time, "time", _fake_time)
+
+    call_count = 0
+
+    def _generator_factory(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield raw_df
+            return
+        if False:  # pragma: no cover - generator marker
+            yield None
+        raise StopIteration
+
+    key = ("TSLA", "1Day", "2024-02-01", "2024-02-02")
+
+    first = memo_module.get_daily_df_memoized(*key, _generator_factory)
+    pd.testing.assert_frame_equal(first, normalize_ohlcv_df(raw_df))
+    assert call_count == 1
+
+    times[0] = memo_module._TTL_S + 1.0
+
+    second = memo_module.get_daily_df_memoized(*key, _generator_factory)
+    assert second is first
+    assert call_count == 3
+    assert memo_module._MEMO[key].ts == times[0]
+
+    times[0] += 0.5
+
+    third = memo_module.get_daily_df_memoized(*key, _generator_factory)
+    assert third is first
+    assert call_count == 3
+
+    memo_module.clear_memo()
+
+
+def test_get_daily_df_memoized_none_result_reuses_last_good(monkeypatch):
+    from ai_trading.core import daily_fetch_memo as memo_module
+
+    memo_module.clear_memo()
+
+    pd = load_pandas()
+    index = pd.DatetimeIndex(["2024-03-01"], tz="UTC", name="timestamp")
+    raw_df = pd.DataFrame(
+        {
+            "open": [9.0],
+            "high": [10.0],
+            "low": [8.5],
+            "close": [9.5],
+            "volume": [5000],
+        },
+        index=index,
+    )
+
+    times = [0.0]
+
+    def _fake_time():
+        return times[0]
+
+    monkeypatch.setattr(memo_module.time, "time", _fake_time)
+
+    call_count = 0
+
+    def _factory(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return raw_df
+        if call_count == 2:
+            return None
+        return raw_df
+
+    key = ("NFLX", "1Day", "2024-03-01", "2024-03-02")
+
+    first = memo_module.get_daily_df_memoized(*key, _factory)
+    pd.testing.assert_frame_equal(first, normalize_ohlcv_df(raw_df))
+    assert call_count == 1
+
+    times[0] = memo_module._TTL_S + 2.0
+
+    second = memo_module.get_daily_df_memoized(*key, _factory)
+    assert second is first
+    assert call_count == 2
+    assert memo_module._MEMO[key].ts == times[0]
+
+    times[0] += 0.25
+
+    third = memo_module.get_daily_df_memoized(*key, _factory)
+    assert third is first
+    assert call_count == 2
+
+    memo_module.clear_memo()
+
+
 def test_daily_missing_columns_error_sticky(monkeypatch):
     fetcher = _stub_fetcher(monkeypatch)
     symbol = "AAPL"
