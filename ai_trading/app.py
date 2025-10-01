@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 from ai_trading.logging import get_logger
 from ai_trading.utils.optional_dep import missing
-from flask import jsonify
+try:
+    from flask import jsonify as _jsonify
+except ImportError as _jsonify_import_error:  # pragma: no cover - exercised via tests
+    jsonify = None  # type: ignore[assignment]
+else:  # pragma: no cover - import path only evaluated once
+    jsonify = _jsonify  # noqa: F401
+    _jsonify_import_error = None
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from flask import Flask
@@ -81,13 +87,19 @@ def create_app():
         fallback_payload["ok"] = bool(fallback_payload.get("ok", False))
 
         func = globals().get("jsonify")
-        fallback_reason: str | None = None
+        fallback_used = False
+        fallback_reasons: list[str] = []
         if callable(func):
             try:
                 response = func(canonical_payload)
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
-                fallback_reason = str(exc) or exc.__class__.__name__
+                fallback_used = True
+                fallback_reasons.extend(
+                    reason
+                    for reason in {str(exc) or exc.__class__.__name__, exc.__class__.__name__}
+                    if reason
+                )
             else:
                 try:
                     response.status_code = status
@@ -95,29 +107,45 @@ def create_app():
                     pass
                 return response
         else:
-            fallback_reason = "jsonify unavailable"
+            fallback_used = True
+            fallback_reasons.append("jsonify unavailable")
+            if '_jsonify_import_error' in globals() and _jsonify_import_error is not None:
+                import_reason = str(_jsonify_import_error).strip()
+                if import_reason:
+                    fallback_reasons.append(import_reason)
+                fallback_reasons.append("ImportError")
 
-        message = str(fallback_payload.get("error") or "").strip()
-        if fallback_reason:
-            if message:
-                if fallback_reason not in message:
-                    message = f"{message}; {fallback_reason}"
-            else:
-                message = fallback_reason
-        if not message:
-            message = "jsonify unavailable"
-        fallback_payload["error"] = message
+        if fallback_used:
+            fallback_payload["ok"] = False
+
+        message_candidates: list[str] = []
+        existing_error = fallback_payload.get("error") or canonical_payload.get("error")
+        if isinstance(existing_error, str) and existing_error.strip():
+            message_candidates.append(existing_error.strip())
+
+        for reason in fallback_reasons:
+            if reason and reason not in message_candidates:
+                message_candidates.append(reason)
+
+        if fallback_used and not message_candidates:
+            message_candidates.append("jsonify unavailable")
+
+        if message_candidates:
+            fallback_payload["error"] = "; ".join(message_candidates)
 
         try:
             body = json.dumps(fallback_payload, default=str)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
+            fallback_reasons = []
+            fallback_used = True
             safe_payload = {
                 "ok": False,
-                "alpaca": fallback_payload.get("alpaca", {}),
-                "error": str(exc) or "serialization_error",
+                "alpaca": dict(fallback_payload.get("alpaca", {})),
+                "error": str(exc) or exc.__class__.__name__ or "serialization_error",
             }
-            fallback_payload = safe_payload
+            fallback_payload = _normalise_payload(safe_payload)
+            fallback_payload["ok"] = False
             body = json.dumps(fallback_payload, default=str)
 
         response_factory = getattr(app, "response_class", None)

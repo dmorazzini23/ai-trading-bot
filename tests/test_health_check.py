@@ -152,6 +152,20 @@ def test_health_endpoint_handles_missing_jsonify(monkeypatch):
     _assert_error_contains(data, "jsonify unavailable")
 
 
+def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
+    monkeypatch.setattr(app_module, "jsonify", None, raising=False)
+    monkeypatch.setattr(app_module, "_jsonify_import_error", ImportError("flask missing"), raising=False)
+
+    app = app_module.create_app()
+    client = app.test_client()
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    _assert_payload_structure(data)
+    assert data["ok"] is False
+    _assert_error_contains(data, "jsonify unavailable", "ImportError", "flask missing")
+
+
 def test_shadow_mode_disabled_when_credentials_missing(monkeypatch):
     import ai_trading.config.management as config_mgmt
 
@@ -194,7 +208,7 @@ def test_jsonify_failure_preserves_ok_when_healthy(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
-    assert data["ok"] is True
+    assert data["ok"] is False
     assert data["alpaca"]["has_key"] is True
     assert data["alpaca"]["has_secret"] is True
     assert data["alpaca"]["shadow_mode"] is False
