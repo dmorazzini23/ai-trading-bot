@@ -8,7 +8,12 @@ from types import SimpleNamespace
 import os
 import sys
 from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:  # Prefer pydantic-settings v2 API
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except Exception:  # pragma: no cover - fallback to pydantic v1 style
+    from pydantic import BaseSettings  # type: ignore
+
+    SettingsConfigDict = None  # type: ignore[assignment]
 from ai_trading.logging import logger
 
 
@@ -95,6 +100,9 @@ def _propagate_default_feed(feed: str) -> None:
             except Exception:  # pragma: no cover - defensive
                 logger.debug("DEFAULT_FEED_PROPAGATE_FAILED", extra={"module": mod_name, "handler": handler})
                 break
+
+
+_HAS_SETTINGS_CONFIG_DICT = SettingsConfigDict is not None and hasattr(BaseSettings, "model_config")
 
 
 class Settings(BaseSettings):
@@ -491,12 +499,19 @@ class Settings(BaseSettings):
             return
         _propagate_default_feed(str(normalized))
 
-    model_config = SettingsConfigDict(
-        env_prefix="AI_TRADING_",
-        extra="ignore",
-        case_sensitive=False,
-        validate_assignment=True,
-    )
+    if _HAS_SETTINGS_CONFIG_DICT:
+        model_config = SettingsConfigDict(
+            env_prefix="AI_TRADING_",
+            extra="ignore",
+            case_sensitive=False,
+            validate_assignment=True,
+        )
+    else:  # pragma: no cover - compatibility with pydantic v1 BaseSettings
+        class Config:  # type: ignore[override,unused-ignore]
+            env_prefix = "AI_TRADING_"
+            extra = "ignore"
+            case_sensitive = False
+            validate_assignment = True
 
 
 @lru_cache(maxsize=1)
