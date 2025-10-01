@@ -1230,6 +1230,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "open": (
         "open",
+        "op",
         "o",
         "open_price",
         "openprice",
@@ -1257,6 +1258,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "high": (
         "high",
+        "hi",
         "h",
         "high_price",
         "highprice",
@@ -1277,6 +1279,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "low": (
         "low",
+        "lo",
         "l",
         "low_price",
         "lowprice",
@@ -1297,6 +1300,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "close": (
         "close",
+        "cl",
+        "cls",
         "c",
         "close_price",
         "closeprice",
@@ -1337,6 +1342,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "volume": (
         "volume",
+        "vol",
         "v",
         "share_volume",
         "session_volume",

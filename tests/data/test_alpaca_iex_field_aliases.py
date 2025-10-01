@@ -277,6 +277,49 @@ def test_ensure_ohlcv_schema_handles_compact_payload():
     assert pytest.approx(first["volume"]) == payload[0]["v"]
 
 
+def test_ensure_ohlcv_schema_handles_two_letter_payload(caplog: pytest.LogCaptureFixture):
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "op": 188.45,
+            "hi": 189.12,
+            "lo": 187.3,
+            "cl": 188.77,
+            "vol": 1_234_567,
+            "n": 6_421,
+            "vw": 188.73,
+        }
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        normalized = fetch.ensure_ohlcv_schema(frame, source="alpaca_iex", frequency="1Min")
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
+    first = normalized.iloc[0]
+    assert pytest.approx(first["open"]) == payload[0]["op"]
+    assert pytest.approx(first["high"]) == payload[0]["hi"]
+    assert pytest.approx(first["low"]) == payload[0]["lo"]
+    assert pytest.approx(first["close"]) == payload[0]["cl"]
+    assert pytest.approx(first["volume"]) == payload[0]["vol"]
+
+
 def test_ensure_ohlcv_schema_logs_payload_columns(caplog: pytest.LogCaptureFixture):
     payload = [
         {
