@@ -1,6 +1,19 @@
+import logging
 import types
 import sys
 
+
+numpy_stub = types.ModuleType("numpy")
+numpy_stub.nan = float("nan")
+numpy_stub.NaN = numpy_stub.nan
+numpy_stub.random = types.SimpleNamespace(seed=lambda *_a, **_k: None)
+sys.modules.setdefault("numpy", numpy_stub)
+
+portalocker_stub = types.ModuleType("portalocker")
+portalocker_stub.LOCK_EX = 1
+portalocker_stub.lock = lambda *_a, **_k: None
+portalocker_stub.unlock = lambda *_a, **_k: None
+sys.modules.setdefault("portalocker", portalocker_stub)
 
 bs4_stub = types.ModuleType("bs4")
 bs4_stub.BeautifulSoup = object
@@ -22,7 +35,7 @@ import ai_trading.core.bot_engine as eng
 from ai_trading.execution.engine import ExecutionEngine
 
 
-def test_run_all_trades_calls_trailing_stops(monkeypatch):
+def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     """run_all_trades_worker should invoke check_trailing_stops and suppress errors."""
 
     # Stub Alpaca modules so _validate_trading_api works
@@ -93,6 +106,15 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch):
     monkeypatch.setattr(ExecutionEngine, "check_trailing_stops", mock_check_trailing_stops)
     monkeypatch.setattr(ExecutionEngine, "check_stops", lambda self: None)
 
-    eng.run_all_trades_worker(state, runtime)
+    with caplog.at_level(logging.INFO, logger="ai_trading.core.bot_engine"):
+        eng.run_all_trades_worker(state, runtime)
 
     assert called["flag"]
+    trailing_logs = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "TRAILING_STOP_CHECK_SUPPRESSED"
+    ]
+    assert trailing_logs, "Expected trailing stop suppression to be logged"
+    assert trailing_logs[0].cause == "ValueError"
+    assert "boom" in trailing_logs[0].detail
