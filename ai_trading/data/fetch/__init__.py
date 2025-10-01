@@ -3680,6 +3680,7 @@ def _fetch_bars(
             ),
         )
         _state["window_has_session"] = False
+        return pd.DataFrame()
     else:
         _state["window_has_session"] = True
     if not _has_alpaca_keys():

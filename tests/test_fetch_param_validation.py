@@ -5,6 +5,9 @@ import pytest
 from ai_trading.data import fetch
 
 
+pd = pytest.importorskip("pandas")
+
+
 def _trading_range():
     start = datetime(2024, 1, 2, tzinfo=UTC)
     end = start + timedelta(minutes=1)
@@ -27,7 +30,8 @@ def test_window_without_trading_session_returns_empty():
     start = datetime(2024, 1, 6, tzinfo=UTC)
     end = start + timedelta(days=1)
     out = fetch._fetch_bars("AAPL", start, end, "1Min")
-    assert out is None or out.empty
+    assert isinstance(out, pd.DataFrame)
+    pd.testing.assert_frame_equal(out, pd.DataFrame())
 
 
 def test_missing_session_raises(monkeypatch):
