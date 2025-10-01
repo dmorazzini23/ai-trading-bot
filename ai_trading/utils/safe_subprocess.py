@@ -84,7 +84,7 @@ def safe_subprocess_run(
         exc.stdout = stdout_text
         exc.stderr = stderr_text
         exc.result = result
-        raise
+        raise exc
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
             proc.kill()

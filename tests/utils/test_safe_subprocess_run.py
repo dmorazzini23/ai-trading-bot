@@ -15,14 +15,22 @@ def test_safe_subprocess_run_success():
 
 
 def test_safe_subprocess_run_timeout(caplog):
-    cmd = [sys.executable, "-c", "import time; time.sleep(1)"]
+    script = (
+        "import sys, time; "
+        "sys.stdout.write('ready\\n'); sys.stdout.flush(); "
+        "sys.stderr.write('warn\\n'); sys.stderr.flush(); "
+        "time.sleep(1)"
+    )
+    cmd = [sys.executable, "-c", script]
     with caplog.at_level("WARNING"):
         with pytest.raises(subprocess.TimeoutExpired) as excinfo:
-            safe_subprocess_run(cmd, timeout=0.1)
+            safe_subprocess_run(cmd, timeout=0.3)
 
-    assert excinfo.value.result == SafeSubprocessResult("", "", 124, True)
-    assert excinfo.value.stdout == ""
-    assert excinfo.value.stderr == ""
+    expected_result = SafeSubprocessResult("ready\n", "warn\n", 124, True)
+    assert excinfo.value.cmd == cmd
+    assert excinfo.value.result == expected_result
+    assert excinfo.value.stdout == "ready\n"
+    assert excinfo.value.stderr == "warn\n"
     assert not caplog.records  # timeout should not emit warnings
 
 
