@@ -7384,7 +7384,8 @@ class DataFetcher:
             pass
 
         normalized = data_fetcher_module.normalize_ohlcv_df(
-            frame.drop(columns=["symbol"], errors="ignore")
+            frame.drop(columns=["symbol"], errors="ignore"),
+            include_columns=("timestamp",),
         )
 
         return normalized

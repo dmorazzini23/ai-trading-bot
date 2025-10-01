@@ -48,7 +48,7 @@ def test_normalize_aliases_compact_and_adjclose() -> None:
         index=_make_index(ts),
     )
 
-    normalized = normalize_ohlcv_df(df)
+    normalized = normalize_ohlcv_df(df, include_columns=("timestamp",))
     assert list(normalized.columns) == [
         "timestamp",
         "open",

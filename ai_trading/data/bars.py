@@ -258,7 +258,7 @@ def _ensure_df(obj: Any) -> pd.DataFrame:
 def empty_bars_dataframe() -> pd.DataFrame:
     cols = ["timestamp", *_OHLCV_REQUIRED]
     base = pd.DataFrame({col: [] for col in cols})
-    return normalize_ohlcv_df(base)
+    return normalize_ohlcv_df(base, include_columns=("timestamp",))
 
 def _create_empty_bars_dataframe(timeframe: str | None = None) -> pd.DataFrame:
     """Return an empty OHLCV DataFrame including a timestamp column."""
@@ -278,7 +278,7 @@ def _normalize_bars_frame(df: Any) -> pd.DataFrame:
         attrs = dict(getattr(ensured, "attrs", {}) or {})
     except (AttributeError, TypeError):  # pragma: no cover - metadata best effort
         attrs = {}
-    normalized = normalize_ohlcv_df(ensured)
+    normalized = normalize_ohlcv_df(ensured, include_columns=("timestamp",))
     if normalized.empty:
         return empty_bars_dataframe()
     if attrs:

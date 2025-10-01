@@ -224,7 +224,7 @@ def test_ensure_schema_then_normalize_restores_timestamp_column():
     )
 
     ensured = data_fetch.ensure_ohlcv_schema(df, source="test", frequency="1Day")
-    normalized = data_fetch.normalize_ohlcv_df(ensured)
+    normalized = data_fetch.normalize_ohlcv_df(ensured, include_columns=("timestamp",))
 
     assert "timestamp" in normalized.columns
     expected = pd.Series(normalized.index, index=normalized.index, name="timestamp")

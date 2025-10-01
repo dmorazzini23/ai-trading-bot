@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 import re
 
@@ -96,18 +97,48 @@ _COLUMN_CANONICAL_MAP = {
 }
 
 
-def _empty_frame() -> "_pd.DataFrame":
+def _empty_frame(include_timestamp: bool = False) -> "_pd.DataFrame":
     idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-    base = pd.DataFrame(columns=REQUIRED, index=idx)
-    base.insert(0, "timestamp", idx)
-    return base
+    base_columns = list(REQUIRED)
+    frame = pd.DataFrame(columns=base_columns, index=idx)
+    if include_timestamp:
+        frame.insert(0, "timestamp", idx)
+    return frame
 
 
-def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
-    """Return a normalized OHLCV dataframe with canonical columns."""
+def normalize_ohlcv_df(
+    df: "_pd.DataFrame | None",
+    *,
+    include_columns: Iterable[object] | None = None,
+) -> "_pd.DataFrame":
+    """Return a normalized OHLCV dataframe with canonical columns.
+
+    Parameters
+    ----------
+    df:
+        Input OHLCV-like dataframe. May be ``None`` or empty.
+    include_columns:
+        Optional iterable of column names to retain in the normalized output.
+        Recognized values include ``"timestamp"`` to reintroduce the datetime
+        index as a column and ``"trade_count"`` to preserve the source field
+        when provided.
+    """
+
+    include_list: list[str] = []
+    include_lookup: set[str] = set()
+    for value in include_columns or []:
+        text = str(value).strip()
+        if not text:
+            continue
+        column_name = _normalize_column_name(value)
+        if column_name in include_lookup:
+            continue
+        include_lookup.add(column_name)
+        include_list.append(column_name)
+    include_timestamp = "timestamp" in include_lookup
 
     if df is None or len(df) == 0:
-        return _empty_frame()
+        return _empty_frame(include_timestamp=include_timestamp)
 
     attrs: dict[str, object] = {}
     try:
@@ -127,7 +158,7 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
 
     frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
 
-    had_timestamp_column = "timestamp" in frame.columns
+    had_trade_count_column = "trade_count" in frame.columns
     if "adj close" in frame.columns and "close" not in frame.columns:
         frame["close"] = frame["adj close"]
     if "close" not in frame.columns and "value" in frame.columns:
@@ -187,14 +218,21 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
     frame = frame.sort_index()
     frame.index.rename("timestamp", inplace=True)
 
+    optional_columns = [
+        column
+        for column in include_list
+        if column not in {"timestamp", *REQUIRED}
+        and column in frame.columns
+    ]
     cols = [column for column in REQUIRED if column in frame.columns]
     if not cols:
-        return _empty_frame()
-    normalized = frame[cols].copy()
+        return _empty_frame(include_timestamp=include_timestamp)
+    selected_cols = cols + [col for col in optional_columns if col not in cols]
+    normalized = frame[selected_cols].copy()
     if normalized.index.tz is None:
         normalized.index = normalized.index.tz_localize("UTC")
     normalized.index.rename("timestamp", inplace=True)
-    if had_timestamp_column or getattr(df.index, "name", None) == "timestamp":
+    if include_timestamp:
         if "timestamp" in normalized.columns:
             normalized = normalized.drop(columns=["timestamp"])
         normalized.insert(0, "timestamp", normalized.index)
@@ -203,9 +241,6 @@ def normalize_ohlcv_df(df: "_pd.DataFrame | None") -> "_pd.DataFrame":
             normalized.attrs.update(attrs)
         except (AttributeError, TypeError, ValueError):  # pragma: no cover - metadata optional
             pass
-    if "trade_count" not in normalized.columns:
-        try:
-            normalized["trade_count"] = 0
-        except Exception:  # pragma: no cover - defensive fallback
-            pass
+    if "trade_count" in normalized.columns and not had_trade_count_column:
+        normalized = normalized.drop(columns=["trade_count"])
     return normalized

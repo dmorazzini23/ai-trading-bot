@@ -147,10 +147,52 @@ def test_normalize_handles_latest_price_columns():
     )
     df = df.set_index("timestamp")
 
-    normalized = normalize_ohlcv_df(df)
+    normalized = normalize_ohlcv_df(df, include_columns=("timestamp",))
 
     assert list(normalized.columns[:6]) == ["timestamp", *REQUIRED]
     first = normalized.iloc[0]
     assert pytest.approx(first["open"]) == 188.45
     assert pytest.approx(first["close"]) == 188.77
     assert pytest.approx(first["volume"]) == 1_234_567
+
+
+def test_normalize_trade_count_optional():
+    idx = pd.date_range("2024-01-01", periods=2, freq="1D", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.5],
+            "high": [10.5, 10.75],
+            "low": [9.5, 9.9],
+            "close": [10.25, 10.6],
+            "volume": [1000, 1200],
+            "trade_count": [15, 18],
+        },
+        index=idx,
+    )
+
+    without_optional = normalize_ohlcv_df(df)
+    assert "trade_count" not in without_optional.columns
+
+    with_optional = normalize_ohlcv_df(df, include_columns=("trade_count",))
+    assert "trade_count" in with_optional.columns
+    pd.testing.assert_series_equal(
+        with_optional["trade_count"],
+        pd.Series([15, 18], index=with_optional.index, name="trade_count"),
+    )
+
+
+def test_normalize_trade_count_not_created_when_missing():
+    idx = pd.date_range("2024-01-01", periods=2, freq="1D", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "open": [10.0, 10.5],
+            "high": [10.5, 10.75],
+            "low": [9.5, 9.9],
+            "close": [10.25, 10.6],
+            "volume": [1000, 1200],
+        },
+        index=idx,
+    )
+
+    normalized = normalize_ohlcv_df(df, include_columns=("trade_count",))
+    assert "trade_count" not in normalized.columns
