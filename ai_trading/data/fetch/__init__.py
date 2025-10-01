@@ -1123,7 +1123,11 @@ def _normalize_column_token(value: Any) -> str:
         token = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", token)
         token = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", token)
     lowered = token.lower()
-    normalized = lowered.replace(" ", "_").replace("-", "_")
+    normalized = (
+        lowered.replace(" ", "_")
+        .replace("-", "_")
+        .replace(".", "_")
+    )
     while "__" in normalized:
         normalized = normalized.replace("__", "_")
     return normalized
@@ -2325,7 +2329,15 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
     if pd_local is None or df is None or not hasattr(df, "columns"):
         return df
 
-    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+    df.columns = [
+        str(c)
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+        .replace(".", "_")
+        for c in df.columns
+    ]
     # Upstream `_alias_rename_map` already inspects tuple pieces and underscore
     # tokens; this legacy map keeps the manual fallback logic untouched.
 
@@ -2386,7 +2398,14 @@ def _flatten_and_normalize_ohlcv(
             }
 
             def _normalize_token(token: Any) -> str:
-                return str(token).strip().lower().replace(" ", "_")
+                return (
+                    str(token)
+                    .strip()
+                    .lower()
+                    .replace(" ", "_")
+                    .replace("-", "_")
+                    .replace(".", "_")
+                )
 
             normalized_aliases = {
                 key: {key, *aliases} for key, aliases in alias_groups.items()
