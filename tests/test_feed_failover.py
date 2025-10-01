@@ -212,6 +212,7 @@ def test_window_no_session_prefers_alpaca_fallback(monkeypatch, capmetrics):
 
     assert hasattr(df, "empty")
     assert not getattr(df, "empty", True)
+    assert len(session.calls) == 2
     assert session.calls[0]["feed"] == "iex"
     assert session.calls[1]["feed"] == "sip"
     assert fetch._FEED_OVERRIDE_BY_TF[("AAPL", "1Min")] == "sip"
