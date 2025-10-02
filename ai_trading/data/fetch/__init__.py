@@ -7146,6 +7146,8 @@ def get_daily_df(
                 df = df.loc[:, ~df.columns.duplicated()]
             except Exception:  # pragma: no cover - defensive guard
                 pass
+    primary_source_hint = normalized_feed or "alpaca"
+
     def _normalize_daily_frame(frame: Any, source_hint: str) -> Any:
         resolved_source = source_hint
         try:
@@ -7170,15 +7172,7 @@ def get_daily_df(
         normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
         return _restore_timestamp_column(normalized)
 
-    try:
-        if fetch_error is not None:
-            raise fetch_error
-        df = _normalize_daily_frame(df, normalized_feed or "alpaca")
-    except MissingOHLCVColumnsError as exc:
-        logger.error(
-            "OHLCV_COLUMNS_MISSING",
-            extra={"source": normalized_feed or "alpaca", "frequency": "1Day", "detail": str(exc)},
-        )
+    def _attempt_backup_normalization(source_hint: str) -> Any:
         start_dt = ensure_datetime(
             start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10)
         )
@@ -7191,7 +7185,7 @@ def get_daily_df(
         )
         if fallback_df is None or getattr(fallback_df, "empty", False):
             return None
-        fallback_source_hint = normalized_feed or "alpaca"
+        fallback_source_hint = source_hint
         try:
             fallback_attrs = getattr(fallback_df, "attrs", None)
         except Exception:  # pragma: no cover - defensive metadata access
@@ -7207,23 +7201,49 @@ def get_daily_df(
                 or fallback_source_hint
             )
         try:
-            df = _normalize_daily_frame(fallback_df, fallback_source_hint)
+            return _normalize_daily_frame(fallback_df, fallback_source_hint)
         except MissingOHLCVColumnsError as fallback_exc:
             logger.error(
                 "OHLCV_COLUMNS_MISSING",
                 extra={
-                    "source": fallback_source_hint or (normalized_feed or "alpaca"),
+                    "source": fallback_source_hint or source_hint,
                     "frequency": "1Day",
                     "detail": str(fallback_exc),
                 },
             )
+        except DataFetchError as fallback_exc:
+            logger.error(
+                "DATA_FETCH_EMPTY",
+                extra={
+                    "source": fallback_source_hint or source_hint,
+                    "frequency": "1Day",
+                    "detail": str(fallback_exc),
+                },
+            )
+        return None
+
+    try:
+        if fetch_error is not None:
+            raise fetch_error
+        df = _normalize_daily_frame(df, primary_source_hint)
+    except MissingOHLCVColumnsError as exc:
+        logger.error(
+            "OHLCV_COLUMNS_MISSING",
+            extra={"source": primary_source_hint, "frequency": "1Day", "detail": str(exc)},
+        )
+        fallback_normalized = _attempt_backup_normalization(primary_source_hint)
+        if fallback_normalized is None:
             return None
+        df = fallback_normalized
     except DataFetchError as exc:
         logger.error(
             "DATA_FETCH_EMPTY",
-            extra={"source": normalized_feed or "alpaca", "frequency": "1Day", "detail": str(exc)},
+            extra={"source": primary_source_hint, "frequency": "1Day", "detail": str(exc)},
         )
-        return None
+        fallback_normalized = _attempt_backup_normalization(primary_source_hint)
+        if fallback_normalized is None:
+            return None
+        df = fallback_normalized
     return df
 
 

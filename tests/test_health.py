@@ -205,10 +205,47 @@ def test_health_check_accepts_datetime_index(monkeypatch):
 
 def test_get_daily_df_normalizes_columns(monkeypatch):
     df = pd.DataFrame({"t": [0], "o": [1], "h": [1], "l": [1], "c": [1], "v": [1]})
+    monkeypatch.setattr(data_fetch, "should_import_alpaca_sdk", lambda: True)
     monkeypatch.setattr(alpaca_api, "get_bars_df", lambda *a, **k: df)
     out = data_fetch.get_daily_df("AAA")
     for col in ["timestamp", "open", "high", "low", "close", "volume"]:
         assert col in out.columns
+
+
+def test_get_daily_df_uses_backup_when_primary_normalization_empties(monkeypatch):
+    primary_df = pd.DataFrame(
+        {
+            "timestamp": [None],
+            "open": [1.0],
+            "high": [1.1],
+            "low": [0.9],
+            "close": [1.05],
+            "volume": [100],
+        }
+    )
+    fallback_df = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=2, tz="UTC"),
+            "open": [1.0, 1.2],
+            "high": [1.1, 1.25],
+            "low": [0.95, 1.15],
+            "close": [1.05, 1.22],
+            "volume": [100, 150],
+        }
+    )
+
+    monkeypatch.setattr(data_fetch, "should_import_alpaca_sdk", lambda: True)
+    monkeypatch.setattr(alpaca_api, "get_bars_df", lambda *a, **k: primary_df)
+    monkeypatch.setattr(
+        data_fetch,
+        "_backup_get_bars",
+        lambda *a, **k: fallback_df,
+    )
+
+    out = data_fetch.get_daily_df("AAA")
+
+    assert len(out) == len(fallback_df)
+    pd.testing.assert_index_equal(out.index, fallback_df.set_index("timestamp").index)
 
 
 def test_ensure_schema_then_normalize_restores_timestamp_column():
