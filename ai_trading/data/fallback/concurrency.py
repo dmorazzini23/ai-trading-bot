@@ -562,12 +562,13 @@ def reset_peak_simultaneous_workers() -> None:
     PEAK_SIMULTANEOUS_WORKERS = 0
 
 
-def reset_tracking_state() -> None:
-    """Clear success and failure tracking sets and reset the peak counter."""
+def reset_tracking_state(*, reset_peak: bool = True) -> None:
+    """Clear success and failure tracking sets and optionally reset the peak counter."""
 
     SUCCESSFUL_SYMBOLS.clear()
     FAILED_SYMBOLS.clear()
-    reset_peak_simultaneous_workers()
+    if reset_peak:
+        reset_peak_simultaneous_workers()
 
 
 async def run_with_concurrency(
@@ -578,7 +579,7 @@ async def run_with_concurrency(
 ) -> tuple[dict[str, T | None], set[str], set[str]]:
     """Execute ``worker`` for each symbol with bounded concurrency and robust progress."""
 
-    reset_tracking_state()
+    reset_tracking_state(reset_peak=False)
 
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
@@ -637,8 +638,27 @@ async def run_with_concurrency(
 
         return _HostPermit(host_semaphore)
 
-    async def _execute(symbol: str) -> None:
+    async def _mark_worker_start() -> None:
         nonlocal active_workers, peak_this_run
+
+        async with active_lock:
+            active_workers += 1
+            if active_workers > peak_this_run:
+                peak_this_run = active_workers
+                global PEAK_SIMULTANEOUS_WORKERS
+                if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
+                    PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+
+    async def _mark_worker_end(started: bool) -> None:
+        nonlocal active_workers
+
+        if not started:
+            return
+        async with active_lock:
+            active_workers = max(0, active_workers - 1)
+
+    async def _execute(symbol: str) -> None:
+        started = False
 
         # Ensure the symbol is registered in the result mapping even if the
         # worker never starts (e.g. due to cancellation or timeout).
@@ -647,11 +667,8 @@ async def run_with_concurrency(
         try:
             async with concurrency_semaphore:
                 async with _acquire_host_permit():
-                    async with active_lock:
-                        active_workers += 1
-                        if active_workers > peak_this_run:
-                            peak_this_run = active_workers
-
+                    await _mark_worker_start()
+                    started = True
                     try:
                         result = await worker(symbol)
                     except asyncio.CancelledError:
@@ -663,8 +680,7 @@ async def run_with_concurrency(
                         SUCCESSFUL_SYMBOLS.add(symbol)
                         results[symbol] = result
                     finally:
-                        async with active_lock:
-                            active_workers -= 1
+                        await _mark_worker_end(started)
         except asyncio.CancelledError:
             FAILED_SYMBOLS.add(symbol)
             raise
@@ -710,9 +726,6 @@ async def run_with_concurrency(
 
     if reset_peak_after_run:
         reset_peak_simultaneous_workers()
-    else:
-        global PEAK_SIMULTANEOUS_WORKERS
-        PEAK_SIMULTANEOUS_WORKERS = peak_this_run
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 

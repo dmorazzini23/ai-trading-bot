@@ -73,7 +73,7 @@ def test_run_with_concurrency_peak_counter_respects_limit_minimal():
             async with tracker_lock:
                 running -= 1
 
-    concurrency.PEAK_SIMULTANEOUS_WORKERS = 99
+    concurrency.reset_peak_simultaneous_workers()
 
     symbols = [f"PEAK_SIMPLE{i}" for i in range(4)]
 
@@ -86,6 +86,93 @@ def test_run_with_concurrency_peak_counter_respects_limit_minimal():
     assert not failed
     assert max_seen == 3
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+
+
+def test_run_with_concurrency_peak_counter_is_monotonic_across_runs():
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    concurrency.PEAK_SIMULTANEOUS_WORKERS = 5
+
+    symbols = [f"PEAK_MONO{i}" for i in range(4)]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen == 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 5
+
+
+def test_run_with_concurrency_peak_matches_requested_limits(monkeypatch):
+    symbols = [f"REQ{i}" for i in range(6)]
+
+    def run_scenario(requested_limit: int, host_limit: int | None = None) -> int:
+        concurrency.reset_tracking_state()
+
+        if host_limit is not None:
+            semaphore = asyncio.Semaphore(host_limit)
+            monkeypatch.setattr(concurrency, "_get_effective_host_limit", lambda: host_limit)
+            monkeypatch.setattr(concurrency, "_get_host_limit_semaphore", lambda: semaphore)
+
+        async def orchestrate() -> int:
+            tracker_lock = asyncio.Lock()
+            running = 0
+            max_seen = 0
+
+            async def worker(sym: str) -> str:
+                nonlocal running, max_seen
+                async with tracker_lock:
+                    running += 1
+                    if running > max_seen:
+                        max_seen = running
+                try:
+                    await asyncio.sleep(0.01)
+                    return sym
+                finally:
+                    async with tracker_lock:
+                        running -= 1
+
+            results, succeeded, failed = await concurrency.run_with_concurrency(
+                symbols,
+                worker,
+                max_concurrency=requested_limit,
+            )
+
+            assert results == {symbol: symbol for symbol in symbols}
+            assert succeeded == set(symbols)
+            assert not failed
+
+            return max_seen
+
+        return asyncio.run(orchestrate())
+
+    sequential_limit = 3
+    sequential_max = run_scenario(sequential_limit)
+    assert sequential_max == sequential_limit
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == sequential_limit
+
+    host_limit = 2
+    host_max = run_scenario(5, host_limit=host_limit)
+    assert host_max == host_limit
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == host_limit
 
 
 def test_run_with_concurrency_respects_limit():
@@ -794,10 +881,11 @@ def test_run_with_concurrency_handles_blocking_and_failures():
         release_blocker.set()
         return await asyncio.wait_for(task, 1)
 
+    previous_peak = concurrency.PEAK_SIMULTANEOUS_WORKERS
     results, succeeded, failed = asyncio.run(run_and_release())
 
     assert max_seen <= 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS <= 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max(previous_peak, max_seen)
     assert results["FAIL"] is None
     assert "FAIL" in failed
     assert "BLOCK" in succeeded
