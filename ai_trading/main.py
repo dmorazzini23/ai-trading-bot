@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 import importlib.util
 from typing import Any, Callable, Tuple
+from types import SimpleNamespace
 from ai_trading.env import ensure_dotenv_loaded
 
 # Ensure environment variables are loaded before any logging configuration
@@ -1017,6 +1018,21 @@ def start_api(ready_signal: threading.Event | None = None) -> None:
     ensure_dotenv_loaded()
     settings = get_settings()
     port = int(settings.api_port or 9001)
+
+    # ── Aux health server on HEALTHCHECK_PORT (non-blocking, separate Flask app)
+    try:
+        from ai_trading.health import HealthCheck
+        health_port = int(getattr(settings, "healthcheck_port", 9101) or 9101)
+        if int(port) != int(health_port):
+            ctx = SimpleNamespace(host="0.0.0.0", port=health_port, service="ai-trading")
+            hc = HealthCheck(ctx=ctx)
+            th = threading.Thread(target=hc.run, name="health-server", daemon=True)
+            th.start()
+            logger.info("HEALTH_SERVER_STARTED", extra={"port": health_port})
+        else:
+            logger.info("HEALTH_SERVER_PORT_SHARED", extra={"port": port})
+    except Exception as _exc:  # pragma: no cover - defensive
+        logger.warning("HEALTH_SERVER_START_FAILED", extra={"error": str(_exc)})
     wait_seconds = max(0.0, float(getattr(settings, "api_port_wait_seconds", 0.0)))
     deadline = monotonic_time() + wait_seconds
     attempt = 0
