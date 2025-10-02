@@ -1436,6 +1436,8 @@ def test_get_minute_df_handles_missing_safe_get(monkeypatch):
     assert isinstance(result, pd.DataFrame)
     expected_idx = idx.rename("timestamp")
     pd.testing.assert_index_equal(result.index, expected_idx)
+    assert idx.name is None
+    assert result.index.name == "timestamp"
     assert result.index.tz is not None
     assert result.index.tz.tzname(None) == UTC.tzname(None)
     assert list(result.columns[:5]) == ["open", "high", "low", "close", "volume"]
