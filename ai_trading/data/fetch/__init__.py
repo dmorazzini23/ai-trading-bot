@@ -1266,6 +1266,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "start_price",
         "starting_price",
         "begin_price",
+        "opening_auction_price",
+        "auction_open_price",
+        "auction_opening_price",
+        "open_auction_price",
     ),
     "high": (
         "high",
@@ -1288,6 +1292,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_high",
         "highiex",
         "iexhigh",
+        "auction_high_price",
+        "highest_auction_price",
     ),
     "low": (
         "low",
@@ -1310,6 +1316,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_low",
         "lowiex",
         "iexlow",
+        "auction_low_price",
+        "lowest_auction_price",
     ),
     "close": (
         "close",
@@ -1345,6 +1353,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "latest_value",
         "market_price",
         "official_price",
+        "closing_auction_price",
+        "auction_close_price",
+        "auction_closing_price",
+        "close_auction_price",
     ),
     "adj_close": (
         "adj close",
@@ -1380,6 +1392,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_total_volume",
         "totalvolumeiex",
         "iextotalvolume",
+        "auction_volume",
     ),
 }
 
@@ -1412,6 +1425,16 @@ def _heuristic_alias_match(tokens: Iterable[str], normalized: str) -> str | None
     if _contains_any("openingprice") or _contains_any("firstprice"):
         return "open"
 
+    price_like_tokens = {"price", "value", "px", "prc"}
+    if (
+        ("opening" in token_set or "opening" in normalized_compact)
+        and (
+            not price_like_tokens.isdisjoint(token_set)
+            or any(term in normalized_compact for term in price_like_tokens)
+        )
+    ):
+        return "open"
+
     # Handle high variants that rely on synonyms like "max" or "peak".
     if _has_any("maximum_price", "peak_price", "highest_price") or (
         _has_any("max", "maximum", "peak", "highest")
@@ -1434,6 +1457,15 @@ def _heuristic_alias_match(tokens: Iterable[str], normalized: str) -> str | None
         _has_any("latest", "last", "final", "ending", "end", "settlement", "settled")
         and _has_any("price", "value")
     ) or _contains_any("officialprice"):
+        return "close"
+
+    if (
+        ("closing" in token_set or "closing" in normalized_compact)
+        and (
+            not price_like_tokens.isdisjoint(token_set)
+            or any(term in normalized_compact for term in price_like_tokens)
+        )
+    ):
         return "close"
 
     # Handle volume variants that lean on share/quantity terminology.

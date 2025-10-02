@@ -73,6 +73,11 @@ Daily price requests now log their parameters and outcome:
   emit `ALPACA_FETCH_ABORTED` when a request is terminated early despite
   remaining retries, and emit `ALPACA_FETCH_RETRY_LIMIT` when no more attempts
   remain, allowing operators to diagnose persistent data issues quickly.
+- `OHLCV_COLUMNS_MISSING` entries include the original payload metadata. If the
+  raw columns show Alpaca IEX auction fields such as `openingAuctionPrice`,
+  `highestAuctionPrice`, `lowestAuctionPrice`, or `closingAuctionPrice`, the
+  fetcher now normalizes them automatically—no manual remediation is required
+  once this build is deployed.
 
 #### Backup Provider Usage
 When the primary data source fails and the backup provider serves a window,
