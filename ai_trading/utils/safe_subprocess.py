@@ -75,7 +75,7 @@ def safe_subprocess_run(
     try:
         stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
     except subprocess.TimeoutExpired as exc:
-        raise _augment_timeout_exception(proc, exc)
+        raise _augment_timeout_exception(proc, exc) from None
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
             proc.kill()

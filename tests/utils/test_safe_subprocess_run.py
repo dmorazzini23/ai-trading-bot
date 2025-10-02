@@ -28,9 +28,11 @@ def test_safe_subprocess_run_timeout(caplog):
 
     expected_result = SafeSubprocessResult("ready\n", "warn\n", 124, True)
     assert excinfo.value.cmd == cmd
+    assert isinstance(excinfo.value.result, SafeSubprocessResult)
     assert excinfo.value.result == expected_result
     assert excinfo.value.stdout == "ready\n"
     assert excinfo.value.stderr == "warn\n"
+    assert excinfo.value.__cause__ is None
     assert not caplog.records  # timeout should not emit warnings
 
 
@@ -95,6 +97,8 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
     assert result.returncode == 124
     assert result.stdout == ""
     assert result.stderr == ""
+    assert excinfo.value.stdout == ""
+    assert excinfo.value.stderr == ""
     assert calls["args"] == (["dummy"],)
     assert calls["kwargs"]["stdout"] == subprocess.PIPE
     assert calls["kwargs"]["stderr"] == subprocess.PIPE
