@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Sequence
@@ -72,10 +73,23 @@ def safe_subprocess_run(
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
 
+    deadline = time.monotonic() + run_timeout
+    poll_interval = max(min(run_timeout / 10.0, 0.1), 0.01)
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timeout_exc = subprocess.TimeoutExpired(cmd=argv, timeout=run_timeout)
+            raise _augment_timeout_exception(proc, timeout_exc) from None
+        wait_time = min(remaining, poll_interval)
+        try:
+            proc.wait(timeout=wait_time)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+
     try:
-        stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
-    except subprocess.TimeoutExpired as exc:
-        raise _augment_timeout_exception(proc, exc) from None
+        stdout_text, stderr_text = proc.communicate()
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
             proc.kill()
