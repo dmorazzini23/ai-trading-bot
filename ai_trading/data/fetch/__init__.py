@@ -4453,7 +4453,6 @@ def _fetch_bars(
     else:
         window_has_session = bool(window_has_session)
     _state["window_has_session"] = window_has_session
-    should_probe_sip = False
     short_circuit_empty = False
     if not window_has_session:
         tf_key = (symbol, _interval)
@@ -4476,36 +4475,7 @@ def _fetch_bars(
             ),
         )
         _state["skip_empty_metrics"] = True
-        try:
-            _state["preferred_feeds_snapshot"] = tuple(_preferred_feed_failover())
-        except Exception:
-            _state["preferred_feeds_snapshot"] = ()
-        should_probe_sip = False
-        preferred_snapshot = _state.get("preferred_feeds_snapshot") or ()
-        preferred_norm: set[str] = set()
-        for candidate in preferred_snapshot:
-            try:
-                normalized = _normalize_feed_value(candidate)
-            except Exception:
-                continue
-            preferred_norm.add(normalized)
-        if explicit_feed_request:
-            try:
-                requested_feed = _normalize_feed_value(_feed)
-            except Exception:
-                try:
-                    requested_feed = str(_feed).strip().lower()
-                except Exception:
-                    requested_feed = ""
-            should_probe_sip = bool(
-                requested_feed
-                and (
-                    requested_feed == "sip"
-                    or (requested_feed == "iex" and "sip" in preferred_norm)
-                )
-            )
-        if not should_probe_sip:
-            short_circuit_empty = True
+        short_circuit_empty = True
     else:
         _state["skip_empty_metrics"] = False
     if not _has_alpaca_keys():
