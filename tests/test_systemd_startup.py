@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -20,49 +21,157 @@ class TestSystemdStartupCompatibility:
     def test_import_no_crash_without_credentials(self):
         """Test that imports don't crash without credentials."""
         # Create a test script that imports key modules
-        test_script = '''
-import os
-import sys
+        test_script = textwrap.dedent(
+            '''
+            import os
+            import sys
+            import types
 
-# Clear all credential environment variables
-for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
-    os.environ.pop(key, None)
+            if "numpy" not in sys.modules:
+                class _Array(list):
+                    def mean(self):
+                        return sum(self) / len(self) if self else 0.0
 
-try:
-    # Test importing key modules without credentials
-    from ai_trading.config.management import _resolve_alpaca_env
-    print("✓ Config management imported")
-    
-    from ai_trading import main as _main
-    print("✓ Main imported")
-    
-    from ai_trading.utils.timefmt import utc_now_iso
-    print("✓ Time utilities imported")
-    
-    # Test that credential resolution works
-    api_key, secret_key, base_url = _resolve_alpaca_env()
-    assert api_key is None
-    assert secret_key is None
-    assert base_url == "https://paper-api.alpaca.markets"
-    print("✓ Credential resolution works with missing creds")
-    
-    # Test UTC timestamp doesn't have double Z
-    timestamp = utc_now_iso()
-    assert timestamp.endswith('Z')
-    assert timestamp.count('Z') == 1
-    print("✓ UTC timestamp has single Z")
-    
-    print("SUCCESS: No import-time crashes!")
-    
-except SystemExit as e:
-    print(f"FAIL: SystemExit called: {e}")
-    sys.exit(1)
-except Exception as e:
-    print(f"FAIL: Unexpected error: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-'''
+                def _to_array(data):
+                    if isinstance(data, _Array):
+                        return data
+                    if data is None:
+                        return _Array()
+                    return _Array(data)
+
+                def _array(data=None, *args, **kwargs):
+                    return _to_array(data)
+
+                def _diff(data, *args, **kwargs):
+                    seq = list(data or [])
+                    return _Array(seq[i + 1] - seq[i] for i in range(len(seq) - 1))
+
+                def _where(condition, x, y):
+                    if isinstance(condition, (list, tuple, _Array)):
+                        return _Array(xv if cond else yv for cond, xv, yv in zip(condition, x, y))
+                    return x if condition else y
+
+                def _zeros_like(data, *args, **kwargs):
+                    return _Array(0 for _ in (data or []))
+
+                numpy_stub = types.ModuleType("numpy")
+                numpy_stub.random = types.SimpleNamespace(
+                    seed=lambda *args, **kwargs: None,
+                )
+                numpy_stub.__dict__.update(
+                    {
+                        "__version__": "0.0-stub",
+                        "ndarray": _Array,
+                        "nan": float("nan"),
+                        "NaN": float("nan"),
+                        "float64": float,
+                        "int64": int,
+                        "array": _array,
+                        "asarray": _array,
+                        "diff": _diff,
+                        "where": _where,
+                        "zeros_like": _zeros_like,
+                    }
+                )
+                sys.modules["numpy"] = numpy_stub
+
+            if "portalocker" not in sys.modules:
+                portalocker_stub = types.ModuleType("portalocker")
+                portalocker_stub.LOCK_EX = 1
+                portalocker_stub.lock = lambda *args, **kwargs: None
+                portalocker_stub.unlock = lambda *args, **kwargs: None
+                sys.modules["portalocker"] = portalocker_stub
+
+            if "bs4" not in sys.modules:
+                bs4_stub = types.ModuleType("bs4")
+
+                class BeautifulSoup:  # noqa: D401 - minimal stub
+                    """Stub BeautifulSoup that ignores all input."""
+
+                    def __init__(self, *args, **kwargs):
+                        self.args = args
+                        self.kwargs = kwargs
+
+                    def find(self, *args, **kwargs):  # pragma: no cover - stub
+                        return None
+
+                bs4_stub.BeautifulSoup = BeautifulSoup
+                sys.modules["bs4"] = bs4_stub
+
+            if "flask" not in sys.modules:
+                flask_stub = types.ModuleType("flask")
+
+                class Flask:  # pragma: no cover - minimal server stub
+                    def __init__(self, *args, **kwargs):
+                        self.args = args
+                        self.kwargs = kwargs
+
+                    def route(self, *_args, **_kwargs):
+                        def decorator(func):
+                            return func
+
+                        return decorator
+
+                    def run(self, *args, **kwargs):
+                        return None
+
+                flask_stub.Flask = Flask
+                flask_stub.Request = object
+                flask_stub.Response = object
+                flask_stub.jsonify = lambda *a, **k: {}
+                sys.modules["flask"] = flask_stub
+
+            os.environ.setdefault("PYTEST_RUNNING", "1")
+
+            # Clear all credential environment variables
+            for key in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
+                os.environ.pop(key, None)
+
+            # Ensure drawdown thresholds are absent to exercise lenient path
+            for key in ["MAX_DRAWDOWN_THRESHOLD", "AI_TRADING_MAX_DRAWDOWN_THRESHOLD"]:
+                os.environ.pop(key, None)
+
+            os.environ["CAPITAL_CAP"] = "1"
+            os.environ["DOLLAR_RISK_LIMIT"] = "0.1"
+
+            try:
+                # Test importing key modules without credentials
+                from ai_trading.config.management import _resolve_alpaca_env
+                print("✓ Config management imported")
+
+                api_key, secret_key, base_url = _resolve_alpaca_env()
+                assert api_key is None
+                assert secret_key is None
+                assert base_url == "https://paper-api.alpaca.markets"
+                print("✓ Credential resolution works with missing creds")
+
+                from ai_trading import main as _main
+                print("✓ Main imported")
+
+                _main._fail_fast_env()
+                print("✓ Environment validation executed")
+
+                from ai_trading.utils.timefmt import utc_now_iso
+                print("✓ Time utilities imported")
+
+                # Test UTC timestamp doesn't have double Z
+                timestamp = utc_now_iso()
+                assert timestamp.endswith('Z')
+                assert timestamp.count('Z') == 1
+                print("✓ UTC timestamp has single Z")
+
+                print("SUCCESS: No import-time crashes!")
+
+            except SystemExit as e:
+                print(f"FAIL: SystemExit called: {e}")
+                sys.exit(1)
+            except Exception as e:
+                print(f"FAIL: Unexpected error: {e}")
+                import traceback
+                traceback.print_exc()
+                sys.exit(1)
+            '''
+        )
 
         # Write test script to temporary file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
@@ -96,6 +205,9 @@ except Exception as e:
             # Check that script succeeded
             assert result.returncode == 0, f"Script failed with return code {result.returncode}"
             assert "SUCCESS: No import-time crashes!" in result.stdout
+            combined_output = "".join([result.stdout, result.stderr])
+            assert "ALPACA_CREDENTIALS_MISSING" in combined_output
+            assert "ENV_VALIDATION_FAILED" not in combined_output
 
         finally:
             os.unlink(script_path)
