@@ -276,6 +276,8 @@ def test_no_session_empty_payload_uses_sip_before_backup(monkeypatch):
     tf_key = ("AAPL", "1Min")
     assert tf_key not in fetch._IEX_EMPTY_COUNTS or fetch._IEX_EMPTY_COUNTS[tf_key] == 0
     assert "sip" in fetch._FEED_FAILOVER_ATTEMPTS.get(tf_key, set())
+    assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
+    assert fetch._FEED_SWITCH_HISTORY[-1] == ("AAPL", "1Min", "sip")
 
 
 def test_cached_override_respects_ttl(monkeypatch):
