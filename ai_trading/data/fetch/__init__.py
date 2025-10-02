@@ -6542,15 +6542,20 @@ def get_daily_df(
         adjustment = adjustment.lower()
     validate_adjustment(adjustment)
 
+    fetch_error: MissingOHLCVColumnsError | None = None
     if use_alpaca:
-        df = _get_bars_df(
-            symbol,
-            timeframe="1Day",
-            start=start,
-            end=end,
-            feed=normalized_feed,
-            adjustment=adjustment,
-        )
+        try:
+            df = _get_bars_df(
+                symbol,
+                timeframe="1Day",
+                start=start,
+                end=end,
+                feed=normalized_feed,
+                adjustment=adjustment,
+            )
+        except MissingOHLCVColumnsError as exc:
+            fetch_error = exc
+            df = None
 
     pd_mod = _ensure_pandas()
     if pd_mod is None:
@@ -6583,20 +6588,78 @@ def get_daily_df(
                 df = df.loc[:, ~df.columns.duplicated()]
             except Exception:  # pragma: no cover - defensive guard
                 pass
-    try:
-        df = ensure_ohlcv_schema(
-            df,
-            source=normalized_feed or "alpaca",
+    def _normalize_daily_frame(frame: Any, source_hint: str) -> Any:
+        resolved_source = source_hint
+        try:
+            attrs = getattr(frame, "attrs", None)
+        except Exception:  # pragma: no cover - defensive metadata access
+            attrs = None
+        if isinstance(attrs, dict):
+            resolved_source = (
+                str(
+                    attrs.get("data_provider")
+                    or attrs.get("fallback_provider")
+                    or attrs.get("data_feed")
+                    or source_hint
+                )
+                or source_hint
+            )
+        normalized = ensure_ohlcv_schema(
+            frame,
+            source=resolved_source or source_hint,
             frequency="1Day",
         )
-        df = normalize_ohlcv_df(df, include_columns=("timestamp",))
-        df = _restore_timestamp_column(df)
+        normalized = normalize_ohlcv_df(normalized, include_columns=("timestamp",))
+        return _restore_timestamp_column(normalized)
+
+    try:
+        if fetch_error is not None:
+            raise fetch_error
+        df = _normalize_daily_frame(df, normalized_feed or "alpaca")
     except MissingOHLCVColumnsError as exc:
         logger.error(
             "OHLCV_COLUMNS_MISSING",
             extra={"source": normalized_feed or "alpaca", "frequency": "1Day", "detail": str(exc)},
         )
-        return None
+        start_dt = ensure_datetime(
+            start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10)
+        )
+        end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
+        fallback_df = _backup_get_bars(
+            symbol,
+            start_dt,
+            end_dt,
+            interval="1d",
+        )
+        if fallback_df is None or getattr(fallback_df, "empty", False):
+            return None
+        fallback_source_hint = normalized_feed or "alpaca"
+        try:
+            fallback_attrs = getattr(fallback_df, "attrs", None)
+        except Exception:  # pragma: no cover - defensive metadata access
+            fallback_attrs = None
+        if isinstance(fallback_attrs, dict):
+            fallback_source_hint = (
+                str(
+                    fallback_attrs.get("data_provider")
+                    or fallback_attrs.get("fallback_provider")
+                    or fallback_attrs.get("data_feed")
+                    or fallback_source_hint
+                )
+                or fallback_source_hint
+            )
+        try:
+            df = _normalize_daily_frame(fallback_df, fallback_source_hint)
+        except MissingOHLCVColumnsError as fallback_exc:
+            logger.error(
+                "OHLCV_COLUMNS_MISSING",
+                extra={
+                    "source": fallback_source_hint or (normalized_feed or "alpaca"),
+                    "frequency": "1Day",
+                    "detail": str(fallback_exc),
+                },
+            )
+            return None
     except DataFetchError as exc:
         logger.error(
             "DATA_FETCH_EMPTY",
