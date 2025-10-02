@@ -85,7 +85,7 @@ sys.modules.setdefault("alpaca.data", types.ModuleType("alpaca.data"))
 sys.modules.setdefault("alpaca.data.timeframe", types.ModuleType("alpaca.data.timeframe"))
 sys.modules.setdefault("alpaca.data.requests", types.ModuleType("alpaca.data.requests"))
 sys.modules["alpaca.data.timeframe"].TimeFrame = object
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
+sys.modules["alpaca.data.timeframe"].TimeFrameUnit = types.SimpleNamespace(Day="Day")
 sys.modules["alpaca.data.requests"].StockBarsRequest = object
 sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = object
 sys.modules["alpaca.data"].TimeFrame = sys.modules["alpaca.data.timeframe"].TimeFrame
@@ -204,7 +204,16 @@ def test_health_check_accepts_datetime_index(monkeypatch):
 
 
 def test_get_daily_df_normalizes_columns(monkeypatch):
-    df = pd.DataFrame({"t": [0], "o": [1], "h": [1], "l": [1], "c": [1], "v": [1]})
+    df = pd.DataFrame(
+        {
+            "t": [pd.Timestamp("2024-01-01", tz="UTC")],
+            "o": [1],
+            "h": [1],
+            "l": [1],
+            "c": [1],
+            "v": [1],
+        }
+    )
     monkeypatch.setattr(data_fetch, "should_import_alpaca_sdk", lambda: True)
     monkeypatch.setattr(alpaca_api, "get_bars_df", lambda *a, **k: df)
     out = data_fetch.get_daily_df("AAA")
