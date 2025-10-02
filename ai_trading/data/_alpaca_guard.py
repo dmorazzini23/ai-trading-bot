@@ -24,7 +24,9 @@ def should_import_alpaca_sdk() -> bool:
     except Exception:
         provider = ""
     provider_normalized = str(provider or "").strip().lower()
-    return _execution_enabled() and provider_normalized == "alpaca"
+    if provider_normalized == "alpaca":
+        return True
+    return _execution_enabled()
 
 
 __all__ = ["should_import_alpaca_sdk"]
