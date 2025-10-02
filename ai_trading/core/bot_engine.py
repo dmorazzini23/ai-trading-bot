@@ -8328,8 +8328,8 @@ class DataFetcher:
                     idx = idx.tz_convert("UTC")
             except (TypeError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
-            if original_name is not None:
-                idx = idx.rename(original_name)
+            new_name = original_name if original_name is not None else "timestamp"
+            idx = idx.rename(new_name)
             working.index = idx
             return working
 
