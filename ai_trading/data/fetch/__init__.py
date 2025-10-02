@@ -1108,34 +1108,52 @@ except ImportError:  # pragma: no cover - optional dependency missing
     _pd_norm_helper = None
 
 
+_ACRONYM_TOKEN_PATTERN = re.compile(
+    r"[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[0-9]+"
+)
+
+
 def _normalize_column_token(value: Any) -> str:
     """Return a normalized alias key for column *value*."""
 
+    def _tokenize(text: str) -> list[str]:
+        cleaned = text.strip()
+        if not cleaned:
+            return []
+        cleaned = re.sub(r"[\s\-\.]+", "_", cleaned)
+        parts = [part for part in cleaned.split("_") if part]
+        tokens: list[str] = []
+        for part in parts:
+            matches = _ACRONYM_TOKEN_PATTERN.findall(part)
+            if not matches:
+                tokens.append(part)
+                continue
+            merged: list[str] = []
+            for segment in matches:
+                if segment.isdigit() and merged:
+                    merged[-1] = f"{merged[-1]}{segment}"
+                else:
+                    merged.append(segment)
+            tokens.extend(merged)
+        return tokens
+
+    tokens: list[str] = []
     if isinstance(value, tuple):
-        parts: list[str] = []
         for part in value:
             if part is None:
                 continue
             try:
-                segment = str(part).strip()
+                tokens.extend(_tokenize(str(part)))
             except Exception:  # pragma: no cover - defensive
                 continue
-            segment = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", segment)
-            segment = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", segment)
-            parts.append(segment)
-        token = "_".join(parts)
     else:
-        token = str(value).strip()
-        token = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", token)
-        token = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", token)
-    lowered = token.lower()
-    normalized = (
-        lowered.replace(" ", "_")
-        .replace("-", "_")
-        .replace(".", "_")
-    )
-    while "__" in normalized:
-        normalized = normalized.replace("__", "_")
+        tokens.extend(_tokenize(str(value)))
+
+    if not tokens:
+        return ""
+
+    normalized = "_".join(tokens).lower()
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
 
 

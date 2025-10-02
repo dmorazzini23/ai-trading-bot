@@ -14,19 +14,35 @@ pd = load_pandas()
 REQUIRED = ("open", "high", "low", "close", "volume")
 
 
+_ACRONYM_TOKEN_PATTERN = re.compile(
+    r"[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[0-9]+"
+)
+
+
 def _normalize_column_name(value: object) -> str:
-    token = str(value).strip()
-    token = re.sub(r"(?<=[A-Za-z0-9])(?=[A-Z])", "_", token)
-    token = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", token)
-    lowered = (
-        token.lower()
-        .replace(" ", "_")
-        .replace("-", "_")
-        .replace(".", "_")
-    )
-    while "__" in lowered:
-        lowered = lowered.replace("__", "_")
-    return lowered
+    text = str(value).strip()
+    if not text:
+        return ""
+    text = re.sub(r"[\s\-\.]+", "_", text)
+    parts = [part for part in text.split("_") if part]
+    tokens: list[str] = []
+    for part in parts:
+        matches = _ACRONYM_TOKEN_PATTERN.findall(part)
+        if not matches:
+            tokens.append(part)
+            continue
+        merged: list[str] = []
+        for segment in matches:
+            if segment.isdigit() and merged:
+                merged[-1] = f"{merged[-1]}{segment}"
+            else:
+                merged.append(segment)
+        tokens.extend(merged)
+    if not tokens:
+        return ""
+    normalized = "_".join(tokens).lower()
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized
 
 _COLUMN_CANONICAL_MAP = {
     "t": "timestamp",
