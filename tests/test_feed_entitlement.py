@@ -20,6 +20,14 @@ def test_ensure_entitled_feed_switches():
     assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
 
 
+def test_ensure_entitled_feed_upgrades_cached_entitlement():
+    bars._ENTITLE_CACHE.clear()
+    client = _Client(['iex'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+    client._feeds = ['sip']
+    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+
+
 def test_ensure_entitled_feed_keeps():
     bars._ENTITLE_CACHE.clear()
     client = _Client(['sip'])

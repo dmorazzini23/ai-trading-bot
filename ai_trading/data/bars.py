@@ -303,30 +303,113 @@ def _is_minute_timeframe(tf) -> bool:
         return False
 
 
-_ENTITLE_CACHE: dict[int, tuple[float, set[str]]] = {}
+@dataclass(frozen=True)
+class _EntitlementCacheEntry:
+    cached_at: float
+    generation: float
+    feeds: frozenset[str]
+
+
+_ENTITLE_CACHE: dict[int, _EntitlementCacheEntry] = {}
 _ENTITLE_TTL = 300
+
+
+def _coerce_generation(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            return None
+    if isinstance(value, datetime):
+        try:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            return value.astimezone(UTC).timestamp()
+        except (AttributeError, OSError, ValueError):  # pragma: no cover - defensive
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:  # pragma: no cover - defensive
+            return None
+        try:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC).timestamp()
+        except (AttributeError, OSError, ValueError):  # pragma: no cover - defensive
+            return None
+    return None
+
+
+def _extract_generation(snapshot: Any, default: float) -> float:
+    for attr in (
+        "updated_at",
+        "generated_at",
+        "timestamp",
+        "last_updated",
+        "created_at",
+        "modified_at",
+    ):
+        value = getattr(snapshot, attr, None)
+        if value is None:
+            continue
+        coerced = _coerce_generation(value)
+        if coerced is not None:
+            return coerced
+    return default
+
 
 def _get_entitled_feeds(client: Any) -> set[str]:
     """Return set of feeds the account is entitled to."""
     now = time.time()
     key = id(client)
-    cached = _ENTITLE_CACHE.get(key)
-    if cached and (now - cached[0] < _ENTITLE_TTL):
-        return cached[1]
+    cached_entry = _ENTITLE_CACHE.get(key)
+    if cached_entry and (now - cached_entry.cached_at < _ENTITLE_TTL) and "sip" in cached_entry.feeds:
+        return set(cached_entry.feeds)
+
     feeds: set[str] = {"iex"}
+    generation = now
     get_acct = getattr(client, "get_account", None)
     if callable(get_acct):
         try:
             acct = get_acct()
+        except COMMON_EXC as e:  # pragma: no cover - network
+            _log.debug('FEED_ENTITLE_CHECK_FAIL', extra={'error': str(e)})
+            if cached_entry and (now - cached_entry.cached_at < _ENTITLE_TTL):
+                return set(cached_entry.feeds)
+        else:
             sub = getattr(acct, "market_data_subscription", None) or getattr(acct, "data_feed", None)
             if isinstance(sub, str):
                 feeds = {sub.lower()}
             elif isinstance(sub, (set, list, tuple)):
                 feeds = {str(x).lower() for x in sub}
-        except COMMON_EXC as e:  # pragma: no cover - network
-            _log.debug('FEED_ENTITLE_CHECK_FAIL', extra={'error': str(e)})
-    _ENTITLE_CACHE[key] = (now, feeds)
-    return feeds
+            generation = _extract_generation(acct, now)
+    elif cached_entry and (now - cached_entry.cached_at < _ENTITLE_TTL):
+        return set(cached_entry.feeds)
+
+    entry = _EntitlementCacheEntry(
+        cached_at=now,
+        generation=generation,
+        feeds=frozenset(feeds),
+    )
+    if cached_entry is None:
+        _ENTITLE_CACHE[key] = entry
+    else:
+        should_replace = (
+            entry.feeds != cached_entry.feeds
+            or entry.generation > cached_entry.generation
+            or (now - cached_entry.cached_at) >= _ENTITLE_TTL
+        )
+        if should_replace:
+            _ENTITLE_CACHE[key] = entry
+        else:
+            entry = cached_entry
+    return set(entry.feeds)
 
 def _ensure_entitled_feed(client: Any, requested: str) -> str:
     """Return a feed we are entitled to, falling back when necessary."""
