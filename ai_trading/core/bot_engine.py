@@ -7797,6 +7797,12 @@ class DataFetcher:
     def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
+        be_module = sys.modules.get(__name__)
+        monotonic = (
+            getattr(be_module, "monotonic_time", monotonic_time)
+            if be_module is not None
+            else monotonic_time
+        )
 
         try:  # lazy import to avoid hard dependency at import time
             from ai_trading.market.calendars import is_trading_day as _is_trading_day
@@ -7835,7 +7841,7 @@ class DataFetcher:
         memo_key = (symbol, timeframe_key, start_ts.isoformat(), end_ts.isoformat())
         legacy_memo_key = (symbol, fetch_date.isoformat())
         min_interval = self._daily_fetch_min_interval(ctx)
-        now_monotonic = monotonic_time()
+        now_monotonic = float(monotonic())
         ttl_window = (
             _DAILY_FETCH_MEMO_TTL if min_interval <= 0 else max(_DAILY_FETCH_MEMO_TTL, float(min_interval))
         )
@@ -7852,6 +7858,10 @@ class DataFetcher:
 
         cached_df: Any | None = None
         cached_reason: str | None = None
+        fallback_entry: (
+            tuple[Any | None, str | None, str | None, tuple[str, str, str] | None]
+            | None
+        ) = None
 
         def _coerce_memo_timestamp(value: Any) -> float | None:
             try:
@@ -7879,73 +7889,11 @@ class DataFetcher:
         refresh_source: str | None = None
         refresh_provider_key: tuple[str, str, str] | None = None
 
-        with cache_lock:
-            window_limit = min_interval if min_interval > 0 else ttl_window
-            canonical_entry = _DAILY_FETCH_MEMO.get(memo_key)
-            if canonical_entry is not None:
-                entry_ts, entry_df, _ = _normalize_memo_entry(canonical_entry)
-                if entry_ts is None:
-                    _DAILY_FETCH_MEMO.pop(memo_key, None)
-                else:
-                    age = now_monotonic - entry_ts
-                    if age <= window_limit:
-                        cached_df = entry_df
-                        cached_reason = "memo"
-                        refresh_stamp = now_monotonic
-                        refresh_df = cached_df
-                        refresh_source = "memo"
-                    else:
-                        _DAILY_FETCH_MEMO.pop(memo_key, None)
-                        if age > ttl_window:
-                            _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+        def _finalize_cached_return() -> Any:
             if cached_df is None:
-                legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
-                if legacy_entry is not None:
-                    entry_ts, entry_df, _ = _normalize_memo_entry(legacy_entry)
-                    if entry_ts is None:
-                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
-                    else:
-                        age = now_monotonic - entry_ts
-                        if age <= window_limit:
-                            cached_df = entry_df
-                            cached_reason = "memo"
-                            refresh_stamp = now_monotonic
-                            refresh_df = cached_df
-                            refresh_source = "memo"
-                        elif age > ttl_window:
-                            _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
-            if cached_df is None:
-                entry = self._daily_cache.get(symbol)
-                if entry and entry[0] == fetch_date:
-                    cached_df = entry[1]
-                    cached_reason = "cache"
-                    refresh_stamp = now_monotonic
-                    refresh_df = cached_df
-                    refresh_source = "cache"
-                else:
-                    self._daily_cache.pop(symbol, None)
-            error_entry = self._daily_error_state.get(error_key)
-            if error_entry is not None:
-                cached_error, error_ts = error_entry
-                if now_monotonic - error_ts <= ttl_window:
-                    raise self._clone_fetch_error(cached_error)
-                self._daily_error_state.pop(error_key, None)
-            if cached_df is None:
-                provider_key = (planned_provider, fetch_date.isoformat(), symbol)
-                session_entry = _DAILY_PROVIDER_SESSION_CACHE.get(provider_key)
-                if session_entry:
-                    session_df, session_ts = session_entry
-                    if now_monotonic - session_ts <= ttl_window:
-                        cached_df = session_df
-                        cached_reason = f"provider_session:{planned_provider}"
-                        refresh_stamp = now_monotonic
-                        refresh_df = cached_df
-                        refresh_source = "provider_session"
-                        refresh_provider_key = provider_key
-                    else:
-                        _DAILY_PROVIDER_SESSION_CACHE.pop(provider_key, None)
-
-        if cached_df is not None and (cached_reason or min_interval <= 0):
+                return None
+            if not (cached_reason or min_interval <= 0):
+                return None
             if refresh_stamp is not None:
                 with cache_lock:
                     _DAILY_FETCH_MEMO[memo_key] = (refresh_stamp, refresh_df)
@@ -7977,6 +7925,133 @@ class DataFetcher:
                     raise
             self._log_daily_cache_hit_once(symbol, reason=cached_reason)
             return cached_df
+
+        def _apply_fallback_entry() -> Any:
+            nonlocal cached_df, cached_reason, refresh_stamp, refresh_df, refresh_source, refresh_provider_key
+            if fallback_entry is None:
+                return None
+            fallback_df, fallback_reason, fallback_source, fallback_provider_key_local = fallback_entry
+            if fallback_df is None:
+                return None
+            cached_df = fallback_df
+            cached_reason = fallback_reason or fallback_source or "cache"
+            refresh_stamp = now_monotonic
+            refresh_df = fallback_df
+            refresh_source = fallback_source
+            refresh_provider_key = fallback_provider_key_local
+            return _finalize_cached_return()
+
+        with cache_lock:
+            window_limit = min_interval if min_interval > 0 else ttl_window
+            canonical_entry = _DAILY_FETCH_MEMO.get(memo_key)
+            if canonical_entry is not None:
+                entry_ts, entry_df, _ = _normalize_memo_entry(canonical_entry)
+                if entry_ts is None:
+                    _DAILY_FETCH_MEMO.pop(memo_key, None)
+                else:
+                    age = now_monotonic - entry_ts
+                    if age <= window_limit:
+                        cached_df = entry_df
+                        cached_reason = "memo"
+                        refresh_stamp = now_monotonic
+                        refresh_df = cached_df
+                        refresh_source = "memo"
+                    else:
+                        if (
+                            fallback_entry is None
+                            and entry_df is not None
+                        ):
+                            fallback_entry = (
+                                entry_df,
+                                "memo_stale",
+                                "memo",
+                                None,
+                            )
+                        _DAILY_FETCH_MEMO.pop(memo_key, None)
+                        if age > ttl_window:
+                            _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+            if cached_df is None:
+                legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
+                if legacy_entry is not None:
+                    entry_ts, entry_df, _ = _normalize_memo_entry(legacy_entry)
+                    if entry_ts is None:
+                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                    else:
+                        age = now_monotonic - entry_ts
+                        if age <= window_limit:
+                            cached_df = entry_df
+                            cached_reason = "memo"
+                            refresh_stamp = now_monotonic
+                            refresh_df = cached_df
+                            refresh_source = "memo"
+                        else:
+                            if (
+                                fallback_entry is None
+                                and entry_df is not None
+                            ):
+                                fallback_entry = (
+                                    entry_df,
+                                    "memo_stale",
+                                    "memo",
+                                    None,
+                                )
+                            if age > ttl_window:
+                                _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+            if cached_df is None:
+                entry = self._daily_cache.get(symbol)
+                if entry and entry[0] == fetch_date:
+                    cached_df = entry[1]
+                    cached_reason = "cache"
+                    refresh_stamp = now_monotonic
+                    refresh_df = cached_df
+                    refresh_source = "cache"
+                else:
+                    if (
+                        fallback_entry is None
+                        and entry
+                        and entry[1] is not None
+                    ):
+                        fallback_entry = (
+                            entry[1],
+                            "cache_stale",
+                            "cache",
+                            None,
+                        )
+                    self._daily_cache.pop(symbol, None)
+            error_entry = self._daily_error_state.get(error_key)
+            if error_entry is not None:
+                cached_error, error_ts = error_entry
+                if now_monotonic - error_ts <= ttl_window:
+                    raise self._clone_fetch_error(cached_error)
+                self._daily_error_state.pop(error_key, None)
+        if cached_df is None:
+            provider_key = (planned_provider, fetch_date.isoformat(), symbol)
+            session_entry = _DAILY_PROVIDER_SESSION_CACHE.get(provider_key)
+            if session_entry:
+                session_df, session_ts = session_entry
+                if now_monotonic - session_ts <= ttl_window:
+                    cached_df = session_df
+                    cached_reason = f"provider_session:{planned_provider}"
+                    refresh_stamp = now_monotonic
+                    refresh_df = cached_df
+                    refresh_source = "provider_session"
+                    refresh_provider_key = provider_key
+                else:
+                    if (
+                        fallback_entry is None
+                        and session_df is not None
+                    ):
+                        fallback_entry = (
+                            session_df,
+                            f"provider_session:{planned_provider}",
+                            "provider_session",
+                            provider_key,
+                        )
+                    _DAILY_PROVIDER_SESSION_CACHE.pop(provider_key, None)
+
+        cached_result = _finalize_cached_return()
+        if cached_result is not None:
+            return cached_result
 
         api_key = self.settings.alpaca_api_key
         api_secret = self.settings.alpaca_secret_key_plain or get_alpaca_secret_key_plain()
@@ -8032,6 +8107,15 @@ class DataFetcher:
                     context="DAILY_DIRECT_FETCH",
                     label="daily",
                 )
+            except ImportError as exc:
+                direct_df = None
+                logger.warning(
+                    "DAILY_FETCH_PROVIDER_IMPORT_ERROR",
+                    extra={"symbol": symbol, "source": "direct", "error": str(exc)},
+                )
+                fallback_result = _apply_fallback_entry()
+                if fallback_result is not None:
+                    return fallback_result
             except Exception:
                 direct_df = None
 
@@ -8059,6 +8143,16 @@ class DataFetcher:
                         severity="hard_fail",
                     )
                 raise self._clone_fetch_error(exc)
+            except ImportError as exc:
+                logger.warning(
+                    "DAILY_FETCH_PROVIDER_IMPORT_ERROR",
+                    extra={"symbol": symbol, "source": "module", "error": str(exc)},
+                )
+                fallback_result = _apply_fallback_entry()
+                if fallback_result is not None:
+                    return fallback_result
+                last_fetch_error = exc
+                df = None
             except data_fetcher_module.DataFetchError as exc:
                 logger.warning(
                     "DAILY_FETCH_PROVIDER_ERROR",
@@ -8067,6 +8161,9 @@ class DataFetcher:
                 last_fetch_error = exc
             backup_get_bars = getattr(data_fetcher_module, "_backup_get_bars", None)
             if not callable(backup_get_bars):
+                fallback_result = _apply_fallback_entry()
+                if fallback_result is not None:
+                    return fallback_result
                 err = DataFetchError(f"failed to fetch daily data for {symbol}")
                 if last_fetch_error is not None:
                     raise err from last_fetch_error
@@ -8074,6 +8171,9 @@ class DataFetcher:
             try:
                 df = backup_get_bars(symbol, start_ts, end_ts, interval="1d")
             except COMMON_EXC as backup_exc:
+                fallback_result = _apply_fallback_entry()
+                if fallback_result is not None:
+                    return fallback_result
                 logger.error(
                     "DAILY_FETCH_BACKUP_FAILED",
                     extra={"symbol": symbol, "error": str(backup_exc)},
@@ -8094,7 +8194,7 @@ class DataFetcher:
             )
 
         with cache_lock:
-            stamp = monotonic_time()
+            stamp = float(monotonic())
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
