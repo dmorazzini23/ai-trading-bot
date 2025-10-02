@@ -121,15 +121,41 @@ def _validate_startup_config() -> _StartupConfig:
     from ai_trading.config.management import get_env
     from ai_trading.settings import get_settings
 
-    feed_default = get_settings().alpaca_data_feed
-    cfg = {
-        "timeframe": get_env("TIMEFRAME", "1Min"),
-        "data_feed": get_env("DATA_FEED", feed_default),
-    }
+    import os
+
+    # Capture an explicit feed override from the environment before consulting
+    # the settings defaults. ``get_env`` would otherwise coerce invalid feeds to
+    # a default, preventing ``_StartupConfig`` from surfacing configuration
+    # issues at startup.
+    feed_env: str | None = None
+    for key in ("DATA_FEED", "ALPACA_DATA_FEED"):
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        if not raw.strip():
+            continue
+        feed_env = raw
+        break
+
+    timeframe_env = os.getenv("TIMEFRAME")
+
     try:
+        feed_value = feed_env if feed_env is not None else get_settings().alpaca_data_feed
+        timeframe_value = (
+            timeframe_env
+            if timeframe_env and timeframe_env.strip()
+            else get_env("TIMEFRAME", "1Min")
+        )
+        cfg = {
+            "timeframe": timeframe_value,
+            "data_feed": feed_value,
+        }
         return _StartupConfig(**cfg)
     except ValidationError as e:  # pragma: no cover - exercised in tests
         logger.error("CONFIG_VALIDATION_FAILED", extra={"errors": e.errors()})
+        raise SystemExit(f"Invalid configuration: {e}") from e
+    except ValueError as e:  # pragma: no cover - exercised in tests
+        logger.error("CONFIG_VALIDATION_FAILED", extra={"errors": str(e)})
         raise SystemExit(f"Invalid configuration: {e}") from e
 
 
