@@ -35,6 +35,20 @@ import ai_trading.core.bot_engine as eng
 from ai_trading.execution.engine import ExecutionEngine
 
 
+def _paper_status_for_testing(engine_class_path: str) -> types.SimpleNamespace:
+    """Return a fake execution-engine status that mimics live mode without creds."""
+
+    return types.SimpleNamespace(
+        mode="paper",
+        engine_class=engine_class_path,
+        shadow_mode=False,
+        missing_credentials=("ALPACA_API_KEY",),
+        missing_dependencies=(),
+        reason=None,
+        settings_fallback=None,
+    )
+
+
 def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     """run_all_trades_worker should invoke check_trailing_stops and suppress errors."""
 
@@ -106,10 +120,29 @@ def test_run_all_trades_calls_trailing_stops(monkeypatch, caplog):
     monkeypatch.setattr(ExecutionEngine, "check_trailing_stops", mock_check_trailing_stops)
     monkeypatch.setattr(ExecutionEngine, "check_stops", lambda self: None)
 
+    # Force execution module status to mimic paper-trading mode without credentials.
+    import ai_trading.execution as execution_module
+
+    monkeypatch.setattr(execution_module, "ExecutionEngine", ExecutionEngine, raising=False)
+    fake_status = _paper_status_for_testing(
+        f"ai_trading.execution.live_trading.ExecutionEngine"
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "get_execution_runtime_status",
+        lambda: fake_status,
+        raising=False,
+    )
+    # Ensure runtime starts without an attached engine to exercise _ensure_execution_engine.
+    runtime.exec_engine = None
+    runtime.execution_engine = None
+
     with caplog.at_level(logging.INFO, logger="ai_trading.core.bot_engine"):
         eng.run_all_trades_worker(state, runtime)
 
     assert called["flag"]
+    assert isinstance(runtime.exec_engine, ExecutionEngine)
+    assert not getattr(runtime.exec_engine, "_IS_STUB", False)
     trailing_logs = [
         record
         for record in caplog.records

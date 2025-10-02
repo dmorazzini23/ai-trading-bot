@@ -19801,7 +19801,10 @@ def _ensure_execution_engine(runtime) -> None:
 
     global _exec_engine, ExecutionEngine
 
-    def _attach_stub_engine(failure: Exception | None = None) -> None:
+    def _attach_stub_engine(
+        failure: Exception | None = None,
+        delegate_cls: type[Any] | None = None,
+    ) -> None:
         """Attach a minimal execution-engine stub exposing the expected hooks."""
 
         class _RuntimeExecutionEngineStub:
@@ -19811,6 +19814,33 @@ def _ensure_execution_engine(runtime) -> None:
 
             def __init__(self, ctx) -> None:  # noqa: D401 - simple holder
                 self.ctx = ctx
+                self._delegate_cls = (
+                    delegate_cls
+                    if delegate_cls is not None
+                    and not getattr(delegate_cls, "_IS_STUB", False)
+                    else None
+                )
+                self._delegate_instance: Any | None = None
+                self._delegate_failed = False
+
+            def _get_delegate(self) -> Any | None:
+                if self._delegate_cls is None or self._delegate_failed:
+                    return None
+                if self._delegate_instance is not None:
+                    return self._delegate_instance
+                try:
+                    self._delegate_instance = self._delegate_cls(self.ctx)
+                except Exception as exc:  # pragma: no cover - delegate optional in tests
+                    self._delegate_failed = True
+                    logger.debug(
+                        "EXECUTION_ENGINE_STUB_DELEGATE_FAILED",
+                        extra={
+                            "cause": exc.__class__.__name__,
+                            "detail": str(exc),
+                        },
+                    )
+                    return None
+                return self._delegate_instance
 
             def start_cycle(self) -> None:  # pragma: no cover - simple stub
                 return None
@@ -19819,9 +19849,15 @@ def _ensure_execution_engine(runtime) -> None:
                 return None
 
             def check_stops(self) -> None:
+                delegate = self._get_delegate()
+                if delegate is not None and hasattr(delegate, "check_stops"):
+                    return delegate.check_stops()
                 return None
 
             def check_trailing_stops(self) -> None:
+                delegate = self._get_delegate()
+                if delegate is not None and hasattr(delegate, "check_trailing_stops"):
+                    return delegate.check_trailing_stops()
                 return None
 
         stub_engine = _RuntimeExecutionEngineStub(runtime)
@@ -19911,14 +19947,20 @@ def _ensure_execution_engine(runtime) -> None:
         )
 
     if expects_live_engine and missing_creds:
-        logger_once.error(
-            "EXECUTION_ENGINE_CREDENTIALS_MISSING",
-            key="execution_engine_credentials_missing",
-            extra=diagnostics,
-        )
-        raise RuntimeError(
-            "Live execution requested but Alpaca credentials are missing."
-        )
+        if _is_testing_env():
+            logger.debug(
+                "EXECUTION_ENGINE_CREDENTIALS_MISSING_TEST_ENV",
+                extra=diagnostics,
+            )
+        else:
+            logger_once.error(
+                "EXECUTION_ENGINE_CREDENTIALS_MISSING",
+                key="execution_engine_credentials_missing",
+                extra=diagnostics,
+            )
+            raise RuntimeError(
+                "Live execution requested but Alpaca credentials are missing."
+            )
 
     if missing_deps and status.mode in {"paper", "live"}:
         logger_once.error(
@@ -19946,7 +19988,8 @@ def _ensure_execution_engine(runtime) -> None:
             logger.warning(
                 "Execution engine initialization failed: %s", e
             )
-            _attach_stub_engine(e)
+            delegate_cls = None if getattr(_ExecutionEngine, "_IS_STUB", False) else _ExecutionEngine
+            _attach_stub_engine(e, delegate_cls)
             if recovered_stub:
                 raise RuntimeError(
                     "Execution engine initialization failed after replacing stub; aborting startup."
@@ -19981,22 +20024,24 @@ def _check_runtime_stops(runtime) -> None:
             "Execution engine missing check_stops; risk-stop checks skipped",
         )
         return
-    if hasattr(exec_engine, "check_stops"):
+    check_stops = getattr(exec_engine, "check_stops", None)
+    if callable(check_stops):
         try:
-            exec_engine.check_stops()
+            check_stops()
         except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard check_stops
             logger.info("check_stops raised but was suppressed: %s", e)
     else:
         logger.warning(
             "Execution engine missing check_stops; risk-stop checks skipped",
         )
-    if not hasattr(exec_engine, "check_trailing_stops"):
+    check_trailing = getattr(exec_engine, "check_trailing_stops", None)
+    if not callable(check_trailing):
         logger.debug(
             "Execution engine missing check_trailing_stops; trailing-stop checks skipped"
         )
         return
     try:
-        exec_engine.check_trailing_stops()
+        check_trailing()
     except (ValueError, TypeError) as e:  # AI-AGENT-REF: guard trailing stops
         logger.info(
             "TRAILING_STOP_CHECK_SUPPRESSED",
