@@ -25,6 +25,42 @@ if missing("ai_trading.metrics", "metrics"):
 else:
     from ai_trading.metrics import PROMETHEUS_AVAILABLE as _PROM_OK, REGISTRY as _PROM_REG
 
+_ALPACA_SECTION_DEFAULTS: dict[str, Any] = {
+    "sdk_ok": False,
+    "initialized": False,
+    "client_attached": False,
+    "has_key": False,
+    "has_secret": False,
+    "base_url": "",
+    "paper": False,
+    "shadow_mode": False,
+}
+
+_ALPACA_BOOL_KEYS = {
+    "sdk_ok",
+    "initialized",
+    "client_attached",
+    "has_key",
+    "has_secret",
+    "paper",
+    "shadow_mode",
+}
+
+
+def _normalise_alpaca_section(raw: Any) -> dict[str, Any]:
+    """Return a fresh Alpaca payload seeded with required keys."""
+
+    normalised = dict(_ALPACA_SECTION_DEFAULTS)
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key in _ALPACA_BOOL_KEYS:
+                normalised[key] = bool(value)
+            elif key == "base_url":
+                normalised[key] = str(value) if value is not None else ""
+            elif key in normalised:
+                normalised[key] = value
+    return normalised
+
 
 def create_app():
     """Create and configure the Flask application."""
@@ -56,26 +92,19 @@ def create_app():
             """Return a shallow copy with defensive defaults."""
 
             base = dict(raw or {})
-            if "ok" in base:
-                base["ok"] = bool(base["ok"])
-            alpaca_raw = base.get("alpaca")
-            base["alpaca"] = dict(alpaca_raw) if isinstance(alpaca_raw, dict) else {}
-            if "ok" not in base:
-                base["ok"] = False
+            base.setdefault("ok", False)
+            base["ok"] = bool(base.get("ok", False))
+            base["alpaca"] = _normalise_alpaca_section(base.get("alpaca"))
             return base
 
         def _ensure_core_fields(payload: dict) -> dict:
             """Ensure ``ok`` and ``alpaca`` keys exist with safe defaults."""
 
-            payload.setdefault("ok", False)
-            payload["ok"] = bool(payload.get("ok", False))
-            alpaca_section = payload.get("alpaca")
-            payload["alpaca"] = (
-                dict(alpaca_section)
-                if isinstance(alpaca_section, dict)
-                else {}
-            )
-            return payload
+            normalised = dict(payload or {})
+            normalised.setdefault("ok", False)
+            normalised["ok"] = bool(normalised.get("ok", False))
+            normalised["alpaca"] = _normalise_alpaca_section(normalised.get("alpaca"))
+            return normalised
 
         def _merge_payloads(primary: dict, secondary: dict) -> dict:
             """Merge fallback data into the canonical payload."""
@@ -83,10 +112,10 @@ def create_app():
             merged = _ensure_core_fields(dict(secondary)) if secondary else _ensure_core_fields({})
             primary = _ensure_core_fields(dict(primary))
 
-            merged_alpaca = dict(merged.get("alpaca", {}))
-            primary_alpaca = dict(primary.get("alpaca", {}))
+            merged_alpaca = _normalise_alpaca_section(merged.get("alpaca"))
+            primary_alpaca = _normalise_alpaca_section(primary.get("alpaca"))
             merged_alpaca.update(primary_alpaca)
-            merged["alpaca"] = merged_alpaca
+            merged["alpaca"] = _normalise_alpaca_section(merged_alpaca)
 
             for key, value in primary.items():
                 if key == "alpaca":
@@ -178,11 +207,7 @@ def create_app():
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
             fallback_reasons = []
             fallback_used = True
-            alpaca_section = (
-                dict(final_payload.get("alpaca", {}))
-                if isinstance(final_payload.get("alpaca"), dict)
-                else {}
-            )
+            alpaca_section = _normalise_alpaca_section(final_payload.get("alpaca"))
             safe_payload = {
                 "ok": False,
                 "alpaca": alpaca_section,
@@ -209,17 +234,6 @@ def create_app():
         """Lightweight liveness probe with Alpaca diagnostics."""
         ok = True
         errors: list[str] = []
-        minimal_alpaca_payload = dict(
-            sdk_ok=False,
-            initialized=False,
-            client_attached=False,
-            has_key=False,
-            has_secret=False,
-            base_url="",
-            paper=False,
-            shadow_mode=False,
-        )
-        alpaca_payload = dict(minimal_alpaca_payload)
         sdk_ok = False
         trading_client = None
         key = secret = None
@@ -280,45 +294,38 @@ def create_app():
         if errors:
             ok = False
 
-        alpaca_payload.update(
-            sdk_ok=bool(sdk_ok),
-            initialized=bool(trading_client),
-            client_attached=bool(trading_client),
-            has_key=bool(key),
-            has_secret=bool(secret),
-            base_url=base_url,
-            paper=paper,
-            shadow_mode=shadow,
+        alpaca_payload = _normalise_alpaca_section(
+            {
+                "sdk_ok": sdk_ok,
+                "initialized": bool(trading_client),
+                "client_attached": bool(trading_client),
+                "has_key": bool(key),
+                "has_secret": bool(secret),
+                "base_url": base_url,
+                "paper": paper,
+                "shadow_mode": shadow,
+            }
         )
 
         payload = {
-            "ok": ok,
-            "alpaca": alpaca_payload,
+            "ok": bool(ok),
+            "alpaca": dict(alpaca_payload),
         }
         if errors:
-            payload["error"] = "; ".join(errors)
+            payload["error"] = "; ".join(dict.fromkeys(errors))
             payload["ok"] = False
-
-        fallback_payload = {
-            "ok": ok,
-            "alpaca": dict(minimal_alpaca_payload),
-        }
-        fallback_payload["alpaca"].update(alpaca_payload)
 
         if errors:
             err_msg = payload.get("error") or last_error or "; ".join(errors)
         else:
             err_msg = last_error
+
+        fallback_payload = {
+            "ok": payload["ok"],
+            "alpaca": dict(alpaca_payload),
+        }
         if err_msg:
             fallback_payload["error"] = err_msg
-
-        # Ensure the canonical payload mirrors the fallback schema so Flask-based
-        # responses and dictionary fallbacks share identical structures.
-        payload["alpaca"] = dict(fallback_payload.get("alpaca", {}))
-        for key, value in fallback_payload.items():
-            if key == "alpaca":
-                continue
-            payload[key] = value
 
         return _json_response(payload, fallback=fallback_payload)
 
