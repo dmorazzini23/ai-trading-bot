@@ -88,6 +88,22 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
     _assert_error_contains(data, "boom")
 
+    app.response_class = None
+    handler = None
+    view_functions = getattr(app, "view_functions", None)
+    if isinstance(view_functions, dict):
+        handler = view_functions.get("health")
+    if handler is None:
+        routes = getattr(app, "_routes", None)
+        if isinstance(routes, dict):
+            handler = routes.get("/health")
+    assert handler is not None, "health handler should be registered"
+
+    dict_payload = handler()
+    assert isinstance(dict_payload, dict)
+    _assert_payload_structure(dict_payload)
+    assert dict_payload["alpaca"] == EXPECTED_ALPACA_MINIMAL
+
 
 def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
     original_import = builtins.__import__
