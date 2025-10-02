@@ -16,7 +16,7 @@ import stat
 import tempfile
 import sys
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, cast
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
@@ -8039,6 +8039,7 @@ class DataFetcher:
         if direct_df is not None:
             df = direct_df
         else:
+            last_fetch_error: Exception | None = None
             try:
                 df = data_fetcher_module.get_daily_df(
                     symbol,
@@ -8063,9 +8064,13 @@ class DataFetcher:
                     "DAILY_FETCH_PROVIDER_ERROR",
                     extra={"symbol": symbol, "error": str(exc)},
                 )
+                last_fetch_error = exc
             backup_get_bars = getattr(data_fetcher_module, "_backup_get_bars", None)
             if not callable(backup_get_bars):
-                raise DataFetchError(f"failed to fetch daily data for {symbol}") from exc
+                err = DataFetchError(f"failed to fetch daily data for {symbol}")
+                if last_fetch_error is not None:
+                    raise err from last_fetch_error
+                raise err
             try:
                 df = backup_get_bars(symbol, start_ts, end_ts, interval="1d")
             except COMMON_EXC as backup_exc:
@@ -8189,6 +8194,20 @@ class DataFetcher:
         fallback_attempted = False
         fallback_feed_used: str | None = None
         df: pd.DataFrame | None = None
+        attempted_feed_norm: str | None = None
+
+        def _record_schema(frame: pd.DataFrame | None) -> None:
+            if attempted_feed_norm != "iex":
+                return
+            final_feed_norm = str((fallback_feed_used or attempted_feed_norm) or "").strip().lower()
+            cache_frame = (
+                frame
+                if final_feed_norm == "iex"
+                and isinstance(frame, pd.DataFrame)
+                and not frame.empty
+                else None
+            )
+            _update_screen_schema_cache(symbol, "1Min", "alpaca_iex", cache_frame)
 
         def _normalize_minute_index(frame: pd.DataFrame) -> pd.DataFrame:
             if not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -8226,6 +8245,7 @@ class DataFetcher:
             )
             if not feed:
                 feed = "iex"
+            attempted_feed_norm = str(feed).strip().lower()
             provider_name = f"alpaca_{feed}" if feed else "alpaca"
             df = self._get_stock_bars(
                 provider_name,
@@ -8239,6 +8259,7 @@ class DataFetcher:
                 client=client,
             )
             if df is None:
+                _record_schema(None)
                 return None
 
             if isinstance(df, pd.DataFrame) and not df.empty:
@@ -8249,6 +8270,7 @@ class DataFetcher:
                         "UNEXPECTED_MINUTE_INDEX",
                         extra={"symbol": symbol, "cause": str(exc)},
                     )
+                    _record_schema(df)
                     return df
 
             current_minute = now_utc.replace(second=0, microsecond=0)
@@ -8258,6 +8280,7 @@ class DataFetcher:
                 logger.warning(
                     "UNEXPECTED_MINUTE_INDEX", extra={"symbol": symbol, "cause": str(exc)}
                 )
+                _record_schema(df)
                 return df
 
             try:
@@ -8271,6 +8294,7 @@ class DataFetcher:
                     "UNEXPECTED_MINUTE_INDEX",
                     extra={"symbol": symbol, "cause": str(exc)},
                 )
+                _record_schema(df)
                 return df
 
             age_seconds = int((current_minute - last_bar_ts).total_seconds())
@@ -8384,6 +8408,7 @@ class DataFetcher:
                         client=client,
                     )
                     if df_iex is None:
+                        _record_schema(None)
                         return None
                     fallback_attempted = True
                     fallback_feed_used = "iex"
@@ -8498,6 +8523,7 @@ class DataFetcher:
             else:
                 self._minute_cache.pop(symbol, None)
                 self._minute_timestamps.pop(symbol, None)
+        _record_schema(df)
         return df
 
 
@@ -17482,6 +17508,71 @@ _screening_in_progress = False
 # Hard-coded fallback symbols when no watchlist is provided
 FALLBACK_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
 
+_SCREEN_SCHEMA_CACHE_TTL = 60.0
+_SCREEN_SCHEMA_CACHE_MAX = 512
+_SCREEN_SCHEMA_CACHE: "OrderedDict[tuple[str, str, str], tuple[float, str | None]]" = OrderedDict()
+_SCREEN_SCHEMA_CACHE_LOCK = Lock()
+
+
+def _screen_schema_cache_key(symbol: str, timeframe: str, feed: str) -> tuple[str, str, str]:
+    return (symbol.upper(), timeframe, feed)
+
+
+def _screen_schema_marker(frame: Any) -> str | None:
+    if frame is None:
+        return None
+    try:
+        index = getattr(frame, "index", None)
+        if index is not None and len(index):
+            last_value = index[-1]
+            try:
+                iso = getattr(last_value, "isoformat", None)
+                if callable(iso):
+                    return iso()
+            except Exception:
+                pass
+            try:
+                return str(last_value)
+            except Exception:
+                return None
+    except Exception:
+        pass
+    try:
+        attrs = getattr(frame, "attrs", None)
+    except Exception:
+        attrs = None
+    if isinstance(attrs, Mapping):
+        raw_cols = attrs.get("raw_payload_columns")
+        if raw_cols:
+            preview = ",".join(str(col) for col in list(raw_cols)[:5])
+            return f"cols:{preview}"
+    return None
+
+
+def _update_screen_schema_cache(symbol: str, timeframe: str, feed: str, frame: Any) -> None:
+    key = _screen_schema_cache_key(symbol, timeframe, feed)
+    marker = _screen_schema_marker(frame)
+    stamp = time.monotonic()
+    with _SCREEN_SCHEMA_CACHE_LOCK:
+        _SCREEN_SCHEMA_CACHE[key] = (stamp, marker)
+        _SCREEN_SCHEMA_CACHE.move_to_end(key)
+        while len(_SCREEN_SCHEMA_CACHE) > _SCREEN_SCHEMA_CACHE_MAX:
+            _SCREEN_SCHEMA_CACHE.popitem(last=False)
+
+
+def _screen_schema_recent(symbol: str, timeframe: str, feed: str) -> bool:
+    key = _screen_schema_cache_key(symbol, timeframe, feed)
+    now = time.monotonic()
+    with _SCREEN_SCHEMA_CACHE_LOCK:
+        entry = _SCREEN_SCHEMA_CACHE.get(key)
+        if not entry:
+            return False
+        stamp, _ = entry
+        if now - stamp > _SCREEN_SCHEMA_CACHE_TTL:
+            _SCREEN_SCHEMA_CACHE.pop(key, None)
+            return False
+        return True
+
 
 def screen_universe(
     candidates: Sequence[str],
@@ -17535,7 +17626,25 @@ def screen_universe(
             valid = sum(1 for sym in ordered_candidates if sym in _SCREEN_CACHE)
             empty = failed = 0
 
+            minute_fetcher = getattr(runtime, "data_fetcher", None)
+            minute_loader = (
+                getattr(minute_fetcher, "get_minute_df", None)
+                if minute_fetcher is not None
+                else None
+            )
+
             for sym in new_syms:
+                if callable(minute_loader) and not _screen_schema_recent(sym, "1Min", "alpaca_iex"):
+                    try:
+                        minute_frame = minute_loader(runtime, sym, lookback_minutes=5)
+                    except Exception as exc:  # pragma: no cover - warm-up best effort
+                        _update_screen_schema_cache(sym, "1Min", "alpaca_iex", None)
+                        logger.debug(
+                            "MINUTE_SCHEMA_WARMUP_FAILED",
+                            extra={"symbol": sym, "reason": str(exc)},
+                        )
+                    else:
+                        _update_screen_schema_cache(sym, "1Min", "alpaca_iex", minute_frame)
                 df = runtime.data_fetcher.get_daily_df(runtime, sym)
                 if not is_valid_ohlcv(df):
                     empty += 1

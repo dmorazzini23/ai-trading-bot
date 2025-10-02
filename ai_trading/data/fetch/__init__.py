@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from threading import Lock
 from contextlib import suppress
 from types import GeneratorType
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Callable
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Callable
 from zoneinfo import ZoneInfo
 from ai_trading.utils.lazy_imports import load_pandas
 from ai_trading.utils.time import monotonic_time, is_generator_stop
@@ -1279,6 +1279,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_open",
         "openiex",
         "iexopen",
+        "openIex",
+        "openIexRealtime",
         "open_price_iex",
         "iex_open_price",
         "openpriceiex",
@@ -1336,6 +1338,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_high",
         "highiex",
         "iexhigh",
+        "highIex",
         "official_high",
         "official_high_price",
         "official_high_px",
@@ -1385,6 +1388,7 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_low",
         "lowiex",
         "iexlow",
+        "lowIex",
         "official_low",
         "official_low_price",
         "official_low_px",
@@ -1439,10 +1443,13 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_close",
         "closeiex",
         "iexclose",
+        "closeIex",
         "close_price_iex",
         "iex_close_price",
         "closepriceiex",
         "iexcloseprice",
+        "closeIexRealtime",
+        "iexClosePrice",
         "latest_price",
         "latest_value",
         "market_price",
@@ -1453,6 +1460,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "officialclose",
         "officialcloseprice",
         "officialclosepx",
+        "closeOfficial",
+        "officialClose",
         "iex_official_close",
         "iex_official_close_price",
         "clearing_price",
@@ -1775,12 +1784,145 @@ def _alias_rename_map(columns: Iterable[Any]) -> dict[Any, str]:
     return rename_map
 
 
+_ALPACA_IEX_CORE_PREFIXES = ("open", "high", "low", "close", "volume")
+_ALPACA_IEX_COMPACT_TOKENS = {"o", "h", "l", "c", "v"}
+_ALPACA_IEX_BAR_KEYS = {"bars", "barset", "results", "bar"}
+
+
+def _gather_schema_tokens(frame: Any) -> set[str]:
+    """Return a set of normalized tokens discovered within ``frame``."""
+
+    tokens: set[str] = set()
+    columns = getattr(frame, "columns", [])
+    for column in columns:
+        try:
+            tokens.add(_normalize_column_token(column))
+        except Exception:
+            continue
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                try:
+                    tokens.add(_normalize_column_token(key))
+                except Exception:
+                    pass
+                _walk(nested)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                _walk(item)
+
+    for column in columns:
+        try:
+            series = frame[column]
+        except Exception:
+            continue
+        values = getattr(series, "values", None)
+        if values is None:
+            try:
+                values = list(series)
+            except Exception:
+                continue
+        for item in values:
+            _walk(item)
+
+    tokens.discard("")
+    return tokens
+
+
+def _has_minimum_alpaca_tokens(tokens: set[str]) -> bool:
+    """Return ``True`` when at least three Alpaca IEX OHLCV tokens are present."""
+
+    hits = 0
+    for token in tokens:
+        if token in _ALPACA_IEX_COMPACT_TOKENS:
+            hits += 1
+        else:
+            for prefix in _ALPACA_IEX_CORE_PREFIXES:
+                if token.startswith(prefix):
+                    hits += 1
+                    break
+        if hits >= 3:
+            return True
+    return False
+
+
+def _coerce_bar_records(candidate: Any) -> list[Mapping[str, Any]]:
+    """Return a list of mapping records extracted from *candidate* if possible."""
+
+    records: list[Mapping[str, Any]] = []
+    if isinstance(candidate, Mapping):
+        nested = candidate.get("bars")
+        if isinstance(nested, Sequence) and not isinstance(nested, (str, bytes, bytearray)):
+            records.extend(item for item in nested if isinstance(item, Mapping))
+        if not records:
+            keys = {
+                _normalize_column_token(key)
+                for key in candidate.keys()
+            }
+            if _has_minimum_alpaca_tokens(keys):
+                records.append(candidate)
+    elif isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        for item in candidate:
+            if isinstance(item, Mapping):
+                nested_records = _coerce_bar_records(item)
+                if nested_records:
+                    records.extend(nested_records)
+            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+                nested_records = _coerce_bar_records(item)
+                if nested_records:
+                    records.extend(nested_records)
+    return records
+
+
+def _extract_alpaca_iex_records(frame: Any) -> list[Mapping[str, Any]]:
+    """Extract candidate OHLCV records from nested Alpaca IEX payload shapes."""
+
+    records: list[Mapping[str, Any]] = []
+    columns = getattr(frame, "columns", [])
+    for column in columns:
+        normalized = _normalize_column_token(column)
+        if normalized not in _ALPACA_IEX_BAR_KEYS:
+            continue
+        try:
+            series = frame[column]
+        except Exception:
+            continue
+        values = getattr(series, "values", None)
+        if values is None:
+            try:
+                values = list(series)
+            except Exception:
+                continue
+        for item in values:
+            records = _coerce_bar_records(item)
+            if records:
+                return records
+    return records
+
+
+def _attempt_alpaca_iex_recovery(frame: Any, pd_local: Any) -> Any | None:
+    """Attempt to recover nested Alpaca IEX payloads into a DataFrame."""
+
+    records = _extract_alpaca_iex_records(frame)
+    if not records:
+        return None
+    try:
+        recovered = pd_local.DataFrame(records)
+    except Exception:
+        return None
+    if recovered is None or getattr(recovered, "empty", False):
+        return None
+    return recovered
+
+
 def ensure_ohlcv_schema(
     df: Any,
     *,
     source: str,
     frequency: str,
     _pd: Any | None = None,
+    _allow_recovery: bool = True,
 ) -> "pd.DataFrame":
     """Return a DataFrame with canonical OHLCV columns and UTC timestamp index."""
 
@@ -1803,6 +1945,33 @@ def ensure_ohlcv_schema(
     work_df = df.copy()
     _attach_payload_metadata(work_df, provider=source, timeframe=frequency)
     _expand_nested_ohlcv_columns(work_df)
+
+    source_normalized = str(source or "").strip().lower()
+
+    def _attempt_source_recovery(frame: Any) -> "pd.DataFrame" | None:
+        if not (_allow_recovery and source_normalized == "alpaca_iex"):
+            return None
+        tokens = _gather_schema_tokens(frame)
+        if not _has_minimum_alpaca_tokens(tokens):
+            return None
+        recovered_df = _attempt_alpaca_iex_recovery(frame, pd_local)
+        if recovered_df is None:
+            return None
+        rows, cols = getattr(recovered_df, "shape", (None, None))
+        shape_hint: str | None = None
+        if rows is not None and cols is not None:
+            shape_hint = f"{rows}x{cols}"
+        extra: dict[str, Any] = {"provider": source, "frequency": frequency}
+        if shape_hint:
+            extra["shape_hint"] = shape_hint
+        logger.info("OHLCV_SCHEMA_RECOVERED", extra=extra)
+        return ensure_ohlcv_schema(
+            recovered_df,
+            source=source,
+            frequency=frequency,
+            _pd=pd_local,
+            _allow_recovery=False,
+        )
 
     rename_map = _alias_rename_map(work_df.columns)
     # `_alias_rename_map` now examines tuple components and underscore tokens so
@@ -1830,6 +1999,9 @@ def ensure_ohlcv_schema(
                 break
 
     if timestamp_col is None:
+        recovered = _attempt_source_recovery(work_df)
+        if recovered is not None:
+            return recovered
         if isinstance(work_df.index, pd_local.DatetimeIndex):
             original_columns = list(work_df.columns)
             work_df = work_df.reset_index()
@@ -1892,6 +2064,10 @@ def ensure_ohlcv_schema(
     required = ["open", "high", "low", "close"]
     missing = [col for col in required if col not in work_df.columns]
     if missing:
+        recovered = _attempt_source_recovery(work_df)
+        if recovered is not None:
+            return recovered
+
         def _seq_metadata(frame: Any, attr_name: str, fallback_attr: str) -> tuple[str, ...]:
             if frame is None:
                 return tuple()

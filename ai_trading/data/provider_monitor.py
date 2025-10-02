@@ -42,26 +42,99 @@ logger = get_logger(__name__)
 
 _MIN_RECOVERY_SECONDS = 600
 _MIN_RECOVERY_PASSES = 3
-_ANTI_THRASH_WINDOW_SECONDS = 120
+_DEFAULT_SWITCH_QUIET_SECONDS = 15.0
 
 
-def _resolve_max_cooldown() -> int:
+def _resolve_max_cooldown() -> float:
+    """Resolve the maximum provider cooldown from settings/env with bounds."""
+
+    candidate: float | None = None
     try:
-        value = get_env("DATA_PROVIDER_MAX_COOLDOWN", "3600", cast=int)
+        settings = get_settings()
     except Exception:
-        value = None
-    if value is None:
+        settings = None
+    if settings is not None:
+        raw_value = getattr(settings, "provider_max_cooldown_seconds", None)
         try:
-            value = int(os.getenv("DATA_PROVIDER_MAX_COOLDOWN", "3600"))
-        except Exception:  # pragma: no cover - defensive env parsing fallback
-            value = 3600
+            candidate = float(raw_value) if raw_value is not None else None
+        except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+            candidate = None
+    if candidate is None:
+        try:
+            new_env = get_env("PROVIDER_MAX_COOLDOWN_SECONDS", None, cast=float)
+        except Exception:
+            new_env = None
+        if new_env is not None:
+            try:
+                candidate = float(new_env)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                candidate = None
+    if candidate is None:
+        try:
+            env_value = get_env("DATA_PROVIDER_MAX_COOLDOWN", None, cast=float)
+        except Exception:
+            env_value = None
+        if env_value is not None:
+            try:
+                candidate = float(env_value)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                candidate = None
+    if candidate is None:
+        raw_env = os.getenv("PROVIDER_MAX_COOLDOWN_SECONDS")
+        if raw_env is not None:
+            try:
+                candidate = float(raw_env)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                candidate = None
+    if candidate is None:
+        raw_env = os.getenv("DATA_PROVIDER_MAX_COOLDOWN")
+        if raw_env is not None:
+            try:
+                candidate = float(raw_env)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                candidate = None
+    if candidate is None:
+        candidate = 600.0
+    candidate = float(candidate)
+    if candidate < 60.0:
+        candidate = 60.0
+    return candidate
+
+
+def _resolve_switch_quiet_seconds() -> float:
+    """Return the configured provider switchover quiet window in seconds."""
+
     try:
-        return max(int(value), 0)
-    except Exception:  # pragma: no cover - defensive conversion
-        return 3600
+        settings = get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        raw_value = getattr(settings, "provider_switch_quiet_seconds", None)
+        try:
+            value = float(raw_value) if raw_value is not None else None
+        except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+            value = None
+        if value is not None:
+            return max(value, 0.0)
 
+    try:
+        env_value = get_env("PROVIDER_SWITCH_QUIET_SECONDS", None, cast=float)
+    except Exception:
+        env_value = None
+    if env_value is not None:
+        try:
+            return max(float(env_value), 0.0)
+        except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+            pass
 
-_MAX_COOLDOWN = _resolve_max_cooldown()
+    raw_env = os.getenv("PROVIDER_SWITCH_QUIET_SECONDS")
+    if raw_env is not None:
+        try:
+            return max(float(raw_env), 0.0)
+        except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+            pass
+
+    return _DEFAULT_SWITCH_QUIET_SECONDS
 
 
 def _logging_dedupe_ttl() -> int:
@@ -258,7 +331,12 @@ class ProviderMonitor:
             if backoff_factor is not None
             else float(get_env("DATA_PROVIDER_BACKOFF_FACTOR", "2", cast=float))
         )
-        self.max_cooldown = max_cooldown if max_cooldown is not None else _MAX_COOLDOWN
+        self.max_cooldown = (
+            float(max_cooldown)
+            if max_cooldown is not None
+            else float(_resolve_max_cooldown())
+        )
+        self.switch_quiet_seconds = max(float(_resolve_switch_quiet_seconds()), 0.0)
         self._pair_states: Dict[Tuple[str, str], dict[str, object]] = {}
         self._last_switch_logged: tuple[str, str] | None = None
         self._last_switch_ts: float | None = None
@@ -277,6 +355,16 @@ class ProviderMonitor:
         """
 
         self._callbacks[provider] = cb
+
+    def _refresh_runtime_limits(self) -> None:
+        """Refresh cached cooldown and quiet window values from configuration."""
+
+        configured_max = float(_resolve_max_cooldown())
+        if configured_max != self.max_cooldown:
+            self.max_cooldown = configured_max
+        configured_quiet = max(float(_resolve_switch_quiet_seconds()), 0.0)
+        if configured_quiet != self.switch_quiet_seconds:
+            self.switch_quiet_seconds = configured_quiet
 
     def record_failure(
         self,
@@ -424,34 +512,36 @@ class ProviderMonitor:
         now_monotonic: float,
         now_wall: datetime,
     ) -> bool:
-        window = max(int(_ANTI_THRASH_WINDOW_SECONDS), 0)
-        if window <= 0:
+        self._refresh_runtime_limits()
+        window = max(float(self.switch_quiet_seconds), 0.0)
+        if window <= 0.0:
             return False
         history = self._pair_switch_history[(from_key, to_key)]
         history.append(now_monotonic)
-        cutoff = now_monotonic - float(window)
+        cutoff = now_monotonic - window
         while history and history[0] < cutoff:
             history.popleft()
         if len(history) < 3:
             return False
         history.clear()
+        window_for_log = int(round(window))
         logger.warning(
             "DATA_PROVIDER_SWITCHOVER_BLOCKED",
             extra={
                 "from_provider": from_key,
                 "to_provider": to_key,
                 "reason": "repeated_switchovers",
-                "window_seconds": window,
+                "window_seconds": window_for_log,
             },
         )
         try:
-            self.disable(from_key, duration=_MAX_COOLDOWN)
+            self.disable(from_key, duration=self.max_cooldown)
         except Exception:  # pragma: no cover - defensive disable
             logger.exception(
                 "PROVIDER_DISABLE_FAILED",
                 extra={"provider": from_key},
             )
-        cooldown_for_log = int(min(float(_MAX_COOLDOWN), float(self.max_cooldown)))
+        cooldown_for_log = int(round(self.max_cooldown))
         record_stay(
             provider=to_key,
             reason="repeated_switchovers",
@@ -472,10 +562,10 @@ class ProviderMonitor:
         The call increments an in-memory counter and emits an INFO log with the
         running count so operators can diagnose frequent provider churn. It also
         tracks consecutive switchovers and raises an alert when a threshold is
-        exceeded. When a pair thrashes (three switches within
-        :data:`_ANTI_THRASH_WINDOW_SECONDS`) the switchover is blocked, the
-        provider is disabled for :data:`_MAX_COOLDOWN` seconds, and
-        :class:`ProviderAction.DISABLE` is returned.
+        exceeded. When a pair thrashes (three switches within the configured
+        quiet window) the switchover is blocked, the provider is disabled for
+        the configured maximum cooldown, and :class:`ProviderAction.DISABLE` is
+        returned.
         """
 
         from_key = _normalize_provider(from_provider)

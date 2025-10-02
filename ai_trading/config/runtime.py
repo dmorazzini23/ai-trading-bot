@@ -701,6 +701,22 @@ CONFIG_SPECS: tuple[ConfigSpec, ...] = (
         min_value=60,
     ),
     ConfigSpec(
+        field="provider_switch_quiet_seconds",
+        env=("PROVIDER_SWITCH_QUIET_SECONDS",),
+        cast="float",
+        default=15.0,
+        description="Quiet period in seconds before repeated provider switchovers are blocked.",
+        min_value=0.0,
+    ),
+    ConfigSpec(
+        field="provider_max_cooldown_seconds",
+        env=("PROVIDER_MAX_COOLDOWN_SECONDS",),
+        cast="float",
+        default=600.0,
+        description="Maximum cooldown applied when providers are disabled for thrash protection.",
+        min_value=60.0,
+    ),
+    ConfigSpec(
         field="http_timeout_seconds",
         env=("AI_TRADING_HTTP_TIMEOUT",),
         cast="float",
