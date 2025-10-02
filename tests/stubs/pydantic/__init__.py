@@ -38,10 +38,22 @@ def field_validator(*_, **__):
         return func
     return decorator
 
+def model_validator(*_, **__):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        return func
+    return decorator
+
 class BaseModel:
     def __init__(self, **data: Any):
         for k, v in data.items():
             setattr(self, k, v)
+
+    def __init_subclass__(cls, **config: Any) -> None:
+        try:
+            super().__init_subclass__(**config)
+        except TypeError:
+            super().__init_subclass__()
+
     def model_dump(self) -> dict[str, Any]:  # pragma: no cover
         return self.__dict__.copy()
 

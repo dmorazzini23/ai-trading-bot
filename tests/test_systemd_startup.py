@@ -60,12 +60,26 @@ class TestSystemdStartupCompatibility:
                 )
                 numpy_stub.__dict__.update(
                     {
-                        "__version__": "0.0-stub",
+                        "__version__": "0.0.0",
                         "ndarray": _Array,
                         "nan": float("nan"),
                         "NaN": float("nan"),
                         "float64": float,
+                        "float32": float,
+                        "float16": float,
                         "int64": int,
+                        "int32": int,
+                        "int16": int,
+                        "int8": int,
+                        "intp": int,
+                        "intc": int,
+                        "uint64": int,
+                        "uint32": int,
+                        "uint16": int,
+                        "uint8": int,
+                        "bool_": bool,
+                        "complex64": complex,
+                        "complex128": complex,
                         "array": _array,
                         "asarray": _array,
                         "diff": _diff,
@@ -74,6 +88,51 @@ class TestSystemdStartupCompatibility:
                     }
                 )
                 sys.modules["numpy"] = numpy_stub
+
+            if "pandas" not in sys.modules:
+                pandas_stub = types.ModuleType("pandas")
+
+                class DataFrame(dict):
+                    def __init__(self, *args, **kwargs):
+                        super().__init__()
+                        self.args = args
+                        self.kwargs = kwargs
+
+                    def to_dict(self, *args, **kwargs):
+                        return dict(self)
+
+                class Series(list):
+                    pass
+
+                pandas_stub.DataFrame = DataFrame
+                pandas_stub.Series = Series
+                pandas_stub.Timestamp = str
+                pandas_stub.__version__ = "0.0.0"
+                pandas_stub.to_datetime = lambda *a, **k: []
+                pandas_stub.date_range = lambda *a, **k: []
+                pandas_stub.isna = lambda *a, **k: False
+                sys.modules["pandas"] = pandas_stub
+
+            if "sklearn" not in sys.modules:
+                sklearn_stub = types.ModuleType("sklearn")
+                sklearn_stub.__version__ = "0.0.0"
+                sys.modules["sklearn"] = sklearn_stub
+
+            if "sklearn.utils" not in sys.modules:
+                sklearn_utils_stub = types.ModuleType("sklearn.utils")
+                sys.modules["sklearn.utils"] = sklearn_utils_stub
+
+            if "sklearn.utils._param_validation" not in sys.modules:
+                param_validation_stub = types.ModuleType("sklearn.utils._param_validation")
+
+                def validate_params(*args, **kwargs):
+                    def decorator(func):
+                        return func
+
+                    return decorator
+
+                param_validation_stub.validate_params = validate_params
+                sys.modules["sklearn.utils._param_validation"] = param_validation_stub
 
             if "portalocker" not in sys.modules:
                 portalocker_stub = types.ModuleType("portalocker")
