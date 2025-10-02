@@ -1265,6 +1265,15 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_open_price",
         "openpriceiex",
         "iexopenprice",
+        "official_open",
+        "official_open_price",
+        "official_open_px",
+        "officialopen",
+        "officialopenprice",
+        "officialopenpx",
+        "official_opening_price",
+        "iex_official_open",
+        "iex_official_open_price",
         "start_price",
         "starting_price",
         "begin_price",
@@ -1309,6 +1318,14 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_high",
         "highiex",
         "iexhigh",
+        "official_high",
+        "official_high_price",
+        "official_high_px",
+        "officialhigh",
+        "officialhighprice",
+        "officialhighpx",
+        "iex_official_high",
+        "iex_official_high_price",
         "auction_high_price",
         "highest_auction_price",
         "regular_market_high",
@@ -1350,6 +1367,14 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iex_low",
         "lowiex",
         "iexlow",
+        "official_low",
+        "official_low_price",
+        "official_low_px",
+        "officiallow",
+        "officiallowprice",
+        "officiallowpx",
+        "iex_official_low",
+        "iex_official_low_price",
         "auction_low_price",
         "lowest_auction_price",
         "regular_market_low",
@@ -1404,6 +1429,16 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "latest_value",
         "market_price",
         "official_price",
+        "official_close",
+        "official_close_price",
+        "official_close_px",
+        "officialclose",
+        "officialcloseprice",
+        "officialclosepx",
+        "iex_official_close",
+        "iex_official_close_price",
+        "clearing_price",
+        "auction_clearing_price",
         "closing_auction_price",
         "auction_close_price",
         "auction_closing_price",
@@ -1465,6 +1500,12 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "totalvolumeiex",
         "iextotalvolume",
         "auction_volume",
+        "official_volume",
+        "officialvolume",
+        "iex_official_volume",
+        "official_volume_shares",
+        "official_matched_volume",
+        "matched_volume",
         "regular_market_volume",
         "regularmarketvolume",
         "regular_session_volume",
@@ -1609,12 +1650,45 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
         if sample is None:
             continue
 
-        nested_map = _alias_rename_map(sample.keys())
-        if not nested_map:
+        allowed = {"timestamp", "open", "high", "low", "close", "volume"}
+
+        def _collect_paths(node: Mapping[Any, Any], prefix: tuple[Any, ...] = ()) -> list[tuple[tuple[Any, ...], str]]:
+            results: list[tuple[tuple[Any, ...], str]] = []
+            try:
+                rename_map = _alias_rename_map(node.keys())
+            except Exception:  # pragma: no cover - defensive mapping access
+                rename_map = {}
+            for alias_key, canonical in rename_map.items():
+                if canonical in allowed:
+                    results.append((prefix + (alias_key,), canonical))
+            for key, value in node.items():
+                if isinstance(value, Mapping):
+                    results.extend(_collect_paths(value, prefix + (key,)))
+            return results
+
+        def _resolve_path(value: Any, path: tuple[Any, ...]) -> Any:
+            current = value
+            for step in path:
+                if isinstance(current, Mapping):
+                    current = current.get(step)
+                    continue
+                if isinstance(current, (list, tuple)):
+                    candidate = None
+                    for item in current:
+                        if isinstance(item, Mapping) and step in item:
+                            candidate = item.get(step)
+                            break
+                    current = candidate
+                    continue
+                return None
+            return current
+
+        nested_paths = _collect_paths(sample)
+        if not nested_paths:
             continue
 
-        for alias_key, canonical in nested_map.items():
-            if canonical not in {"timestamp", "open", "high", "low", "close", "volume"}:
+        for path, canonical in nested_paths:
+            if canonical not in allowed:
                 continue
             if canonical in getattr(df, "columns", []):
                 continue
@@ -1622,7 +1696,7 @@ def _expand_nested_ohlcv_columns(df: Any) -> None:
             extracted: list[Any] = []
             for value in series:
                 if isinstance(value, Mapping):
-                    extracted.append(value.get(alias_key))
+                    extracted.append(_resolve_path(value, path))
                 else:
                     extracted.append(None)
 
@@ -1778,6 +1852,11 @@ def ensure_ohlcv_schema(
             "end_price",
             "final_price",
             "official_price",
+            "official_close",
+            "official_close_price",
+            "official_close_px",
+            "clearing_price",
+            "auction_clearing_price",
             "value",
         )
         for alias in close_aliases:
