@@ -206,8 +206,14 @@ def create_app():
         if callable(response_factory):
             final_payload = _ensure_core_fields(final_payload)
             return response_factory(body, status=status, mimetype="application/json")
+
+        # When ``response_class`` is unavailable (for example when stub clients swap
+        # Flask out for light-weight shims) surface the fully populated payload
+        # directly so callers don't need to understand Flask's ``(body, status)``
+        # tuple convention. Callers running under a real Flask stack will already
+        # receive a wrapped ``Response`` above, preserving status semantics.
         final_payload = _ensure_core_fields(final_payload)
-        return final_payload, status
+        return final_payload
 
     @app.route('/health')
     def health():

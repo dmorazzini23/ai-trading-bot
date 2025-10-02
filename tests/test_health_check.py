@@ -166,7 +166,7 @@ def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     _assert_error_contains(data, "jsonify unavailable", "ImportError", "flask missing")
 
 
-def test_health_endpoint_tuple_fallback_preserves_structure(monkeypatch):
+def test_health_endpoint_dict_fallback_preserves_structure(monkeypatch):
     def broken_jsonify(payload):
         raise RuntimeError("json busted")
 
@@ -174,14 +174,25 @@ def test_health_endpoint_tuple_fallback_preserves_structure(monkeypatch):
 
     app = app_module.create_app()
     app.response_class = None
-    client = app.test_client()
 
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    _assert_payload_structure(data)
-    assert data["ok"] is False
-    _assert_error_contains(data, "json busted")
+    # When ``response_class`` is missing Flask cannot build a real ``Response``.
+    # In these scenarios the view should expose the payload dictionary directly
+    # so stub callers do not need to replicate Flask's response machinery.
+    handler = None
+    view_functions = getattr(app, "view_functions", None)
+    if isinstance(view_functions, dict):
+        handler = view_functions.get("health")
+    if handler is None:
+        routes = getattr(app, "_routes", None)
+        if isinstance(routes, dict):
+            handler = routes.get("/health")
+    assert handler is not None, "health handler should be registered"
+
+    payload = handler()
+    assert isinstance(payload, dict)
+    _assert_payload_structure(payload)
+    assert payload["ok"] is False
+    _assert_error_contains(payload, "json busted")
 
 
 def test_shadow_mode_disabled_when_credentials_missing(monkeypatch):
