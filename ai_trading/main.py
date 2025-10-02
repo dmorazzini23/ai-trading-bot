@@ -561,6 +561,7 @@ def _fail_fast_env() -> None:
 
     test_mode = _is_test_mode()
     risk_default: str | None = None
+    backfilled_alpaca: list[str] = []
     if test_mode:
         defaults = {
             "ALPACA_API_KEY": "test-key",
@@ -576,6 +577,8 @@ def _fail_fast_env() -> None:
         for key, value in defaults.items():
             if not os.getenv(key):
                 os.environ[key] = value
+                if key in {"ALPACA_API_KEY", "ALPACA_SECRET_KEY"}:
+                    backfilled_alpaca.append(key)
 
     alias_backfilled = False
     alias_risk_limit = os.getenv("DAILY_LOSS_LIMIT")
@@ -598,12 +601,16 @@ def _fail_fast_env() -> None:
         "DOLLAR_RISK_LIMIT",
     )
     loaded = reload_env(override=False)
+    allow_missing_drawdown = test_mode or _is_truthy_env("RUN_HEALTHCHECK")
     try:
-        trading_cfg = TradingConfig.from_env()
+        trading_cfg = TradingConfig.from_env(
+            allow_missing_drawdown=allow_missing_drawdown
+        )
     except (RuntimeError, ValueError) as e:
         logger.critical("ENV_VALIDATION_FAILED", extra={"error": str(e)})
         raise SystemExit(1) from e
 
+    credential_warning_logged = False
     try:
         validate_required_env(required)
     except RuntimeError as exc:
@@ -621,6 +628,14 @@ def _fail_fast_env() -> None:
                 "ALPACA_CREDENTIALS_MISSING",
                 extra={"missing": missing_alpaca},
             )
+            backfilled_alpaca.clear()
+            credential_warning_logged = True
+
+    if backfilled_alpaca and not credential_warning_logged:
+        logger.warning(
+            "ALPACA_CREDENTIALS_MISSING",
+            extra={"missing": tuple(sorted(backfilled_alpaca))},
+        )
 
     snapshot = {k: get_env(k, "") or "" for k in required}
     _, _, base_url = _resolve_alpaca_env()

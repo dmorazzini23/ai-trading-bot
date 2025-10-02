@@ -2656,6 +2656,22 @@ _RUNTIME_READY: bool = False
 _CONFIG_LOGGED: bool = False
 
 
+def _should_relax_drawdown_requirements() -> bool:
+    return (
+        _truthy_env(os.getenv("PYTEST_RUNNING"))
+        or _truthy_env(os.getenv("TESTING"))
+        or _truthy_env(os.getenv("RUN_HEALTHCHECK"))
+    )
+
+
+def _trading_config_from_env(
+    *, allow_missing_drawdown: bool | None = None
+) -> TradingConfig:
+    if allow_missing_drawdown is None:
+        allow_missing_drawdown = _should_relax_drawdown_requirements()
+    return TradingConfig.from_env(allow_missing_drawdown=allow_missing_drawdown)
+
+
 def _log_config_loaded() -> None:
     """Log that configuration settings have been loaded."""
     global _CONFIG_LOGGED
@@ -2672,7 +2688,7 @@ def _reset_config_log() -> None:
 @lru_cache(maxsize=1)
 def _get_trading_config() -> TradingConfig:
     """Return cached ``TradingConfig`` and emit log once."""
-    cfg = TradingConfig.from_env()
+    cfg = _trading_config_from_env()
     _log_config_loaded()
     return cfg
 
@@ -5695,7 +5711,7 @@ def ensure_finbert(cfg=None):
                 from ai_trading.config.management import TradingConfig
 
                 enabled = bool(
-                    getattr(TradingConfig.from_env(), "enable_finbert", False)
+                    getattr(_trading_config_from_env(), "enable_finbert", False)
                 )
             except (
                 FileNotFoundError,
@@ -6312,7 +6328,7 @@ class BotMode:
         return self.params
 
     def get_config(self) -> dict[str, float]:
-        cfg = config.TradingConfig.from_env()
+        cfg = _trading_config_from_env()
         params = dict(self.params)
         from ai_trading import settings as S  # AI-AGENT-REF: authoritative getters
         try:
