@@ -37,6 +37,34 @@ def _bars_df_fixture():
     return _alpaca_iex_raw_frame().reset_index(drop=False)
 
 
+@pytest.fixture
+def alpaca_iex_auction_frame():
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "openingAuctionPrice": 188.45,
+            "highestAuctionPrice": 189.12,
+            "lowestAuctionPrice": 187.3,
+            "closingAuctionPrice": 188.77,
+            "auctionVolume": 1_234_567,
+        }
+    ]
+
+    def _builder(timeframe: str = "1Min"):
+        frame = pd.DataFrame(payload)
+        fetch._attach_payload_metadata(
+            frame,
+            payload=payload,
+            provider="alpaca",
+            feed="iex",
+            timeframe=timeframe,
+            symbol="AAPL",
+        )
+        return frame, payload
+
+    return _builder
+
+
 def test_get_bars_df_alpaca_iex_columns(monkeypatch: pytest.MonkeyPatch):
     raw_frame = _alpaca_iex_raw_frame()
     expected = raw_frame.reset_index(drop=False)
@@ -404,6 +432,40 @@ def test_ensure_ohlcv_schema_handles_first_highest_lowest_payload(
     assert pytest.approx(first["low"]) == payload[0]["lowestPrice"]
     assert pytest.approx(first["close"]) == payload[0]["lastPrice"]
     assert pytest.approx(first["volume"]) == payload[0]["accumulatedVolume"]
+
+
+@pytest.mark.parametrize("frequency", ["1Min", "1Day"])
+def test_ensure_ohlcv_schema_handles_auction_payload(
+    alpaca_iex_auction_frame,
+    frequency: str,
+    caplog: pytest.LogCaptureFixture,
+):
+    frame, payload = alpaca_iex_auction_frame(frequency)
+
+    with caplog.at_level(logging.ERROR):
+        normalized = fetch.ensure_ohlcv_schema(
+            frame,
+            source="alpaca_iex",
+            frequency=frequency,
+        )
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
+
+    first = normalized.iloc[0]
+    sample = payload[0]
+    assert pytest.approx(first["open"]) == sample["openingAuctionPrice"]
+    assert pytest.approx(first["high"]) == sample["highestAuctionPrice"]
+    assert pytest.approx(first["low"]) == sample["lowestAuctionPrice"]
+    assert pytest.approx(first["close"]) == sample["closingAuctionPrice"]
+    assert pytest.approx(first["volume"]) == sample["auctionVolume"]
 
 
 def test_ensure_ohlcv_schema_logs_payload_columns(caplog: pytest.LogCaptureFixture):
