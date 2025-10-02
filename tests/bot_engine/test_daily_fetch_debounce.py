@@ -148,7 +148,7 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     cached_df = {"cached": True}
 
     be._DAILY_FETCH_MEMO_TTL = 60.0
-    be._DAILY_FETCH_MEMO = {memo_key: (0.0, memo_df)}
+    be._DAILY_FETCH_MEMO = {memo_key: (5.0, memo_df)}
     fetcher._daily_cache[symbol] = (fetch_date, cached_df)
 
     first = fetcher.get_daily_df(types.SimpleNamespace(), symbol)

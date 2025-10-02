@@ -7868,7 +7868,7 @@ class DataFetcher:
                 ts = float(value)
             except (TypeError, ValueError):
                 return None
-            if not math.isfinite(ts):
+            if not math.isfinite(ts) or ts <= 0.0:
                 return None
             return ts
 
@@ -7882,7 +7882,8 @@ class DataFetcher:
             ts_second = _coerce_memo_timestamp(second)
             if ts_second is not None:
                 return ts_second, first, False
-            return None, None, False
+            payload = second if second is not None else first
+            return None, payload, True
 
         refresh_stamp: float | None = None
         refresh_df: Any | None = None
@@ -7946,11 +7947,9 @@ class DataFetcher:
             canonical_entry = _DAILY_FETCH_MEMO.get(memo_key)
             if canonical_entry is not None:
                 entry_ts, entry_df, _ = _normalize_memo_entry(canonical_entry)
-                if entry_ts is None:
-                    _DAILY_FETCH_MEMO.pop(memo_key, None)
-                else:
-                    age = now_monotonic - entry_ts
-                    if age <= window_limit:
+                if entry_df is not None:
+                    age = None if entry_ts is None else now_monotonic - entry_ts
+                    if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
                         cached_df = entry_df
                         cached_reason = "memo"
                         refresh_stamp = now_monotonic
@@ -7970,15 +7969,15 @@ class DataFetcher:
                         _DAILY_FETCH_MEMO.pop(memo_key, None)
                         if age > ttl_window:
                             _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                else:
+                    _DAILY_FETCH_MEMO.pop(memo_key, None)
             if cached_df is None:
                 legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
                 if legacy_entry is not None:
                     entry_ts, entry_df, _ = _normalize_memo_entry(legacy_entry)
-                    if entry_ts is None:
-                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
-                    else:
-                        age = now_monotonic - entry_ts
-                        if age <= window_limit:
+                    if entry_df is not None:
+                        age = None if entry_ts is None else now_monotonic - entry_ts
+                        if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
                             cached_df = entry_df
                             cached_reason = "memo"
                             refresh_stamp = now_monotonic
@@ -7997,6 +7996,8 @@ class DataFetcher:
                                 )
                             if age > ttl_window:
                                 _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                    else:
+                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
             if cached_df is None:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
