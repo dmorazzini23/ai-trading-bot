@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 from types import SimpleNamespace
 import os
 import sys
-from pydantic import AliasChoices, Field, SecretStr, computed_field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, SecretStr, computed_field, field_validator
 try:  # Prefer pydantic-settings v2 API
     from pydantic_settings import BaseSettings, SettingsConfigDict
 except Exception:  # pragma: no cover - fallback to pydantic v1 style
@@ -105,7 +105,33 @@ def _propagate_default_feed(feed: str) -> None:
 _HAS_SETTINGS_CONFIG_DICT = SettingsConfigDict is not None and hasattr(BaseSettings, "model_config")
 
 
-class Settings(BaseSettings):
+class _ModelConfigCompatMixin:
+    """Shim to tolerate kwargs passed to :meth:`BaseSettings.__init_subclass__`.
+
+    Some lean environments patch in extremely small ``BaseSettings`` stand-ins
+    that do not accept configuration keywords.  When newer ``pydantic-settings``
+    releases forward ``model_config`` through ``__init_subclass__`` this mixin
+    swallows the keywords, mirrors :class:`pydantic.BaseModel` initialisation,
+    and then defers to ``BaseSettings``.
+    """
+
+    model_config: ClassVar[Any | None] = None
+
+    def __init_subclass__(cls, **config: Any) -> None:  # pragma: no cover - exercised via import
+        model_config = config.pop("model_config", None)
+        if model_config is not None:
+            try:
+                BaseModel.__init_subclass__(**config)
+            except TypeError:
+                BaseModel.__init_subclass__()
+            cls.model_config = model_config  # type: ignore[assignment]
+        try:
+            super().__init_subclass__(**config)
+        except TypeError:
+            super().__init_subclass__()
+
+
+class Settings(_ModelConfigCompatMixin, BaseSettings):
     env: str = Field(default="test", alias="APP_ENV")
     market_calendar: str = Field(default="XNYS", alias="MARKET_CALENDAR")
     data_provider: str = Field(default="mock", alias="DATA_PROVIDER")
