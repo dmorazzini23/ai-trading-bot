@@ -5595,6 +5595,7 @@ def get_minute_df(
     use_finnhub = enable_finnhub and bool(has_finnhub)
     finnhub_disabled_requested = False
     df = None
+    primary_frame_acquired = False
     last_empty_error: EmptyBarsError | None = None
     provider_str, backup_normalized = _resolve_backup_provider()
     backup_label = (backup_normalized or provider_str.lower() or "").strip()
@@ -5691,6 +5692,8 @@ def get_minute_df(
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
+            if _frame_has_rows(df):
+                primary_frame_acquired = True
             if (
                 proactive_switch
                 and feed_to_use != initial_feed
@@ -5831,7 +5834,8 @@ def get_minute_df(
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 df_alt = _post_process(df_alt, symbol=symbol, timeframe="1Min")
                                 df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
-                                if df_alt is not None and not getattr(df_alt, "empty", True):
+                                if _frame_has_rows(df_alt):
+                                    primary_frame_acquired = True
                                     mark_success(symbol, "1Min")
                                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                     _SKIPPED_SYMBOLS.discard(tf_key)
@@ -5874,11 +5878,13 @@ def get_minute_df(
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 df_short = _post_process(df_short, symbol=symbol, timeframe="1Min")
                                 df_short = _verify_minute_continuity(df_short, symbol, backfill=backfill)
-                                if df_short is not None and not getattr(df_short, "empty", True):
+                                if _frame_has_rows(df_short):
+                                    primary_frame_acquired = True
                                     mark_success(symbol, "1Min")
                                     return df_short
                                 df = df_short
-                    df = None
+                    if not primary_frame_acquired:
+                        df = None
                 else:
                     logger.debug(
                         "ALPACA_EMPTY_BARS",
@@ -5889,7 +5895,8 @@ def get_minute_df(
                             "occurrences": cnt,
                         },
                     )
-                    df = None
+                    if not primary_frame_acquired:
+                        df = None
             else:
                 if isinstance(e, ValueError) and "invalid_time_window" in str(e):
                     _log_fetch_minute_empty(provider_feed_label, "invalid_time_window", str(e), symbol=symbol)
@@ -5899,7 +5906,8 @@ def get_minute_df(
                     last_empty_error.__cause__ = e  # type: ignore[attr-defined]
                 else:
                     logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
-                df = None
+                if not primary_frame_acquired:
+                    df = None
     else:
         _warn_missing_alpaca(symbol, "1Min")
         df = None
@@ -5922,7 +5930,7 @@ def get_minute_df(
         if normalized_override != feed_to_use:
             _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
             switch_recorded = True
-    if df is None or getattr(df, "empty", True):
+    if (not primary_frame_acquired) and (df is None or getattr(df, "empty", True)):
         if use_finnhub:
             finnhub_df = None
             try:
@@ -5956,7 +5964,7 @@ def get_minute_df(
             )
         else:
             log_finnhub_disabled(symbol)
-    if df is None or getattr(df, "empty", True):
+    if (not primary_frame_acquired) and (df is None or getattr(df, "empty", True)):
         max_span = _dt.timedelta(days=7)
         total_span = end_dt - start_dt
         if total_span > max_span:
