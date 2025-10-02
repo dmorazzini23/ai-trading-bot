@@ -3849,6 +3849,7 @@ def _fetch_bars(
         yf_interval = _YF_INTERVAL_MAP.get(_interval, _interval.lower())
         return _run_backup_fetch(yf_interval)
     _feed = resolved_feed
+    _state["initial_feed"] = _feed
     adjustment_norm = adjustment.lower() if isinstance(adjustment, str) else adjustment
     validate_adjustment(adjustment_norm)
     _validate_alpaca_params(_start, _end, _interval, _feed, adjustment_norm)
@@ -4161,6 +4162,11 @@ def _fetch_bars(
             _state["defer_success_metric"] = True
             try:
                 result = _req(session, None, headers=headers, timeout=timeout)
+            except EmptyBarsError:
+                if not _state.get("window_has_session", True):
+                    result = pd.DataFrame()
+                else:
+                    raise
             finally:
                 if prev_defer is None:
                     _state.pop("defer_success_metric", None)
@@ -4716,7 +4722,8 @@ def _fetch_bars(
                 )
             logged_attempt = False
             if (
-                not skip_empty_metrics
+                _state.get("window_has_session", True)
+                and not skip_empty_metrics
                 and empty_attempts == 1
                 and should_backoff_first_empty
                 and remaining_retries > 0
@@ -4823,6 +4830,19 @@ def _fetch_bars(
                 fallback_result: Any | None = None
                 fallback_attempted = False
                 fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
+                if not _state.get("window_has_session", True):
+                    filtered: list[str] = []
+                    for candidate in fallback_candidates:
+                        try:
+                            normalized_candidate = _normalize_feed_value(candidate)
+                        except ValueError:
+                            try:
+                                normalized_candidate = str(candidate).strip().lower()
+                            except Exception:
+                                continue
+                        if normalized_candidate in {"iex", "sip"}:
+                            filtered.append(normalized_candidate)
+                    fallback_candidates = filtered
                 sip_allowed = _sip_configured() and not _is_sip_unauthorized()
                 if sip_allowed and "sip" not in fallback_candidates and "sip" not in call_attempts:
                     slots = _fallback_slots_remaining()
@@ -5185,7 +5205,7 @@ def _fetch_bars(
                             "alpaca_empty: symbol="
                             f"{symbol}, timeframe={_interval}, feed={_feed}, reason=market_closed"
                         )
-                    if planned_backoff is not None:
+                    if planned_backoff is not None and _state.get("window_has_session", True):
                         _state["retries"] = attempt
                         _state["delay"] = planned_backoff
                         _state["retry_delay"] = planned_backoff
@@ -5393,9 +5413,38 @@ def _fetch_bars(
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
         return df
     if not _state.get("window_has_session", True):
-        tf_key = (symbol, _interval)
+        tf_norm = _canon_tf(_interval)
+        tf_key = (symbol, tf_norm)
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
         _SKIPPED_SYMBOLS.discard(tf_key)
+        fallback_feed = _state.get("last_fallback_feed")
+        if fallback_feed:
+            try:
+                fallback_norm = _normalize_feed_value(fallback_feed)
+            except ValueError:
+                try:
+                    fallback_norm = str(fallback_feed).strip().lower()
+                except Exception:
+                    fallback_norm = None
+            initial_feed = _state.get("initial_feed", _feed)
+            try:
+                initial_norm = _normalize_feed_value(initial_feed)
+            except ValueError:
+                try:
+                    initial_norm = str(initial_feed).strip().lower()
+                except Exception:
+                    initial_norm = None
+            if (
+                fallback_norm
+                and fallback_norm in {"iex", "sip"}
+                and fallback_norm != (initial_norm or "")
+            ):
+                _FEED_OVERRIDE_BY_TF[tf_key] = fallback_norm
+                _record_override(symbol, fallback_norm, tf_norm)
+                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fallback_norm)
+                log_key = (symbol, tf_norm, fallback_norm)
+                if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
+                    _FEED_SWITCH_HISTORY.append(log_key)
         empty_df = _empty_ohlcv_frame(pd)
         return empty_df if empty_df is not None else pd.DataFrame()
     if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
