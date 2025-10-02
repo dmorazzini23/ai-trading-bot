@@ -273,10 +273,15 @@ def _get_host_map(loop: asyncio.AbstractEventLoop) -> _HostSemaphoreMap:
 def _get_or_create_loop_semaphore(
     loop: asyncio.AbstractEventLoop,
     hostname: str,
+    snapshot: HostLimitSnapshot | None = None,
 ) -> asyncio.Semaphore:
-    cache = _ensure_limit_cache()
-    resolved_limit = cache.limit
-    version = cache.version
+    if snapshot is None:
+        cache = _ensure_limit_cache()
+        resolved_limit = cache.limit
+        version = cache.version
+    else:
+        resolved_limit = snapshot.limit
+        version = snapshot.version
     host_map = _get_host_map(loop)
 
     if host_map:
@@ -307,7 +312,10 @@ def get_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
 
     loop = asyncio.get_running_loop()
     host = _normalize_host(hostname)
-    return _get_or_create_loop_semaphore(loop, host)
+    if _HOST_SEMAPHORES.get(loop):
+        reload_host_limit_if_env_changed()
+    snapshot = get_host_limit_snapshot()
+    return _get_or_create_loop_semaphore(loop, host, snapshot)
 
 
 def refresh_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
