@@ -30,6 +30,7 @@ once. Future requests for the same pair use the working feed immediately, elimin
 
 - `BACKUP_DATA_PROVIDER`: fallback source when the primary feed returns empty data. The default is `yahoo`. Set to `finnhub` to use the Finnhub low-latency candles API when an API key is configured, or to `none` to disable backup queries.
 - When a fallback is used, the bot logs `USING_BACKUP_PROVIDER` with the chosen provider. If disabled or unknown, `BACKUP_PROVIDER_DISABLED` or `UNKNOWN_BACKUP_PROVIDER` is logged.
+- Daily-bar requests automatically fall back to the configured provider when the primary response is missing required OHLCV columns, ensuring cached consumers always receive canonical data.
 
 ## Provider Priority and Fallbacks
 
