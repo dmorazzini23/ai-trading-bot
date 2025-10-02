@@ -723,7 +723,9 @@ def _record_feed_switch(symbol: str, timeframe: str, from_feed: str, to_feed: st
     _record_override(symbol, to_norm, tf_norm)
     attempted = _FEED_FAILOVER_ATTEMPTS.setdefault(key, set())
     attempted.add(to_norm)
-    _FEED_SWITCH_HISTORY.append((symbol, tf_norm, to_norm))
+    entry = (symbol, tf_norm, to_norm)
+    if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != entry:
+        _FEED_SWITCH_HISTORY.append(entry)
     if from_norm == "iex":
         _IEX_EMPTY_COUNTS.pop(key, None)
     log_key = (symbol, tf_norm, to_norm)
@@ -4787,6 +4789,8 @@ def _fetch_bars(
                 fallback_result: Any | None = None
                 fallback_attempted = False
                 fallback_candidates = list(_iter_preferred_feeds(symbol, base_interval, base_feed))
+                if skip_empty_metrics:
+                    fallback_candidates = [feed for feed in fallback_candidates if feed == "sip"]
                 sip_allowed = _sip_configured() and not _is_sip_unauthorized()
                 if sip_allowed and "sip" not in fallback_candidates and "sip" not in call_attempts:
                     slots = _fallback_slots_remaining()
@@ -5122,6 +5126,8 @@ def _fetch_bars(
                     _state["abort_logged"] = True
                     return None
                 _log_retry_limit_warning(payload)
+                if skip_empty_metrics:
+                    return None
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
@@ -5149,7 +5155,7 @@ def _fetch_bars(
                             "alpaca_empty: symbol="
                             f"{symbol}, timeframe={_interval}, feed={_feed}, reason=market_closed"
                         )
-                    if planned_backoff is not None:
+                    if planned_backoff is not None and not skip_empty_metrics:
                         _state["retries"] = attempt
                         _state["delay"] = planned_backoff
                         _state["retry_delay"] = planned_backoff
@@ -5192,6 +5198,8 @@ def _fetch_bars(
                     "reason": reason,
                 }
                 _log_retry_limit_warning(payload)
+                if skip_empty_metrics:
+                    return None
                 raise EmptyBarsError(
                     "alpaca_empty: symbol="
                     f"{symbol}, timeframe={_interval}, feed={_feed}, reason={reason},"
@@ -5362,7 +5370,11 @@ def _fetch_bars(
         _SKIPPED_SYMBOLS.discard(tf_key)
         empty_df = _empty_ohlcv_frame(pd)
         return empty_df if empty_df is not None else pd.DataFrame()
-    if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
+    if (
+        _state.get("window_has_session", True)
+        and _ENABLE_HTTP_FALLBACK
+        and (df is None or getattr(df, "empty", True))
+    ):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
         providers_tried = set(_state["providers"])
@@ -5589,6 +5601,7 @@ def get_minute_df(
     success_marked = False
     fallback_logged = False
     fallback_frame: Any | None = None
+    recovered_from_primary_fallback = False
     enable_finnhub = os.getenv("ENABLE_FINNHUB", "1").lower() not in ("0", "false")
     has_finnhub = os.getenv("FINNHUB_API_KEY") and fh_fetcher is not None and not getattr(fh_fetcher, "is_stub", False)
     use_finnhub = enable_finnhub and bool(has_finnhub)
@@ -5834,9 +5847,13 @@ def get_minute_df(
                                     mark_success(symbol, "1Min")
                                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                                     _SKIPPED_SYMBOLS.discard(tf_key)
-                                    return df_alt
-                                df = df_alt
-                    if end_dt - start_dt > _dt.timedelta(days=1):
+                                    df = df_alt
+                                    success_marked = True
+                                    switch_recorded = True
+                                    recovered_from_primary_fallback = True
+                                else:
+                                    df = df_alt
+                    if (not recovered_from_primary_fallback) and end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(
                             "ALPACA_SHORT_WINDOW_RETRY",
@@ -5877,7 +5894,8 @@ def get_minute_df(
                                     mark_success(symbol, "1Min")
                                     return df_short
                                 df = df_short
-                    df = None
+                    if not recovered_from_primary_fallback:
+                        df = None
                 else:
                     logger.debug(
                         "ALPACA_EMPTY_BARS",
@@ -5888,7 +5906,8 @@ def get_minute_df(
                             "occurrences": cnt,
                         },
                     )
-                    df = None
+                    if not recovered_from_primary_fallback:
+                        df = None
             else:
                 if isinstance(e, ValueError) and "invalid_time_window" in str(e):
                     _log_fetch_minute_empty(provider_feed_label, "invalid_time_window", str(e), symbol=symbol)
@@ -5898,7 +5917,8 @@ def get_minute_df(
                     last_empty_error.__cause__ = e  # type: ignore[attr-defined]
                 else:
                     logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
-                df = None
+                if not recovered_from_primary_fallback:
+                    df = None
     else:
         _warn_missing_alpaca(symbol, "1Min")
         df = None
