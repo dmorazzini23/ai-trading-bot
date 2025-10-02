@@ -7858,39 +7858,46 @@ class DataFetcher:
                 return ts_second, first, False
             return None, None, False
 
+        refresh_stamp: float | None = None
+        refresh_df: Any | None = None
+        refresh_source: str | None = None
+        refresh_provider_key: tuple[str, str, str] | None = None
+
         with cache_lock:
-            refresh_stamp: float | None = None
-            refresh_df: Any | None = None
-            refresh_source: str | None = None
-            refresh_provider_key: tuple[str, str, str] | None = None
             window_limit = min_interval if min_interval > 0 else ttl_window
-            memo_candidates = (
-                ("canonical", _DAILY_FETCH_MEMO.get(memo_key)),
-                ("legacy", _DAILY_FETCH_MEMO.get(legacy_memo_key)),
-            )
-            for kind, entry in memo_candidates:
-                if entry is None:
-                    continue
-                entry_ts, entry_df, _entry_canonical = _normalize_memo_entry(entry)
+            canonical_entry = _DAILY_FETCH_MEMO.get(memo_key)
+            if canonical_entry is not None:
+                entry_ts, entry_df, _ = _normalize_memo_entry(canonical_entry)
                 if entry_ts is None:
-                    if kind == "canonical":
-                        _DAILY_FETCH_MEMO.pop(memo_key, None)
-                    else:
-                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
-                    continue
-                _DAILY_FETCH_MEMO[memo_key] = (entry_ts, entry_df)
-                _DAILY_FETCH_MEMO[legacy_memo_key] = (entry_ts, entry_df)
-                age = now_monotonic - entry_ts
-                if age <= window_limit:
-                    cached_df = entry_df
-                    cached_reason = "memo"
-                    refresh_stamp = now_monotonic
-                    refresh_df = cached_df
-                    refresh_source = "memo"
-                    break
-                if age > ttl_window:
                     _DAILY_FETCH_MEMO.pop(memo_key, None)
-                    _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                else:
+                    age = now_monotonic - entry_ts
+                    if age <= window_limit:
+                        cached_df = entry_df
+                        cached_reason = "memo"
+                        refresh_stamp = now_monotonic
+                        refresh_df = cached_df
+                        refresh_source = "memo"
+                    else:
+                        _DAILY_FETCH_MEMO.pop(memo_key, None)
+                        if age > ttl_window:
+                            _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+            if cached_df is None:
+                legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
+                if legacy_entry is not None:
+                    entry_ts, entry_df, _ = _normalize_memo_entry(legacy_entry)
+                    if entry_ts is None:
+                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                    else:
+                        age = now_monotonic - entry_ts
+                        if age <= window_limit:
+                            cached_df = entry_df
+                            cached_reason = "memo"
+                            refresh_stamp = now_monotonic
+                            refresh_df = cached_df
+                            refresh_source = "memo"
+                        elif age > ttl_window:
+                            _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
             if cached_df is None:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
@@ -7921,18 +7928,22 @@ class DataFetcher:
                         refresh_provider_key = provider_key
                     else:
                         _DAILY_PROVIDER_SESSION_CACHE.pop(provider_key, None)
-            if refresh_stamp is not None:
-                _DAILY_FETCH_MEMO[memo_key] = (refresh_stamp, refresh_df)
-                _DAILY_FETCH_MEMO[legacy_memo_key] = (refresh_stamp, refresh_df)
-                if refresh_source in {"cache", "provider_session"}:
-                    self._daily_cache[symbol] = (fetch_date, refresh_df)
-                if refresh_source == "provider_session" and refresh_provider_key is not None:
-                    _DAILY_PROVIDER_SESSION_CACHE[refresh_provider_key] = (
-                        refresh_df,
-                        refresh_stamp,
-                    )
 
         if cached_df is not None and (cached_reason or min_interval <= 0):
+            if refresh_stamp is not None:
+                with cache_lock:
+                    _DAILY_FETCH_MEMO[memo_key] = (refresh_stamp, refresh_df)
+                    _DAILY_FETCH_MEMO[legacy_memo_key] = (refresh_stamp, refresh_df)
+                    if refresh_source in {"cache", "provider_session"}:
+                        self._daily_cache[symbol] = (fetch_date, refresh_df)
+                    if (
+                        refresh_source == "provider_session"
+                        and refresh_provider_key is not None
+                    ):
+                        _DAILY_PROVIDER_SESSION_CACHE[refresh_provider_key] = (
+                            refresh_df,
+                            refresh_stamp,
+                        )
             if daily_cache_hit:
                 try:
                     daily_cache_hit.inc()
