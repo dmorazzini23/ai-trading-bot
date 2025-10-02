@@ -1237,6 +1237,8 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "timestamp_iex",
         "iex_timestamp",
         "iex_time",
+        "regular_market_time",
+        "regularmarkettime",
     ),
     "open": (
         "open",
@@ -1270,6 +1272,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "auction_open_price",
         "auction_opening_price",
         "open_auction_price",
+        "regular_market_open",
+        "regularmarketopen",
+        "regular_session_open",
+        "regularsessionopen",
     ),
     "high": (
         "high",
@@ -1294,6 +1300,12 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iexhigh",
         "auction_high_price",
         "highest_auction_price",
+        "regular_market_high",
+        "regularmarkethigh",
+        "regular_market_day_high",
+        "regularmarketdayhigh",
+        "regular_session_high",
+        "regularsessionhigh",
     ),
     "low": (
         "low",
@@ -1318,6 +1330,12 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "iexlow",
         "auction_low_price",
         "lowest_auction_price",
+        "regular_market_low",
+        "regularmarketlow",
+        "regular_market_day_low",
+        "regularmarketdaylow",
+        "regular_session_low",
+        "regularsessionlow",
     ),
     "close": (
         "close",
@@ -1357,6 +1375,16 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "auction_close_price",
         "auction_closing_price",
         "close_auction_price",
+        "regular_market_close",
+        "regularmarketclose",
+        "regular_market_price",
+        "regularmarketprice",
+        "regular_market_previous_close",
+        "regularmarketpreviousclose",
+        "regular_market_last_price",
+        "regularmarketlastprice",
+        "regular_market_last_close",
+        "regularmarketlastclose",
     ),
     "adj_close": (
         "adj close",
@@ -1393,6 +1421,10 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "totalvolumeiex",
         "iextotalvolume",
         "auction_volume",
+        "regular_market_volume",
+        "regularmarketvolume",
+        "regular_session_volume",
+        "regularsessionvolume",
     ),
 }
 
@@ -2414,12 +2446,69 @@ def normalize_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
     # tokens; this legacy map keeps the manual fallback logic untouched.
 
     alias_groups = {
-        "timestamp": {"timestamp", "time", "t", "ts"},
-        "open": {"open", "o"},
-        "high": {"high", "h"},
-        "low": {"low", "l"},
-        "close": {"close", "c", "price"},
-        "volume": {"volume", "v", "totalvolume", "volume_total", "total_volume", "volumetotal"},
+        "timestamp": {
+            "timestamp",
+            "time",
+            "t",
+            "ts",
+            "regular_market_time",
+            "regularmarkettime",
+        },
+        "open": {
+            "open",
+            "o",
+            "regular_market_open",
+            "regularmarketopen",
+            "regular_session_open",
+            "regularsessionopen",
+        },
+        "high": {
+            "high",
+            "h",
+            "regular_market_high",
+            "regularmarkethigh",
+            "regular_market_day_high",
+            "regularmarketdayhigh",
+            "regular_session_high",
+            "regularsessionhigh",
+        },
+        "low": {
+            "low",
+            "l",
+            "regular_market_low",
+            "regularmarketlow",
+            "regular_market_day_low",
+            "regularmarketdaylow",
+            "regular_session_low",
+            "regularsessionlow",
+        },
+        "close": {
+            "close",
+            "c",
+            "price",
+            "regular_market_close",
+            "regularmarketclose",
+            "regular_market_price",
+            "regularmarketprice",
+            "regular_market_previous_close",
+            "regularmarketpreviousclose",
+            "regular_market_last_price",
+            "regularmarketlastprice",
+            "regular_market_last_close",
+            "regularmarketlastclose",
+        },
+        "volume": {
+            "volume",
+            "v",
+            "totalvolume",
+            "volume_total",
+            "total_volume",
+            "volumetotal",
+            "regular_market_volume",
+            "regularmarketvolume",
+            "regular_session_volume",
+            "regularsessionvolume",
+        },
     }
     for canonical, aliases in alias_groups.items():
         for alias in list(aliases):
@@ -2512,7 +2601,83 @@ def _flatten_and_normalize_ohlcv(
                     df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
         except (AttributeError, IndexError, TypeError):
             df.columns = ["_".join([str(x) for x in tup if x is not None]) for tup in df.columns]
+
+    try:
+        rename_map = _alias_rename_map(df.columns)
+    except Exception:  # pragma: no cover - defensive
+        rename_map = {}
+    if rename_map:
+        try:
+            df = df.rename(columns=rename_map)
+        except Exception:  # pragma: no cover - defensive rename fallback
+            pass
     normalize_ohlcv_columns(df)
+
+    yahoo_schema_aliases: dict[str, tuple[str, ...]] = {
+        "open": (
+            "regular_market_open",
+            "regularmarketopen",
+            "regular_session_open",
+            "regularsessionopen",
+        ),
+        "high": (
+            "regular_market_high",
+            "regularmarkethigh",
+            "regular_market_day_high",
+            "regularmarketdayhigh",
+            "regular_session_high",
+            "regularsessionhigh",
+        ),
+        "low": (
+            "regular_market_low",
+            "regularmarketlow",
+            "regular_market_day_low",
+            "regularmarketdaylow",
+            "regular_session_low",
+            "regularsessionlow",
+        ),
+        "close": (
+            "regular_market_price",
+            "regularmarketprice",
+            "regular_market_close",
+            "regularmarketclose",
+            "regular_market_last_price",
+            "regularmarketlastprice",
+            "regular_market_last_close",
+            "regularmarketlastclose",
+            "regular_market_previous_close",
+            "regularmarketpreviousclose",
+        ),
+        "volume": (
+            "regular_market_volume",
+            "regularmarketvolume",
+            "regular_session_volume",
+            "regularsessionvolume",
+        ),
+    }
+
+    def _assign_from_alias(target: str, alias: str) -> bool:
+        if alias in getattr(df, "columns", []):
+            try:
+                df[target] = df[alias]
+            except Exception:  # pragma: no cover - defensive assignment
+                return False
+            return True
+        compact = alias.replace("_", "")
+        if compact and compact in getattr(df, "columns", []):
+            try:
+                df[target] = df[compact]
+            except Exception:  # pragma: no cover - defensive assignment
+                return False
+            return True
+        return False
+
+    for canonical, aliases in yahoo_schema_aliases.items():
+        if canonical in getattr(df, "columns", []):
+            continue
+        for alias in aliases:
+            if _assign_from_alias(canonical, alias):
+                break
 
     if "close" not in getattr(df, "columns", []):
         for candidate in (

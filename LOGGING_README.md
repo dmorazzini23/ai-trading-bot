@@ -77,7 +77,12 @@ Daily price requests now log their parameters and outcome:
   raw columns show Alpaca IEX auction fields such as `openingAuctionPrice`,
   `highestAuctionPrice`, `lowestAuctionPrice`, or `closingAuctionPrice`, the
   fetcher now normalizes them automatically—no manual remediation is required
-  once this build is deployed.
+  once this build is deployed. Yahoo Finance fallback payloads that only expose
+  `regularMarket*` fields (for example `regularMarketOpen`,
+  `regularMarketDayHigh`, `regularMarketDayLow`, `regularMarketPrice`, and
+  `regularMarketVolume`) are also normalized into canonical OHLCV columns in
+  this release, preventing repeated `OHLCV_COLUMNS_MISSING` alerts during a
+  switchover to the Yahoo backup provider.
 
 #### Backup Provider Usage
 When the primary data source fails and the backup provider serves a window,
