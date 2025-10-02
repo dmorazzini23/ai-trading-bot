@@ -184,6 +184,12 @@ def test_missing_columns_failure_does_not_throttle(monkeypatch, caplog):
 
     _patch_minimal_runtime(monkeypatch)
     monkeypatch.setattr(be, "datetime", _FixedDateTime)
+    monkeypatch.setattr(be, "audit_positions", lambda _rt: None)
+    monkeypatch.setattr(
+        be,
+        "_prepare_run",
+        lambda _rt, _state, _tickers=None: (0.0, True, []),
+    )
 
     runtime = _stub_runtime(monkeypatch)
     state = be.BotState()
@@ -213,3 +219,36 @@ def test_missing_columns_failure_does_not_throttle(monkeypatch, caplog):
     assert not any(
         record.message == "RUN_ALL_TRADES_SKIPPED_RECENT" for record in caplog.records
     )
+
+
+def test_warmup_resets_last_run_timestamp(monkeypatch, caplog):
+    """Warm-up should not cause the next cycle to be throttled."""
+
+    _patch_minimal_runtime(monkeypatch)
+    monkeypatch.setattr(be, "datetime", _FixedDateTime)
+    monkeypatch.setattr(be, "audit_positions", lambda _rt: None)
+    monkeypatch.setattr(
+        be,
+        "_prepare_run",
+        lambda _rt, _state, _tickers=None: (0.0, True, []),
+    )
+
+    runtime = _stub_runtime(monkeypatch)
+    state = be.BotState()
+
+    be.run_all_trades_worker(state, runtime)
+    assert state.last_run_at == _FixedDateTime.now(UTC)
+
+    from ai_trading import main as main_mod
+
+    monkeypatch.setattr(main_mod, "_STATE_CACHE", state)
+
+    main_mod._reset_warmup_cooldown_timestamp()
+
+    assert getattr(state, "last_run_at", None) is None
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        be.run_all_trades_worker(state, runtime)
+
+    assert "RUN_ALL_TRADES_SKIPPED_RECENT" not in caplog.text

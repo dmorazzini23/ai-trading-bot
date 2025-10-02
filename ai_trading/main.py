@@ -166,6 +166,20 @@ def _resolve_cached_context(
     return state, runtime, reused
 
 
+def _reset_warmup_cooldown_timestamp() -> None:
+    """Clear the cached state's cooldown after a warm-up cycle."""
+
+    with _RUNTIME_CACHE_LOCK:
+        state = _STATE_CACHE
+        if state is None:
+            return
+        try:
+            if hasattr(state, "last_run_at"):
+                setattr(state, "last_run_at", None)
+        except Exception:
+            return
+
+
 def _is_truthy_env(name: str) -> bool:
     """Return ``True`` when environment variable ``name`` is truthy."""
 
@@ -899,6 +913,7 @@ def run_bot(*_a, **_k) -> int:
         if not _TRADE_LOG_INITIALIZED:
             ensure_trade_log_path()
         run_cycle()
+        _reset_warmup_cooldown_timestamp()
         return 0
     except (ValueError, TypeError, RuntimeError) as e:
         logger.error("Bot startup failed: %s", e, exc_info=True)
@@ -1344,6 +1359,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(1) from e
     logger.info("Warm-up run_cycle completed")
+    _reset_warmup_cooldown_timestamp()
     api_ready = threading.Event()
     api_error = threading.Event()
     t = Thread(target=start_api_with_signal, args=(api_ready, api_error), daemon=True)
