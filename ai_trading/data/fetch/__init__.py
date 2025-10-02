@@ -1276,6 +1276,17 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "regularmarketopen",
         "regular_session_open",
         "regularsessionopen",
+        "minute_open",
+        "minute_open_price",
+        "minute_bar_open",
+        "minute_bar_open_price",
+        "minutebaropen",
+        "daily_open",
+        "daily_open_price",
+        "daily_bar_open",
+        "dailybaropen",
+        "bar_open",
+        "bar_open_price",
     ),
     "high": (
         "high",
@@ -1306,6 +1317,17 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "regularmarketdayhigh",
         "regular_session_high",
         "regularsessionhigh",
+        "minute_high",
+        "minute_high_price",
+        "minute_bar_high",
+        "minute_bar_high_price",
+        "minutebarhigh",
+        "daily_high",
+        "daily_high_price",
+        "daily_bar_high",
+        "dailybarhigh",
+        "bar_high",
+        "bar_high_price",
     ),
     "low": (
         "low",
@@ -1336,6 +1358,17 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "regularmarketdaylow",
         "regular_session_low",
         "regularsessionlow",
+        "minute_low",
+        "minute_low_price",
+        "minute_bar_low",
+        "minute_bar_low_price",
+        "minutebarlow",
+        "daily_low",
+        "daily_low_price",
+        "daily_bar_low",
+        "dailybarlow",
+        "bar_low",
+        "bar_low_price",
     ),
     "close": (
         "close",
@@ -1385,6 +1418,17 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "regularmarketlastprice",
         "regular_market_last_close",
         "regularmarketlastclose",
+        "minute_close",
+        "minute_close_price",
+        "minute_bar_close",
+        "minute_bar_close_price",
+        "minutebarclose",
+        "daily_close",
+        "daily_close_price",
+        "daily_bar_close",
+        "dailybarclose",
+        "bar_close",
+        "bar_close_price",
     ),
     "adj_close": (
         "adj close",
@@ -1425,6 +1469,13 @@ _OHLCV_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "regularmarketvolume",
         "regular_session_volume",
         "regularsessionvolume",
+        "minute_volume",
+        "minute_bar_volume",
+        "minutebarvolume",
+        "daily_volume",
+        "daily_bar_volume",
+        "dailybarvolume",
+        "bar_volume",
     ),
 }
 
@@ -1519,6 +1570,74 @@ def _heuristic_alias_match(tokens: Iterable[str], normalized: str) -> str | None
     return None
 
 
+def _expand_nested_ohlcv_columns(df: Any) -> None:
+    """Populate canonical OHLCV columns from nested mapping payloads."""
+
+    if df is None:
+        return
+
+    try:
+        columns = list(getattr(df, "columns", []))
+    except Exception:  # pragma: no cover - defensive
+        return
+
+    if not columns:
+        return
+
+    for column in columns:
+        try:
+            series = df[column]
+        except Exception:  # pragma: no cover - defensive access
+            continue
+
+        sample: Mapping[str, Any] | None = None
+        try:
+            iterator = getattr(series, "items", None)
+            values_iterable: Iterable[Any]
+            if callable(iterator):
+                values_iterable = (value for _, value in series.items())
+            else:
+                values_iterable = getattr(series, "values", series)
+        except Exception:  # pragma: no cover - defensive iteration
+            values_iterable = []
+
+        for value in values_iterable:
+            if isinstance(value, Mapping) and value:
+                sample = value
+                break
+
+        if sample is None:
+            continue
+
+        nested_map = _alias_rename_map(sample.keys())
+        if not nested_map:
+            continue
+
+        for alias_key, canonical in nested_map.items():
+            if canonical not in {"timestamp", "open", "high", "low", "close", "volume"}:
+                continue
+            if canonical in getattr(df, "columns", []):
+                continue
+
+            extracted: list[Any] = []
+            for value in series:
+                if isinstance(value, Mapping):
+                    extracted.append(value.get(alias_key))
+                else:
+                    extracted.append(None)
+
+            if not any(item is not None for item in extracted):
+                continue
+
+            try:
+                df[canonical] = extracted
+            except Exception:  # pragma: no cover - fallback to pandas assignment
+                try:
+                    df.loc[:, canonical] = extracted
+                except Exception:
+                    continue
+
+
 def _alias_rename_map(columns: Iterable[Any]) -> dict[Any, str]:
     """Return a mapping of columns that should be renamed to canonical names."""
 
@@ -1591,6 +1710,7 @@ def ensure_ohlcv_schema(
 
     work_df = df.copy()
     _attach_payload_metadata(work_df, provider=source, timeframe=frequency)
+    _expand_nested_ohlcv_columns(work_df)
 
     rename_map = _alias_rename_map(work_df.columns)
     # `_alias_rename_map` now examines tuple components and underscore tokens so
