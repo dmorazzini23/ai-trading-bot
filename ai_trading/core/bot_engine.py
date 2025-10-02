@@ -8184,7 +8184,7 @@ class DataFetcher:
             if original_name is not None:
                 idx = idx.rename(original_name)
             else:
-                idx = idx.rename(None)
+                idx = idx.rename("timestamp")
             working.index = idx
             return working
 
