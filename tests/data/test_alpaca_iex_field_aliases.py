@@ -365,6 +365,52 @@ def test_ensure_ohlcv_schema_handles_nested_bar_payload(caplog: pytest.LogCaptur
     assert pytest.approx(first["volume"]) == minute_bar["volume"]
 
 
+def test_ensure_ohlcv_schema_handles_official_nested_payload(caplog: pytest.LogCaptureFixture):
+    payload = [
+        {
+            "t": "2024-01-02T09:30:00Z",
+            "latestBar": {
+                "official": {
+                    "officialOpenPrice": 188.45,
+                    "officialHighPrice": 189.12,
+                    "officialLowPrice": 187.3,
+                    "officialClosePrice": 188.77,
+                    "officialVolume": 1_234_567,
+                }
+            },
+        }
+    ]
+    frame = pd.DataFrame(payload)
+    fetch._attach_payload_metadata(
+        frame,
+        payload=payload,
+        provider="alpaca",
+        feed="iex",
+        timeframe="1Min",
+        symbol="AAPL",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        normalized = fetch.ensure_ohlcv_schema(frame, source="alpaca_iex", frequency="1Min")
+
+    assert list(normalized.columns[:6]) == [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+    assert not any(record.message == "OHLCV_COLUMNS_MISSING" for record in caplog.records)
+    first = normalized.iloc[0]
+    official = payload[0]["latestBar"]["official"]
+    assert pytest.approx(first["open"]) == official["officialOpenPrice"]
+    assert pytest.approx(first["high"]) == official["officialHighPrice"]
+    assert pytest.approx(first["low"]) == official["officialLowPrice"]
+    assert pytest.approx(first["close"]) == official["officialClosePrice"]
+    assert pytest.approx(first["volume"]) == official["officialVolume"]
+
+
 def test_ensure_ohlcv_schema_handles_compact_payload():
     payload = [
         {"t": "2024-01-02T09:30:00Z", "o": 188.45, "h": 189.12, "l": 187.3, "c": 188.77, "v": 1_234_567}
