@@ -26,12 +26,26 @@ def test_invalid_adjustment_raises():
         fetch._fetch_bars("AAPL", start, end, "1Min", adjustment="bad")
 
 
-def test_window_without_trading_session_returns_empty():
+def test_window_without_trading_session_returns_empty(monkeypatch):
     start = datetime(2024, 1, 6, tzinfo=UTC)
     end = start + timedelta(days=1)
+
+    class _Session:
+        def __init__(self) -> None:
+            self.called = False
+
+        def get(self, *args, **kwargs):  # pragma: no cover - should not run
+            self.called = True
+            raise AssertionError("network request should not be made")
+
+    session = _Session()
+    monkeypatch.setattr(fetch, "_HTTP_SESSION", session, raising=False)
+
     out = fetch._fetch_bars("AAPL", start, end, "1Min")
+    expected = fetch._empty_ohlcv_frame(pd)
     assert isinstance(out, pd.DataFrame)
-    pd.testing.assert_frame_equal(out, pd.DataFrame())
+    pd.testing.assert_frame_equal(out, expected if expected is not None else pd.DataFrame())
+    assert session.called is False
 
 
 def test_missing_session_raises(monkeypatch):

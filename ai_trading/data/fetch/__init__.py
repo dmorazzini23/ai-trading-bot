@@ -3887,6 +3887,33 @@ def _fetch_bars(
             _state["preferred_feeds_snapshot"] = tuple(_preferred_feed_failover())
         except Exception:
             _state["preferred_feeds_snapshot"] = ()
+        should_probe_sip = False
+        preferred_snapshot = _state.get("preferred_feeds_snapshot") or ()
+        preferred_norm: set[str] = set()
+        for candidate in preferred_snapshot:
+            try:
+                normalized = _normalize_feed_value(candidate)
+            except Exception:
+                continue
+            preferred_norm.add(normalized)
+        if explicit_feed_request:
+            try:
+                requested_feed = _normalize_feed_value(_feed)
+            except Exception:
+                try:
+                    requested_feed = str(_feed).strip().lower()
+                except Exception:
+                    requested_feed = ""
+            should_probe_sip = bool(
+                requested_feed
+                and (
+                    requested_feed == "sip"
+                    or (requested_feed == "iex" and "sip" in preferred_norm)
+                )
+            )
+        if not should_probe_sip:
+            empty_df = _empty_ohlcv_frame(pd)
+            return empty_df if empty_df is not None else pd.DataFrame()
     else:
         _state["skip_empty_metrics"] = False
     if not _has_alpaca_keys():
