@@ -50,12 +50,7 @@ def create_app():
         app.config["_ENV_ERR"] = str(e)
 
     def _json_response(data: dict, *, status: int = 200, fallback: dict | None = None) -> Any:
-        """Return a JSON ``Response`` with a resilient fallback.
-
-        When ``jsonify`` is unavailable or raises, fall back to ``json.dumps`` while
-        preserving the canonical payload structure so callers consistently receive
-        ``{"ok": bool, "alpaca": {...}}`` along with any error context.
-        """
+        """Return a JSON ``Response`` with a resilient fallback."""
 
         def _normalise_payload(raw: dict | None) -> dict:
             """Return a shallow copy with defensive defaults."""
@@ -82,50 +77,42 @@ def create_app():
             )
             return payload
 
-        canonical_payload = _ensure_core_fields(_normalise_payload(data))
+        def _merge_payloads(primary: dict, secondary: dict) -> dict:
+            """Merge fallback data into the canonical payload."""
 
-        fallback_payload = dict(canonical_payload)
-        fallback_payload["alpaca"] = dict(canonical_payload["alpaca"])
+            merged = _ensure_core_fields(dict(secondary)) if secondary else _ensure_core_fields({})
+            primary = _ensure_core_fields(dict(primary))
 
-        if fallback is not None:
-            fallback_source = _normalise_payload(fallback)
-            if "ok" in fallback_source:
-                fallback_payload["ok"] = fallback_source["ok"]
-            fallback_payload["alpaca"].update(fallback_source.get("alpaca", {}))
-            for key, value in fallback_source.items():
-                if key in {"ok", "alpaca"}:
+            merged_alpaca = dict(merged.get("alpaca", {}))
+            primary_alpaca = dict(primary.get("alpaca", {}))
+            merged_alpaca.update(primary_alpaca)
+            merged["alpaca"] = merged_alpaca
+
+            for key, value in primary.items():
+                if key == "alpaca":
                     continue
-                fallback_payload[key] = value
+                if key == "ok":
+                    merged["ok"] = bool(value)
+                else:
+                    merged[key] = value
 
-        fallback_payload = _ensure_core_fields(fallback_payload)
+            return _ensure_core_fields(merged)
 
-        # Merge any caller-provided fallback data back into the canonical payload so
-        # the final body always exposes the required structure.
-        response_payload = dict(canonical_payload)
-        response_payload.setdefault("alpaca", {})
-        response_payload["alpaca"] = dict(response_payload.get("alpaca", {}))
+        canonical_payload = _ensure_core_fields(_normalise_payload(data))
+        fallback_payload = (
+            _ensure_core_fields(_normalise_payload(fallback))
+            if fallback is not None
+            else {}
+        )
 
-        fallback_alpaca_section = fallback_payload.get("alpaca", {})
-        if isinstance(fallback_alpaca_section, dict):
-            response_payload["alpaca"].update(fallback_alpaca_section)
-
-        if "ok" in fallback_payload:
-            response_payload["ok"] = fallback_payload["ok"]
-
-        for key, value in fallback_payload.items():
-            if key in {"ok", "alpaca"}:
-                continue
-            response_payload[key] = value
-
-        final_payload = _ensure_core_fields(response_payload)
+        response_payload = _merge_payloads(canonical_payload, fallback_payload)
 
         func = globals().get("jsonify")
         fallback_used = False
         fallback_reasons: list[str] = []
         if callable(func):
             try:
-                canonical_payload = _ensure_core_fields(dict(canonical_payload))
-                response = func(canonical_payload)
+                response = func(_ensure_core_fields(dict(response_payload)))
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
                 fallback_used = True
@@ -149,13 +136,15 @@ def create_app():
                     fallback_reasons.append(import_reason)
                 fallback_reasons.append("ImportError")
 
+        final_payload = _ensure_core_fields(dict(response_payload))
+
         if fallback_used:
             final_payload["ok"] = False
 
         message_candidates: list[str] = []
-        existing_error = final_payload.get("error")
+        existing_error = response_payload.get("error")
         if existing_error is None:
-            existing_error = canonical_payload.get("error")
+            existing_error = fallback_payload.get("error") or canonical_payload.get("error")
         existing_error_str: str | None = None
         if isinstance(existing_error, str):
             existing_error_str = existing_error.strip() or None
@@ -322,6 +311,14 @@ def create_app():
             err_msg = last_error
         if err_msg:
             fallback_payload["error"] = err_msg
+
+        # Ensure the canonical payload mirrors the fallback schema so Flask-based
+        # responses and dictionary fallbacks share identical structures.
+        payload["alpaca"] = dict(fallback_payload.get("alpaca", {}))
+        for key, value in fallback_payload.items():
+            if key == "alpaca":
+                continue
+            payload[key] = value
 
         return _json_response(payload, fallback=fallback_payload)
 
