@@ -3861,6 +3861,9 @@ def _fetch_bars(
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
+        if not _state.get("empty_metric_emitted"):
+            _incr("data.fetch.empty", value=1.0, tags=_tags())
+            _state["empty_metric_emitted"] = True
         logger.info(
             "DATA_WINDOW_NO_SESSION",
             extra=_norm_extra(
