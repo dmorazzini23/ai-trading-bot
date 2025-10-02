@@ -3862,6 +3862,8 @@ def _fetch_bars(
     else:
         window_has_session = bool(window_has_session)
     _state["window_has_session"] = window_has_session
+    should_probe_sip = False
+    short_circuit_empty = False
     if not window_has_session:
         tf_key = (symbol, _interval)
         _SKIPPED_SYMBOLS.discard(tf_key)
@@ -3912,8 +3914,7 @@ def _fetch_bars(
                 )
             )
         if not should_probe_sip:
-            empty_df = _empty_ohlcv_frame(pd)
-            return empty_df if empty_df is not None else pd.DataFrame()
+            short_circuit_empty = True
     else:
         _state["skip_empty_metrics"] = False
     if not _has_alpaca_keys():
@@ -3939,8 +3940,18 @@ def _fetch_bars(
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         fb_int = interval_map.get(_interval)
         if fb_int:
-            return _run_backup_fetch(fb_int)
+            fallback_df = _run_backup_fetch(fb_int)
+            if short_circuit_empty:
+                empty_df = _empty_ohlcv_frame(pd)
+                return empty_df if empty_df is not None else pd.DataFrame()
+            return fallback_df
+        if short_circuit_empty:
+            empty_df = _empty_ohlcv_frame(pd)
+            return empty_df if empty_df is not None else pd.DataFrame()
         return pd.DataFrame()
+    if short_circuit_empty:
+        empty_df = _empty_ohlcv_frame(pd)
+        return empty_df if empty_df is not None else pd.DataFrame()
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
@@ -3978,7 +3989,14 @@ def _fetch_bars(
             interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
             fb_int = interval_map.get(_interval)
             if fb_int:
-                return _run_backup_fetch(fb_int)
+                fallback_df = _run_backup_fetch(fb_int)
+                if short_circuit_empty:
+                    empty_df = _empty_ohlcv_frame(pd)
+                    return empty_df if empty_df is not None else pd.DataFrame()
+                return fallback_df
+            if short_circuit_empty:
+                empty_df = _empty_ohlcv_frame(pd)
+                return empty_df if empty_df is not None else pd.DataFrame()
         else:
             _alpaca_disabled_until = None
             _ALPACA_DISABLED_ALERTED = False
@@ -5876,6 +5894,15 @@ def get_minute_df(
                                     _SKIPPED_SYMBOLS.discard(tf_key)
                                     return df_alt
                                 df = df_alt
+                            else:
+                                df = df_alt
+                                if (
+                                    df_alt is not None
+                                    and getattr(df_alt, "empty", True)
+                                    and not switch_recorded
+                                ):
+                                    _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
+                                    switch_recorded = True
                     if end_dt - start_dt > _dt.timedelta(days=1):
                         short_start = end_dt - _dt.timedelta(days=1)
                         logger.debug(

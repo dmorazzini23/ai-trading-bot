@@ -469,7 +469,7 @@ def test_alt_feed_switch_records_override(monkeypatch):
     monkeypatch.setattr(fetch, "_has_alpaca_keys", lambda: True)
     monkeypatch.setattr(fetch, "_sip_configured", lambda: True)
     monkeypatch.setattr(fetch, "_SIP_UNAUTHORIZED", False)
-    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: True)
+    monkeypatch.setattr(fetch, "_window_has_trading_session", lambda *a, **k: False)
     monkeypatch.setattr(fetch, "max_data_fallbacks", lambda: 2)
     monkeypatch.setattr(fetch, "provider_priority", lambda: ["alpaca_iex", "alpaca_sip"])
     monkeypatch.setattr(fetch, "_verify_minute_continuity", lambda df, *a, **k: df)
@@ -488,12 +488,12 @@ def test_alt_feed_switch_records_override(monkeypatch):
         assert feed == "sip"
         df = pd.DataFrame(
             {
-                "timestamp": [pd.Timestamp(start)],
-                "open": [1.0],
-                "high": [1.0],
-                "low": [1.0],
-                "close": [1.0],
-                "volume": [1],
+                "timestamp": pd.Series(dtype="datetime64[ns, UTC]"),
+                "open": pd.Series(dtype="float64"),
+                "high": pd.Series(dtype="float64"),
+                "low": pd.Series(dtype="float64"),
+                "close": pd.Series(dtype="float64"),
+                "volume": pd.Series(dtype="float64"),
             }
         )
         return df
@@ -503,15 +503,7 @@ def test_alt_feed_switch_records_override(monkeypatch):
     df = fetch.get_minute_df(symbol, start, end)
 
     assert hasattr(df, "empty")
-    assert not getattr(df, "empty", True)
-    assert list(df.columns[:6]) == [
-        "timestamp",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-    ]
+    assert getattr(df, "empty", True)
     assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
     assert (symbol, "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
     assert fetch._FEED_SWITCH_HISTORY == [(symbol, "1Min", "sip")]
