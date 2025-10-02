@@ -13,6 +13,8 @@ pd = load_pandas()
 
 REQUIRED = ("open", "high", "low", "close", "volume")
 
+_PROVIDER_SUFFIXES = ("iex", "sip")
+
 
 _ACRONYM_TOKEN_PATTERN = re.compile(
     r"[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[0-9]+"
@@ -43,6 +45,23 @@ def _normalize_column_name(value: object) -> str:
     normalized = "_".join(tokens).lower()
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
+
+
+def _remap_provider_suffix_columns(frame: "_pd.DataFrame") -> "_pd.DataFrame":
+    rename_map: dict[str, str] = {}
+    for column in frame.columns:
+        if not isinstance(column, str):
+            continue
+        for suffix in _PROVIDER_SUFFIXES:
+            token = f"_{suffix}"
+            if column.endswith(token):
+                base = column[: -len(token)]
+                if base and base in REQUIRED:
+                    rename_map[column] = base
+                break
+    if rename_map:
+        frame = frame.rename(columns=rename_map)
+    return frame
 
 _COLUMN_CANONICAL_MAP = {
     "t": "timestamp",
@@ -171,6 +190,8 @@ def normalize_ohlcv_df(
 
     if _COLUMN_CANONICAL_MAP:
         frame = frame.rename(columns=_COLUMN_CANONICAL_MAP)
+
+    frame = _remap_provider_suffix_columns(frame)
 
     frame = frame.loc[:, ~pd.Index(frame.columns).duplicated()]
 
