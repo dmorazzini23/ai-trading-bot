@@ -1,95 +1,79 @@
 # AGENTS: Operating Contract & Playbook
 
-**Last updated:** 2025-08-25
-**Runtime targets:** Ubuntu 24.04 • Python 3.12 • zoneinfo-only • Flask on :9001
+**Last updated:** 2025-10-02  
+**Runtime targets:** Ubuntu 24.04 • Python 3.12.3 • zoneinfo-only • API on :9001 • Health server on `HEALTHCHECK_PORT` (default :8081)
 
-This document defines what automated agents (including LLM coding agents) may do in this repository and how they must do it.
+This document is the authoritative playbook for Codex-style editing in this repository. If reality drifts, update this file immediately.
 
-## 1) Non-negotiable invariants
-- **Python:** 3.12 (`requires-python=">=3.12"`). Tooling targets **py312**.
-- **Timezones:** Use stdlib **zoneinfo**; never depend on `pytz`.
-- **Service:** `ai-trading.service` runs a Flask API on **0.0.0.0:9001**.
-- **Health:** `GET /healthz` must always return JSON and never 500.
-- **Config access:** via `ai_trading.config.management`:
-  - `get_env(key, default=None, cast=None, required=False)`
-  - `reload_env(path=None, override=True)` (use sparingly, not in hot paths)
-  - `SEED` (default **42**; may be overridden in `.env`)
-- **Single Alpaca SDK in production:** prefer `alpaca-py`. Do **not** mix with legacy `alpaca-trade-api` in prod.
-- Alpaca SDK imports are deferred; runtime preflight ensures `alpaca-py` is installed before trading begins.
-- **No production shims:** Do **not** introduce or rely on `optional_import(...)` in runtime code paths.
+---
 
-## 2) Performance & resource guardrails
-- Target machine: 2 GB RAM / 1 vCPU. Keep startup lean.
-- Gate heavy imports (`pandas`, `sklearn`, `torch`, `matplotlib`, `gymnasium`) inside functions unless needed at startup.
-- Never write large artifacts to disk by default. No diagnostics tarballs in CI or systemd units.
+## 1. Runtime Invariants
+- **Python:** 3.12 (`requires-python=">=3.12"`). Target `cp312` wheels only.
+- **Timezones:** Use stdlib **zoneinfo** exclusively; `pytz` is forbidden.
+- **Service topology:**
+  - Flask **API on :9001** (0.0.0.0:9001).
+  - Dedicated **Health server on `HEALTHCHECK_PORT`** (default 8081) serving `GET /healthz` with JSON and HTTP 200 when healthy.
+  - If `HEALTHCHECK_PORT == API_PORT`, the API may serve health endpoints on the shared port; otherwise run health in its own thread/process.
+- **Configuration access:** via `ai_trading.config.management` only (`get_env`, `reload_env`, `SEED`). No ad-hoc `os.environ` walks in runtime code.
+- **SDK policy:**
+  - Runtime: **`alpaca-trade-api` 3.2.0**.
+  - Dev/test-only: **`alpaca-py (dev/test-only)`** 0.42.0 is available for mocks, fixtures, or tooling—never ship it in production execution paths.
+- **Logging:** Structured logger only; no raw `print` in runtime or tests unless asserting stdout.
+- **Shims:** **No shims.** Fix root causes directly; do not add compatibility layers or wrapper modules.
 
-## 3) Editing & PR policy for agents
-- Use small, reviewable PRs grouped by concern (docs vs code).
-- When changing behavior, update docs in the same PR.
-- Include:
-  - Motivation & before/after.
-  - Test plan (commands and expected output).
-  - Rollback plan.
+---
 
-## 4) Installation & local run (docs reference)
-```bash
-python -m pip install -U pip
-pip install -e .
-ruff check .
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
-curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
-```
+## 2. Editing Contract (Codex Editing Contract)
+- All edits must use **`apply_patch`**.
+- Keep diffs surgical; touch only what is necessary and preserve context.
+- Do not introduce new shims, compatibility facades, or bulk rewrites.
+- Respect existing module boundaries; no large refactors unless explicitly requested.
+- Honor runtime invariants (SDK choice, ports, zoneinfo, logging).
+- Ensure new imports do not execute work at import time.
 
-## 5) Timezone examples (docs reference)
+---
 
-```py
-from datetime import datetime
-from zoneinfo import ZoneInfo
-now_ny = datetime.now(ZoneInfo("America/New_York"))
-```
+## 3. Validation Requirements
+Agents must run and report these checks when changing runtime or library code (docs-only changes may explain why checks were skipped):
+- `pytest -q`
+- `ruff` (limit to changed paths when possible)
+- `mypy` (at least on changed files/modules)
+- `python -m py_compile $(git ls-files '*.py')`
 
-## 6) Config examples (docs reference)
+Always add or update unit tests when fixing bugs or adding behavior.
 
-```py
-from ai_trading.config import management as config
+---
 
-api_port = config.get_env("API_PORT", "9001", cast=int)
-base_url = config.get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-is_paper = "paper" in base_url.lower() or config.get_env("APP_ENV", "test") != "prod"
-seed = config.SEED  # defaults to 42
-conf_threshold = config.get_env("AI_TRADING_CONF_THRESHOLD", "0.75", cast=float)
+## 4. PR Deliverables
+Every agent-authored PR must include:
+- **WORKLOG** — summary of intent, root cause, and scope.
+- **PATCHSET** — list of `apply_patch` diffs (no file dumps or editors).
+- **VALIDATION** — commands executed (`pytest -q`, `ruff`, `mypy`, `py_compile`) with outcomes.
+- **RISK & ROLLBACK** — risk assessment and how to revert.
 
-# Reload if you must re-read .env after edits (avoid in hot paths):
-config.reload_env()
-```
+---
 
-## 7) Health & metrics endpoints (docs reference)
+## 5. Greppable Anchors
+Use these stable strings to anchor surgical edits:
+- `IMPORT_PREFLIGHT_OK`
+- `HEALTHCHECK_PORT_CONFLICT`
+- `TRADING_PARAMS_VALIDATED`
+- `ExecutionEngine initialized`
 
-* Routes: `GET /healthz`, `GET /metrics`
-* `/healthz` JSON: `{"ok": true, "ts": "...", "service": "ai-trading"}`
-* `/metrics` exposes Prometheus format
-* Set `RUN_HEALTHCHECK=1` to serve these on `$HEALTHCHECK_PORT` (default **9101**, must differ from the API port **9001**)
-* Local check:
-  ```bash
-  RUN_HEALTHCHECK=1 python -m ai_trading.app &
-  curl -sf http://127.0.0.1:$HEALTHCHECK_PORT/healthz
-  ```
-* Requirement: Endpoints must not raise exceptions; log and return `ok: false` if degraded.
+---
 
-## 8) Alpaca SDK stance
+## 6. Operational Notes
+- The API and health server are distinct by default. Validate both surfaces when debugging deployments:
+  - `curl -sS http://127.0.0.1:9001/` (API route as applicable)
+  - `curl -sS http://127.0.0.1:${HEALTHCHECK_PORT}/healthz`
+- Health endpoints must degrade gracefully (never raise uncaught exceptions); log structured diagnostics.
+- Respect fail-fast configuration: missing required env vars should raise immediately with actionable errors.
 
-* Production default: `alpaca-py`.
-* If switching to another SDK, update all broker modules, tests, and docs in the same PR. Do not document multiple SDKs as active simultaneously.
+---
 
-## 9) What agents must not do
+## 7. Anti-Patterns to Avoid
+- Reintroducing shims, optional import helpers, or dynamic SDK swaps.
+- Adding raw `print` statements or silent exception handling.
+- Migrating runtime off `alpaca-trade-api` without explicit approval.
+- Conflating API and health ports, or assuming shared-port deployment without checking `HEALTHCHECK_PORT`.
 
-* Don’t introduce `pytz`.
-* Don’t re-add `requirements.txt` workflows.
-* Don’t bind new ports without updating docs & systemd.
-* Don’t add background file dumps or large archives by default.
-
-## 10) Troubleshooting quick map (docs reference)
-
-* **ImportError/AttributeError** for `get_env` or `reload_env`: update to latest `ai_trading/config/management.py`.
-* **/health returns 500:** fix the route; health must swallow exceptions and return JSON.
-* **Alpaca errors about missing client:** install the single chosen SDK and align import paths.
