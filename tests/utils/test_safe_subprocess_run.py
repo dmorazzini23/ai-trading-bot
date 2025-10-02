@@ -69,13 +69,10 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
             self._killed = False
             self.returncode = None
             calls["instance"] = self
+            calls["wait_calls"] = []
 
         def communicate(self, timeout=None):
-            if timeout is not None:
-                exc = subprocess.TimeoutExpired(cmd=calls["args"][0], timeout=timeout)
-                exc.stdout = None
-                exc.stderr = None
-                raise exc
+            assert timeout is None
             self.returncode = 124
             return "", ""
 
@@ -83,8 +80,9 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
             self._killed = True
             calls["killed"] = True
 
-        def wait(self):
-            pass
+        def wait(self, timeout=None):
+            calls["wait_calls"].append(timeout)
+            raise subprocess.TimeoutExpired(cmd=calls["args"][0], timeout=timeout)
 
     monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", FakeProc)
 
@@ -105,6 +103,7 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
     assert calls["kwargs"]["text"] is True
     assert calls.get("killed") is True
     assert calls["instance"]._killed is True
+    assert calls["wait_calls"]
     assert not caplog.records
 
 
@@ -117,21 +116,19 @@ def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
             self._killed = False
             self.args = args
             state["instance"] = self
+            state["wait_calls"] = []
 
         def communicate(self, timeout=None):
-            if timeout is not None:
-                exc = subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
-                exc.stdout = "partial stdout"
-                exc.stderr = "partial stderr"
-                raise exc
+            assert timeout is None
             self.returncode = 124
             return "partial stdout", "partial stderr"
 
         def kill(self):
             self._killed = True
 
-        def wait(self):
-            pass
+        def wait(self, timeout=None):
+            state["wait_calls"].append(timeout)
+            raise subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
 
     monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", FakeProc)
 
@@ -147,6 +144,7 @@ def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
     assert excinfo.value.stderr == "partial stderr"
     assert isinstance(excinfo.value.result, SafeSubprocessResult)
     assert state["instance"]._killed is True
+    assert state["wait_calls"]
 
 
 def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
@@ -159,26 +157,27 @@ def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
             self._killed = False
             self.returncode = None
             state["instance"] = self
+            state["wait_calls"] = []
 
         def communicate(self, timeout=None):
             state["communicate_calls"].append(timeout)
-            if timeout is not None:
-                raise subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
+            assert timeout is None
             self.returncode = 124
             return b"late stdout", b"late stderr"
 
         def kill(self):
             self._killed = True
 
-        def wait(self):
-            pass
+        def wait(self, timeout=None):
+            state.setdefault("wait_calls", []).append(timeout)
+            raise subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
 
     monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", FakeProc)
 
     with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         safe_subprocess_run(["dummy"], timeout=0.1)
 
-    assert state["communicate_calls"] == [0.1, None]
+    assert state["communicate_calls"] == [None]
     result = excinfo.value.result
     assert isinstance(result, SafeSubprocessResult)
     assert result.timeout is True
@@ -191,3 +190,4 @@ def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
     assert state["init_kwargs"]["stderr"] == subprocess.PIPE
     assert state["init_kwargs"]["text"] is True
     assert state["instance"]._killed is True
+    assert state["wait_calls"]
