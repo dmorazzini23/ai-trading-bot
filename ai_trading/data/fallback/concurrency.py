@@ -48,6 +48,36 @@ else:  # pragma: no cover - exercised in integration tests
 
 
 _POOLING_LIMIT_STATE: tuple[int, int] | None = None
+_LOCAL_POOLING_VERSION: int = 0
+
+
+def _next_local_pooling_version() -> int:
+    """Return a monotonically increasing version for locally computed limits."""
+
+    global _LOCAL_POOLING_VERSION
+
+    _LOCAL_POOLING_VERSION += 1
+    if _LOCAL_POOLING_VERSION <= 0:
+        _LOCAL_POOLING_VERSION = 1
+    return _LOCAL_POOLING_VERSION
+
+
+def _record_pooling_snapshot(limit: int, version: int) -> None:
+    """Persist a normalised pooling snapshot and track the latest version."""
+
+    global _POOLING_LIMIT_STATE, _LOCAL_POOLING_VERSION
+
+    _POOLING_LIMIT_STATE = (limit, version)
+    if version > _LOCAL_POOLING_VERSION:
+        _LOCAL_POOLING_VERSION = version
+
+
+def _invalidate_pooling_snapshot() -> None:
+    """Force the next limit lookup to recompute the pooling snapshot."""
+
+    global _POOLING_LIMIT_STATE
+
+    _POOLING_LIMIT_STATE = None
 
 
 def _normalise_pooling_state(snapshot: object | None) -> tuple[int, int] | None:
@@ -78,6 +108,9 @@ def _get_effective_host_limit() -> int | None:
 
     global _POOLING_LIMIT_STATE
 
+    if _POOLING_LIMIT_STATE is not None:
+        return _POOLING_LIMIT_STATE[0]
+
     snapshot: tuple[int, int] | None = None
 
     if callable(_pooling_reload_host_limit):
@@ -93,21 +126,20 @@ def _get_effective_host_limit() -> int | None:
             snapshot = None
 
     if snapshot is not None:
-        _POOLING_LIMIT_STATE = snapshot
+        _record_pooling_snapshot(snapshot[0], snapshot[1])
         return snapshot[0]
 
     if not callable(_pooling_host_limit):
-        _POOLING_LIMIT_STATE = None
         return None
 
     try:
         limit = int(_pooling_host_limit())
     except Exception:
-        _POOLING_LIMIT_STATE = None
         return None
 
     limit = max(1, limit)
-    _POOLING_LIMIT_STATE = None
+    version = _next_local_pooling_version()
+    _record_pooling_snapshot(limit, version)
     return limit
 
 
@@ -150,7 +182,7 @@ def _get_host_limit_semaphore() -> asyncio.Semaphore | None:
     if isinstance(actual_limit, int) and isinstance(actual_version, int):
         normalised = _normalise_pooling_state((actual_limit, actual_version))
         if normalised is not None:
-            _POOLING_LIMIT_STATE = normalised
+            _record_pooling_snapshot(normalised[0], normalised[1])
 
     return semaphore
 
@@ -550,6 +582,8 @@ async def run_with_concurrency(
 
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
+
+    _invalidate_pooling_snapshot()
 
     limit = _normalise_positive_int(max_concurrency) or 1
     host_limit = _get_effective_host_limit()

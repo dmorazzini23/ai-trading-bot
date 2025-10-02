@@ -193,6 +193,11 @@ def _cache_fallback(symbol: str, feed: str, timeframe: str = "1Min") -> None:
 async def run_with_concurrency(limit: int, coros):
     """Execute *coros* concurrently while keeping at most *limit* in flight."""
 
+    try:
+        reload_host_limit_if_env_changed()
+    except Exception:
+        pass
+
     max_concurrency = max(1, int(limit or 1))
     semaphore = asyncio.Semaphore(max_concurrency)
 
