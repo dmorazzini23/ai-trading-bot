@@ -8,6 +8,21 @@ from typing import Final, NamedTuple
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
 
+_previous_host_semaphores = globals().get("_HOST_SEMAPHORES")
+if isinstance(_previous_host_semaphores, WeakKeyDictionary):
+    _previous_host_semaphores.clear()
+elif hasattr(_previous_host_semaphores, "clear"):
+    try:
+        _previous_host_semaphores.clear()  # type: ignore[call-arg]  # pragma: no cover - defensive guard for exotic reload state
+    except Exception:  # pragma: no cover - defensive guard for exotic reload state
+        pass
+
+if "_LIMIT_CACHE" in globals():
+    globals()["_LIMIT_CACHE"] = None
+
+if "_LIMIT_VERSION" in globals():
+    globals()["_LIMIT_VERSION"] = 0
+
 from ai_trading.config import management as config
 
 _DEFAULT_LIMIT: Final[int] = 8
