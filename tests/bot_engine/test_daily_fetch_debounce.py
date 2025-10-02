@@ -153,13 +153,16 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
 
     first = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
     assert first is memo_df
+    first_stamp = be._DAILY_FETCH_MEMO[memo_key][0]
 
     # Simulate memo expiry and verify the cached entry refreshes memo storage
     be._DAILY_FETCH_MEMO[memo_key] = (0.0, memo_df)
     second = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
     assert second is cached_df
     assert memo_key in be._DAILY_FETCH_MEMO
-    assert be._DAILY_FETCH_MEMO[memo_key][1] is cached_df
+    updated_stamp, updated_df = be._DAILY_FETCH_MEMO[memo_key]
+    assert updated_df is cached_df
+    assert updated_stamp > first_stamp
 
 
 def test_daily_fetch_memo_handles_generator_factory():
