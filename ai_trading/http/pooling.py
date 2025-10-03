@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
+import sys
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Final, NamedTuple
 from urllib.parse import urlparse
 from weakref import WeakKeyDictionary
@@ -66,6 +69,96 @@ _ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
 )
 
 _DEFAULT_HOST_KEY: Final[str] = "__default__"
+
+
+def _load_fallback_concurrency_module() -> ModuleType | None:
+    module = sys.modules.get("ai_trading.data.fallback.concurrency")
+    if module is not None:
+        return module
+    try:
+        return importlib.import_module("ai_trading.data.fallback.concurrency")
+    except Exception:
+        return None
+
+
+def _normalise_pooling_state(state: object | None) -> tuple[int, int] | None:
+    if state is None:
+        return None
+    if isinstance(state, tuple) and len(state) >= 2:
+        limit, version = state[0], state[1]
+    else:
+        limit = getattr(state, "limit", None)
+        version = getattr(state, "version", None)
+    try:
+        limit = int(limit)
+        version = int(version)
+    except (TypeError, ValueError):
+        return None
+    if limit < 1:
+        limit = 1
+    return limit, version
+
+
+def _get_pooling_limit_state() -> tuple[int, int] | None:
+    module = _load_fallback_concurrency_module()
+    if module is None:
+        return None
+    state = getattr(module, "_POOLING_LIMIT_STATE", None)
+    return _normalise_pooling_state(state)
+
+
+def _set_pooling_limit_state(limit: int, version: int) -> None:
+    module = _load_fallback_concurrency_module()
+    if module is None:
+        return
+    recorder = getattr(module, "_record_pooling_snapshot", None)
+    if callable(recorder):
+        try:
+            recorder(limit, version)
+            return
+        except Exception:
+            pass
+    try:
+        module._POOLING_LIMIT_STATE = (max(1, int(limit)), int(version))  # type: ignore[attr-defined]
+    except Exception:
+        return
+    local_version = getattr(module, "_LOCAL_POOLING_VERSION", None)
+    if isinstance(local_version, int) and version > local_version:
+        try:
+            module._LOCAL_POOLING_VERSION = version  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def _sync_limit_cache_from_pooling(limit: int, version: int) -> HostLimitSnapshot:
+    global _LIMIT_CACHE, _LIMIT_VERSION
+
+    env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+    cache = _LIMIT_CACHE
+    limit = max(1, int(limit))
+    version = int(version)
+    if cache is None:
+        cache = _ResolvedLimitCache(
+            env_key=None,
+            raw_env=None,
+            limit=limit,
+            version=version,
+            config_id=None,
+            env_snapshot=env_snapshot,
+        )
+    else:
+        cache = _ResolvedLimitCache(
+            env_key=cache.env_key,
+            raw_env=cache.raw_env,
+            limit=limit,
+            version=version,
+            config_id=cache.config_id,
+            env_snapshot=env_snapshot,
+        )
+    _LIMIT_CACHE = cache
+    if version > _LIMIT_VERSION or _LIMIT_VERSION <= 0:
+        _LIMIT_VERSION = version
+    return HostLimitSnapshot(limit, version)
 
 
 def _normalize_host(hostname: str | None) -> str:
@@ -270,11 +363,15 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
     cache = _LIMIT_CACHE
     if cache is not None and cache.env_snapshot == env_snapshot:
-        return HostLimitSnapshot(cache.limit, cache.version)
+        snapshot = HostLimitSnapshot(cache.limit, cache.version)
+        _set_pooling_limit_state(snapshot.limit, snapshot.version)
+        return snapshot
 
     reset_host_semaphores(clear_limit_cache=True)
     limit, version = _resolve_limit()
-    return HostLimitSnapshot(limit, version)
+    snapshot = HostLimitSnapshot(limit, version)
+    _set_pooling_limit_state(snapshot.limit, snapshot.version)
+    return snapshot
 
 
 def _get_host_map(loop: asyncio.AbstractEventLoop) -> _HostSemaphoreMap:
@@ -327,9 +424,27 @@ def get_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
 
     loop = asyncio.get_running_loop()
     host = _normalize_host(hostname)
-    if _HOST_SEMAPHORES.get(loop):
+    host_map = _HOST_SEMAPHORES.get(loop)
+    if host_map:
         reload_host_limit_if_env_changed()
     snapshot = get_host_limit_snapshot()
+    pooling_state = _get_pooling_limit_state()
+    if host_map and pooling_state is not None:
+        pooling_limit, pooling_version = pooling_state
+        if (
+            pooling_version > snapshot.version
+            or (
+                pooling_version == snapshot.version
+                and pooling_limit != snapshot.limit
+            )
+        ):
+            snapshot = _sync_limit_cache_from_pooling(
+                pooling_limit, pooling_version
+            )
+        elif pooling_version < snapshot.version:
+            _set_pooling_limit_state(snapshot.limit, snapshot.version)
+    else:
+        _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return _get_or_create_loop_semaphore(loop, host, snapshot)
 
 
@@ -343,6 +458,7 @@ def refresh_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
     cache = _ensure_limit_cache()
     semaphore = _build_semaphore(cache.limit, cache.version)
     host_map[host] = _SemaphoreRecord(semaphore, cache.limit, cache.version)
+    _set_pooling_limit_state(cache.limit, cache.version)
     return semaphore
 
 
