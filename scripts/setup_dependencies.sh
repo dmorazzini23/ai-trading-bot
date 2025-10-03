@@ -54,7 +54,6 @@ fi
 
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip uninstall -y alpaca-trade-api || true
 pip install --upgrade pip
 pip install -r requirements.txt
 "$ROOT_DIR/ci/scripts/forbid_alpaca_trade_api.sh"

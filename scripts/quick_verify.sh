@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run fast sanity checks: compilation, lint, type-check, and tests.
-# Fails on usage of legacy imports or alpaca-trade-api.
+# Fails if unsupported Alpaca SDK versions are installed or legacy imports exist.
 set -euo pipefail
 
 ci/scripts/forbid_alpaca_trade_api.sh

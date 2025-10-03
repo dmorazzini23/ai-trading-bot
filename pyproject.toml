@@ -7,13 +7,14 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy==1.26.4",  # AI-AGENT-REF: pin NumPy to 1.x for pandas-ta compatibility
   "requests>=2.31,<3",
-  "urllib3==2.5.0",  # AI-AGENT-REF: align with Alpaca SDK
+  "urllib3==1.26.20",  # AI-AGENT-REF: align with alpaca-trade-api 3.2.0
   "certifi>=2023.7.22",
   "charset-normalizer>=3.2,<4",
   "idna>=3.4,<4",
   "psutil>=5.9,<6",
   "portalocker==2.7.0",
-  "alpaca-py>=0.42.1,<1",  # AI-AGENT-REF: include Alpaca SDK
+  "alpaca-trade-api==3.2.0",  # AI-AGENT-REF: runtime Alpaca SDK pin
+  "alpaca-py>=0.42.1,<1",  # AI-AGENT-REF: dev/test helper SDK
   "joblib>=1.3,<2",
   "Flask>=3,<4",
   "beautifulsoup4>=4.12,<5",
