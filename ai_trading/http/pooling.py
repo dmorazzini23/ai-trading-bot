@@ -167,13 +167,19 @@ def _normalize_host(hostname: str | None) -> str:
     return host or _DEFAULT_HOST_KEY
 
 
-def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
-    semaphore = asyncio.Semaphore(limit)
+def _annotate_semaphore_metadata(
+    semaphore: asyncio.Semaphore, limit: int, version: int
+) -> None:
     try:
         setattr(semaphore, "_ai_trading_host_limit", limit)
         setattr(semaphore, "_ai_trading_host_limit_version", version)
     except Exception:  # pragma: no cover - attribute assignment failure should not break runtime
         pass
+
+
+def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
+    semaphore = asyncio.Semaphore(limit)
+    _annotate_semaphore_metadata(semaphore, limit, version)
     return semaphore
 
 
@@ -459,6 +465,7 @@ def _get_or_create_loop_semaphore(
 
     record = host_map.get(hostname)
     if record is not None and record.limit == resolved_limit and record.version == version:
+        _annotate_semaphore_metadata(record.semaphore, resolved_limit, version)
         return record.semaphore
 
     semaphore = _build_semaphore(resolved_limit, version)
@@ -471,12 +478,10 @@ def get_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
 
     loop = asyncio.get_running_loop()
     host = _normalize_host(hostname)
-    host_map = _HOST_SEMAPHORES.get(loop)
-    if host_map:
-        reload_host_limit_if_env_changed()
+    reload_host_limit_if_env_changed()
     snapshot = get_host_limit_snapshot()
     pooling_state = _get_pooling_limit_state()
-    if host_map and pooling_state is not None:
+    if pooling_state is not None:
         pooling_limit, pooling_version = pooling_state
         if (
             pooling_version > snapshot.version

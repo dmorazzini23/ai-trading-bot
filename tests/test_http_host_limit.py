@@ -31,20 +31,22 @@ async def _semaphore_id(pooling) -> int:
     return id(pooling.get_host_semaphore())
 
 
-async def _semaphore_state(pooling) -> tuple[int, int | None]:
+async def _semaphore_state(pooling) -> tuple[int, int | None, int | None]:
     semaphore = pooling.get_host_semaphore()
     recorded_limit = getattr(semaphore, "_ai_trading_host_limit", None)
-    return id(semaphore), recorded_limit
+    recorded_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
+    return id(semaphore), recorded_limit, recorded_version
 
 
 async def _refresh_and_get_id(pooling) -> int:
     return id(pooling.refresh_host_semaphore())
 
 
-async def _refresh_state(pooling) -> tuple[int, int | None]:
+async def _refresh_state(pooling) -> tuple[int, int | None, int | None]:
     semaphore = pooling.refresh_host_semaphore()
     recorded_limit = getattr(semaphore, "_ai_trading_host_limit", None)
-    return id(semaphore), recorded_limit
+    recorded_version = getattr(semaphore, "_ai_trading_host_limit_version", None)
+    return id(semaphore), recorded_limit, recorded_version
 
 
 def test_host_limit_enforced(monkeypatch):
@@ -89,14 +91,21 @@ def test_get_host_semaphore_rebuilds_on_env_update(monkeypatch):
 
     loop = asyncio.new_event_loop()
     try:
-        first_id, first_limit = loop.run_until_complete(_semaphore_state(pooling))
+        first_id, first_limit, first_version = loop.run_until_complete(
+            _semaphore_state(pooling)
+        )
         assert first_limit == 2
+        assert isinstance(first_version, int)
         assert loop.run_until_complete(_max_concurrency(pooling, worker_count=5)) == 2
 
         monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "5")
-        second_id, second_limit = loop.run_until_complete(_semaphore_state(pooling))
+        second_id, second_limit, second_version = loop.run_until_complete(
+            _semaphore_state(pooling)
+        )
         assert second_id != first_id
         assert second_limit == 5
+        assert isinstance(second_version, int)
+        assert second_version != first_version
         assert loop.run_until_complete(_max_concurrency(pooling, worker_count=7)) == 5
     finally:
         loop.close()
@@ -135,13 +144,20 @@ def test_refresh_host_semaphore_uses_latest_limit(monkeypatch):
 
     loop = asyncio.new_event_loop()
     try:
-        first_id, first_limit = loop.run_until_complete(_semaphore_state(pooling))
+        first_id, first_limit, first_version = loop.run_until_complete(
+            _semaphore_state(pooling)
+        )
         assert first_limit == 3
+        assert isinstance(first_version, int)
 
         monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "6")
-        refreshed_id, refreshed_limit = loop.run_until_complete(_refresh_state(pooling))
+        refreshed_id, refreshed_limit, refreshed_version = loop.run_until_complete(
+            _refresh_state(pooling)
+        )
         assert refreshed_id != first_id
         assert refreshed_limit == 6
+        assert isinstance(refreshed_version, int)
+        assert refreshed_version != first_version
         assert loop.run_until_complete(_max_concurrency(pooling, worker_count=8)) == 6
     finally:
         loop.close()
