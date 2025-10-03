@@ -366,11 +366,13 @@ def _extract_generation(snapshot: Any, default: float) -> float:
 
 def _get_entitled_feeds(client: Any) -> set[str]:
     """Return set of feeds the account is entitled to."""
+
     now = time.time()
     key = id(client)
     cached_entry = _ENTITLE_CACHE.get(key)
-    if cached_entry and (now - cached_entry.cached_at < _ENTITLE_TTL) and "sip" in cached_entry.feeds:
-        return set(cached_entry.feeds)
+    cache_age_ok = False
+    if cached_entry is not None:
+        cache_age_ok = (now - cached_entry.cached_at) < _ENTITLE_TTL
 
     feeds: set[str] = {"iex"}
     generation = now
@@ -380,8 +382,11 @@ def _get_entitled_feeds(client: Any) -> set[str]:
             acct = get_acct()
         except COMMON_EXC as e:  # pragma: no cover - network
             _log.debug('FEED_ENTITLE_CHECK_FAIL', extra={'error': str(e)})
-            if cached_entry and (now - cached_entry.cached_at < _ENTITLE_TTL):
-                return set(cached_entry.feeds)
+            if cached_entry is not None:
+                if cache_age_ok:
+                    return set(cached_entry.feeds)
+                feeds = set(cached_entry.feeds)
+                generation = cached_entry.generation
         else:
             sub = getattr(acct, "market_data_subscription", None) or getattr(acct, "data_feed", None)
             if isinstance(sub, str):
@@ -389,23 +394,26 @@ def _get_entitled_feeds(client: Any) -> set[str]:
             elif isinstance(sub, (set, list, tuple)):
                 feeds = {str(x).lower() for x in sub}
             generation = _extract_generation(acct, now)
-    elif cached_entry and (now - cached_entry.cached_at < _ENTITLE_TTL):
-        return set(cached_entry.feeds)
+    else:
+        if cached_entry is not None:
+            if cache_age_ok:
+                return set(cached_entry.feeds)
+            feeds = set(cached_entry.feeds)
+            generation = cached_entry.generation
 
     entry = _EntitlementCacheEntry(
         cached_at=now,
         generation=generation,
         feeds=frozenset(feeds),
     )
-    if cached_entry is None:
+    if cached_entry is None or not cache_age_ok:
         _ENTITLE_CACHE[key] = entry
     else:
-        should_replace = (
-            entry.feeds != cached_entry.feeds
-            or entry.generation > cached_entry.generation
-            or (now - cached_entry.cached_at) >= _ENTITLE_TTL
-        )
-        if should_replace:
+        cached_feeds = cached_entry.feeds
+        feeds_changed = entry.feeds != cached_feeds
+        generation_increased = entry.generation > cached_entry.generation
+        sip_upgrade = "sip" in entry.feeds and "sip" not in cached_feeds
+        if feeds_changed or generation_increased or sip_upgrade:
             _ENTITLE_CACHE[key] = entry
         else:
             entry = cached_entry
