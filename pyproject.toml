@@ -7,7 +7,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy==1.26.4",  # AI-AGENT-REF: pin NumPy to 1.x for pandas-ta compatibility
   "requests>=2.31,<3",
-  "urllib3==1.26.20",  # AI-AGENT-REF: align with alpaca-trade-api 3.2.0
+  # Stay on urllib3<2 to satisfy alpaca-trade-api 3.2.0
+  "urllib3==1.26.20",
   "certifi>=2023.7.22",
   "charset-normalizer>=3.2,<4",
   "idna>=3.4,<4",
