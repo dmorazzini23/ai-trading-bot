@@ -33,6 +33,53 @@ from ai_trading.core import bot_engine
 from ai_trading.guards import staleness
 
 
+def test_minute_frame_attrs_extracts_known_keys():
+    pd = load_pandas()
+    frame = pd.DataFrame({"close": [1.0]})
+    frame.attrs["data_provider"] = "alpaca_iex"
+    frame.attrs["source_label"] = "alpaca_iex"
+    frame.attrs["ignored"] = "should_not_appear"
+
+    attrs = bot_engine._minute_frame_attrs(frame)
+
+    assert attrs == {
+        "data_provider": "alpaca_iex",
+        "source_label": "alpaca_iex",
+    }
+
+
+def test_log_iex_minute_stale_includes_attrs(monkeypatch):
+    pd = load_pandas()
+    frame = pd.DataFrame({"close": [1.0]})
+    frame.attrs["data_feed"] = "iex"
+    frame.attrs["fallback_feed"] = "sip"
+
+    class _Recorder:
+        def __init__(self):
+            self.calls: list[tuple[str, dict[str, object] | None]] = []
+
+        def warning(self, message: str, *, extra: dict[str, object] | None = None):
+            self.calls.append((message, extra))
+
+    recorder = _Recorder()
+    monkeypatch.setattr(bot_engine, "logger", recorder)
+
+    bot_engine._log_iex_minute_stale(
+        symbol="AAPL",
+        age_seconds=720,
+        retry_feed="sip",
+        frame=frame,
+    )
+
+    assert recorder.calls
+    message, extra = recorder.calls[-1]
+    assert message == "IEX_MINUTE_DATA_STALE"
+    assert extra is not None
+    assert extra["symbol"] == "AAPL"
+    assert extra["retry_feed"] == "sip"
+    assert extra["minute_attrs"] == {"data_feed": "iex", "fallback_feed": "sip"}
+
+
 @pytest.fixture(autouse=True)
 def _short_intraday_defaults(monkeypatch):
     """Keep intraday lookback small for unit test fixtures."""

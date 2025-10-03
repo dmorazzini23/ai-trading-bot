@@ -1076,6 +1076,43 @@ def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.da
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
 
 
+def _clear_minute_fallback_state(
+    symbol: str,
+    timeframe: str,
+    start: _dt.datetime,
+    end: _dt.datetime,
+    *,
+    primary_label: str | None = None,
+    backup_label: str | None = None,
+) -> bool:
+    """Clear cached fallback hints when the primary feed is healthy again."""
+
+    key = _fallback_key(symbol, timeframe, start, end)
+    tf_key = (symbol, timeframe)
+    cleared = False
+    if key in _FALLBACK_WINDOWS:
+        _FALLBACK_WINDOWS.discard(key)
+        cleared = True
+    if key in _FALLBACK_METADATA:
+        _FALLBACK_METADATA.pop(key, None)
+        cleared = True
+    if tf_key in _FALLBACK_UNTIL:
+        _FALLBACK_UNTIL.pop(tf_key, None)
+        cleared = True
+    if cleared and primary_label and backup_label:
+        try:
+            provider_monitor.update_data_health(
+                primary_label,
+                backup_label,
+                healthy=True,
+                reason="primary_recovered",
+                severity="good",
+            )
+        except Exception:
+            pass
+    return cleared
+
+
 def _annotate_df_source(
     df: pd.DataFrame | None,
     *,
@@ -7127,6 +7164,15 @@ def get_minute_df(
             _record_minute_fallback(frame=df)
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
+    if backup_label and not used_backup:
+        _clear_minute_fallback_state(
+            symbol,
+            "1Min",
+            start_dt,
+            end_dt,
+            primary_label=primary_label,
+            backup_label=backup_label,
+        )
     source_label = (
         resolved_backup_provider
         if used_backup

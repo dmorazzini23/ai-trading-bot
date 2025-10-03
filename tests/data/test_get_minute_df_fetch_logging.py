@@ -81,3 +81,36 @@ def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
         for record in caplog.records
     )
     assert any(record.message == "UNAUTHORIZED_SIP" for record in caplog.records)
+
+
+def test_clear_minute_fallback_state_clears_all_metadata(monkeypatch):
+    start, end = _dt_range()
+    key = data_fetcher._fallback_key("AAPL", "1Min", start, end)
+    tf_key = ("AAPL", "1Min")
+    data_fetcher._FALLBACK_WINDOWS.add(key)
+    data_fetcher._FALLBACK_METADATA[key] = {"fallback_provider": "yahoo"}
+    data_fetcher._FALLBACK_UNTIL[tf_key] = 123456
+
+    calls: list[tuple[str, str, bool, str, str | None]] = []
+
+    class _Monitor:
+        def update_data_health(self, primary, backup, *, healthy, reason, severity=None):
+            calls.append((primary, backup, healthy, reason, severity))
+            return primary
+
+    monkeypatch.setattr(data_fetcher, "provider_monitor", _Monitor())
+
+    cleared = data_fetcher._clear_minute_fallback_state(
+        "AAPL",
+        "1Min",
+        start,
+        end,
+        primary_label="alpaca_iex",
+        backup_label="yahoo",
+    )
+
+    assert cleared is True
+    assert key not in data_fetcher._FALLBACK_WINDOWS
+    assert key not in data_fetcher._FALLBACK_METADATA
+    assert tf_key not in data_fetcher._FALLBACK_UNTIL
+    assert calls == [("alpaca_iex", "yahoo", True, "primary_recovered", "good")]
