@@ -4510,9 +4510,6 @@ def _fetch_bars(
             empty_df = _empty_ohlcv_frame(pd)
             return empty_df if empty_df is not None else pd.DataFrame()
         return pd.DataFrame()
-    if short_circuit_empty:
-        empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
     global _alpaca_disabled_until, _ALPACA_DISABLED_ALERTED, _alpaca_empty_streak, _alpaca_disable_count
     if _alpaca_disabled_until:
         now = datetime.now(UTC)
@@ -5954,6 +5951,7 @@ def _fetch_bars(
     # Attempt request with bounded retries when empty or transient issues occur
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     df = None
+    http_fallback_frame: pd.DataFrame | None = None
     last_empty_error: EmptyBarsError | None = None
 
     empty_attempts = 0
@@ -5990,41 +5988,6 @@ def _fetch_bars(
     if df is not None and not getattr(df, "empty", True):
         _ALPACA_EMPTY_ERROR_COUNTS.pop((symbol, _interval), None)
         return df
-    if not _state.get("window_has_session", True):
-        tf_norm = _canon_tf(_interval)
-        tf_key = (symbol, tf_norm)
-        _IEX_EMPTY_COUNTS.pop(tf_key, None)
-        _SKIPPED_SYMBOLS.discard(tf_key)
-        fallback_feed = _state.get("last_fallback_feed")
-        if fallback_feed:
-            try:
-                fallback_norm = _normalize_feed_value(fallback_feed)
-            except ValueError:
-                try:
-                    fallback_norm = str(fallback_feed).strip().lower()
-                except Exception:
-                    fallback_norm = None
-            initial_feed = _state.get("initial_feed", _feed)
-            try:
-                initial_norm = _normalize_feed_value(initial_feed)
-            except ValueError:
-                try:
-                    initial_norm = str(initial_feed).strip().lower()
-                except Exception:
-                    initial_norm = None
-            if (
-                fallback_norm
-                and fallback_norm in {"iex", "sip"}
-                and fallback_norm != (initial_norm or "")
-            ):
-                _FEED_OVERRIDE_BY_TF[tf_key] = fallback_norm
-                _record_override(symbol, fallback_norm, tf_norm)
-                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fallback_norm)
-                log_key = (symbol, tf_norm, fallback_norm)
-                if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
-                    _FEED_SWITCH_HISTORY.append(log_key)
-        empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
     if _ENABLE_HTTP_FALLBACK and (df is None or getattr(df, "empty", True)):
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
         y_int = interval_map.get(_interval)
@@ -6059,7 +6022,46 @@ def _fetch_bars(
                     resolved_provider="yahoo",
                     resolved_feed="yahoo",
                 )
-                return annotated_df
+                if _state.get("window_has_session", True):
+                    return annotated_df
+                http_fallback_frame = annotated_df
+    if not _state.get("window_has_session", True):
+        tf_norm = _canon_tf(_interval)
+        tf_key = (symbol, tf_norm)
+        _IEX_EMPTY_COUNTS.pop(tf_key, None)
+        _SKIPPED_SYMBOLS.discard(tf_key)
+        fallback_feed = _state.get("last_fallback_feed")
+        if fallback_feed:
+            try:
+                fallback_norm = _normalize_feed_value(fallback_feed)
+            except ValueError:
+                try:
+                    fallback_norm = str(fallback_feed).strip().lower()
+                except Exception:
+                    fallback_norm = None
+            initial_feed = _state.get("initial_feed", _feed)
+            try:
+                initial_norm = _normalize_feed_value(initial_feed)
+            except ValueError:
+                try:
+                    initial_norm = str(initial_feed).strip().lower()
+                except Exception:
+                    initial_norm = None
+            if (
+                fallback_norm
+                and fallback_norm in {"iex", "sip"}
+                and fallback_norm != (initial_norm or "")
+            ):
+                _FEED_OVERRIDE_BY_TF[tf_key] = fallback_norm
+                _record_override(symbol, fallback_norm, tf_norm)
+                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fallback_norm)
+                log_key = (symbol, tf_norm, fallback_norm)
+                if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
+                    _FEED_SWITCH_HISTORY.append(log_key)
+        if http_fallback_frame is not None and not getattr(http_fallback_frame, "empty", True):
+            return http_fallback_frame
+        empty_df = _empty_ohlcv_frame(pd)
+        return empty_df if empty_df is not None else pd.DataFrame()
     if df is None or getattr(df, "empty", True):
         return None
     return df
@@ -6392,7 +6394,8 @@ def get_minute_df(
                     _EMPTY_BAR_COUNTS.pop(tf_key, None)
                     _IEX_EMPTY_COUNTS.pop(tf_key, None)
                     _SKIPPED_SYMBOLS.discard(tf_key)
-                    return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
+                    if window_has_session:
+                        return pd.DataFrame() if pd is not None else []  # type: ignore[return-value]
                 cnt = _EMPTY_BAR_COUNTS.get(tf_key, attempt)
                 if cnt > _EMPTY_BAR_MAX_RETRIES:
                     _log_with_capture(
