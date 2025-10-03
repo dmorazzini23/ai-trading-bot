@@ -12,10 +12,14 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from ai_trading.core import bot_engine
+
+if TYPE_CHECKING:  # pragma: no cover - typing aid only
+    import pandas as pd
 
 
 def test_tickers_csv():
