@@ -4552,6 +4552,12 @@ def _fetch_bars(
         short_circuit_empty = True
     else:
         _state["skip_empty_metrics"] = False
+    if short_circuit_empty:
+        if not _state.get("empty_metric_emitted"):
+            _incr("data.fetch.empty", value=1.0, tags=_tags())
+            _state["empty_metric_emitted"] = True
+        empty_df = _empty_ohlcv_frame(pd)
+        return empty_df if empty_df is not None else pd.DataFrame()
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
