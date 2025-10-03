@@ -1,4 +1,5 @@
 import builtins
+import json
 import sys
 import types
 
@@ -60,6 +61,22 @@ def _assert_payload_structure(payload: dict) -> None:
     assert isinstance(payload["alpaca"]["base_url"], str)
 
 
+def _assert_fallback_meta(payload: dict, *, used: bool, reasons: tuple[str, ...] = ()) -> None:
+    meta = payload.get("meta", {})
+    assert isinstance(meta, dict)
+    fallback_meta = meta.get("fallback", {})
+    assert isinstance(fallback_meta, dict)
+    assert fallback_meta.get("used") is used
+    meta_reasons = fallback_meta.get("reasons", [])
+    assert isinstance(meta_reasons, list)
+    if used or reasons:
+        assert meta_reasons, "fallback metadata reasons should be present"
+        for fragment in reasons:
+            assert fragment in meta_reasons
+    else:
+        assert not meta_reasons
+
+
 def _assert_error_contains(payload: dict, *expected: str) -> None:
     err = payload.get("error", "")
     assert isinstance(err, str) and err
@@ -82,8 +99,19 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     client = app.test_client()
     resp = client.get("/health")
     assert resp.status_code == 200
+
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=False)
+
+    get_data = getattr(resp, "get_data", None)
+    if callable(get_data):
+        raw_body = get_data(as_text=True)
+        if raw_body:
+            raw_payload = json.loads(raw_body)
+            _assert_payload_structure(raw_payload)
+            _assert_fallback_meta(raw_payload, used=False)
+            assert raw_payload == data
     assert data["ok"] is False
     assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
     _assert_error_contains(data, "boom")
@@ -102,6 +130,7 @@ def test_health_endpoint_handles_import_error(monkeypatch):
     dict_payload = handler()
     assert isinstance(dict_payload, dict)
     _assert_payload_structure(dict_payload)
+    _assert_fallback_meta(dict_payload, used=False)
     assert dict_payload["alpaca"] == EXPECTED_ALPACA_MINIMAL
 
 
@@ -125,6 +154,7 @@ def test_health_endpoint_returns_plain_dict_when_jsonify_fails(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=True, reasons=("json busted", "RuntimeError"))
     assert data["ok"] is False
     assert data["alpaca"] == EXPECTED_ALPACA_MINIMAL
     _assert_error_contains(data, "boom", "json busted")
@@ -137,6 +167,14 @@ def test_health_endpoint_structure_is_stable():
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=False)
+
+    raw_body = resp.get_data(as_text=True)
+    assert raw_body
+    payload = json.loads(raw_body)
+    _assert_payload_structure(payload)
+    _assert_fallback_meta(payload, used=False)
+    assert payload == data
 
 
 def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
@@ -151,6 +189,7 @@ def test_health_endpoint_jsonify_failure_uses_sanitized_payload(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=True, reasons=("json busted", "RuntimeError"))
     assert data["ok"] is False
     _assert_error_contains(data, "json busted")
 
@@ -164,6 +203,7 @@ def test_health_endpoint_handles_missing_jsonify(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=True, reasons=("jsonify unavailable",))
     assert data["ok"] is False
     _assert_error_contains(data, "jsonify unavailable")
 
@@ -187,6 +227,7 @@ def test_health_endpoint_missing_jsonify_dict_fallback_structure(monkeypatch):
     payload = handler()
     assert isinstance(payload, dict)
     _assert_payload_structure(payload)
+    _assert_fallback_meta(payload, used=True, reasons=("jsonify unavailable",))
     assert payload["ok"] is False
     _assert_error_contains(payload, "jsonify unavailable")
 
@@ -201,6 +242,11 @@ def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(
+        data,
+        used=True,
+        reasons=("jsonify unavailable", "ImportError", "flask missing"),
+    )
     assert data["ok"] is False
     _assert_error_contains(data, "jsonify unavailable", "ImportError", "flask missing")
 
@@ -230,6 +276,7 @@ def test_health_endpoint_dict_fallback_preserves_structure(monkeypatch):
     payload = handler()
     assert isinstance(payload, dict)
     _assert_payload_structure(payload)
+    _assert_fallback_meta(payload, used=True, reasons=("json busted", "RuntimeError"))
     assert payload["ok"] is False
     _assert_error_contains(payload, "json busted")
 
@@ -247,6 +294,7 @@ def test_shadow_mode_disabled_when_credentials_missing(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=False)
     assert data["ok"] is True
     assert data["alpaca"]["shadow_mode"] is False
     assert data["alpaca"]["has_key"] is False
@@ -276,6 +324,7 @@ def test_jsonify_failure_preserves_ok_when_healthy(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=True, reasons=("json busted", "RuntimeError"))
     assert data["ok"] is False
     assert data["alpaca"]["has_key"] is True
     assert data["alpaca"]["has_secret"] is True
@@ -317,6 +366,7 @@ def test_json_dump_failure_rebuilds_payload(monkeypatch):
     assert resp.status_code == 200
     data = resp.get_json()
     _assert_payload_structure(data)
+    _assert_fallback_meta(data, used=True, reasons=("not serializable",))
     assert data["ok"] is False
     assert data["alpaca"]["has_key"] is True
     assert data["alpaca"]["has_secret"] is True

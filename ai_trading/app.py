@@ -127,6 +127,34 @@ def create_app():
 
             return _ensure_core_fields(merged)
 
+        def _stamp_fallback_meta(
+            payload: dict,
+            *,
+            used: bool,
+            reasons: list[str] | tuple[str, ...] | None = None,
+        ) -> dict:
+            """Ensure payload carries structured fallback metadata."""
+
+            meta = payload.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+            fallback_meta = meta.get("fallback")
+            if not isinstance(fallback_meta, dict):
+                fallback_meta = {}
+            fallback_meta["used"] = bool(used)
+            clean_reasons: list[str] = []
+            for reason in reasons or ():
+                text = str(reason).strip()
+                if text and text not in clean_reasons:
+                    clean_reasons.append(text)
+            if clean_reasons or used:
+                fallback_meta["reasons"] = clean_reasons
+            else:
+                fallback_meta.pop("reasons", None)
+            meta["fallback"] = fallback_meta
+            payload["meta"] = meta
+            return payload
+
         canonical_payload = _ensure_core_fields(_normalise_payload(data))
         fallback_payload = (
             _ensure_core_fields(_normalise_payload(fallback))
@@ -135,7 +163,9 @@ def create_app():
         )
 
         response_payload = _merge_payloads(canonical_payload, fallback_payload)
-        sanitized_payload = _ensure_core_fields(dict(response_payload))
+        sanitized_payload = _stamp_fallback_meta(
+            _ensure_core_fields(dict(response_payload)), used=False, reasons=[]
+        )
 
         func = globals().get("jsonify")
         fallback_used = False
@@ -146,10 +176,14 @@ def create_app():
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
                 fallback_used = True
+                reason_candidates = [str(exc).strip(), exc.__class__.__name__]
                 fallback_reasons.extend(
                     reason
-                    for reason in {str(exc) or exc.__class__.__name__, exc.__class__.__name__}
+                    for reason in dict.fromkeys(reason_candidates)
                     if reason
+                )
+                sanitized_payload = _stamp_fallback_meta(
+                    sanitized_payload, used=True, reasons=fallback_reasons
                 )
             else:
                 try:
@@ -165,18 +199,14 @@ def create_app():
                 if import_reason:
                     fallback_reasons.append(import_reason)
                 fallback_reasons.append("ImportError")
+            sanitized_payload = _stamp_fallback_meta(
+                sanitized_payload, used=True, reasons=fallback_reasons
+            )
 
-        final_payload = dict(sanitized_payload)
+        final_payload = _ensure_core_fields(dict(sanitized_payload))
 
         if fallback_used:
             final_payload["ok"] = False
-
-        # Ensure the exposed payload always carries the canonical structure
-        # regardless of how we arrive here (missing ``jsonify`` or runtime
-        # failures). Re-running the normaliser guarantees ``ok`` and
-        # ``alpaca`` are present and that ``alpaca`` is seeded from
-        # ``_ALPACA_SECTION_DEFAULTS``.
-        final_payload = _ensure_core_fields(final_payload)
 
         message_candidates: list[str] = []
         existing_error = final_payload.get("error")
@@ -208,25 +238,43 @@ def create_app():
                 else:
                     final_payload["error_details"] = {"messages": merged}
 
+        sanitized_payload = _ensure_core_fields(dict(final_payload))
+        sanitized_payload = _stamp_fallback_meta(
+            sanitized_payload, used=fallback_used, reasons=fallback_reasons
+        )
+
         try:
-            final_payload = _ensure_core_fields(final_payload)
-            body = json.dumps(final_payload, default=str)
+            body = json.dumps(sanitized_payload, default=str)
         except Exception as exc:  # pragma: no cover - defensive
             _log.exception("HEALTH_JSON_ENCODE_FAILED", exc_info=exc)
-            fallback_reasons = []
+            extra_reason = str(exc).strip() or exc.__class__.__name__ or "serialization_error"
             fallback_used = True
-            alpaca_section = _normalise_alpaca_section(final_payload.get("alpaca"))
-            safe_payload = {
-                "ok": False,
-                "alpaca": alpaca_section,
-                "error": str(exc) or exc.__class__.__name__ or "serialization_error",
-            }
-            final_payload = _ensure_core_fields(safe_payload)
-            body = json.dumps(final_payload, default=str)
+            fallback_reasons = [
+                reason
+                for reason in dict.fromkeys([*fallback_reasons, extra_reason])
+                if reason
+            ]
+            alpaca_section = _normalise_alpaca_section(sanitized_payload.get("alpaca"))
+            sanitized_payload = _stamp_fallback_meta(
+                _ensure_core_fields(
+                    {
+                        "ok": False,
+                        "alpaca": alpaca_section,
+                        "error": extra_reason,
+                    }
+                ),
+                used=True,
+                reasons=fallback_reasons,
+            )
+            body = json.dumps(sanitized_payload, default=str)
 
         response_factory = getattr(app, "response_class", None)
         if callable(response_factory):
-            final_payload = _ensure_core_fields(final_payload)
+            sanitized_payload = _stamp_fallback_meta(
+                _ensure_core_fields(dict(sanitized_payload)),
+                used=fallback_used,
+                reasons=fallback_reasons,
+            )
             return response_factory(body, status=status, mimetype="application/json")
 
         # When ``response_class`` is unavailable (for example when stub clients swap
@@ -234,8 +282,12 @@ def create_app():
         # directly so callers don't need to understand Flask's ``(body, status)``
         # tuple convention. Callers running under a real Flask stack will already
         # receive a wrapped ``Response`` above, preserving status semantics.
-        final_payload = _ensure_core_fields(final_payload)
-        return final_payload
+        sanitized_payload = _stamp_fallback_meta(
+            _ensure_core_fields(dict(sanitized_payload)),
+            used=fallback_used,
+            reasons=fallback_reasons,
+        )
+        return sanitized_payload
 
     @app.route('/health')
     def health():
