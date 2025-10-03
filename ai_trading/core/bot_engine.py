@@ -8310,16 +8310,42 @@ class DataFetcher:
             )
             _update_screen_schema_cache(symbol, "1Min", "alpaca_iex", cache_frame)
 
-        def _normalize_minute_index(frame: pd.DataFrame) -> pd.DataFrame:
+        def _normalize_minute_index(
+            frame: pd.DataFrame, *, allow_preserve: bool = True
+        ) -> tuple[pd.DataFrame, bool]:
             if not isinstance(frame, pd.DataFrame) or frame.empty:
-                return frame
+                return frame, False
+
             working = frame.copy()
-            idx = working.index
-            original_name = getattr(idx, "name", None)
+            original_idx = working.index
+            original_name = getattr(original_idx, "name", None)
+            original_tz = getattr(original_idx, "tz", None)
+            preserve_unnamed = (
+                isinstance(original_idx, pd.DatetimeIndex)
+                and original_tz is not None
+                and original_name is None
+                and "timestamp" not in working.columns
+            )
+
+            source_values: pd.Series | pd.Index | Sequence[object]
+            column_backed = False
+            if not isinstance(original_idx, pd.DatetimeIndex) and "timestamp" in working.columns:
+                source_values = working["timestamp"]
+                column_backed = True
+            else:
+                source_values = original_idx
+
             try:
-                idx = pd.to_datetime(idx, utc=True)
+                idx = pd.to_datetime(source_values, utc=True)
             except (TypeError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
+
+            if not isinstance(idx, pd.DatetimeIndex):
+                try:
+                    idx = pd.DatetimeIndex(idx)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(str(exc)) from exc
+
             try:
                 tzinfo = getattr(idx, "tz", None)
                 if tzinfo is None:
@@ -8328,10 +8354,18 @@ class DataFetcher:
                     idx = idx.tz_convert("UTC")
             except (TypeError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
-            new_name = original_name if original_name is not None else "timestamp"
-            idx = idx.rename(new_name)
+
+            if preserve_unnamed and not column_backed:
+                new_name = None
+            else:
+                new_name = original_name if original_name is not None else "timestamp"
+
+            try:
+                idx = pd.DatetimeIndex(idx, name=new_name)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(str(exc)) from exc
             working.index = idx
-            return working
+            return working, bool(allow_preserve and preserve_unnamed and not column_backed)
 
         try:
             feed = self._resolve_feed(
@@ -8361,9 +8395,12 @@ class DataFetcher:
                 _record_schema(None)
                 return None
 
+            preserve_unnamed_index = False
             if isinstance(df, pd.DataFrame) and not df.empty:
                 try:
-                    df = _normalize_minute_index(df)
+                    df, preserve_unnamed_index = _normalize_minute_index(
+                        df, allow_preserve=False
+                    )
                 except ValueError as exc:
                     logger.warning(
                         "UNEXPECTED_MINUTE_INDEX",
@@ -8451,11 +8488,14 @@ class DataFetcher:
                     if fallback_df is not None:
                         if isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
                             try:
-                                df = _normalize_minute_index(fallback_df)
+                                df, preserve_unnamed_index = _normalize_minute_index(
+                                    fallback_df
+                                )
                             except ValueError:
                                 df = fallback_df
                         else:
                             df = fallback_df
+                            preserve_unnamed_index = False
                         if isinstance(df, pd.DataFrame) and not df.empty:
                             try:
                                 normalized_last = pd.Timestamp(df.index[-1])
@@ -8513,11 +8553,12 @@ class DataFetcher:
                     fallback_feed_used = "iex"
                     if isinstance(df_iex, pd.DataFrame) and not df_iex.empty:
                         try:
-                            df = _normalize_minute_index(df_iex)
+                            df, preserve_unnamed_index = _normalize_minute_index(df_iex)
                         except ValueError:
                             df = df_iex
                     else:
                         df = df_iex if isinstance(df_iex, pd.DataFrame) else pd.DataFrame()
+                        preserve_unnamed_index = False
                 except (
                     FileNotFoundError,
                     PermissionError,
@@ -8588,7 +8629,9 @@ class DataFetcher:
         elif df is None:
             data_fresh = False
 
-        def _finalize_minute_index(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+        def _finalize_minute_index(
+            frame: pd.DataFrame | None, preserve_unnamed: bool
+        ) -> pd.DataFrame | None:
             if not isinstance(frame, pd.DataFrame):
                 return frame
 
@@ -8596,7 +8639,10 @@ class DataFetcher:
             idx_name = getattr(idx, "name", None)
 
             if isinstance(idx, pd.DatetimeIndex):
-                if idx_name and idx_name != "timestamp":
+                if (
+                    (idx_name is None and not preserve_unnamed)
+                    or (idx_name and idx_name != "timestamp")
+                ):
                     try:
                         frame = frame.copy()
                         frame.index = idx.rename("timestamp")
@@ -8613,7 +8659,18 @@ class DataFetcher:
 
             return frame
 
-        df = _finalize_minute_index(df)
+        df = _finalize_minute_index(df, preserve_unnamed_index)
+        if (
+            isinstance(df, pd.DataFrame)
+            and isinstance(df.index, pd.DatetimeIndex)
+            and not preserve_unnamed_index
+            and df.index.name != "timestamp"
+        ):
+            try:
+                df = df.copy()
+                df.index = df.index.rename("timestamp")
+            except Exception:  # pragma: no cover - defensive normalization
+                pass
 
         with cache_lock:
             if data_fresh:
