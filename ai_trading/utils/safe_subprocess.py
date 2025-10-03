@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import shlex
 import subprocess
-import time
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Sequence
@@ -73,31 +72,11 @@ def safe_subprocess_run(
         logger.warning("safe_subprocess_run(%s) failed: %s", argv, exc)
         return SafeSubprocessResult("", str(exc), getattr(exc, "returncode", -1), False)
 
-    deadline = time.monotonic() + run_timeout
-    poll_interval = max(min(run_timeout / 10.0, 0.1), 0.01)
-
-    finished_at: float | None = None
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            timeout_exc = subprocess.TimeoutExpired(cmd=argv, timeout=run_timeout)
-            raise _augment_timeout_exception(proc, timeout_exc) from None
-        wait_time = min(remaining, poll_interval)
-        try:
-            proc.wait(timeout=wait_time)
-            finished_at = time.monotonic()
-            break
-        except subprocess.TimeoutExpired:
-            continue
-
-    if finished_at is None:
-        finished_at = time.monotonic()
-    if finished_at > deadline:
-        timeout_exc = subprocess.TimeoutExpired(cmd=argv, timeout=run_timeout)
-        raise _augment_timeout_exception(proc, timeout_exc) from None
-
     try:
-        stdout_text, stderr_text = proc.communicate()
+        stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
+    except subprocess.TimeoutExpired as exc:
+        exc.timeout = run_timeout
+        raise _augment_timeout_exception(proc, exc) from None
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
             proc.kill()
@@ -134,10 +113,23 @@ def _augment_timeout_exception(
     with suppress(ProcessLookupError):
         proc.kill()
     stdout_after, stderr_after = proc.communicate()
-    stdout_text = _normalize_stream(stdout_after)
-    stderr_text = _normalize_stream(stderr_after)
-    result = SafeSubprocessResult(stdout_text, stderr_text, 124, True)
-    exc.stdout = stdout_text
-    exc.stderr = stderr_text
+
+    def _merge_streams(primary: str | bytes | None, secondary: str | bytes | None) -> str:
+        first = _normalize_stream(primary)
+        second = _normalize_stream(secondary)
+        if first and second:
+            if second.startswith(first):
+                return second
+            if first.endswith(second):
+                return first
+            return first + second
+        return first or second
+
+    collected_stdout = _merge_streams(getattr(exc, "stdout", None), stdout_after)
+    collected_stderr = _merge_streams(getattr(exc, "stderr", None), stderr_after)
+
+    result = SafeSubprocessResult(collected_stdout, collected_stderr, 124, True)
+    exc.stdout = collected_stdout
+    exc.stderr = collected_stderr
     exc.result = result
     return exc
