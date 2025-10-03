@@ -11,7 +11,7 @@ import uuid
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Iterable, TYPE_CHECKING
+from typing import Any, Iterable, TYPE_CHECKING, NoReturn
 
 from ai_trading.logging import get_logger
 
@@ -238,7 +238,7 @@ try:  # Eagerly import to keep a stable module reference for reloads.
 except Exception as exc:  # pragma: no cover - optional dependency missing or other import failure
     stub = ModuleType(f"{__name__}.train")
 
-    def _raise_import_error(*_a: Any, _exc: Exception = exc, **_k: Any) -> None:
+    def _raise_import_error(*_a: Any, _exc: Exception = exc, **_k: Any) -> NoReturn:
         raise ImportError(
             "RL stack not available; install stable-baselines3, gymnasium, and torch"
         ) from _exc
