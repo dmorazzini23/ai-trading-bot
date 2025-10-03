@@ -175,6 +175,65 @@ def test_run_with_concurrency_peak_matches_requested_limits(monkeypatch):
     assert concurrency.PEAK_SIMULTANEOUS_WORKERS == host_limit
 
 
+def test_run_with_concurrency_peak_tracks_host_semaphore_metadata(monkeypatch):
+    current_limit = 3
+    version = 1
+
+    def _fake_effective_host_limit() -> int:
+        return 5
+
+    def _fake_get_host_semaphore() -> asyncio.Semaphore:
+        nonlocal version
+        semaphore = asyncio.Semaphore(current_limit)
+        setattr(semaphore, "_ai_trading_host_limit", current_limit)
+        setattr(semaphore, "_ai_trading_host_limit_version", version)
+        version += 1
+        return semaphore
+
+    monkeypatch.setattr(
+        concurrency, "_get_effective_host_limit", _fake_effective_host_limit
+    )
+    monkeypatch.setattr(concurrency, "_get_host_limit_semaphore", _fake_get_host_semaphore)
+
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
+
+    async def worker(sym: str) -> str:
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
+
+    symbols = [f"HOSTPEAK{i}" for i in range(6)]
+
+    def run_once(expected_peak: int) -> None:
+        nonlocal max_seen
+        max_seen = 0
+        concurrency.reset_peak_simultaneous_workers()
+        results, succeeded, failed = asyncio.run(
+            concurrency.run_with_concurrency(symbols, worker, max_concurrency=10)
+        )
+
+        assert results == {symbol: symbol for symbol in symbols}
+        assert succeeded == set(symbols)
+        assert not failed
+        assert max_seen == expected_peak
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == expected_peak
+
+    run_once(current_limit)
+
+    current_limit = 2
+    run_once(current_limit)
+
+
 def test_run_with_concurrency_respects_limit():
     @dataclass
     class InnerLockHolder:

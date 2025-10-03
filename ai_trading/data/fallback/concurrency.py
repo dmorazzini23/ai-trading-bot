@@ -591,12 +591,18 @@ async def run_with_concurrency(
 
     limit = _normalise_positive_int(max_concurrency) or 1
     host_limit = _get_effective_host_limit()
-    host_semaphore: asyncio.Semaphore | None = None
     if host_limit is not None:
         host_limit_value = _normalise_positive_int(host_limit)
         if host_limit_value is not None:
             limit = min(limit, host_limit_value)
-        host_semaphore = _get_host_limit_semaphore()
+
+    host_semaphore = _get_host_limit_semaphore()
+    if host_semaphore is not None:
+        semaphore_limit = _normalise_positive_int(
+            getattr(host_semaphore, "_ai_trading_host_limit", None)
+        )
+        if semaphore_limit is not None:
+            limit = min(limit, semaphore_limit)
 
     limit = max(1, limit)
 
