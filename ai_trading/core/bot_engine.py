@@ -6649,7 +6649,28 @@ def _log_iex_minute_stale(
         extra["minute_attrs"] = attrs
     if phase:
         extra["phase"] = phase
-    logger.log(level, "IEX_MINUTE_DATA_STALE", extra=extra)
+    message = "IEX_MINUTE_DATA_STALE"
+    if level == logging.WARNING:
+        warn_fn = getattr(logger, "warning", None)
+        if callable(warn_fn):
+            warn_fn(message, extra=extra)
+            return
+
+    log_fn = getattr(logger, "log", None)
+    if callable(log_fn):
+        log_fn(level, message, extra=extra)
+        return
+
+    level_name = logging.getLevelName(level)
+    if isinstance(level_name, str):
+        level_method = getattr(logger, level_name.lower(), None)
+        if callable(level_method):
+            level_method(message, extra=extra)
+            return
+
+    warn_fn = getattr(logger, "warning", None)
+    if callable(warn_fn):
+        warn_fn(message, extra=extra)
 
 
 def _env_float(default: float | str, *keys: str) -> float:
