@@ -152,6 +152,58 @@ def _ensure_override_state_current() -> None:
         _clear_cycle_overrides()
 
 
+def _safe_empty_should_emit(key: tuple[str, ...], when: datetime) -> bool:
+    hook = _empty_should_emit
+    if callable(hook):
+        try:
+            return bool(hook(key, when))
+        except Exception:
+            return False
+    return False
+
+
+def _safe_empty_record(key: tuple[str, ...], when: datetime) -> int:
+    hook = _empty_record
+    if callable(hook):
+        try:
+            result = hook(key, when)
+        except Exception:
+            return 0
+        return int(result) if result is not None else 0
+    return 0
+
+
+def _safe_empty_classify(**kwargs: Any) -> int:
+    hook = _empty_classify
+    if callable(hook):
+        try:
+            return int(hook(**kwargs))
+        except Exception:
+            return logging.INFO
+    return logging.INFO
+
+
+def _safe_backup_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
+    hook = _backup_get_bars
+    if callable(hook):
+        try:
+            return hook(symbol, start, end, interval)
+        except Exception:
+            pass
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        return []  # type: ignore[return-value]
+    return pd_local.DataFrame()
+
+
+def _time_now(default: float = 0.0) -> float:
+    time_fn = getattr(time, "time", None)
+    try:
+        return float(time_fn()) if callable(time_fn) else float(default)
+    except Exception:
+        return float(default)
+
+
 def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
     try:
         normalized_feed = _normalize_feed_value(feed)
@@ -164,7 +216,7 @@ def _record_override(symbol: str, feed: str, timeframe: str = "1Min") -> None:
         return
     tf_norm = _canon_tf(timeframe)
     _cycle_feed_override[symbol] = normalized_feed
-    _override_set_ts[symbol] = time.time()
+    _override_set_ts[symbol] = _time_now()
     _remember_fallback_for_cycle(_get_cycle_id(), symbol, tf_norm, normalized_feed)
 
 
@@ -177,7 +229,8 @@ def _get_cached_or_primary(symbol: str, primary_feed: str) -> str:
     cached = _cycle_feed_override.get(symbol)
     if cached:
         ts = _override_set_ts.get(symbol, 0.0)
-        if ts and (time.time() - ts) <= _OVERRIDE_TTL_S:
+        now_ts = _time_now(None)
+        if ts and now_ts is not None and (now_ts - ts) <= _OVERRIDE_TTL_S:
             return cached
         _clear_override(symbol)
     normalized_primary = str(primary_feed or "iex").strip().lower() or "iex"
@@ -244,7 +297,7 @@ _DAILY_TTL_S = 60.0
 def daily_fetch_memo(key: Tuple[str, str], value_factory):
     """Memoize intraday daily fetch results for a short TTL."""
 
-    now = time.time()
+    now = _time_now()
     cached = _daily_memo.get(key)
     if cached is not None:
         ts, value = cached
@@ -1015,7 +1068,7 @@ def _mark_fallback(
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     except Exception:
-        now_s = int(time.time())
+        now_s = int(_time_now())
     _FALLBACK_UNTIL[(symbol, timeframe)] = now_s + max(30, _FALLBACK_TTL_SECONDS)
 
 
@@ -3884,7 +3937,7 @@ def _repair_rth_minute_gaps(
             missing_end = None
         if missing_start is not None and missing_end is not None:
             try:
-                fallback_df = _backup_get_bars(
+                fallback_df = _safe_backup_get_bars(
                     symbol,
                     missing_start,
                     missing_end,
@@ -4129,7 +4182,10 @@ def _ensure_requests():
                     class _Shim(real):  # type: ignore[misc]
                         pass
 
-                    placeholder.__bases__ = (_Shim,)
+                    try:
+                        placeholder.__bases__ = (_Shim,)
+                    except TypeError:
+                        continue
         except Exception:  # pragma: no cover - optional dependency
             requests = _RequestsModulePlaceholder()
     return requests
@@ -4387,7 +4443,7 @@ def _fetch_bars(
         tags = _tags(provider=resolved_provider, feed=feed_tag)
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         _state["last_fallback_feed"] = feed_tag
-        fallback_df = _backup_get_bars(symbol, _start, _end, interval=interval_code)
+        fallback_df = _safe_backup_get_bars(symbol, _start, _end, interval=interval_code)
         annotated_df = _annotate_df_source(
             fallback_df,
             provider=resolved_provider,
@@ -4606,7 +4662,7 @@ def _fetch_bars(
     try:
         now_s = int(_dt.datetime.now(tz=UTC).timestamp())
     except Exception:
-        now_s = int(time.time())
+        now_s = int(_time_now())
     until = _FALLBACK_UNTIL.get((symbol, _interval))
     if until and now_s < until:
         interval_map = {"1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "60m", "1Day": "1d"}
@@ -4798,8 +4854,6 @@ def _fetch_bars(
                 and bound_func is default_session_get
             ):
                 use_session_get = False
-        if use_session_get and _state.get("retries", 0) >= 1:
-            use_session_get = False
         prev_corr = _state.get("corr_id")
         try:
             params = _build_request_params()
@@ -5098,7 +5152,7 @@ def _fetch_bars(
                 fb_int = interval_map.get(_interval)
                 if fb_int:
                     try:
-                        fallback_df = _backup_get_bars(symbol, _start, _end, interval=fb_int)
+                        fallback_df = _safe_backup_get_bars(symbol, _start, _end, interval=fb_int)
                     except Exception:
                         fallback_df = pd.DataFrame()
                     provider_str, normalized_provider = _resolve_backup_provider()
@@ -5321,9 +5375,9 @@ def _fetch_bars(
                 if market_open:
                     _now = datetime.now(UTC)
                     _key = (symbol, "AVAILABLE", _now.date().isoformat(), _feed, _interval)
-                    if _empty_should_emit(_key, _now):
-                        lvl = _empty_classify(is_market_open=True)
-                        cnt = _empty_record(_key, _now)
+                    if _safe_empty_should_emit(_key, _now):
+                        lvl = _safe_empty_classify(is_market_open=True)
+                        cnt = _safe_empty_record(_key, _now)
                         logger.log(
                             lvl,
                             "EMPTY_DATA",
@@ -5639,9 +5693,9 @@ def _fetch_bars(
             except Exception:  # pragma: no cover - defensive
                 _open = False
             if _open:
-                if _empty_should_emit(_key, _now):
-                    lvl = _empty_classify(is_market_open=True)
-                    cnt = _empty_record(_key, _now)
+                if _safe_empty_should_emit(_key, _now):
+                    lvl = _safe_empty_classify(is_market_open=True)
+                    cnt = _safe_empty_record(_key, _now)
                     logger.log(
                         lvl,
                         "EMPTY_DATA",
@@ -6361,7 +6415,7 @@ def get_minute_df(
                 if backup_end_dt != end_dt:
                     end_dt = backup_end_dt
             try:
-                df = _backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
+                df = _safe_backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
             except Exception:
                 df = None
             else:
@@ -6712,7 +6766,7 @@ def get_minute_df(
             cur_start = start_dt
             while cur_start < end_dt:
                 cur_end = min(cur_start + max_span, end_dt)
-                dfs.append(_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
+                dfs.append(_safe_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
                 used_backup = True
                 cur_start = cur_end
             if pd is not None and dfs:
@@ -6744,7 +6798,7 @@ def get_minute_df(
             else:
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
         else:
-            df = _backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+            df = _safe_backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
             if df is not None and not getattr(df, "empty", True):
                 fallback_frame = df
@@ -7089,7 +7143,7 @@ def get_daily_df(
     if not use_alpaca:
         start_dt = ensure_datetime(start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10))
         end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
-        df = _backup_get_bars(symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"))
+        df = _safe_backup_get_bars(symbol, start_dt, end_dt, interval=_YF_INTERVAL_MAP.get("1Day", "1d"))
         if df is None or getattr(df, "empty", False):
             try:
                 from ai_trading import alpaca_api as _bars_mod
@@ -7194,7 +7248,7 @@ def get_daily_df(
             start if start is not None else datetime.now(UTC) - _dt.timedelta(days=10)
         )
         end_dt = ensure_datetime(end if end is not None else datetime.now(UTC))
-        fallback_df = _backup_get_bars(
+        fallback_df = _safe_backup_get_bars(
             symbol,
             start_dt,
             end_dt,
@@ -7342,7 +7396,7 @@ def get_bars(
         # Best effort: daily vs intraday
         y_int = "1d" if tf_norm.lower() in {"1day", "day", "1d"} else "1m"
         try:
-            return _backup_get_bars(symbol, ensure_datetime(start), ensure_datetime(end), interval=y_int)
+            return _safe_backup_get_bars(symbol, ensure_datetime(start), ensure_datetime(end), interval=y_int)
         except Exception:
             # Defer to Alpaca path (will return None) to preserve behavior
             return _fetch_bars(symbol, start, end, timeframe, feed=feed, adjustment=adjustment)
