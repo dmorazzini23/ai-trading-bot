@@ -7,7 +7,6 @@ ENV AI_TRADING_MODEL_MODULE=ai_trading.model_loader \
 COPY . .
 RUN mkdir -p $AI_TRADING_DATA_DIR $AI_TRADING_CACHE_DIR $AI_TRADING_LOG_DIR \
     && chmod 700 $AI_TRADING_DATA_DIR $AI_TRADING_CACHE_DIR $AI_TRADING_LOG_DIR \
-    && (pip uninstall -y alpaca-trade-api || true) \
     && pip install -r requirements.txt \
     && pip install .[ml]
 VOLUME ["/var/lib/ai-trading-bot", "/var/cache/ai-trading-bot", "/var/log/ai-trading-bot"]

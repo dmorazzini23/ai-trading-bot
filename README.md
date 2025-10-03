@@ -18,8 +18,8 @@ A sophisticated **AI-powered algorithmic trading system** that combines machine 
 
 ```bash
 python -m pip install -U pip
-pip install -e .  # installs alpaca-py==0.42.0
-python -c "from alpaca.trading.client import TradingClient"  # verify alpaca-py
+pip install -e .  # installs alpaca-trade-api==3.2.0 and alpaca-py==0.42.1
+python -c "import alpaca_trade_api, pkgutil; assert alpaca_trade_api.__version__=='3.2.0'"  # verify runtime SDK pin
 python -m ai_trading --dry-run
 ruff check .
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
@@ -28,7 +28,7 @@ curl -s http://127.0.0.1:9101/healthz
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9101/metrics
 ```
 
-The import test confirms the Alpaca SDK is ready; if it fails, install it with `pip install alpaca-py`.
+The runtime SDK check ensures `alpaca-trade-api==3.2.0` is active; install it explicitly with `pip install alpaca-trade-api==3.2.0` if the assertion fails.
 
 The dry run exits with status **0** and prints `INDICATOR_IMPORT_OK`, confirming optional indicator modules are available.
 
@@ -39,8 +39,7 @@ Set `RUN_HEALTHCHECK=1` to launch the lightweight Flask app that serves:
 
 The health server binds to `HEALTHCHECK_PORT` (default **9101**) and must not reuse the API port (**9001**).
 
-Use **one** Alpaca SDK in production (recommended: `alpaca-py`).
-Remove legacy `alpaca-trade-api` if present (`pip uninstall -y alpaca-trade-api`).
+Runtime pins to **`alpaca-trade-api==3.2.0`**; the repo also installs **`alpaca-py==0.42.1`** for tests and helper utilities.
 Startup validates required environment variables (API keys, feed selection, risk
 parameters) at launch and exits early with clear remediation hints if
 configuration is missing.
