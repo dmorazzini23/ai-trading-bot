@@ -1390,17 +1390,18 @@ def test_get_minute_df_handles_missing_safe_get(monkeypatch):
 
     def fake_get_stock_bars(client, req, symbol, context=None):
         calls.append(context or "")
-        return pd.DataFrame(
+        legacy_payload = pd.DataFrame(
             {
+                "timestamp": list(idx),
                 "open": [1.0, 1.01, 1.02],
                 "high": [1.1, 1.11, 1.12],
                 "low": [0.9, 0.91, 0.92],
                 "close": [1.0, 1.01, 1.02],
                 "volume": [100, 110, 120],
                 "symbol": [symbol] * len(idx),
-            },
-            index=idx,
+            }
         )
+        return legacy_payload.reset_index(drop=True)
 
     class FrozenDatetime(datetime):
         @classmethod
@@ -1436,10 +1437,11 @@ def test_get_minute_df_handles_missing_safe_get(monkeypatch):
     result = fetcher.get_minute_df(ctx, "AAPL", lookback_minutes=2)
 
     assert isinstance(result, pd.DataFrame)
+    assert isinstance(result.index, pd.DatetimeIndex)
     expected_idx = idx.rename("timestamp")
     pd.testing.assert_index_equal(result.index, expected_idx)
-    assert idx.name is None
     assert result.index.name == "timestamp"
+    assert idx.name is None
     assert result.index.tz is not None
     assert result.index.tz.tzname(None) == UTC.tzname(None)
     assert list(result.columns[:5]) == ["open", "high", "low", "close", "volume"]
