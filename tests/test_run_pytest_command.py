@@ -5,7 +5,7 @@ import importlib.util as iu
 import os
 import sys
 
-from tools import run_pytest
+import tools.run_pytest as run_pytest
 
 
 def test_build_pytest_cmd_echo(monkeypatch):  # AI-AGENT-REF: verify exact command

@@ -30,7 +30,7 @@ def test_runner_echo_exact_command(tmp_path):  # AI-AGENT-REF: check exact runne
     proc = subprocess.run(args, capture_output=True, text=True, env=env)
     assert proc.returncode == 0
     echo = _first_echo_line(proc.stderr)
-    from tools import run_pytest
+    import tools.run_pytest as run_pytest
 
     cmd = [sys.executable, "-m", "pytest", "-q", "-W", "ignore"]
     addopts = os.environ.get("PYTEST_ADDOPTS", "")

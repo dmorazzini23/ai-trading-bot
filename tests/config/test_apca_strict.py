@@ -18,7 +18,7 @@ def test_apca_env_strict_raises(monkeypatch):
 
 def test_env_doctor_detects_process_env(monkeypatch):
     monkeypatch.setenv("APCA_FAKE", "1")
-    from tools import env_doctor
+    import tools.env_doctor as env_doctor
 
     exit_code = env_doctor.main()
     assert exit_code != 0
