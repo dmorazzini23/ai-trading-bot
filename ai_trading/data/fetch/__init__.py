@@ -61,6 +61,7 @@ from ai_trading.data.metrics import (
 )
 from ai_trading.data.provider_monitor import provider_monitor
 from ai_trading.core.daily_fetch_memo import get_daily_df_memoized
+from ai_trading.data.fetch_yf import fetch_yf_batched
 from .normalize import normalize_ohlcv_df
 from ai_trading.monitoring.alerts import AlertSeverity, AlertType
 from ai_trading.net.http import HTTPSession, get_http_session, reload_host_limit_if_env_changed
@@ -382,6 +383,23 @@ _YF_INTERVAL_MAP = {
     "1Hour": "60m",
     "1Day": "1d",
 }
+
+
+def fetch_daily_backup(
+    symbols: Iterable[str], *, start: Any | None = None, end: Any | None = None, period: str = "1y"
+) -> dict[str, pd.DataFrame]:
+    """Fetch daily bars via Yahoo Finance in batches returning normalized frames."""
+
+    results = fetch_yf_batched(symbols, start=start, end=end, period=period, interval="1d")
+    filtered: dict[str, pd.DataFrame] = {}
+    for symbol, frame in results.items():
+        if frame is None or frame.empty:
+            continue
+        normalized = normalize_ohlcv_df(frame, include_columns=("timestamp",))
+        if normalized is None or normalized.empty:  # type: ignore[truthy-bool]
+            continue
+        filtered[symbol] = normalized
+    return filtered
 
 
 # Lightweight indirection to support tests monkeypatching `data_fetcher.get_settings`
@@ -2245,27 +2263,8 @@ def ensure_ohlcv_schema(
             "raw_payload_symbol": payload_symbol,
         }
         extra = {k: v for k, v in extra.items() if v is not None}
-        logger.error("OHLCV_COLUMNS_MISSING", extra=extra)
-        reason = "close_column_missing" if "close" in missing else "ohlcv_columns_missing"
-        err = MissingOHLCVColumnsError(reason)
-        setattr(err, "fetch_reason", reason)
-        setattr(err, "missing_columns", tuple(missing))
-        if payload_symbol:
-            setattr(err, "symbol", payload_symbol)
-        setattr(err, "timeframe", frequency)
-        if payload_columns:
-            setattr(err, "raw_payload_columns", payload_columns)
-        if payload_keys:
-            setattr(err, "raw_payload_keys", payload_keys)
-        if payload_feed:
-            setattr(err, "raw_payload_feed", payload_feed)
-        if payload_timeframe:
-            setattr(err, "raw_payload_timeframe", payload_timeframe)
-        if payload_provider:
-            setattr(err, "raw_payload_provider", payload_provider)
-        if payload_symbol:
-            setattr(err, "raw_payload_symbol", payload_symbol)
-        raise err
+        logger.debug("OHLCV_COLUMNS_MISSING", extra=extra)
+        return None
 
     if "volume" not in work_df.columns:
         work_df["volume"] = 0
@@ -3259,14 +3258,8 @@ def _flatten_and_normalize_ohlcv(
             "rows": int(getattr(df, "shape", (0, 0))[0]),
         }
         extra = {k: v for k, v in extra.items() if v is not None}
-        logger.error("OHLCV_COLUMNS_MISSING", extra=extra)
-        reason = "close_column_missing" if "close" in missing else "ohlcv_columns_missing"
-        err = MissingOHLCVColumnsError(reason)
-        setattr(err, "fetch_reason", reason)
-        setattr(err, "missing_columns", tuple(missing))
-        setattr(err, "symbol", symbol)
-        setattr(err, "timeframe", timeframe)
-        raise err
+        logger.debug("OHLCV_COLUMNS_MISSING", extra=extra)
+        return None
 
     # Ensure the primary OHLCV columns are numeric before downstream checks.
     for col in required:
@@ -3495,112 +3488,74 @@ def _set_price_reliability(
 
 def _yahoo_get_bars(symbol: str, start: Any, end: Any, interval: str) -> pd.DataFrame:
     """Return a DataFrame with a tz-aware 'timestamp' column between start and end."""
-    pd = _ensure_pandas()
-    yf = _ensure_yfinance()
+
+    pd_local = _ensure_pandas()
+    if pd_local is None:
+        return []  # type: ignore[return-value]
+
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    if str(interval).lower() in {"1m", "1min", "1minute"}:
-        safe_end = _last_complete_minute(pd)
+    interval_norm = str(interval).lower()
+
+    if interval_norm in {"1m", "1min", "1minute"}:
+        safe_end = _last_complete_minute(pd_local)
         if end_dt > safe_end:
             end_dt = max(start_dt, safe_end)
-    window_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
-    if pd is None:
-        return []  # type: ignore[return-value]
-    if getattr(yf, "download", None) is None:
-        empty_cols = ["timestamp", "open", "high", "low", "close", "volume"]
-        return pd.DataFrame(columns=empty_cols)
-    error_cls = None
-    try:
-        error_cls = getattr(getattr(yf, "shared", None), "YFPricesMissingError", None)
-    except Exception:
-        error_cls = None
 
-    def _download(_start: _dt.datetime) -> pd.DataFrame | None:
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
-            return yf.download(
-                symbol,
-                start=_start,
-                end=end_dt,
-                interval=interval,
-                auto_adjust=True,
-                threads=False,
-                progress=False,
-                group_by="column",
+    def _empty_frame() -> pd.DataFrame:
+        idx = pd_local.DatetimeIndex([], tz="UTC", name="timestamp")
+        cols = ["timestamp", "open", "high", "low", "close", "volume"]
+        return pd_local.DataFrame(columns=cols, index=idx).reset_index(drop=True)
+
+    chunk_span = _dt.timedelta(days=7)
+    needs_chunk = interval_norm in {"1m", "1min", "1minute"} and (end_dt - start_dt) > chunk_span
+
+    frames: list[pd.DataFrame] = []
+    if needs_chunk:
+        cur_start = start_dt
+        while cur_start < end_dt:
+            cur_end = min(cur_start + chunk_span, end_dt)
+            df_map = fetch_yf_batched(
+                [symbol],
+                start=cur_start,
+                end=cur_end,
+                period="1y",
+                interval=interval_norm,
             )
-
-    try:
-        df = _download(start_dt)
-    except Exception as exc:  # pragma: no cover - yfinance error formatting varies
-        message = str(exc).lower()
-        if (error_cls and isinstance(exc, error_cls)) or "possibly delisted" in message:
-            _log_yf_warning(
-                "YF_PRICES_MISSING",
-                symbol,
-                interval,
-                {
-                    "symbol": symbol,
-                    "interval": interval,
-                    "detail": str(exc),
-                },
-            )
-            metrics.empty_payload += 1
-            idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-            cols = ["open", "high", "low", "close", "volume"]
-            return pd.DataFrame(columns=cols, index=idx).reset_index()
-        raise
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message=".*auto_adjust.*", module="yfinance")
-    if df is None or getattr(df, "empty", True):
-        metrics.empty_payload += 1
-        if window_seconds < 180:
-            widened_start = start_dt - _dt.timedelta(minutes=3)
+            frame = df_map.get(symbol)
+            if frame is not None and not frame.empty:
+                frame = frame.copy()
+                frame.index.name = "timestamp"
+                frames.append(frame.reset_index())
+            cur_start = cur_end
+        if frames:
+            combined = pd_local.concat(frames, ignore_index=True)
             try:
-                widened = _download(widened_start)
-            except Exception as exc:
-                message = str(exc).lower()
-                if (error_cls and isinstance(exc, error_cls)) or "possibly delisted" in message:
-                    _log_yf_warning(
-                        "YF_PRICES_MISSING",
-                        symbol,
-                        interval,
-                        {
-                            "symbol": symbol,
-                            "interval": interval,
-                            "detail": str(exc),
-                            "phase": "widened",
-                        },
-                    )
-                    widened = None
-                else:
-                    widened = None
-            if widened is not None and not getattr(widened, "empty", True):
-                df = widened
-        if df is None or getattr(df, "empty", True):
-            _log_yf_warning(
-                "YAHOO_EDGE_WINDOW_EMPTY",
-                symbol,
-                interval,
-                {
-                    "symbol": symbol,
-                    "interval": interval,
-                    "start": start_dt.isoformat(),
-                    "end": end_dt.isoformat(),
-                    "window_seconds": window_seconds,
-                },
-            )
-            idx = pd.DatetimeIndex([], tz="UTC", name="timestamp")
-            cols = ["open", "high", "low", "close", "volume"]
-            return pd.DataFrame(columns=cols, index=idx).reset_index()
-    df = df.reset_index().rename(columns={df.index.name or "Date": "timestamp"})
-    if "timestamp" not in df.columns:
-        for c in df.columns:
-            if c.lower() in ("date", "datetime"):
-                df = df.rename(columns={c: "timestamp"})
-                break
-    df = _flatten_and_normalize_ohlcv(df, symbol, interval)
-    return df
+                combined["timestamp"] = pd_local.to_datetime(
+                    combined["timestamp"], utc=True, errors="coerce"
+                )
+            except Exception:
+                combined = combined.drop(columns=["timestamp"], errors="ignore")
+                return _empty_frame()
+            combined = combined.dropna(subset=["timestamp"])
+            combined = combined.sort_values("timestamp")
+            combined = combined.drop_duplicates(subset="timestamp", keep="last")
+            combined = combined.reset_index(drop=True)
+            return combined
+
+    df_map = fetch_yf_batched(
+        [symbol],
+        start=start_dt,
+        end=end_dt,
+        period="1y",
+        interval=interval_norm,
+    )
+    frame = df_map.get(symbol)
+    if frame is None or frame.empty:
+        return _empty_frame()
+    frame = frame.copy()
+    frame.index.name = "timestamp"
+    return frame.reset_index()
 
 
 def _finnhub_resolution(interval: str) -> str | None:
@@ -7548,6 +7503,7 @@ __all__ = [
     "_alpaca_get_bars",
     "get_daily",
     "fetch_daily_data_async",
+    "fetch_daily_backup",
     "_yahoo_get_bars",
     "_backup_get_bars",
     "_fetch_bars",

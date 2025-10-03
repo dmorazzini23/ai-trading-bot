@@ -480,6 +480,8 @@ def _resolve_rate_limit_window() -> float:
 
 
 _RATE_LIMIT_TRACKER = RateLimitedEventTracker(_resolve_rate_limit_window())
+_SUMMARY_LAST_EMIT: dict[str, float] = {}
+_SUMMARY_CAP_SECONDS = 3600.0
 
 
 def _get_rate_limit_tracker() -> RateLimitedEventTracker:
@@ -490,9 +492,14 @@ def _get_rate_limit_tracker() -> RateLimitedEventTracker:
 
 
 def _emit_rate_limit_summaries(summaries: list[RateLimitedSummary]) -> None:
+    now = _monotonic_time()
     for summary in summaries:
         if summary.suppressed < 3:
             continue
+        last_emit = _SUMMARY_LAST_EMIT.get(summary.key)
+        if last_emit is not None and now - last_emit < _SUMMARY_CAP_SECONDS:
+            continue
+        _SUMMARY_LAST_EMIT[summary.key] = now
         parts = [
             f'LOG_THROTTLE_SUMMARY | key="{summary.key}" suppressed={summary.suppressed}',
             f"window_s={summary.window_s:.1f}",
