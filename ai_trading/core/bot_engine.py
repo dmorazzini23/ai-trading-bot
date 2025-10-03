@@ -7980,17 +7980,27 @@ class DataFetcher:
                 return None
             return ts
 
-        def _normalize_memo_entry(entry: Any) -> tuple[float | None, Any | None, bool]:
+        def _normalize_memo_entry(
+            entry: Any,
+        ) -> tuple[float | None, Any | None, tuple[float, Any] | None]:
             if isinstance(entry, tuple) and len(entry) == 2:
                 first, second = entry
                 ts_first = _coerce_memo_timestamp(first)
                 if ts_first is not None:
-                    return ts_first, second, True
+                    payload = second if second is not None else None
+                    normalized_pair = (
+                        (ts_first, payload) if payload is not None else None
+                    )
+                    return ts_first, payload, normalized_pair
                 ts_second = _coerce_memo_timestamp(second)
                 if ts_second is not None:
-                    return ts_second, first, False
+                    payload = first if first is not None else None
+                    normalized_pair = (
+                        (ts_second, payload) if payload is not None else None
+                    )
+                    return ts_second, payload, normalized_pair
                 payload = second if second is not None else first
-                return None, payload, True
+                return None, payload, None
             if isinstance(entry, MappingABC):
                 ts_value: float | None = None
                 payload: Any | None = None
@@ -8035,9 +8045,14 @@ class DataFetcher:
                             payload = value
                             break
                 if payload is not None:
-                    return ts_value, payload, True
-                return ts_value, None, False
-            return None, None, False
+                    normalized_pair = (
+                        (ts_value, payload)
+                        if ts_value is not None
+                        else None
+                    )
+                    return ts_value, payload, normalized_pair
+                return ts_value, None, None
+            return None, None, None
 
         def _memo_get_entry(key: tuple[str, ...]) -> Any:
             getter = getattr(_DAILY_FETCH_MEMO, "get", None)
@@ -8142,11 +8157,18 @@ class DataFetcher:
             refresh_provider_key = fallback_provider_key_local
             return _finalize_cached_return()
 
+        memo_hit = False
+
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window
             canonical_entry = _memo_get_entry(memo_key)
             if canonical_entry is not None:
-                entry_ts, entry_df, _ = _normalize_memo_entry(canonical_entry)
+                entry_ts, entry_df, normalized_pair = _normalize_memo_entry(
+                    canonical_entry
+                )
+                if normalized_pair is not None:
+                    _memo_set_entry(memo_key, normalized_pair)
+                    _memo_set_entry(legacy_memo_key, normalized_pair)
                 if entry_df is not None:
                     age = None if entry_ts is None else now_monotonic - entry_ts
                     if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
@@ -8155,6 +8177,7 @@ class DataFetcher:
                         refresh_stamp = now_monotonic
                         refresh_df = cached_df
                         refresh_source = "memo"
+                        memo_hit = True
                     else:
                         if (
                             fallback_entry is None
@@ -8171,10 +8194,15 @@ class DataFetcher:
                             _memo_pop_entry(legacy_memo_key)
                 else:
                     _memo_pop_entry(memo_key)
-            if cached_df is None:
+            if not memo_hit and cached_df is None:
                 legacy_entry = _memo_get_entry(legacy_memo_key)
                 if legacy_entry is not None:
-                    entry_ts, entry_df, _ = _normalize_memo_entry(legacy_entry)
+                    entry_ts, entry_df, normalized_pair = _normalize_memo_entry(
+                        legacy_entry
+                    )
+                    if normalized_pair is not None:
+                        _memo_set_entry(memo_key, normalized_pair)
+                        _memo_set_entry(legacy_memo_key, normalized_pair)
                     if entry_df is not None:
                         age = None if entry_ts is None else now_monotonic - entry_ts
                         if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
@@ -8183,6 +8211,7 @@ class DataFetcher:
                             refresh_stamp = now_monotonic
                             refresh_df = cached_df
                             refresh_source = "memo"
+                            memo_hit = True
                         else:
                             if (
                                 fallback_entry is None
@@ -8198,7 +8227,7 @@ class DataFetcher:
                                 _memo_pop_entry(legacy_memo_key)
                     else:
                         _memo_pop_entry(legacy_memo_key)
-            if cached_df is None:
+            if not memo_hit and cached_df is None:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
