@@ -22,7 +22,7 @@ from ai_trading.utils.time import now_utc
 from .timeutils import ensure_utc_datetime, expected_regular_minutes
 from .models import StockBarsRequest, TimeFrame
 from ._alpaca_guard import should_import_alpaca_sdk
-from .fetch.sip_disallowed import sip_disallowed
+from .fetch.sip_disallowed import sip_disallowed, sip_credentials_missing
 import time
 
 try:  # pragma: no cover - requests optional
@@ -426,21 +426,22 @@ def _ensure_entitled_feed(client: Any, requested: str) -> str:
         env_flag = _env_bool("ALPACA_HAS_SIP")
 
     sip_allowed = not sip_disallowed()
-    if allow_explicit_disallow:
-        sip_allowed = False
-    elif allow_override is True:
+    explicit_env_disallow = allow_explicit_disallow or env_flag is False
+    explicit_env_allow = allow_override is True or env_flag is True
+
+    if allow_override is True:
         sip_allowed = True
-    elif sip_capability and not sip_allowed:
+    elif explicit_env_disallow:
+        sip_allowed = False
+    elif sip_capability and not sip_allowed and sip_credentials_missing():
         sip_allowed = True
 
     sip_entitled_flag = False
-    if allow_explicit_disallow:
+    if explicit_env_disallow:
         sip_entitled_flag = False
-    elif env_flag is True:
+    elif explicit_env_allow:
         sip_entitled_flag = True
-    elif env_flag is False:
-        sip_entitled_flag = False
-    elif sip_allowed and sip_capability:
+    elif sip_capability and sip_allowed:
         sip_entitled_flag = True
     prefer_sip = normalized_req == "sip"
     resolved = get_alpaca_feed(prefer_sip, sip_entitled=sip_entitled_flag)

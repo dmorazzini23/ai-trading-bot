@@ -5,6 +5,16 @@ from __future__ import annotations
 from ai_trading.utils.environment import env
 
 
+def _has_alpaca_credentials() -> bool:
+    return bool(env.ALPACA_KEY) and bool(env.ALPACA_SECRET)
+
+
+def sip_credentials_missing() -> bool:
+    """Return ``True`` when Alpaca API credentials are absent."""
+
+    return not _has_alpaca_credentials()
+
+
 def sip_disallowed() -> bool:
     """Return ``True`` when the SIP feed should not be used."""
 
@@ -27,10 +37,6 @@ def sip_disallowed() -> bool:
     if allow_flag is False:
         return True
 
-    has_creds = bool(env.ALPACA_KEY) and bool(env.ALPACA_SECRET)
-    if not has_creds:
-        return True
-
     explicit_entitlement = _coerce_flag(getattr(env, "ALPACA_SIP_ENTITLED", None))
     if explicit_entitlement is not None:
         return not explicit_entitlement
@@ -39,8 +45,11 @@ def sip_disallowed() -> bool:
     if has_sip is not None:
         return not has_sip
 
+    if not _has_alpaca_credentials():
+        return True
+
     return False
 
 
-__all__ = ["sip_disallowed"]
+__all__ = ["sip_disallowed", "sip_credentials_missing"]
 
