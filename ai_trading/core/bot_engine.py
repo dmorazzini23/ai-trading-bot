@@ -17,6 +17,7 @@ import tempfile
 import sys
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, TYPE_CHECKING, cast
 from collections import OrderedDict, deque
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo  # AI-AGENT-REF: timezone conversions
 from functools import cached_property, lru_cache
@@ -7873,17 +7874,108 @@ class DataFetcher:
             return ts
 
         def _normalize_memo_entry(entry: Any) -> tuple[float | None, Any | None, bool]:
-            if not isinstance(entry, tuple) or len(entry) != 2:
-                return None, None, False
-            first, second = entry
-            ts_first = _coerce_memo_timestamp(first)
-            if ts_first is not None:
-                return ts_first, second, True
-            ts_second = _coerce_memo_timestamp(second)
-            if ts_second is not None:
-                return ts_second, first, False
-            payload = second if second is not None else first
-            return None, payload, True
+            if isinstance(entry, tuple) and len(entry) == 2:
+                first, second = entry
+                ts_first = _coerce_memo_timestamp(first)
+                if ts_first is not None:
+                    return ts_first, second, True
+                ts_second = _coerce_memo_timestamp(second)
+                if ts_second is not None:
+                    return ts_second, first, False
+                payload = second if second is not None else first
+                return None, payload, True
+            if isinstance(entry, MappingABC):
+                ts_value: float | None = None
+                payload: Any | None = None
+                ts_candidates = (
+                    "ts",
+                    "timestamp",
+                    "stamp",
+                    "time",
+                    "monotonic",
+                    "memo_ts",
+                )
+                payload_candidates = (
+                    "df",
+                    "data",
+                    "value",
+                    "payload",
+                    "result",
+                    "memo",
+                    "bars",
+                )
+                for key in ts_candidates:
+                    if key in entry:
+                        ts_value = _coerce_memo_timestamp(entry[key])
+                        if ts_value is not None:
+                            break
+                for key in payload_candidates:
+                    if key in entry and entry[key] is not None:
+                        payload = entry[key]
+                        break
+                if payload is None:
+                    for key, value in entry.items():
+                        if key in ts_candidates:
+                            continue
+                        if isinstance(value, tuple) or isinstance(value, MappingABC):
+                            nested_ts, nested_payload, _ = _normalize_memo_entry(value)
+                            if nested_payload is not None:
+                                if ts_value is None:
+                                    ts_value = nested_ts
+                                payload = nested_payload
+                                break
+                        elif value is not None:
+                            payload = value
+                            break
+                if payload is not None:
+                    return ts_value, payload, True
+                return ts_value, None, False
+            return None, None, False
+
+        def _memo_get_entry(key: tuple[str, ...]) -> Any:
+            getter = getattr(_DAILY_FETCH_MEMO, "get", None)
+            if callable(getter):
+                try:
+                    return getter(key)
+                except TypeError:
+                    pass
+            try:
+                return _DAILY_FETCH_MEMO[key]  # type: ignore[index]
+            except Exception:
+                return None
+
+        def _memo_set_entry(key: tuple[str, ...], value: tuple[float, Any]) -> None:
+            try:
+                _DAILY_FETCH_MEMO[key] = value
+                return
+            except TypeError:
+                pass
+            setter = getattr(_DAILY_FETCH_MEMO, "__setitem__", None)
+            if callable(setter):
+                setter(key, value)
+
+        def _memo_pop_entry(key: tuple[str, ...]) -> None:
+            popper = getattr(_DAILY_FETCH_MEMO, "pop", None)
+            if callable(popper):
+                try:
+                    popper(key, None)
+                    return
+                except TypeError:
+                    try:
+                        popper(key)
+                        return
+                    except Exception:
+                        pass
+                except Exception:
+                    return
+            deleter = getattr(_DAILY_FETCH_MEMO, "__delitem__", None)
+            if callable(deleter):
+                try:
+                    deleter(key)
+                except KeyError:
+                    pass
+                except Exception:
+                    pass
 
         refresh_stamp: float | None = None
         refresh_df: Any | None = None
@@ -7897,8 +7989,9 @@ class DataFetcher:
                 return None
             if refresh_stamp is not None:
                 with cache_lock:
-                    _DAILY_FETCH_MEMO[memo_key] = (refresh_stamp, refresh_df)
-                    _DAILY_FETCH_MEMO[legacy_memo_key] = (refresh_stamp, refresh_df)
+                    if refresh_df is not None:
+                        _memo_set_entry(memo_key, (refresh_stamp, refresh_df))
+                        _memo_set_entry(legacy_memo_key, (refresh_stamp, refresh_df))
                     if refresh_source in {"cache", "provider_session"}:
                         self._daily_cache[symbol] = (fetch_date, refresh_df)
                     if (
@@ -7944,7 +8037,7 @@ class DataFetcher:
 
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window
-            canonical_entry = _DAILY_FETCH_MEMO.get(memo_key)
+            canonical_entry = _memo_get_entry(memo_key)
             if canonical_entry is not None:
                 entry_ts, entry_df, _ = _normalize_memo_entry(canonical_entry)
                 if entry_df is not None:
@@ -7966,13 +8059,13 @@ class DataFetcher:
                                 "memo",
                                 None,
                             )
-                        _DAILY_FETCH_MEMO.pop(memo_key, None)
+                        _memo_pop_entry(memo_key)
                         if age > ttl_window:
-                            _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                            _memo_pop_entry(legacy_memo_key)
                 else:
-                    _DAILY_FETCH_MEMO.pop(memo_key, None)
+                    _memo_pop_entry(memo_key)
             if cached_df is None:
-                legacy_entry = _DAILY_FETCH_MEMO.get(legacy_memo_key)
+                legacy_entry = _memo_get_entry(legacy_memo_key)
                 if legacy_entry is not None:
                     entry_ts, entry_df, _ = _normalize_memo_entry(legacy_entry)
                     if entry_df is not None:
@@ -7995,9 +8088,9 @@ class DataFetcher:
                                     None,
                                 )
                             if age > ttl_window:
-                                _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                                _memo_pop_entry(legacy_memo_key)
                     else:
-                        _DAILY_FETCH_MEMO.pop(legacy_memo_key, None)
+                        _memo_pop_entry(legacy_memo_key)
             if cached_df is None:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
@@ -8199,8 +8292,8 @@ class DataFetcher:
             actual_provider = self._infer_provider_label(df, planned_provider)
             provider_session_key = (actual_provider, fetch_date.isoformat(), symbol)
             self._daily_cache[symbol] = (fetch_date, df)
-            _DAILY_FETCH_MEMO[memo_key] = (stamp, df)
-            _DAILY_FETCH_MEMO[legacy_memo_key] = (stamp, df)
+            _memo_set_entry(memo_key, (stamp, df))
+            _memo_set_entry(legacy_memo_key, (stamp, df))
             _DAILY_PROVIDER_SESSION_CACHE[provider_session_key] = (df, stamp)
             _DAILY_PROVIDER_REQUEST_LOG[(actual_provider, fetch_date.isoformat())] = stamp
             self._daily_error_state.pop(error_key, None)

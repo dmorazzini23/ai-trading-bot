@@ -147,8 +147,8 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     memo_df = {"memo": True}
     cached_df = {"cached": True}
 
-    be._DAILY_FETCH_MEMO_TTL = 60.0
-    be._DAILY_FETCH_MEMO = {memo_key: (5.0, memo_df)}
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", {memo_key: (5.0, memo_df)}, raising=False)
     fetcher._daily_cache[symbol] = (fetch_date, cached_df)
 
     first = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
@@ -163,6 +163,65 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     updated_stamp, updated_df = be._DAILY_FETCH_MEMO[memo_key]
     assert updated_df is cached_df
     assert updated_stamp > first_stamp
+
+
+@pytest.mark.parametrize(
+    "legacy_entry",
+    [
+        {"timestamp": 5.0, "df": {"memo": True}},
+        {"df": {"memo": True}},
+    ],
+)
+def test_daily_fetch_legacy_memo_dict_short_circuits(monkeypatch, legacy_entry):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+
+    monotonic_values = iter([10.0, 11.0, 120.0, 121.0, 130.0])
+    monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    legacy_key = (symbol, fetch_date.isoformat())
+
+    stale_cache_df = {"cache": True}
+    fetcher._daily_cache[symbol] = (fetch_date, stale_cache_df)
+
+    class StrictMemo(dict):
+        def pop(self, *_args, **_kwargs):  # pragma: no cover - validate no removal
+            raise AssertionError("memo pop should not execute for valid entries")
+
+    memo_store = StrictMemo()
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
+    entry_copy = dict(legacy_entry)
+    memo_payload = entry_copy.get("df") or entry_copy.get("data") or entry_copy.get("value")
+    if memo_payload is None:
+        memo_payload = {"memo": True}
+        entry_copy.setdefault("df", memo_payload)
+    memo_store[legacy_key] = entry_copy
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+
+    assert result is memo_payload
+    canonical_keys = [key for key in memo_store.keys() if len(key) == 4]
+    assert canonical_keys
+    canonical_entry = memo_store[canonical_keys[0]]
+    assert canonical_entry[1] is memo_payload
+    assert memo_store[legacy_key][1] is memo_payload
+    assert isinstance(canonical_entry, tuple)
+    assert isinstance(memo_store[legacy_key], tuple)
+    assert fetcher._daily_cache[symbol][1] is stale_cache_df
 
 
 def test_daily_fetch_memo_handles_generator_factory():
