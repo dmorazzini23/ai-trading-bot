@@ -4348,6 +4348,10 @@ def _fetch_bars(
         "empty_metric_emitted": False,
     }
 
+    def _register_provider_attempt(feed_name: str) -> None:
+        providers = _state.setdefault("providers", [])
+        providers.append(feed_name)
+
     success_metrics: dict[str, Any] = {
         "success_emitted": False,
         "fallback_tags": None,
@@ -4678,7 +4682,7 @@ def _fetch_bars(
     ) -> pd.DataFrame:
         nonlocal _interval, _feed, _start, _end
         global _SIP_UNAUTHORIZED, _alpaca_empty_streak, _alpaca_disabled_until, _alpaca_disable_count, _ALPACA_DISABLED_ALERTED
-        _state["providers"].append(_feed)
+        _register_provider_attempt(_feed)
 
         if session is None or not hasattr(session, "get"):
             raise ValueError("session_required")
@@ -4715,6 +4719,7 @@ def _fetch_bars(
             fb_interval, fb_feed, fb_start, fb_end = fb
             if fb_feed == "sip" and (not skip_check):
                 if not _sip_fallback_allowed(session, headers, fb_interval):
+                    _register_provider_attempt(fb_feed)
                     _log_sip_unavailable(symbol, fb_interval, "UNAUTHORIZED_SIP")
                     return None
             from_feed = _feed
@@ -4793,6 +4798,8 @@ def _fetch_bars(
                 and bound_func is default_session_get
             ):
                 use_session_get = False
+        if use_session_get and _state.get("retries", 0) >= 1:
+            use_session_get = False
         prev_corr = _state.get("corr_id")
         try:
             params = _build_request_params()
@@ -5431,6 +5438,7 @@ def _fetch_bars(
                         break
                     fallback_attempted = True
                     call_attempts.add(alt_feed)
+                    _register_provider_attempt(alt_feed)
                     _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(alt_feed)
                     fallback_result = _attempt_fallback((base_interval, alt_feed, base_start, base_end))
                     if fallback_result is not None and not getattr(fallback_result, "empty", True):
@@ -5481,6 +5489,7 @@ def _fetch_bars(
             if fallback:
                 fb_interval, fb_feed, fb_start, fb_end = fallback
                 call_attempts.add(fb_feed)
+                _register_provider_attempt(fb_feed)
                 _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fb_feed)
                 result = _attempt_fallback(fallback, skip_check=True)
                 if result is not None and not getattr(result, "empty", True):
