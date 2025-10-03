@@ -8439,6 +8439,7 @@ class DataFetcher:
     ) -> pd.DataFrame | None:
         symbol = symbol.upper()
         now_utc = datetime.now(UTC)
+        market_open_now = bool(is_market_open())
         last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(
             minutes=1
         )
