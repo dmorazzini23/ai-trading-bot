@@ -64,12 +64,15 @@ def test_log_iex_minute_stale_includes_attrs(monkeypatch):
     recorder = _Recorder()
     monkeypatch.setattr(bot_engine, "logger", recorder)
 
-    bot_engine._log_iex_minute_stale(
-        symbol="AAPL",
-        age_seconds=720,
-        retry_feed="sip",
-        frame=frame,
-    )
+    try:
+        bot_engine._log_iex_minute_stale(
+            symbol="AAPL",
+            age_seconds=720,
+            retry_feed="sip",
+            frame=frame,
+        )
+    except Exception as exc:  # pragma: no cover - explicit guard for stub compatibility
+        pytest.fail(f"_log_iex_minute_stale raised unexpectedly: {exc!r}")
 
     assert recorder.calls
     message, extra = recorder.calls[-1]
