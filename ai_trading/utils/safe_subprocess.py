@@ -6,7 +6,7 @@ import shlex
 import subprocess
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Sequence
+from typing import NoReturn, Sequence
 
 from ai_trading.logging import get_logger
 
@@ -76,7 +76,7 @@ def safe_subprocess_run(
         stdout_text, stderr_text = proc.communicate(timeout=run_timeout)
     except subprocess.TimeoutExpired as exc:
         exc.timeout = run_timeout
-        raise _augment_timeout_exception(proc, exc) from None
+        _augment_timeout_exception(proc, exc)
     except subprocess.SubprocessError as exc:
         with suppress(ProcessLookupError):
             proc.kill()
@@ -107,7 +107,7 @@ def _normalize_stream(stream: str | bytes | None) -> str:
 def _augment_timeout_exception(
     proc: subprocess.Popen[bytes] | subprocess.Popen[str],
     exc: subprocess.TimeoutExpired,
-) -> subprocess.TimeoutExpired:
+) -> NoReturn:
     """Populate timeout exception metadata before re-raising."""
 
     with suppress(ProcessLookupError):
@@ -129,7 +129,8 @@ def _augment_timeout_exception(
     collected_stderr = _merge_streams(getattr(exc, "stderr", None), stderr_after)
 
     result = SafeSubprocessResult(collected_stdout, collected_stderr, 124, True)
+    proc.returncode = 124
     exc.stdout = collected_stdout
     exc.stderr = collected_stderr
     exc.result = result
-    return exc
+    raise exc
