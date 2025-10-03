@@ -135,13 +135,14 @@ def create_app():
         )
 
         response_payload = _merge_payloads(canonical_payload, fallback_payload)
+        sanitized_payload = _ensure_core_fields(dict(response_payload))
 
         func = globals().get("jsonify")
         fallback_used = False
         fallback_reasons: list[str] = []
         if callable(func):
             try:
-                response = func(_ensure_core_fields(dict(response_payload)))
+                response = func(dict(sanitized_payload))
             except Exception as exc:  # pragma: no cover - defensive fallback
                 _log.exception("HEALTH_JSONIFY_FALLBACK", exc_info=exc)
                 fallback_used = True
@@ -165,7 +166,7 @@ def create_app():
                     fallback_reasons.append(import_reason)
                 fallback_reasons.append("ImportError")
 
-        final_payload = _ensure_core_fields(dict(response_payload))
+        final_payload = dict(sanitized_payload)
 
         if fallback_used:
             final_payload["ok"] = False
@@ -178,7 +179,7 @@ def create_app():
         final_payload = _ensure_core_fields(final_payload)
 
         message_candidates: list[str] = []
-        existing_error = response_payload.get("error")
+        existing_error = final_payload.get("error")
         if existing_error is None:
             existing_error = fallback_payload.get("error") or canonical_payload.get("error")
         existing_error_str: str | None = None
