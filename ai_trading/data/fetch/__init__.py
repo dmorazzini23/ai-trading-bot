@@ -4536,8 +4536,6 @@ def _fetch_bars(
         )
         _state["skip_empty_metrics"] = True
         short_circuit_empty = True
-        empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
     else:
         _state["skip_empty_metrics"] = False
     if not _has_alpaca_keys():
@@ -6117,32 +6115,28 @@ def _fetch_bars(
         _SKIPPED_SYMBOLS.discard(tf_key)
         fallback_feed = _state.get("last_fallback_feed")
         if fallback_feed:
-            try:
-                fallback_norm = _normalize_feed_value(fallback_feed)
-            except ValueError:
-                try:
-                    fallback_norm = str(fallback_feed).strip().lower()
-                except Exception:
-                    fallback_norm = None
             initial_feed = _state.get("initial_feed", _feed)
             try:
                 initial_norm = _normalize_feed_value(initial_feed)
             except ValueError:
                 try:
-                    initial_norm = str(initial_feed).strip().lower()
+                    initial_norm = str(initial_feed).strip().lower() or None
                 except Exception:
                     initial_norm = None
+            try:
+                fallback_norm = _normalize_feed_value(fallback_feed)
+            except ValueError:
+                try:
+                    fallback_norm = str(fallback_feed).strip().lower() or None
+                except Exception:
+                    fallback_norm = None
             if (
                 fallback_norm
                 and fallback_norm in {"iex", "sip"}
                 and fallback_norm != (initial_norm or "")
             ):
-                _FEED_OVERRIDE_BY_TF[tf_key] = fallback_norm
-                _record_override(symbol, fallback_norm, tf_norm)
-                _FEED_FAILOVER_ATTEMPTS.setdefault(tf_key, set()).add(fallback_norm)
-                log_key = (symbol, tf_norm, fallback_norm)
-                if not _FEED_SWITCH_HISTORY or _FEED_SWITCH_HISTORY[-1] != log_key:
-                    _FEED_SWITCH_HISTORY.append(log_key)
+                from_feed = initial_norm or initial_feed
+                _record_feed_switch(symbol, tf_norm, from_feed, fallback_norm)
         if http_fallback_frame is not None and not getattr(http_fallback_frame, "empty", True):
             return http_fallback_frame
         empty_df = _empty_ohlcv_frame(pd)
