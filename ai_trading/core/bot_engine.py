@@ -67,6 +67,7 @@ from ai_trading.data.fetch import (
     _sip_configured,
     build_fetcher,
     should_skip_symbol,
+    fetch_daily_backup,
 )
 from ai_trading.data._alpaca_guard import should_import_alpaca_sdk
 from ai_trading.runtime.shutdown import should_stop
@@ -6635,6 +6636,8 @@ def _log_iex_minute_stale(
     age_seconds: int,
     retry_feed: str | None,
     frame: Any,
+    level: int = logging.WARNING,
+    phase: str | None = None,
 ) -> None:
     extra: dict[str, Any] = {
         "symbol": symbol,
@@ -6644,7 +6647,9 @@ def _log_iex_minute_stale(
     attrs = _minute_frame_attrs(frame)
     if attrs:
         extra["minute_attrs"] = attrs
-    logger.warning("IEX_MINUTE_DATA_STALE", extra=extra)
+    if phase:
+        extra["phase"] = phase
+    logger.log(level, "IEX_MINUTE_DATA_STALE", extra=extra)
 
 
 def _env_float(default: float | str, *keys: str) -> float:
@@ -6676,11 +6681,62 @@ def _env_float(default: float | str, *keys: str) -> float:
 def _minute_data_freshness_limit() -> int:
     """Return tolerated staleness for minute data in seconds."""
 
+    if _MINUTE_STALE_TOLERANCE_OVERRIDE > 0:
+        return _MINUTE_STALE_TOLERANCE_OVERRIDE
     try:
         value = int(minute_data_freshness_tolerance())
     except Exception:
         return 900
     return value if value > 0 else 900
+
+
+def _minute_data_is_stale_age(age_seconds: int) -> bool:
+    return age_seconds > _minute_data_freshness_limit()
+
+
+def _should_skip_minute_check(market_open_now: bool, phase: str | None = None) -> bool:
+    if not market_open_now and _SKIP_MINUTE_CHECK_WHEN == "market_closed":
+        return True
+    if phase and phase.lower() == "warmup" and _SKIP_MINUTE_CHECK_WHEN == "warmup":
+        return True
+    return False
+
+
+def _maybe_check_minute_freshness(
+    age_seconds: int,
+    *,
+    market_open_now: bool,
+    phase: str,
+    symbol: str,
+    retry_feed: str | None,
+    frame: Any,
+) -> bool:
+    if _should_skip_minute_check(market_open_now, phase):
+        _log_iex_minute_stale(
+            symbol=symbol,
+            age_seconds=age_seconds,
+            retry_feed=retry_feed,
+            frame=frame,
+            level=logging.INFO,
+            phase=phase,
+        )
+        logger.info(
+            "MINUTE_FRESHNESS_SKIPPED",
+            extra={"symbol": symbol, "reason": phase},
+        )
+        return False
+    if not _minute_data_is_stale_age(age_seconds):
+        return False
+    level = logging.INFO if phase == "warmup" else logging.WARNING
+    _log_iex_minute_stale(
+        symbol=symbol,
+        age_seconds=age_seconds,
+        retry_feed=retry_feed,
+        frame=frame,
+        level=level,
+        phase=phase,
+    )
+    return True
 
 
 CAPITAL_CAP = _env_float(0.25, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
@@ -8607,14 +8663,19 @@ class DataFetcher:
                 )
                 if fallback_feed is None:
                     fallback_feed = "sip" if feed != "sip" else "yahoo"
-                fallback_attempted = True
-                fallback_feed_used = fallback_feed
-                _log_iex_minute_stale(
+                phase_label = "market_closed" if not market_open_now else "runtime"
+                if not _maybe_check_minute_freshness(
+                    age_seconds,
+                    market_open_now=market_open_now,
+                    phase=phase_label,
                     symbol=symbol,
-                    age_seconds=age_seconds,
                     retry_feed=fallback_feed,
                     frame=df,
-                )
+                ):
+                    _record_schema(df)
+                    return df
+                fallback_attempted = True
+                fallback_feed_used = fallback_feed
                 try:
                     fallback_df = self._get_stock_bars(
                         f"alpaca_{fallback_feed}",
@@ -17621,6 +17682,54 @@ def check_market_regime(runtime: BotContext, state: BotState) -> bool:
 _SCREEN_CACHE: dict[str, float] = {}
 
 
+def _safe_env_int(key: str, default: int) -> int:
+    try:
+        value = int(get_env(key, str(default), cast=int))
+    except Exception:
+        return default
+    return value if value > 0 else default
+
+
+_SCREEN_BATCH_SIZE = max(1, _safe_env_int("SCREEN_BATCH_SIZE", 25))
+_SCREEN_TOPN = max(1, _safe_env_int("SCREEN_TOPN", 20))
+_SCREEN_MIN_REFETCH_SEC = max(0, _safe_env_int("SCREEN_MIN_REFETCH_SEC", 900))
+_LAST_SCREEN_FETCH: dict[str, float] = {}
+_MINUTE_STALE_TOLERANCE_OVERRIDE = max(0, _safe_env_int("MINUTE_STALE_TOLERANCE_SEC", 420))
+_SKIP_MINUTE_CHECK_WHEN = str(
+    get_env("SKIP_MINUTE_CHECK_WHEN", "market_closed") or "market_closed"
+).strip().lower()
+
+
+def _should_refetch_screen_symbol(symbol: str, now_ts: float | None = None) -> bool:
+    now_value = now_ts if now_ts is not None else time.time()
+    last = _LAST_SCREEN_FETCH.get(symbol)
+    if last is None or now_value - last >= _SCREEN_MIN_REFETCH_SEC:
+        _LAST_SCREEN_FETCH[symbol] = now_value
+        return True
+    return False
+
+
+def _prefilter_screen_symbols(candidates: Sequence[str]) -> list[str]:
+    now_ts = time.time()
+    filtered: list[str] = []
+    for candidate in candidates:
+        symbol = str(candidate).strip().upper()
+        if not symbol:
+            continue
+        if not _should_refetch_screen_symbol(symbol, now_ts):
+            continue
+        filtered.append(symbol)
+        if len(filtered) >= _SCREEN_TOPN:
+            break
+    return filtered
+
+
+def _iter_screen_batches(symbols: Sequence[str]) -> Iterable[list[str]]:
+    size = max(1, _SCREEN_BATCH_SIZE)
+    for idx in range(0, len(symbols), size):
+        yield list(symbols[idx : idx + size])
+
+
 def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
     """
     Comprehensive market data validation to prevent trading with insufficient or poor quality data.
@@ -17890,9 +17999,15 @@ def screen_universe(
             return []
         _screening_in_progress = True
         try:
-            top_n = 20  # AI-AGENT-REF: maintain top N selection
             ordered_candidates = list(dict.fromkeys(candidates))
-            cand_set = set(ordered_candidates)
+            normalized_candidates = [
+                sym.strip().upper() for sym in ordered_candidates if str(sym).strip()
+            ]
+            filtered_candidates = _prefilter_screen_symbols(ordered_candidates)
+            if not filtered_candidates and normalized_candidates:
+                filtered_candidates = normalized_candidates[:_SCREEN_TOPN]
+            cand_set = set(filtered_candidates)
+            top_n = min(_SCREEN_TOPN, max(len(cand_set), 1))
             logger.info(
                 f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
             )
@@ -17922,10 +18037,15 @@ def screen_universe(
                 if sym not in cand_set:
                     _SCREEN_CACHE.pop(sym, None)
 
-            new_syms = [sym for sym in ordered_candidates if sym not in _SCREEN_CACHE]
-            filtered_out = {}  # Track reasons for filtering
-            tried = len(ordered_candidates)
-            valid = sum(1 for sym in ordered_candidates if sym in _SCREEN_CACHE)
+            throttled = {
+                sym
+                for sym in normalized_candidates
+                if sym not in filtered_candidates and sym in cand_set
+            }
+            filtered_out = {sym: "throttled" for sym in throttled}
+            new_syms = [sym for sym in filtered_candidates if sym not in _SCREEN_CACHE]
+            tried = len(filtered_candidates)
+            valid = sum(1 for sym in filtered_candidates if sym in _SCREEN_CACHE)
             empty = failed = 0
 
             minute_fetcher = getattr(runtime, "data_fetcher", None)
@@ -17935,107 +18055,127 @@ def screen_universe(
                 else None
             )
 
-            for sym in new_syms:
-                if callable(minute_loader) and not _screen_schema_recent(sym, "1Min", "alpaca_iex"):
+            def _calc_atr(df_in: pd.DataFrame) -> pd.Series:
+                ser: pd.Series | None = None
+                ta_available = hasattr(ta, "atr") and not getattr(ta, "_failed", False)
+                if ta_available:
                     try:
-                        minute_frame = minute_loader(runtime, sym, lookback_minutes=5)
-                    except Exception as exc:  # pragma: no cover - warm-up best effort
-                        _update_screen_schema_cache(sym, "1Min", "alpaca_iex", None)
-                        logger.debug(
-                            "MINUTE_SCHEMA_WARMUP_FAILED",
-                            extra={"symbol": sym, "reason": str(exc)},
+                        ser = ta.atr(
+                            df_in["high"], df_in["low"], df_in["close"], length=ATR_LENGTH
                         )
-                    else:
-                        _update_screen_schema_cache(sym, "1Min", "alpaca_iex", minute_frame)
-                df = runtime.data_fetcher.get_daily_df(runtime, sym)
-                if not is_valid_ohlcv(df):
-                    empty += 1
-                    filtered_out[sym] = "no_data"
-                    logger.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe")
-                    time.sleep(0.25)
-                    continue
-
-                # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
-                validation_result = _validate_market_data_quality(df, sym)
-                if not validation_result["valid"]:
-                    failed += 1
-                    filtered_out[sym] = validation_result["reason"]
-                    logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
-                    time.sleep(0.25)
-                    continue
-
-                original_len = len(df)
-                df = df[df["volume"] > 100_000]
-                if df.empty:
-                    failed += 1
-                    filtered_out[sym] = "low_volume"
-                    logger.debug(
-                        f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
-                    )
-                    time.sleep(0.25)
-                    continue
-
-                def _calc_atr(df_in: pd.DataFrame) -> pd.Series:
-                    ser: pd.Series | None = None
-                    ta_available = hasattr(ta, "atr") and not getattr(ta, "_failed", False)
-                    if ta_available:
-                        try:
-                            ser = ta.atr(
-                                df_in["high"], df_in["low"], df_in["close"], length=ATR_LENGTH
-                            )
-                        except (ValueError, TypeError):  # pragma: no cover - fall back below
-                            ser = None
-                    if ser is None or not hasattr(ser, "empty") or ser.empty:
-                        try:
-                            from ai_trading.indicators import atr as _atr
-
-                            ser = _atr(
-                                df_in["high"], df_in["low"], df_in["close"], period=ATR_LENGTH
-                            )
-                        except (ValueError, TypeError):
-                            ser = pd.Series()
-                    return ser if isinstance(ser, pd.Series) else pd.Series()
-
-                series = _calc_atr(df)
-                if series.empty or series.dropna().empty:
+                    except (ValueError, TypeError):  # pragma: no cover - fall back below
+                        ser = None
+                if ser is None or not hasattr(ser, "empty") or ser.empty:
                     try:
-                        from datetime import UTC, datetime, timedelta
-                        from ai_trading.data.fetch import get_daily_df as _fetch_daily_df
+                        from ai_trading.indicators import atr as _atr
 
-                        end = datetime.now(UTC)
-                        start = end - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS * 2)
-                        df2 = _fetch_daily_df(sym, start, end)
-                        df2 = df2[df2["volume"] > 100_000]
-                        series = _calc_atr(df2)
-                        if series.empty or series.dropna().empty:
+                        ser = _atr(
+                            df_in["high"], df_in["low"], df_in["close"], period=ATR_LENGTH
+                        )
+                    except (ValueError, TypeError):
+                        ser = pd.Series()
+                return ser if isinstance(ser, pd.Series) else pd.Series()
+
+            for batch in _iter_screen_batches(new_syms):
+                primary_frames: dict[str, pd.DataFrame | None] = {}
+                missing_symbols: list[str] = []
+                for sym in batch:
+                    if callable(minute_loader) and not _screen_schema_recent(sym, "1Min", "alpaca_iex"):
+                        try:
+                            minute_frame = minute_loader(runtime, sym, lookback_minutes=5)
+                        except Exception as exc:  # pragma: no cover - warm-up best effort
+                            _update_screen_schema_cache(sym, "1Min", "alpaca_iex", None)
+                            logger.debug(
+                                "MINUTE_SCHEMA_WARMUP_FAILED",
+                                extra={"symbol": sym, "reason": str(exc)},
+                            )
+                        else:
+                            _update_screen_schema_cache(sym, "1Min", "alpaca_iex", minute_frame)
+                    df_primary = runtime.data_fetcher.get_daily_df(runtime, sym)
+                    primary_frames[sym] = df_primary
+                    if not is_valid_ohlcv(df_primary):
+                        missing_symbols.append(sym)
+
+                backup_frames: dict[str, pd.DataFrame] = {}
+                if missing_symbols:
+                    try:
+                        backup_frames = fetch_daily_backup(missing_symbols)
+                    except Exception as exc:  # pragma: no cover - network surface
+                        logger.debug(
+                            "YF_BACKUP_BATCH_FAILED",
+                            extra={"count": len(missing_symbols), "error": str(exc)},
+                        )
+
+                for sym in batch:
+                    df = primary_frames.get(sym)
+                    if not is_valid_ohlcv(df):
+                        df = backup_frames.get(sym)
+                    if not is_valid_ohlcv(df):
+                        empty += 1
+                        filtered_out[sym] = "no_data"
+                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: returned empty dataframe (post-backup)")
+                        time.sleep(0.1)
+                        continue
+
+                    validation_result = _validate_market_data_quality(df, sym)
+                    if not validation_result["valid"]:
+                        failed += 1
+                        filtered_out[sym] = validation_result["reason"]
+                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
+                        time.sleep(0.1)
+                        continue
+
+                    original_len = len(df)
+                    df = df[df["volume"] > 100_000]
+                    if df.empty:
+                        failed += 1
+                        filtered_out[sym] = "low_volume"
+                        logger.debug(
+                            f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
+                        )
+                        time.sleep(0.1)
+                        continue
+
+                    series = _calc_atr(df)
+                    if series.empty or series.dropna().empty:
+                        try:
+                            from datetime import UTC, datetime, timedelta
+                            from ai_trading.data.fetch import get_daily_df as _fetch_daily_df
+
+                            end = datetime.now(UTC)
+                            start = end - timedelta(days=DEFAULT_DAILY_LOOKBACK_DAYS * 2)
+                            df2 = _fetch_daily_df(sym, start, end)
+                            df2 = df2[df2["volume"] > 100_000]
+                            series = _calc_atr(df2)
+                            if series.empty or series.dropna().empty:
+                                failed += 1
+                                filtered_out[sym] = "atr_insufficient_data"
+                                logger.warning(
+                                    f"[SCREEN_UNIVERSE] {sym}: ATR unavailable after extended fetch"
+                                )
+                                time.sleep(0.25)
+                                continue
+                            df = df2
+                        except (ValueError, TypeError, OSError):
                             failed += 1
-                            filtered_out[sym] = "atr_insufficient_data"
+                            filtered_out[sym] = "atr_fetch_failed"
                             logger.warning(
-                                f"[SCREEN_UNIVERSE] {sym}: ATR unavailable after extended fetch"
+                                f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
                             )
                             time.sleep(0.25)
                             continue
-                        df = df2
-                    except (ValueError, TypeError, OSError):
-                        failed += 1
-                        filtered_out[sym] = "atr_fetch_failed"
-                        logger.warning(
-                            f"[SCREEN_UNIVERSE] {sym}: ATR extended fetch failed"
-                        )
-                        time.sleep(0.25)
-                        continue
 
-                atr_val = series.iloc[-1]
-                if not pd.isna(atr_val):
-                    _SCREEN_CACHE[sym] = float(atr_val)
-                    logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
-                    valid += 1
-                    logger.info("SCREEN_TAG", extra={"symbol": sym, "tag": "VALID"})
-                else:
-                    failed += 1
-                    filtered_out[sym] = "atr_nan"
-                    logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
-                time.sleep(0.25)
+                    atr_val = series.iloc[-1]
+                    if not pd.isna(atr_val):
+                        _SCREEN_CACHE[sym] = float(atr_val)
+                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
+                        valid += 1
+                        logger.info("SCREEN_TAG", extra={"symbol": sym, "tag": "VALID"})
+                    else:
+                        failed += 1
+                        filtered_out[sym] = "atr_nan"
+                        logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
+                    time.sleep(0.25)
 
             atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
             ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)

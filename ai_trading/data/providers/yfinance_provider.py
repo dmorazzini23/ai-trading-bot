@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import types
 
-from ai_trading.data.fetch.normalize import normalize_ohlcv_df
+from ai_trading.data.fetch_yf import fetch_yf_batched
 
 
 def get_yfinance():
@@ -27,19 +27,18 @@ class Provider:
     def __init__(self, session=None):
         self._session = session
 
-    @staticmethod
-    def _yf():
-        yf = get_yfinance()
-        if yf is None:
-            raise ImportError("Provider 'yfinance' requested but the 'yfinance' package is not installed")
-        return yf
-
     def fetch_ohlcv(self, symbol: str, interval: str = "1d", **kwargs):
-        yf = self._yf()
-        t = yf.Ticker(symbol)
-        df = t.history(period=kwargs.get("period", "1y"), interval=interval)
-        df = normalize_ohlcv_df(df, include_columns=("timestamp",))
-        if len(df) == 0:
+        params: dict[str, object] = {
+            "period": kwargs.get("period", "1y"),
+            "interval": interval,
+        }
+        if "start" in kwargs or "end" in kwargs:
+            params["start"] = kwargs.get("start")
+            params["end"] = kwargs.get("end")
+
+        df_map = fetch_yf_batched([symbol], **params)
+        df = df_map.get(symbol)
+        if df is None or df.empty:
             return []
         return df
 
@@ -53,24 +52,20 @@ class Provider:
         limit: int
             Number of bars to return.
         """
-        yf = self._yf()
-        t = yf.Ticker(symbol)
-        try:
-            df_raw = t.history(period=f"{int(limit)}d", interval="1d")
-        except Exception:  # pragma: no cover - network/third-party errors
-            return []
-        df = normalize_ohlcv_df(df_raw, include_columns=("timestamp",))
-        if len(df) == 0:
+        period = f"{int(limit)}d"
+        df_map = fetch_yf_batched([symbol], period=period, interval="1d")
+        df = df_map.get(symbol)
+        if df is None or df.empty:
             return []
         df = df.tail(limit)
         bars = []
         for _, row in df.iterrows():
             bar = types.SimpleNamespace(
-                o=float(row.get("open", row.get("Open", 0.0)) or 0.0),
-                h=float(row.get("high", row.get("High", 0.0)) or 0.0),
-                l=float(row.get("low", row.get("Low", 0.0)) or 0.0),
-                c=float(row.get("close", row.get("Close", 0.0)) or 0.0),
-                v=float(row.get("volume", row.get("Volume", 0.0)) or 0.0),
+                o=float(row.get("open", 0.0) or 0.0),
+                h=float(row.get("high", 0.0) or 0.0),
+                l=float(row.get("low", 0.0) or 0.0),
+                c=float(row.get("close", 0.0) or 0.0),
+                v=float(row.get("volume", 0.0) or 0.0),
             )
             bars.append(bar)
         return bars
