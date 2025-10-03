@@ -648,6 +648,7 @@ _FALLBACK_WINDOWS: set[tuple[str, str, int, int]] = set()
 # Soft memory of fallback usage per (symbol, timeframe) to suppress repeated
 # primary-provider attempts for slightly shifted windows in the same cycle.
 _FALLBACK_UNTIL: dict[tuple[str, str], int] = {}
+_BACKUP_SKIP_UNTIL: dict[tuple[str, str], int] = {}
 _FALLBACK_METADATA: dict[tuple[str, str, int, int], dict[str, str]] = {}
 _FALLBACK_TTL_SECONDS = int(os.getenv("FALLBACK_TTL_SECONDS", "180"))
 # Track backup provider log emissions to avoid duplicate INFO spam for the same
@@ -1119,10 +1120,38 @@ def _mark_fallback(
     except Exception:
         now_s = int(_time_now())
     _FALLBACK_UNTIL[(symbol, timeframe)] = now_s + max(30, _FALLBACK_TTL_SECONDS)
+    if _frame_has_rows(fallback_df):
+        _set_backup_skip(symbol, timeframe)
 
 
 def _used_fallback(symbol: str, timeframe: str, start: _dt.datetime, end: _dt.datetime) -> bool:
     return _fallback_key(symbol, timeframe, start, end) in _FALLBACK_WINDOWS
+
+
+def _set_backup_skip(symbol: str, timeframe: str, *, until: int | None = None) -> None:
+    key = (symbol, timeframe)
+    if until is not None:
+        try:
+            until_int = int(until)
+        except Exception:
+            _BACKUP_SKIP_UNTIL.pop(key, None)
+            _SKIPPED_SYMBOLS.add(key)
+        else:
+            _BACKUP_SKIP_UNTIL[key] = until_int
+            _SKIPPED_SYMBOLS.add(key)
+        return
+    _SKIPPED_SYMBOLS.add(key)
+    try:
+        now_s = int(_dt.datetime.now(tz=UTC).timestamp())
+    except Exception:
+        now_s = int(_time_now())
+    _BACKUP_SKIP_UNTIL[key] = now_s + max(30, _FALLBACK_TTL_SECONDS)
+
+
+def _clear_backup_skip(symbol: str, timeframe: str) -> None:
+    key = (symbol, timeframe)
+    _BACKUP_SKIP_UNTIL.pop(key, None)
+    _SKIPPED_SYMBOLS.discard(key)
 
 
 def _clear_minute_fallback_state(
@@ -1147,6 +1176,9 @@ def _clear_minute_fallback_state(
         cleared = True
     if tf_key in _FALLBACK_UNTIL:
         _FALLBACK_UNTIL.pop(tf_key, None)
+        cleared = True
+    if tf_key in _BACKUP_SKIP_UNTIL:
+        _clear_backup_skip(symbol, timeframe)
         cleared = True
     if cleared and primary_label and backup_label:
         try:
@@ -6276,6 +6308,17 @@ def get_minute_df(
     resolved_backup_feed = backup_provider_normalized or None
 
     ttl_until: int | None = None
+    now_s_cached: int | None = None
+
+    def _now_seconds() -> int:
+        nonlocal now_s_cached
+        if now_s_cached is None:
+            try:
+                now_s_cached = int(_dt.datetime.now(tz=UTC).timestamp())
+            except Exception:
+                now_s_cached = int(_time_now())
+        return now_s_cached
+
     try:
         ttl_until_value = _FALLBACK_UNTIL.get(tf_key)
         if ttl_until_value is not None:
@@ -6283,11 +6326,7 @@ def get_minute_df(
     except Exception:
         ttl_until = None
     if ttl_until is not None:
-        try:
-            now_s = int(_dt.datetime.now(tz=UTC).timestamp())
-        except Exception:
-            now_s = int(_time_now())
-        fallback_ttl_active = now_s < ttl_until
+        fallback_ttl_active = _now_seconds() < ttl_until
     if fallback_ttl_active:
         skip_primary_due_to_fallback = True
         if fallback_metadata is None:
@@ -6297,11 +6336,46 @@ def get_minute_df(
         if resolved_backup_feed:
             fallback_metadata.setdefault("fallback_feed", resolved_backup_feed)
 
+    forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
+    if forced_skip_until is not None:
+        try:
+            forced_skip_until_int = int(forced_skip_until)
+        except Exception:
+            forced_skip_until_int = None
+        if forced_skip_until_int is None:
+            _clear_backup_skip(symbol, "1Min")
+        elif _now_seconds() < forced_skip_until_int:
+            skip_primary_due_to_fallback = True
+        else:
+            _clear_backup_skip(symbol, "1Min")
+
     minute_metrics: dict[str, Any] = {
         "success_emitted": False,
         "fallback_tags": None,
         "fallback_emitted": False,
     }
+    backup_skip_engaged = False
+
+    def _register_backup_skip() -> None:
+        nonlocal backup_skip_engaged
+        backup_skip_engaged = True
+        _set_backup_skip(symbol, "1Min")
+
+    def _track_backup_frame(frame: Any | None) -> Any | None:
+        if _frame_has_rows(frame):
+            _register_backup_skip()
+        return frame
+
+    def _minute_backup_get_bars(
+        symbol_arg: str,
+        start_arg: Any,
+        end_arg: Any,
+        *,
+        interval: str,
+    ) -> Any | None:
+        return _track_backup_frame(
+            _safe_backup_get_bars(symbol_arg, start_arg, end_arg, interval=interval)
+        )
 
     def _record_minute_success(tags: dict[str, str], *, prefer_fallback: bool = False) -> None:
         if minute_metrics.get("success_emitted"):
@@ -6355,6 +6429,7 @@ def get_minute_df(
         _incr("data.fetch.fallback_attempt", value=1.0, tags=tags)
         if frame_has_rows:
             _record_minute_fallback_success(tags)
+            _register_backup_skip()
             fallback_feed: str | None = None
             if feed_tag:
                 try:
@@ -6395,12 +6470,15 @@ def get_minute_df(
                 normalized_feed = _normalize_feed_value(cached_cycle_feed)
             except Exception:
                 normalized_feed = str(cached_cycle_feed).strip().lower()
-    if tf_key in _SKIPPED_SYMBOLS and window_has_session:
-        logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
-        raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")
-    elif tf_key in _SKIPPED_SYMBOLS:
-        _SKIPPED_SYMBOLS.discard(tf_key)
-        _EMPTY_BAR_COUNTS.pop(tf_key, None)
+    if tf_key in _SKIPPED_SYMBOLS:
+        if skip_primary_due_to_fallback:
+            pass
+        elif window_has_session:
+            logger.debug("SKIP_SYMBOL_EMPTY_BARS", extra={"symbol": symbol})
+            raise EmptyBarsError(f"empty_bars: symbol={symbol}, timeframe=1Min, skipped=1")
+        else:
+            _SKIPPED_SYMBOLS.discard(tf_key)
+            _EMPTY_BAR_COUNTS.pop(tf_key, None)
     try:
         attempt = record_attempt(symbol, "1Min")
     except EmptyBarsError:
@@ -6488,7 +6566,7 @@ def get_minute_df(
                 if backup_end_dt != end_dt:
                     end_dt = backup_end_dt
             try:
-                df = _safe_backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
+                df = _minute_backup_get_bars(symbol, start_dt, backup_end_dt, interval="1m")
             except Exception:
                 df = None
             else:
@@ -6497,6 +6575,7 @@ def get_minute_df(
                     used_backup = True
                     force_primary_fetch = False
                     fallback_frame = df
+                    _register_backup_skip()
                 else:
                     df = None
     requested_feed = normalized_feed or _DEFAULT_FEED
@@ -6527,7 +6606,22 @@ def get_minute_df(
             elif feed_to_use == "iex" and _IEX_EMPTY_COUNTS.get(tf_key, 0) > 0 and not _sip_configured():
                 _log_sip_unavailable(symbol, "1Min", "SIP_UNAVAILABLE")
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=feed_to_use)
-            if _frame_has_rows(df):
+            fallback_http_provider = False
+            if df is not None:
+                try:
+                    attrs = getattr(df, "attrs", None)
+                except Exception:
+                    attrs = None
+                if isinstance(attrs, dict):
+                    provider_attr = attrs.get("data_provider") or attrs.get("fallback_provider")
+                    if provider_attr and str(provider_attr).strip().lower() == "yahoo":
+                        fallback_http_provider = True
+            if fallback_http_provider:
+                used_backup = True
+                primary_frame_acquired = False
+                fallback_frame = df
+                _register_backup_skip()
+            elif _frame_has_rows(df):
                 primary_frame_acquired = True
             if (
                 proactive_switch
@@ -6776,7 +6870,9 @@ def get_minute_df(
             _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
             switch_recorded = True
     if (not primary_frame_acquired) and (df is None or getattr(df, "empty", True)):
-        if use_finnhub:
+        if fallback_frame is not None and not getattr(fallback_frame, "empty", True):
+            df = fallback_frame
+        elif use_finnhub:
             finnhub_df = None
             try:
                 finnhub_df = _finnhub_get_bars(symbol, start_dt, end_dt, "1m")
@@ -6839,8 +6935,9 @@ def get_minute_df(
             cur_start = start_dt
             while cur_start < end_dt:
                 cur_end = min(cur_start + max_span, end_dt)
-                dfs.append(_safe_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
+                dfs.append(_minute_backup_get_bars(symbol, cur_start, cur_end, interval="1m"))
                 used_backup = True
+                _register_backup_skip()
                 cur_start = cur_end
             if pd is not None and dfs:
                 df = pd.concat(dfs, ignore_index=True)
@@ -6871,8 +6968,9 @@ def get_minute_df(
             else:
                 df = pd.DataFrame() if pd is not None else []  # type: ignore[assignment]
         else:
-            df = _safe_backup_get_bars(symbol, start_dt, end_dt, interval="1m")
+            df = _minute_backup_get_bars(symbol, start_dt, end_dt, interval="1m")
             used_backup = True
+            _register_backup_skip()
             if df is not None and not getattr(df, "empty", True):
                 fallback_frame = df
 
@@ -6884,6 +6982,7 @@ def get_minute_df(
         fallback_frame = candidate_df
         if candidate_df is not None and not getattr(candidate_df, "empty", True):
             df = candidate_df
+            _register_backup_skip()
             if not fallback_logged:
                 _record_minute_fallback(frame=df)
                 fallback_logged = True
@@ -7134,6 +7233,7 @@ def get_minute_df(
             if isinstance(attrs, dict) and "price_reliable" not in attrs:
                 _set_price_reliability(fallback_candidate, reliable=True)
             _apply_last_complete_meta(fallback_candidate)
+            _register_backup_skip()
             return fallback_candidate
         if allow_empty_return:
             if used_backup and not fallback_logged:
@@ -7159,6 +7259,8 @@ def get_minute_df(
             _record_minute_fallback(frame=df)
             fallback_logged = True
         _IEX_EMPTY_COUNTS.pop(tf_key, None)
+    if used_backup:
+        _register_backup_skip()
     if backup_label and not used_backup:
         _clear_minute_fallback_state(
             symbol,
