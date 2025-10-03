@@ -76,6 +76,7 @@ def safe_subprocess_run(
     deadline = time.monotonic() + run_timeout
     poll_interval = max(min(run_timeout / 10.0, 0.1), 0.01)
 
+    finished_at: float | None = None
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -84,9 +85,16 @@ def safe_subprocess_run(
         wait_time = min(remaining, poll_interval)
         try:
             proc.wait(timeout=wait_time)
+            finished_at = time.monotonic()
             break
         except subprocess.TimeoutExpired:
             continue
+
+    if finished_at is None:
+        finished_at = time.monotonic()
+    if finished_at > deadline:
+        timeout_exc = subprocess.TimeoutExpired(cmd=argv, timeout=run_timeout)
+        raise _augment_timeout_exception(proc, timeout_exc) from None
 
     try:
         stdout_text, stderr_text = proc.communicate()
