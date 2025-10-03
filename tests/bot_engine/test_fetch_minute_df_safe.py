@@ -1360,7 +1360,9 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     assert captured["symbol"] == "AAPL"
     assert captured["max_age"] == 900
     assert isinstance(result, pd.DataFrame)
-    pd.testing.assert_index_equal(result.index, fresh_idx)
+    expected_idx = fresh_idx.rename("timestamp")
+    pd.testing.assert_index_equal(result.index, expected_idx)
+    assert fresh_idx.name is None
     assert fetcher._minute_cache["AAPL"].index[-1] == fresh_idx[-1]
     assert fetcher._minute_timestamps["AAPL"] == base_now
 
