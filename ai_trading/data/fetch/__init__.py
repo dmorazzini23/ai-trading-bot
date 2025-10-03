@@ -5561,6 +5561,26 @@ def _fetch_bars(
                             }
                         ),
                     )
+                    http_fallback_df: Any | None = None
+                    if _ENABLE_HTTP_FALLBACK:
+                        interval_map = {
+                            "1Min": "1m",
+                            "5Min": "5m",
+                            "15Min": "15m",
+                            "1Hour": "60m",
+                            "1Day": "1d",
+                        }
+                        fb_int = interval_map.get(base_interval)
+                        if fb_int:
+                            http_fallback_df = _run_backup_fetch(
+                                fb_int,
+                                from_provider="alpaca_sip",
+                            )
+                            if http_fallback_df is not None and not getattr(http_fallback_df, "empty", True):
+                                _IEX_EMPTY_COUNTS.pop(tf_key, None)
+                                return http_fallback_df
+                    if http_fallback_df is not None:
+                        return http_fallback_df
                     return result if result is not None else pd.DataFrame()
                 reason = "UNAUTHORIZED_SIP" if sip_locked else "SIP_UNAVAILABLE"
                 if reason != "UNAUTHORIZED_SIP" or _sip_allowed():
@@ -6118,6 +6138,19 @@ def get_minute_df(
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
+    fallback_window_used = _used_fallback(symbol, "1Min", start_dt, end_dt)
+    fallback_metadata: dict[str, str] | None = None
+    skip_primary_due_to_fallback = False
+    if fallback_window_used:
+        try:
+            fallback_metadata = get_fallback_metadata(symbol, "1Min", start_dt, end_dt)
+        except Exception:
+            fallback_metadata = None
+        provider_hint = None
+        if isinstance(fallback_metadata, dict):
+            provider_hint = fallback_metadata.get("fallback_provider") or fallback_metadata.get("resolved_provider")
+        if provider_hint and str(provider_hint).strip().lower() == "yahoo":
+            skip_primary_due_to_fallback = True
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
     _ensure_override_state_current()
@@ -6290,10 +6323,12 @@ def get_minute_df(
             elif until:
                 return True
         return False
-    force_primary_fetch = True
+    force_primary_fetch = not skip_primary_due_to_fallback
     if backup_label:
         prefer_primary_first = bool(os.getenv("PYTEST_RUNNING")) or not _disable_signal_active(primary_label)
-        if prefer_primary_first:
+        if skip_primary_due_to_fallback:
+            active_provider = backup_label
+        elif prefer_primary_first:
             try:
                 monitored_choice = provider_monitor.active_provider(primary_label, backup_label)
             except Exception:
