@@ -61,6 +61,7 @@ _HOST_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, _HostSemaphoreMap
 
 _LIMIT_CACHE: _ResolvedLimitCache | None = None
 _LIMIT_VERSION: int = 0
+_LAST_LIMIT_ENV_SNAPSHOT: tuple[str | None, str | None, str | None] | None = None
 
 _ENV_LIMIT_KEYS: Final[tuple[str, str, str]] = (
     "HTTP_MAX_PER_HOST",
@@ -276,12 +277,42 @@ def _read_limit_source(
     return limit, None, None, config_id
 
 
+def _refresh_all_host_semaphores(snapshot: HostLimitSnapshot) -> None:
+    """Rebuild cached semaphores for all known event loops."""
+
+    if not _HOST_SEMAPHORES:
+        _set_pooling_limit_state(snapshot.limit, snapshot.version)
+        return
+
+    stale_loops: list[asyncio.AbstractEventLoop] = []
+    for loop, host_map in list(_HOST_SEMAPHORES.items()):
+        if not host_map:
+            if getattr(loop, "is_closed", None) and loop.is_closed():
+                stale_loops.append(loop)
+            continue
+        for host in list(host_map.keys()):
+            refresh_host_semaphore(
+                host,
+                loop=loop,
+                snapshot=snapshot,
+                update_pooling_state=False,
+            )
+    for loop in stale_loops:
+        _HOST_SEMAPHORES.pop(loop, None)
+    _set_pooling_limit_state(snapshot.limit, snapshot.version)
+
+
 def _resolve_limit() -> tuple[int, int]:
     """Return the current host limit and cache version."""
 
-    global _LIMIT_CACHE, _LIMIT_VERSION
+    global _LIMIT_CACHE, _LIMIT_VERSION, _LAST_LIMIT_ENV_SNAPSHOT
 
     env_snapshot = tuple(os.getenv(key) for key in _ENV_LIMIT_KEYS)
+    prior_cache = _LIMIT_CACHE
+    env_changed = _LAST_LIMIT_ENV_SNAPSHOT != env_snapshot
+    if env_changed:
+        _LIMIT_CACHE = None
+
     limit, env_key, raw_env, config_id = _read_limit_source(env_snapshot)
 
     cache = _LIMIT_CACHE
@@ -293,6 +324,7 @@ def _resolve_limit() -> tuple[int, int]:
         and cache.config_id == config_id
         and cache.env_snapshot == env_snapshot
     ):
+        _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
         return cache.limit, cache.version
 
     if _LIMIT_VERSION == 0:
@@ -308,6 +340,21 @@ def _resolve_limit() -> tuple[int, int]:
         config_id=config_id,
         env_snapshot=env_snapshot,
     )
+    snapshot = HostLimitSnapshot(limit, version)
+    _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
+
+    should_refresh = env_changed
+    if not should_refresh and prior_cache is not None:
+        should_refresh = (
+            prior_cache.limit != limit
+            or prior_cache.env_key != env_key
+            or prior_cache.raw_env != raw_env
+            or prior_cache.config_id != config_id
+        )
+
+    if should_refresh:
+        _refresh_all_host_semaphores(snapshot)
+
     return limit, version
 
 
@@ -448,17 +495,26 @@ def get_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
     return _get_or_create_loop_semaphore(loop, host, snapshot)
 
 
-def refresh_host_semaphore(hostname: str | None = None) -> asyncio.Semaphore:
+def refresh_host_semaphore(
+    hostname: str | None = None,
+    *,
+    loop: asyncio.AbstractEventLoop | None = None,
+    snapshot: HostLimitSnapshot | None = None,
+    update_pooling_state: bool = True,
+) -> asyncio.Semaphore:
     """Force the cached semaphore for the current loop to refresh using the latest limit."""
 
-    loop = asyncio.get_running_loop()
+    if loop is None:
+        loop = asyncio.get_running_loop()
     host = _normalize_host(hostname)
     host_map = _get_host_map(loop)
-    old_record = host_map.pop(host, None)
-    cache = _ensure_limit_cache()
-    semaphore = _build_semaphore(cache.limit, cache.version)
-    host_map[host] = _SemaphoreRecord(semaphore, cache.limit, cache.version)
-    _set_pooling_limit_state(cache.limit, cache.version)
+    if snapshot is None:
+        cache = _ensure_limit_cache()
+        snapshot = HostLimitSnapshot(cache.limit, cache.version)
+    semaphore = _build_semaphore(snapshot.limit, snapshot.version)
+    host_map[host] = _SemaphoreRecord(semaphore, snapshot.limit, snapshot.version)
+    if update_pooling_state:
+        _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return semaphore
 
 
