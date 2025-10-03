@@ -1375,12 +1375,33 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
         return frame
 
     captured: dict[str, object] = {}
+    freshness_calls: list[dict[str, object]] = []
 
     def capture_ensure(df, max_age_seconds, *, symbol=None, now=None, tz=None):
         captured["df"] = df.copy()
         captured["max_age"] = max_age_seconds
         captured["symbol"] = symbol
         return None
+
+    def capture_freshness(
+        age_seconds,
+        *,
+        market_open_now,
+        phase,
+        symbol,
+        retry_feed,
+        frame,
+    ):
+        freshness_calls.append(
+            {
+                "age_seconds": age_seconds,
+                "market_open_now": market_open_now,
+                "phase": phase,
+                "symbol": symbol,
+                "retry_feed": retry_feed,
+            }
+        )
+        return True
 
     monkeypatch.setattr(bot_engine, "datetime", FrozenDatetime, raising=False)
     monkeypatch.setattr(bot_engine, "get_settings", lambda: settings)
@@ -1391,6 +1412,8 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
         fake_safe_get_stock_bars,
     )
     monkeypatch.setattr(staleness, "_ensure_data_fresh", capture_ensure)
+    monkeypatch.setattr(bot_engine, "_maybe_check_minute_freshness", capture_freshness)
+    monkeypatch.setattr(bot_engine, "is_market_open", lambda: True, raising=False)
     monkeypatch.setattr(
         bot_engine,
         "_minute_data_freshness_limit",
@@ -1415,6 +1438,11 @@ def test_data_fetcher_stale_iex_retries_realtime_feed(monkeypatch):
     assert fresh_idx.name is None
     assert fetcher._minute_cache["AAPL"].index[-1] == fresh_idx[-1]
     assert fetcher._minute_timestamps["AAPL"] == base_now
+    assert freshness_calls, "freshness gate was not invoked"
+    first_call = freshness_calls[0]
+    assert first_call["market_open_now"] is True
+    assert first_call["phase"] == "runtime"
+    assert first_call["retry_feed"] == "sip"
 
 
 def test_get_minute_df_handles_missing_safe_get(monkeypatch):
