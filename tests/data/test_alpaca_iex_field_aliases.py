@@ -681,11 +681,15 @@ def test_ensure_ohlcv_schema_logs_payload_columns(caplog: pytest.LogCaptureFixtu
     records = [record for record in caplog.records if record.message == "OHLCV_COLUMNS_MISSING"]
     assert records, "expected OHLCV_COLUMNS_MISSING to be logged"
     logged = records[-1]
+    assert logged.levelno == logging.ERROR
     assert getattr(logged, "raw_payload_columns", None) == ["t", "volume"]
     assert getattr(logged, "raw_payload_feed", None) == "iex"
     assert getattr(logged, "raw_payload_timeframe", None) == "1Min"
     assert getattr(logged, "raw_payload_symbol", None) == "AAPL"
+
     err = excinfo.value
     assert getattr(err, "raw_payload_columns", None) == ("t", "volume")
     assert getattr(err, "raw_payload_feed", None) == "iex"
     assert getattr(err, "raw_payload_symbol", None) == "AAPL"
+    assert err.metadata["missing_columns"] == ["open", "high", "low", "close"]
+    assert err.metadata["columns"] == ["t", "volume"]
