@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time as dt_time, timedelta
 import sys
 import types
 
@@ -195,7 +195,12 @@ def test_daily_fetch_legacy_memo_dict_short_circuits(monkeypatch, legacy_entry):
     legacy_key = (symbol, fetch_date.isoformat())
 
     stale_cache_df = {"cache": True}
-    fetcher._daily_cache[symbol] = (fetch_date, stale_cache_df)
+
+    class StrictCache(dict):
+        def get(self, *_args, **_kwargs):  # pragma: no cover - enforce memo short circuit
+            raise AssertionError("daily cache should not be queried when memo is fresh")
+
+    fetcher._daily_cache = StrictCache({symbol: (fetch_date, stale_cache_df)})
 
     class StrictMemo(dict):
         def pop(self, *_args, **_kwargs):  # pragma: no cover - validate no removal
@@ -223,6 +228,88 @@ def test_daily_fetch_legacy_memo_dict_short_circuits(monkeypatch, legacy_entry):
     assert isinstance(memo_store[legacy_key], tuple)
     assert fetcher._daily_cache[symbol][1] is stale_cache_df
 
+
+def test_daily_fetch_legacy_tuple_normalizes_and_skips_daily_cache(monkeypatch):
+    assert hasattr(be, "DataFetcher")
+    fetcher = _stub_fetcher(monkeypatch)
+    symbol = "AAPL"
+
+    monkeypatch.setattr(be, "datetime", FixedDateTime)
+    monkeypatch.setattr(be, "is_market_open", lambda: True)
+    be.daily_cache_hit = None
+    be.daily_cache_miss = None
+    monkeypatch.setattr(
+        be,
+        "bars",
+        types.SimpleNamespace(TimeFrame=types.SimpleNamespace(Day="Day")),
+        raising=False,
+    )
+
+    monotonic_values = iter([10.0, 11.0, 120.0, 121.0, 130.0, 140.0, 150.0])
+    monkeypatch.setattr(be.time, "monotonic", lambda: next(monotonic_values))
+
+    fetch_date = FixedDateTime.now(UTC).date()
+    legacy_key = (symbol, fetch_date.isoformat())
+    end_ts = datetime.combine(fetch_date, dt_time.max, tzinfo=UTC)
+    start_ts = end_ts - timedelta(days=be.DEFAULT_DAILY_LOOKBACK_DAYS)
+    canonical_key = (
+        symbol,
+        "1Day",
+        start_ts.isoformat(),
+        end_ts.isoformat(),
+    )
+
+    memo_payload = {"memo": True}
+
+    class StrictCache(dict):
+        def get(self, *_args, **_kwargs):  # pragma: no cover - enforce memo short circuit
+            raise AssertionError("daily cache should not be queried when memo is fresh")
+
+    fetcher._daily_cache = StrictCache({symbol: (fetch_date, {"cache": True})})
+
+    class TrackingMemo(dict):
+        def __init__(self):
+            super().__init__()
+            self.set_calls = []
+
+        def __setitem__(self, key, value):
+            self.set_calls.append((key, value))
+            super().__setitem__(key, value)
+
+        def pop(self, *_args, **_kwargs):  # pragma: no cover - ensure no eviction
+            raise AssertionError("memo pop should not execute for valid entries")
+
+    memo_store = TrackingMemo()
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", memo_store, raising=False)
+    monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
+
+    memo_store[canonical_key] = (memo_payload, 5.0)
+    memo_store[legacy_key] = (memo_payload, 5.0)
+
+    result = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
+
+    assert result is memo_payload
+    for key in (canonical_key, legacy_key):
+        stored = memo_store[key]
+        assert isinstance(stored, tuple)
+        assert len(stored) == 2
+        assert stored[1] is memo_payload
+        assert stored[0] > 5.0
+
+    assert any(
+        key == canonical_key
+        and isinstance(value, tuple)
+        and isinstance(value[0], (int, float))
+        and value[0] > 5.0
+        for key, value in memo_store.set_calls
+    )
+    assert any(
+        key == legacy_key
+        and isinstance(value, tuple)
+        and isinstance(value[0], (int, float))
+        and value[0] > 5.0
+        for key, value in memo_store.set_calls
+    )
 
 def test_daily_fetch_memo_handles_generator_factory():
     from ai_trading.data import fetch as fetch_module
