@@ -15,9 +15,7 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
-    from ai_trading.utils.lazy_imports import load_pandas
-
-    pd = load_pandas()
+    import pandas as pd
 
 from ai_trading.order.types import OrderSide
 
@@ -87,7 +85,7 @@ class IDataProvider(ABC):
     """Interface for market data providers."""
 
     @abstractmethod
-    async def get_market_data(self, symbol: str, timeframe: str='1min', start: datetime | None=None, end: datetime | None=None) -> "pd.DataFrame":
+    async def get_market_data(self, symbol: str, timeframe: str='1min', start: datetime | None=None, end: datetime | None=None) -> pd.DataFrame:
         """Get historical market data."""
 
     @abstractmethod
@@ -205,30 +203,30 @@ class IIndicatorCalculator(ABC):
     """Interface for technical indicator calculations."""
 
     @abstractmethod
-    def calculate_sma(self, data: "pd.Series", period: int) -> "pd.Series":
+    def calculate_sma(self, data: pd.Series, period: int) -> pd.Series:
         """Calculate Simple Moving Average."""
 
     @abstractmethod
-    def calculate_ema(self, data: "pd.Series", period: int) -> "pd.Series":
+    def calculate_ema(self, data: pd.Series, period: int) -> pd.Series:
         """Calculate Exponential Moving Average."""
 
     @abstractmethod
-    def calculate_rsi(self, data: "pd.Series", period: int=14) -> "pd.Series":
+    def calculate_rsi(self, data: pd.Series, period: int=14) -> pd.Series:
         """Calculate Relative Strength Index."""
 
     @abstractmethod
-    def calculate_bollinger_bands(self, data: "pd.Series", period: int=20, std: float=2) -> tuple["pd.Series", "pd.Series", "pd.Series"]:
+    def calculate_bollinger_bands(self, data: pd.Series, period: int=20, std: float=2) -> tuple[pd.Series, pd.Series, pd.Series]:
         """Calculate Bollinger Bands."""
 
     @abstractmethod
-    def calculate_macd(self, data: "pd.Series", fast: int=12, slow: int=26, signal: int=9) -> tuple["pd.Series", "pd.Series"]:
+    def calculate_macd(self, data: pd.Series, fast: int=12, slow: int=26, signal: int=9) -> tuple[pd.Series, pd.Series]:
         """Calculate MACD."""
 
 class ITradingStrategy(ABC):
     """Interface for trading strategies."""
 
     @abstractmethod
-    async def generate_signal(self, symbol: str, market_data: "pd.DataFrame") -> TradingSignal | None:
+    async def generate_signal(self, symbol: str, market_data: pd.DataFrame) -> TradingSignal | None:
         """Generate trading signal based on market data."""
 
     @abstractmethod
@@ -304,15 +302,15 @@ class IMLModel(ABC):
     """Interface for machine learning models."""
 
     @abstractmethod
-    async def train(self, features: "pd.DataFrame", targets: "pd.Series") -> None:
+    async def train(self, features: pd.DataFrame, targets: pd.Series) -> None:
         """Train the model."""
 
     @abstractmethod
-    async def predict(self, features: "pd.DataFrame") -> "np.ndarray":
+    async def predict(self, features: pd.DataFrame) -> "np.ndarray":
         """Make predictions."""
 
     @abstractmethod
-    async def predict_proba(self, features: "pd.DataFrame") -> "np.ndarray":
+    async def predict_proba(self, features: pd.DataFrame) -> "np.ndarray":
         """Get prediction probabilities."""
 
     @abstractmethod
@@ -327,7 +325,7 @@ class IFeatureEngineer(ABC):
     """Interface for feature engineering."""
 
     @abstractmethod
-    async def engineer_features(self, market_data: "pd.DataFrame") -> "pd.DataFrame":
+    async def engineer_features(self, market_data: pd.DataFrame) -> pd.DataFrame:
         """Engineer features from market data."""
 
     @abstractmethod
@@ -335,7 +333,7 @@ class IFeatureEngineer(ABC):
         """Get list of feature names."""
 
     @abstractmethod
-    async def update_features(self, new_data: "pd.DataFrame") -> "pd.DataFrame":
+    async def update_features(self, new_data: pd.DataFrame) -> pd.DataFrame:
         """Update features with new data."""
 
 class IMetricsCollector(ABC):
