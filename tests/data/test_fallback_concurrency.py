@@ -386,6 +386,8 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
 
     symbols = [f"WAIT{i}" for i in range(6)]
 
+    previous_peak = concurrency.PEAK_SIMULTANEOUS_WORKERS
+
     try:
         results, succeeded, failed = asyncio.run(
             concurrency.run_with_concurrency(symbols, worker, max_concurrency=2, timeout_s=0.05)
@@ -396,7 +398,7 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
     assert any(value is None for value in results.values())
     assert failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 0
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max(previous_peak, max_seen)
 
 
 def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release():
@@ -454,6 +456,8 @@ def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release(
 
     symbols = [f"HOST_WAIT{i}" for i in range(4)]
 
+    previous_peak = concurrency.PEAK_SIMULTANEOUS_WORKERS
+
     try:
         results, succeeded, failed = asyncio.run(
             concurrency.run_with_concurrency(symbols, worker, max_concurrency=3, timeout_s=0.05)
@@ -465,7 +469,7 @@ def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release(
     assert any(value is None for value in results.values())
     assert failed
     assert max_seen == 1
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 0
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max(previous_peak, max_seen)
     assert host_semaphore._held == 0
 
 
@@ -526,17 +530,63 @@ def test_run_with_concurrency_back_to_back_host_limit_runs_reset_peak(monkeypatc
         return max_seen, semaphore
 
     async def orchestrate() -> None:
+        previous_peak = concurrency.PEAK_SIMULTANEOUS_WORKERS
+
         max_seen_timeout, timeout_semaphore = await run_once(1, timeout=0.05)
         assert max_seen_timeout == 1
-        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 0
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max(previous_peak, max_seen_timeout)
         assert timeout_semaphore._held == 0
+
+        previous_peak = concurrency.PEAK_SIMULTANEOUS_WORKERS
 
         max_seen_success, success_semaphore = await run_once(3)
         assert max_seen_success == 3
-        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max(previous_peak, max_seen_success)
         assert success_semaphore._held == 0
 
     asyncio.run(orchestrate())
+
+
+def test_run_with_concurrency_smaller_run_observes_lower_peak_during_execution():
+    concurrency.reset_peak_simultaneous_workers()
+
+    symbols_high = ["HIGH1", "HIGH2", "HIGH3"]
+
+    async def high_worker(sym: str) -> str:
+        await asyncio.sleep(0)
+        return sym
+
+    asyncio.run(
+        concurrency.run_with_concurrency(symbols_high, high_worker, max_concurrency=3)
+    )
+
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+
+    observed_peaks: list[int] = []
+    first_started = asyncio.Event()
+    release_gate = asyncio.Event()
+
+    async def low_worker(sym: str) -> str:
+        observed_peaks.append(concurrency.PEAK_SIMULTANEOUS_WORKERS)
+        if not first_started.is_set():
+            first_started.set()
+        await release_gate.wait()
+        return sym
+
+    async def run_low() -> None:
+        task = asyncio.create_task(
+            concurrency.run_with_concurrency(["LOW1", "LOW2"], low_worker, max_concurrency=1)
+        )
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        release_gate.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run_low())
+
+    assert observed_peaks
+    assert len(observed_peaks) == 2
+    assert max(observed_peaks) == 1
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
 
 
 def test_run_with_concurrency_rebinds_nested_dataclass_lock():

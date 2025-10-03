@@ -581,6 +581,10 @@ async def run_with_concurrency(
 
     reset_tracking_state(reset_peak=False)
 
+    global PEAK_SIMULTANEOUS_WORKERS
+    original_peak = PEAK_SIMULTANEOUS_WORKERS
+    reset_peak_simultaneous_workers()
+
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
 
@@ -696,8 +700,6 @@ async def run_with_concurrency(
         return {}, set(), set()
 
     gather_coro = asyncio.gather(*tasks, return_exceptions=True)
-    reset_peak_after_run = False
-
     try:
         if timeout_s is None:
             outcomes = await gather_coro
@@ -706,10 +708,7 @@ async def run_with_concurrency(
     except asyncio.TimeoutError:
         for task in tasks:
             task.cancel()
-        try:
-            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
-            reset_peak_after_run = True
+        outcomes = await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.CancelledError:
         for task in tasks:
             task.cancel()
@@ -724,8 +723,8 @@ async def run_with_concurrency(
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 
-    if reset_peak_after_run:
-        reset_peak_simultaneous_workers()
+    final_peak = max(original_peak, peak_this_run)
+    PEAK_SIMULTANEOUS_WORKERS = final_peak
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
