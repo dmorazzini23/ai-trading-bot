@@ -12,6 +12,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -88,7 +89,7 @@ def test_talib_imports():
     except ImportError:
         return False
 
-def _make_sample_df(pd, *, rows: int = 60, volume: int = 150_000) -> "pd.DataFrame":
+def _make_sample_df(pd, *, rows: int = 60, volume: int = 150_000) -> Any:
     base = pd.Series(range(rows), dtype="float64") + 100.0
     data = {
         "open": base - 0.5,
