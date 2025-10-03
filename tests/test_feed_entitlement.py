@@ -28,6 +28,14 @@ def test_ensure_entitled_feed_upgrades_cached_entitlement():
     assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
 
 
+def test_ensure_entitled_feed_downgrades_cached_entitlement():
+    bars._ENTITLE_CACHE.clear()
+    client = _Client(['sip'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+    client._feeds = ['iex']
+    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+
+
 def test_ensure_entitled_feed_keeps():
     bars._ENTITLE_CACHE.clear()
     client = _Client(['sip'])
