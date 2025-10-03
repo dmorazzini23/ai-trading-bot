@@ -6208,6 +6208,7 @@ def get_minute_df(
     fallback_window_used = _used_fallback(symbol, "1Min", start_dt, end_dt)
     fallback_metadata: dict[str, str] | None = None
     skip_primary_due_to_fallback = False
+    fallback_ttl_active = False
     if fallback_window_used:
         try:
             fallback_metadata = get_fallback_metadata(symbol, "1Min", start_dt, end_dt)
@@ -6225,6 +6226,28 @@ def get_minute_df(
     backup_provider_str, backup_provider_normalized = _resolve_backup_provider()
     resolved_backup_provider = backup_provider_normalized or backup_provider_str
     resolved_backup_feed = backup_provider_normalized or None
+
+    ttl_until: int | None = None
+    try:
+        ttl_until_value = _FALLBACK_UNTIL.get(tf_key)
+        if ttl_until_value is not None:
+            ttl_until = int(ttl_until_value)
+    except Exception:
+        ttl_until = None
+    if ttl_until is not None:
+        try:
+            now_s = int(_dt.datetime.now(tz=UTC).timestamp())
+        except Exception:
+            now_s = int(_time_now())
+        fallback_ttl_active = now_s < ttl_until
+    if fallback_ttl_active:
+        skip_primary_due_to_fallback = True
+        if fallback_metadata is None:
+            fallback_metadata = {}
+        if resolved_backup_provider:
+            fallback_metadata.setdefault("fallback_provider", resolved_backup_provider)
+        if resolved_backup_feed:
+            fallback_metadata.setdefault("fallback_feed", resolved_backup_feed)
 
     minute_metrics: dict[str, Any] = {
         "success_emitted": False,
