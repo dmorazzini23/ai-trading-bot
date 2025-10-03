@@ -6596,6 +6596,57 @@ CONF_THRESHOLD = float(
 CONFIRMATION_COUNT = int(params.get("CONFIRMATION_COUNT", 2))
 
 
+def _minute_frame_attrs(frame: Any) -> dict[str, str]:
+    if not isinstance(frame, pd.DataFrame):
+        return {}
+    try:
+        attrs = getattr(frame, "attrs", None)
+    except Exception:
+        return {}
+    if not isinstance(attrs, dict):
+        return {}
+    allowed_keys = (
+        "data_provider",
+        "data_feed",
+        "source",
+        "source_label",
+        "fallback_provider",
+        "fallback_feed",
+    )
+    sanitized: dict[str, str] = {}
+    for key in allowed_keys:
+        if key not in attrs:
+            continue
+        value = attrs.get(key)
+        if value is None:
+            continue
+        try:
+            text = str(value).strip()
+        except Exception:
+            continue
+        if text:
+            sanitized[key] = text[:128]
+    return sanitized
+
+
+def _log_iex_minute_stale(
+    *,
+    symbol: str,
+    age_seconds: int,
+    retry_feed: str | None,
+    frame: Any,
+) -> None:
+    extra: dict[str, Any] = {
+        "symbol": symbol,
+        "age_seconds": age_seconds,
+        "retry_feed": retry_feed,
+    }
+    attrs = _minute_frame_attrs(frame)
+    if attrs:
+        extra["minute_attrs"] = attrs
+    logger.warning("IEX_MINUTE_DATA_STALE", extra=extra)
+
+
 def _env_float(default: float | str, *keys: str) -> float:
     if isinstance(default, str):
         name = default
@@ -8558,13 +8609,11 @@ class DataFetcher:
                     fallback_feed = "sip" if feed != "sip" else "yahoo"
                 fallback_attempted = True
                 fallback_feed_used = fallback_feed
-                logger.warning(
-                    "IEX_MINUTE_DATA_STALE",
-                    extra={
-                        "symbol": symbol,
-                        "age_seconds": age_seconds,
-                        "retry_feed": fallback_feed,
-                    },
+                _log_iex_minute_stale(
+                    symbol=symbol,
+                    age_seconds=age_seconds,
+                    retry_feed=fallback_feed,
+                    frame=df,
                 )
                 try:
                     fallback_df = self._get_stock_bars(
@@ -8711,13 +8760,17 @@ class DataFetcher:
                 data_fresh = True
             except RuntimeError as stale_exc:
                 if fallback_attempted:
+                    stale_extra: dict[str, Any] = {
+                        "symbol": symbol,
+                        "feed": fallback_feed_used or feed,
+                        "detail": str(stale_exc),
+                    }
+                    attrs = _minute_frame_attrs(df)
+                    if attrs:
+                        stale_extra["minute_attrs"] = attrs
                     logger.warning(
                         "REALTIME_FALLBACK_STALE",
-                        extra={
-                            "symbol": symbol,
-                            "feed": fallback_feed_used or feed,
-                            "detail": str(stale_exc),
-                        },
+                        extra=stale_extra,
                     )
         elif df is None:
             data_fresh = False
