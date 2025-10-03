@@ -238,10 +238,10 @@ try:  # Eagerly import to keep a stable module reference for reloads.
 except Exception as exc:  # pragma: no cover - optional dependency missing or other import failure
     stub = ModuleType(f"{__name__}.train")
 
-    def _raise_import_error(*_a: Any, **_k: Any) -> None:
+    def _raise_import_error(*_a: Any, _exc: Exception = exc, **_k: Any) -> None:
         raise ImportError(
             "RL stack not available; install stable-baselines3, gymnasium, and torch"
-        ) from exc
+        ) from _exc
 
     stub.__dict__.update(
         {

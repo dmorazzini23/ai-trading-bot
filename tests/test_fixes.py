@@ -14,6 +14,10 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pandas_types
 
 from ai_trading.core import bot_engine
 
@@ -88,8 +92,10 @@ def test_talib_imports():
     except ImportError:
         return False
 
-def _make_sample_df(pd, *, rows: int = 60, volume: int = 150_000) -> "pd.DataFrame":
-    base = pd.Series(range(rows), dtype="float64") + 100.0
+def _make_sample_df(
+    pandas_module: Any, *, rows: int = 60, volume: int = 150_000
+) -> pandas_types.DataFrame:
+    base = pandas_module.Series(range(rows), dtype="float64") + 100.0
     data = {
         "open": base - 0.5,
         "high": base + 0.5,
@@ -97,8 +103,8 @@ def _make_sample_df(pd, *, rows: int = 60, volume: int = 150_000) -> "pd.DataFra
         "close": base,
         "volume": [volume] * rows,
     }
-    index = pd.date_range(datetime(2024, 1, 1), periods=rows, freq="D")
-    return pd.DataFrame(data, index=index)
+    index = pandas_module.date_range(datetime(2024, 1, 1), periods=rows, freq="D")
+    return pandas_module.DataFrame(data, index=index)
 
 
 def test_screen_universe_logging(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
