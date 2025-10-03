@@ -519,6 +519,37 @@ class DataFetchError(Exception):
 class MissingOHLCVColumnsError(DataFetchError):
     """Raised when a provider omits required OHLCV columns."""
 
+    def __init__(
+        self,
+        *args: Any,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(*args)
+        self.metadata: dict[str, Any] = dict(metadata or {})
+
+        def _coerce_seq(value: Any) -> tuple[str, ...] | None:
+            if value is None:
+                return None
+            if isinstance(value, tuple):
+                return tuple(str(item) for item in value)
+            if isinstance(value, list):
+                return tuple(str(item) for item in value)
+            try:
+                return tuple(str(item) for item in list(value))
+            except Exception:  # pragma: no cover - defensive coercion
+                return None
+
+        self.raw_payload_columns = _coerce_seq(
+            self.metadata.get("raw_payload_columns")
+        )
+        self.raw_payload_keys = _coerce_seq(
+            self.metadata.get("raw_payload_keys")
+        )
+        self.raw_payload_feed = self.metadata.get("raw_payload_feed")
+        self.raw_payload_timeframe = self.metadata.get("raw_payload_timeframe")
+        self.raw_payload_provider = self.metadata.get("raw_payload_provider")
+        self.raw_payload_symbol = self.metadata.get("raw_payload_symbol")
+
 
 # Dedicated error for SIP authorization failures so callers can branch.
 class UnauthorizedSIPError(DataFetchError):
@@ -2263,8 +2294,11 @@ def ensure_ohlcv_schema(
             "raw_payload_symbol": payload_symbol,
         }
         extra = {k: v for k, v in extra.items() if v is not None}
-        logger.debug("OHLCV_COLUMNS_MISSING", extra=extra)
-        return None
+        logger.error("OHLCV_COLUMNS_MISSING", extra=extra)
+        raise MissingOHLCVColumnsError(
+            f"missing ohlcv columns {missing} | source={source} frequency={frequency}",
+            metadata=extra,
+        )
 
     if "volume" not in work_df.columns:
         work_df["volume"] = 0
