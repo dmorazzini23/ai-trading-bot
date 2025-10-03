@@ -582,7 +582,6 @@ async def run_with_concurrency(
     reset_tracking_state(reset_peak=False)
 
     global PEAK_SIMULTANEOUS_WORKERS
-    original_peak = PEAK_SIMULTANEOUS_WORKERS
     reset_peak_simultaneous_workers()
 
     loop = asyncio.get_running_loop()
@@ -644,14 +643,13 @@ async def run_with_concurrency(
 
     async def _mark_worker_start() -> None:
         nonlocal active_workers, peak_this_run
+        global PEAK_SIMULTANEOUS_WORKERS
 
         async with active_lock:
             active_workers += 1
             if active_workers > peak_this_run:
                 peak_this_run = active_workers
-                global PEAK_SIMULTANEOUS_WORKERS
-                if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
-                    PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+                PEAK_SIMULTANEOUS_WORKERS = peak_this_run
 
     async def _mark_worker_end(started: bool) -> None:
         nonlocal active_workers
@@ -723,8 +721,7 @@ async def run_with_concurrency(
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 
-    final_peak = max(original_peak, peak_this_run)
-    PEAK_SIMULTANEOUS_WORKERS = final_peak
+    PEAK_SIMULTANEOUS_WORKERS = peak_this_run
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
