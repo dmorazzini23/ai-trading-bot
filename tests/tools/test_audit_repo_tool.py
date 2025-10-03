@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools import audit_repo
+import tools.audit_repo as audit_repo
 
 
 def test_audit_repo_runs_clean():
