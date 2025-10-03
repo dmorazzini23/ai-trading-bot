@@ -168,6 +168,29 @@ def test_health_endpoint_handles_missing_jsonify(monkeypatch):
     _assert_error_contains(data, "jsonify unavailable")
 
 
+def test_health_endpoint_missing_jsonify_dict_fallback_structure(monkeypatch):
+    monkeypatch.delattr(app_module, "jsonify", raising=False)
+
+    app = app_module.create_app()
+    app.response_class = None
+
+    handler = None
+    view_functions = getattr(app, "view_functions", None)
+    if isinstance(view_functions, dict):
+        handler = view_functions.get("health")
+    if handler is None:
+        routes = getattr(app, "_routes", None)
+        if isinstance(routes, dict):
+            handler = routes.get("/health")
+    assert handler is not None, "health handler should be registered"
+
+    payload = handler()
+    assert isinstance(payload, dict)
+    _assert_payload_structure(payload)
+    assert payload["ok"] is False
+    _assert_error_contains(payload, "jsonify unavailable")
+
+
 def test_health_endpoint_handles_jsonify_import_error(monkeypatch):
     monkeypatch.setattr(app_module, "jsonify", None, raising=False)
     monkeypatch.setattr(app_module, "_jsonify_import_error", ImportError("flask missing"), raising=False)

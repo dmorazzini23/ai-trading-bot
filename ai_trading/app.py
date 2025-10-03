@@ -170,6 +170,13 @@ def create_app():
         if fallback_used:
             final_payload["ok"] = False
 
+        # Ensure the exposed payload always carries the canonical structure
+        # regardless of how we arrive here (missing ``jsonify`` or runtime
+        # failures). Re-running the normaliser guarantees ``ok`` and
+        # ``alpaca`` are present and that ``alpaca`` is seeded from
+        # ``_ALPACA_SECTION_DEFAULTS``.
+        final_payload = _ensure_core_fields(final_payload)
+
         message_candidates: list[str] = []
         existing_error = response_payload.get("error")
         if existing_error is None:
