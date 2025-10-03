@@ -190,3 +190,42 @@ def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
     assert state["init_kwargs"]["stderr"] == subprocess.PIPE
     assert state["init_kwargs"]["text"] is True
     assert state["instance"]._killed is True
+
+
+def test_safe_subprocess_run_timeout_populates_result_and_returncode(monkeypatch):
+    state: dict[str, object] = {"communicate_calls": []}
+
+    class FakeProc:
+        def __init__(self, *args, **kwargs):
+            state["init_args"] = args
+            state["init_kwargs"] = kwargs
+            self.returncode = None
+            self._killed = False
+            state["instance"] = self
+
+        def communicate(self, timeout=None):
+            state["communicate_calls"].append(timeout)
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(cmd=["dummy"], timeout=timeout)
+            return "", ""
+
+        def kill(self):
+            self._killed = True
+
+    monkeypatch.setattr("ai_trading.utils.safe_subprocess.subprocess.Popen", FakeProc)
+
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        safe_subprocess_run(["dummy"], timeout=0.3)
+
+    assert state["communicate_calls"] == [0.3, None]
+    proc_instance = state["instance"]
+    assert proc_instance._killed is True
+    assert proc_instance.returncode == 124
+
+    result = excinfo.value.result
+    assert isinstance(result, SafeSubprocessResult)
+    assert result.timeout is True
+    assert result.returncode == 124
+    assert result.stdout == ""
+    assert result.stderr == ""
+    assert excinfo.value.timeout == pytest.approx(0.3)
