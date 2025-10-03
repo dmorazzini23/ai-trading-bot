@@ -1,0 +1,14 @@
+###############################
+# Minimal resolver constraints #
+###############################
+# Keep Alpaca SDKs and Yahoo Finance compatible.
+
+# Alpaca compatibility: <2
+urllib3==1.26.20
+
+# Satisfies alpaca-trade-api (<11) and alpaca-py (>=10.4)
+websockets==10.4
+
+# Avoids websockets>=13 pull from newer yfinance
+yfinance==0.2.58
+
