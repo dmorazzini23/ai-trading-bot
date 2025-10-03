@@ -1,6 +1,6 @@
 import os
 from functools import lru_cache
-from ai_trading.settings import Settings, _secret_to_str
+from ai_trading.settings import Settings, _secret_to_str, _to_bool, _to_float, _to_int
 from ai_trading.settings import get_settings as _base_get_settings
 
 TICKERS_FILE = os.getenv('AI_TRADING_TICKERS_FILE', 'tickers.csv')
@@ -48,7 +48,7 @@ def provider_priority(s: Settings | None = None) -> tuple[str, ...]:
 def max_data_fallbacks(s: Settings | None = None) -> int:
     """Return maximum allowed provider fallbacks."""
     s = s or get_settings()
-    return int(getattr(s, 'max_data_fallbacks', 2))
+    return _to_int(getattr(s, 'max_data_fallbacks', 2), 2)
 
 
 def minute_data_freshness_tolerance(s: Settings | None = None) -> int:
@@ -75,19 +75,19 @@ def alpaca_feed_failover(s: Settings | None = None) -> tuple[str, ...]:
 def alpaca_empty_to_backup(s: Settings | None = None) -> bool:
     """Return whether to route empty payloads to the backup provider."""
     s = s or get_settings()
-    return bool(getattr(s, 'alpaca_empty_to_backup', True))
+    return _to_bool(getattr(s, 'alpaca_empty_to_backup', True), True)
 
 
 def sentiment_retry_max(s: Settings | None = None) -> int:
     """Return maximum sentiment fetch retry count (defaults to 5 attempts)."""
     s = s or get_settings()
-    return int(getattr(s, 'sentiment_max_retries', 5))
+    return _to_int(getattr(s, 'sentiment_max_retries', 5), 5)
 
 
 def sentiment_backoff_base(s: Settings | None = None) -> float:
     """Return base delay for sentiment fetch backoff (defaults to 5 seconds)."""
     s = s or get_settings()
-    return float(getattr(s, 'sentiment_backoff_base', 5.0))
+    return _to_float(getattr(s, 'sentiment_backoff_base', 5.0), 5.0)
 
 
 def sentiment_backoff_strategy(s: Settings | None = None) -> str:
