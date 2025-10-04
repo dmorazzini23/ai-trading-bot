@@ -6673,14 +6673,10 @@ def get_minute_df(
                 _register_backup_skip()
             elif _frame_has_rows(df):
                 primary_frame_acquired = True
-            if (
-                proactive_switch
-                and feed_to_use != initial_feed
-                and df is not None
-                and not getattr(df, "empty", True)
-            ):
-                _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
-                switch_recorded = True
+            if proactive_switch and feed_to_use != initial_feed:
+                if not switch_recorded:
+                    _record_feed_switch(symbol, "1Min", initial_feed, feed_to_use)
+                    switch_recorded = True
         except (EmptyBarsError, ValueError, RuntimeError, AttributeError) as e:
             provider_feed_label = f"alpaca_{feed_to_use}"
             if isinstance(e, EmptyBarsError):
@@ -6904,7 +6900,6 @@ def get_minute_df(
 
     if (
         df is not None
-        and not getattr(df, "empty", True)
         and feed is None
         and feed_to_use != initial_feed
         and not switch_recorded

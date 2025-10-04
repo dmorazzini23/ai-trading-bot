@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -481,7 +482,7 @@ def test_window_no_session_override_persists(monkeypatch):
     assert second_session.calls[0]["feed"] == "sip"
     assert fetch._FEED_SWITCH_HISTORY == [("AAPL", "1Min", "sip")]
 
-def test_alt_feed_switch_records_override(monkeypatch):
+def test_alt_feed_switch_records_override(monkeypatch, caplog):
     _reset_state()
     fetch._SKIPPED_SYMBOLS.clear()
     fetch._EMPTY_BAR_COUNTS.clear()
@@ -531,7 +532,8 @@ def test_alt_feed_switch_records_override(monkeypatch):
 
     monkeypatch.setattr(fetch, "_fetch_bars", fake_fetch)
 
-    df = fetch.get_minute_df(symbol, start, end)
+    with caplog.at_level(logging.INFO, logger=fetch.logger.name):
+        df = fetch.get_minute_df(symbol, start, end)
 
     assert hasattr(df, "empty")
     assert getattr(df, "empty", True)
@@ -542,3 +544,7 @@ def test_alt_feed_switch_records_override(monkeypatch):
     assert fetch._FEED_OVERRIDE_BY_TF[tf_key] == "sip"
     assert (symbol, "1Min", "sip") in fetch._FEED_SWITCH_LOGGED
     assert fetch._FEED_SWITCH_HISTORY == [(symbol, "1Min", "sip")]
+    switch_messages = [
+        record.message for record in caplog.records if record.name == fetch.logger.name
+    ]
+    assert "ALPACA_FEED_SWITCH" in switch_messages
