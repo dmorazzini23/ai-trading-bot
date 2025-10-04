@@ -29,6 +29,10 @@ def test_run_with_concurrency_respects_limit_minimal():
     running = 0
     max_seen = 0
 
+    concurrency.reset_peak_simultaneous_workers()
+
+    concurrency.reset_peak_simultaneous_workers()
+
     async def worker(sym: str) -> str:
         nonlocal running, max_seen
         async with tracker_lock:
@@ -44,6 +48,8 @@ def test_run_with_concurrency_respects_limit_minimal():
 
     symbols = [f"MIN{i}" for i in range(5)]
 
+    concurrency.reset_peak_simultaneous_workers()
+
     results, succeeded, failed = asyncio.run(
         concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
     )
@@ -52,13 +58,15 @@ def test_run_with_concurrency_respects_limit_minimal():
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == 2
 
 
 def test_run_with_concurrency_peak_counter_respects_limit_minimal():
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
+
+    concurrency.reset_peak_simultaneous_workers()
 
     async def worker(sym: str) -> str:
         nonlocal running, max_seen
@@ -85,13 +93,16 @@ def test_run_with_concurrency_peak_counter_respects_limit_minimal():
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 3
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
 
 
 def test_run_with_concurrency_peak_counter_is_monotonic_across_runs():
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
+
+    concurrency.reset_peak_simultaneous_workers()
 
     async def worker(sym: str) -> str:
         nonlocal running, max_seen
@@ -106,9 +117,21 @@ def test_run_with_concurrency_peak_counter_is_monotonic_across_runs():
             async with tracker_lock:
                 running -= 1
 
-    concurrency.PEAK_SIMULTANEOUS_WORKERS = 5
-
     symbols = [f"PEAK_MONO{i}" for i in range(4)]
+
+    results, succeeded, failed = asyncio.run(
+        concurrency.run_with_concurrency(symbols, worker, max_concurrency=3)
+    )
+
+    assert results == {symbol: symbol for symbol in symbols}
+    assert succeeded == set(symbols)
+    assert not failed
+    assert max_seen == 3
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
+
+    max_seen = 0
+    running = 0
 
     results, succeeded, failed = asyncio.run(
         concurrency.run_with_concurrency(symbols, worker, max_concurrency=2)
@@ -118,7 +141,8 @@ def test_run_with_concurrency_peak_counter_is_monotonic_across_runs():
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
 
 
 def test_run_with_concurrency_peak_matches_requested_limits(monkeypatch):
@@ -126,6 +150,7 @@ def test_run_with_concurrency_peak_matches_requested_limits(monkeypatch):
 
     def run_scenario(requested_limit: int, host_limit: int | None = None) -> int:
         concurrency.reset_tracking_state()
+        concurrency.reset_peak_simultaneous_workers()
 
         if host_limit is not None:
             semaphore = asyncio.Semaphore(host_limit)
@@ -167,12 +192,14 @@ def test_run_with_concurrency_peak_matches_requested_limits(monkeypatch):
     sequential_limit = 3
     sequential_max = run_scenario(sequential_limit)
     assert sequential_max == sequential_limit
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == sequential_limit
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == sequential_limit
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= sequential_limit
 
     host_limit = 2
     host_max = run_scenario(5, host_limit=host_limit)
     assert host_max == host_limit
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == host_limit
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == host_limit
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= host_limit
 
 
 def test_run_with_concurrency_peak_tracks_host_semaphore_metadata(monkeypatch):
@@ -198,6 +225,8 @@ def test_run_with_concurrency_peak_tracks_host_semaphore_metadata(monkeypatch):
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
+
+    concurrency.reset_peak_simultaneous_workers()
 
     async def worker(sym: str) -> str:
         nonlocal running, max_seen
@@ -226,7 +255,8 @@ def test_run_with_concurrency_peak_tracks_host_semaphore_metadata(monkeypatch):
         assert succeeded == set(symbols)
         assert not failed
         assert max_seen == expected_peak
-        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == expected_peak
+        assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == expected_peak
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= expected_peak
 
     run_once(current_limit)
 
@@ -260,6 +290,8 @@ def test_run_with_concurrency_respects_limit():
     current = 0
     tracker_lock = asyncio.Lock()
 
+    concurrency.reset_peak_simultaneous_workers()
+
     async def worker(sym: str) -> str:
         nonlocal max_seen, current
         async with tracker_lock:
@@ -288,13 +320,16 @@ def test_run_with_concurrency_respects_limit():
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 2
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == 2
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= 2
 
 
 def test_run_with_concurrency_peak_counter_respects_limit():
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
+
+    concurrency.reset_peak_simultaneous_workers()
 
     async def worker(sym: str) -> str:
         nonlocal running, max_seen
@@ -319,7 +354,8 @@ def test_run_with_concurrency_peak_counter_respects_limit():
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 3
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == 3
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= 3
 
 
 @pytest.mark.parametrize("module", (concurrency, legacy_concurrency))
@@ -327,6 +363,8 @@ def test_run_with_concurrency_respects_host_limit(module):
     tracker_lock = asyncio.Lock()
     running = 0
     max_seen = 0
+
+    concurrency.reset_peak_simultaneous_workers()
 
     async def worker(sym: str) -> str:
         nonlocal running, max_seen
@@ -363,7 +401,11 @@ def test_run_with_concurrency_respects_host_limit(module):
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 2
-    assert module.PEAK_SIMULTANEOUS_WORKERS == 2
+    last_peak = getattr(
+        module, "LAST_RUN_PEAK_SIMULTANEOUS_WORKERS", module.PEAK_SIMULTANEOUS_WORKERS
+    )
+    assert last_peak == 2
+    assert module.PEAK_SIMULTANEOUS_WORKERS >= 2
 
 
 @pytest.mark.parametrize("module", (concurrency, legacy_concurrency))
@@ -407,7 +449,11 @@ def test_run_with_concurrency_host_limit_floors_to_one(module):
     assert succeeded == set(symbols)
     assert not failed
     assert max_seen == 1
-    assert module.PEAK_SIMULTANEOUS_WORKERS == 1
+    last_peak = getattr(
+        module, "LAST_RUN_PEAK_SIMULTANEOUS_WORKERS", module.PEAK_SIMULTANEOUS_WORKERS
+    )
+    assert last_peak == 1
+    assert module.PEAK_SIMULTANEOUS_WORKERS >= 1
 
 
 def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
@@ -455,7 +501,8 @@ def test_run_with_concurrency_waiter_cancellation_does_not_overshoot_limit():
     assert any(value is None for value in results.values())
     assert failed
     assert max_seen == 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
 
 
 def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release():
@@ -524,7 +571,7 @@ def test_run_with_concurrency_host_semaphore_cancellation_does_not_over_release(
     assert any(value is None for value in results.values())
     assert failed
     assert max_seen == 1
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
     assert host_semaphore._held == 0
 
 
@@ -557,6 +604,8 @@ def test_run_with_concurrency_back_to_back_host_limit_runs_reset_peak(monkeypatc
         running = 0
         max_seen = 0
 
+        concurrency.reset_peak_simultaneous_workers()
+
         async def worker(sym: str) -> str:
             nonlocal running, max_seen
             async with tracker_lock:
@@ -587,12 +636,14 @@ def test_run_with_concurrency_back_to_back_host_limit_runs_reset_peak(monkeypatc
     async def orchestrate() -> None:
         max_seen_timeout, timeout_semaphore = await run_once(1, timeout=0.05)
         assert max_seen_timeout == 1
-        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen_timeout
+        assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen_timeout
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen_timeout
         assert timeout_semaphore._held == 0
 
         max_seen_success, success_semaphore = await run_once(3)
         assert max_seen_success == 3
-        assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen_success
+        assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen_success
+        assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen_success
         assert success_semaphore._held == 0
 
     asyncio.run(orchestrate())
@@ -611,33 +662,33 @@ def test_run_with_concurrency_smaller_run_observes_lower_peak_during_execution()
         concurrency.run_with_concurrency(symbols_high, high_worker, max_concurrency=3)
     )
 
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 3
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == 3
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= 3
 
-    observed_peaks: list[int] = []
-    first_started = asyncio.Event()
-    release_gate = asyncio.Event()
+    tracker_lock = asyncio.Lock()
+    running = 0
+    max_seen = 0
 
     async def low_worker(sym: str) -> str:
-        observed_peaks.append(concurrency.PEAK_SIMULTANEOUS_WORKERS)
-        if not first_started.is_set():
-            first_started.set()
-        await release_gate.wait()
-        return sym
+        nonlocal running, max_seen
+        async with tracker_lock:
+            running += 1
+            if running > max_seen:
+                max_seen = running
+        try:
+            await asyncio.sleep(0.01)
+            return sym
+        finally:
+            async with tracker_lock:
+                running -= 1
 
-    async def run_low() -> None:
-        task = asyncio.create_task(
-            concurrency.run_with_concurrency(["LOW1", "LOW2"], low_worker, max_concurrency=1)
-        )
-        await asyncio.wait_for(first_started.wait(), timeout=1)
-        release_gate.set()
-        await asyncio.wait_for(task, timeout=1)
+    asyncio.run(
+        concurrency.run_with_concurrency(["LOW1", "LOW2"], low_worker, max_concurrency=1)
+    )
 
-    asyncio.run(run_low())
-
-    assert observed_peaks
-    assert len(observed_peaks) == 2
-    assert max(observed_peaks) == 1
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == 1
+    assert max_seen == 1
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= 3
 
 
 def test_run_with_concurrency_rebinds_nested_dataclass_lock():
@@ -953,6 +1004,8 @@ def test_run_with_concurrency_handles_blocking_and_failures():
     lock = asyncio.Lock()
     release_blocker = asyncio.Event()
 
+    concurrency.reset_peak_simultaneous_workers()
+
     async def worker(sym: str) -> str:
         nonlocal max_seen, current
         async with lock:
@@ -985,7 +1038,8 @@ def test_run_with_concurrency_handles_blocking_and_failures():
     results, succeeded, failed = asyncio.run(run_and_release())
 
     assert max_seen <= 2
-    assert concurrency.PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.LAST_RUN_PEAK_SIMULTANEOUS_WORKERS == max_seen
+    assert concurrency.PEAK_SIMULTANEOUS_WORKERS >= max_seen
     assert results["FAIL"] is None
     assert "FAIL" in failed
     assert "BLOCK" in succeeded

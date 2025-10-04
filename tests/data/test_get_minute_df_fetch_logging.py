@@ -40,6 +40,9 @@ class _DummyProviderMonitor:
     def register_disable_callback(self, *args, **kwargs):
         return None
 
+    def update_data_health(self, *args, **kwargs):
+        return None
+
 
 def test_sip_unauthorized_branch_annotates_backup(monkeypatch, caplog):
     start, end = _dt_range()
