@@ -1,4 +1,5 @@
 import asyncio
+import os
 import types
 
 from tests.conftest import reload_module
@@ -135,6 +136,47 @@ def test_reload_host_limit_if_env_changed_triggers_refresh(monkeypatch):
         loop.close()
 
     monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+    _reload_pooling(pooling)
+
+
+def test_reload_host_limit_refreshes_cache_and_semaphores(monkeypatch):
+    monkeypatch.setenv("AI_TRADING_HOST_LIMIT", "2")
+    pooling = _reload_pooling()
+
+    loop = asyncio.new_event_loop()
+    try:
+        first_id, first_limit, first_version = loop.run_until_complete(
+            _semaphore_state(pooling)
+        )
+        assert first_limit == 2
+        assert isinstance(first_version, int)
+
+        monkeypatch.setenv("HTTP_MAX_PER_HOST", "6")
+        monkeypatch.delenv("AI_TRADING_HOST_LIMIT", raising=False)
+
+        snapshot = pooling.reload_host_limit_if_env_changed()
+        assert snapshot.limit == 6
+        assert snapshot.version != first_version
+
+        cache = pooling._LIMIT_CACHE
+        assert cache is not None
+        expected_snapshot = (
+            os.getenv("HTTP_MAX_PER_HOST"),
+            os.getenv("AI_TRADING_HTTP_HOST_LIMIT"),
+            os.getenv("AI_TRADING_HOST_LIMIT"),
+        )
+        assert cache.env_snapshot == expected_snapshot
+
+        second_id, second_limit, second_version = loop.run_until_complete(
+            _semaphore_state(pooling)
+        )
+        assert second_id != first_id
+        assert second_limit == 6
+        assert second_version == snapshot.version
+    finally:
+        loop.close()
+
+    monkeypatch.delenv("HTTP_MAX_PER_HOST", raising=False)
     _reload_pooling(pooling)
 
 
