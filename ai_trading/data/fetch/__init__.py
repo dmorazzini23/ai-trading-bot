@@ -2627,7 +2627,7 @@ def _has_alpaca_keys() -> bool:
     global _ALPACA_CREDS_CACHE
     now = monotonic_time()
     if os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}:
-        _ALPACA_CREDS_CACHE = (True, now)
+        _ALPACA_CREDS_CACHE = None
         return True
     if is_data_feed_downgraded():
         _ALPACA_CREDS_CACHE = (False, now)
@@ -4641,9 +4641,6 @@ def _fetch_bars(
     else:
         _state["skip_empty_metrics"] = False
 
-    if short_circuit_empty:
-        empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
