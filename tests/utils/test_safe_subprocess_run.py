@@ -32,6 +32,9 @@ def test_safe_subprocess_run_timeout(caplog):
     assert excinfo.value.result == expected_result
     assert excinfo.value.stdout == "ready\n"
     assert excinfo.value.stderr == "warn\n"
+    assert excinfo.value.timeout == pytest.approx(0.3)
+    assert excinfo.value.result.stdout == excinfo.value.stdout
+    assert excinfo.value.result.stderr == excinfo.value.stderr
     assert excinfo.value.__cause__ is None
     assert not caplog.records  # timeout should not emit warnings
 
@@ -94,6 +97,8 @@ def test_safe_subprocess_run_timeout_without_captured_output(monkeypatch, caplog
     assert result.stderr == ""
     assert excinfo.value.stdout == ""
     assert excinfo.value.stderr == ""
+    assert excinfo.value.result.stdout == excinfo.value.stdout
+    assert excinfo.value.result.stderr == excinfo.value.stderr
     assert calls["args"] == (["dummy"],)
     assert calls["kwargs"]["stdout"] == subprocess.PIPE
     assert calls["kwargs"]["stderr"] == subprocess.PIPE
@@ -141,6 +146,8 @@ def test_safe_subprocess_run_timeout_with_captured_output(monkeypatch):
     assert result.stderr == "partial stderr"
     assert excinfo.value.stdout == "partial stdout"
     assert excinfo.value.stderr == "partial stderr"
+    assert excinfo.value.result.stdout == excinfo.value.stdout
+    assert excinfo.value.result.stderr == excinfo.value.stderr
     assert isinstance(excinfo.value.result, SafeSubprocessResult)
     assert state["instance"]._killed is True
     assert state["communicate_calls"] == [0.25, None]
@@ -186,6 +193,8 @@ def test_safe_subprocess_run_timeout_attaches_result_bytes(monkeypatch):
     assert result.stderr == "late stderr"
     assert excinfo.value.stdout == "late stdout"
     assert excinfo.value.stderr == "late stderr"
+    assert excinfo.value.result.stdout == excinfo.value.stdout
+    assert excinfo.value.result.stderr == excinfo.value.stderr
     assert state["init_kwargs"]["stdout"] == subprocess.PIPE
     assert state["init_kwargs"]["stderr"] == subprocess.PIPE
     assert state["init_kwargs"]["text"] is True
@@ -229,3 +238,5 @@ def test_safe_subprocess_run_timeout_populates_result_and_returncode(monkeypatch
     assert result.stdout == ""
     assert result.stderr == ""
     assert excinfo.value.timeout == pytest.approx(0.3)
+    assert excinfo.value.result.stdout == excinfo.value.stdout
+    assert excinfo.value.result.stderr == excinfo.value.stderr
