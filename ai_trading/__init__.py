@@ -6,7 +6,9 @@ safe to import from the package root for tests and CLI users.
 """
 import importlib.util
 import os
+import runpy  # noqa: F401 - ensure availability when sys.modules cleared
 import sys
+import zoneinfo  # noqa: F401 - ensure tzdata bindings load after clears
 from pathlib import Path
 from importlib import import_module as _import_module
 import unittest.mock as _mock
@@ -19,69 +21,41 @@ sys.modules.pop(f"{__name__}.__main__", None)
 PYTEST_DONT_REWRITE = ["ai_trading"]
 
 
-def _capture_essential_modules() -> dict[str, object]:
-    names = (
-        "importlib",
-        "importlib._bootstrap",
-        "importlib._bootstrap_external",
-        "importlib.machinery",
-        "pathlib",
-        "posixpath",
-        "ntpath",
-        "os",
-        "collections",
-        "ast",
-        "io",
-        "contextlib",
-        "warnings",
-        "marshal",
-        "traceback",
-        "tokenize",
-        "linecache",
-    )
-    captured: dict[str, object] = {}
-    for name in names:
-        module = sys.modules.get(name)
-        if module is None:
-            try:
-                module = __import__(name)
-            except Exception:  # pragma: no cover - optional dependency missing
-                continue
-        captured[name] = module
-    return captured
+_SAFE_SYS_MODULES = (
+    "sys",
+    "builtins",
+    "types",
+    "importlib",
+    "importlib._bootstrap",
+    "importlib._bootstrap_external",
+    "importlib.machinery",
+    "pathlib",
+    "posixpath",
+    "ntpath",
+    "os",
+    "collections",
+    "runpy",
+    "zipimport",
+    "pkgutil",
+    "zoneinfo",
+    "zoneinfo._tzpath",
+)
 
 
-_ESSENTIAL_MODULES = _capture_essential_modules()
-
-
-def _pop_assertion_rewrite_hook():  # pragma: no cover - depends on pytest internals
-    for hook in list(sys.meta_path):
-        if hook.__class__.__name__ == "AssertionRewritingHook":
-            sys.meta_path.remove(hook)
-            return hook
-    return None
-
-
-class _StdlibSafePatchDict(_mock._patch_dict):  # pragma: no cover - exercised via pytest
-    def __enter__(self):
-        self._ar_hook = None
+class _SafePatchDict(_mock._patch_dict):  # pragma: no cover - exercised via tests
+    def _patch_dict(self):
+        super()._patch_dict()
         if self.in_dict is sys.modules and self.clear:
-            self._ar_hook = _pop_assertion_rewrite_hook()
-        return super().__enter__()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        result = super().__exit__(exc_type, exc_value, traceback)
-        if self.in_dict is sys.modules and self.clear:
-            for name, module in _ESSENTIAL_MODULES.items():
-                if name not in sys.modules:
-                    sys.modules[name] = module
-            if self._ar_hook is not None and self._ar_hook not in sys.meta_path:
-                sys.meta_path.insert(0, self._ar_hook)
-        return result
+            for name in _SAFE_SYS_MODULES:
+                if name in sys.modules:
+                    continue
+                try:
+                    __import__(name)
+                except Exception:
+                    continue
 
 
-if not isinstance(_mock.patch.dict, _StdlibSafePatchDict):
-    _mock._patch_dict = _StdlibSafePatchDict
+_mock._patch_dict = _SafePatchDict
 
 _modules_ref = getattr(sys, "modules", None)
 _ESSENTIAL_NAMES = (
