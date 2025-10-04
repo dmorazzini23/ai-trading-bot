@@ -1712,80 +1712,18 @@ class ExecutionEngine:
                 directional_predicted = predicted_slippage_bps if side == OrderSide.BUY else -predicted_slippage_bps
                 adverse_predicted_bps = max(directional_predicted, 0.0)
             if adverse_predicted_bps > threshold:
+                payload = {
+                    "order_id": order.id,
+                    "adverse_slippage_bps": round(adverse_predicted_bps, 2),
+                    "threshold_bps": round(threshold, 2),
+                }
                 if had_manual_price:
-                    logger.warning(
-                        "MANUAL_SLIPPAGE_THRESHOLD_EXCEEDED",
-                        extra={
-                            "order_id": order.id,
-                            "adverse_slippage_bps": round(adverse_predicted_bps, 2),
-                            "threshold_bps": round(threshold, 2),
-                        },
-                    )
-                    raise AssertionError(
-                        f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
-                    )
-                tol_bps = get_env("SLIPPAGE_LIMIT_TOLERANCE_BPS", "5", cast=float)
-                if order.order_type == OrderType.MARKET:
-                    adj = float(expected) * (tol_bps / 10000.0)
-                    limit_price = float(expected) + adj if side == OrderSide.BUY else float(expected) - adj
-                    tick = TICK_BY_SYMBOL.get(order.symbol)
-                    try:
-                        price_money = Money(limit_price, tick)
-                    except Exception:
-                        price_money = None
-                    else:
-                        order.order_type = OrderType.LIMIT
-                        order.price = price_money
-                        base_price = limit_price
-                    logger.warning(
-                        "SLIPPAGE_LIMIT_CONVERSION",
-                        extra={
-                            "order_id": order.id,
-                            "limit_price": round(limit_price, 4),
-                            "adverse_slippage_bps": round(adverse_predicted_bps, 2),
-                        },
-                    )
-                reduced = max(1, int(order.quantity * threshold / adverse_predicted_bps))
-                if reduced < order.quantity:
-                    order.quantity = reduced
-                    logger.warning(
-                        "SLIPPAGE_QTY_REDUCED",
-                        extra={
-                            "order_id": order.id,
-                            "new_qty": reduced,
-                            "adverse_slippage_bps": round(adverse_predicted_bps, 2),
-                        },
-                    )
+                    logger.warning("MANUAL_SLIPPAGE_THRESHOLD_EXCEEDED", extra=payload)
                 else:
-                    order.status = OrderStatus.REJECTED
-                    logger.warning(
-                        "SLIPPAGE_ORDER_REJECTED",
-                        extra={
-                            "order_id": order.id,
-                            "adverse_slippage_bps": round(adverse_predicted_bps, 2),
-                        },
-                    )
-                    return
-                try:
-                    from ai_trading.core.bot_engine import get_trade_logger
-
-                    tl = get_trade_logger()
-                    strategy = getattr(order, "strategy_id", None) or "slippage_adjust"
-                    side_val = order.side.value if isinstance(order.side, OrderSide) else order.side
-                    price_for_log = float(order.price) if order.price is not None else float(base_price)
-                    tl.log_entry(
-                        order.symbol,
-                        price_for_log,
-                        order.quantity,
-                        side_val,
-                        strategy,
-                        signal_tags="slippage_adjust",
-                    )
-                except Exception as exc:  # pragma: no cover - best effort logging
-                    logger.warning(
-                        "SLIPPAGE_LOG_FAILED",
-                        extra={"order_id": order.id, "detail": str(exc)},
-                    )
+                    logger.warning("SLIPPAGE_THRESHOLD_EXCEEDED", extra=payload)
+                raise AssertionError(
+                    f"predicted slippage {predicted_slippage_bps:.2f} bps exceeds threshold"
+                )
 
             remaining = order.quantity
             while remaining > 0 and order.status != OrderStatus.CANCELED:

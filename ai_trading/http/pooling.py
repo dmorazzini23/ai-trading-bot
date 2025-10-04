@@ -184,6 +184,16 @@ def _build_semaphore(limit: int, version: int) -> asyncio.Semaphore:
     return semaphore
 
 
+def _clear_all_loop_semaphores() -> None:
+    """Remove cached host semaphores for all tracked event loops."""
+
+    for loop, host_map in list(_HOST_SEMAPHORES.items()):
+        try:
+            host_map.clear()
+        except Exception:
+            _HOST_SEMAPHORES.pop(loop, None)
+
+
 def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
     """Clear cached host semaphores and, optionally, the limit cache.
 
@@ -433,24 +443,16 @@ def reload_host_limit_if_env_changed() -> HostLimitSnapshot:
         _set_pooling_limit_state(snapshot.limit, snapshot.version)
         return snapshot
 
+    if cache is not None and cache.env_snapshot != env_snapshot:
+        _clear_all_loop_semaphores()
+
     limit, version = _resolve_limit()
     cache = _LIMIT_CACHE
-    if cache is not None and cache.env_snapshot != env_snapshot:
-        cache = _ResolvedLimitCache(
-            env_key=cache.env_key,
-            raw_env=cache.raw_env,
-            limit=cache.limit,
-            version=cache.version,
-            config_id=cache.config_id,
-            env_snapshot=env_snapshot,
-        )
-        _LIMIT_CACHE = cache
-    snapshot = HostLimitSnapshot(limit, version)
     if cache is not None:
-        _LAST_LIMIT_ENV_SNAPSHOT = cache.env_snapshot
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
     else:
-        _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
+        snapshot = HostLimitSnapshot(limit, version)
+    _LAST_LIMIT_ENV_SNAPSHOT = env_snapshot
     _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return snapshot
 

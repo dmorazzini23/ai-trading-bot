@@ -637,11 +637,24 @@ async def run_with_concurrency(
 
     host_semaphore = _get_host_limit_semaphore()
     if host_semaphore is not None:
-        semaphore_limit = _normalise_positive_int(
-            getattr(host_semaphore, "_ai_trading_host_limit", None)
-        )
-        if semaphore_limit is not None:
-            limit = min(limit, semaphore_limit)
+        bound_loop = getattr(host_semaphore, "_loop", None)
+        if bound_loop is not None and bound_loop is not loop:
+            refreshed: asyncio.Semaphore | None = None
+            if callable(_pooling_refresh_host_semaphore):
+                try:
+                    refreshed = _pooling_refresh_host_semaphore(loop=loop)
+                except Exception:
+                    refreshed = None
+            if isinstance(refreshed, asyncio.Semaphore):
+                host_semaphore = refreshed
+            else:
+                host_semaphore = None
+        if host_semaphore is not None:
+            semaphore_limit = _normalise_positive_int(
+                getattr(host_semaphore, "_ai_trading_host_limit", None)
+            )
+            if semaphore_limit is not None:
+                limit = min(limit, semaphore_limit)
 
     limit = max(1, limit)
 

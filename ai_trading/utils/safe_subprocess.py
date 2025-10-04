@@ -51,7 +51,7 @@ def safe_subprocess_run(
         ``124`` return code.
     """
 
-    run_timeout = SUBPROCESS_TIMEOUT_DEFAULT if timeout is None else float(timeout)
+    run_timeout = SUBPROCESS_TIMEOUT_S if timeout is None else float(timeout)
     if run_timeout <= 0:
         logger.warning(
             "safe_subprocess_run(%s) timed out immediately (timeout=%.2f seconds)",
