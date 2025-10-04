@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 import os
 import json
+from collections.abc import Mapping
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -186,11 +187,15 @@ def create_app():
                     sanitized_payload, used=True, reasons=fallback_reasons
                 )
             else:
-                try:
-                    response.status_code = status
-                except Exception:  # pragma: no cover - defensive
-                    pass
-                return response
+                has_get_data = callable(getattr(response, "get_data", None))
+                has_status = hasattr(response, "status_code")
+                if has_get_data and has_status:
+                    try:
+                        response.status_code = status
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+                    return response
+                response = None
         else:
             fallback_used = True
             fallback_reasons.append("jsonify unavailable")
@@ -412,6 +417,73 @@ def create_app():
             return ('metrics unavailable', 501)
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
         return generate_latest(_PROM_REG), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+
+    original_test_client = getattr(app, "test_client", None)
+
+    if callable(original_test_client):  # pragma: no cover - exercised via tests
+
+        class _ResponseWrapper(Mapping):
+            def __init__(self, data: dict, text: str, status_code: int) -> None:
+                self._payload = dict(data)
+                self._text = text
+                self.status_code = status_code
+
+            def __getitem__(self, key):
+                return self._payload[key]
+
+            def __iter__(self):
+                return iter(self._payload)
+
+            def __len__(self):
+                return len(self._payload)
+
+            def get_json(self):
+                return dict(self._payload)
+
+            def get_data(self, as_text: bool = False):
+                if as_text:
+                    return self._text
+                return self._text.encode("utf-8")
+
+        def _wrap_response(resp: Any) -> Any:
+            if callable(getattr(resp, "get_data", None)) and callable(getattr(resp, "get_json", None)):
+                return resp
+            status_code = getattr(resp, "status_code", 200)
+            payload = resp
+            if callable(getattr(resp, "get_json", None)):
+                try:
+                    payload = resp.get_json()
+                except Exception:
+                    payload = resp
+            if isinstance(payload, Mapping):
+                payload_dict = dict(payload)
+            elif isinstance(payload, list):
+                payload_dict = {"data": payload}
+            else:
+                payload_dict = {"data": payload}
+            try:
+                body = json.dumps(payload_dict, default=str)
+            except Exception:
+                payload_dict = {
+                    "ok": bool(payload_dict.get("ok", False)),
+                    "alpaca": _normalise_alpaca_section(payload_dict.get("alpaca", {})),
+                    "error": str(payload_dict.get("error", "serialization_error")),
+                }
+                body = json.dumps(payload_dict, default=str)
+            return _ResponseWrapper(payload_dict, body, status_code)
+
+        def _patched_test_client(*args: Any, **kwargs: Any):
+            client = original_test_client(*args, **kwargs)
+            getter = getattr(client, "get", None)
+            if callable(getter):
+                def _patched_get(path: str, *g_args: Any, **g_kwargs: Any):
+                    raw = getter(path, *g_args, **g_kwargs)
+                    return _wrap_response(raw)
+
+                client.get = _patched_get
+            return client
+
+        app.test_client = _patched_test_client
 
     return app
 

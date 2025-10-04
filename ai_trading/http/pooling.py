@@ -58,6 +58,7 @@ _HostSemaphoreMap = dict[str, _SemaphoreRecord]
 _HOST_SEMAPHORES: WeakKeyDictionary[asyncio.AbstractEventLoop, _HostSemaphoreMap] = (
     WeakKeyDictionary()
 )
+_RETIRED_SEMAPHORES: list[asyncio.Semaphore] = []
 
 _LIMIT_CACHE: _ResolvedLimitCache | None = None
 _LIMIT_VERSION: int = 0
@@ -193,6 +194,11 @@ def reset_host_semaphores(*, clear_limit_cache: bool = True) -> None:
 
     global _LIMIT_CACHE, _LIMIT_VERSION
 
+    if _HOST_SEMAPHORES:
+        for host_map in list(_HOST_SEMAPHORES.values()):
+            for record in host_map.values():
+                _RETIRED_SEMAPHORES.append(record.semaphore)
+    _RETIRED_SEMAPHORES[:] = _RETIRED_SEMAPHORES[-8:]
     _HOST_SEMAPHORES.clear()
 
     # Bump the global version so that future semaphore lookups will treat the
@@ -520,8 +526,13 @@ def refresh_host_semaphore(
     if snapshot is None:
         cache = _ensure_limit_cache()
         snapshot = HostLimitSnapshot(cache.limit, cache.version)
+    previous = host_map.get(host)
     semaphore = _build_semaphore(snapshot.limit, snapshot.version)
     host_map[host] = _SemaphoreRecord(semaphore, snapshot.limit, snapshot.version)
+    if previous is not None:
+        _RETIRED_SEMAPHORES.append(previous.semaphore)
+        if len(_RETIRED_SEMAPHORES) > 8:
+            _RETIRED_SEMAPHORES.pop(0)
     if update_pooling_state:
         _set_pooling_limit_state(snapshot.limit, snapshot.version)
     return semaphore

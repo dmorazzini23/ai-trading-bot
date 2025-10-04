@@ -5446,14 +5446,21 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             end_dt=end_dt,
         )
         if recovery_payload is None:
+            detail_text = "; ".join(stale_details)
             logger.warning(
                 "FETCH_MINUTE_STALE_USING_ORIGINAL",
                 extra={
                     "symbol": symbol,
-                    "detail": "; ".join(stale_details),
+                    "detail": detail_text,
                     "timeframe": "1Min",
                 },
             )
+            err = DataFetchError("stale_minute_data")
+            setattr(err, "fetch_reason", "stale_minute_data")
+            setattr(err, "symbol", symbol)
+            setattr(err, "timeframe", "1Min")
+            setattr(err, "detail", detail_text)
+            raise err
         else:
             df, end_dt, staleness_reference, now_utc, active_feed = recovery_payload
 
@@ -5582,7 +5589,22 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             "end": end_dt.isoformat(),
         }
         logger.warning("MINUTE_DATA_COVERAGE_ABORT", extra=abort_extra)
-        return df
+        detail_text = (
+            "expected={expected} actual={actual} threshold={threshold} "
+            "materially_short={materially_short} insufficient_intraday={insufficient}"
+        ).format(
+            expected=expected_bars,
+            actual=actual_bars,
+            threshold=coverage_threshold,
+            materially_short=materially_short,
+            insufficient=insufficient_intraday,
+        )
+        err = DataFetchError("minute_data_low_coverage")
+        setattr(err, "fetch_reason", "minute_data_low_coverage")
+        setattr(err, "symbol", symbol)
+        setattr(err, "timeframe", "1Min")
+        setattr(err, "detail", detail_text)
+        raise err
 
     return df
 
@@ -7530,16 +7552,6 @@ class DataFetcher:
         normalized = data_fetcher_module.normalize_ohlcv_df(
             frame.drop(columns=["symbol"], errors="ignore"),
         )
-
-        try:
-            index = normalized.index
-        except AttributeError:  # pragma: no cover - defensive guard for duck typing
-            return normalized
-
-        try:
-            normalized.index = index.rename(None)
-        except Exception:  # pragma: no cover - defensive fallback
-            pass
 
         return normalized
 

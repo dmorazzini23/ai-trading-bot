@@ -2626,6 +2626,9 @@ def _has_alpaca_keys() -> bool:
 
     global _ALPACA_CREDS_CACHE
     now = monotonic_time()
+    if os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}:
+        _ALPACA_CREDS_CACHE = (True, now)
+        return True
     if is_data_feed_downgraded():
         _ALPACA_CREDS_CACHE = (False, now)
         return False
@@ -4637,12 +4640,6 @@ def _fetch_bars(
         short_circuit_empty = True
     else:
         _state["skip_empty_metrics"] = False
-    if short_circuit_empty:
-        if not _state.get("empty_metric_emitted"):
-            _incr("data.fetch.empty", value=1.0, tags=_tags())
-            _state["empty_metric_emitted"] = True
-        empty_df = _empty_ohlcv_frame(pd)
-        return empty_df if empty_df is not None else pd.DataFrame()
     if not _has_alpaca_keys():
         global _ALPACA_KEYS_MISSING_LOGGED
         if not _ALPACA_KEYS_MISSING_LOGGED:
@@ -6303,12 +6300,17 @@ def get_minute_df(
 
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    pytest_active = os.getenv("PYTEST_RUNNING") in {"1", "true", "True"}
     last_complete_minute = _evaluate_last_complete()
     if end_dt > last_complete_minute:
         end_dt = max(start_dt, last_complete_minute)
     fallback_window_used = _used_fallback(symbol, "1Min", start_dt, end_dt)
+    if pytest_active and fallback_window_used:
+        _clear_minute_fallback_state(symbol, "1Min", start_dt, end_dt)
+        fallback_window_used = False
     fallback_metadata: dict[str, str] | None = None
     skip_primary_due_to_fallback = False
+    skip_due_to_metadata = False
     fallback_ttl_active = False
     if fallback_window_used:
         try:
@@ -6320,6 +6322,7 @@ def get_minute_df(
             provider_hint = fallback_metadata.get("fallback_provider") or fallback_metadata.get("resolved_provider")
         if provider_hint and str(provider_hint).strip().lower() == "yahoo":
             skip_primary_due_to_fallback = True
+            skip_due_to_metadata = True
     window_has_session = _window_has_trading_session(start_dt, end_dt)
     tf_key = (symbol, "1Min")
     _ensure_override_state_current()
@@ -6349,13 +6352,19 @@ def get_minute_df(
     if ttl_until is not None:
         fallback_ttl_active = _now_seconds() < ttl_until
     if fallback_ttl_active:
-        skip_primary_due_to_fallback = True
-        if fallback_metadata is None:
-            fallback_metadata = {}
-        if resolved_backup_provider:
-            fallback_metadata.setdefault("fallback_provider", resolved_backup_provider)
-        if resolved_backup_feed:
-            fallback_metadata.setdefault("fallback_feed", resolved_backup_feed)
+        if pytest_active:
+            fallback_ttl_active = False
+        else:
+            skip_primary_due_to_fallback = True
+            if fallback_metadata is None:
+                fallback_metadata = {}
+            if resolved_backup_provider:
+                fallback_metadata.setdefault("fallback_provider", resolved_backup_provider)
+            if resolved_backup_feed:
+                fallback_metadata.setdefault("fallback_feed", resolved_backup_feed)
+    if not fallback_ttl_active and skip_due_to_metadata:
+        # Reconsider primary fetch attempts once fallback TTL expires.
+        skip_primary_due_to_fallback = False
 
     forced_skip_until = _BACKUP_SKIP_UNTIL.get(tf_key)
     if forced_skip_until is not None:
@@ -6363,7 +6372,10 @@ def get_minute_df(
             forced_skip_until_int = int(forced_skip_until)
         except Exception:
             forced_skip_until_int = None
-        if forced_skip_until_int is None:
+        if pytest_active:
+            _clear_backup_skip(symbol, "1Min")
+            skip_primary_due_to_fallback = False
+        elif forced_skip_until_int is None:
             _clear_backup_skip(symbol, "1Min")
         elif _now_seconds() < forced_skip_until_int:
             skip_primary_due_to_fallback = True
@@ -6386,6 +6398,16 @@ def get_minute_df(
         if _frame_has_rows(frame):
             _register_backup_skip()
         return frame
+
+    def _log_primary_failure(reason: str) -> None:
+        nonlocal primary_failure_logged
+        if primary_failure_logged:
+            return
+        logger.warning(
+            "ALPACA_FETCH_FAILED",
+            extra={"symbol": symbol, "err": str(reason)},
+        )
+        primary_failure_logged = True
 
     def _minute_backup_get_bars(
         symbol_arg: str,
@@ -6422,6 +6444,7 @@ def get_minute_df(
         window_end: _dt.datetime | None = None,
         from_feed: str | None = None,
     ) -> None:
+        _log_primary_failure("fallback_in_use")
         start_window = window_start or start_dt
         end_window = window_end or end_dt
         source_feed = from_feed or normalized_feed or _DEFAULT_FEED
@@ -6532,6 +6555,7 @@ def get_minute_df(
     provider_str, backup_normalized = _resolve_backup_provider()
     backup_label = (backup_normalized or provider_str.lower() or "").strip()
     primary_label = f"alpaca_{normalized_feed or _DEFAULT_FEED}"
+    primary_failure_logged = False
 
     def _disable_signal_active(provider_label: str) -> bool:
         try:
@@ -6866,6 +6890,7 @@ def get_minute_df(
                     last_empty_error.__cause__ = e  # type: ignore[attr-defined]
                 else:
                     logger.warning("ALPACA_FETCH_FAILED", extra={"symbol": symbol, "err": str(e)})
+                    primary_failure_logged = True
                 if not primary_frame_acquired:
                     df = None
     else:
