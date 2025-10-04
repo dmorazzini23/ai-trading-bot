@@ -238,7 +238,12 @@ def _maybe_recreate_lock(obj: object, loop: asyncio.AbstractEventLoop) -> object
             bound_loop = candidate
             break
 
-    if bound_loop is loop and bound_loop is not None:
+    if bound_loop is loop:
+        return obj
+
+    if hasattr(obj, "_ai_trading_host_limit") or hasattr(
+        obj, "_ai_trading_host_limit_version"
+    ):
         return obj
 
     def _capture_sem_state() -> dict[str, int]:
@@ -533,6 +538,34 @@ def _scan(obj: object, seen: set[int], loop: asyncio.AbstractEventLoop) -> objec
     return obj
 
 
+def _should_replace_closure_cell(original: object, new_value: object) -> bool:
+    """Return ``True`` when ``cell_contents`` should be reassigned."""
+
+    if new_value is original:
+        return False
+
+    if _is_asyncio_primitive(original) or _is_asyncio_primitive(new_value):
+        return True
+
+    original_type = type(original)
+    new_type = type(new_value)
+
+    if original_type is new_type:
+        return True
+
+    if is_dataclass(original) and is_dataclass(new_value) and original_type is new_type:
+        return True
+
+    container_types = (Mapping, MutableSequence, MutableSet, list, tuple, set, frozenset)
+    if isinstance(original, container_types) and isinstance(new_value, container_types):
+        return True
+
+    if isinstance(original, SimpleNamespace) and isinstance(new_value, SimpleNamespace):
+        return True
+
+    return False
+
+
 def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.AbstractEventLoop) -> None:
     """Rebind foreign-loop locks captured in ``worker``'s closure to ``loop``."""
 
@@ -546,20 +579,26 @@ def _rebind_worker_closure(worker: Callable[[str], Awaitable[T]], loop: asyncio.
         except ValueError:
             continue
         new_value = _scan(original, seen, loop)
-        if new_value is not original:
+        if not _should_replace_closure_cell(original, new_value):
+            continue
+        try:
             cell.cell_contents = new_value
+        except ValueError:
+            continue
 
 
 SUCCESSFUL_SYMBOLS: set[str] = set()
 FAILED_SYMBOLS: set[str] = set()
 PEAK_SIMULTANEOUS_WORKERS: int = 0
+LAST_RUN_PEAK_SIMULTANEOUS_WORKERS: int = 0
 
 
 def reset_peak_simultaneous_workers() -> None:
     """Reset ``PEAK_SIMULTANEOUS_WORKERS`` to ``0`` for test isolation."""
 
-    global PEAK_SIMULTANEOUS_WORKERS
+    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
     PEAK_SIMULTANEOUS_WORKERS = 0
+    LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = 0
 
 
 def reset_tracking_state(*, reset_peak: bool = True) -> None:
@@ -581,8 +620,8 @@ async def run_with_concurrency(
 
     reset_tracking_state(reset_peak=False)
 
-    global PEAK_SIMULTANEOUS_WORKERS
-    reset_peak_simultaneous_workers()
+    global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
+    LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = 0
 
     loop = asyncio.get_running_loop()
     _rebind_worker_closure(worker, loop)
@@ -625,6 +664,9 @@ async def run_with_concurrency(
             async def __aenter__(self) -> None:
                 if self._semaphore is None:
                     return None
+                bound_loop = getattr(self._semaphore, "_loop", None)
+                if bound_loop is not None and bound_loop is not loop:
+                    return None
                 try:
                     await self._semaphore.acquire()
                 except asyncio.CancelledError:
@@ -649,13 +691,15 @@ async def run_with_concurrency(
 
     async def _mark_worker_start() -> None:
         nonlocal active_workers, peak_this_run
-        global PEAK_SIMULTANEOUS_WORKERS
+        global PEAK_SIMULTANEOUS_WORKERS, LAST_RUN_PEAK_SIMULTANEOUS_WORKERS
 
         async with active_lock:
             active_workers += 1
             if active_workers > peak_this_run:
                 peak_this_run = active_workers
-                PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+                LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+                if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
+                    PEAK_SIMULTANEOUS_WORKERS = peak_this_run
 
     async def _mark_worker_end(started: bool) -> None:
         nonlocal active_workers
@@ -717,7 +761,11 @@ async def run_with_concurrency(
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        reset_peak_simultaneous_workers()
+        LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = max(
+            LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run
+        )
+        if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
+            PEAK_SIMULTANEOUS_WORKERS = peak_this_run
         raise
     for task, outcome in zip(tasks, outcomes):
         symbol = task_to_symbol.get(task)
@@ -727,7 +775,9 @@ async def run_with_concurrency(
             results.setdefault(symbol, None)
             FAILED_SYMBOLS.add(symbol)
 
-    PEAK_SIMULTANEOUS_WORKERS = peak_this_run
+    LAST_RUN_PEAK_SIMULTANEOUS_WORKERS = max(LAST_RUN_PEAK_SIMULTANEOUS_WORKERS, peak_this_run)
+    if peak_this_run > PEAK_SIMULTANEOUS_WORKERS:
+        PEAK_SIMULTANEOUS_WORKERS = peak_this_run
 
     return results, set(SUCCESSFUL_SYMBOLS), set(FAILED_SYMBOLS)
 
@@ -755,6 +805,7 @@ __all__ = [
     "SUCCESSFUL_SYMBOLS",
     "FAILED_SYMBOLS",
     "PEAK_SIMULTANEOUS_WORKERS",
+    "LAST_RUN_PEAK_SIMULTANEOUS_WORKERS",
     "reset_peak_simultaneous_workers",
     "reset_tracking_state",
 ]
