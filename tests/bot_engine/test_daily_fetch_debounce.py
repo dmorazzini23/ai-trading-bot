@@ -147,16 +147,31 @@ def test_daily_fetch_memo_reuses_recent_result(monkeypatch):
     memo_df = {"memo": True}
     cached_df = {"cached": True}
 
+    class StrictCache(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.raise_on_get = True
+            self.get_calls = 0
+
+        def get(self, *args, **kwargs):  # pragma: no cover - ensure memo short circuit
+            self.get_calls += 1
+            if self.raise_on_get:
+                raise AssertionError("daily cache should not be consulted when memo is fresh")
+            return super().get(*args, **kwargs)
+
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO_TTL", 60.0, raising=False)
     monkeypatch.setattr(be, "_DAILY_FETCH_MEMO", {memo_key: (5.0, memo_df)}, raising=False)
-    fetcher._daily_cache[symbol] = (fetch_date, cached_df)
+    fetcher._daily_cache = StrictCache({symbol: (fetch_date, cached_df)})
 
     first = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
     assert first is memo_df
+    assert fetcher._daily_cache.get_calls == 0
     first_stamp = be._DAILY_FETCH_MEMO[memo_key][0]
+    assert first_stamp > 5.0
 
     # Simulate memo expiry and verify the cached entry refreshes memo storage
     be._DAILY_FETCH_MEMO[memo_key] = (0.0, memo_df)
+    fetcher._daily_cache.raise_on_get = False
     second = fetcher.get_daily_df(types.SimpleNamespace(), symbol)
     assert second is cached_df
     assert memo_key in be._DAILY_FETCH_MEMO

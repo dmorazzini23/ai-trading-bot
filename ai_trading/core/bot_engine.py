@@ -8199,13 +8199,14 @@ class DataFetcher:
                 if normalized_pair is not None:
                     _memo_set_entry(memo_key, normalized_pair)
                     _memo_set_entry(legacy_memo_key, normalized_pair)
-                if entry_df is not None:
+                has_payload = entry_df is not None or normalized_pair is not None
+                if has_payload:
                     age = None if entry_ts is None else now_monotonic - entry_ts
                     if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
                         cached_df = entry_df
                         cached_reason = "memo"
                         refresh_stamp = now_monotonic
-                        refresh_df = cached_df
+                        refresh_df = entry_df
                         refresh_source = "memo"
                         memo_hit = True
                     else:
@@ -8224,7 +8225,7 @@ class DataFetcher:
                             _memo_pop_entry(legacy_memo_key)
                 else:
                     _memo_pop_entry(memo_key)
-            if not memo_hit and cached_df is None:
+            if not memo_hit:
                 legacy_entry = _memo_get_entry(legacy_memo_key)
                 if legacy_entry is not None:
                     entry_ts, entry_df, normalized_pair = _normalize_memo_entry(
@@ -8233,13 +8234,14 @@ class DataFetcher:
                     if normalized_pair is not None:
                         _memo_set_entry(memo_key, normalized_pair)
                         _memo_set_entry(legacy_memo_key, normalized_pair)
-                    if entry_df is not None:
+                    has_payload = entry_df is not None or normalized_pair is not None
+                    if has_payload:
                         age = None if entry_ts is None else now_monotonic - entry_ts
                         if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
                             cached_df = entry_df
                             cached_reason = "memo"
                             refresh_stamp = now_monotonic
-                            refresh_df = cached_df
+                            refresh_df = entry_df
                             refresh_source = "memo"
                             memo_hit = True
                         else:
@@ -8257,7 +8259,7 @@ class DataFetcher:
                                 _memo_pop_entry(legacy_memo_key)
                     else:
                         _memo_pop_entry(legacy_memo_key)
-            if not memo_hit and cached_df is None:
+            if not memo_hit:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:
                     cached_df = entry[1]
