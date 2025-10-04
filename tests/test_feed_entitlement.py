@@ -129,3 +129,25 @@ def test_ensure_entitled_feed_downgrades_when_allow_flag_disables(monkeypatch):
     monkeypatch.delenv("ALPACA_SECRET", raising=False)
     client = _Client(['sip', 'iex'])
     assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+
+
+def test_ensure_entitled_feed_trusts_account_when_sip_disallowed_advisory(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    for key in ("ALPACA_ALLOW_SIP", "ALPACA_SIP_ENTITLED", "ALPACA_HAS_SIP"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALPACA_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET", "test-secret")
+    monkeypatch.setattr(bars, "sip_disallowed", lambda: True)
+    client = _Client(['sip'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+
+
+def test_ensure_entitled_feed_respects_explicit_entitlement_false(monkeypatch):
+    bars._ENTITLE_CACHE.clear()
+    monkeypatch.delenv("ALPACA_ALLOW_SIP", raising=False)
+    monkeypatch.setenv("ALPACA_SIP_ENTITLED", "0")
+    monkeypatch.setenv("ALPACA_KEY", "test-key")
+    monkeypatch.setenv("ALPACA_SECRET", "test-secret")
+    monkeypatch.setattr(bars, "sip_disallowed", lambda: False)
+    client = _Client(['sip', 'iex'])
+    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
