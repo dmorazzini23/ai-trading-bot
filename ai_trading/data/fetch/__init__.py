@@ -4636,11 +4636,12 @@ def _fetch_bars(
                 }
             ),
         )
+        # Treat the window as empty but continue through the standard
+        # fallback machinery so alternative feeds/backups get a chance to
+        # populate data.  The final response is normalised via
+        # ``short_circuit_empty`` if all providers return nothing.
+        short_circuit_empty = True
         _state["skip_empty_metrics"] = True
-        empty_df = _empty_ohlcv_frame(pd)
-        if not isinstance(empty_df, pd.DataFrame):
-            empty_df = pd.DataFrame()
-        return empty_df
     else:
         _state["skip_empty_metrics"] = False
 
