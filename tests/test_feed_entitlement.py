@@ -1,17 +1,22 @@
+from datetime import UTC, datetime, timedelta
+
 from ai_trading.data import bars
 
 
 class _Account:
-    def __init__(self, feeds):
+    def __init__(self, feeds, generation=None):
         self.market_data_subscription = feeds
+        if generation is not None:
+            self.updated_at = generation
 
 
 class _Client:
-    def __init__(self, feeds):
+    def __init__(self, feeds, generation=None):
         self._feeds = feeds
+        self._generation = generation
 
     def get_account(self):
-        return _Account(self._feeds)
+        return _Account(self._feeds, self._generation)
 
 
 def test_ensure_entitled_feed_switches():
@@ -20,12 +25,54 @@ def test_ensure_entitled_feed_switches():
     assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
 
 
-def test_ensure_entitled_feed_upgrades_cached_entitlement():
+def test_get_entitled_feeds_refreshes_cache_on_upgrade():
     bars._ENTITLE_CACHE.clear()
-    client = _Client(['iex'])
-    assert bars._ensure_entitled_feed(client, 'sip') == 'iex'
+    generation = datetime(2024, 1, 1, tzinfo=UTC)
+    client = _Client(['iex'], generation)
+    feeds_initial = bars._get_entitled_feeds(client)
+    assert feeds_initial == {'iex'}
+    cache_key = id(client)
+    first_entry = bars._ENTITLE_CACHE[cache_key]
     client._feeds = ['sip']
-    assert bars._ensure_entitled_feed(client, 'sip') == 'sip'
+    client._generation = generation + timedelta(minutes=1)
+    feeds_upgraded = bars._get_entitled_feeds(client)
+    assert feeds_upgraded == {'sip'}
+    second_entry = bars._ENTITLE_CACHE[cache_key]
+    assert second_entry is not first_entry
+    assert second_entry.generation > first_entry.generation
+
+
+def test_get_entitled_feeds_refreshes_cache_on_downgrade():
+    bars._ENTITLE_CACHE.clear()
+    generation = datetime(2024, 1, 1, tzinfo=UTC)
+    client = _Client(['sip'], generation)
+    feeds_initial = bars._get_entitled_feeds(client)
+    assert feeds_initial == {'sip'}
+    cache_key = id(client)
+    first_entry = bars._ENTITLE_CACHE[cache_key]
+    client._feeds = ['iex']
+    client._generation = generation + timedelta(minutes=2)
+    feeds_downgraded = bars._get_entitled_feeds(client)
+    assert feeds_downgraded == {'iex'}
+    second_entry = bars._ENTITLE_CACHE[cache_key]
+    assert second_entry is not first_entry
+    assert second_entry.generation > first_entry.generation
+
+
+def test_get_entitled_feeds_refreshes_cache_on_generation_change():
+    bars._ENTITLE_CACHE.clear()
+    generation = datetime(2024, 1, 1, tzinfo=UTC)
+    client = _Client(['sip'], generation)
+    feeds_initial = bars._get_entitled_feeds(client)
+    assert feeds_initial == {'sip'}
+    cache_key = id(client)
+    first_entry = bars._ENTITLE_CACHE[cache_key]
+    client._generation = generation + timedelta(minutes=3)
+    feeds_next = bars._get_entitled_feeds(client)
+    assert feeds_next == {'sip'}
+    second_entry = bars._ENTITLE_CACHE[cache_key]
+    assert second_entry is not first_entry
+    assert second_entry.generation > first_entry.generation
 
 
 def test_ensure_entitled_feed_downgrades_cached_entitlement():
