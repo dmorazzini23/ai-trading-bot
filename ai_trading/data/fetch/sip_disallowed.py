@@ -34,19 +34,16 @@ def sip_disallowed() -> bool:
         return None
 
     allow_flag = _coerce_flag(getattr(env, "ALPACA_ALLOW_SIP", None))
-    if allow_flag is False:
-        return True
-
     explicit_entitlement = _coerce_flag(getattr(env, "ALPACA_SIP_ENTITLED", None))
-    if explicit_entitlement is not None:
-        return not explicit_entitlement
-
     has_sip = _coerce_flag(getattr(env, "ALPACA_HAS_SIP", None))
-    if has_sip is not None:
-        return not has_sip
 
-    if not _has_alpaca_credentials():
-        return True
+    for flag in (allow_flag, explicit_entitlement, has_sip):
+        if flag is False:
+            return True
+
+    for flag in (allow_flag, explicit_entitlement, has_sip):
+        if flag is True:
+            return False
 
     return False
 
