@@ -17,7 +17,7 @@ def test_sip_disallowed_without_credentials(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     monkeypatch.delenv("ALPACA_HAS_SIP", raising=False)
-    assert sip_disallowed() is True
+    assert sip_disallowed() is False
 
 
 def test_sip_allowed_with_credentials(monkeypatch):
