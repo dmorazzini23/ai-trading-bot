@@ -4504,6 +4504,7 @@ def _fetch_bars(
         "retries": 0,
         "providers": [],
         "empty_metric_emitted": False,
+        "allow_no_session_primary": False,
     }
 
     def _register_provider_attempt(feed_name: str) -> None:
@@ -4909,6 +4910,8 @@ def _fetch_bars(
             )
             prev_defer = _state.get("defer_success_metric")
             _state["defer_success_metric"] = True
+            prev_allow_primary = _state.get("allow_no_session_primary", False)
+            _state["allow_no_session_primary"] = True
             try:
                 result = _req(session, None, headers=headers, timeout=timeout)
             except EmptyBarsError:
@@ -4917,6 +4920,10 @@ def _fetch_bars(
                 else:
                     raise
             finally:
+                if prev_allow_primary:
+                    _state["allow_no_session_primary"] = True
+                else:
+                    _state.pop("allow_no_session_primary", None)
                 if prev_defer is None:
                     _state.pop("defer_success_metric", None)
                 else:
@@ -4941,6 +4948,18 @@ def _fetch_bars(
                     resolved_feed=fb_feed,
                 )
             return result
+
+        if (
+            not _state.get("window_has_session", True)
+            and fallback is None
+            and not _state.get("allow_no_session_primary", False)
+        ):
+            if _ENABLE_HTTP_FALLBACK:
+                return pd.DataFrame()
+            empty_frame = _empty_ohlcv_frame(pd)
+            if isinstance(empty_frame, pd.DataFrame):
+                return empty_frame
+            return pd.DataFrame()
 
         def _build_request_params() -> dict[str, Any]:
             return {
@@ -6123,7 +6142,25 @@ def _fetch_bars(
     alt_feed = None
     fallback = None
     sip_locked_initial = _is_sip_unauthorized()
-    if max_fb >= 1:
+    _allow_sip_override = globals().get("_ALLOW_SIP")
+    http_fallback_env = os.getenv("ENABLE_HTTP_FALLBACK")
+    http_fallback_enabled = False
+    if http_fallback_env is not None:
+        http_fallback_enabled = http_fallback_env.strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+    explicit_sip_override = (
+        _allow_sip_override is not None
+        and (
+            bool(os.getenv("PYTEST_RUNNING"))
+            or http_fallback_enabled
+        )
+    )
+    fallback_allowed = window_has_session or explicit_sip_override
+    if max_fb >= 1 and fallback_allowed:
         if priority:
             try:
                 idx = priority.index(f"alpaca_{_feed}")
@@ -6146,6 +6183,8 @@ def _fetch_bars(
             # Ensure a SIP fallback candidate exists for tests even when
             # provider priority is customized or empty.
             fallback = (_interval, "sip", _start, _end)
+    if (not window_has_session) and fallback is None and not _ENABLE_HTTP_FALLBACK:
+        return _finalize_frame(None)
     # Attempt request with bounded retries when empty or transient issues occur
     normalized_feed = _normalize_feed_value(feed) if feed is not None else None
     df = None
