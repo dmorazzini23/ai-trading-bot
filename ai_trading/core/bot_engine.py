@@ -8200,74 +8200,60 @@ class DataFetcher:
 
         with cache_lock:
             window_limit = min_interval if min_interval > 0 else ttl_window
-            canonical_entry = _memo_get_entry(memo_key)
-            if canonical_entry is not None:
-                entry_ts, entry_df, normalized_pair = _normalize_memo_entry(
-                    canonical_entry
-                )
+
+            def _apply_memo_entry(
+                key: tuple[str, ...], *, counterpart: tuple[str, ...]
+            ) -> bool:
+                nonlocal cached_df, cached_reason, refresh_stamp, refresh_df, refresh_source, fallback_entry
+                entry = _memo_get_entry(key)
+                if entry is None:
+                    return False
+                entry_ts, entry_df, normalized_pair = _normalize_memo_entry(entry)
                 if normalized_pair is not None:
-                    _memo_set_entry(memo_key, normalized_pair)
-                    _memo_set_entry(legacy_memo_key, normalized_pair)
-                has_payload = entry_df is not None or normalized_pair is not None
-                if has_payload:
-                    age = None if entry_ts is None else now_monotonic - entry_ts
-                    if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
-                        cached_df = entry_df
-                        cached_reason = "memo"
-                        refresh_stamp = now_monotonic
-                        refresh_df = entry_df
-                        refresh_source = "memo"
-                        memo_hit = True
-                    else:
-                        if (
-                            fallback_entry is None
-                            and entry_df is not None
-                        ):
-                            fallback_entry = (
-                                entry_df,
-                                "memo_stale",
-                                "memo",
-                                None,
-                            )
-                        _memo_pop_entry(memo_key)
-                        if age > ttl_window:
-                            _memo_pop_entry(legacy_memo_key)
-                else:
-                    _memo_pop_entry(memo_key)
-            if not memo_hit:
-                legacy_entry = _memo_get_entry(legacy_memo_key)
-                if legacy_entry is not None:
-                    entry_ts, entry_df, normalized_pair = _normalize_memo_entry(
-                        legacy_entry
+                    _memo_set_entry(key, normalized_pair)
+                    if counterpart != key:
+                        _memo_set_entry(counterpart, normalized_pair)
+                payload = entry_df
+                if payload is None and normalized_pair is not None:
+                    payload = normalized_pair[1]
+                has_payload = payload is not None
+                if not has_payload:
+                    # Entry missing data; remove to avoid repeated lookups.
+                    _memo_pop_entry(key)
+                    if key == memo_key and counterpart != key:
+                        _memo_pop_entry(counterpart)
+                    return False
+                age = None if entry_ts is None else now_monotonic - entry_ts
+                is_fresh = (
+                    age is None
+                    or age <= _DAILY_FETCH_MEMO_TTL
+                    or age <= window_limit
+                )
+                if is_fresh:
+                    cached_df = payload
+                    cached_reason = "memo"
+                    refresh_stamp = now_monotonic
+                    refresh_df = payload
+                    refresh_source = "memo"
+                    return True
+                if fallback_entry is None:
+                    fallback_entry = (
+                        payload,
+                        "memo_stale",
+                        "memo",
+                        None,
                     )
-                    if normalized_pair is not None:
-                        _memo_set_entry(memo_key, normalized_pair)
-                        _memo_set_entry(legacy_memo_key, normalized_pair)
-                    has_payload = entry_df is not None or normalized_pair is not None
-                    if has_payload:
-                        age = None if entry_ts is None else now_monotonic - entry_ts
-                        if age is None or age <= _DAILY_FETCH_MEMO_TTL or age <= window_limit:
-                            cached_df = entry_df
-                            cached_reason = "memo"
-                            refresh_stamp = now_monotonic
-                            refresh_df = entry_df
-                            refresh_source = "memo"
-                            memo_hit = True
-                        else:
-                            if (
-                                fallback_entry is None
-                                and entry_df is not None
-                            ):
-                                fallback_entry = (
-                                    entry_df,
-                                    "memo_stale",
-                                    "memo",
-                                    None,
-                                )
-                            if age > ttl_window:
-                                _memo_pop_entry(legacy_memo_key)
-                    else:
-                        _memo_pop_entry(legacy_memo_key)
+                if age is not None and age > ttl_window:
+                    _memo_pop_entry(key)
+                    if key == memo_key and counterpart != key:
+                        _memo_pop_entry(counterpart)
+                return False
+
+            if _apply_memo_entry(memo_key, counterpart=legacy_memo_key):
+                memo_hit = True
+            elif _apply_memo_entry(legacy_memo_key, counterpart=memo_key):
+                memo_hit = True
+
             if not memo_hit:
                 entry = self._daily_cache.get(symbol)
                 if entry and entry[0] == fetch_date:

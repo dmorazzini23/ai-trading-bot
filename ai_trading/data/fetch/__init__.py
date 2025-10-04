@@ -4637,7 +4637,10 @@ def _fetch_bars(
             ),
         )
         _state["skip_empty_metrics"] = True
-        short_circuit_empty = True
+        empty_df = _empty_ohlcv_frame(pd)
+        if not isinstance(empty_df, pd.DataFrame):
+            empty_df = pd.DataFrame()
+        return empty_df
     else:
         _state["skip_empty_metrics"] = False
 
@@ -6784,6 +6787,9 @@ def get_minute_df(
                         alt_feed = "sip"
                     if alt_feed and alt_feed != current_feed:
                         attempted_feeds.add(alt_feed)
+                        if not switch_recorded:
+                            _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
+                            switch_recorded = True
                         try:
                             df_alt = _fetch_bars(symbol, start_dt, end_dt, "1Min", feed=alt_feed)
                         except (EmptyBarsError, ValueError, RuntimeError) as alt_err:
@@ -6808,7 +6814,6 @@ def get_minute_df(
                                         "timeframe": "1Min",
                                     },
                                 )
-                                _record_feed_switch(symbol, "1Min", current_feed, alt_feed)
                                 _IEX_EMPTY_COUNTS.pop(tf_key, None)
                                 df_alt = _post_process(df_alt, symbol=symbol, timeframe="1Min")
                                 df_alt = _verify_minute_continuity(df_alt, symbol, backfill=backfill)
